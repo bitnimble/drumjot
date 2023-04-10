@@ -1,3 +1,4 @@
+import classNames from 'classnames';
 import { makeAutoObservable } from 'mobx';
 import { observer } from 'mobx-react';
 import React from 'react';
@@ -39,13 +40,22 @@ const LoopView = <T extends string>(props: LoopViewProps<T>) => {
   const { loop, tracks } = props;
   return (
     <div className={styles.loop}>
-      {tracks.map((t, i) => (
-        <div key={t} className={styles.trackContainer}>
-          {loop.tracks[t] ? (
-            <TrackView color={colors[i]} track={loop.tracks[t]} time={loop.time} />
-          ) : null}
-        </div>
-      ))}
+      {Array(loop.repeats)
+        .fill(0)
+        .map((_, repetition) => (
+          <div
+            key={repetition}
+            className={classNames(styles.repetition, repetition > 0 && styles.isRepeat)}
+          >
+            {tracks.map((t, i) => (
+              <div key={t} className={styles.trackContainer}>
+                {loop.tracks[t] ? (
+                  <TrackView color={colors[i]} track={loop.tracks[t]} time={loop.time} />
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ))}
     </div>
   );
 };
@@ -101,7 +111,7 @@ const TrackView = (props: { color: string; track: Note[]; time: TimeSignature })
   }
 
   // If there's a leftover bar, fill it with rests and then append.
-  if (currentBar.length) {
+  if (currentBar.length || (currentLength === 0 && track.length === 0)) {
     const fill = lengthToNotes(barLength - currentLength).map((v) => ({
       accent: false,
       rest: true,
@@ -161,7 +171,7 @@ const lengthToNotes = (length: number) => {
     let noteToSubtract: Value | undefined;
     // Find largest subtractable note
     for (const value of values) {
-      if (currentValue - mapNoteValue[value] > 0) {
+      if (currentValue - mapNoteValue[value] >= 0) {
         noteToSubtract = value;
         break;
       }

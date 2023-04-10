@@ -21,6 +21,7 @@ export type Note = {
 export type Loop<T extends string> = {
   time: TimeSignature,
   tracks: Record<T, Note[]>,
+  repeats: number,
 }
 
 export type Jot<T extends string> = {
@@ -49,7 +50,17 @@ export const rockJot = jot({
         hihat: [eighth, eighth, eighth, eighth, eighth, eighth, eighth, eighth, eighth, eighth, eighth, eighth, eighth, eighth, eighth, eighth],
         snare: [quarterRest, quarter, quarterRest, quarter, quarterRest, quarter, quarterRest, quarter],
         kick: [quarter, quarter, quarter, quarter, quarter, quarter, quarter, quarter],
-      }
+      },
+      repeats: 2,
+    },
+    {
+      time: { count: 4, unit: Value.QUARTER },
+      tracks: {
+        hihat: [eighth, eighth, eighth, eighth, eighth, eighth, eighth, eighth],
+        snare: [],
+        kick: [],
+      },
+      repeats: 2,
     },
   ],
 });
