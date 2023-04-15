@@ -1,7 +1,8 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { createJotView, JotStore } from 'src/jot_view';
-import { Jot, rockJot } from 'src/schema';
+import { Jot } from 'src/jot';
+import { rockJot } from 'src/fakes';
 
 class Drumjot {
   private jotStore: JotStore;
@@ -20,7 +21,7 @@ class Drumjot {
   }
 
   loadTestJot() {
-    this.load(rockJot);
+    this.load(new Jot(rockJot));
   }
 }
 

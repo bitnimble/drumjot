@@ -1,5 +1,8 @@
 @value atom: 8px;
 @value colorGrey: #888;
+@value brandOrange: #FF8C55;
+@value brandOrangeA05: rgba(255, 140, 85, 0.5);
+
 
 @value originBorderStyle: solid;
 @value repetitionBorderStyle: dashed;
@@ -67,4 +70,12 @@
     width: calc(2 * atom);
     height: calc(2 * atom);
     border-radius: 50%;
+}
+
+.note.selected {
+    box-shadow: 0 0 0 2px brandOrange;
+}
+
+.note:hover {
+    box-shadow: 0 0 0 2px brandOrangeA05;
 }
