@@ -2,11 +2,13 @@
 @value colorGrey: #888;
 @value brandOrange: #FF8C55;
 @value brandOrangeA05: rgba(255, 140, 85, 0.5);
-
+@value brandOrangeA01: rgba(255, 140, 85, 0.1);
 
 @value originBorderStyle: solid;
 @value repetitionBorderStyle: dashed;
 @value borderColor: colorGrey;
+
+@value containerLeftMargin: calc(atom * 4);
 
 .jotContainer {
     position: relative;
@@ -14,7 +16,14 @@
     height: 100%;
     display: flex;
     align-items: center;
-    margin-left: calc(atom * 2);
+    margin-left: containerLeftMargin;
+}
+
+.marquee {
+    position: absolute;
+    box-shadow: 0 0 0 1px brandOrange;
+    background: brandOrangeA01;
+    transform: translateX(calc(-1 * containerLeftMargin));
 }
 
 .tracks {

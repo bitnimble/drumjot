@@ -1,8 +1,8 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import { createJotView, JotViewStore } from 'src/jot_view';
-import { RenderedJot } from 'src/jot';
 import { rockJot } from 'src/fakes';
+import { RenderedJot } from 'src/jot';
+import { createJotView, JotViewStore } from 'src/jot_view';
 
 class Drumjot {
   private jotStore: JotViewStore;
