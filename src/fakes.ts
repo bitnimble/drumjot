@@ -15,7 +15,7 @@ export const jot = <T extends string>(jot: JotState<T>) => jot;
 
 export const rockJot = jot({
   title: 'Simple rock loop',
-  tracks: ['hihat', 'snare', 'kick'],
+  trackNames: ['hihat', 'snare', 'kick'],
   loops: [
     {
       time: { count: 4, unit: Value.QUARTER },

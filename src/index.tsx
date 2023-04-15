@@ -1,11 +1,11 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import { createJotView, JotStore } from 'src/jot_view';
-import { Jot } from 'src/jot';
+import { createJotView, JotViewStore } from 'src/jot_view';
+import { RenderedJot } from 'src/jot';
 import { rockJot } from 'src/fakes';
 
 class Drumjot {
-  private jotStore: JotStore;
+  private jotStore: JotViewStore;
 
   constructor(root: HTMLElement) {
     const { store, View } = createJotView();
@@ -15,13 +15,13 @@ class Drumjot {
     _root.render(<View />);
   }
 
-  load(jot: Jot<string>) {
+  load(jot: RenderedJot<string>) {
     // TODO: confirm if currentJot is saved
     this.jotStore.currentJot = jot;
   }
 
   loadTestJot() {
-    this.load(new Jot(rockJot));
+    this.load(new RenderedJot(rockJot));
   }
 }
 

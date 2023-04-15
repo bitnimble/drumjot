@@ -9,10 +9,12 @@
 @value borderColor: colorGrey;
 
 .jotContainer {
+    position: relative;
     width: 100%;
     height: 100%;
     display: flex;
     align-items: center;
+    margin-left: calc(atom * 2);
 }
 
 .tracks {
@@ -20,44 +22,72 @@
 }
 
 .loop {
+    position: absolute;
     display: flex;
-    border-left: 1px originBorderStyle borderColor;
+}
+.loop::after {
+    position: absolute;
+    content: '';
+    /* -1px, to be directly on top of the right border of .loop:last-of-type::after, so there is
+     * only a single 1px border between them */
+    left: -1px;
+    top: calc(atom * -5);
+    bottom: calc(atom * -5);
+    width: 1px;
+    background: borderColor;
 }
 
-.loop:last-of-type {
-    border-right: 1px originBorderStyle black;
+.loop:last-of-type::after {
+    position: absolute;
+    content: '';
+    right: 0;
+    top: calc(atom * -5);
+    bottom: calc(atom * -5);
+    width: 1px;
+    background: borderColor;
 }
 
+.trackContainer {
+    width: 100%;
+}
 .trackContainer:first-of-type {
     border-top: 1px originBorderStyle borderColor;
 }
+.trackContainer:last-of-type {
+    border-bottom: 1px originBorderStyle borderColor;
+}
 
 .track {
-    height: calc(6 * atom);
-    border-bottom: 1px originBorderStyle borderColor;
+    position: relative;
 }
 
 .isRepeat .trackContainer:first-of-type {
     border-top-style: repetitionBorderStyle;
 }
-.isRepeat .track {
+.isRepeat .trackContainer:last-of-type {
     border-bottom-style: repetitionBorderStyle;
 }
 
 .bar {
-    padding: 0 atom;
+    position: absolute;
     height: 100%;
-    min-width: calc(35 * atom);
-    display: inline-grid;
-    border-right: 1px originBorderStyle borderColor;
+}
+.bar::after {
+    position: absolute;
+    content: '';
+    right: 0;
+    top: calc(atom * -5);
+    bottom: calc(atom * -5);
+    width: 1px;
+    background: borderColor;
 }
 
 .bar:last-of-type, .isRepeat .bar {
-    border-right-style: repetitionBorderStyle;
+    /* border-right-style: repetitionBorderStyle; */
 }
 
 .repetition:last-of-type .bar:last-of-type {
-    border-right: none;
+    /* border-right: none; */
 }
 
 .noteContainer {
@@ -67,15 +97,19 @@
 }
 
 .note {
+    position: absolute;
     width: calc(2 * atom);
     height: calc(2 * atom);
     border-radius: 50%;
+    transform: translate(-50%, -50%);
+    /* TODO: remove this z-index and order the layers properly */
+    z-index: 1;
 }
 
 .note.selected {
-    box-shadow: 0 0 0 2px brandOrange;
+    box-shadow: 0 0 0 calc(atom * 0.5) brandOrange;
 }
 
 .note:hover {
-    box-shadow: 0 0 0 2px brandOrangeA05;
+    box-shadow: 0 0 0 calc(atom * 0.5) brandOrangeA05;
 }
