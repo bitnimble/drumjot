@@ -1,0 +1,54 @@
+# Local development orchestration for the Drumjot transcriber.
+#
+# Usage:
+#   cp .env.example .env       # populate ANTHROPIC_API_KEY
+#   docker compose up --build  # first run downloads models on demand
+#
+# Notes:
+# - The `deploy.resources.reservations.devices` block requires the NVIDIA
+#   Container Toolkit on the host. If you don't have a GPU, comment it
+#   out and the container will fall back to CPU automatically (slow).
+# - SPEC.md is mounted in read-only from the repo root so the LLM prompt
+#   stays in sync with the live spec without having to vendor a copy.
+services:
+  transcriber:
+    build:
+      # Build context = repo root. The transcriber image needs both
+      # `transcriber/` (Python service) and `src/` (canonical TS parser).
+      context: ..
+      dockerfile: transcriber/Dockerfile
+    image: drumjot-transcriber:dev
+    container_name: drumjot-transcriber
+    ports:
+      - "8001:8001"
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      LLM_MODEL: ${LLM_MODEL:-claude-opus-4-7}
+      CRITIC_MODEL: ${CRITIC_MODEL:-claude-haiku-3-5}
+      CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:5173","http://127.0.0.1:5173"]}
+      DEVICE: ${DEVICE:-auto}
+      REFINE_BY_DEFAULT: ${REFINE_BY_DEFAULT:-true}
+      SELF_CONSISTENCY_SAMPLES_DEFAULT: ${SELF_CONSISTENCY_SAMPLES_DEFAULT:-1}
+      # When set, every /transcribe call persists its intermediate audio
+      # + JSON artifacts into a per-request subdir of this path. Leave
+      # blank to keep request data ephemeral; set debug=true on a
+      # per-request basis to opt-in to the default /debug volume below.
+      DEBUG_DIR: ${DEBUG_DIR:-}
+    volumes:
+      - models-cache:/models
+      # Debug artifact volume. Files written here by the transcriber
+      # (drum stems, per-instrument stems, beats.json, initial.jot, etc.)
+      # are immediately accessible on the host under ./debug/ so you can
+      # listen back to stems or replay the refinement loop.
+      - ./debug:/debug
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  models-cache:

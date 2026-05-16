@@ -4,7 +4,8 @@
  * The DSL only allows single-letter pitches `a`-`z`, so several MIDI notes
  * share a letter and are disambiguated via:
  *   - modifiers (e.g. `:o` for open hi-hat),
- *   - `mapping[pitch].midi.note` (declares the default MIDI note for a letter),
+ *   - `instrumentMapping[pitch].midi.note` (declares the default MIDI note
+ *     for a letter),
  *   - per-note `metadata.midi.note` overrides (used by the converter to preserve
  *     the exact source note for round-trip fidelity).
  *
@@ -58,7 +59,7 @@ export const GM_PERCUSSION: Readonly<Record<number, GmEntry>> = {
 /**
  * Pick a default MIDI note for a (pitch, modifiers) combination. Used when
  * writing a Drumjot Note to MIDI and neither the note's own
- * `metadata.midi.note` nor the mapping's `midi.note` is set.
+ * `metadata.midi.note` nor the instrument mapping's `midi.note` is set.
  *
  * Returns `undefined` for unknown pitches; callers must decide whether to
  * skip the note or substitute another value.

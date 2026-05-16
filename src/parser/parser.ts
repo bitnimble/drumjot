@@ -33,13 +33,30 @@ export function parse(src: string): Jot {
 
 // ---------- Top-level: voices, bars, patterns, global metadata ----------
 
+/**
+ * Subset of `Metadata` that propagates from inline `{{...}}` blocks down to
+ * each bar's `bar.metadata`. The DSL spec says these "remain in effect until
+ * the next override", so a bar that's parsed after such a block carries
+ * the effective values for layout and renderers to use directly.
+ *
+ * Other metadata keys (mapping, comment, custom user keys) stay only on
+ * `jot.globalMetadata` - per-bar duplication adds no value for them and
+ * would bloat the AST.
+ */
+type BarMeta = Pick<Metadata, 'time' | 'bpm'>;
+
 type Item =
   | { kind: 'el'; el: Element }
-  | { kind: 'bar' }
+  | { kind: 'bar'; activeMeta: BarMeta }
   | { kind: 'voice' };
 
 function parseJot(c: Cursor): Jot {
   let globalMetadata: Metadata = {};
+  // Running snapshot of values that propagate to the bar level. Updated by
+  // every inline `{{...}}` block we encounter; the snapshot at each `|`
+  // becomes the opening bar's `bar.metadata` so the AST is the source of
+  // truth for per-bar tempo/time information.
+  let barActive: BarMeta = {};
   const patterns: Record<string, Pattern> = {};
   const items: Item[] = [];
 
@@ -50,6 +67,8 @@ function parseJot(c: Cursor): Jot {
     if (c.match('{{')) {
       const meta = parseMetadata(c, true);
       globalMetadata = { ...globalMetadata, ...meta };
+      if (meta.time !== undefined) barActive = { ...barActive, time: meta.time };
+      if (meta.bpm !== undefined) barActive = { ...barActive, bpm: meta.bpm };
       continue;
     }
     if (c.match('||')) {
@@ -59,7 +78,7 @@ function parseJot(c: Cursor): Jot {
     }
     if (c.peek() === '|') {
       c.advance();
-      items.push({ kind: 'bar' });
+      items.push({ kind: 'bar', activeMeta: { ...barActive } });
       continue;
     }
     if (c.peek() === '[' && isLikelyDefinition(c)) {
@@ -109,6 +128,17 @@ function buildVoice(items: Array<Exclude<Item, { kind: 'voice' }>>): Voice {
   let anacrusis: Element[] | undefined;
   let current: Element[] = [];
   let seenBarSep = false;
+  // The metadata that was active when the *current* bar opened. Each `|`
+  // closes the prior bar (using `barOpeningMeta`) and starts a new one
+  // (whose meta is the active snapshot recorded on this `|` item).
+  let barOpeningMeta: BarMeta = {};
+
+  const commit = (els: Element[], meta: BarMeta) => {
+    if (els.length === 0) return;
+    const bar: Bar = { elements: els };
+    if (hasAnyMeta(meta)) bar.metadata = meta as Metadata;
+    bars.push(bar);
+  };
 
   for (const it of items) {
     if (it.kind === 'bar') {
@@ -119,11 +149,10 @@ function buildVoice(items: Array<Exclude<Item, { kind: 'voice' }>>): Voice {
       } else {
         // Skip empty bars: consecutive `|`s separated only by whitespace or
         // metadata blocks act as a single separator, not an empty bar.
-        if (current.length > 0) {
-          bars.push({ elements: current });
-        }
+        commit(current, barOpeningMeta);
         current = [];
       }
+      barOpeningMeta = it.activeMeta;
     } else {
       current.push(it.el);
     }
@@ -131,12 +160,16 @@ function buildVoice(items: Array<Exclude<Item, { kind: 'voice' }>>): Voice {
   if (current.length > 0) {
     // Either trailing content after the last '|' (a final bar) or content
     // with no '|' anywhere (treat as a single bar for usability).
-    bars.push({ elements: current });
+    commit(current, barOpeningMeta);
   }
 
   const voice: Voice = { bars };
   if (anacrusis) voice.anacrusis = anacrusis;
   return voice;
+}
+
+function hasAnyMeta(m: BarMeta): boolean {
+  return m.time !== undefined || m.bpm !== undefined;
 }
 
 // ---------- Pattern definitions ----------

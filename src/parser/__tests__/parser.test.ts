@@ -197,13 +197,16 @@ describe('metadata', () => {
     expect(jot.globalMetadata.time).toEqual({ count: 4, unit: 4 });
   });
 
-  it('parses nested mapping objects', () => {
+  it('parses nested instrumentMapping objects', () => {
     const jot = parse(
-      '{{ mapping: { k:{name:"Kick"}, s:{name:"Snare", limb:"lh"} } }} | k . s . |'
+      '{{ instrumentMapping: { k:{name:"Kick"}, s:{name:"Snare", limb:"lh"} } }} | k . s . |'
     );
-    const mapping = jot.globalMetadata.mapping as Record<string, { name: string; limb?: string }>;
-    expect(mapping.k.name).toBe('Kick');
-    expect(mapping.s.limb).toBe('lh');
+    const map = jot.globalMetadata.instrumentMapping as Record<
+      string,
+      { name: string; limb?: string }
+    >;
+    expect(map.k.name).toBe('Kick');
+    expect(map.s.limb).toBe('lh');
   });
 
   it('parses crescendo as a transition object', () => {
@@ -289,10 +292,10 @@ describe('macros', () => {
 // ---------- SPEC examples end-to-end ----------
 
 describe('SPEC.md examples', () => {
-  it('example 1: basic groove with two voices and a mapping', () => {
+  it('example 1: basic groove with two voices and an instrument mapping', () => {
     const src = `
       {{ bpm: 120, time: "4/4",
-         mapping: { k:{name:"Kick"}, s:{name:"Snare"}, h:{name:"HiHat"} } }}
+         instrumentMapping: { k:{name:"Kick"}, s:{name:"Snare"}, h:{name:"HiHat"} } }}
       | h:c h:c h:c h:c h:c h:c h:c h:c |
       ||
       | k . s . k . s . |
@@ -342,6 +345,22 @@ describe('SPEC.md examples', () => {
     expect(jot.globalMetadata.time).toEqual({ count: 4, unit: 4 });
     expect(jot.voices[0].bars).toHaveLength(2);
     expect(jot.voices[0].bars[0].elements).toHaveLength(7);
+    // Per-bar metadata snapshots: bar 0 retains its 7/8 effective time, bar 1
+    // picks up the inline 4/4 change. This is what makes the AST round-trippable
+    // for tempo/time-sig changes.
+    expect(jot.voices[0].bars[0].metadata?.time).toEqual({ count: 7, unit: 8 });
+    expect(jot.voices[0].bars[1].metadata?.time).toEqual({ count: 4, unit: 4 });
+  });
+
+  it('attaches inline bpm changes to subsequent bars', () => {
+    const jot = parse(
+      '{{ bpm: 120, time: "4/4" }} | k . s . | {{ bpm: 140 }} | k . s . |'
+    );
+    expect(jot.voices[0].bars[0].metadata?.bpm).toBe(120);
+    expect(jot.voices[0].bars[1].metadata?.bpm).toBe(140);
+    // Time signature carries forward unchanged.
+    expect(jot.voices[0].bars[0].metadata?.time).toEqual({ count: 4, unit: 4 });
+    expect(jot.voices[0].bars[1].metadata?.time).toEqual({ count: 4, unit: 4 });
   });
 
   it('example 9: macro + pattern combination', () => {

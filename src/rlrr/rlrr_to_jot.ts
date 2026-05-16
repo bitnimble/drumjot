@@ -13,8 +13,8 @@
  *       RLRR is lossless.
  *  [R5] Drums whose class is unknown to our `CLASS_TO_DRUM` table get a
  *       deterministic letter (last 3 chars of the class name's hash, mapped
- *       into a-z) and a `mapping` entry naming them after the original
- *       drum class.
+ *       into a-z) and an `instrumentMapping` entry naming them after the
+ *       original drum class.
  *  [R6] `audioFileData`, `recordingMetadata` and the original `instruments`
  *       array are preserved verbatim on `jot.globalMetadata.rlrr` so a
  *       subsequent `jotToRlrr` round-trips them.
@@ -22,11 +22,11 @@
 import {
   Bar,
   Element,
+  Instrument,
   Jot,
   Metadata,
   Modifier,
   Note,
-  NoteMapping,
   Simultaneity,
   TimeSignature,
   Voice,
@@ -134,12 +134,12 @@ export function rlrrToJot(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
     bars.pop();
   }
 
-  // Build mapping for every unique class we saw.
-  const mapping: Record<string, NoteMapping> = {};
+  // Build an instrument mapping for every unique class we saw.
+  const instrumentMapping: Record<string, Instrument> = {};
   for (const cls of usedClasses) {
     const descriptor = CLASS_TO_DRUM[cls];
-    if (descriptor && !mapping[descriptor.pitch]) {
-      mapping[descriptor.pitch] = {
+    if (descriptor && !instrumentMapping[descriptor.pitch]) {
+      instrumentMapping[descriptor.pitch] = {
         name: descriptor.name,
         midi: { note: descriptor.midi },
       };
@@ -158,7 +158,7 @@ export function rlrrToJot(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
   const globalMetadata: Metadata = {
     bpm: initialBpm,
     time,
-    mapping,
+    instrumentMapping,
     rlrr: rlrrSidecar,
   };
 

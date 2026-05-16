@@ -6,7 +6,7 @@ A textual DSL for representing drumming notation/tablature. Designed to be unamb
 
 ## Notes, rests, sequencing
 
-- **Note**: a single lowercase letter `a`–`z`. Resolved via `mapping`.
+- **Note**: a single lowercase letter `a`–`z`. Resolved via `instrumentMapping`.
 - **Rest**: `.` — occupies one position.
 - **Sequence**: notes/rests written one after another play in order.
 - **Onset-aligned simultaneity**: `a+b` plays `a` and `b` at the same instant. `+` also works on groups, enabling polyrhythms: `(a a a)_4 + (b b b b)_4`.
@@ -108,7 +108,7 @@ Two scopes, distinguished by brace count:
 - **Note / group metadata**: `{ key: value, ... }` immediately follows a note or group.
 - **Global metadata**: `{{ key: value, ... }}` applies to the rest of the track until overridden.
 
-Precedence (highest to lowest): **note > group > global > mapping**. Applies to every key, including `vol`.
+Precedence (highest to lowest): **note > group > global > instrumentMapping**. Applies to every key, including `vol`.
 
 Special keys:
 
@@ -127,7 +127,8 @@ type VolTransition = {
   duration: number; // bars
 };
 
-type NoteMapping = {
+// One drum-kit instrument (kick, snare, hi-hat, ...).
+type Instrument = {
   name?: string;
   limb?: 'lh' | 'rh' | 'lf' | 'rf';
   midi?: { note: number; vol?: Volume };
@@ -137,7 +138,8 @@ type Metadata = {
   bpm?: number | BpmTransition;
   vol?: Volume | VolTransition;
   time?: string;            // e.g. "4/4", "7/8"
-  mapping?: Record<string, NoteMapping>;
+  // Maps each pitch letter to an Instrument. Order is the rendered lane order.
+  instrumentMapping?: Record<string, Instrument>;
   comment?: string;
   // user-defined keys allowed
 };
@@ -212,7 +214,7 @@ Macro names follow the same identifier rules. Macros and patterns occupy separat
 
 ```
 {{ bpm: 120, time: "4/4",
-   mapping: { k:{name:"Kick"}, s:{name:"Snare"}, h:{name:"HiHat"} } }}
+   instrumentMapping: { k:{name:"Kick"}, s:{name:"Snare"}, h:{name:"HiHat"} } }}
 | h:c h:c h:c h:c h:c h:c h:c h:c |
 ||
 | k . s . k . s . |

@@ -102,3 +102,40 @@ dist
 
 # TernJS port file
 .tern-port
+
+# Transcriber service (Python backend, see transcriber/)
+transcriber/.env
+transcriber/.venv
+transcriber/venv
+transcriber/data
+transcriber/models
+transcriber/debug
+transcriber/build
+transcriber/*.egg-info
+
+# Python tooling (general). The transcriber service is the main producer
+# of these, but list them globally so a `python` invocation from the
+# repo root doesn't leak caches into git.
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Editor / IDE local settings (per-user). Add explicit shared configs
+# back with `git add -f` if you want to commit them.
+.idea/
+.cursor/
+*.swp
+*.swo
+*~
+
+# Bun caches (per-project / per-user)
+.bun/

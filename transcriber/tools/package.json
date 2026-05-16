@@ -1,0 +1,7 @@
+{
+  "name": "drumjot-transcriber-tools",
+  "version": "0.1.0",
+  "description": "Bun-side helpers used by the Python transcriber pipeline (DSL <-> onset list bridge).",
+  "type": "module",
+  "private": true
+}

@@ -1,0 +1,22 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Locally-cached model weights & audio + debug-mode artifacts
+data/
+models/
+debug/
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.aac
+*.m4a
+*.mid
+*.midi

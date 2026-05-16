@@ -1,76 +1,100 @@
 import { Jot, bar, group, note, patternRef, rest, simul } from 'src/dsl';
 
+/** A named example jot shown in the web UI's example picker. */
+export type ExampleJot = {
+  id: string;
+  label: string;
+  jot: Jot;
+};
+
 /**
- * Simple rock loop, matching SPEC.md example 1:
+ * Simple rock loop, adapted from SPEC.md example 1. Authored as two voices
+ * joined by `||`, split by limb group:
  *
+ *   - Voice 1 ("Hands"): hi-hat eighths plus snare backbeats.
+ *   - Voice 2 ("Feet"):  kick pattern.
+ *
+ * Roughly:
  * ```
- * {{ bpm: 120, time: "4/4",
- *    mapping: { k:{name:"Kick"}, s:{name:"Snare"}, h:{name:"HiHat"} } }}
- * | h:c h:c h:c h:c h:c h:c h:c h:c |
+ * | h:c h:c h:c+s:a h:c h:c h:c h:c+s:a s:fl@r |
+ * | h:c h:c h:c+s:a h:c h:c h:c h:c+s@l h:o+s@l |
  * ||
- * | k . s . k . s . |
+ * | k . . . k . . . |
+ * | k k:g . . k . . . |
  * ```
  *
- * Authored as a two-voice jot: the hi-hat eighths run in parallel with the
- * kick/snare backbeat.
+ * Bar 1 ends with a snare-flam pickup (the right hand briefly leaves the
+ * hi-hat). Bar 2 ends with an open hi-hat + snare on the left hand, an
+ * idiomatic lead-in back to bar 1.
+ *
+ * Within each voice, lane order comes from
+ * `globalMetadata.instrumentMapping` declaration order ({ h, s, k }), so
+ * the hands staff stacks hi-hat on top of snare and the feet staff renders
+ * the kick on its own lane below.
  */
 export const rockJot: Jot = {
   title: 'Simple rock loop',
   globalMetadata: {
     bpm: 120,
     time: { count: 4, unit: 4 },
-    mapping: {
-      k: { name: 'Kick', limb: 'rf' },
-      s: { name: 'Snare', limb: 'lh' },
+    instrumentMapping: {
       h: { name: 'HiHat', limb: 'rh' },
+      s: { name: 'Snare', limb: 'lh' },
+      k: { name: 'Kick', limb: 'rf' },
     },
   },
   voices: [
     {
+      name: 'Hands',
       bars: [
         bar(
           note('h', { modifiers: ['c'] }),
           note('h', { modifiers: ['c'] }),
+          simul(note('h', { modifiers: ['c'] }), note('s', { modifiers: ['a'] })),
           note('h', { modifiers: ['c'] }),
           note('h', { modifiers: ['c'] }),
           note('h', { modifiers: ['c'] }),
-          note('h', { modifiers: ['c'] }),
-          note('h', { modifiers: ['c'] }),
-          note('h', { modifiers: ['c'] })
+          simul(note('h', { modifiers: ['c'] }), note('s', { modifiers: ['a'] })),
+          // Right hand jumps off the hi-hat for a snare flam pickup into bar 2.
+          // Left hand plays the grace stroke immediately before the right.
+          note('s', { modifiers: ['fl'], sticking: 'r' })
         ),
         bar(
           note('h', { modifiers: ['c'] }),
           note('h', { modifiers: ['c'] }),
+          simul(note('h', { modifiers: ['c'] }), note('s', { modifiers: ['a'] })),
           note('h', { modifiers: ['c'] }),
           note('h', { modifiers: ['c'] }),
           note('h', { modifiers: ['c'] }),
-          note('h', { modifiers: ['c'] }),
-          note('h', { modifiers: ['c'] }),
-          note('h', { modifiers: ['o'] })
+          simul(note('h', { modifiers: ['c'] }), note('s', { sticking: 'l' })),
+          // Open hi-hat lead-in to bar 1's downbeat. Right hand opens the
+          // hat, left hand plays the snare on the and-of-4.
+          simul(note('h', { modifiers: ['o'] }), note('s', { sticking: 'l' }))
         ),
       ],
     },
     {
+      name: 'Feet',
       bars: [
         bar(
           note('k'),
           rest(),
-          note('s', { modifiers: ['a'] }),
+          rest(),
           rest(),
           note('k'),
           rest(),
-          note('s', { modifiers: ['a'] }),
+          rest(),
           rest()
         ),
         bar(
           note('k'),
           note('k', { modifiers: ['g'] }),
-          note('s', { modifiers: ['a'] }),
+          rest(),
           rest(),
           note('k'),
           rest(),
-          note('s', { sticking: 'l' }),
-          note('s', { modifiers: ['fl'], sticking: 'r' })
+          rest(),
+          rest()
         ),
       ],
     },
@@ -78,23 +102,28 @@ export const rockJot: Jot = {
 };
 
 /**
- * Showcase of triplets, simultaneity and a pattern with manipulation.
+ * Showcase of triplets, simultaneity, and pattern reuse.
+ *
+ * The `Groove` pattern is defined once and replayed across three of the four
+ * bars (AABA form: groove, groove, fill, groove). Bar 3 is a half-bar
+ * triplet fill, demonstrating how custom bars sit alongside pattern refs.
  *
  * Roughly:
  * ```
  * [Groove=(k.s.kks.)]
- * | [Groove] |
- * | k . s . (k+s k+s k+s)_4 |
+ * | [Groove] | [Groove] | k . s . (k+s k+s k+s)_4 | [Groove] |
  * ```
+ *
+ * Instrument-mapping order puts snare above kick.
  */
 export const tripletJot: Jot = {
   title: 'Triplet showcase',
   globalMetadata: {
     bpm: 110,
     time: { count: 4, unit: 4 },
-    mapping: {
-      k: { name: 'Kick', limb: 'rf' },
+    instrumentMapping: {
       s: { name: 'Snare', limb: 'lh' },
+      k: { name: 'Kick', limb: 'rf' },
     },
   },
   patterns: {
@@ -119,6 +148,7 @@ export const tripletJot: Jot = {
     {
       bars: [
         bar(patternRef('Groove')),
+        bar(patternRef('Groove')),
         bar(
           note('k'),
           rest(),
@@ -133,7 +163,14 @@ export const tripletJot: Jot = {
             { weight: 4 }
           )
         ),
+        bar(patternRef('Groove')),
       ],
     },
   ],
 };
+
+/** Registry of example jots offered by the web UI picker. */
+export const EXAMPLE_JOTS: readonly ExampleJot[] = [
+  { id: 'rock', label: 'Simple rock loop', jot: rockJot },
+  { id: 'triplet', label: 'Triplet showcase', jot: tripletJot },
+];

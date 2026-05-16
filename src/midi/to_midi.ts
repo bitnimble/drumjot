@@ -18,8 +18,8 @@
  *
  *  [B4] Per-note `metadata.midi.note` and `metadata.midi.velocity` win when
  *       present (this is the channel the reader uses to preserve fidelity).
- *       Otherwise we fall back to `mapping[pitch].midi` and, for unknown
- *       pitches, to a heuristic in `defaultMidiNote`.
+ *       Otherwise we fall back to `instrumentMapping[pitch].midi` and, for
+ *       unknown pitches, to a heuristic in `defaultMidiNote`.
  *
  *  [B5] When no velocity is supplied we map `vol` buckets to GM-ish values
  *       and apply `:a` / `:g` adjustments. Volume transitions
@@ -224,7 +224,7 @@ function resolveMidiNote(note: ResolvedNote, track: ResolvedTrack): number | und
   // [B4] Per-note override wins.
   const meta = note.source.metadata as { midi?: { note?: number } } | undefined;
   if (meta?.midi?.note !== undefined) return meta.midi.note;
-  if (track.mapping.midi?.note !== undefined) return track.mapping.midi.note;
+  if (track.instrument.midi?.note !== undefined) return track.instrument.midi.note;
   return defaultMidiNote(note.pitch, note.modifiers);
 }
 

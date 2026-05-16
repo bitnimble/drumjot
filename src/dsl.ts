@@ -36,7 +36,13 @@ export type VolTransition = {
 
 export type Limb = 'lh' | 'rh' | 'lf' | 'rf';
 
-export type NoteMapping = {
+/**
+ * One drum-kit instrument (kick, snare, hi-hat, ...). The DSL's
+ * `instrumentMapping` is a `Record<pitch, Instrument>` that resolves each
+ * single-letter pitch to a named instrument with optional limb assignment
+ * and a default MIDI note.
+ */
+export type Instrument = {
   name?: string;
   limb?: Limb;
   midi?: { note: number; vol?: Volume };
@@ -44,13 +50,14 @@ export type NoteMapping = {
 
 /**
  * Metadata as it appears in `{ ... }` or `{{ ... }}`. Per-note > per-group >
- * global > mapping precedence is the consumer's responsibility.
+ * global > instrumentMapping precedence is the consumer's responsibility.
  */
 export type Metadata = {
   bpm?: number | BpmTransition;
   vol?: Volume | VolTransition;
   time?: TimeSignature;
-  mapping?: Record<string, NoteMapping>;
+  /** Maps each pitch letter to an Instrument. Order is the rendered lane order. */
+  instrumentMapping?: Record<string, Instrument>;
   comment?: string;
   [key: string]: unknown;
 };
@@ -82,7 +89,7 @@ export type Sticking = 'r' | 'l' | 'rf' | 'lf';
 
 export type Note = {
   kind: 'note';
-  /** Single lowercase letter a-z; resolved via active `mapping`. */
+  /** Single lowercase letter a-z; resolved via the active `instrumentMapping`. */
   pitch: string;
   modifiers?: Modifier[];
   sticking?: Sticking;
@@ -121,6 +128,12 @@ export type Group = {
   roll?: boolean;
   modifiers?: Modifier[];
   metadata?: Metadata;
+  /**
+   * Set during expansion (`RenderedJot.expandElements`) when this group
+   * originated from a `patternRef`. The renderer uses it to draw outlines
+   * around pattern usages and link them back to their definition.
+   */
+  patternSource?: { name: string };
 };
 
 /**
@@ -162,9 +175,17 @@ export type Bar = {
 
 /**
  * One side of a global simultaneity (`||`). Multiple voices play in parallel
- * from a common start; the track length equals the longest voice.
+ * from a common start; the track length equals the longest voice. The DSL
+ * surface syntax for joining voices is the `||` operator; nothing else in the
+ * codebase should use the term "voice" for any other concept.
+ *
+ * `name` is purely a display hint (the renderer uses it instead of
+ * "Voice 1/2/..." when present); it has no spec representation since DSL
+ * source can't name a `||` side.
  */
 export type Voice = {
+  /** Optional display label, e.g. "Hands" / "Feet". Not parseable from DSL. */
+  name?: string;
   /** Anacrusis/pickup elements before the first `|`. Not length-checked. */
   anacrusis?: Element[];
   bars: Bar[];

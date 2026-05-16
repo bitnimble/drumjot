@@ -46,11 +46,11 @@ import { parseMidi, MidiEvent } from 'midi-file';
 import {
   Bar,
   Element,
+  Instrument,
   Jot,
   Metadata,
   Modifier,
   Note,
-  NoteMapping,
   Simultaneity,
   TimeSignature,
 } from 'src/dsl';
@@ -235,14 +235,14 @@ export function fromMidi(
     bars.pop();
   }
 
-  // Build a mapping from observed MIDI notes -> NoteMapping entries.
+  // Build an instrument mapping from the MIDI notes we actually observed.
   const usedNotes = new Set(drumNotes.map((d) => d.note));
-  const mapping = buildMapping(usedNotes);
+  const instrumentMapping = buildInstrumentMap(usedNotes);
 
   const globalMetadata: Metadata = {
     bpm,
     time: barSpans[0].time,
-    mapping,
+    instrumentMapping,
   };
 
   // [A9] No anacrusis is inferred; bars run from tick 0 onward.
@@ -337,8 +337,8 @@ function buildNote(
   return note;
 }
 
-function buildMapping(used: Set<number>): Record<string, NoteMapping> {
-  const out: Record<string, NoteMapping> = {};
+function buildInstrumentMap(used: Set<number>): Record<string, Instrument> {
+  const out: Record<string, Instrument> = {};
   for (const midi of used) {
     const entry = GM_PERCUSSION[midi];
     const pitch = entry?.pitch ?? deriveLetterFromMidi(midi);

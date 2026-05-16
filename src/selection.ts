@@ -6,13 +6,24 @@ import { JotViewStore } from 'src/jot_view';
 export type SelectionState =
   | { type: 'notes'; notes: Set<ResolvedNote> }
   | { type: 'bars'; bars: ResolvedBar[] }
-  | { type: 'voice'; voice: ResolvedVoice };
+  | { type: 'voice'; voice: ResolvedVoice }
+  /**
+   * A pattern is "selected" when its definition + all usages should be
+   * visually highlighted. Created by clicking a pattern bracket label.
+   */
+  | { type: 'pattern'; name: string };
 
 /**
- * Marquee selection store. Tracks an in-progress drag and exposes both a
- * committed `state` and an in-progress `transientState`. The intersection
- * logic that turns a marquee Box into a SelectionState is intentionally
- * left as a TODO so the surrounding plumbing can be exercised first.
+ * Selection store: holds the committed `state`, an in-progress marquee
+ * `transientState`, and exposes mutators for both marquee drags and
+ * discrete selection events (pattern label clicks, etc.).
+ *
+ * UX rule: any mouse-down on empty container space clears the existing
+ * selection. If that mouse-down turns into a drag, the resulting marquee
+ * commits a new selection on mouse-up. If it stays a plain click, the
+ * selection ends up cleared. Selections produced by clicking on a specific
+ * element (e.g. a pattern bracket) bypass this by stopping mouse-down
+ * propagation before the container handler fires.
  */
 export class SelectionStore {
   state?: SelectionState = undefined;
@@ -30,6 +41,10 @@ export class SelectionStore {
   }
 
   beginSelection(p: Point) {
+    // Mouse-down on empty space clears the existing selection. A subsequent
+    // drag will overwrite it with a marquee result; a plain click will leave
+    // the store empty.
+    this.state = undefined;
     this.mousedownPoint = p;
   }
 
@@ -50,6 +65,20 @@ export class SelectionStore {
 
   clear() {
     this.state = undefined;
+  }
+
+  /** Toggle the selection of a pattern by name. */
+  togglePattern(name: string) {
+    if (this.state?.type === 'pattern' && this.state.name === name) {
+      this.state = undefined;
+    } else {
+      this.state = { type: 'pattern', name };
+    }
+  }
+
+  /** Convenience: returns the currently-selected pattern name, if any. */
+  get selectedPattern(): string | undefined {
+    return this.state?.type === 'pattern' ? this.state.name : undefined;
   }
 
   private getSelectionForMarquee(): SelectionState | undefined {

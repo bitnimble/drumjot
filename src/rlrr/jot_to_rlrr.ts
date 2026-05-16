@@ -11,8 +11,8 @@
  *  [S3] For each note we resolve a target drum instance name in this
  *       precedence order:
  *         (a) `note.metadata.rlrr.name`                (exact round-trip),
- *         (b) `track.mapping[pitch].midi.note` matched to an instrument in
- *             the kit via the GM table,
+ *         (b) `track.instrument.midi.note` matched to an instrument in the
+ *             kit via the GM table,
  *         (c) `pitchToClass(pitch, modifiers)` then pick the first
  *             instrument of that class in the kit.
  *       Notes that don't resolve to any kit instrument are dropped.
@@ -181,7 +181,7 @@ function resolveInstrument(
   }
 
   // [S3](b) map via the track's midi note if it matches a known kit class.
-  const midiNote = track.mapping.midi?.note;
+  const midiNote = track.instrument.midi?.note;
   if (midiNote !== undefined) {
     for (const inst of kit) {
       const descriptor = describeDrum(inst.name);

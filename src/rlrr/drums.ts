@@ -4,8 +4,8 @@
  *
  * Drum class names come from
  * https://github.com/emretanirgan/ParadiddleUtilities/blob/master/PDUtilities/drum_sets/defaultset.rlrr
- * and the midi_mapping.yaml in the same project. We pick a stable single
- * letter per class to satisfy the DSL constraint that pitches are `a`-`z`.
+ * and the upstream `midi_mapping.yaml`. We pick a stable single letter per
+ * class to satisfy the DSL constraint that pitches are `a`-`z`.
  *
  * Where a single DSL letter collapses several classes (e.g. all crashes ->
  * `c`), the converter preserves the original drum class on the produced
@@ -20,7 +20,7 @@ export type DrumDescriptor = {
   modifiers?: Modifier[];
   /** Default GM percussion MIDI note for this class. */
   midi: number;
-  /** Human-readable name used as `NoteMapping.name`. */
+  /** Human-readable name used as `Instrument.name` in the DSL mapping. */
   name: string;
 };
 

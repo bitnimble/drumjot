@@ -1,0 +1,34 @@
+# Files NOT to ship as build context to `transcriber/Dockerfile`.
+# The build context is the repo root, so we have to exclude bulky
+# things explicitly.
+
+# Frontend deps + builds
+node_modules
+dist
+.cache
+
+# Python
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.venv
+**/venv
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+
+# Transcriber-local
+transcriber/.env
+transcriber/data
+transcriber/models
+transcriber/debug
+
+# IDE / OS
+.idea
+.vscode
+.DS_Store
+*.swp
+
+# VCS
+.git
+.gitignore
