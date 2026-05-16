@@ -1,0 +1,214 @@
+/**
+ * DSL data structures matching the Drumming DSL spec (SPEC.md).
+ *
+ * These types describe a jot at the level the DSL describes it: a tree of
+ * notes, rests, simultaneities, groups, bar separators, pattern definitions
+ * and references, plus metadata. No parser is included; a Jot is authored
+ * either directly as data or (in future) produced by a parser.
+ */
+
+// ---------- Metadata ----------
+
+export type Volume = 'pp' | 'p' | 'mp' | 'mf' | 'f' | 'ff';
+
+/**
+ * Time signature, e.g. 4/4 = { count: 4, unit: 4 }, 7/8 = { count: 7, unit: 8 }.
+ * `unit` is the note value of the denominator (4 = quarter, 8 = eighth, ...).
+ */
+export type TimeSignature = {
+  count: number;
+  unit: number;
+};
+
+export type BpmTransition = {
+  start?: number;
+  end: number;
+  /** duration of the transition, in bars */
+  duration: number;
+};
+
+export type VolTransition = {
+  start?: Volume;
+  end: Volume;
+  /** duration of the transition, in bars */
+  duration: number;
+};
+
+export type Limb = 'lh' | 'rh' | 'lf' | 'rf';
+
+export type NoteMapping = {
+  name?: string;
+  limb?: Limb;
+  midi?: { note: number; vol?: Volume };
+};
+
+/**
+ * Metadata as it appears in `{ ... }` or `{{ ... }}`. Per-note > per-group >
+ * global > mapping precedence is the consumer's responsibility.
+ */
+export type Metadata = {
+  bpm?: number | BpmTransition;
+  vol?: Volume | VolTransition;
+  time?: TimeSignature;
+  mapping?: Record<string, NoteMapping>;
+  comment?: string;
+  [key: string]: unknown;
+};
+
+// ---------- Modifiers & sticking ----------
+
+/** Single- and multi-character modifiers from the spec. */
+export type Modifier =
+  | 'a' // accent
+  | 'g' // ghost
+  | 'c' // closed (hi-hat)
+  | 'h' // half-open
+  | 'o' // open
+  | 'f' // foot / chick
+  | 's' // splash
+  | 'r' // rim shot
+  | 'x' // cross-stick
+  | 'z' // buzz / press
+  | 'k' // choke
+  | 'm' // mute
+  | 'l' // let-ring
+  | 'fl' // flam
+  | 'dr' // drag
+  | 'rf'; // ruff
+
+export type Sticking = 'r' | 'l' | 'rf' | 'lf';
+
+// ---------- Elements ----------
+
+export type Note = {
+  kind: 'note';
+  /** Single lowercase letter a-z; resolved via active `mapping`. */
+  pitch: string;
+  modifiers?: Modifier[];
+  sticking?: Sticking;
+  /** Roll/buzz fill (`~`). */
+  roll?: boolean;
+  /** Duration weight from `_N`; defaults to 1. */
+  weight?: number;
+  /** Repeat count from `*N`; defaults to 1. */
+  repeat?: number;
+  metadata?: Metadata;
+};
+
+export type Rest = {
+  kind: 'rest';
+  weight?: number;
+  repeat?: number;
+};
+
+/** Onset-aligned simultaneity: `a+b+c`. All inner elements share a single onset. */
+export type Simultaneity = {
+  kind: 'simul';
+  elements: Element[];
+  weight?: number;
+};
+
+/**
+ * Parenthesised group `(...)`. A top-level group spans one bar.
+ * Inner elements are distributed evenly across the group's duration unless
+ * individual elements override with `_N` weights.
+ */
+export type Group = {
+  kind: 'group';
+  elements: Element[];
+  weight?: number;
+  repeat?: number;
+  roll?: boolean;
+  modifiers?: Modifier[];
+  metadata?: Metadata;
+};
+
+/**
+ * Substitution within a pattern reference, e.g. `[Name#3=(...)]` or `[Name#4-8=(...)]`.
+ * Positions are 1-based; ranges are inclusive on both ends. Path entries
+ * support descent into nested groups: `[Name#3#2=(...)]` -> path: [3, 2].
+ */
+export type PatternSubstitution = {
+  path: Array<number | [number, number]>;
+  replacement: Element;
+};
+
+/**
+ * Reference to a previously-defined pattern. With substitutions, this is the
+ * `[Name#3=(...)]` style position replacement; the original pattern is not
+ * mutated unless the result is re-assigned via `=`.
+ */
+export type PatternRef = {
+  kind: 'patternRef';
+  name: string;
+  substitutions?: PatternSubstitution[];
+  weight?: number;
+  repeat?: number;
+};
+
+export type Element = Note | Rest | Simultaneity | Group | PatternRef;
+
+// ---------- Bars, voices, patterns, jot ----------
+
+/**
+ * One bar's worth of elements (between two `|`). The sum of element weights
+ * must equal the current time signature's bar length (rendering enforces).
+ */
+export type Bar = {
+  elements: Element[];
+  /** Inline metadata override for this bar (rare; usually metadata is global). */
+  metadata?: Metadata;
+};
+
+/**
+ * One side of a global simultaneity (`||`). Multiple voices play in parallel
+ * from a common start; the track length equals the longest voice.
+ */
+export type Voice = {
+  /** Anacrusis/pickup elements before the first `|`. Not length-checked. */
+  anacrusis?: Element[];
+  bars: Bar[];
+};
+
+export type Pattern = {
+  name: string;
+  /** `[?Name=...]` defines silently; not played in-line. */
+  silent: boolean;
+  elements: Element[];
+};
+
+/** Top-level jot. */
+export type Jot = {
+  title: string;
+  /** Effective from the start; per-group/per-note metadata overrides. */
+  globalMetadata: Metadata;
+  /** Named patterns keyed by identifier (without the `[]`). */
+  patterns?: Record<string, Pattern>;
+  /** Voices laid out in parallel via `||`. A single-voice jot has length 1. */
+  voices: Voice[];
+};
+
+// ---------- Convenience helpers ----------
+
+export const note = (pitch: string, opts: Omit<Note, 'kind' | 'pitch'> = {}): Note => ({
+  kind: 'note',
+  pitch,
+  ...opts,
+});
+
+export const rest = (opts: Omit<Rest, 'kind'> = {}): Rest => ({ kind: 'rest', ...opts });
+
+export const simul = (...elements: Element[]): Simultaneity => ({ kind: 'simul', elements });
+
+export const group = (elements: Element[], opts: Omit<Group, 'kind' | 'elements'> = {}): Group => ({
+  kind: 'group',
+  elements,
+  ...opts,
+});
+
+export const bar = (...elements: Element[]): Bar => ({ elements });
+
+export const patternRef = (
+  name: string,
+  opts: Omit<PatternRef, 'kind' | 'name'> = {}
+): PatternRef => ({ kind: 'patternRef', name, ...opts });

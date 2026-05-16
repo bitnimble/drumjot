@@ -1,0 +1,171 @@
+.jotContainer {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  padding: 32px 24px;
+  overflow: auto;
+  box-sizing: border-box;
+  user-select: none;
+}
+
+.title {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 4px 0;
+  letter-spacing: 0.02em;
+}
+
+.subtitle {
+  color: #6b6b6b;
+  font-size: 12px;
+  margin: 0 0 20px 0;
+}
+
+.legend {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  font-size: 12px;
+}
+
+.legendChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 4px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid #e7e0d5;
+}
+
+.legendSwatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.voices {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.voice {
+  position: relative;
+}
+
+.voiceLabel {
+  font-size: 10px;
+  color: #999;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 6px;
+}
+
+.voiceStaff {
+  position: relative;
+  display: flex;
+  border-top: 1px solid #c9bfae;
+  border-bottom: 1px solid #c9bfae;
+  background:
+    linear-gradient(to bottom, transparent calc(100% - 1px), #efe6d2 calc(100% - 1px));
+}
+
+.bar {
+  position: relative;
+  border-right: 1px solid #c9bfae;
+  flex: 0 0 auto;
+}
+
+.bar:first-child {
+  border-left: 1px solid #c9bfae;
+}
+
+.barAnacrusis {
+  border-right: 1px dashed #c9bfae;
+  background: rgba(255, 140, 85, 0.04);
+}
+
+.lane {
+  position: relative;
+  border-bottom: 1px dashed #e2d8c4;
+}
+
+.lane:last-child {
+  border-bottom: none;
+}
+
+.laneLabel {
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  color: #aaa;
+  pointer-events: none;
+}
+
+.note {
+  position: absolute;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  cursor: pointer;
+}
+
+.note.accent {
+  box-shadow:
+    0 0 0 2px #fff,
+    0 0 0 3px currentColor;
+}
+
+.note.ghost {
+  opacity: 0.45;
+  border: 1px dashed currentColor;
+  background: transparent !important;
+}
+
+.note.roll {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.5) 0 2px,
+    transparent 2px 4px
+  );
+}
+
+.modifierBadge {
+  position: absolute;
+  top: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  font-weight: 700;
+  color: #555;
+  pointer-events: none;
+  letter-spacing: 0.04em;
+}
+
+.stickingBadge {
+  position: absolute;
+  bottom: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  color: #888;
+  pointer-events: none;
+}
+
+.marquee {
+  position: absolute;
+  box-shadow: 0 0 0 1px #ff8c55;
+  background: rgba(255, 140, 85, 0.1);
+  pointer-events: none;
+}
+
+.empty {
+  font-size: 14px;
+  color: #888;
+  padding: 24px;
+}
