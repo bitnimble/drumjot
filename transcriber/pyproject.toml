@@ -36,3 +36,44 @@ dev = ["ruff>=0.6", "pytest>=8"]
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+[tool.ruff]
+# Match repo-wide style: 100-char line limit (see ../.prettierrc tabWidth/printWidth).
+line-length = 100
+target-version = "py311"
+extend-exclude = [
+    # Cached / generated dirs that shouldn't be linted even if present.
+    ".venv",
+    "venv",
+    "build",
+    "debug",
+    "models",
+]
+
+[tool.ruff.lint]
+# Enabled lint groups, in roughly decreasing order of strictness:
+#   E,W = pycodestyle errors / warnings
+#   F   = pyflakes (unused imports, undefined names, ...)
+#   I   = isort (import sorting)
+#   B   = flake8-bugbear (likely bugs)
+#   UP  = pyupgrade (modern syntax suggestions)
+#   SIM = flake8-simplify
+select = ["E", "W", "F", "I", "B", "UP", "SIM"]
+# E501 line-too-long is reported by `select = ["E"]` but we already cap
+# at 100 chars; long URLs / log strings shouldn't trip ruff for cosmetic
+# reasons - the formatter (if/when adopted) handles wrapping anyway.
+ignore = [
+    "E501",
+    # B008: function calls in defaults are intentional for FastAPI's
+    # `Depends(...)` / `File(...)` parameter pattern.
+    "B008",
+    # SIM117: nested `with` blocks are kept for readability in places.
+    "SIM117",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests use deliberately ugly fixtures and patterns; relax the checks.
+"tests/*" = ["E", "F841"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]

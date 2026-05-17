@@ -182,7 +182,9 @@ def diff_velocities(
         return []
 
     issues: list[Issue] = []
-    for p, rms in zip(predicted, rms_at_each):
+    # `rms_at_each` is computed from `predicted` so the two are always the
+    # same length; strict=True turns a future bug there into a loud error.
+    for p, rms in zip(predicted, rms_at_each, strict=True):
         if rms < 1e-6:
             continue
         actual_velocity = int(round(median_vel * rms / median_rms))

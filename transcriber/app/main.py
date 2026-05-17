@@ -229,10 +229,11 @@ async def transcribe(
                     structure=structure,
                     samples=self_consistency_samples,
                 )
-                if scores:
-                    chosen_idx = int(max(range(len(scores)), key=lambda i: scores[i]))
-                else:
-                    chosen_idx = 0
+                chosen_idx = (
+                    int(max(range(len(scores)), key=lambda i: scores[i]))
+                    if scores
+                    else 0
+                )
                 self_consistency_log = SelfConsistencyLog(
                     samples=self_consistency_samples,
                     scores=scores,

@@ -25,7 +25,6 @@ Why it matters:
 from __future__ import annotations
 
 import logging
-from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -227,10 +226,7 @@ def _finalize_bar(index: int, beats: list[BeatTick]) -> BarInfo:
     # `end_time` is the start of the next bar; approximate with the last
     # beat's time + average gap. Will be overwritten by `_summarize` once
     # we know the next bar's actual start.
-    if len(beats) >= 2:
-        gap = beats[-1].time - beats[-2].time
-    else:
-        gap = 60.0 / 120.0
+    gap = beats[-1].time - beats[-2].time if len(beats) >= 2 else 60.0 / 120.0
     end = beats[-1].time + max(gap, 0.0)
     count = len(beats)
     # Average tempo over this bar's beats

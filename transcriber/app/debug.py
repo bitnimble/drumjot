@@ -62,7 +62,7 @@ class DebugSink:
         cls,
         base_dir: Path | None,
         original_filename: str | None,
-    ) -> "DebugSink | None":
+    ) -> DebugSink | None:
         if base_dir is None:
             return None
         try:

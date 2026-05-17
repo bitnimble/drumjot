@@ -54,6 +54,20 @@ cp .env.example .env
 docker compose up --build
 ```
 
+## Linting and tests
+
+```bash
+cd transcriber
+pip install -e .[dev]
+ruff check .         # lint (config in pyproject.toml [tool.ruff])
+pytest               # pure-Python tests under tests/
+```
+
+`ruff check .` should always exit clean before pushing; CI will treat
+any violation as a failure. The `pytest` suite intentionally only covers
+the modules that don't need madmom / audio-separator / a GPU - it's a
+sanity net for the parts of the pipeline that change most often.
+
 Wait for `INFO: Uvicorn running on http://0.0.0.0:8001` then:
 
 ```bash

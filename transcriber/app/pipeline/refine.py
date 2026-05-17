@@ -24,7 +24,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -55,7 +55,7 @@ log = logging.getLogger(__name__)
 PROMPT_DIR = Path(__file__).resolve().parent.parent.parent / "prompts"
 
 
-class RefineLevel(str, Enum):
+class RefineLevel(StrEnum):
     MACRO = "macro"
     STRUCTURE = "structure"
     ONSETS = "onsets"

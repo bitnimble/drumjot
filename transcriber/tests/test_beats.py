@@ -14,7 +14,6 @@ from app.pipeline.beats import (
     _pad_trailing_bars,
 )
 
-
 # ---------- _choose_time_signature ----------
 
 
