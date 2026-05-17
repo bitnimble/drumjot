@@ -1,5 +1,5 @@
 import classNames from 'classnames';
-import { makeAutoObservable, runInAction } from 'mobx';
+import { autorun, makeAutoObservable, runInAction } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { Instrument, Modifier, Sticking } from 'src/dsl';
@@ -17,9 +17,9 @@ import {
   px,
 } from 'src/jot';
 import { parse, ParseError } from 'src/parser';
-import { jotPlayer, PlayerState } from 'src/playback';
+import { isAudibleUnder, jotPlayer, PlayerState, timeToX } from 'src/playback';
 import { SelectionStore } from 'src/selection';
-import { RefinementLog, transcriber } from 'src/transcriber';
+import { RefinementLog, titleFromFilename, transcriber } from 'src/transcriber';
 import styles from './jot_view.module.css';
 
 export type TranscribeStatus =
@@ -44,6 +44,15 @@ export type TranscribeOptions = {
   debug: boolean;
 };
 
+/**
+ * Pixels-per-bar at zoom = 1. Same numeric value as `ViewConfig.barWidth`'s
+ * own default so existing layouts are unchanged for users who never touch
+ * the slider.
+ */
+const BASE_BAR_WIDTH = 640;
+const MIN_ZOOM = 0.3;
+const MAX_ZOOM = 3.0;
+
 export class JotViewStore {
   currentJot: RenderedJot | undefined;
   examples: readonly ExampleJot[] = [];
@@ -57,6 +66,23 @@ export class JotViewStore {
     debug: false,
   };
   /**
+   * Shared layout config threaded into every new `RenderedJot` we
+   * construct, so the zoom slider mutates a single config object and
+   * the layout reflows reactively (ViewConfig is MobX-observable;
+   * RenderedJot's `layoutJot` is a computedFn that reads `barWidth`).
+   */
+  viewConfig: ViewConfig = new ViewConfig();
+  /** Horizontal zoom multiplier; 1.0 = `BASE_BAR_WIDTH` pixels per bar. */
+  zoom: number = 1;
+  /** DSL pitches the user has muted via the row-gutter M button. */
+  mutedPitches: Set<string> = new Set();
+  /**
+   * DSL pitches the user has soloed. When non-empty, ONLY these rows
+   * are audible; this and `mutedPitches` are pushed to the player via
+   * an autorun so toggles take effect live during playback.
+   */
+  soloedPitches: Set<string> = new Set();
+  /**
    * Controller for the in-flight `/transcribe` request, if any. The
    * "Stop" toolbar button calls `.abort()` here; the request's
    * AbortSignal is passed into `transcriber.transcribe` which forwards
@@ -67,6 +93,34 @@ export class JotViewStore {
 
   constructor() {
     makeAutoObservable(this);
+    // Push mute / solo state to the player whenever it changes. While
+    // playback is in flight, the player cancels and reschedules events
+    // so the toggle takes effect immediately (including bringing
+    // previously-muted rows back mid-song). When idle, the filter is
+    // just stored for the next play().
+    autorun(() => {
+      jotPlayer.setFilter({
+        mutedPitches: new Set(this.mutedPitches),
+        soloedPitches: new Set(this.soloedPitches),
+      });
+    });
+  }
+
+  toggleMute(pitch: string) {
+    if (this.mutedPitches.has(pitch)) this.mutedPitches.delete(pitch);
+    else this.mutedPitches.add(pitch);
+  }
+
+  toggleSolo(pitch: string) {
+    if (this.soloedPitches.has(pitch)) this.soloedPitches.delete(pitch);
+    else this.soloedPitches.add(pitch);
+  }
+
+  isPitchAudible(pitch: string): boolean {
+    return isAudibleUnder(pitch, {
+      mutedPitches: this.mutedPitches,
+      soloedPitches: this.soloedPitches,
+    });
   }
 
   setJot(jot: RenderedJot | undefined) {
@@ -82,7 +136,7 @@ export class JotViewStore {
   loadExample(id: string) {
     const example = this.examples.find((e) => e.id === id);
     if (!example) return;
-    this.currentJot = new RenderedJot(example.jot);
+    this.currentJot = new RenderedJot(example.jot, this.viewConfig);
     this.currentExampleId = id;
   }
 
@@ -100,6 +154,12 @@ export class JotViewStore {
 
   setDebug(enabled: boolean) {
     this.transcribeOptions.debug = enabled;
+  }
+
+  setZoom(z: number) {
+    const clamped = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
+    this.zoom = clamped;
+    this.viewConfig.barWidth = px(BASE_BAR_WIDTH * clamped);
   }
 
   /**
@@ -132,8 +192,14 @@ export class JotViewStore {
         signal: controller.signal,
       });
       const jot = parse(response.jot_dsl);
+      // The transcriber service no longer injects a title (the regex
+      // pass over the DSL lived in Python and was the only string-level
+      // mutation we did to LLM output). Set it here from the upload
+      // filename so the rendered jot shows a useful heading.
+      const derivedTitle = titleFromFilename(file.name);
+      if (derivedTitle) jot.title = derivedTitle;
       runInAction(() => {
-        this.currentJot = new RenderedJot(jot);
+        this.currentJot = new RenderedJot(jot, this.viewConfig);
         this.currentExampleId = undefined;
         this.transcribeStatus = {
           phase: 'success',
@@ -190,10 +256,54 @@ export class JotViewStore {
     this.transcribeStatus = { phase: 'idle' };
   }
 
+  /**
+   * Read a Drumjot DSL file from the user's machine and load it as the
+   * current jot. Parse failures are surfaced through `transcribeStatus`
+   * (same error pill the transcribe flow uses) so the user sees what
+   * went wrong rather than getting silent dismissal.
+   */
+  async loadJotFile(file: File): Promise<void> {
+    let text: string;
+    try {
+      text = await file.text();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      runInAction(() => {
+        this.transcribeStatus = { phase: 'error', message: `Could not read ${file.name}: ${message}` };
+      });
+      return;
+    }
+    try {
+      const jot = parse(text);
+      if (!jot.title) {
+        const derivedTitle = titleFromFilename(file.name);
+        if (derivedTitle) jot.title = derivedTitle;
+      }
+      runInAction(() => {
+        this.currentJot = new RenderedJot(jot, this.viewConfig);
+        this.currentExampleId = undefined;
+        this.transcribeStatus = { phase: 'idle' };
+      });
+    } catch (err) {
+      const message =
+        err instanceof ParseError
+          ? `Could not parse ${file.name}: ${err.message}`
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      runInAction(() => {
+        this.transcribeStatus = { phase: 'error', message };
+      });
+    }
+  }
+
   async playCurrent(): Promise<void> {
     const jot = this.currentJot;
     if (!jot) return;
-    await jotPlayer.play(jot.source);
+    // Pass the laid-out RenderedJot (not its source) so the player's
+    // timeline reads live bar widths — the playhead then tracks correctly
+    // across zoom changes.
+    await jotPlayer.play(jot);
   }
 
   stopPlayback(): void {
@@ -235,17 +345,22 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
           transcribeStatus={store.transcribeStatus}
           transcribeOptions={store.transcribeOptions}
           onTranscribe={(file) => store.transcribeAudio(file)}
+          onLoadJot={(file) => store.loadJotFile(file)}
           onCancelTranscribe={() => store.cancelTranscribe()}
           onClearTranscribeStatus={() => store.clearTranscribeStatus()}
           onSetRefine={(v) => store.setRefine(v)}
           onSetLint={(v) => store.setLint(v)}
           onSetBestOfK={(n) => store.setBestOfK(n)}
           onSetDebug={(v) => store.setDebug(v)}
+          zoom={store.zoom}
+          onSetZoom={(z) => store.setZoom(z)}
           hasJot={!!jot}
           playerState={jotPlayer.state}
           playerError={jotPlayer.errorMessage}
+          playbackSpeed={jotPlayer.playbackSpeed}
           onPlay={() => store.playCurrent()}
           onStopPlayback={() => store.stopPlayback()}
+          onSetPlaybackSpeed={(s) => jotPlayer.setPlaybackSpeed(s)}
         />
         {jot ? (
           <JotView
@@ -256,6 +371,13 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
             onMouseDown={onMouseDown}
             onMouseMove={onMouseMove}
             onMouseUp={selection.endSelection}
+            voiceControls={{
+              mutedPitches: store.mutedPitches,
+              soloedPitches: store.soloedPitches,
+              isPitchAudible: (pitch) => store.isPitchAudible(pitch),
+              onToggleMute: (pitch) => store.toggleMute(pitch),
+              onToggleSolo: (pitch) => store.toggleSolo(pitch),
+            }}
           />
         ) : (
           <div className={styles.empty}>No jot loaded</div>
@@ -275,17 +397,22 @@ const Toolbar = observer(
     transcribeStatus,
     transcribeOptions,
     onTranscribe,
+    onLoadJot,
     onCancelTranscribe,
     onClearTranscribeStatus,
     onSetRefine,
     onSetLint,
     onSetBestOfK,
     onSetDebug,
+    zoom,
+    onSetZoom,
     hasJot,
     playerState,
     playerError,
+    playbackSpeed,
     onPlay,
     onStopPlayback,
+    onSetPlaybackSpeed,
   }: {
     examples: readonly ExampleJot[];
     currentId: string | undefined;
@@ -293,25 +420,37 @@ const Toolbar = observer(
     transcribeStatus: TranscribeStatus;
     transcribeOptions: TranscribeOptions;
     onTranscribe: (file: File) => void;
+    onLoadJot: (file: File) => void;
     onCancelTranscribe: () => void;
     onClearTranscribeStatus: () => void;
     onSetRefine: (enabled: boolean) => void;
     onSetLint: (enabled: boolean) => void;
     onSetBestOfK: (n: number) => void;
     onSetDebug: (enabled: boolean) => void;
+    zoom: number;
+    onSetZoom: (z: number) => void;
     hasJot: boolean;
     playerState: PlayerState;
     playerError: string | undefined;
+    playbackSpeed: number;
     onPlay: () => void;
     onStopPlayback: () => void;
+    onSetPlaybackSpeed: (speed: number) => void;
   }) => {
     const fileInputRef = React.useRef<HTMLInputElement>(null);
+    const jotInputRef = React.useRef<HTMLInputElement>(null);
     const uploading = transcribeStatus.phase === 'uploading';
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (file) onTranscribe(file);
       // Reset so picking the same file twice in a row still fires onChange.
+      e.target.value = '';
+    };
+
+    const handleJotFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (file) onLoadJot(file);
       e.target.value = '';
     };
 
@@ -346,10 +485,44 @@ const Toolbar = observer(
           hasJot={hasJot}
           playerState={playerState}
           playerError={playerError}
+          playbackSpeed={playbackSpeed}
           onPlay={onPlay}
           onStop={onStopPlayback}
+          onSetPlaybackSpeed={onSetPlaybackSpeed}
         />
+        <label
+          className={styles.toolbarCheckbox}
+          title="Compress or expand the score horizontally. Has no effect on audio playback, only on how the notation is laid out."
+        >
+          <span>Zoom</span>
+          <input
+            type="range"
+            min={0.3}
+            max={3.0}
+            step={0.05}
+            value={zoom}
+            onChange={(e) => onSetZoom(Number(e.target.value))}
+            className={styles.zoomSlider}
+          />
+          <span className={styles.zoomValue}>{Math.round(zoom * 100)}%</span>
+        </label>
         <span className={styles.toolbarDivider} aria-hidden="true" />
+        <button
+          type="button"
+          className={styles.playButton}
+          onClick={() => jotInputRef.current?.click()}
+          disabled={uploading}
+          title="Load a Drumjot DSL file (`.jot`) from disk and render it. Parser runs entirely client-side; no transcriber service required."
+        >
+          Load .jot
+        </button>
+        <input
+          ref={jotInputRef}
+          type="file"
+          accept=".jot,.txt,text/plain"
+          className={styles.hiddenInput}
+          onChange={handleJotFileChange}
+        />
         <button
           type="button"
           className={styles.transcribeButton}
@@ -440,36 +613,43 @@ const Toolbar = observer(
   }
 );
 
+const PLAYBACK_SPEEDS: readonly number[] = [0.25, 0.5, 0.75, 1.0, 1.25];
+
 const PlaybackControls = observer(
   ({
     hasJot,
     playerState,
     playerError,
+    playbackSpeed,
     onPlay,
     onStop,
+    onSetPlaybackSpeed,
   }: {
     hasJot: boolean;
     playerState: PlayerState;
     playerError: string | undefined;
+    playbackSpeed: number;
     onPlay: () => void;
     onStop: () => void;
+    onSetPlaybackSpeed: (speed: number) => void;
   }) => {
     const loading = playerState === 'loading';
     const playing = playerState === 'playing';
+    const hasError = !!playerError && !loading && !playing;
     return (
       <>
         <button
           type="button"
-          className={styles.playButton}
+          className={classNames(styles.playButton, hasError && styles.playButtonError)}
           onClick={onPlay}
           disabled={!hasJot || loading || playing}
           title={
             playerError
-              ? `Last playback error: ${playerError}`
+              ? `Playback error: ${playerError}`
               : 'Play the current jot through a synthesised TR-909 drum kit. First click loads the samples (~150 KB) from the smplr CDN.'
           }
         >
-          {loading ? 'Loading…' : '▶ Play'}
+          {loading ? 'Loading…' : hasError ? '⚠ Play' : '▶ Play'}
         </button>
         {playing && (
           <button
@@ -481,10 +661,42 @@ const PlaybackControls = observer(
             ■ Stop
           </button>
         )}
+        <label
+          className={styles.toolbarCheckbox}
+          title="Tempo multiplier applied to playback. Slowing down spaces successive hits further apart without changing the drum pitch — useful for practising along to a complex fill at half speed."
+        >
+          <span>Speed</span>
+          <select
+            className={styles.samplesSelect}
+            value={String(playbackSpeed)}
+            onChange={(e) => onSetPlaybackSpeed(Number(e.target.value))}
+          >
+            {PLAYBACK_SPEEDS.map((s) => (
+              <option key={s} value={String(s)}>
+                {s.toFixed(2)}×
+              </option>
+            ))}
+          </select>
+        </label>
+        {hasError && (
+          <span
+            className={classNames(styles.statusPill, styles.statusPillError)}
+            title={playerError}
+          >
+            Playback: {truncate(playerError ?? '', 60)}
+          </span>
+        )}
       </>
     );
   }
 );
+
+const Playhead = observer(() => {
+  const timeline = jotPlayer.timeline;
+  if (jotPlayer.state !== 'playing' || timeline.bars.length === 0) return null;
+  const x = timeToX(timeline, jotPlayer.currentTime);
+  return <div className={styles.playhead} style={{ left: x }} />;
+});
 
 const TranscribeStatusPill = observer(
   ({ status, onClear }: { status: TranscribeStatus; onClear: () => void }) => {
@@ -549,6 +761,15 @@ function truncate(s: string, n: number): string {
   return s.length <= n ? s : `${s.slice(0, n - 1)}\u2026`;
 }
 
+type VoiceControls = {
+  mutedPitches: ReadonlySet<string>;
+  soloedPitches: ReadonlySet<string>;
+  /** True if the row would currently make sound; false = muted via M or solo exclusion. */
+  isPitchAudible: (pitch: string) => boolean;
+  onToggleMute: (pitch: string) => void;
+  onToggleSolo: (pitch: string) => void;
+};
+
 type JotViewProps = {
   jot: RenderedJot;
   marquee: Box | undefined;
@@ -557,16 +778,27 @@ type JotViewProps = {
   onMouseDown: (e: React.MouseEvent<HTMLDivElement>) => void;
   onMouseMove: (e: React.MouseEvent<HTMLDivElement>) => void;
   onMouseUp: () => void;
+  voiceControls: VoiceControls;
 };
 
 const JotView = observer((props: JotViewProps) => {
-  const { jot, marquee, highlightedPattern, onPatternClick, onMouseDown, onMouseMove, onMouseUp } =
-    props;
+  const {
+    jot,
+    marquee,
+    highlightedPattern,
+    onPatternClick,
+    onMouseDown,
+    onMouseMove,
+    onMouseUp,
+    voiceControls,
+  } = props;
   const resolved = jot.resolved;
   const config = jot.config;
+  const containerRef = React.useRef<HTMLDivElement>(null);
 
   return (
     <div
+      ref={containerRef}
       className={styles.jotContainer}
       onMouseDown={onMouseDown}
       onMouseMove={onMouseMove}
@@ -585,9 +817,11 @@ const JotView = observer((props: JotViewProps) => {
             totalVoices={resolved.voices.length}
             highlightedPattern={highlightedPattern}
             onPatternClick={onPatternClick}
+            voiceControls={voiceControls}
           />
         ))}
       </div>
+      <PlayheadAutoScroller containerRef={containerRef} />
       {marquee && (
         <div
           className={styles.marquee}
@@ -602,6 +836,49 @@ const JotView = observer((props: JotViewProps) => {
     </div>
   );
 });
+
+/**
+ * Side-effect-only component: when the playhead crosses the right (or
+ * left) viewport buffer, nudges the scrollable container's `scrollLeft`
+ * so the playhead stays visible during playback. Rendered nothing.
+ *
+ * Wrapped with `observer` so MobX reactivity drives re-renders on every
+ * rAF-driven `currentTime` update; the body just reads observables and
+ * runs the side effect.
+ */
+const PlayheadAutoScroller = observer(
+  ({ containerRef }: { containerRef: React.RefObject<HTMLDivElement> }) => {
+    const t = jotPlayer.currentTime;
+    const state = jotPlayer.state;
+    const timeline = jotPlayer.timeline;
+
+    React.useEffect(() => {
+      if (state !== 'playing' || timeline.bars.length === 0) return;
+      const container = containerRef.current;
+      if (!container) return;
+      // Anchor x via any barsRow inside the container — they all share
+      // the same left edge because voices stack vertically.
+      const barsRow = container.querySelector<HTMLDivElement>(`.${styles.barsRow}`);
+      if (!barsRow) return;
+
+      const containerRect = container.getBoundingClientRect();
+      const barsRect = barsRow.getBoundingClientRect();
+      const playheadViewportX = barsRect.left + timeToX(timeline, t);
+      // Margin keeps the playhead off the very edge so the user can see
+      // a beat or two of upcoming notation.
+      const rightLimit = containerRect.right - 100;
+      const leftLimit = containerRect.left + 60;
+
+      if (playheadViewportX > rightLimit) {
+        container.scrollLeft += playheadViewportX - rightLimit;
+      } else if (playheadViewportX < leftLimit) {
+        container.scrollLeft -= leftLimit - playheadViewportX;
+      }
+    }, [t, state, timeline, containerRef]);
+
+    return null;
+  }
+);
 
 function formatSubtitle(jot: ResolvedJot): string {
   const parts: string[] = [];
@@ -649,6 +926,7 @@ const VoiceView = observer(
     totalVoices,
     highlightedPattern,
     onPatternClick,
+    voiceControls,
   }: {
     voice: ResolvedVoice;
     config: ViewConfig;
@@ -656,6 +934,7 @@ const VoiceView = observer(
     totalVoices: number;
     highlightedPattern: string | undefined;
     onPatternClick: (name: string) => void;
+    voiceControls: VoiceControls;
   }) => {
     const pitches = voice.pitches;
     const staffHeight = px(pitches.length * config.trackHeight);
@@ -677,14 +956,17 @@ const VoiceView = observer(
         <div className={styles.voiceStaff} style={{ height: staffHeight }}>
           <div className={styles.laneGutter} style={{ height: staffHeight }}>
             {pitches.map((pitch) => (
-              <div
+              <GutterCell
                 key={pitch}
-                className={styles.laneGutterCell}
-                style={{ height: config.trackHeight }}
-                title={instrumentByPitch[pitch] ?? `Pitch ${pitch}`}
-              >
-                {pitch}
-              </div>
+                pitch={pitch}
+                height={config.trackHeight}
+                instrumentName={instrumentByPitch[pitch]}
+                muted={voiceControls.mutedPitches.has(pitch)}
+                soloed={voiceControls.soloedPitches.has(pitch)}
+                audible={voiceControls.isPitchAudible(pitch)}
+                onToggleMute={voiceControls.onToggleMute}
+                onToggleSolo={voiceControls.onToggleSolo}
+              />
             ))}
           </div>
           <div className={styles.barsRow} style={{ width: voice.width }}>
@@ -697,10 +979,78 @@ const VoiceView = observer(
                 isAnacrusis={bar.index === 0}
                 highlightedPattern={highlightedPattern}
                 onPatternClick={onPatternClick}
+                isPitchAudible={voiceControls.isPitchAudible}
               />
             ))}
+            <Playhead />
           </div>
         </div>
+      </div>
+    );
+  }
+);
+
+/**
+ * One pitch row in the lane gutter: shows the DSL letter plus a Mute and
+ * Solo button. Stops click propagation so toggling doesn't also fire the
+ * page-level mouse selection logic.
+ */
+const GutterCell = observer(
+  ({
+    pitch,
+    height,
+    instrumentName,
+    muted,
+    soloed,
+    audible,
+    onToggleMute,
+    onToggleSolo,
+  }: {
+    pitch: string;
+    height: Pixels;
+    instrumentName: string | undefined;
+    muted: boolean;
+    soloed: boolean;
+    audible: boolean;
+    onToggleMute: (pitch: string) => void;
+    onToggleSolo: (pitch: string) => void;
+  }) => {
+    const stopBubble = (e: React.MouseEvent) => e.stopPropagation();
+    return (
+      <div
+        className={classNames(styles.laneGutterCell, !audible && styles.laneGutterCellDim)}
+        style={{ height }}
+        title={instrumentName ?? `Pitch ${pitch}`}
+      >
+        <span className={styles.gutterPitch}>{pitch}</span>
+        <button
+          type="button"
+          className={classNames(styles.muteButton, muted && styles.muteButtonActive)}
+          onClick={(e) => {
+            stopBubble(e);
+            onToggleMute(pitch);
+          }}
+          onMouseDown={stopBubble}
+          title={muted ? `Unmute ${pitch}` : `Mute ${pitch}`}
+          aria-label={muted ? `Unmute ${pitch}` : `Mute ${pitch}`}
+          aria-pressed={muted}
+        >
+          M
+        </button>
+        <button
+          type="button"
+          className={classNames(styles.soloButton, soloed && styles.soloButtonActive)}
+          onClick={(e) => {
+            stopBubble(e);
+            onToggleSolo(pitch);
+          }}
+          onMouseDown={stopBubble}
+          title={soloed ? `Unsolo ${pitch}` : `Solo ${pitch}`}
+          aria-label={soloed ? `Unsolo ${pitch}` : `Solo ${pitch}`}
+          aria-pressed={soloed}
+        >
+          S
+        </button>
       </div>
     );
   }
@@ -714,6 +1064,7 @@ const BarView = observer(
     isAnacrusis,
     highlightedPattern,
     onPatternClick,
+    isPitchAudible,
   }: {
     bar: ResolvedBar;
     pitches: string[];
@@ -721,6 +1072,7 @@ const BarView = observer(
     isAnacrusis: boolean;
     highlightedPattern: string | undefined;
     onPatternClick: (name: string) => void;
+    isPitchAudible: (pitch: string) => boolean;
   }) => {
     return (
       <div
@@ -730,10 +1082,11 @@ const BarView = observer(
       >
         {pitches.map((pitch) => {
           const track = bar.tracks[pitch];
+          const dim = !isPitchAudible(pitch);
           return (
             <div
               key={pitch}
-              className={styles.lane}
+              className={classNames(styles.lane, dim && styles.laneDim)}
               style={{ height: config.trackHeight }}
             >
               {track?.notes.map((note, i) => (

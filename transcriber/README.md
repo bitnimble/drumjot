@@ -122,23 +122,28 @@ Layout of a persisted request:
 ```
 transcriber/debug/20260517-004530_a1b2c3d4_my-song/
 ├── input.mp3                # raw upload (original codec)
-├── stage1/
-│   └── drum_stem.wav        # demucs htdemucs_ft output
-├── stage2/
-│   ├── k.wav                # MDX23C kick stem
+├── stems_all/               # stage `stems_all`: demucs htdemucs_ft output
+│   └── drum_stem.wav
+├── stems_per/               # stage `stems_per`: MDX23C drum-piece split
+│   ├── k.wav                # kick stem
 │   ├── s.wav                # snare
 │   ├── h.wav                # hi-hat
 │   ├── d.wav                # ride
 │   ├── c.wav                # crash
 │   └── t.wav                # toms
-├── beats.json               # full BeatStructure (beats, bars, feel, tempo)
-├── onsets.json              # per-stem onset candidates with (bar, beat_in_bar)
-├── initial.jot              # first-pass Drumjot DSL (pre-refinement)
-├── final.jot                # final DSL (== initial.jot if refinement off)
+├── beats.json               # stage `beats`: BeatStructure (beats, bars, feel, tempo)
+├── onsets.json              # stage `onsets`: per-stem candidates with (bar, beat_in_bar)
+├── initial.jot              # stage `transcribe`: first-pass Drumjot DSL
+├── final.jot                # stage `refine`: refined DSL (== initial if refinement off)
 ├── best_of_k.json           # K candidate scores + chosen index (if used)
 ├── refinement.json          # per-iteration accept/reject log
 └── request.json             # filename, options, scores, timings summary
 ```
+
+Each folder/file is named after the pipeline stage that produces it,
+which is also the value to pass as `resume_stage` on
+`/transcribe/resume`. Stage ordering:
+`stems_all` → `stems_per` → `beats` → `onsets` → `transcribe` → `refine`.
 
 The response JSON includes a `debug_dir` field with the container path
 so the caller can pick the right subdir. The Vite app's "Save debug

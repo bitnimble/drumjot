@@ -54,7 +54,10 @@ from app.pipeline.lint import (
     format_for_prompt,
     lint_jot,
 )
-from app.pipeline.llm_util import strip_code_fence
+from app.pipeline.llm_util import (
+    call_messages_with_refusal_retry,
+    strip_code_fence,
+)
 from app.pipeline.score import score_jot
 
 log = logging.getLogger(__name__)
@@ -150,7 +153,23 @@ def refine_jot(
             elapsed_seconds=time.perf_counter() - started,
         )
 
-    initial_score = score_jot(extracted, stem_onsets).onset_f1
+    # Predicted onset times in `extracted` are bar-relative starting at
+    # bar 0 = t=0. `stem_onsets` are absolute audio time. Anchor the two
+    # by adding the audio's first-bar start time to every prediction
+    # before comparison. Without this every onset misses by the pre-roll
+    # and the F1 collapses to ~0.
+    time_offset = (
+        structure.bars[0].start_time if structure.bars else 0.0
+    )
+
+    initial = score_jot(
+        extracted,
+        stem_onsets,
+        time_offset=time_offset,
+        structure=structure,
+        debug_tag="initial",
+    )
+    initial_score = initial.onset_f1
     best_dsl = initial_dsl
     best_score = initial_score
     # Cache the extracted form alongside best_dsl so we don't pay another
@@ -177,8 +196,12 @@ def refine_jot(
         )
 
     log.info(
-        "Refinement starting. Initial F1=%.4f, levels=[%s]",
-        initial_score, ", ".join(lvl.value for lvl in active_levels),
+        "Refinement starting. Initial F1=%.4f (per-pitch: %s), "
+        "time_offset=%.3fs, levels=[%s]",
+        initial_score,
+        initial.per_pitch_summary(),
+        time_offset,
+        ", ".join(lvl.value for lvl in active_levels),
     )
 
     for level in active_levels:
@@ -197,6 +220,7 @@ def refine_jot(
                     best_score=best_score,
                     stem_onsets=stem_onsets,
                     structure=structure,
+                    time_offset=time_offset,
                     iteration=iteration,
                     t_iter=t_iter,
                 )
@@ -217,8 +241,11 @@ def refine_jot(
                 break
 
             triaged = triage_issues(issues, level.value, max_issues=25)
+            generator_purpose = f"refine_{level.value}_iter{iteration}"
             try:
-                candidate_dsl = _generator_revise(best_dsl, triaged, level)
+                candidate_dsl = _generator_revise(
+                    best_dsl, triaged, level, debug_purpose=generator_purpose,
+                )
             except Exception as exc:
                 log.warning("Generator failed at %s/%d: %s", level.value, iteration, exc)
                 iterations.append(IterationLog(
@@ -238,7 +265,9 @@ def refine_jot(
                 )
                 try:
                     candidate_dsl = _generator_revise(
-                        best_dsl, triaged, level, parse_error=str(exc)
+                        best_dsl, triaged, level,
+                        parse_error=str(exc),
+                        debug_purpose=f"{generator_purpose}__parse_retry",
                     )
                     cand_extracted = extract_jot(candidate_dsl)
                 except Exception as exc2:
@@ -252,7 +281,14 @@ def refine_jot(
                     ))
                     continue
 
-            cand_score = score_jot(cand_extracted, stem_onsets).onset_f1
+            cand_score_obj = score_jot(
+                cand_extracted,
+                stem_onsets,
+                time_offset=time_offset,
+                structure=structure,
+                debug_tag=f"{level.value}_iter{iteration}",
+            )
+            cand_score = cand_score_obj.onset_f1
             accept = cand_score > best_score
             iterations.append(IterationLog(
                 level=level.value,
@@ -262,7 +298,10 @@ def refine_jot(
                 score_before=best_score,
                 score_after=cand_score,
                 accepted=accept,
-                note=f"{time.perf_counter() - t_iter:.1f}s",
+                note=(
+                    f"{time.perf_counter() - t_iter:.1f}s "
+                    f"per-pitch: {cand_score_obj.per_pitch_summary()}"
+                ),
             ))
             if accept:
                 log.info(
@@ -335,6 +374,7 @@ def _run_lint_iteration(
     best_score: float,
     stem_onsets: dict[str, list[OnsetCandidate]],
     structure: BeatStructure,
+    time_offset: float,
     iteration: int,
     t_iter: float,
 ) -> _LintIterationOutcome:
@@ -407,16 +447,26 @@ def _run_lint_iteration(
     last_exc: Exception | None = None
     for seg in segments:
         segment_text = best_dsl[seg.byte_start:seg.byte_end]
+        # Newlines before the segment = line number of segment line 1
+        # in the full DSL, minus one. Pass through so diagnostic
+        # positions render segment-relative — otherwise the LLM sees
+        # `at line 8:5` next to a snippet that starts at line 1.
+        segment_line_offset = best_dsl.count("\n", 0, seg.byte_start)
         onset_context = _build_lint_onset_context_for_bars(
             stem_onsets, structure,
             voice_index=seg.voice_index,
             bar_indices=range(seg.first_bar, seg.last_bar + 1),
+        )
+        purpose = (
+            f"lint_iter{iteration}_v{seg.voice_index}_b{seg.first_bar}-{seg.last_bar}"
         )
         try:
             patched_text = _lint_generator_revise_segment(
                 segment_text=segment_text,
                 diagnostics=seg.diagnostics,
                 onset_context=onset_context,
+                segment_line_offset=segment_line_offset,
+                debug_purpose=purpose,
             )
         except Exception as exc:
             last_exc = exc
@@ -490,11 +540,19 @@ def _run_lint_iteration(
         )
 
     accept = after.errors < before.errors
-    cand_score = score_jot(cand_extracted, stem_onsets).onset_f1
+    cand_score_obj = score_jot(
+        cand_extracted,
+        stem_onsets,
+        time_offset=time_offset,
+        structure=structure,
+        debug_tag=f"lint_iter{iteration}",
+    )
+    cand_score = cand_score_obj.onset_f1
     note = (
         f"{time.perf_counter() - t_iter:.1f}s; "
         f"{len(segments)} segments, errors {before.errors}->{after.errors}, "
-        f"warnings {before.warnings}->{after.warnings}"
+        f"warnings {before.warnings}->{after.warnings}; "
+        f"per-pitch: {cand_score_obj.per_pitch_summary()}"
     )
     stop = (not accept) or after.errors == 0
     return _LintIterationOutcome(
@@ -597,7 +655,9 @@ def _lint_generator_revise_segment(
     segment_text: str,
     diagnostics: list[LintDiagnostic],
     onset_context: str,
+    segment_line_offset: int = 0,
     parse_error: str | None = None,
+    debug_purpose: str = "lint_segment",
 ) -> str:
     """Ask the LLM to rewrite a single segment with the given diagnostics fixed.
 
@@ -628,16 +688,24 @@ def _lint_generator_revise_segment(
     prompt = (
         template
         .replace("{SEGMENT}", segment_text)
-        .replace("{LINT_DIAGNOSTICS}", format_for_prompt(diag_payload))
+        .replace(
+            "{LINT_DIAGNOSTICS}",
+            format_for_prompt(diag_payload, line_offset=segment_line_offset),
+        )
         .replace("{ONSET_CONTEXT}", onset_context or "(no audio context available)")
         .replace("{PARSE_ERROR_HINT}", parse_hint)
     )
 
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-    response = client.messages.create(
-        model=settings.llm_model,
-        max_tokens=settings.llm_max_tokens,
-        messages=[{"role": "user", "content": prompt}],
+    response = call_messages_with_refusal_retry(
+        client,
+        {
+            "model": settings.llm_model,
+            "max_tokens": settings.llm_max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+        },
+        base_prompt=prompt,
+        purpose=debug_purpose,
     )
     text = "".join(b.text for b in response.content if hasattr(b, "text")).strip()
     return strip_code_fence(text)
@@ -726,6 +794,7 @@ def _generator_revise(
     issues: list[Issue],
     level: RefineLevel,
     parse_error: str | None = None,
+    debug_purpose: str = "refine",
 ) -> str:
     template_path = PROMPT_DIR / f"refine_{level.value}.md"
     template = template_path.read_text(encoding="utf-8")
@@ -765,10 +834,15 @@ def _generator_revise(
     )
 
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-    response = client.messages.create(
-        model=settings.llm_model,
-        max_tokens=settings.llm_max_tokens,
-        messages=[{"role": "user", "content": prompt}],
+    response = call_messages_with_refusal_retry(
+        client,
+        {
+            "model": settings.llm_model,
+            "max_tokens": settings.llm_max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+        },
+        base_prompt=prompt,
+        purpose=debug_purpose,
     )
     text = "".join(b.text for b in response.content if hasattr(b, "text")).strip()
     return strip_code_fence(text)

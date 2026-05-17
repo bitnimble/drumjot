@@ -19,12 +19,13 @@ Your job:
 
 Context: this is the `{LEVEL}` pass. The downstream model will only
 look at the issues you return, so don't be too aggressive in dropping
-- when in doubt, keep with a lowered confidence.
+— when in doubt, keep with a lowered `confidence`.
 
-Output strictly a JSON array of issues using the same schema as the
-input (same field names). No commentary, no markdown fences, no
-explanation - your entire response must be parseable as JSON.
+Call the `report_triaged_issues` tool with your filtered + ranked
+list. The tool's schema enforces the issue shape (allowed `type`s,
+required fields), so just emit each kept issue as a structured
+record — no need to format JSON yourself.
 
-Input issues:
+## Input issues
 
 {ISSUES_JSON}

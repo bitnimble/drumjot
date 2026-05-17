@@ -104,6 +104,26 @@
   outline-offset: 1px;
 }
 
+.playButtonError {
+  border-color: #b00020;
+  color: #b00020;
+}
+
+.playButtonError:hover:not(:disabled) {
+  background: #ffecec;
+}
+
+.playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #ff5c0a;
+  pointer-events: none;
+  z-index: 5;
+  box-shadow: 0 0 4px rgba(255, 92, 10, 0.5);
+}
+
 .cancelButton {
   font-size: 13px;
   padding: 5px 10px;
@@ -157,6 +177,20 @@
   background: #fff;
   color: #2b2b2b;
   cursor: pointer;
+}
+
+.zoomSlider {
+  width: 100px;
+  accent-color: #ff8c55;
+  cursor: pointer;
+}
+
+.zoomValue {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: #6b6b6b;
+  min-width: 36px;
+  text-align: right;
 }
 
 .statusPill {
@@ -260,6 +294,12 @@
 .voiceStaff {
   position: relative;
   display: flex;
+  /* Force the staff box to be as wide as its content (gutter + barsRow) so
+     the top/bottom borders and centerline gradient extend across the full
+     length of the score. Without this, the staff's box width falls back to
+     its parent's width (viewport-bound) while the flex children overflow
+     visually beyond, leaving the borders cut off at 100vw. */
+  min-width: max-content;
   border-top: 1px solid #c9bfae;
   border-bottom: 1px solid #c9bfae;
   background:
@@ -267,13 +307,21 @@
 }
 
 .laneGutter {
-  position: relative;
+  /* Sticky so the pitch labels + M/S buttons stay visible when the score
+     scrolls horizontally. The scroll container is `.jotContainer`; this
+     element sticks to its left edge as `.barsRow` slides under. The high
+     z-index keeps the gutter above the playhead (z: 5) when the playhead
+     would otherwise cross into the gutter's region during scroll. */
+  position: sticky;
+  left: 0;
+  z-index: 6;
   flex: 0 0 auto;
-  width: 44px;
+  width: 96px;
   display: flex;
   flex-direction: column;
   border-right: 1px solid #c9bfae;
-  background: rgba(255, 246, 232, 0.85);
+  /* Opaque background so notes don't show through during sticky overlap. */
+  background: #fff6e8;
   box-sizing: border-box;
 }
 
@@ -281,7 +329,8 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  padding: 0 8px;
+  gap: 4px;
+  padding: 0 6px;
   font-size: 12px;
   font-weight: 600;
   color: #666;
@@ -289,10 +338,84 @@
   box-sizing: border-box;
   cursor: help;
   white-space: nowrap;
+  transition: opacity 120ms ease;
 }
 
 .laneGutterCell:last-child {
   border-bottom: none;
+}
+
+.laneGutterCellDim {
+  /* Slightly dim the gutter cell when the row is muted/solo-excluded so
+     the user can scan which rows will play. The note lanes themselves
+     get a stronger dim via `.laneDim`. */
+  opacity: 0.65;
+}
+
+.gutterPitch {
+  flex: 1 1 auto;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.muteButton,
+.soloButton {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  border: 1px solid #c9bfae;
+  border-radius: 3px;
+  background: #fff;
+  color: #888;
+  cursor: pointer;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.muteButton:hover,
+.soloButton:hover {
+  border-color: #888;
+  color: #444;
+}
+
+.muteButton:focus,
+.soloButton:focus {
+  outline: 2px solid #ff8c55;
+  outline-offset: 1px;
+}
+
+.muteButtonActive {
+  background: #b00020;
+  border-color: #b00020;
+  color: #fff;
+}
+
+.muteButtonActive:hover {
+  background: #8a0019;
+  border-color: #8a0019;
+  color: #fff;
+}
+
+.soloButtonActive {
+  background: #f2b300;
+  border-color: #d99f00;
+  color: #2b2b2b;
+}
+
+.soloButtonActive:hover {
+  background: #d99f00;
+  border-color: #b88600;
+}
+
+.laneDim {
+  opacity: 0.25;
+  transition: opacity 120ms ease;
 }
 
 .barsRow {

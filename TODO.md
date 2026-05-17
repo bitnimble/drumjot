@@ -1,0 +1,5 @@
+- Remove silent pattern definition - just make them silent by default
+- `beat_in_bar` > 4 in a 4/4 time signature, in onsets.json
+- stem separation - also output the drumless music stem (everything except drums)
+- offset playback in the web ui by the drums offset
+- allow layering of song + drums in web ui playback

@@ -1,55 +1,91 @@
 """Drumjot transcriber HTTP API (FastAPI).
 
 Endpoints:
-    GET  /health        - readiness + GPU info
-    POST /transcribe    - accept an audio file, return Drumjot DSL
+    GET  /health             - readiness + GPU info
+    POST /transcribe         - accept an audio file, return Drumjot DSL
+    POST /transcribe/resume  - re-run from a chosen pipeline stage using
+                               a previous debug folder's intermediate
+                               artifacts
 
-    The service is intentionally stateless. All temp files live in per-request
-    tempdirs. Models are loaded eagerly at container startup (FastAPI
-    lifespan) so the first /transcribe call doesn't pay model-load latency
-    and so orchestrators can use /health as a true readiness probe.
+The service is intentionally stateless. All temp files live in per-request
+tempdirs. Models are loaded eagerly at container startup (FastAPI
+lifespan) so the first /transcribe call doesn't pay model-load latency
+and so orchestrators can use /health as a true readiness probe.
 """
 from __future__ import annotations
 
 import logging
 import tempfile
 import time
-from contextlib import asynccontextmanager
+from collections.abc import Iterator
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
-from typing import Any
 
-import librosa
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.debug import DebugSink, beats_dump, onsets_dump
+from app.debug import (
+    DebugSink,
+    reset_current_debug_sink,
+    set_current_debug_sink,
+)
 from app.models import (
     BarSummary,
-    BestOfKLog,
     HealthResponse,
-    RefinementIteration,
-    RefinementLog,
     TranscribeMetadata,
     TranscribeResponse,
 )
-from app.pipeline.beats import (
-    analyze_beats,
-    detect_feel_for_bars,
-    summarize_bar_for_prompt,
+from app.pipeline.beats import summarize_bar_for_prompt
+from app.pipeline.resume import (
+    find_input_audio,
+    hydrate_context_from_resume,
+    load_original_filename,
 )
-from app.pipeline.llm import (
-    transcribe_to_jot,
-    transcribe_to_jot_best_of_k,
+from app.pipeline.runner import (
+    BeatInput,
+    PipelineContext,
+    PipelineOptions,
+    Stage,
+    StageError,
+    run_pipeline,
 )
-from app.pipeline.onsets import attach_beat_positions, detect_onsets
-from app.pipeline.refine import RefineLevel, refine_jot
 from app.pipeline.separate import Separator
-from app.pipeline.title import inject_title, title_from_filename
 
 # Fallback debug dir used when `debug=true` is requested but `DEBUG_DIR`
 # env var wasn't set. Matches the docker-compose volume mount.
 DEFAULT_DEBUG_DIR = Path("/debug")
+
+# Map stage -> HTTP status code surfaced when that stage fails. The
+# transcribe stage is the only external dependency (Anthropic), so it
+# gets 502 (bad gateway); everything else is local compute and surfaces
+# as 500.
+_STAGE_HTTP_STATUS: dict[Stage, int] = {
+    Stage.STEMS_ALL: 500,
+    Stage.STEMS_PER: 500,
+    Stage.BEATS: 500,
+    Stage.ONSETS: 500,
+    Stage.TRANSCRIBE: 502,
+    Stage.REFINE: 500,
+}
+
+
+@contextmanager
+def _scoped_debug_sink(sink: DebugSink | None) -> Iterator[None]:
+    """Install `sink` as the request-scoped current sink for the duration
+    of the `with` block, then restore the previous value.
+
+    Deep callees (the LLM wrapper, refinement helpers) read from a
+    ContextVar so they can dump their hydrated prompts to the same
+    request folder without having the sink threaded through their
+    signatures.
+    """
+    token = set_current_debug_sink(sink)
+    try:
+        yield
+    finally:
+        reset_current_debug_sink(token)
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -120,15 +156,15 @@ async def transcribe(
     include_candidates: bool = Form(default=False),
     refine: bool = Form(default=settings.refine_by_default),
     lint: bool = Form(default=settings.lint_by_default),
-    best_of_k: int = Form(
-        default=settings.best_of_k_default
-    ),
+    best_of_k: int = Form(default=settings.best_of_k_default),
+    beat_input: BeatInput = Form(default=settings.beat_input_default),
     debug: bool = Form(default=False),
 ) -> TranscribeResponse:
     started = time.perf_counter()
     log.info(
-        "Transcribe request: %s (%s bytes) refine=%s lint=%s best_of_k=%d debug=%s",
-        file.filename, file.size, refine, lint, best_of_k, debug,
+        "Transcribe request: %s (%s bytes) refine=%s lint=%s best_of_k=%d "
+        "beat_input=%s debug=%s",
+        file.filename, file.size, refine, lint, best_of_k, beat_input, debug,
     )
 
     if file.size is not None and file.size > 200_000_000:
@@ -144,216 +180,245 @@ async def transcribe(
         debug_base = DEFAULT_DEBUG_DIR
     sink = DebugSink.for_request(debug_base, file.filename)
 
-    with tempfile.TemporaryDirectory(prefix="drumjot_") as tmp_str:
+    with tempfile.TemporaryDirectory(prefix="drumjot_") as tmp_str, _scoped_debug_sink(sink):
         work = Path(tmp_str)
         in_path = work / (file.filename or "input.wav")
         in_path.write_bytes(await file.read())
-
         if sink is not None:
             sink.copy_audio("input", in_path)
 
-        # 1) Stem separation
+        ctx = PipelineContext(audio_path=in_path, work_dir=work)
+        options = PipelineOptions(
+            refine=refine, lint=lint, best_of_k=best_of_k, beat_input=beat_input,
+        )
         sep: Separator = request.app.state.separator
         try:
-            stems = sep.separate(in_path, work)
-        except Exception as exc:
-            log.exception("Separation failed")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Stem separation failed: {exc}",
-            ) from exc
-
-        if sink is not None:
-            sink.copy_audio("stage1/drum_stem", stems.drum_stem)
-            for pitch, path in stems.per_instrument.items():
-                sink.copy_audio(f"stage2/{pitch}", path)
-
-        # Compute song duration up front so beat tracking can pad
-        # synthetic bars forward to cover the full audio (otherwise
-        # onsets that fire after the last detected beat get jammed onto
-        # the last real bar with out-of-range beat_in_bar values).
-        try:
-            import soundfile as sf
-
-            with sf.SoundFile(str(in_path)) as f:
-                duration = len(f) / f.samplerate
-        except Exception:
-            duration = 0.0
-
-        # 2) Beat / downbeat / time-sig tracking over the FULL mix. We
-        #    run on the original audio (not the drum stem) so beat
-        #    tracking has the full spectral context to work with.
-        try:
-            structure = analyze_beats(
-                in_path, duration_seconds=duration if duration > 0 else None
+            run_pipeline(
+                ctx=ctx,
+                start_stage=Stage.STEMS_ALL,
+                separator=sep,
+                options=options,
+                sink=sink,
             )
-        except Exception as exc:
-            log.exception("Beat tracking failed")
+        except StageError as exc:
             raise HTTPException(
-                status_code=500,
-                detail=f"Beat tracking failed: {exc}",
+                status_code=_STAGE_HTTP_STATUS[exc.stage],
+                detail=str(exc),
             ) from exc
 
-        # 3) Onset detection per stem (high recall)
-        raw_onsets = {
-            pitch: detect_onsets(path)
-            for pitch, path in stems.per_instrument.items()
-        }
-        # Attach (bar, beat_in_bar) positions using the beat structure.
-        onsets_by_pitch = {
-            pitch: attach_beat_positions(cands, structure)
-            for pitch, cands in raw_onsets.items()
-        }
-
-        # 4) Per-bar feel detection using the flat onset stream.
-        flat_times = [c.time for cs in onsets_by_pitch.values() for c in cs]
-        detect_feel_for_bars(structure, flat_times)
-
         if sink is not None:
-            sink.write_json("beats.json", beats_dump(structure))
-            sink.write_json("onsets.json", onsets_dump(onsets_by_pitch))
-
-        # Fallback duration if the soundfile probe above failed - use the
-        # latest detected onset across all stems as a lower bound for the
-        # metadata payload.
-        if duration <= 0:
-            duration = max(
-                (c.time for cs in onsets_by_pitch.values() for c in cs),
-                default=0.0,
-            )
-
-        # 5) Initial transcription. Best-of-K sampling if requested.
-        best_of_k_log: BestOfKLog | None = None
-        try:
-            if best_of_k > 1:
-                jot_dsl, scores = transcribe_to_jot_best_of_k(
-                    candidates_by_pitch=onsets_by_pitch,
-                    structure=structure,
-                    samples=best_of_k,
-                )
-                chosen_idx = (
-                    int(max(range(len(scores)), key=lambda i: scores[i]))
-                    if scores
-                    else 0
-                )
-                best_of_k_log = BestOfKLog(
-                    samples=best_of_k,
-                    scores=scores,
-                    chosen_index=chosen_idx,
-                )
-            else:
-                jot_dsl = transcribe_to_jot(
-                    candidates_by_pitch=onsets_by_pitch,
-                    structure=structure,
-                )
-        except Exception as exc:
-            log.exception("LLM transcription failed")
-            raise HTTPException(
-                status_code=502,
-                detail=f"LLM transcription failed: {exc}",
-            ) from exc
-
-        initial_dsl = jot_dsl
-        if sink is not None:
-            sink.write_text("initial.jot", initial_dsl)
-            if best_of_k_log is not None:
-                sink.write_json(
-                    "best_of_k.json", best_of_k_log.model_dump()
-                )
-
-        # 6) Optional refinement (multi-level convergence loop).
-        # `lint` and `refine` are independent toggles: lint enables the
-        # deterministic instrument/performance fix-up pass; refine enables
-        # the F1-gated tempo / structure / onset / velocity loop. The
-        # canonical level order is enforced inside refine_jot, so we just
-        # build a set here.
-        refinement_levels: list[RefineLevel] = []
-        if lint:
-            refinement_levels.append(RefineLevel.LINT)
-        if refine:
-            refinement_levels.extend([
-                RefineLevel.MACRO,
-                RefineLevel.STRUCTURE,
-                RefineLevel.ONSETS,
-                RefineLevel.VELOCITY,
-            ])
-
-        refinement_log: RefinementLog | None = None
-        if refinement_levels:
-            try:
-                stem_audios: dict[str, tuple[Any, int]] = {}
-                for pitch, path in stems.per_instrument.items():
-                    audio, sr = librosa.load(str(path), sr=44100, mono=True)
-                    stem_audios[pitch] = (audio, sr)
-
-                refined_dsl, log_obj = refine_jot(
-                    initial_dsl=jot_dsl,
-                    stem_onsets=onsets_by_pitch,
-                    stem_audios=stem_audios,
-                    structure=structure,
-                    levels=refinement_levels,
-                )
-                jot_dsl = refined_dsl
-                refinement_log = RefinementLog(
-                    initial_score=log_obj.initial_score,
-                    final_score=log_obj.final_score,
-                    elapsed_seconds=log_obj.elapsed_seconds,
-                    iterations=[
-                        RefinementIteration(**vars(it)) for it in log_obj.iterations
-                    ],
-                )
-            except Exception:
-                log.exception("Refinement failed; returning unrefined Jot")
-
-        # Inject the title deterministically from the uploaded filename.
-        # The few-shot examples don't include `title:` because LLM-invented
-        # titles occasionally tripped Anthropic's output content filter on
-        # benign drum audio.
-        jot_dsl = inject_title(jot_dsl, title_from_filename(file.filename))
-
-        if sink is not None:
-            sink.write_text("final.jot", jot_dsl)
-            if refinement_log is not None:
-                sink.write_json("refinement.json", refinement_log.model_dump())
+            sink.finalize({
+                "filename": file.filename,
+                "options": {
+                    "refine": refine,
+                    "lint": lint,
+                    "best_of_k": best_of_k,
+                    "beat_input": beat_input,
+                    "include_candidates": include_candidates,
+                    "debug": debug,
+                },
+                "scores": {
+                    "initial": (
+                        ctx.refinement_log.initial_score
+                        if ctx.refinement_log else None
+                    ),
+                    "final": (
+                        ctx.refinement_log.final_score
+                        if ctx.refinement_log else None
+                    ),
+                },
+                "stems_used": sorted(ctx.per_instrument_stems.keys()),
+                "duration_seconds": ctx.duration,
+            })
 
     elapsed = time.perf_counter() - started
     log.info("Transcribe complete in %.2fs (refined=%s)", elapsed, refine)
 
-    bar_summaries = [
-        BarSummary(**summarize_bar_for_prompt(b)) for b in structure.bars
-    ]
+    return _build_response(
+        ctx=ctx,
+        include_candidates=include_candidates,
+        debug_dir=str(sink.dir) if sink is not None else None,
+    )
 
-    if sink is not None:
+
+def _resolve_resume_dir(resume_folder: str) -> Path:
+    """Resolve `resume_folder` to an absolute path inside the debug base.
+
+    Accepts either an absolute path (`/debug/20251110-123456_abc12345_song`)
+    or a bare folder name resolved against the configured debug base
+    (or `DEFAULT_DEBUG_DIR` when `DEBUG_DIR` is unset, matching what the
+    standard docker-compose mount produces).
+
+    Refuses paths outside the base so this endpoint can't be used to
+    read arbitrary container files (defensive — the operator can already
+    reach those via the debug mount, but the endpoint shouldn't widen
+    its own attack surface).
+    """
+    base = (settings.debug_dir or DEFAULT_DEBUG_DIR).resolve()
+    candidate = Path(resume_folder)
+    if not candidate.is_absolute():
+        candidate = base / candidate
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(base)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"resume_folder must be inside the debug base ({base}); "
+                f"got {resolved}"
+            ),
+        ) from exc
+    if not resolved.is_dir():
+        raise HTTPException(
+            status_code=404,
+            detail=f"resume_folder not found: {resolved}",
+        )
+    return resolved
+
+
+@app.post("/transcribe/resume", response_model=TranscribeResponse)
+async def transcribe_resume(
+    request: Request,
+    resume_folder: str = Form(...),
+    resume_stage: Stage = Form(...),
+    include_candidates: bool = Form(default=False),
+    refine: bool = Form(default=settings.refine_by_default),
+    lint: bool = Form(default=settings.lint_by_default),
+    best_of_k: int = Form(default=settings.best_of_k_default),
+    beat_input: BeatInput = Form(default=settings.beat_input_default),
+) -> TranscribeResponse:
+    """Re-run the pipeline from `resume_stage` onward, hydrating any
+    artifacts produced by earlier stages from `resume_folder`.
+
+    `resume_stage` is one of:
+        `stems_all`, `stems_per`, `beats`, `onsets`, `transcribe`, `refine`.
+
+    Required artifacts depend on which stages will be skipped:
+        - `stems_per`: `stems_all/drum_stem.<ext>`
+        - `beats`:     `stems_per/*.<ext>`
+        - `onsets`:    `stems_per/*.<ext>` + `beats.json`
+        - `transcribe`: `beats.json` + `onsets.json` + `stems_per/*.<ext>`
+        - `refine`:    `initial.jot` + the four above
+    Anything missing comes back as a 400 with a stage-specific message.
+
+    Stages from `resume_stage` onward run fresh and overwrite whichever
+    of `initial.jot`, `final.jot`, `best_of_k.json`, `refinement.json`,
+    `beats.json`, `onsets.json` they would normally produce. Upstream
+    artifacts are left intact so subsequent resumes from this folder
+    remain idempotent.
+    """
+    started = time.perf_counter()
+    resume_dir = _resolve_resume_dir(resume_folder)
+    log.info(
+        "Resume request from %s (resume_stage=%s refine=%s lint=%s best_of_k=%d)",
+        resume_dir, resume_stage.value, refine, lint, best_of_k,
+    )
+
+    audio_path = find_input_audio(resume_dir) or (resume_dir / "input")
+    sink = DebugSink(resume_dir)
+    options = PipelineOptions(
+        refine=refine, lint=lint, best_of_k=best_of_k, beat_input=beat_input,
+    )
+    sep: Separator = request.app.state.separator
+
+    # Run stem separation (if it fires) into a temp work_dir so its
+    # filenames don't collide with the resume folder; the sink will
+    # mirror them into `<resume_dir>/stems_all/` and `/stems_per/`.
+    with (
+        tempfile.TemporaryDirectory(prefix="drumjot_resume_") as tmp_str,
+        _scoped_debug_sink(sink),
+    ):
+        work = Path(tmp_str)
+        ctx = PipelineContext(audio_path=audio_path, work_dir=work)
+        try:
+            hydrate_context_from_resume(ctx, resume_dir, resume_stage)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            run_pipeline(
+                ctx=ctx,
+                start_stage=resume_stage,
+                separator=sep,
+                options=options,
+                sink=sink,
+            )
+        except StageError as exc:
+            raise HTTPException(
+                status_code=_STAGE_HTTP_STATUS[exc.stage],
+                detail=str(exc),
+            ) from exc
+
         sink.finalize({
-            "filename": file.filename,
+            "filename": load_original_filename(resume_dir),
             "options": {
                 "refine": refine,
                 "lint": lint,
                 "best_of_k": best_of_k,
+                "beat_input": beat_input,
                 "include_candidates": include_candidates,
-                "debug": debug,
+                "resume_folder": str(resume_dir),
+                "resume_stage": resume_stage.value,
             },
             "scores": {
-                "initial": refinement_log.initial_score if refinement_log else None,
-                "final": refinement_log.final_score if refinement_log else None,
+                "initial": (
+                    ctx.refinement_log.initial_score
+                    if ctx.refinement_log else None
+                ),
+                "final": (
+                    ctx.refinement_log.final_score
+                    if ctx.refinement_log else None
+                ),
             },
-            "stems_used": sorted(stems.per_instrument.keys()),
-            "duration_seconds": duration,
+            "stems_used": sorted(ctx.per_instrument_stems.keys()),
+            "duration_seconds": ctx.duration,
         })
 
+    elapsed = time.perf_counter() - started
+    log.info("Resume complete in %.2fs (refined=%s)", elapsed, refine)
+
+    return _build_response(
+        ctx=ctx,
+        include_candidates=include_candidates,
+        debug_dir=str(resume_dir),
+    )
+
+
+def _build_response(
+    *,
+    ctx: PipelineContext,
+    include_candidates: bool,
+    debug_dir: str | None,
+) -> TranscribeResponse:
+    """Assemble the HTTP response from a completed PipelineContext."""
+    if ctx.structure is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Pipeline completed but produced no beat structure.",
+        )
+    if ctx.final_jot is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Pipeline completed but produced no final jot.",
+        )
+    bar_summaries = [
+        BarSummary(**summarize_bar_for_prompt(b)) for b in ctx.structure.bars
+    ]
+    stems_used = sorted(ctx.per_instrument_stems.keys())
     return TranscribeResponse(
-        jot_dsl=jot_dsl,
+        jot_dsl=ctx.final_jot,
         metadata=TranscribeMetadata(
-            initial_tempo=structure.initial_tempo,
-            initial_time_signature=list(structure.initial_time_signature),
-            duration_seconds=duration,
-            stems_used=sorted(stems.per_instrument.keys()),
+            initial_tempo=ctx.structure.initial_tempo,
+            initial_time_signature=list(ctx.structure.initial_time_signature),
+            duration_seconds=ctx.duration,
+            stems_used=stems_used,
             bars=bar_summaries,
-            has_tempo_changes=structure.has_tempo_changes,
-            has_time_sig_changes=structure.has_time_sig_changes,
+            has_tempo_changes=ctx.structure.has_tempo_changes,
+            has_time_sig_changes=ctx.structure.has_time_sig_changes,
         ),
-        refinement=refinement_log,
-        best_of_k=best_of_k_log,
-        candidates=onsets_by_pitch if include_candidates else {},
-        debug_dir=str(sink.dir) if sink is not None else None,
+        refinement=ctx.refinement_log,
+        best_of_k=ctx.best_of_k_log,
+        candidates=ctx.onsets_by_pitch if include_candidates else {},
+        debug_dir=debug_dir,
     )

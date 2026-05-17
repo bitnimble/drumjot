@@ -23,8 +23,22 @@ def detect_onsets(audio_path: Path, sample_rate: int = 44100) -> list[OnsetCandi
     """Run a high-recall onset detector and return a list of candidates.
 
     Returns candidates with absolute onset time (seconds from start) and a
-    relative strength (the onset detection function value at that time).
-    `bar` / `beat_in_bar` are filled in by the caller using `BeatStructure`.
+    relative strength (the onset-strength-envelope value at the detected
+    peak). `bar` / `beat_in_bar` are filled in by the caller using
+    `BeatStructure`.
+
+    Note on two-pass detection: librosa's `onset_detect(backtrack=True)`
+    walks each detected peak BACKWARDS along the onset-strength envelope
+    until it finds a local minimum, which is the musically-accurate
+    "start of the transient" but is by definition a low-strength
+    position. Sampling `onset_env` there returns ~0 for almost every
+    onset and renders the strength signal useless for downstream filters
+    / accent detection. We therefore run the detector twice with
+    identical peak-picking parameters: once with `backtrack=False` to
+    get the peak frame indices (which we sample for strength), and once
+    with `backtrack=True` to get the musically-accurate time positions
+    that the candidate actually carries. Peak picking is deterministic
+    so the two passes produce a 1:1 correspondence.
     """
     audio, sr = librosa.load(str(audio_path), sr=sample_rate, mono=True)
     if audio.size == 0:
@@ -33,12 +47,10 @@ def detect_onsets(audio_path: Path, sample_rate: int = 44100) -> list[OnsetCandi
     onset_env = librosa.onset.onset_strength(y=audio, sr=sr, hop_length=512)
     times = librosa.times_like(onset_env, sr=sr, hop_length=512)
 
-    onset_times = librosa.onset.onset_detect(
+    common_kwargs: dict = dict(
         onset_envelope=onset_env,
         sr=sr,
         hop_length=512,
-        units="time",
-        backtrack=True,
         pre_max=settings.onset_pre_max,
         post_max=settings.onset_post_max,
         pre_avg=settings.onset_pre_avg,
@@ -46,11 +58,36 @@ def detect_onsets(audio_path: Path, sample_rate: int = 44100) -> list[OnsetCandi
         delta=settings.onset_delta,
         wait=settings.onset_wait,
     )
+    peak_frames = librosa.onset.onset_detect(
+        **common_kwargs, units="frames", backtrack=False,
+    )
+    onset_times = librosa.onset.onset_detect(
+        **common_kwargs, units="time", backtrack=True,
+    )
 
+    # Pair the two passes by index. They should match in length; warn
+    # (and fall back to time-anchored sampling for any extras) if they
+    # don't, rather than dropping detections silently.
+    if len(peak_frames) != len(onset_times):
+        log.warning(
+            "Peak / backtrack onset_detect length mismatch in %s "
+            "(peaks=%d, backtracked=%d); strength values for the trailing "
+            "candidates will be sampled at backtracked positions.",
+            audio_path.name,
+            len(peak_frames),
+            len(onset_times),
+        )
+
+    env_last_idx = len(onset_env) - 1
     candidates: list[OnsetCandidate] = []
-    for t in onset_times:
-        idx = int(np.argmin(np.abs(times - t)))
-        strength = float(onset_env[idx])
+    for i, t in enumerate(onset_times):
+        if i < len(peak_frames):
+            peak_idx = max(0, min(int(peak_frames[i]), env_last_idx))
+            strength = float(onset_env[peak_idx])
+        else:
+            # Fallback for the length-mismatch case described above.
+            idx = int(np.argmin(np.abs(times - t)))
+            strength = float(onset_env[idx])
         candidates.append(
             OnsetCandidate(
                 time=float(t),

@@ -6,6 +6,7 @@ real environment variables when running under Docker / IaaS.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -48,12 +49,42 @@ class Settings(BaseSettings):
     drum_pieces_model: str = "MDX23C-DrumSep-aufr33-jarredou.ckpt"
 
     # --- Onset detector tuning (librosa) ---
+    # Windows are tight because we run on per-instrument stems, not the
+    # full mix — each stem's transients are well isolated, so the
+    # ±35ms local-max window (pre_max=post_max=3 at hop=512 / sr=44100)
+    # still suppresses double-counting one transient while preserving
+    # back-to-back hits like kick doubles or hi-hat 16ths (~125ms at
+    # 120bpm). The pre_avg / post_avg window is also halved relative
+    # to librosa's defaults to keep the running threshold responsive
+    # to short loud passages.
     onset_delta: float = 0.05
-    onset_wait: int = 5
-    onset_pre_max: int = 20
-    onset_post_max: int = 20
-    onset_pre_avg: int = 100
-    onset_post_avg: int = 100
+    onset_wait: int = 3
+    onset_pre_max: int = 3
+    onset_post_max: int = 3
+    onset_pre_avg: int = 50
+    onset_post_avg: int = 50
+
+    # --- Beat tracker ---
+    # `madmom`         = the legacy RNN+DBN downbeat tracker (default).
+    # `beat_transformer` = vendored Beat Transformer (Zhao et al. 2022)
+    #                      activations -> shared DBN postprocessor.
+    # The DBN stage is shared between both — the toggle only changes
+    # which network produces the per-frame (beat, downbeat) activations.
+    beat_tracker: Literal["madmom", "beat_transformer"] = "madmom"
+    # Path to a pretrained Beat Transformer checkpoint (`fold_N_trf_param.pt`
+    # from upstream). Baked into the image at build time from
+    # `transcriber/checkpoints/`. The released checkpoints all share the
+    # same dmodel=256 / nhead=8 / d_hid=1024 / nlayers=9 architecture
+    # (`Demixed_DilatedTransformerModel` with `instr=5`).
+    beat_transformer_checkpoint: Path = Path("/app/checkpoints/beat_transformer.pt")
+    # Which audio to feed into the beat tracker:
+    # - `full_mix`  = the original upload (madmom's training distribution;
+    #                 also BT's "non-demixed" baseline).
+    # - `drum_stem` = the Demucs Stage 1 drum stem (no melody/bass cues,
+    #                 but cleaner transients — sometimes helps BT on tracks
+    #                 with heavy syncopation in non-drum stems).
+    # Overridable per-request via the `beat_input` form parameter.
+    beat_input_default: Literal["full_mix", "drum_stem"] = "full_mix"
 
     # --- Paths (Docker volumes mount these) ---
     models_dir: Path = Path("/models")

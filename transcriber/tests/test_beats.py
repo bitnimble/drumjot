@@ -12,6 +12,7 @@ from app.pipeline.beats import (
     BeatTick,
     _choose_time_signature,
     _pad_trailing_bars,
+    align_beats_to_onsets,
 )
 
 # ---------- _choose_time_signature ----------
@@ -118,3 +119,88 @@ def test_position_outside_padded_range_returns_none() -> None:
     _pad_trailing_bars(structure, duration_seconds=3.0)
     # Onset past the audio duration: dropped.
     assert structure.position(50.0) is None
+
+
+# ---------- align_beats_to_onsets ----------
+
+
+def test_align_snaps_late_beats_back_to_onsets() -> None:
+    # 160 BPM 4/4 bar: ideal beat times are 0.000, 0.375, 0.750, 1.125.
+    # Simulate BT's ~30 ms lag: every detected beat is 0.030 s late.
+    beat_gap = 60.0 / 160.0
+    detected_offsets = [0.030] * 4
+    beats = [
+        BeatTick(
+            time=i * beat_gap + detected_offsets[i],
+            beat_in_bar=i + 1,
+            bar_index=0,
+        )
+        for i in range(4)
+    ]
+    bar = BarInfo(
+        index=0,
+        start_time=beats[0].time,
+        end_time=beats[-1].time + beat_gap,
+        beats=list(beats),
+        time_signature=(4, 4),
+        tempo_bpm=60.0 / beat_gap,
+    )
+    structure = BeatStructure(beats=list(beats), bars=[bar])
+
+    # Strong drum onsets sit on the true beat positions.
+    onsets = [(i * beat_gap, 10.0) for i in range(4)]
+    align_beats_to_onsets(structure, onsets, max_distance=0.05)
+
+    for i, b in enumerate(structure.beats):
+        assert abs(b.time - i * beat_gap) < 1e-9
+    # Bar start/end + tempo recomputed from snapped beats.
+    assert structure.bars[0].start_time == 0.0
+    assert abs(structure.bars[0].tempo_bpm - 160.0) < 0.1
+
+
+def test_align_picks_strongest_onset_in_window_not_closest() -> None:
+    # Beat at t=1.000. A weak onset at t=0.995 (5 ms away, strength 0.1)
+    # and a strong onset at t=1.020 (20 ms away, strength 5.0). The
+    # strong one should win.
+    beat = BeatTick(time=1.000, beat_in_bar=1, bar_index=0)
+    bar = BarInfo(
+        index=0,
+        start_time=1.000,
+        end_time=1.500,
+        beats=[beat],
+        time_signature=(4, 4),
+        tempo_bpm=120.0,
+    )
+    structure = BeatStructure(beats=[beat], bars=[bar])
+
+    align_beats_to_onsets(
+        structure, [(0.995, 0.1), (1.020, 5.0)], max_distance=0.05,
+    )
+    assert abs(structure.beats[0].time - 1.020) < 1e-9
+
+
+def test_align_leaves_beats_with_no_nearby_onset_alone() -> None:
+    beat = BeatTick(time=2.000, beat_in_bar=1, bar_index=0)
+    bar = BarInfo(
+        index=0,
+        start_time=2.000,
+        end_time=2.500,
+        beats=[beat],
+        time_signature=(4, 4),
+        tempo_bpm=120.0,
+    )
+    structure = BeatStructure(beats=[beat], bars=[bar])
+
+    # All onsets sit > 50 ms from the beat.
+    align_beats_to_onsets(
+        structure, [(1.800, 5.0), (2.200, 5.0)], max_distance=0.05,
+    )
+    assert structure.beats[0].time == 2.000
+
+
+def test_align_no_op_when_no_onsets() -> None:
+    bar = _make_bar(0, start=0.0, beat_gap=0.5)
+    structure = BeatStructure(beats=list(bar.beats), bars=[bar])
+    align_beats_to_onsets(structure, [])
+    for i, b in enumerate(structure.beats):
+        assert b.time == i * 0.5

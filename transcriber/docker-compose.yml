@@ -38,6 +38,14 @@ services:
       REFINE_BY_DEFAULT: ${REFINE_BY_DEFAULT:-true}
       LINT_BY_DEFAULT: ${LINT_BY_DEFAULT:-true}
       BEST_OF_K_DEFAULT: ${BEST_OF_K_DEFAULT:-1}
+      # `madmom` (default) or `beat_transformer`. The latter requires
+      # transcriber/checkpoints/beat_transformer.pt to exist at build
+      # time; see transcriber/checkpoints/README.md.
+      BEAT_TRACKER: ${BEAT_TRACKER:-madmom}
+      BEAT_TRANSFORMER_CHECKPOINT: ${BEAT_TRANSFORMER_CHECKPOINT:-/app/checkpoints/beat_transformer.pt}
+      # `full_mix` (default) or `drum_stem`. Overridable per-request via
+      # the `beat_input` form parameter on /transcribe.
+      BEAT_INPUT_DEFAULT: ${BEAT_INPUT_DEFAULT:-full_mix}
       # When set, every /transcribe call persists its intermediate audio
       # + JSON artifacts into a per-request subdir of this path. Leave
       # blank to keep request data ephemeral; set debug=true on a

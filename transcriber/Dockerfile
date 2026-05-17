@@ -103,6 +103,11 @@ COPY transcriber/app/ ./app/
 COPY transcriber/prompts/ ./prompts/
 COPY SPEC.md ./SPEC.md
 
+# Beat Transformer checkpoint (optional). If the directory is empty
+# the image still builds; BT just fails-loud at first use when
+# BEAT_TRACKER=beat_transformer is set. See transcriber/checkpoints/README.md.
+COPY transcriber/checkpoints/ ./checkpoints/
+
 # Benchmark harness code (datasets/ and results/ are intentionally NOT
 # copied — they're host-mounted at runtime via docker-compose volumes
 # so the user can paste large fixture files in without rebuilding).

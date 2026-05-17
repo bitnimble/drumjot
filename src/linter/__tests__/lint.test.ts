@@ -201,4 +201,21 @@ describe('positions', () => {
     expect(hit.range!.start).toBeGreaterThan(0);
     expect(hit.range!.end).toBeGreaterThan(hit.range!.start);
   });
+
+  it('attaches a range to the leftmost operand of a + simultaneity', () => {
+    // Regression: rules that anchor on `hands[0]` (e.g. too-many-hands)
+    // previously reported "(no position)" because the parser only
+    // attached `range` to the rightmost operand of a `+` chain — left
+    // operands were swept into the Simultaneity wrapper before they
+    // could be tagged.
+    const src =
+      '{{ instrumentMapping: { s:{name:"Snare"}, d:{name:"Ride"}, c:{name:"Crash"} } }} ' +
+      '| s+d+c . . . . . . . |';
+    const diags = lintSource(src);
+    const hit = diagsByRule(diags, 'performance/too-many-hands')[0];
+    expect(hit).toBeDefined();
+    expect(hit.range).toBeDefined();
+    // Anchor is `hands[0]`, the leftmost in source order (`s`).
+    expect(src.slice(hit.range!.start, hit.range!.end)).toBe('s');
+  });
 });

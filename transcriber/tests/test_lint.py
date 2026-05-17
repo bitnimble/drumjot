@@ -77,6 +77,43 @@ def test_location_formats_compact() -> None:
     assert multi_line.location() == "4:2-5:10"
 
 
+def test_location_with_line_offset_makes_position_segment_relative() -> None:
+    diag = LintDiagnostic(
+        rule_id="x",
+        severity="error",
+        kind="instrument",
+        message="m",
+        line=8,
+        column=5,
+        end_line=8,
+        end_column=11,
+    )
+    # Without offset: full-DSL position.
+    assert diag.location() == "8:5-11"
+    # With offset (segment starts at line 5, i.e. 4 newlines before it):
+    # the diagnostic on full-DSL line 8 should render as segment line 4.
+    assert diag.location(line_offset=4) == "4:5-11"
+
+
+def test_format_for_prompt_applies_line_offset() -> None:
+    result = LintResult(
+        bars=[],
+        diagnostics=[
+            LintDiagnostic(
+                rule_id="x", severity="error", kind="instrument",
+                message="m", line=10, column=2,
+            ),
+        ],
+        errors=1,
+        warnings=0,
+    )
+    # Segment starts at line 8 of the full DSL (7 newlines before it).
+    # The diagnostic on full-DSL line 10 should render as segment line 3.
+    out = format_for_prompt(result, line_offset=7)
+    assert "at 3:2" in out
+    assert "at 10:2" not in out
+
+
 def test_format_for_prompt_orders_errors_before_warnings() -> None:
     result = LintResult(
         bars=[],

@@ -30,6 +30,13 @@ class PredictedOnset:
     time: float
     velocity: int
     modifiers: list[str]
+    # 0-indexed bar within the voice the onset was emitted in. -1 when
+    # the bun bridge didn't surface this (legacy data or hand-built
+    # ExtractedJot fixtures); callers that re-time against the audio's
+    # `BeatStructure` should fall back to `time` in that case.
+    bar: int = -1
+    # 0-indexed float beat position within the bar (0.0 = downbeat).
+    beat_in_bar: float = 0.0
 
 
 @dataclass
@@ -86,6 +93,8 @@ def extract_jot(dsl_text: str, timeout: float = 30.0) -> ExtractedJot:
                 time=float(item["time"]),
                 velocity=int(item["velocity"]),
                 modifiers=list(item.get("modifiers", [])),
+                bar=int(item["bar"]) if "bar" in item else -1,
+                beat_in_bar=float(item.get("beat_in_bar", 0.0)),
             )
             for item in items
         ]

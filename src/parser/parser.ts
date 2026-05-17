@@ -280,19 +280,22 @@ function parseElement(c: Cursor): Element {
   c.skipWs();
   const start = c.pos;
   const primary = parsePrimary(c);
-  const final = applySuffixesAndSimul(c, primary);
-  // Attach source range to Notes / Groups so the linter can point at
-  // them. Skipping Simultaneity / PatternRef / Rest: they're not direct
-  // lint targets (lints fire on their child notes/groups instead).
-  if (final.kind === 'note' || final.kind === 'group') {
-    final.range = { start, end: c.pos };
-  }
-  return final;
+  return applySuffixesAndSimul(c, primary, start);
 }
 
-/** Apply postfix attachments and a possible trailing `+ rhs` simultaneity. */
-function applySuffixesAndSimul(c: Cursor, primary: Element): Element {
+/**
+ * Apply postfix attachments and a possible trailing `+ rhs` simultaneity.
+ * When `start` is supplied and the post-suffix element is a Note/Group,
+ * attach its source range BEFORE any simultaneity merge — otherwise the
+ * left operand of `k + s + h` ends up wrapped inside a Simultaneity and
+ * never gets its own range (lint rules that anchor on the first-stacked
+ * note then report "(no position)").
+ */
+function applySuffixesAndSimul(c: Cursor, primary: Element, start?: number): Element {
   let el = parseSuffixes(c, primary);
+  if (start !== undefined && (el.kind === 'note' || el.kind === 'group')) {
+    el.range = { start, end: c.pos };
+  }
   c.skipWs();
   if (c.peek() === '+') {
     c.advance();

@@ -55,15 +55,24 @@ class LintDiagnostic:
     voice_index: int | None = None
     suggested_fix: str | None = None
 
-    def location(self) -> str:
-        """Compact `line:col` / `line:col-line:col` representation for prompts."""
+    def location(self, line_offset: int = 0) -> str:
+        """Compact `line:col` / `line:col-line:col` representation for prompts.
+
+        `line_offset` subtracts from both the start and end line numbers
+        so positions can be reported relative to a segment rather than
+        the full DSL — necessary when the LLM only sees a slice and
+        otherwise has no way to map an absolute line back to what it
+        was shown.
+        """
         if self.line is None or self.column is None:
             return "(no position)"
+        adj_line = self.line - line_offset
         if self.end_line is None or self.end_column is None:
-            return f"{self.line}:{self.column}"
-        if self.end_line == self.line:
-            return f"{self.line}:{self.column}-{self.end_column}"
-        return f"{self.line}:{self.column}-{self.end_line}:{self.end_column}"
+            return f"{adj_line}:{self.column}"
+        adj_end_line = self.end_line - line_offset
+        if adj_end_line == adj_line:
+            return f"{adj_line}:{self.column}-{self.end_column}"
+        return f"{adj_line}:{self.column}-{adj_end_line}:{self.end_column}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,12 +192,17 @@ def _parse_diagnostic(d: dict) -> LintDiagnostic:
     )
 
 
-def format_for_prompt(result: LintResult) -> str:
+def format_for_prompt(result: LintResult, line_offset: int = 0) -> str:
     """Render diagnostics for embedding in a refinement prompt.
 
     Each diagnostic gets a compact one-line header followed by its snippet
     indented two spaces, so the LLM can both read the message and see the
     exact offending text. Errors are listed before warnings.
+
+    `line_offset` is the number of newlines that precede the segment
+    being shown to the LLM. When non-zero, the rendered `line:col`
+    positions are made segment-relative (so "line 3" means line 3 of
+    the snippet, not line 3 of the full DSL the LLM never sees).
     """
     lines: list[str] = []
     sorted_diags = sorted(
@@ -196,7 +210,10 @@ def format_for_prompt(result: LintResult) -> str:
         key=lambda d: (0 if d.severity == "error" else 1, d.rule_id, d.line or 0),
     )
     for d in sorted_diags:
-        header = f"[{d.severity.upper()} {d.rule_id} at {d.location()}] {d.message}"
+        header = (
+            f"[{d.severity.upper()} {d.rule_id} at {d.location(line_offset)}] "
+            f"{d.message}"
+        )
         lines.append(header)
         if d.snippet:
             for snippet_line in d.snippet.splitlines():

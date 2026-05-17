@@ -50,7 +50,8 @@ segment starts at a `|` separator and ends just before the next `|`
   are context, not edit targets. Their text should appear in your output
   unchanged.
 - Preserve any inline `{{...}}` metadata blocks that fall inside the
-  segment exactly as written.
+  segment exactly as written. Do **not** introduce a `title:` field or
+  any narrative naming — neutral identifiers only.
 - Do not output any explanation, code fences, or other commentary —
   just the corrected DSL fragment.{PARSE_ERROR_HINT}
 

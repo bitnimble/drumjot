@@ -62,21 +62,29 @@ export function midiNoteToRole(midiNote: number): DrumRole | undefined {
   return MIDI_TO_ROLE[midiNote];
 }
 
+// Preference lists are ordered most-specific to most-generic. Each kit's
+// own naming style is the leading entry where known (TR-808 uses
+// `hihat-close`, `mid-tom`, `rimshot`, etc.; CR-8000 / LM-2 / MFB-512
+// follow similar but not identical conventions). Substring matching in
+// `resolveGroupForRole` picks up close variants we haven't enumerated.
+//
+// TR-808 has no distinct `ride`; we fall back to `cymbal` so jots with
+// ride hits still produce audible sound on that kit.
 const ROLE_PREFERENCES: Record<DrumRole, string[]> = {
   kick: ['kick', 'bass', 'bassdrum', 'bd', 'kk'],
   snare: ['snare', 'sd', 'sn'],
-  rim: ['rim', 'rimshot', 'sidestick', 'side-stick', 'rs'],
+  rim: ['rimshot', 'rim', 'sidestick', 'side-stick', 'rs'],
   clap: ['clap', 'handclap', 'cp'],
-  hihat_closed: ['hihat-closed', 'closedhat', 'chh', 'hat-closed', 'closed', 'hihat', 'hat', 'ch'],
-  hihat_pedal: ['hihat-pedal', 'pedalhat', 'phh', 'hihat-foot', 'foot-hat', 'hihat-closed', 'hihat'],
+  hihat_closed: ['hihat-close', 'hihat-closed', 'closedhat', 'chh', 'hat-closed', 'closed', 'hihat', 'hat', 'ch'],
+  hihat_pedal: ['hihat-pedal', 'pedalhat', 'phh', 'hihat-foot', 'foot-hat', 'hihat-close', 'hihat-closed', 'hihat'],
   hihat_open: ['hihat-open', 'openhat', 'ohh', 'hat-open', 'open', 'hihat', 'hat', 'oh'],
-  tom_low: ['tom-low', 'low-tom', 'lt', 'tom-3', 'tom3', 'low-conga', 'tom'],
-  tom_mid: ['tom-mid', 'mid-tom', 'mt', 'tom-2', 'tom2', 'mid-conga', 'tom'],
-  tom_hi: ['tom-hi', 'hi-tom', 'high-tom', 'ht', 'tom-1', 'tom1', 'high-conga', 'tom'],
-  crash: ['crash', 'cymbal-crash', 'cy', 'cr', 'cymbal'],
-  ride: ['ride', 'ride-cymbal', 'rd'],
+  tom_low: ['tom-low', 'low-tom', 'lt', 'tom-3', 'tom3', 'low-conga', 'conga-low', 'tom'],
+  tom_mid: ['mid-tom', 'tom-mid', 'mt', 'tom-2', 'tom2', 'mid-conga', 'conga-mid', 'tom'],
+  tom_hi: ['tom-hi', 'hi-tom', 'high-tom', 'ht', 'tom-1', 'tom1', 'high-conga', 'conga-hi', 'tom'],
+  crash: ['crash', 'cymbal-crash', 'cymbal', 'cy', 'cr'],
+  ride: ['ride', 'ride-cymbal', 'rd', 'cymbal'],
   cowbell: ['cowbell', 'bell', 'cb'],
-  tambourine: ['tambourine', 'tamb', 'shaker', 'maracas'],
+  tambourine: ['tambourine', 'tamb', 'shaker', 'maraca', 'maracas'],
 };
 
 /**

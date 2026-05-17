@@ -183,3 +183,23 @@ async function safeReadError(res: Response): Promise<string> {
 
 /** Singleton instance for convenience. */
 export const transcriber = new TranscriberClient();
+
+/**
+ * Derive a Jot title from an uploaded audio file's name. Strips the
+ * file extension and trims whitespace; returns null when the input is
+ * null/empty or yields an empty stem (so callers can skip applying it
+ * rather than overwrite an LLM-emitted title with the empty string).
+ *
+ * This used to live in `transcriber/app/pipeline/title.py` as a regex
+ * pass over the DSL inside the Python service. It now lives here so
+ * the canonical TS parser owns the DSL — the frontend sets
+ * `jot.title` directly on the parsed Jot rather than mutating the
+ * DSL text.
+ */
+export function titleFromFilename(filename: string | null | undefined): string | null {
+  if (!filename) return null;
+  // Strip a single trailing `.<ext>` (handles dotfiles like ".env" by
+  // not matching, which leaves the stem untouched). Then trim.
+  const stem = filename.replace(/\.[^./\\]+$/, '').trim();
+  return stem || null;
+}

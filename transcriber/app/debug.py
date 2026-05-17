@@ -33,11 +33,39 @@ import re
 import shutil
 import time
 import uuid
+from contextvars import ContextVar, Token
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
+
+# Request-scoped current DebugSink. Set by /transcribe at the top of each
+# request so deep callees (the LLM wrapper, refinement helpers) can dump
+# their prompts without having the sink threaded through their signatures.
+# FastAPI's request handlers run in async context where ContextVars are
+# request-local, so concurrent /transcribe calls don't see each other's
+# sinks. Defaults to None when debug persistence is disabled — call sites
+# must handle that.
+_CURRENT_DEBUG_SINK: ContextVar["DebugSink | None"] = ContextVar(
+    "drumjot_debug_sink", default=None
+)
+
+
+def current_debug_sink() -> "DebugSink | None":
+    """Return the request-scoped DebugSink, or None if debug is disabled."""
+    return _CURRENT_DEBUG_SINK.get()
+
+
+def set_current_debug_sink(sink: "DebugSink | None") -> Token:
+    """Install `sink` as the request-scoped sink. Returns a Token that
+    callers MUST pass to `reset_current_debug_sink` (typically in a
+    `finally`) so the ContextVar is restored on exit."""
+    return _CURRENT_DEBUG_SINK.set(sink)
+
+
+def reset_current_debug_sink(token: Token) -> None:
+    _CURRENT_DEBUG_SINK.reset(token)
 
 
 _FILENAME_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -55,6 +83,8 @@ class DebugSink:
         self.dir = request_dir
         self.dir.mkdir(parents=True, exist_ok=True)
         self._started = time.perf_counter()
+        # Monotonic counter for LLM-call dumps so files sort in call order.
+        self._llm_call_seq = 0
         log.info("Debug artifacts will be written to %s", self.dir)
 
     @classmethod
@@ -105,6 +135,14 @@ class DebugSink:
         except OSError as exc:
             log.warning("Debug write %s failed: %s", dest, exc)
 
+    def write_bytes(self, name: str, data: bytes) -> None:
+        dest = self.dir / name
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(data)
+        except OSError as exc:
+            log.warning("Debug write_bytes %s failed: %s", dest, exc)
+
     def write_json(self, name: str, payload: Any) -> None:
         dest = self.dir / name
         try:
@@ -115,6 +153,41 @@ class DebugSink:
             )
         except (OSError, TypeError, ValueError) as exc:
             log.warning("Debug write_json %s failed: %s", dest, exc)
+
+    def write_llm_prompt(
+        self,
+        purpose: str,
+        model: str,
+        prompt: str,
+        *,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        """Persist the full hydrated prompt for one LLM call.
+
+        Files land at `<dir>/llm/NN_<purpose>.txt` where NN is a
+        zero-padded per-request sequence number. Each file opens with a
+        small header (model, char count, optional extra kwargs) followed
+        by the raw prompt text — we deliberately avoid wrapping the
+        prompt in a markdown fence because the prompt itself can contain
+        triple backticks.
+        """
+        self._llm_call_seq += 1
+        seq = f"{self._llm_call_seq:02d}"
+        safe_purpose = _slugify(purpose) or "llm"
+        header_lines: list[str] = [
+            f"# LLM call {seq}: {purpose}",
+            f"- model: {model}",
+            f"- prompt_chars: {len(prompt)}",
+        ]
+        if extra:
+            for key, value in extra.items():
+                if value is None:
+                    continue
+                header_lines.append(f"- {key}: {value}")
+        body = "\n".join(header_lines) + "\n\n----- PROMPT -----\n" + prompt
+        if not body.endswith("\n"):
+            body += "\n"
+        self.write_text(f"llm/{seq}_{safe_purpose}.txt", body)
 
     def finalize(self, summary: dict[str, Any]) -> None:
         """Write the request summary (timings, options, scores) last."""

@@ -7,8 +7,9 @@ code, plans that exist but haven't been executed yet, and a list of
 gotchas worth knowing before making changes. Read it top to bottom
 once; refer back as needed.
 
-Last updated by the assistant: May 2026, end of the session that built
-the transcriber service and the beat-aware refinement pipeline.
+Last updated by the assistant: May 2026, after the session that added
+browser playback, the named-stage pipeline runner, and the
+`/transcribe/resume` endpoint.
 
 ---
 
@@ -68,6 +69,19 @@ drumjot/
 │   ├── geom.ts                     Tiny Point/Box helpers.
 │   ├── selection.ts                Marquee + pattern selection store.
 │   ├── transcriber.ts              HTTP client for the transcriber service.
+│   ├── playback/                   Browser drum playback via smplr.
+│   │   ├── player.ts               JotPlayer singleton (MobX-observable
+│   │   │                           state/currentTime/timeline/playbackSpeed;
+│   │   │                           live setFilter for mute/solo;
+│   │   │                           live setPlaybackSpeed for slow practice).
+│   │   ├── events.ts               RenderedJot -> PlaybackEvent[] (carries
+│   │   │                           DSL pitch letter for mute/solo filtering).
+│   │   ├── timeline.ts             buildTimeline + timeToX; reads LIVE
+│   │   │                           bar.x/width so zoom changes during
+│   │   │                           playback keep the playhead in sync.
+│   │   ├── drums.ts                MIDI note -> drum role -> smplr kit-group
+│   │   │                           resolution. Hardcoded for TR-808 today.
+│   │   └── index.ts                Public exports.
 │   ├── index.tsx                   Vite entry; constructs Drumjot, mounts the
 │   │                               View, exposes window.Drumjot for the console.
 │   ├── parser/                     Recursive-descent DSL parser.
@@ -120,32 +134,89 @@ drumjot/
     │   ├── refine_onsets.md        Missing/extra hit corrections.
     │   └── refine_velocity.md      Dynamics adjustments.
     └── app/
-        ├── main.py                 FastAPI: GET /health, POST /transcribe.
+        ├── main.py                 FastAPI: GET /health, POST /transcribe,
+        │                           POST /transcribe/resume.
         ├── config.py               Pydantic-settings (env-driven).
+        ├── debug.py                DebugSink + serializers (beats_dump,
+        │                           onsets_dump). Request-scoped ContextVar
+        │                           so deep callees can dump prompts
+        │                           without threading the sink.
         ├── models.py               Request/response schemas:
         │                           TranscribeResponse, OnsetCandidate (with
         │                           bar/beat_in_bar), BarSummary, RefinementLog,
         │                           BestOfKLog.
         └── pipeline/
-            ├── separate.py         Two-stage: Demucs htdemucs_ft (mix ->
-            │                       drum stem) -> Jarredou MDX23C 6-stem
-            │                       (drum stem -> per-instrument stems).
-            ├── beats.py            madmom RNN+DBN downbeat tracker;
-            │                       BeatStructure with BarInfo (tempo, time
-            │                       sig, feel); intra-beat fraction analysis
-            │                       for feel detection.
+            ├── runner.py           Stage enum + PipelineContext +
+            │                       run_pipeline(). Both endpoints dispatch
+            │                       through here; StageError carries the
+            │                       failing stage so HTTP layer maps to
+            │                       500 (local) / 502 (transcribe = LLM).
+            ├── resume.py           hydrate_context_from_resume(folder,
+            │                       start_stage): loads on-disk artifacts
+            │                       for stages strictly before start_stage,
+            │                       raises FileNotFoundError naming the
+            │                       missing piece for HTTP 400.
+            ├── separate.py         Two-stage separator with INDEPENDENT
+            │                       run_stems_all() / run_stems_per() so
+            │                       resume can re-run either alone. Demucs
+            │                       htdemucs_ft for `stems_all`, Jarredou
+            │                       MDX23C 6-stem for `stems_per`. Debug
+            │                       output folders: `stems_all/`, `stems_per/`
+            │                       (previously stage1/, stage2/).
+            ├── beats.py            madmom RNN+DBN downbeat tracker (default)
+            │                       OR Beat Transformer activations into the
+            │                       shared DBN (selectable via `beat_tracker`
+            │                       setting). BeatStructure with BarInfo
+            │                       (tempo, time sig, feel); intra-beat
+            │                       fraction analysis for feel detection.
+            │                       `_summarize` excludes bar 0 when ≥2
+            │                       bars present (anacrusis handling).
             ├── onsets.py           librosa high-recall onset detection
             │                       per stem; attaches bar/beat positions.
+            │                       Tight detection window (pre_max=post_max=3,
+            │                       wait=3) since input is per-instrument
+            │                       stems where transients are isolated.
             ├── llm.py              Claude initial transcription +
             │                       best-of-K wrapper.
+            ├── llm_util.py         Refusal/content-filter retry helper.
             ├── jot_extract.py      Subprocess wrapper around the bun bridge.
             ├── diff.py             Typed issue detectors with confidence
             │                       scores: missing_onset, extra_onset,
             │                       velocity_mismatch, tempo_mismatch.
             ├── score.py            Per-stem F1 via mir_eval (the loop's
             │                       fitness function).
-            ├── critic.py           Haiku triage of the issue list.
-            └── refine.py           Multi-level convergence loop.
+            ├── critic.py           Haiku triage of the issue list via
+            │                       Anthropic tool-use channel (structured
+            │                       output, no JSON parsing).
+            └── refine.py           Multi-level convergence loop (LINT +
+                                    MACRO/STRUCTURE/ONSETS/VELOCITY). LINT
+                                    is per-segment patches; the F1-gated
+                                    levels are critic (Haiku) → generator
+                                    (Opus) per iteration.
+```
+
+Debug folder layout (when DEBUG_DIR is set or debug=true on a request):
+
+```
+/debug/<timestamp>_<id>_<slug>/
+├── input.<ext>           # raw upload
+├── stems_all/            # stage `stems_all` output (Demucs)
+│   └── drum_stem.wav
+├── stems_per/            # stage `stems_per` output (MDX23C)
+│   ├── k.wav, s.wav, h.wav, d.wav, c.wav, t.wav
+├── beats.json            # stage `beats` output (BeatStructure dump)
+├── onsets.json           # stage `onsets` output (per-pitch candidates)
+├── onsets_only.mid       # auto-emitted alongside onsets.json; one MIDI hit
+│                         # per detected onset (channel 10, per-pitch
+│                         # percentile-normalised velocity). Drop into a DAW
+│                         # to hear *exactly* what the detector heard, with
+│                         # no LLM filtering or quantization in the way.
+├── initial.jot           # stage `transcribe` output
+├── best_of_k.json        # K candidates + scores + chosen_index (when K>1)
+├── final.jot             # stage `refine` output
+├── refinement.json       # per-iteration accept/reject log
+├── llm/NN_<purpose>.txt  # full hydrated prompts for every LLM call
+└── request.json          # filename + options + scores + timings summary
 ```
 
 ---
@@ -177,7 +248,7 @@ The frontend's Vite dev server proxies `/api/*` to
 `http://localhost:8001`, so the "Transcribe audio" toolbar button works
 end-to-end as long as the Docker service is up.
 
-Current test count: **65 passing, 2 skipped** (the skipped tests are
+Current test count: **85 passing, 2 skipped** (the skipped tests are
 fixture suites — drop `.mid` files in `src/midi/__tests__/fixtures/`
 or `.rlrr` files in `src/rlrr/__tests__/fixtures/` to activate them).
 
@@ -235,6 +306,62 @@ phase produced concrete files you can find in the layout above.
 10. **Audio format support**. Frontend `accept` attribute explicitly
     lists wav, flac, mp3, aac/m4a, opus, ogg; backend goes through
     librosa + ffmpeg so anything ffmpeg understands works.
+11. **Naming cleanup**. `self_consistency_samples` was renamed to
+    `best_of_k` end-to-end (Python + TS + UI + CLI + docs); the old
+    term was misleading (it's plain best-of-K with a score function,
+    not self-consistency in the LLM-paper sense).
+12. **Browser drum playback**. `src/playback/` added. Play button
+    schedules events through smplr (TR-808 default; samples fetched
+    from a CDN on first click). Travelling playhead reads live bar
+    widths so zoom changes during playback don't desync. Per-row mute
+    / solo buttons in the gutter take effect mid-playback by cancelling
+    and rescheduling. Stop button actually stops (smplr's
+    `drums.stop()` only halts currently-sounding notes; we collect the
+    per-note stop fns from `drums.start({ time })` and invoke them all).
+    Playback-speed dropdown (0.25×–1.25×) re-anchors mid-flight and
+    spaces audio times by `1/speed` so pitch is unchanged.
+13. **`/transcribe/resume` endpoint**. Re-run from a chosen pipeline
+    stage using a previous debug folder's intermediates. Cuts iteration
+    cost when debugging the LLM stage (the 30–60 s separation step is
+    skipped). See §5.6.
+14. **Named-stage pipeline runner**. `pipeline/runner.py` unifies the
+    pipeline into six explicit stages (`stems_all`, `stems_per`,
+    `beats`, `onsets`, `transcribe`, `refine`). Both endpoints
+    dispatch through `run_pipeline(start_stage=...)`. See §5.7.
+15. **Anacrusis-aware initial time signature**. `_summarize` in
+    `beats.py` now excludes bar 0 when ≥2 bars are present. Madmom
+    correctly emits beat_in_bar=2,3,4 for a 3-beat pickup, but the
+    old code derived `initial_time_signature` from `bars[0]` and
+    labelled the whole song as 3/4 with `has_time_sig_changes=true`.
+    Bar 0's own `time_signature` is left as-is (accurate for its
+    actual beat count).
+16. **Onset detector retuning**. `pre_max`/`post_max` went 20→3,
+    `wait` 5→3, `pre_avg`/`post_avg` 100→50. The wide windows were
+    over-defensive for full-mix detection; we run on per-instrument
+    stems where transients are well isolated, and the previous
+    ±232 ms local-max window was suppressing double-kicks and
+    hi-hat 16ths.
+17. **Beat-onset alignment**. Neural beat trackers (Beat Transformer
+    especially) report each beat at its activation peak, which lags
+    the actual transient by ~30–50 ms. Symptom: downbeat kicks land
+    at `beat_in_bar≈1.18` instead of `1.00`, the LLM then either
+    drops them as "off-grid" or snaps them to the wrong slot.
+    `pipeline/beats.py::align_beats_to_onsets` snaps each beat to
+    the **strongest** drum onset within ±50 ms (strongest, not
+    closest — a quiet ghost hat shouldn't outrank a louder kick
+    further out), then `_rebuild_bar_fields` recomputes per-bar
+    `start_time` / `end_time` / `tempo_bpm` and the global initial
+    tempo. Drum-stem onsets are detected once on `ctx.drum_stem`
+    inside `_do_beats` and passed into `analyze_beats(..., align_onsets=...)`.
+18. **Silent pattern definitions in the prompt**. The DSL has two
+    forms for naming a repeated bar: `[?Name=(...)]` is **silent**
+    (definition only — referenced later by `[Name]`); `[Name=(...)]`
+    **plays at its position** like an inline element. The LLM
+    originally emitted the playing form for pattern definitions,
+    causing everything in the anacrusis to stack on top of itself
+    and play "4 bars in 1 second". `prompts/transcribe.md` now
+    mandates the `?` prefix; if the symptom recurs, check the
+    LLM's output for missing `?` on top-of-chart definitions.
 
 ---
 
@@ -313,6 +440,57 @@ issue list before the expensive **generator** LLM (Opus 4.7) sees it
   global initial tempo; the onset pass picks up per-bar mismatches
   implicitly through missing/extra onsets. Per-bar tempo issues are a
   reasonable follow-up.
+
+### 5.6 The `/transcribe/resume` endpoint
+
+Re-runs the pipeline from a chosen stage onward, hydrating earlier
+stages' artifacts from a previous run's debug folder. Form params:
+
+- `resume_folder` — absolute path or bare folder name under
+  `DEBUG_DIR` (default `/debug`). A path-traversal guard rejects
+  anything outside the configured base.
+- `resume_stage` — one of `stems_all`, `stems_per`, `beats`, `onsets`,
+  `transcribe`, `refine`. Required.
+- `refine`, `lint`, `best_of_k`, `include_candidates` — same as
+  `/transcribe`.
+
+Required upstream artifacts depend on `resume_stage`:
+
+- `stems_per` needs `stems_all/drum_stem.<ext>`.
+- `beats` needs `stems_per/*.<ext>` (consumed downstream by `onsets`).
+- `onsets` needs `stems_per/*.<ext>` + `beats.json`.
+- `transcribe` needs `beats.json` + `onsets.json` + `stems_per/*.<ext>`.
+- `refine` needs `initial.jot` + the four above.
+
+Missing artifacts surface as HTTP 400 with a message naming which
+`resume_stage` value would regenerate them. Output overwrites the
+artifacts produced by the chosen stage and any stage after it;
+upstream artifacts are preserved so re-resuming the same folder is
+idempotent.
+
+### 5.7 Named-stage pipeline runner
+
+Both endpoints dispatch through `pipeline/runner.run_pipeline()`. The
+six stages and their data dependencies:
+
+```
+stems_all  -> drum_stem               (consumed by stems_per)
+stems_per  -> per_instrument_stems    (consumed by onsets, refine)
+beats      -> structure               (consumed by onsets, transcribe, refine)
+onsets     -> onsets_by_pitch         (consumed by transcribe, refine)
+transcribe -> initial_jot             (consumed by refine)
+refine     -> final_jot
+```
+
+Each `_do_<stage>(...)` function reads its inputs from a shared
+`PipelineContext`, writes its output back, and persists artifacts via
+the debug sink. Stage failures wrap into `StageError(stage,
+original)`; the HTTP layer maps `StageError.stage == TRANSCRIBE` to
+502 (LLM is external) and everything else to 500.
+
+The runner is the single place where the pipeline order lives.
+Adding a stage means: extend the enum, add a `_do_*`, add a case to
+`_run_stage`, add a hydration entry in `resume.py`.
 
 ---
 
@@ -467,7 +645,12 @@ preprocessing. Tests cover every spec example.
    last PyPI release (0.16.1) predates modern Python. The Dockerfile
    pins this. If install breaks in a future Python, fallback paths in
    `beats.py` will use librosa beat tracking (no downbeat detection),
-   degrading per-bar feel detection to default-`straight16`.
+   degrading per-bar feel detection to default-`straight16`. A second
+   backend, **Beat Transformer**, is also available via
+   `settings.beat_tracker = "beat_transformer"`; its activations feed
+   the same madmom DBN postprocessor and respect the same `BeatStructure`
+   shape, with an optional tempo-window narrowing around its tempo
+   head's prediction.
 2. **Vector size limits**. A 5-minute song's per-bar prompt is
    currently within Opus's 200k context budget, but a 10-minute song
    could push it. If you hit token limits, batch by song-section.
@@ -490,9 +673,14 @@ preprocessing. Tests cover every spec example.
    signature not bpm). So a Jot with tempo changes renders all bars
    at the same visual width even if real durations differ. Fine for
    notation; would need work for "playback-accurate" rendering.
-8. **No "stop transcription" UI**. Once the user clicks Transcribe,
-   they wait the full ~30–90 s. The transcriber.ts client passes an
-   AbortSignal through, just nothing in the toolbar wires it up.
+8. **Stop semantics for browser playback need both halves**. smplr's
+   `drums.stop()` only halts notes already sounding; future-scheduled
+   notes (via `drums.start({ time })`) keep firing until they reach
+   their start time. `JotPlayer.stop()` collects the per-note stopFns
+   returned by each `start` call and invokes them all, otherwise Stop
+   only stops the playhead animation and the song keeps playing.
+   Anyone adding new scheduling paths must push their stop fns onto
+   `this.scheduledStops` for Stop to remain truthful.
 9. **`<input type="file">` accept is best-effort** across browsers.
    Safari especially can be loose about which MIME types it tags
    non-Apple formats with. The `audio/*` wildcard catches most edge
@@ -502,6 +690,54 @@ preprocessing. Tests cover every spec example.
     bar**. If you add new fields to `Metadata` that need to propagate
     per-bar (beyond `time` + `bpm` today), update the `BarMeta` type
     in `src/parser/parser.ts` accordingly.
+11. **`JotPlayer.currentTime` is in JOT time, not real time.** With
+    `playbackSpeed < 1.0`, real elapsed seconds ≠ reported
+    `currentTime`. The rAF loop computes
+    `startJotTime + (ctx.currentTime - startContextTime) * playbackSpeed`,
+    and `setPlaybackSpeed` mid-flight re-anchors both fields so the
+    playhead doesn't jump. Anything reading `currentTime` for visual
+    sync should keep working; anything timing wall-clock events
+    against it needs to divide by `playbackSpeed` first.
+12. **Per-instrument stems are the input to `onsets.detect_onsets`,
+    not the full drum mix**. The detector windows are tuned tight
+    (`pre_max`=`post_max`=3, `wait`=3) on this assumption. If a future
+    refactor ever runs onset detection on the full drum stem (or
+    full mix), the windows need to widen back to ~20 or you'll get
+    spurious double-detections of single transients.
+13. **smplr's TR-808 group names are non-obvious.** The kit uses
+    `hihat-close` (no trailing `d`), `mid-tom` (not `tom-mid`), and
+    has no separate `ride` group — `drums.ts` falls back to
+    `cymbal` for ride hits. If you swap to a different kit
+    (`Casio-RZ1`, `LM-2`, `MFB-512`, `Roland CR-8000`) those mappings
+    will need re-verifying against the new kit's `getGroupNames()`.
+14. **The frontend's playback module assumes one global BPM**. The
+    timeline anchors to `globalMetadata.bpm` because `toMidi` only
+    emits one `setTempo` at tick 0 — per-bar `{{ bpm: ... }}`
+    overrides in the DSL aren't carried into the MIDI bytes that drive
+    playback, so honouring them in the playhead would drift the
+    visual relative to the audio. If MIDI export ever emits multiple
+    tempo events, `playback/events.ts` and `playback/timeline.ts` need
+    updating in lockstep.
+15. **Beat times are snapped to drum onsets after tracking**. If
+    you change the order of operations in `analyze_beats` or
+    `_do_beats`, preserve the sequence:
+    `tracker → align_beats_to_onsets → _pad_trailing_bars`. Snapping
+    after padding would re-time the synthetic trailing bars to
+    arbitrary onsets in the fadeout; padding before snapping is
+    correct because the synthetic bars are built from the **already
+    corrected** last-real-bar tempo. The alignment is also why
+    `detect_onsets(ctx.drum_stem)` runs in `_do_beats` before
+    `_do_onsets` re-detects per-stem — these are different stems
+    (combined drum vs. per-instrument) and the duplicate cost is
+    cheap relative to the accuracy win.
+16. **`[?Name=(...)]` is silent; `[Name=(...)]` plays at its
+    position.** Easy to swap by accident. The `?` prefix turns the
+    definition into "pattern declaration only, body invoked later
+    via `[Name]`". Without `?`, the body is played inline at the
+    position the definition appears in. If you ever see playback
+    speed appear orders of magnitude too fast, suspect an LLM
+    emission that dropped the `?` on top-of-chart definitions
+    inside the anacrusis.
 
 ---
 

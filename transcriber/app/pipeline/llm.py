@@ -28,7 +28,10 @@ from app.config import settings
 from app.models import OnsetCandidate
 from app.pipeline.beats import BeatStructure
 from app.pipeline.jot_extract import extract_jot
-from app.pipeline.llm_util import strip_code_fence
+from app.pipeline.llm_util import (
+    call_messages_with_refusal_retry,
+    strip_code_fence,
+)
 from app.pipeline.score import score_jot
 
 log = logging.getLogger(__name__)
@@ -41,6 +44,7 @@ def transcribe_to_jot(
     structure: BeatStructure,
     temperature: float | None = None,
     parse_error_hint: str | None = None,
+    debug_purpose: str = "initial_transcribe",
 ) -> str:
     """Single LLM call. Returns the DSL string. Retry / scoring is the
     caller's responsibility - use `transcribe_to_jot_best_of_k`
@@ -106,7 +110,10 @@ def transcribe_to_jot(
     }
     if temperature is not None:
         create_kwargs["temperature"] = temperature
-    response = client.messages.create(**create_kwargs)
+
+    response = call_messages_with_refusal_retry(
+        client, create_kwargs, base_prompt=prompt, purpose=debug_purpose,
+    )
 
     parts = []
     for block in response.content:
@@ -137,11 +144,13 @@ def transcribe_to_jot_best_of_k(
     temperatures = _temperatures_for(samples)
     candidates_dsl: list[str] = []
     for i, temp in enumerate(temperatures):
+        purpose = f"initial_transcribe_sample_{i + 1}of{samples}_temp_{temp:.2f}"
         try:
             dsl = transcribe_to_jot(
                 candidates_by_pitch=candidates_by_pitch,
                 structure=structure,
                 temperature=temp,
+                debug_purpose=purpose,
             )
         except anthropic.BadRequestError as exc:
             if "temperature" in str(exc).lower():
@@ -154,6 +163,7 @@ def transcribe_to_jot_best_of_k(
                         candidates_by_pitch=candidates_by_pitch,
                         structure=structure,
                         temperature=None,
+                        debug_purpose=f"{purpose}__no_temperature",
                     )
                 except Exception as exc2:
                     log.warning("Best-of-K sample %d/%d failed on retry: %s", i + 1, samples, exc2)
@@ -169,12 +179,24 @@ def transcribe_to_jot_best_of_k(
     if not candidates_dsl:
         raise RuntimeError("All best-of-K samples failed")
 
+    # Anchor predicted DSL-time to audio-time before scoring (see
+    # `score_jot` docstring): the bar 0 = t=0 convention in the bun
+    # bridge would otherwise put every prediction off by the audio's
+    # pre-roll length, collapsing the F1 to ~0.
+    time_offset = structure.bars[0].start_time if structure.bars else 0.0
+
     scored: list[tuple[float, str]] = []
     per_sample_scores: list[float] = []
     for i, dsl in enumerate(candidates_dsl):
         try:
             extracted = extract_jot(dsl)
-            score = score_jot(extracted, candidates_by_pitch).onset_f1
+            score = score_jot(
+                extracted,
+                candidates_by_pitch,
+                time_offset=time_offset,
+                structure=structure,
+                debug_tag=f"best_of_k_sample_{i + 1}of{samples}",
+            ).onset_f1
         except Exception as exc:
             # Either the bun parser rejected the DSL (JotParseError) or
             # mir_eval blew up on degenerate input - both are reasons to

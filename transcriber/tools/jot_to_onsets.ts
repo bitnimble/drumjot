@@ -82,7 +82,24 @@ async function main() {
 
   const globalBpm = resolveBpm(jot.globalMetadata.bpm, 120);
 
-  type OnsetOut = { time: number; velocity: number; modifiers: string[] };
+  type OnsetOut = {
+    time: number;
+    /**
+     * 0-indexed bar within this voice. The Python scorer maps voice-local
+     * bar index 1:1 to the audio's `structure.bars[index]` so it can
+     * re-time the onset using the AUDIO's bar boundary + per-bar tempo
+     * instead of relying on the LLM's emitted BPM (which drifts).
+     */
+    bar: number;
+    /**
+     * Beat position within the bar, 0-indexed float matching the rest of
+     * the Drumjot data model (0.0 = on the downbeat, 1.5 = 1.5 beats
+     * into the bar, etc.).
+     */
+    beat_in_bar: number;
+    velocity: number;
+    modifiers: string[];
+  };
   const onsets: Record<string, OnsetOut[]> = {};
 
   // Walk voices/bars carrying running "active" bpm so inline {{bpm:...}}
@@ -93,6 +110,7 @@ async function main() {
     const voice = resolved.voices[vi];
     let activeBpm = globalBpm;
     let barOffsetSeconds = 0;
+    let barIndex = 0;
     for (const bar of voice.bars) {
       const barMetaBpm = resolveBpm((bar.source as { metadata?: { bpm?: unknown } })?.metadata?.bpm, undefined);
       if (barMetaBpm !== undefined) activeBpm = barMetaBpm;
@@ -106,12 +124,15 @@ async function main() {
           const modifierSet = note.modifiers as ReadonlySet<string>;
           (onsets[pitch] ??= []).push({
             time: Number(t.toFixed(4)),
+            bar: barIndex,
+            beat_in_bar: Number(note.beat.toFixed(4)),
             velocity: resolveVelocity(note.source.metadata, modifierSet),
             modifiers: Array.from(modifierSet),
           });
         }
       }
       barOffsetSeconds += barDuration;
+      barIndex += 1;
     }
   }
 
