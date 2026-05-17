@@ -768,7 +768,7 @@ function describeNote(note: ResolvedNote, instrument: Instrument): string {
   const name = instrument.name ?? `Pitch ${note.pitch}`;
   const qualifiers: string[] = [];
   for (const mod of note.modifiers) {
-    qualifiers.push(MODIFIER_LABELS[mod as Modifier] ?? mod);
+    qualifiers.push(MODIFIER_LABELS[mod] ?? mod);
   }
   if (note.roll) qualifiers.push('roll');
   if (note.sticking) qualifiers.push(STICKING_LABELS[note.sticking]);

@@ -7,6 +7,7 @@ import {
   Instrument,
   Jot,
   Metadata,
+  Modifier,
   Note,
   Pattern,
   PatternRef,
@@ -63,7 +64,12 @@ export class ViewConfig {
 export type ResolvedNote = {
   source: Note;
   pitch: string;
-  modifiers: ReadonlySet<string>;
+  /**
+   * Modifiers attached to this note, narrowed to the {@link Modifier}
+   * union so consumers can pass literal modifier strings to `.has()`
+   * without casting and so misspelled modifiers fail at compile time.
+   */
+  modifiers: ReadonlySet<Modifier>;
   sticking?: Note['sticking'];
   roll: boolean;
   /** Position within bar, in beats (0 = bar start, bar.length = bar end). */
@@ -399,7 +405,7 @@ export class RenderedJot {
       track.notes.push({
         source: note,
         pitch,
-        modifiers: new Set(note.modifiers ?? []),
+        modifiers: new Set<Modifier>(note.modifiers ?? []),
         sticking: note.sticking,
         roll: !!note.roll,
         beat,

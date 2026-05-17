@@ -95,7 +95,7 @@ export function describeDrum(instanceName: string): DrumDescriptor | undefined {
  *    disambiguate at the RLRR layer. The MIDI round-trip uses the `event.midi`
  *    extension to preserve the original note number.
  */
-export function pitchToClass(pitch: string, mods: ReadonlySet<string>): string | undefined {
+export function pitchToClass(pitch: string, mods: ReadonlySet<Modifier>): string | undefined {
   switch (pitch) {
     case 'k':
       return 'BP_Kick_C';

@@ -66,7 +66,7 @@ export const GM_PERCUSSION: Readonly<Record<number, GmEntry>> = {
  */
 export function defaultMidiNote(
   pitch: string,
-  modifiers: ReadonlySet<string>
+  modifiers: ReadonlySet<Modifier>
 ): number | undefined {
   switch (pitch) {
     case 'k':

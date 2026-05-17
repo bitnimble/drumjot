@@ -59,6 +59,13 @@ export type Metadata = {
   /** Maps each pitch letter to an Instrument. Order is the rendered lane order. */
   instrumentMapping?: Record<string, Instrument>;
   comment?: string;
+  /**
+   * Optional song title. When present in `globalMetadata` it is lifted out
+   * to `Jot.title` by the parser, but we declare it explicitly here so
+   * direct authors get autocomplete + typing without falling back to the
+   * `[key: string]: unknown` index signature.
+   */
+  title?: string;
   [key: string]: unknown;
 };
 
