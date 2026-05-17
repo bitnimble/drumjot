@@ -21,6 +21,7 @@ import anthropic
 
 from app.config import settings
 from app.pipeline.diff import Issue
+from app.pipeline.llm_util import strip_code_fence
 
 log = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ def triage_issues(
             messages=[{"role": "user", "content": prompt}],
         )
         text = "".join(b.text for b in response.content if hasattr(b, "text")).strip()
-        text = _strip_code_fence(text)
+        text = strip_code_fence(text)
         triaged_raw = json.loads(text)
         triaged = [_dict_to_issue(d) for d in triaged_raw][:max_issues]
         log.info(
@@ -92,14 +93,3 @@ def _dict_to_issue(d: dict[str, Any]) -> Issue:
         expected_bpm=d.get("expected_bpm"),
         current_bpm=d.get("current_bpm"),
     )
-
-
-def _strip_code_fence(text: str) -> str:
-    if text.startswith("```"):
-        text = text[3:]
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip("`\n ")
-    if text.endswith("```"):
-        text = text[: -3].strip()
-    return text

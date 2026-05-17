@@ -47,6 +47,7 @@ from app.pipeline.jot_extract import (
     JotParseError,
     extract_jot,
 )
+from app.pipeline.llm_util import strip_code_fence
 from app.pipeline.score import score_jot
 
 log = logging.getLogger(__name__)
@@ -300,15 +301,4 @@ def _generator_revise(
         messages=[{"role": "user", "content": prompt}],
     )
     text = "".join(b.text for b in response.content if hasattr(b, "text")).strip()
-    return _strip_code_fence(text)
-
-
-def _strip_code_fence(text: str) -> str:
-    if text.startswith("```"):
-        text = text[3:]
-        if text.startswith(("dsl", "drumjot", "text", "json")):
-            text = text.split("\n", 1)[1] if "\n" in text else ""
-        text = text.strip("`\n ")
-    if text.endswith("```"):
-        text = text[: -3].strip()
-    return text
+    return strip_code_fence(text)

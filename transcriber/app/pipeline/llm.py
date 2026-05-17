@@ -26,8 +26,9 @@ import anthropic
 
 from app.config import settings
 from app.models import OnsetCandidate
-from app.pipeline.beats import BeatStructure, BarInfo
-from app.pipeline.jot_extract import JotParseError, extract_jot
+from app.pipeline.beats import BeatStructure
+from app.pipeline.jot_extract import extract_jot
+from app.pipeline.llm_util import strip_code_fence
 from app.pipeline.score import score_jot
 
 log = logging.getLogger(__name__)
@@ -103,7 +104,7 @@ def transcribe_to_jot(
         if hasattr(block, "text"):
             parts.append(block.text)
     text = "".join(parts).strip()
-    return _strip_code_fence(text)
+    return strip_code_fence(text)
 
 
 def transcribe_to_jot_with_self_consistency(
@@ -185,17 +186,6 @@ def _temperatures_for(samples: int) -> list[float]:
     if samples <= len(base):
         return base[:samples]
     return base + [0.7 + 0.05 * (i + 1) for i in range(samples - len(base))]
-
-
-def _strip_code_fence(text: str) -> str:
-    if text.startswith("```"):
-        text = text[3:]
-        if text.startswith(("dsl", "drumjot", "text", "json")):
-            text = text.split("\n", 1)[1] if "\n" in text else ""
-        text = text.strip("`\n ")
-    if text.endswith("```"):
-        text = text[: -3].strip()
-    return text
 
 
 def _format_bars(
