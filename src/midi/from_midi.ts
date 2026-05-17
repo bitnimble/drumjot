@@ -54,7 +54,7 @@ import {
   Simultaneity,
   TimeSignature,
 } from 'src/dsl';
-import { GM_PERCUSSION, deriveLetterFromMidi } from './gm';
+import { GM_PERCUSSION, allocatePitchesForMidi } from './gm';
 
 export type FromMidiOptions = {
   /** 1-based MIDI channel for drums. Defaults to GM convention (10). */
@@ -148,6 +148,11 @@ export function fromMidi(
   // [A5] Compute bar boundaries from time-signature changes.
   const barSpans = computeBarSpans(timeSigChanges, drumNotes, ticksPerBeat);
 
+  // Per-song allocation of `midi -> pitch` so unknown drums get unique
+  // fallback letters that don't collide with GM_PERCUSSION or with each
+  // other. See `allocatePitchesForMidi`.
+  const pitchByMidi = allocatePitchesForMidi(drumNotes.map((d) => d.note));
+
   // Index drum notes into (bar, slot) buckets.
   type Slot = {
     notes: Array<{
@@ -167,7 +172,7 @@ export function fromMidi(
     const slotIdx = Math.round((snapped - bar.startTick) / gridTicks);
 
     const entry = GM_PERCUSSION[dn.note];
-    const pitch = entry?.pitch ?? deriveLetterFromMidi(dn.note);
+    const pitch = pitchByMidi.get(dn.note) ?? entry?.pitch ?? 'z';
     const modifiers = entry?.modifiers ? [...entry.modifiers] : [];
 
     let bucket = slotsByBar.get(barIdx);
@@ -236,8 +241,9 @@ export function fromMidi(
   }
 
   // Build an instrument mapping from the MIDI notes we actually observed.
-  const usedNotes = new Set(drumNotes.map((d) => d.note));
-  const instrumentMapping = buildInstrumentMap(usedNotes);
+  // Reuse the per-song letter allocation so the mapping and the inline
+  // pitches agree letter-for-letter even when fallback letters were used.
+  const instrumentMapping = buildInstrumentMap(pitchByMidi);
 
   const globalMetadata: Metadata = {
     bpm,
@@ -337,18 +343,21 @@ function buildNote(
   return note;
 }
 
-function buildInstrumentMap(used: Set<number>): Record<string, Instrument> {
+function buildInstrumentMap(
+  pitchByMidi: ReadonlyMap<number, string>
+): Record<string, Instrument> {
   const out: Record<string, Instrument> = {};
-  for (const midi of used) {
+  // Iterate in sorted MIDI order so the resulting mapping is stable.
+  const midis = Array.from(pitchByMidi.keys()).sort((a, b) => a - b);
+  for (const midi of midis) {
+    const pitch = pitchByMidi.get(midi);
+    if (!pitch || out[pitch]) continue;
     const entry = GM_PERCUSSION[midi];
-    const pitch = entry?.pitch ?? deriveLetterFromMidi(midi);
-    if (!out[pitch]) {
-      out[pitch] = {
-        name: entry?.name ?? `MIDI ${midi}`,
-        ...(entry?.limb ? { limb: entry.limb } : {}),
-        midi: { note: midi },
-      };
-    }
+    out[pitch] = {
+      name: entry?.name ?? `MIDI ${midi}`,
+      ...(entry?.limb ? { limb: entry.limb } : {}),
+      midi: { note: midi },
+    };
   }
   return out;
 }

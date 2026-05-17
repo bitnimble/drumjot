@@ -32,6 +32,7 @@ import {
   Voice,
 } from 'src/dsl';
 import { CLASS_TO_DRUM, describeDrum, instanceNameToClass } from './drums';
+import { allocateFallbackLetters } from './fallback';
 import {
   RlrrFile,
   eventTimeSeconds,
@@ -78,6 +79,11 @@ export function rlrrToJot(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
   const slots = new Map<number, Map<number, SlotNote[]>>();
   const usedClasses = new Set<string>();
 
+  // Per-song deterministic allocation of `instanceName -> pitch`. Unknown
+  // drum classes get unique fallback letters that don't collide with
+  // CLASS_TO_DRUM or with one another.
+  const pitchByName = allocateFallbackLetters(rlrr.events.map((e) => e.name));
+
   for (const event of rlrr.events) {
     const seconds = eventTimeSeconds(event);
     const beats = secondsToBeats(seconds, tempoTimeline);
@@ -87,7 +93,7 @@ export function rlrrToJot(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
 
     const cls = instanceNameToClass(event.name);
     if (cls) usedClasses.add(cls);
-    const note = buildNote(event);
+    const note = buildNote(event, pitchByName.get(event.name));
     const sortKey = `${cls ?? 'zzz'}:${event.name}`;
 
     let bucket = slots.get(barIdx);
@@ -134,7 +140,9 @@ export function rlrrToJot(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
     bars.pop();
   }
 
-  // Build an instrument mapping for every unique class we saw.
+  // Build an instrument mapping. Canonical CLASS_TO_DRUM entries win; any
+  // unknown instances get a friendly fallback entry that reuses the
+  // allocated letter (so the inline pitches and the mapping agree).
   const instrumentMapping: Record<string, Instrument> = {};
   for (const cls of usedClasses) {
     const descriptor = CLASS_TO_DRUM[cls];
@@ -144,6 +152,11 @@ export function rlrrToJot(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
         midi: { note: descriptor.midi },
       };
     }
+  }
+  for (const [name, pitch] of pitchByName) {
+    if (instrumentMapping[pitch]) continue;
+    const cls = instanceNameToClass(name);
+    instrumentMapping[pitch] = { name: cls ?? name };
   }
 
   // [R6] Preserve original RLRR sidecar data on global metadata.
@@ -207,9 +220,16 @@ function secondsToBeats(seconds: number, timeline: TempoSegment[]): number {
   return seg.startBeats + (dt * seg.bpm) / 60;
 }
 
-function buildNote(event: { name: string; vel: number; loc: number; midi?: number }): Note {
+function buildNote(
+  event: { name: string; vel: number; loc: number; midi?: number },
+  allocatedPitch: string | undefined
+): Note {
   const descriptor = describeDrum(event.name);
-  const pitch = descriptor?.pitch ?? deriveFallbackPitch(event.name);
+  // [R5] If neither the canonical map nor the per-song allocator has a
+  // pitch for this instrument we fall back to `z`. The allocator should
+  // always have an entry though - it's seeded from the event list - so
+  // this is purely defensive.
+  const pitch = descriptor?.pitch ?? allocatedPitch ?? 'z';
   const modifiers: Modifier[] = descriptor?.modifiers ? [...descriptor.modifiers] : [];
 
   // [R7] Velocity-driven accents/ghosts, mirroring the MIDI converter's policy.
@@ -226,18 +246,4 @@ function buildNote(event: { name: string; vel: number; loc: number; midi?: numbe
     }),
   } as Metadata;
   return note;
-}
-
-/**
- * [R5] Deterministically derive a letter for an unknown drum class so we can
- * still produce a valid Jot. Letters from the end of the alphabet are used
- * to avoid clashes with the standard kit-letter assignments.
- */
-function deriveFallbackPitch(name: string): string {
-  let h = 0;
-  for (let i = 0; i < name.length; i++) {
-    h = (h * 31 + name.charCodeAt(i)) | 0;
-  }
-  const slot = Math.abs(h) % 26;
-  return String.fromCharCode('z'.charCodeAt(0) - slot);
 }

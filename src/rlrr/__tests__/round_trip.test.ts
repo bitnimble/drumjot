@@ -6,6 +6,7 @@ import { MidiEvent, parseMidi, writeMidi } from 'midi-file';
 import {
   DEFAULT_INSTRUMENTS,
   RlrrFile,
+  allocateFallbackLetters,
   eventTimeSeconds,
   jotToRlrr,
   midiToRlrr,
@@ -261,6 +262,25 @@ describe('rlrrToJot / jotToRlrr', () => {
     expect(back.bpmEvents[0].bpm).toBe(120);
     // Kit list is preserved.
     expect(back.instruments.length).toBe(DEFAULT_INSTRUMENTS.length);
+  });
+
+  it('assigns unique fallback letters to unknown instrument instances', () => {
+    // Two synthetic instance names that share a hash hint must end up on
+    // different letters, and neither may collide with canonical pitches
+    // (kick = 'k') in use.
+    const map = allocateFallbackLetters([
+      'BP_Kick_C_1',
+      'BP_MysteryDrumA_C_1',
+      'BP_MysteryDrumB_C_1',
+    ]);
+    expect(map.get('BP_Kick_C_1')).toBe('k');
+    const a = map.get('BP_MysteryDrumA_C_1');
+    const b = map.get('BP_MysteryDrumB_C_1');
+    expect(a).toBeDefined();
+    expect(b).toBeDefined();
+    expect(a).not.toBe(b);
+    expect(a).not.toBe('k');
+    expect(b).not.toBe('k');
   });
 
   it('preserves recordingMetadata and audioFileData across a Jot round trip', () => {

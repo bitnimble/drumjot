@@ -13,5 +13,10 @@ export { fromMidi } from './from_midi';
 export type { FromMidiOptions } from './from_midi';
 export { toMidi, TICKS_PER_BEAT } from './to_midi';
 export type { ToMidiOptions } from './to_midi';
-export { GM_PERCUSSION, defaultMidiNote, deriveLetterFromMidi } from './gm';
+export {
+  GM_PERCUSSION,
+  defaultMidiNote,
+  deriveLetterFromMidi,
+  allocatePitchesForMidi,
+} from './gm';
 export type { GmEntry } from './gm';

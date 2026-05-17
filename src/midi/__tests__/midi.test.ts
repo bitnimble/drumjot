@@ -3,7 +3,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MidiData, MidiEvent, parseMidi, writeMidi } from 'midi-file';
-import { fromMidi, toMidi } from 'src/midi';
+import { allocatePitchesForMidi, fromMidi, toMidi } from 'src/midi';
 
 const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const DRUM_CHANNEL_IDX = 9;
@@ -285,6 +285,44 @@ describe('MIDI <-> Jot synthetic baseline', () => {
     // 8 hi-hat + 4 kick/snare = 12 hits.
     expect(notes.length).toBeGreaterThanOrEqual(12);
     expect(new Set(notes.map((n) => n.note))).toEqual(new Set([36, 38, 42]));
+  });
+
+  it('assigns unique fallback letters for unknown MIDI notes', () => {
+    // 60 (% 26 = 8, hint = 'r') and 86 (% 26 = 8, hint = 'r') share a hint.
+    // Both are outside GM_PERCUSSION, so the allocator must give them
+    // different letters.
+    const map = allocatePitchesForMidi([60, 86, 36]);
+    const a = map.get(60);
+    const b = map.get(86);
+    expect(a).toBeDefined();
+    expect(b).toBeDefined();
+    expect(a).not.toBe(b);
+    // The GM-mapped note (36 -> kick -> 'k') wins for that entry.
+    expect(map.get(36)).toBe('k');
+    // Neither fallback may collide with a canonical pitch from
+    // GM_PERCUSSION (e.g. 'k' for kick) when that pitch is in use.
+    expect(a).not.toBe('k');
+    expect(b).not.toBe('k');
+  });
+
+  it('preserves all unknown MIDI notes in the instrument mapping', () => {
+    const tpq = 480;
+    const bytes = buildMidi({
+      ticksPerBeat: tpq,
+      bpm: 120,
+      notes: [
+        { tick: 0, note: 60, velocity: 100 }, // unknown
+        { tick: tpq, note: 86, velocity: 100 }, // unknown, shares hint with 60
+        { tick: tpq * 2, note: 36, velocity: 100 }, // kick
+      ],
+    });
+    const jot = fromMidi(bytes);
+    const mapping = jot.globalMetadata.instrumentMapping ?? {};
+    // Three distinct letters: kick + two unique unknowns.
+    expect(Object.keys(mapping).sort().length).toBe(3);
+    // Each unknown carries its source MIDI number so a round-trip survives.
+    const midiNotes = Object.values(mapping).map((i) => i.midi?.note).sort();
+    expect(midiNotes).toEqual([36, 60, 86]);
   });
 
   it('skips non-drum channels on read', () => {

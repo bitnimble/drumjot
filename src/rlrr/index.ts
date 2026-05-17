@@ -46,3 +46,4 @@ export {
   pitchToClass,
 } from './drums';
 export type { DrumDescriptor } from './drums';
+export { allocateFallbackLetters } from './fallback';

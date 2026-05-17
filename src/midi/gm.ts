@@ -98,11 +98,62 @@ export function defaultMidiNote(
 
 /**
  * Fallback letter assignment for MIDI notes outside the canonical GM map.
- * We pick letters from the end of the alphabet (`z`, `y`, `x`, ...) to avoid
- * clashing with the standard kit-letter assignments above. The function is
- * deterministic so identical MIDI files always parse to identical jots.
+ *
+ * Two callers need this: the note-emission loop and the instrument-map
+ * builder. They must agree on the letter assigned to each MIDI number,
+ * and no two unknown MIDI numbers in the same song may share a letter
+ * (otherwise the resulting `instrumentMapping` is ambiguous and one of
+ * the drums silently disappears).
+ *
+ * Strategy: deterministic per-song allocation, not per-note. We use a
+ * starting "hint" derived from the MIDI number (so identical files keep
+ * stable letters across runs), but skip any letter that's already taken
+ * either by GM_PERCUSSION or by a previous fallback in the same song.
+ * Letters are walked from the end of the alphabet (`z`, `y`, ...) to
+ * minimise clashes with conventional kit letters.
  */
-export function deriveLetterFromMidi(midiNote: number): string {
-  const slot = midiNote % 26;
-  return String.fromCharCode('z'.charCodeAt(0) - slot);
+export function deriveLetterFromMidi(
+  midiNote: number,
+  claimed: ReadonlySet<string> = new Set()
+): string {
+  const hint = String.fromCharCode('z'.charCodeAt(0) - (midiNote % 26));
+  if (!claimed.has(hint)) return hint;
+  // Walk z -> a looking for the first free slot. 26 letters total, so
+  // this terminates trivially for any plausible drum kit.
+  for (let i = 25; i >= 0; i--) {
+    const c = String.fromCharCode('a'.charCodeAt(0) + i);
+    if (!claimed.has(c)) return c;
+  }
+  // Exhausted: more than 26 distinct unknown drum classes in one song.
+  // Pick `z` and accept the collision; in practice this never happens.
+  return 'z';
+}
+
+/**
+ * Build a per-song MIDI-note -> DSL-letter map. The canonical
+ * `GM_PERCUSSION` entries win for any MIDI note they cover; everything
+ * else gets a fallback letter that doesn't collide with the canonical
+ * mappings or with any previously-assigned fallback.
+ */
+export function allocatePitchesForMidi(
+  used: Iterable<number>
+): Map<number, string> {
+  const out = new Map<number, string>();
+  const claimed = new Set<string>();
+  const uniqueSorted = Array.from(new Set(used)).sort((a, b) => a - b);
+
+  for (const midi of uniqueSorted) {
+    const entry = GM_PERCUSSION[midi];
+    if (entry) {
+      out.set(midi, entry.pitch);
+      claimed.add(entry.pitch);
+    }
+  }
+  for (const midi of uniqueSorted) {
+    if (out.has(midi)) continue;
+    const letter = deriveLetterFromMidi(midi, claimed);
+    out.set(midi, letter);
+    claimed.add(letter);
+  }
+  return out;
 }
