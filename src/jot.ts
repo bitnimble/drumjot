@@ -297,6 +297,11 @@ export class RenderedJot {
       if (!orderedPitches.includes(p)) orderedPitches.push(p);
     }
 
+    // Now that the voice-level lane order is known, assign a stable color
+    // to every track of a given pitch. Without this pass, colors would
+    // flicker per bar because `layoutBarContents` doesn't see lane order.
+    this.assignTrackColors(bars, orderedPitches);
+
     return {
       source: voice,
       bars,
@@ -306,8 +311,33 @@ export class RenderedJot {
   };
 
   /**
+   * Walk every bar's tracks and assign each pitch a color from the palette
+   * based on its index in the voice-level lane order. The result is that
+   * the same pitch is always the same colour for the whole voice, no
+   * matter which bar fires it first.
+   */
+  private assignTrackColors(bars: ResolvedBar[], orderedPitches: string[]): void {
+    const palette = this.viewConfig.palette;
+    if (palette.length === 0) return;
+    for (const bar of bars) {
+      for (const pitch of Object.keys(bar.tracks)) {
+        const idx = orderedPitches.indexOf(pitch);
+        const slot = idx >= 0 ? idx : 0;
+        bar.tracks[pitch].color = palette[slot % palette.length];
+      }
+    }
+  }
+
+  /**
    * Lay out a bar's elements (post pattern-expansion) into per-pitch tracks
    * with absolute pixel positions within the bar.
+   *
+   * Note that the `color` of each emitted track is intentionally a
+   * placeholder here. We don't know the final voice-level lane order until
+   * after every bar has been laid out, so `layoutVoice` does a second pass
+   * to assign stable colors per pitch (see `assignTrackColors`). If we
+   * picked palette indices here, the colors would flicker between bars
+   * based on which pitch happened to fire first in each bar.
    */
   private layoutBarContents(
     elements: Element[],
@@ -382,12 +412,10 @@ export class RenderedJot {
       span.width = px((span.endBeat - span.startBeat) * pxPerBeat);
     }
 
-    // Group flat notes by pitch into tracks.
+    // Group flat notes by pitch into tracks. Colors are placeholders here;
+    // `assignTrackColors` rewrites them once the voice-level lane order is
+    // known so the same pitch keeps a stable color across all bars.
     const tracks: Record<string, ResolvedTrack> = {};
-
-    let paletteIndex = 0;
-    const nextColor = () =>
-      this.viewConfig.palette[paletteIndex++ % this.viewConfig.palette.length];
 
     for (const { note, beat, duration } of flatNotes) {
       const pitch = note.pitch;
@@ -397,7 +425,7 @@ export class RenderedJot {
         track = {
           pitch,
           instrument,
-          color: nextColor(),
+          color: '',
           notes: [],
         };
         tracks[pitch] = track;
