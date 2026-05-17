@@ -4,13 +4,17 @@
  * The service URL is resolved at module load time:
  *   - In dev, requests go through Vite's `/api` proxy (see vite.config.ts),
  *     which forwards them to `http://localhost:8001` (the docker-compose
- *     default for `transcriber/`).
- *   - In production, set `VITE_TRANSCRIBER_BASE` at build time to a fully
- *     qualified base URL of a deployed transcriber instance.
+ *     default for `transcriber/`). The browser bundle reads
+ *     `VITE_TRANSCRIBER_URL` from `import.meta.env` and falls back to
+ *     `/api` (i.e. the proxy path) when it isn't set.
+ *   - In production, set `VITE_TRANSCRIBER_URL` at build time to a fully
+ *     qualified base URL of a deployed transcriber instance. The same
+ *     variable also feeds the dev-server proxy target, so dev and prod
+ *     agree on the name.
  */
 const TRANSCRIBER_BASE: string =
   (import.meta as unknown as { env?: Record<string, string> }).env
-    ?.VITE_TRANSCRIBER_BASE ?? '/api';
+    ?.VITE_TRANSCRIBER_URL ?? '/api';
 
 export type BarSummary = {
   bar: number;
@@ -59,7 +63,17 @@ export type TranscribeResponse = {
   metadata: TranscribeMetadata;
   refinement?: RefinementLog | null;
   self_consistency?: SelfConsistencyLog | null;
-  candidates?: Record<string, Array<{ time: number; strength: number; slot: number }>>;
+  /**
+   * Onset candidates that fed the LLM, per pitch. Only populated when the
+   * request set `include_candidates=true`. `bar` is 0-indexed; `beat_in_bar`
+   * is a 1-indexed float (integer part = beat number, fraction = position
+   * inside the beat). Both are -1 / -1.0 for onsets outside the tracked
+   * beat range.
+   */
+  candidates?: Record<
+    string,
+    Array<{ time: number; strength: number; bar: number; beat_in_bar: number }>
+  >;
   /**
    * Absolute path inside the transcriber container where intermediate
    * artifacts (drum stems, per-instrument stems, beats.json, initial.jot,
