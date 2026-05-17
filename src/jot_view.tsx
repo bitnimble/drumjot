@@ -53,6 +53,14 @@ export class JotViewStore {
     selfConsistencySamples: 1,
     debug: false,
   };
+  /**
+   * Controller for the in-flight `/transcribe` request, if any. The
+   * "Stop" toolbar button calls `.abort()` here; the request's
+   * AbortSignal is passed into `transcriber.transcribe` which forwards
+   * it to `fetch` so the request is genuinely cancelled at the
+   * network layer rather than just discarding the response.
+   */
+  private transcribeController: AbortController | undefined;
 
   constructor() {
     makeAutoObservable(this);
@@ -91,8 +99,20 @@ export class JotViewStore {
    * Upload an audio file to the transcriber service, parse the returned
    * Drumjot DSL, and load the resulting Jot. Updates `transcribeStatus`
    * so the toolbar can show progress / errors.
+   *
+   * A single in-flight transcription is tracked via `transcribeController`.
+   * Calling `cancelTranscribe()` aborts the underlying `fetch` request and
+   * surfaces a cancelled state on the toolbar; starting a new
+   * transcription while one is in flight will abort the previous one
+   * first (defensive - the UI disables the button during upload, but the
+   * console-level `loadDsl` API doesn't).
    */
   async transcribeAudio(file: File): Promise<void> {
+    if (this.transcribeController) {
+      this.transcribeController.abort();
+    }
+    const controller = new AbortController();
+    this.transcribeController = controller;
     runInAction(() => {
       this.transcribeStatus = { phase: 'uploading', filename: file.name };
     });
@@ -101,6 +121,7 @@ export class JotViewStore {
         refine: this.transcribeOptions.refine,
         selfConsistencySamples: this.transcribeOptions.selfConsistencySamples,
         debug: this.transcribeOptions.debug,
+        signal: controller.signal,
       });
       const jot = parse(response.jot_dsl);
       runInAction(() => {
@@ -118,16 +139,43 @@ export class JotViewStore {
         };
       });
     } catch (err) {
-      const message =
-        err instanceof ParseError
-          ? `Transcriber returned invalid DSL: ${err.message}`
-          : err instanceof Error
-            ? err.message
-            : String(err);
-      runInAction(() => {
-        this.transcribeStatus = { phase: 'error', message };
-      });
+      // AbortError surfaces as DOMException with name='AbortError' (and
+      // wraps as TypeError in some runtimes when the fetch was already
+      // aborted at start). Treat the user-initiated cancellation
+      // distinctly from real errors so we don't show a scary red pill.
+      const isAbort =
+        controller.signal.aborted ||
+        (err instanceof DOMException && err.name === 'AbortError');
+      if (isAbort) {
+        runInAction(() => {
+          this.transcribeStatus = { phase: 'idle' };
+        });
+      } else {
+        const message =
+          err instanceof ParseError
+            ? `Transcriber returned invalid DSL: ${err.message}`
+            : err instanceof Error
+              ? err.message
+              : String(err);
+        runInAction(() => {
+          this.transcribeStatus = { phase: 'error', message };
+        });
+      }
+    } finally {
+      if (this.transcribeController === controller) {
+        this.transcribeController = undefined;
+      }
     }
+  }
+
+  /**
+   * Abort the in-flight transcription, if any. No-op when nothing is
+   * running. The next `transcribeAudio` call resumes normally.
+   */
+  cancelTranscribe() {
+    if (!this.transcribeController) return;
+    this.transcribeController.abort();
+    this.transcribeController = undefined;
   }
 
   clearTranscribeStatus() {
@@ -169,6 +217,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
           transcribeStatus={store.transcribeStatus}
           transcribeOptions={store.transcribeOptions}
           onTranscribe={(file) => store.transcribeAudio(file)}
+          onCancelTranscribe={() => store.cancelTranscribe()}
           onClearTranscribeStatus={() => store.clearTranscribeStatus()}
           onSetRefine={(v) => store.setRefine(v)}
           onSetSelfConsistency={(n) => store.setSelfConsistencySamples(n)}
@@ -202,6 +251,7 @@ const Toolbar = observer(
     transcribeStatus,
     transcribeOptions,
     onTranscribe,
+    onCancelTranscribe,
     onClearTranscribeStatus,
     onSetRefine,
     onSetSelfConsistency,
@@ -213,6 +263,7 @@ const Toolbar = observer(
     transcribeStatus: TranscribeStatus;
     transcribeOptions: TranscribeOptions;
     onTranscribe: (file: File) => void;
+    onCancelTranscribe: () => void;
     onClearTranscribeStatus: () => void;
     onSetRefine: (enabled: boolean) => void;
     onSetSelfConsistency: (n: number) => void;
@@ -260,25 +311,30 @@ const Toolbar = observer(
           className={styles.transcribeButton}
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
-          title="Upload an audio file (wav, flac, mp3, aac/m4a, opus, ogg); the transcriber service will return a Jot."
+          title="Upload an audio file; the transcriber service will return a Jot. The Python backend decodes anything ffmpeg understands."
         >
           {uploading ? 'Transcribing...' : 'Transcribe audio'}
         </button>
+        {uploading && (
+          <button
+            type="button"
+            className={styles.cancelButton}
+            onClick={onCancelTranscribe}
+            title="Abort the in-flight transcription request."
+          >
+            Stop
+          </button>
+        )}
         <input
           ref={fileInputRef}
           type="file"
-          // `audio/*` covers anything the browser tags as audio. Explicit
-          // extensions catch files whose MIME the OS hasn't filled in,
-          // which is common for .opus / .oga / .flac on Windows.
-          accept={[
-            'audio/*',
-            // Lossless / uncompressed
-            '.wav', '.flac', 'audio/wav', 'audio/x-wav', 'audio/flac', 'audio/x-flac',
-            // Lossy
-            '.mp3', 'audio/mpeg', 'audio/mp3',
-            '.aac', '.m4a', '.mp4', 'audio/aac', 'audio/x-aac', 'audio/mp4', 'audio/x-m4a',
-            '.opus', '.ogg', '.oga', 'audio/opus', 'audio/ogg',
-          ].join(',')}
+          // The Python backend decodes audio via librosa + soundfile +
+          // ffmpeg, so anything ffmpeg understands works. Trust the
+          // browser's `audio/*` filter; if the OS hasn't tagged a file
+          // (rare on macOS / Linux, occasionally on Windows for .opus),
+          // the user can switch the picker to "All files" and pick it
+          // manually.
+          accept="audio/*"
           className={styles.hiddenInput}
           onChange={handleFileChange}
         />

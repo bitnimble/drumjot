@@ -76,6 +76,28 @@
   outline-offset: 1px;
 }
 
+.cancelButton {
+  font-size: 13px;
+  padding: 5px 10px;
+  border: 1px solid #c9bfae;
+  border-radius: 4px;
+  background: #fff;
+  color: #b00020;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.cancelButton:hover {
+  background: #ffecec;
+  border-color: #b00020;
+}
+
+.cancelButton:focus {
+  outline: 2px solid #b00020;
+  outline-offset: 1px;
+}
+
 .hiddenInput {
   display: none;
 }
