@@ -166,11 +166,25 @@ async def transcribe(
             for pitch, path in stems.per_instrument.items():
                 sink.copy_audio(f"stage2/{pitch}", path)
 
+        # Compute song duration up front so beat tracking can pad
+        # synthetic bars forward to cover the full audio (otherwise
+        # onsets that fire after the last detected beat get jammed onto
+        # the last real bar with out-of-range beat_in_bar values).
+        try:
+            import soundfile as sf
+
+            with sf.SoundFile(str(in_path)) as f:
+                duration = len(f) / f.samplerate
+        except Exception:
+            duration = 0.0
+
         # 2) Beat / downbeat / time-sig tracking over the FULL mix. We
         #    run on the original audio (not the drum stem) so beat
         #    tracking has the full spectral context to work with.
         try:
-            structure = analyze_beats(in_path)
+            structure = analyze_beats(
+                in_path, duration_seconds=duration if duration > 0 else None
+            )
         except Exception as exc:
             log.exception("Beat tracking failed")
             raise HTTPException(
@@ -197,13 +211,10 @@ async def transcribe(
             sink.write_json("beats.json", beats_dump(structure))
             sink.write_json("onsets.json", onsets_dump(onsets_by_pitch))
 
-        # Compute song duration for the metadata payload.
-        try:
-            import soundfile as sf
-
-            with sf.SoundFile(str(in_path)) as f:
-                duration = len(f) / f.samplerate
-        except Exception:
+        # Fallback duration if the soundfile probe above failed - use the
+        # latest detected onset across all stems as a lower bound for the
+        # metadata payload.
+        if duration <= 0:
             duration = max(
                 (c.time for cs in onsets_by_pitch.values() for c in cs),
                 default=0.0,

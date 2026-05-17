@@ -85,17 +85,20 @@ class BeatStructure:
         Returns None if `t` falls outside the tracked range (e.g. silence
         before the first beat, or after the last). Callers should treat
         that as "drop this onset" - it's noise or chart padding.
+
+        Trailing audio after the last detected beat is handled upstream:
+        `analyze_beats` pads synthetic bars forward to cover the full
+        duration, so the normal binary-search branch picks them up. We
+        keep the backward-extrapolation branch (for onsets that fire
+        slightly before the first detected beat) because that case is
+        better expressed as a fractional `1.0 + (-frac)` on bar 0 than
+        as a synthetic pre-roll bar.
         """
         if not self.beats:
             return None
-        # Find the beat tick that t belongs to (the one whose interval
-        # [tick.time, next_tick.time) contains t).
         first_t = self.beats[0].time
         last_t = self.beats[-1].time
         if t < first_t:
-            # Onsets before the first beat get attributed to bar 0, fractional
-            # *before* beat 1 of that bar. We extrapolate using the first beat
-            # gap as a tempo proxy.
             if len(self.beats) < 2:
                 return None
             gap = self.beats[1].time - self.beats[0].time
@@ -104,16 +107,9 @@ class BeatStructure:
             frac = (t - first_t) / gap  # negative
             return (self.beats[0].bar_index, 1.0 + frac)
         if t > last_t:
-            if len(self.beats) < 2:
-                return None
-            gap = self.beats[-1].time - self.beats[-2].time
-            if gap <= 0:
-                return None
-            frac = (t - last_t) / gap
-            return (
-                self.beats[-1].bar_index,
-                float(self.beats[-1].beat_in_bar) + frac,
-            )
+            # With trailing-bar padding this only fires for onsets PAST
+            # the audio duration - drop them rather than guessing.
+            return None
 
         # Binary search for the enclosing beat
         lo, hi = 0, len(self.beats) - 1
@@ -133,22 +129,34 @@ class BeatStructure:
 
 # ---------- Detection ----------
 
-def analyze_beats(audio_path: Path) -> BeatStructure:
+def analyze_beats(
+    audio_path: Path, duration_seconds: float | None = None
+) -> BeatStructure:
     """Run beat + downbeat detection on the audio at `audio_path`.
 
     Uses madmom (RNN + DBN) for the actual ML; falls back to a
     librosa-based heuristic if madmom isn't importable, so the rest of
     the pipeline degrades gracefully rather than failing outright.
+
+    When `duration_seconds` is supplied, the returned structure is padded
+    with synthetic bars after the last detected beat so that every
+    timestamp within the audio falls inside some bar. This stops onsets
+    that occur after the final detected beat from piling up at an
+    out-of-range `beat_in_bar` value on the last real bar (see
+    `position`).
     """
     try:
-        return _madmom_beats(audio_path)
+        structure = _madmom_beats(audio_path)
     except Exception as exc:
         log.warning(
             "madmom beat tracking failed (%s); falling back to librosa "
             "(no downbeat classification - assuming 4/4 throughout)",
             exc,
         )
-        return _librosa_fallback(audio_path)
+        structure = _librosa_fallback(audio_path)
+    if duration_seconds is not None and duration_seconds > 0:
+        _pad_trailing_bars(structure, duration_seconds)
+    return structure
 
 
 def _madmom_beats(audio_path: Path) -> BeatStructure:
@@ -225,16 +233,13 @@ def _finalize_bar(index: int, beats: list[BeatTick]) -> BarInfo:
         gap = 60.0 / 120.0
     end = beats[-1].time + max(gap, 0.0)
     count = len(beats)
-    # `unit` defaults to 4 (quarter-note beats) - the spec form for most
-    # popular meters. Compound meters (6/8, 12/8) are perceived as fewer
-    # but longer beats by the tracker, so we don't naively divide.
-    time_sig = (count, 4)
     # Average tempo over this bar's beats
     if len(beats) >= 2:
         gaps = np.diff([b.time for b in beats])
         tempo_bpm = float(60.0 / np.mean(gaps))
     else:
         tempo_bpm = 120.0
+    time_sig = _choose_time_signature(count, tempo_bpm)
     return BarInfo(
         index=index,
         start_time=start,
@@ -243,6 +248,32 @@ def _finalize_bar(index: int, beats: list[BeatTick]) -> BarInfo:
         time_signature=time_sig,
         tempo_bpm=tempo_bpm,
     )
+
+
+def _choose_time_signature(count: int, tempo_bpm: float) -> tuple[int, int]:
+    """Pick a `(numerator, denominator)` for a bar with `count` beats.
+
+    Madmom only reports a count of beats per bar; it doesn't tell us
+    whether they're quarter notes (simple meter) or dotted quarters
+    (compound meter). For 4-, 5- and 7-beat bars 'quarter notes' is
+    nearly always right in popular music. For 6 beats it's genuinely
+    ambiguous: a slow rock waltz is 6/4, but a fast jazz waltz or
+    Irish jig is 6/8 with the same beat count.
+
+    ASSUMPTION (refine when we have ground-truth data): treat 6-beat
+    bars as 6/8 whenever the detected tempo is on the fast side
+    (>= 100 BPM in the beat-tracker's "quarter-note" sense). Anything
+    slower stays at 6/4. 12-beat bars get the same split for 12/8 vs
+    12/4.
+
+    Returns `(count, unit)` where `unit` is the note value of the
+    denominator (4 = quarter, 8 = eighth).
+    """
+    if count == 6 and tempo_bpm >= 100.0:
+        return (6, 8)
+    if count == 12 and tempo_bpm >= 100.0:
+        return (12, 8)
+    return (count, 4)
 
 
 def _summarize(beats: list[BeatTick], bars: list[BarInfo]) -> BeatStructure:
@@ -267,6 +298,70 @@ def _summarize(beats: list[BeatTick], bars: list[BarInfo]) -> BeatStructure:
         has_tempo_changes=len(tempo_set) > 1,
         has_time_sig_changes=len(sig_set) > 1,
     )
+
+
+def _pad_trailing_bars(structure: BeatStructure, duration_seconds: float) -> None:
+    """Extend the bar timeline forward to cover `duration_seconds`.
+
+    Madmom's downbeat tracker tends to cut off well before the audio's
+    actual end (it stops emitting confident beats in silence / fadeouts).
+    Without padding, onsets after the last detected beat get attributed
+    to the last real bar with arbitrarily large `beat_in_bar` values
+    (e.g. 4.9 or 6.2 inside a 4/4 bar). Instead, synthesise additional
+    bars after the last one that reuse its tempo and time signature, so
+    those onsets land in dedicated bars with a sensible position.
+
+    The synthetic bars share `time_signature` and `tempo_bpm` with the
+    last detected bar; their beats are placed at regular intervals so
+    `position()` can interpolate normally.
+    """
+    if not structure.bars:
+        return
+    last = structure.bars[-1]
+    if not last.beats:
+        return
+    # Estimate beat spacing from the last bar; fall back to 60/tempo.
+    if len(last.beats) >= 2:
+        beat_gap = (last.beats[-1].time - last.beats[0].time) / max(
+            len(last.beats) - 1, 1
+        )
+    else:
+        beat_gap = 60.0 / max(last.tempo_bpm, 1.0)
+    if beat_gap <= 0:
+        return
+
+    count = last.time_signature[0]
+    unit = last.time_signature[1]
+    bar_duration = beat_gap * count
+
+    # Synthesise bars until we've covered `duration_seconds`. Cap the
+    # count to prevent runaway loops on broken inputs.
+    cursor = last.end_time
+    next_index = last.index + 1
+    MAX_PAD_BARS = 256
+    while cursor < duration_seconds and next_index - last.index <= MAX_PAD_BARS:
+        new_beats: list[BeatTick] = []
+        for i in range(count):
+            new_beats.append(
+                BeatTick(
+                    time=cursor + i * beat_gap,
+                    beat_in_bar=i + 1,
+                    bar_index=next_index,
+                )
+            )
+        new_bar = BarInfo(
+            index=next_index,
+            start_time=cursor,
+            end_time=cursor + bar_duration,
+            beats=new_beats,
+            time_signature=(count, unit),
+            tempo_bpm=last.tempo_bpm,
+            feel=last.feel,
+        )
+        structure.bars.append(new_bar)
+        structure.beats.extend(new_beats)
+        cursor += bar_duration
+        next_index += 1
 
 
 def _librosa_fallback(audio_path: Path) -> BeatStructure:
