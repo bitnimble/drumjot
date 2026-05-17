@@ -126,17 +126,18 @@ def refine_jot(
     initial_score = score_jot(extracted, stem_onsets).onset_f1
     best_dsl = initial_dsl
     best_score = initial_score
+    # Cache the extracted form alongside best_dsl so we don't pay another
+    # bun subprocess at the top of every iteration. Each accepted
+    # candidate updates both fields together; rejection / failure leaves
+    # both unchanged.
+    best_extracted: ExtractedJot = extracted
     log.info("Refinement starting. Initial F1=%.4f", initial_score)
 
     for level in LEVEL_ORDER:
         max_iter = LEVEL_MAX_ITERATIONS[level]
         for iteration in range(max_iter):
             t_iter = time.perf_counter()
-            try:
-                extracted = extract_jot(best_dsl)
-            except JotParseError as exc:
-                log.warning("Re-parse failed entering %s/%d: %s", level.value, iteration, exc)
-                break
+            extracted = best_extracted
 
             issues = _compute_issues_for_level(
                 level, extracted, stem_onsets, stem_audios, structure
@@ -200,6 +201,7 @@ def refine_jot(
                 )
                 best_dsl = candidate_dsl
                 best_score = cand_score
+                best_extracted = cand_extracted
             else:
                 log.info(
                     "Rejected %s/%d: F1 %.4f -> %.4f (no improvement; stopping level)",
