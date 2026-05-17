@@ -169,7 +169,9 @@ def refine_jot(
                         best_dsl, triaged, level, parse_error=str(exc)
                     )
                     cand_extracted = extract_jot(candidate_dsl)
-                except (Exception, JotParseError) as exc2:
+                except Exception as exc2:
+                    # Covers both another JotParseError on the retry and
+                    # network / API errors from the generator call.
                     iterations.append(IterationLog(
                         level=level.value, iteration=iteration,
                         issues_detected=len(issues), issues_sent_to_llm=len(triaged),

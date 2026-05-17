@@ -142,7 +142,11 @@ def transcribe_to_jot_with_self_consistency(
         try:
             extracted = extract_jot(dsl)
             score = score_jot(extracted, candidates_by_pitch).onset_f1
-        except (JotParseError, Exception) as exc:
+        except Exception as exc:
+            # Either the bun parser rejected the DSL (JotParseError) or
+            # mir_eval blew up on degenerate input - both are reasons to
+            # exclude this sample from consideration without aborting the
+            # whole self-consistency pass.
             log.info(
                 "Self-consistency sample %d/%d unscoreable (%s); excluding",
                 i + 1, samples, exc,
