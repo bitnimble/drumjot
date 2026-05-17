@@ -76,6 +76,34 @@
   outline-offset: 1px;
 }
 
+.playButton {
+  font-size: 13px;
+  padding: 5px 12px;
+  border: 1px solid #c9bfae;
+  border-radius: 4px;
+  background: #fff;
+  color: #2b2b2b;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.playButton:hover:not(:disabled) {
+  background: #f6efe0;
+  border-color: #b09d80;
+}
+
+.playButton:disabled {
+  color: #b9b0a0;
+  cursor: not-allowed;
+}
+
+.playButton:focus {
+  outline: 2px solid #ff8c55;
+  outline-offset: 1px;
+}
+
 .cancelButton {
   font-size: 13px;
   padding: 5px 10px;

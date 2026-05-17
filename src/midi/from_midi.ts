@@ -54,6 +54,7 @@ import {
   Simultaneity,
   TimeSignature,
 } from 'src/dsl';
+import { defaultKindForPitch } from 'src/instruments';
 import { GM_PERCUSSION, allocatePitchesForMidi } from './gm';
 
 export type FromMidiOptions = {
@@ -354,6 +355,9 @@ function buildInstrumentMap(
     if (!pitch || out[pitch]) continue;
     const entry = GM_PERCUSSION[midi];
     out[pitch] = {
+      // GM entries carry an explicit kind; unknown MIDI notes get the
+      // pitch-letter default (which falls back to `custom`).
+      kind: entry?.kind ?? defaultKindForPitch(pitch),
       name: entry?.name ?? `MIDI ${midi}`,
       ...(entry?.limb ? { limb: entry.limb } : {}),
       midi: { note: midi },

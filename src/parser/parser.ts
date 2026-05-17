@@ -47,7 +47,7 @@ type BarMeta = Pick<Metadata, 'time' | 'bpm'>;
 
 type Item =
   | { kind: 'el'; el: Element }
-  | { kind: 'bar'; activeMeta: BarMeta }
+  | { kind: 'bar'; activeMeta: BarMeta; pos: number }
   | { kind: 'voice' };
 
 function parseJot(c: Cursor): Jot {
@@ -77,8 +77,9 @@ function parseJot(c: Cursor): Jot {
       continue;
     }
     if (c.peek() === '|') {
+      const pos = c.pos;
       c.advance();
-      items.push({ kind: 'bar', activeMeta: { ...barActive } });
+      items.push({ kind: 'bar', activeMeta: { ...barActive }, pos });
       continue;
     }
     if (c.peek() === '[' && isLikelyDefinition(c)) {
@@ -98,17 +99,18 @@ function parseJot(c: Cursor): Jot {
   }
 
   // Slice items into voices (split on `||`) and bars (split on `|`).
+  const srcLength = c.src.length;
   const voices: Voice[] = [];
   let voiceItems: Array<Exclude<Item, { kind: 'voice' }>> = [];
   for (const it of items) {
     if (it.kind === 'voice') {
-      voices.push(buildVoice(voiceItems));
+      voices.push(buildVoice(voiceItems, srcLength));
       voiceItems = [];
     } else {
       voiceItems.push(it);
     }
   }
-  voices.push(buildVoice(voiceItems));
+  voices.push(buildVoice(voiceItems, srcLength));
 
   const title = typeof globalMetadata.title === 'string' ? globalMetadata.title : '';
   const restMeta: Metadata = { ...globalMetadata };
@@ -123,7 +125,10 @@ function parseJot(c: Cursor): Jot {
   return jot;
 }
 
-function buildVoice(items: Array<Exclude<Item, { kind: 'voice' }>>): Voice {
+function buildVoice(
+  items: Array<Exclude<Item, { kind: 'voice' }>>,
+  srcLength: number
+): Voice {
   const bars: Bar[] = [];
   let anacrusis: Element[] | undefined;
   let current: Element[] = [];
@@ -132,16 +137,32 @@ function buildVoice(items: Array<Exclude<Item, { kind: 'voice' }>>): Voice {
   // closes the prior bar (using `barOpeningMeta`) and starts a new one
   // (whose meta is the active snapshot recorded on this `|` item).
   let barOpeningMeta: BarMeta = {};
+  // Source position of the `|` that opened the current bar. `null` until
+  // the first `|` is seen; the linter degrades gracefully when this is
+  // absent (e.g. inline jots with no bar separator at all).
+  let barOpeningPos: number | null = null;
+  // Source range for the voice as a whole — set lazily when we see the
+  // first item, extended as we go.
+  let voiceStart: number | null = null;
+  let voiceEnd = 0;
 
-  const commit = (els: Element[], meta: BarMeta) => {
+  const commit = (
+    els: Element[],
+    meta: BarMeta,
+    start: number | null,
+    end: number
+  ) => {
     if (els.length === 0) return;
     const bar: Bar = { elements: els };
     if (hasAnyMeta(meta)) bar.metadata = meta as Metadata;
+    if (start !== null) bar.range = { start, end };
     bars.push(bar);
   };
 
   for (const it of items) {
     if (it.kind === 'bar') {
+      if (voiceStart === null) voiceStart = it.pos;
+      voiceEnd = Math.max(voiceEnd, it.pos);
       if (!seenBarSep) {
         if (current.length > 0) anacrusis = current;
         current = [];
@@ -149,23 +170,37 @@ function buildVoice(items: Array<Exclude<Item, { kind: 'voice' }>>): Voice {
       } else {
         // Skip empty bars: consecutive `|`s separated only by whitespace or
         // metadata blocks act as a single separator, not an empty bar.
-        commit(current, barOpeningMeta);
+        commit(current, barOpeningMeta, barOpeningPos, it.pos);
         current = [];
       }
       barOpeningMeta = it.activeMeta;
+      barOpeningPos = it.pos;
     } else {
+      const range = elementRange(it.el);
+      if (range) {
+        if (voiceStart === null) voiceStart = range.start;
+        voiceEnd = Math.max(voiceEnd, range.end);
+      }
       current.push(it.el);
     }
   }
   if (current.length > 0) {
     // Either trailing content after the last '|' (a final bar) or content
     // with no '|' anywhere (treat as a single bar for usability).
-    commit(current, barOpeningMeta);
+    commit(current, barOpeningMeta, barOpeningPos, srcLength);
   }
 
   const voice: Voice = { bars };
   if (anacrusis) voice.anacrusis = anacrusis;
+  if (voiceStart !== null) {
+    voice.range = { start: voiceStart, end: Math.max(voiceEnd, srcLength) };
+  }
   return voice;
+}
+
+function elementRange(el: Element): { start: number; end: number } | undefined {
+  if (el.kind === 'note' || el.kind === 'group') return el.range;
+  return undefined;
 }
 
 function hasAnyMeta(m: BarMeta): boolean {
@@ -243,8 +278,16 @@ function parseElementSequence(c: Cursor, terminator: string): Element[] {
 
 function parseElement(c: Cursor): Element {
   c.skipWs();
+  const start = c.pos;
   const primary = parsePrimary(c);
-  return applySuffixesAndSimul(c, primary);
+  const final = applySuffixesAndSimul(c, primary);
+  // Attach source range to Notes / Groups so the linter can point at
+  // them. Skipping Simultaneity / PatternRef / Rest: they're not direct
+  // lint targets (lints fire on their child notes/groups instead).
+  if (final.kind === 'note' || final.kind === 'group') {
+    final.range = { start, end: c.pos };
+  }
+  return final;
 }
 
 /** Apply postfix attachments and a possible trailing `+ rhs` simultaneity. */

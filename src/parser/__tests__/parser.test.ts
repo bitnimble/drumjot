@@ -34,7 +34,9 @@ describe('primitives', () => {
   it('parses a single note', () => {
     const v = singleVoice('k');
     expect(v.bars).toHaveLength(1);
-    expect(v.bars[0].elements).toEqual([{ kind: 'note', pitch: 'k' }]);
+    expect(v.bars[0].elements).toEqual([
+      { kind: 'note', pitch: 'k', range: { start: 0, end: 1 } },
+    ]);
   });
 
   it('parses a rest', () => {

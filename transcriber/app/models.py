@@ -65,7 +65,7 @@ class RefinementLog(BaseModel):
     iterations: list[RefinementIteration] = Field(default_factory=list)
 
 
-class SelfConsistencyLog(BaseModel):
+class BestOfKLog(BaseModel):
     samples: int
     scores: list[float] = Field(default_factory=list)
     chosen_index: int = 0
@@ -88,7 +88,7 @@ class TranscribeResponse(BaseModel):
     jot_dsl: str
     metadata: TranscribeMetadata
     refinement: RefinementLog | None = None
-    self_consistency: SelfConsistencyLog | None = None
+    best_of_k: BestOfKLog | None = None
     candidates: dict[str, list[OnsetCandidate]] = Field(default_factory=dict)
     debug_dir: str | None = None
 

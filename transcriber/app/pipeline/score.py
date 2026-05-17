@@ -61,12 +61,19 @@ def score_jot(
         else:
             pred_intervals = np.column_stack([pred_times, pred_times + 0.1])
             actual_intervals = np.column_stack([actual_times, actual_times + 0.1])
+            # mir_eval.transcription requires strictly positive pitch
+            # values; for onset-only ADT scoring we pass a constant
+            # placeholder so pitch_tolerance=0.0 trivially matches every
+            # (ref, est) pair on pitch and the F1 reflects timing only.
+            dummy_pitch = 60.0
+            ref_pitches = np.full(len(actual_times), dummy_pitch)
+            est_pitches = np.full(len(pred_times), dummy_pitch)
             try:
                 _, _, f1, _ = mir_eval.transcription.precision_recall_f1_overlap(
                     actual_intervals,
-                    np.zeros(len(actual_times)),
+                    ref_pitches,
                     pred_intervals,
-                    np.zeros(len(pred_times)),
+                    est_pitches,
                     onset_tolerance=tolerance,
                     pitch_tolerance=0.0,
                 )

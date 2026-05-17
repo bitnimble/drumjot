@@ -26,10 +26,10 @@ from app.config import settings
 from app.debug import DebugSink, beats_dump, onsets_dump
 from app.models import (
     BarSummary,
+    BestOfKLog,
     HealthResponse,
     RefinementIteration,
     RefinementLog,
-    SelfConsistencyLog,
     TranscribeMetadata,
     TranscribeResponse,
 )
@@ -40,11 +40,12 @@ from app.pipeline.beats import (
 )
 from app.pipeline.llm import (
     transcribe_to_jot,
-    transcribe_to_jot_with_self_consistency,
+    transcribe_to_jot_best_of_k,
 )
 from app.pipeline.onsets import attach_beat_positions, detect_onsets
-from app.pipeline.refine import refine_jot
+from app.pipeline.refine import RefineLevel, refine_jot
 from app.pipeline.separate import Separator
+from app.pipeline.title import inject_title, title_from_filename
 
 # Fallback debug dir used when `debug=true` is requested but `DEBUG_DIR`
 # env var wasn't set. Matches the docker-compose volume mount.
@@ -118,15 +119,16 @@ async def transcribe(
     file: UploadFile = File(...),
     include_candidates: bool = Form(default=False),
     refine: bool = Form(default=settings.refine_by_default),
-    self_consistency_samples: int = Form(
-        default=settings.self_consistency_samples_default
+    lint: bool = Form(default=settings.lint_by_default),
+    best_of_k: int = Form(
+        default=settings.best_of_k_default
     ),
     debug: bool = Form(default=False),
 ) -> TranscribeResponse:
     started = time.perf_counter()
     log.info(
-        "Transcribe request: %s (%s bytes) refine=%s self_consistency=%d debug=%s",
-        file.filename, file.size, refine, self_consistency_samples, debug,
+        "Transcribe request: %s (%s bytes) refine=%s lint=%s best_of_k=%d debug=%s",
+        file.filename, file.size, refine, lint, best_of_k, debug,
     )
 
     if file.size is not None and file.size > 200_000_000:
@@ -220,22 +222,22 @@ async def transcribe(
                 default=0.0,
             )
 
-        # 5) Initial transcription. Self-consistency if requested.
-        self_consistency_log: SelfConsistencyLog | None = None
+        # 5) Initial transcription. Best-of-K sampling if requested.
+        best_of_k_log: BestOfKLog | None = None
         try:
-            if self_consistency_samples > 1:
-                jot_dsl, scores = transcribe_to_jot_with_self_consistency(
+            if best_of_k > 1:
+                jot_dsl, scores = transcribe_to_jot_best_of_k(
                     candidates_by_pitch=onsets_by_pitch,
                     structure=structure,
-                    samples=self_consistency_samples,
+                    samples=best_of_k,
                 )
                 chosen_idx = (
                     int(max(range(len(scores)), key=lambda i: scores[i]))
                     if scores
                     else 0
                 )
-                self_consistency_log = SelfConsistencyLog(
-                    samples=self_consistency_samples,
+                best_of_k_log = BestOfKLog(
+                    samples=best_of_k,
                     scores=scores,
                     chosen_index=chosen_idx,
                 )
@@ -254,14 +256,30 @@ async def transcribe(
         initial_dsl = jot_dsl
         if sink is not None:
             sink.write_text("initial.jot", initial_dsl)
-            if self_consistency_log is not None:
+            if best_of_k_log is not None:
                 sink.write_json(
-                    "self_consistency.json", self_consistency_log.model_dump()
+                    "best_of_k.json", best_of_k_log.model_dump()
                 )
 
         # 6) Optional refinement (multi-level convergence loop).
-        refinement_log: RefinementLog | None = None
+        # `lint` and `refine` are independent toggles: lint enables the
+        # deterministic instrument/performance fix-up pass; refine enables
+        # the F1-gated tempo / structure / onset / velocity loop. The
+        # canonical level order is enforced inside refine_jot, so we just
+        # build a set here.
+        refinement_levels: list[RefineLevel] = []
+        if lint:
+            refinement_levels.append(RefineLevel.LINT)
         if refine:
+            refinement_levels.extend([
+                RefineLevel.MACRO,
+                RefineLevel.STRUCTURE,
+                RefineLevel.ONSETS,
+                RefineLevel.VELOCITY,
+            ])
+
+        refinement_log: RefinementLog | None = None
+        if refinement_levels:
             try:
                 stem_audios: dict[str, tuple[Any, int]] = {}
                 for pitch, path in stems.per_instrument.items():
@@ -273,6 +291,7 @@ async def transcribe(
                     stem_onsets=onsets_by_pitch,
                     stem_audios=stem_audios,
                     structure=structure,
+                    levels=refinement_levels,
                 )
                 jot_dsl = refined_dsl
                 refinement_log = RefinementLog(
@@ -285,6 +304,12 @@ async def transcribe(
                 )
             except Exception:
                 log.exception("Refinement failed; returning unrefined Jot")
+
+        # Inject the title deterministically from the uploaded filename.
+        # The few-shot examples don't include `title:` because LLM-invented
+        # titles occasionally tripped Anthropic's output content filter on
+        # benign drum audio.
+        jot_dsl = inject_title(jot_dsl, title_from_filename(file.filename))
 
         if sink is not None:
             sink.write_text("final.jot", jot_dsl)
@@ -303,7 +328,8 @@ async def transcribe(
             "filename": file.filename,
             "options": {
                 "refine": refine,
-                "self_consistency_samples": self_consistency_samples,
+                "lint": lint,
+                "best_of_k": best_of_k,
                 "include_candidates": include_candidates,
                 "debug": debug,
             },
@@ -327,7 +353,7 @@ async def transcribe(
             has_time_sig_changes=structure.has_time_sig_changes,
         ),
         refinement=refinement_log,
-        self_consistency=self_consistency_log,
+        best_of_k=best_of_k_log,
         candidates=onsets_by_pitch if include_candidates else {},
         debug_dir=str(sink.dir) if sink is not None else None,
     )

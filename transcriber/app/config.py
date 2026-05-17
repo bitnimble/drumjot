@@ -26,19 +26,26 @@ class Settings(BaseSettings):
     # Cheaper model used by the refinement critic (issue triage). Set to
     # empty string to disable the critic call entirely (fall back to
     # deterministic confidence ranking).
-    critic_model: str = "claude-haiku-3-5"
+    critic_model: str = "claude-haiku-4-5-20251001"
 
     # --- Refinement defaults ---
     refine_by_default: bool = True
-    self_consistency_samples_default: int = 1
+    # Lint pass is a separate toggle from the F1-gated refinement levels.
+    # It runs first when enabled (so the F1-gated levels see a chart
+    # that's at least musically well-formed) and is independently
+    # toggleable so cost-sensitive callers can skip it.
+    lint_by_default: bool = True
+    best_of_k_default: int = 1
 
     # --- Separation models ---
     # `htdemucs_ft` gives drums stem; community drum-piece separator turns
     # that into kick/snare/hat/ride/crash/toms.
     demucs_model: str = "htdemucs_ft.yaml"
-    drum_pieces_model: str = (
-        "aufr33-jarredou_MDX23C_DrumSep_model_v0.1.ckpt"
-    )
+    # Filename in audio-separator's model registry. The project originally
+    # pinned this to `aufr33-jarredou_MDX23C_DrumSep_model_v0.1.ckpt` —
+    # upstream normalized the name in the 0.31+ line. Same underlying
+    # checkpoint, different registry key.
+    drum_pieces_model: str = "MDX23C-DrumSep-aufr33-jarredou.ckpt"
 
     # --- Onset detector tuning (librosa) ---
     onset_delta: float = 0.05

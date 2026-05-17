@@ -31,6 +31,7 @@ import {
   TimeSignature,
   Voice,
 } from 'src/dsl';
+import { defaultKindForPitch } from 'src/instruments';
 import { CLASS_TO_DRUM, describeDrum, instanceNameToClass } from './drums';
 import { allocateFallbackLetters } from './fallback';
 import {
@@ -148,6 +149,7 @@ export function rlrrToJot(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
     const descriptor = CLASS_TO_DRUM[cls];
     if (descriptor && !instrumentMapping[descriptor.pitch]) {
       instrumentMapping[descriptor.pitch] = {
+        kind: defaultKindForPitch(descriptor.pitch),
         name: descriptor.name,
         midi: { note: descriptor.midi },
       };
@@ -156,7 +158,10 @@ export function rlrrToJot(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
   for (const [name, pitch] of pitchByName) {
     if (instrumentMapping[pitch]) continue;
     const cls = instanceNameToClass(name);
-    instrumentMapping[pitch] = { name: cls ?? name };
+    instrumentMapping[pitch] = {
+      kind: defaultKindForPitch(pitch),
+      name: cls ?? name,
+    };
   }
 
   // [R6] Preserve original RLRR sidecar data on global metadata.

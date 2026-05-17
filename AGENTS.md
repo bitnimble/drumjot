@@ -125,7 +125,7 @@ drumjot/
         ├── models.py               Request/response schemas:
         │                           TranscribeResponse, OnsetCandidate (with
         │                           bar/beat_in_bar), BarSummary, RefinementLog,
-        │                           SelfConsistencyLog.
+        │                           BestOfKLog.
         └── pipeline/
             ├── separate.py         Two-stage: Demucs htdemucs_ft (mix ->
             │                       drum stem) -> Jarredou MDX23C 6-stem
@@ -137,7 +137,7 @@ drumjot/
             ├── onsets.py           librosa high-recall onset detection
             │                       per stem; attaches bar/beat positions.
             ├── llm.py              Claude initial transcription +
-            │                       self-consistency wrapper.
+            │                       best-of-K wrapper.
             ├── jot_extract.py      Subprocess wrapper around the bun bridge.
             ├── diff.py             Typed issue detectors with confidence
             │                       scores: missing_onset, extra_onset,
@@ -221,7 +221,7 @@ phase produced concrete files you can find in the layout above.
 8. **Refinement pipeline**. Per-stem onset diff against the source
    stems; LLM-based revision with score gating (only accept revisions
    that improve onset F1); critic LLM (Haiku) for issue triage;
-   self-consistency wrapper that generates K candidates and picks the
+   best-of-K wrapper that generates K candidates and picks the
    best; constrained DSL output via retry-on-parse-error; multi-level
    refinement (macro / structure / onsets / velocity).
 9. **Beat-aware overhaul**. Replaced the constant-tempo + 1/16 grid
@@ -333,7 +333,7 @@ bleed that the LLM cleanup partially recovers.
 
 Per-song cost (3-min track on Replicate-tier serverless GPU):
 - Separation: ~$0.05
-- LLM (single-shot + refinement, no self-consistency): ~$0.15
+- LLM (single-shot + refinement, no best-of-K): ~$0.15
 - **Total: ~$0.20 per song.**
 
 ### 6.2 Path B — Train own N2N on Google Cloud TPUs (RESEARCHED ONLY)
@@ -523,7 +523,7 @@ weren't possible in the build/test sandbox.
 4. **Run on a 7/8 or 3/4 song**. Verify `time_signature: "7/8"` or
    `3/4` is detected and time-sig changes (if any) emit
    `{{ time: "..." }}` between bars.
-5. **Self-consistency**: set samples=3 or 5 in the UI, verify the
+5. **Best-of-K**: set samples=3 or 5 in the UI, verify the
    F1 of the chosen sample is meaningfully better than samples=1 for
    tricky audio.
 6. **Try opus/aac/flac/wav files** to confirm the format list works

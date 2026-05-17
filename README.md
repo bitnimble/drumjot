@@ -45,8 +45,8 @@ The toolbar gives you:
   the next section).
 - A **Refine accuracy** checkbox that toggles the LLM convergence
   loop on the transcribed output.
-- A **Samples** dropdown that controls how many self-consistency
-  samples the transcriber generates.
+- A **Samples** dropdown that controls how many best-of-K
+  candidates the transcriber generates.
 
 ### Other useful commands
 
@@ -108,7 +108,7 @@ Other env vars you may want to tune (defaults are sensible):
 | `LLM_MODEL` | `claude-opus-4-7` | Initial transcription + refinement model. |
 | `CRITIC_MODEL` | `claude-haiku-3-5` | Cheaper model for issue triage; empty string disables the critic. |
 | `REFINE_BY_DEFAULT` | `true` | Whether `/transcribe` runs the multi-level refinement loop unless the request explicitly says otherwise. |
-| `SELF_CONSISTENCY_SAMPLES_DEFAULT` | `1` | Number of candidate transcriptions to generate at request time when the request doesn't override. |
+| `BEST_OF_K_DEFAULT` | `1` | Number of candidate transcriptions to generate at request time when the request doesn't override. |
 | `DEVICE` | `auto` | `auto` lets audio-separator pick CUDA/MPS/CPU. Force with `cuda` / `cpu`. |
 | `DEBUG_DIR` | _(unset)_ | When set (recommend `/debug`), every request persists drum stems + beat tracking + LLM input/output to `<DEBUG_DIR>/<timestamp>_<id>_<filename>/` so you can listen back and debug. The default compose mount `./debug:/debug` already exposes this on the host. |
 
@@ -154,13 +154,13 @@ were detected.
 curl -X POST http://localhost:8001/transcribe \
   -F file=@your_song.mp3 \
   -F refine=true \
-  -F self_consistency_samples=3 \
+  -F best_of_k=3 \
   -F debug=true
 ```
 
 Response is a JSON `TranscribeResponse` with `jot_dsl` (the canonical
 DSL string), `metadata` (tempo, time signature, per-bar info), and
-optionally `refinement` + `self_consistency` logs.
+optionally `refinement` + `best_of_k` logs.
 
 When `debug=true` (or `DEBUG_DIR` is set), the response also includes a
 `debug_dir` field pointing at a per-request folder under

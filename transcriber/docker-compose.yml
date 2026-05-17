@@ -19,8 +19,16 @@ services:
       dockerfile: transcriber/Dockerfile
     image: drumjot-transcriber:dev
     container_name: drumjot-transcriber
+    # Run as non-root UID:GID 1000:1000 so bind-mounted artifacts (debug,
+    # benchmark results) and volume contents (models cache) end up owned
+    # by the host user rather than root. Image's USER directive sets the
+    # same; this is a redundant runtime guarantee.
+    user: "1000:1000"
     ports:
-      - "8001:8001"
+      # Host port is overridable via TRANSCRIBER_PORT in .env (defaults to
+      # 8001). Container-internal port stays 8001 so nothing inside the
+      # image (benchmark client, healthcheck, uvicorn CMD) needs to care.
+      - "${TRANSCRIBER_PORT:-8001}:8001"
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       LLM_MODEL: ${LLM_MODEL:-claude-opus-4-7}
@@ -28,26 +36,34 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:5173","http://127.0.0.1:5173"]}
       DEVICE: ${DEVICE:-auto}
       REFINE_BY_DEFAULT: ${REFINE_BY_DEFAULT:-true}
-      SELF_CONSISTENCY_SAMPLES_DEFAULT: ${SELF_CONSISTENCY_SAMPLES_DEFAULT:-1}
+      LINT_BY_DEFAULT: ${LINT_BY_DEFAULT:-true}
+      BEST_OF_K_DEFAULT: ${BEST_OF_K_DEFAULT:-1}
       # When set, every /transcribe call persists its intermediate audio
       # + JSON artifacts into a per-request subdir of this path. Leave
       # blank to keep request data ephemeral; set debug=true on a
       # per-request basis to opt-in to the default /debug volume below.
       DEBUG_DIR: ${DEBUG_DIR:-}
     volumes:
-      - models-cache:/models
+      - /codebox-workspace/drumjot/models-cache:/models
       # Debug artifact volume. Files written here by the transcriber
       # (drum stems, per-instrument stems, beats.json, initial.jot, etc.)
       # are immediately accessible on the host under ./debug/ so you can
       # listen back to stems or replay the refinement loop.
-      - ./debug:/debug
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+      - /codebox-workspace/drumjot/debug:/debug
+      # Benchmark fixture + output volumes. Pasting dataset files into
+      # transcriber/benchmarks/datasets/<dataset>/ on the host makes
+      # them visible inside the container; benchmark results land in
+      # ./benchmarks/results/ on the host so partial runs are inspectable
+      # without docker cp.
+      - /codebox-workspace/drumjot/benchmarks/datasets:/app/benchmarks/datasets
+      - /codebox-workspace/drumjot/benchmarks/results:/app/benchmarks/results
+    # GPU passthrough. The compose-spec `gpus: all` form (compose >=2.30)
+    # is the equivalent of the CLI's `--gpus all` flag and sets
+    # NVIDIA_VISIBLE_DEVICES / NVIDIA_DRIVER_CAPABILITIES implicitly.
+    # Replaces the older `runtime: nvidia` + `deploy.resources.reservations`
+    # mechanisms, both of which proved insufficient with the modern
+    # NVIDIA Container Toolkit on this host.
+    gpus: all
     restart: unless-stopped
 
 volumes:

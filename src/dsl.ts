@@ -39,10 +39,16 @@ export type Limb = 'lh' | 'rh' | 'lf' | 'rf';
 /**
  * One drum-kit instrument (kick, snare, hi-hat, ...). The DSL's
  * `instrumentMapping` is a `Record<pitch, Instrument>` that resolves each
- * single-letter pitch to a named instrument with optional limb assignment
- * and a default MIDI note.
+ * single-letter pitch to an instrument with a first-class `kind` (used by
+ * the linter), an optional human-readable display label, optional limb
+ * assignment, and an optional default MIDI note.
+ *
+ * `kind` is required — see `src/instruments.ts` for the enum and defaults.
+ * For pitches outside the canonical kit, set `kind: 'custom'`; the linter
+ * treats those as unrestricted.
  */
 export type Instrument = {
+  kind: import('./instruments').DrumInstrumentKind;
   name?: string;
   limb?: Limb;
   midi?: { note: number; vol?: Volume };
@@ -92,6 +98,21 @@ export type Modifier =
 
 export type Sticking = 'r' | 'l' | 'rf' | 'lf';
 
+// ---------- Source ranges ----------
+
+/**
+ * Half-open byte range `[start, end)` into the original DSL source string.
+ * Populated by the parser for elements where the linter needs to point at a
+ * specific span (`Note`, `Group`, `Bar`, `Voice`). Manually-authored Jot
+ * objects (e.g. in `src/fakes.ts`) leave it undefined; the linter degrades
+ * gracefully when ranges are absent (it surfaces diagnostics without
+ * position info rather than crashing).
+ */
+export type SourceRange = {
+  start: number;
+  end: number;
+};
+
 // ---------- Elements ----------
 
 export type Note = {
@@ -107,6 +128,8 @@ export type Note = {
   /** Repeat count from `*N`; defaults to 1. */
   repeat?: number;
   metadata?: Metadata;
+  /** Source range; populated by the parser, omitted by hand-built jots. */
+  range?: SourceRange;
 };
 
 export type Rest = {
@@ -141,6 +164,8 @@ export type Group = {
    * around pattern usages and link them back to their definition.
    */
   patternSource?: { name: string };
+  /** Source range; populated by the parser, omitted by hand-built jots. */
+  range?: SourceRange;
 };
 
 /**
@@ -178,6 +203,8 @@ export type Bar = {
   elements: Element[];
   /** Inline metadata override for this bar (rare; usually metadata is global). */
   metadata?: Metadata;
+  /** Source range covering the bar's content (`|` to `|`). */
+  range?: SourceRange;
 };
 
 /**
@@ -196,6 +223,8 @@ export type Voice = {
   /** Anacrusis/pickup elements before the first `|`. Not length-checked. */
   anacrusis?: Element[];
   bars: Bar[];
+  /** Source range spanning the voice (from start to next `||` or EOF). */
+  range?: SourceRange;
 };
 
 export type Pattern = {

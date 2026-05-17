@@ -35,7 +35,7 @@ export type TranscribeMetadata = {
 };
 
 export type RefinementIteration = {
-  level: 'macro' | 'structure' | 'onsets' | 'velocity';
+  level: 'lint' | 'macro' | 'structure' | 'onsets' | 'velocity';
   iteration: number;
   issues_detected: number;
   issues_sent_to_llm: number;
@@ -52,7 +52,7 @@ export type RefinementLog = {
   iterations: RefinementIteration[];
 };
 
-export type SelfConsistencyLog = {
+export type BestOfKLog = {
   samples: number;
   scores: number[];
   chosen_index: number;
@@ -62,7 +62,7 @@ export type TranscribeResponse = {
   jot_dsl: string;
   metadata: TranscribeMetadata;
   refinement?: RefinementLog | null;
-  self_consistency?: SelfConsistencyLog | null;
+  best_of_k?: BestOfKLog | null;
   /**
    * Onset candidates that fed the LLM, per pitch. Only populated when the
    * request set `include_candidates=true`. `bar` is 0-indexed; `beat_in_bar`
@@ -86,10 +86,20 @@ export type TranscribeResponse = {
 
 export type TranscribeOptions = {
   includeCandidates?: boolean;
-  /** Run the multi-level convergence loop after the initial transcription. */
+  /**
+   * Run the F1-gated multi-level convergence loop (macro / structure /
+   * onsets / velocity). Independent of `lint`.
+   */
   refine?: boolean;
+  /**
+   * Run the deterministic Jot linter (instrument-tier + performance-tier
+   * checks) and ask the LLM to fix flagged regions surgically.
+   * Independent of `refine` — you can enable either alone, both, or
+   * neither.
+   */
+  lint?: boolean;
   /** Generate K candidate transcriptions and pick the highest-scoring one. */
-  selfConsistencySamples?: number;
+  bestOfK?: number;
   /**
    * Persist all intermediate audio + JSON artifacts to the transcriber's
    * debug directory. Useful for debugging stem separation, beat tracking,
@@ -132,8 +142,11 @@ export class TranscriberClient {
     if (options.refine !== undefined) {
       form.append('refine', options.refine ? 'true' : 'false');
     }
-    if (options.selfConsistencySamples !== undefined && options.selfConsistencySamples > 1) {
-      form.append('self_consistency_samples', String(options.selfConsistencySamples));
+    if (options.lint !== undefined) {
+      form.append('lint', options.lint ? 'true' : 'false');
+    }
+    if (options.bestOfK !== undefined && options.bestOfK > 1) {
+      form.append('best_of_k', String(options.bestOfK));
     }
     if (options.debug) {
       form.append('debug', 'true');

@@ -39,12 +39,16 @@ PROMPT_DIR = Path(__file__).resolve().parent.parent.parent / "prompts"
 def transcribe_to_jot(
     candidates_by_pitch: dict[str, list[OnsetCandidate]],
     structure: BeatStructure,
-    temperature: float = 0.0,
+    temperature: float | None = None,
     parse_error_hint: str | None = None,
 ) -> str:
     """Single LLM call. Returns the DSL string. Retry / scoring is the
-    caller's responsibility - use `transcribe_to_jot_with_self_consistency`
+    caller's responsibility - use `transcribe_to_jot_best_of_k`
     for the production path.
+
+    `temperature` is silently ignored for models that don't accept it
+    (Opus 4.7+ uses extended thinking and rejects any `temperature`
+    value). For older models, pass a float to override the default.
     """
     if not settings.anthropic_api_key:
         raise RuntimeError(
@@ -88,16 +92,21 @@ def transcribe_to_jot(
     ) + parse_hint
 
     log.info(
-        "Calling LLM model=%s temperature=%.2f prompt_chars=%d bars=%d",
-        settings.llm_model, temperature, len(prompt), len(structure.bars),
+        "Calling LLM model=%s temperature=%s prompt_chars=%d bars=%d",
+        settings.llm_model,
+        f"{temperature:.2f}" if temperature is not None else "default",
+        len(prompt),
+        len(structure.bars),
     )
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-    response = client.messages.create(
-        model=settings.llm_model,
-        max_tokens=settings.llm_max_tokens,
-        temperature=temperature,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    create_kwargs: dict = {
+        "model": settings.llm_model,
+        "max_tokens": settings.llm_max_tokens,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if temperature is not None:
+        create_kwargs["temperature"] = temperature
+    response = client.messages.create(**create_kwargs)
 
     parts = []
     for block in response.content:
@@ -107,7 +116,7 @@ def transcribe_to_jot(
     return strip_code_fence(text)
 
 
-def transcribe_to_jot_with_self_consistency(
+def transcribe_to_jot_best_of_k(
     candidates_by_pitch: dict[str, list[OnsetCandidate]],
     structure: BeatStructure,
     samples: int = 1,
@@ -120,6 +129,11 @@ def transcribe_to_jot_with_self_consistency(
     if samples < 1:
         samples = 1
 
+    # Opus 4.7 ignores any temperature override (extended-thinking models
+    # fix it internally), so best-of-K relies on the model's intrinsic
+    # stochasticity at default temperature rather than us varying it.
+    # `_temperatures_for` is kept for older models; if the API rejects
+    # the override, we retry once with temperature=None.
     temperatures = _temperatures_for(samples)
     candidates_dsl: list[str] = []
     for i, temp in enumerate(temperatures):
@@ -129,13 +143,31 @@ def transcribe_to_jot_with_self_consistency(
                 structure=structure,
                 temperature=temp,
             )
+        except anthropic.BadRequestError as exc:
+            if "temperature" in str(exc).lower():
+                log.info(
+                    "Best-of-K sample %d/%d: model rejected temperature, retrying without",
+                    i + 1, samples,
+                )
+                try:
+                    dsl = transcribe_to_jot(
+                        candidates_by_pitch=candidates_by_pitch,
+                        structure=structure,
+                        temperature=None,
+                    )
+                except Exception as exc2:
+                    log.warning("Best-of-K sample %d/%d failed on retry: %s", i + 1, samples, exc2)
+                    continue
+            else:
+                log.warning("Best-of-K sample %d/%d failed: %s", i + 1, samples, exc)
+                continue
         except Exception as exc:
-            log.warning("Self-consistency sample %d/%d failed: %s", i + 1, samples, exc)
+            log.warning("Best-of-K sample %d/%d failed: %s", i + 1, samples, exc)
             continue
         candidates_dsl.append(dsl)
 
     if not candidates_dsl:
-        raise RuntimeError("All self-consistency samples failed")
+        raise RuntimeError("All best-of-K samples failed")
 
     scored: list[tuple[float, str]] = []
     per_sample_scores: list[float] = []
@@ -147,24 +179,24 @@ def transcribe_to_jot_with_self_consistency(
             # Either the bun parser rejected the DSL (JotParseError) or
             # mir_eval blew up on degenerate input - both are reasons to
             # exclude this sample from consideration without aborting the
-            # whole self-consistency pass.
+            # whole best-of-K pass.
             log.info(
-                "Self-consistency sample %d/%d unscoreable (%s); excluding",
+                "Best-of-K sample %d/%d unscoreable (%s); excluding",
                 i + 1, samples, exc,
             )
             per_sample_scores.append(0.0)
             continue
         per_sample_scores.append(score)
         scored.append((score, dsl))
-        log.info("Self-consistency sample %d/%d: F1=%.4f", i + 1, samples, score)
+        log.info("Best-of-K sample %d/%d: F1=%.4f", i + 1, samples, score)
 
     if not scored:
-        log.warning("No self-consistency sample parsed; falling back to first.")
+        log.warning("No best-of-K sample parsed; falling back to first.")
         return candidates_dsl[0], per_sample_scores
 
     best_score, best_dsl = max(scored, key=lambda s: s[0])
     log.info(
-        "Self-consistency picked best: F1=%.4f (range %.4f-%.4f over %d valid samples)",
+        "Best-of-K picked best: F1=%.4f (range %.4f-%.4f over %d valid samples)",
         best_score,
         min(s for s, _ in scored),
         max(s for s, _ in scored),

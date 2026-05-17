@@ -1,4 +1,9 @@
-import { Metadata, TimeSignature } from 'src/dsl';
+import { Instrument, Metadata, TimeSignature, Volume } from 'src/dsl';
+import {
+  ALL_DRUM_INSTRUMENT_KINDS,
+  DrumInstrumentKind,
+  defaultKindForPitch,
+} from 'src/instruments';
 import { Cursor } from './cursor';
 import { ParseError } from './errors';
 
@@ -160,7 +165,10 @@ function parseArray(c: Cursor): unknown[] {
 /**
  * Coerce well-known top-level metadata keys into their typed forms. `time`
  * arrives as a string ("4/4") in the DSL but is exposed as a structured
- * TimeSignature object on the Metadata type.
+ * TimeSignature object on the Metadata type. `instrumentMapping` entries get
+ * their `kind` field auto-filled from the pitch letter (or from an explicit
+ * `kind:` in the DSL, if the user supplied one) so downstream consumers can
+ * rely on a first-class instrument taxonomy.
  */
 function normalizeMetadataValue(key: string, value: unknown, c: Cursor): unknown {
   if (key === 'time' && typeof value === 'string') {
@@ -171,5 +179,68 @@ function normalizeMetadataValue(key: string, value: unknown, c: Cursor): unknown
     const ts: TimeSignature = { count: Number(m[1]), unit: Number(m[2]) };
     return ts;
   }
+  if (key === 'instrumentMapping' && value && typeof value === 'object') {
+    return normalizeInstrumentMapping(value as Record<string, unknown>, c);
+  }
   return value;
+}
+
+/**
+ * Per-pitch fill of the `kind` field. If the DSL supplied `kind` explicitly,
+ * validate it against the enum; otherwise look up the default for the pitch
+ * letter (`k → kick`, `s → snare`, ...) and fall back to `custom`.
+ */
+function normalizeInstrumentMapping(
+  raw: Record<string, unknown>,
+  c: Cursor
+): Record<string, Instrument> {
+  const out: Record<string, Instrument> = {};
+  for (const [pitch, entryRaw] of Object.entries(raw)) {
+    if (!entryRaw || typeof entryRaw !== 'object') {
+      throw new ParseError(
+        `instrumentMapping['${pitch}'] must be an object`,
+        c.src,
+        c.pos
+      );
+    }
+    const entry = entryRaw as Record<string, unknown>;
+    let kind: DrumInstrumentKind;
+    if (typeof entry.kind === 'string') {
+      if (!(ALL_DRUM_INSTRUMENT_KINDS as readonly string[]).includes(entry.kind)) {
+        throw new ParseError(
+          `Unknown instrument kind '${entry.kind}' for pitch '${pitch}'; ` +
+            `expected one of: ${ALL_DRUM_INSTRUMENT_KINDS.join(', ')}`,
+          c.src,
+          c.pos
+        );
+      }
+      kind = entry.kind as DrumInstrumentKind;
+    } else {
+      kind = defaultKindForPitch(pitch);
+    }
+    const instrument: Instrument = { kind };
+    if (typeof entry.name === 'string') instrument.name = entry.name;
+    if (typeof entry.limb === 'string') {
+      const limb = entry.limb;
+      if (limb === 'lh' || limb === 'rh' || limb === 'lf' || limb === 'rf') {
+        instrument.limb = limb;
+      }
+    }
+    if (entry.midi && typeof entry.midi === 'object') {
+      const midi = entry.midi as Record<string, unknown>;
+      if (typeof midi.note === 'number') {
+        instrument.midi = { note: midi.note };
+        if (typeof midi.vol === 'string' && isVolume(midi.vol)) {
+          instrument.midi.vol = midi.vol;
+        }
+      }
+    }
+    out[pitch] = instrument;
+  }
+  return out;
+}
+
+const VOLUMES: ReadonlySet<string> = new Set(['pp', 'p', 'mp', 'mf', 'f', 'ff']);
+function isVolume(v: string): v is Volume {
+  return VOLUMES.has(v);
 }

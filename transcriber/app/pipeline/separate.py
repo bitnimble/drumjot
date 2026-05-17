@@ -77,7 +77,12 @@ class Separator:
         common = dict(
             output_dir=None,  # set per-call
             model_file_dir=str(settings.models_dir),
-            use_autocast=True,
+            # fp16 autocast: known regression in Demucs's CUDA kernels on
+            # newer driver/torch combos where inference silently produces
+            # all-zeros output (correct shape, zero values). Disable to
+            # force fp32 — slower but produces correct results. Toggle
+            # back to True once Demucs / torch resolve the upstream issue.
+            use_autocast=False,
         )
 
         t0 = time.perf_counter()

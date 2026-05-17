@@ -17,6 +17,7 @@ import {
   px,
 } from 'src/jot';
 import { parse, ParseError } from 'src/parser';
+import { jotPlayer, PlayerState } from 'src/playback';
 import { SelectionStore } from 'src/selection';
 import { RefinementLog, transcriber } from 'src/transcriber';
 import styles from './jot_view.module.css';
@@ -38,7 +39,8 @@ export type TranscribeStatus =
 
 export type TranscribeOptions = {
   refine: boolean;
-  selfConsistencySamples: number;
+  lint: boolean;
+  bestOfK: number;
   debug: boolean;
 };
 
@@ -50,7 +52,8 @@ export class JotViewStore {
   /** UI-controlled options for the next transcribe call. */
   transcribeOptions: TranscribeOptions = {
     refine: true,
-    selfConsistencySamples: 1,
+    lint: true,
+    bestOfK: 1,
     debug: false,
   };
   /**
@@ -87,8 +90,12 @@ export class JotViewStore {
     this.transcribeOptions.refine = enabled;
   }
 
-  setSelfConsistencySamples(n: number) {
-    this.transcribeOptions.selfConsistencySamples = Math.max(1, Math.min(5, n));
+  setLint(enabled: boolean) {
+    this.transcribeOptions.lint = enabled;
+  }
+
+  setBestOfK(n: number) {
+    this.transcribeOptions.bestOfK = Math.max(1, Math.min(5, n));
   }
 
   setDebug(enabled: boolean) {
@@ -119,7 +126,8 @@ export class JotViewStore {
     try {
       const response = await transcriber.transcribe(file, {
         refine: this.transcribeOptions.refine,
-        selfConsistencySamples: this.transcribeOptions.selfConsistencySamples,
+        lint: this.transcribeOptions.lint,
+        bestOfK: this.transcribeOptions.bestOfK,
         debug: this.transcribeOptions.debug,
         signal: controller.signal,
       });
@@ -181,6 +189,16 @@ export class JotViewStore {
   clearTranscribeStatus() {
     this.transcribeStatus = { phase: 'idle' };
   }
+
+  async playCurrent(): Promise<void> {
+    const jot = this.currentJot;
+    if (!jot) return;
+    await jotPlayer.play(jot.source);
+  }
+
+  stopPlayback(): void {
+    jotPlayer.stop();
+  }
 }
 
 type CreateJotViewOptions = {
@@ -220,8 +238,14 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
           onCancelTranscribe={() => store.cancelTranscribe()}
           onClearTranscribeStatus={() => store.clearTranscribeStatus()}
           onSetRefine={(v) => store.setRefine(v)}
-          onSetSelfConsistency={(n) => store.setSelfConsistencySamples(n)}
+          onSetLint={(v) => store.setLint(v)}
+          onSetBestOfK={(n) => store.setBestOfK(n)}
           onSetDebug={(v) => store.setDebug(v)}
+          hasJot={!!jot}
+          playerState={jotPlayer.state}
+          playerError={jotPlayer.errorMessage}
+          onPlay={() => store.playCurrent()}
+          onStopPlayback={() => store.stopPlayback()}
         />
         {jot ? (
           <JotView
@@ -254,8 +278,14 @@ const Toolbar = observer(
     onCancelTranscribe,
     onClearTranscribeStatus,
     onSetRefine,
-    onSetSelfConsistency,
+    onSetLint,
+    onSetBestOfK,
     onSetDebug,
+    hasJot,
+    playerState,
+    playerError,
+    onPlay,
+    onStopPlayback,
   }: {
     examples: readonly ExampleJot[];
     currentId: string | undefined;
@@ -266,8 +296,14 @@ const Toolbar = observer(
     onCancelTranscribe: () => void;
     onClearTranscribeStatus: () => void;
     onSetRefine: (enabled: boolean) => void;
-    onSetSelfConsistency: (n: number) => void;
+    onSetLint: (enabled: boolean) => void;
+    onSetBestOfK: (n: number) => void;
     onSetDebug: (enabled: boolean) => void;
+    hasJot: boolean;
+    playerState: PlayerState;
+    playerError: string | undefined;
+    onPlay: () => void;
+    onStopPlayback: () => void;
   }) => {
     const fileInputRef = React.useRef<HTMLInputElement>(null);
     const uploading = transcribeStatus.phase === 'uploading';
@@ -306,6 +342,14 @@ const Toolbar = observer(
             <span className={styles.toolbarDivider} aria-hidden="true" />
           </>
         )}
+        <PlaybackControls
+          hasJot={hasJot}
+          playerState={playerState}
+          playerError={playerError}
+          onPlay={onPlay}
+          onStop={onStopPlayback}
+        />
+        <span className={styles.toolbarDivider} aria-hidden="true" />
         <button
           type="button"
           className={styles.transcribeButton}
@@ -340,6 +384,18 @@ const Toolbar = observer(
         />
         <label
           className={styles.toolbarCheckbox}
+          title="Run the deterministic Jot linter and ask the LLM to fix any instrument-tier (invalid modifier) or performance-tier (impossible sticking, too many hands, ...) issues it flags. Cheap relative to the F1 refinement; per-segment LLM calls scoped to the affected bars only."
+        >
+          <input
+            type="checkbox"
+            checked={transcribeOptions.lint}
+            disabled={uploading}
+            onChange={(e) => onSetLint(e.target.checked)}
+          />
+          Lint
+        </label>
+        <label
+          className={styles.toolbarCheckbox}
           title="Run the multi-level convergence loop after the initial transcription. Adds ~30-60s but typically lifts accuracy by 5-10 F1 points."
         >
           <input
@@ -357,9 +413,9 @@ const Toolbar = observer(
           <span>Samples</span>
           <select
             className={styles.samplesSelect}
-            value={transcribeOptions.selfConsistencySamples}
+            value={transcribeOptions.bestOfK}
             disabled={uploading}
-            onChange={(e) => onSetSelfConsistency(Number(e.target.value))}
+            onChange={(e) => onSetBestOfK(Number(e.target.value))}
           >
             <option value={1}>1</option>
             <option value={3}>3</option>
@@ -380,6 +436,52 @@ const Toolbar = observer(
         </label>
         <TranscribeStatusPill status={transcribeStatus} onClear={onClearTranscribeStatus} />
       </div>
+    );
+  }
+);
+
+const PlaybackControls = observer(
+  ({
+    hasJot,
+    playerState,
+    playerError,
+    onPlay,
+    onStop,
+  }: {
+    hasJot: boolean;
+    playerState: PlayerState;
+    playerError: string | undefined;
+    onPlay: () => void;
+    onStop: () => void;
+  }) => {
+    const loading = playerState === 'loading';
+    const playing = playerState === 'playing';
+    return (
+      <>
+        <button
+          type="button"
+          className={styles.playButton}
+          onClick={onPlay}
+          disabled={!hasJot || loading || playing}
+          title={
+            playerError
+              ? `Last playback error: ${playerError}`
+              : 'Play the current jot through a synthesised TR-909 drum kit. First click loads the samples (~150 KB) from the smplr CDN.'
+          }
+        >
+          {loading ? 'Loading…' : '▶ Play'}
+        </button>
+        {playing && (
+          <button
+            type="button"
+            className={styles.cancelButton}
+            onClick={onStop}
+            title="Stop playback."
+          >
+            ■ Stop
+          </button>
+        )}
+      </>
     );
   }
 );

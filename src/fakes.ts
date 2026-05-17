@@ -38,9 +38,9 @@ export const rockJot: Jot = {
     bpm: 120,
     time: { count: 4, unit: 4 },
     instrumentMapping: {
-      h: { name: 'HiHat', limb: 'rh' },
-      s: { name: 'Snare', limb: 'lh' },
-      k: { name: 'Kick', limb: 'rf' },
+      h: { kind: 'hihat', name: 'HiHat', limb: 'rh' },
+      s: { kind: 'snare', name: 'Snare', limb: 'lh' },
+      k: { kind: 'kick', name: 'Kick', limb: 'rf' },
     },
   },
   voices: [
@@ -122,8 +122,8 @@ export const tripletJot: Jot = {
     bpm: 110,
     time: { count: 4, unit: 4 },
     instrumentMapping: {
-      s: { name: 'Snare', limb: 'lh' },
-      k: { name: 'Kick', limb: 'rf' },
+      s: { kind: 'snare', name: 'Snare', limb: 'lh' },
+      k: { kind: 'kick', name: 'Kick', limb: 'rf' },
     },
   },
   patterns: {

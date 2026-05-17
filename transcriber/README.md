@@ -18,7 +18,7 @@ runs:
    Drumjot DSL with inline `{{ bpm: ... }}` / `{{ time: ... }}` blocks
    where tempo/time signature change, and `(...)_N` triplet groups in
    bars where the feel is triplet/shuffle. Optionally with
-   **self-consistency** (K candidates, pick best by F1).
+   **best-of-K** sampling (K candidates, pick best by F1).
 6. **Optional multi-level refinement loop** (off by default per request,
    on by default in compose):
    - *Macro* pass - tempo / time-signature fixes
@@ -94,7 +94,7 @@ Multipart form upload.
 | `file` | audio file | required | see "Supported audio formats" below |
 | `include_candidates` | bool | false | include onset candidates in response (debug) |
 | `refine` | bool | `REFINE_BY_DEFAULT` | run the multi-level convergence loop |
-| `self_consistency_samples` | int | `SELF_CONSISTENCY_SAMPLES_DEFAULT` (1) | generate K initial candidates and pick the best by F1 against source stems |
+| `best_of_k` | int | `BEST_OF_K_DEFAULT` (1) | generate K initial candidates and pick the best by F1 against source stems |
 | `debug` | bool | false | persist intermediate artifacts to disk; see "Debug artifacts" below |
 
 Time signature and grid are no longer form parameters; both are
@@ -135,7 +135,7 @@ transcriber/debug/20260517-004530_a1b2c3d4_my-song/
 ├── onsets.json              # per-stem onset candidates with (bar, beat_in_bar)
 ├── initial.jot              # first-pass Drumjot DSL (pre-refinement)
 ├── final.jot                # final DSL (== initial.jot if refinement off)
-├── self_consistency.json    # K candidate scores + chosen index (if used)
+├── best_of_k.json           # K candidate scores + chosen index (if used)
 ├── refinement.json          # per-iteration accept/reject log
 └── request.json             # filename, options, scores, timings summary
 ```
@@ -202,7 +202,7 @@ Response (`application/json`):
       ...
     ]
   },
-  "self_consistency": null,
+  "best_of_k": null,
   "candidates": {}
 }
 ```
@@ -236,7 +236,7 @@ transcriber/
         ├── separate.py     # Demucs + DrumSep
         ├── onsets.py       # librosa per-stem detection
         ├── beats.py        # madmom beat/downbeat/feel tracking
-        ├── llm.py          # Claude initial transcription + self-consistency
+        ├── llm.py          # Claude initial transcription + best-of-K
         ├── jot_extract.py  # bun subprocess: DSL -> structured onsets
         ├── diff.py         # onset / velocity / tempo issue detectors
         ├── score.py        # per-stem F1 via mir_eval
