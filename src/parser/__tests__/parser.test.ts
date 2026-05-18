@@ -211,6 +211,18 @@ describe('metadata', () => {
     expect(map.s.limb).toBe('lh');
   });
 
+  it('parses startOffset from a separately-prepended global block', () => {
+    // The transcriber stamps the audio lead-in as its own `{{ }}` block at
+    // the top of the DSL so the LLM-emitted metadata block doesn't have to
+    // be rewritten. Both blocks must merge into a single `globalMetadata`.
+    const jot = parse(
+      '{{ startOffset: 5.321 }}\n{{ bpm: 120, time: "4/4" }}\n| k . s . k . s . |'
+    );
+    expect(jot.globalMetadata.startOffset).toBe(5.321);
+    expect(jot.globalMetadata.bpm).toBe(120);
+    expect(jot.globalMetadata.time).toEqual({ count: 4, unit: 4 });
+  });
+
   it('parses crescendo as a transition object', () => {
     const jot = parse(
       '{{ vol: { start: "mp", end: "ff", duration: 2 } }} | h h h h | h h h h |'
@@ -237,20 +249,31 @@ describe('patterns', () => {
   it('captures pattern definitions and references', () => {
     const jot = parse('[Groove=(k.s.kks.)] | [Groove]*3 |');
     expect(jot.patterns?.Groove).toBeDefined();
-    expect(jot.patterns?.Groove.silent).toBe(false);
     expect(jot.patterns?.Groove.elements).toHaveLength(1);
     const ref = asPatternRef(jot.voices[0].bars[0].elements[0]);
     expect(ref.name).toBe('Groove');
     expect(ref.repeat).toBe(3);
   });
 
-  it('honors silent pattern definitions [?Name=...]', () => {
-    const jot = parse('[?Groove=(k.s.)]| [Groove] |');
-    expect(jot.patterns?.Groove.silent).toBe(true);
-    // Silent def must not contribute an in-line played reference; the voice
-    // only contains the explicit [Groove] from after the bar separator.
+  it('does not play a pattern definition at its position', () => {
+    // A bare `[Groove=(...)]` defines the pattern silently — it must not
+    // contribute an in-line played reference. The voice only contains
+    // the explicit `[Groove]` after the bar separator.
+    const jot = parse('[Groove=(k.s.)]| [Groove] |');
+    expect(jot.patterns?.Groove.elements).toHaveLength(1);
     expect(jot.voices[0].bars).toHaveLength(1);
     expect(jot.voices[0].bars[0].elements).toHaveLength(1);
+    expect(asPatternRef(jot.voices[0].bars[0].elements[0]).name).toBe('Groove');
+  });
+
+  it('supports defining and using a pattern in the same expression', () => {
+    // To play a pattern at the definition site, follow the definition
+    // with an explicit reference: `[Name=(...)][Name]`.
+    const jot = parse('| [Groove=(k.s.)][Groove] |');
+    expect(jot.patterns?.Groove.elements).toHaveLength(1);
+    expect(jot.voices[0].bars).toHaveLength(1);
+    expect(jot.voices[0].bars[0].elements).toHaveLength(1);
+    expect(asPatternRef(jot.voices[0].bars[0].elements[0]).name).toBe('Groove');
   });
 
   it('parses position substitutions [Name#N=...]', () => {
@@ -368,13 +391,13 @@ describe('SPEC.md examples', () => {
   it('example 9: macro + pattern combination', () => {
     const src = `
       [$std=k.s.kks.]
-      [?Verse=([$std])*4]
-      [?Chorus=([$std])*2 (k+s k+s k+s k+s)_8]
+      [Verse=([$std])*4]
+      [Chorus=([$std])*2 (k+s k+s k+s k+s)_8]
       | [Verse] | [Chorus] | [Verse] |
     `;
     const jot = parse(src);
-    expect(jot.patterns?.Verse.silent).toBe(true);
-    expect(jot.patterns?.Chorus.silent).toBe(true);
+    expect(jot.patterns?.Verse).toBeDefined();
+    expect(jot.patterns?.Chorus).toBeDefined();
     expect(jot.voices[0].bars).toHaveLength(3);
     expect(asPatternRef(jot.voices[0].bars[0].elements[0]).name).toBe('Verse');
   });

@@ -129,7 +129,6 @@ export const tripletJot: Jot = {
   patterns: {
     Groove: {
       name: 'Groove',
-      silent: false,
       elements: [
         group([
           note('k'),

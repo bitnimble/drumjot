@@ -82,7 +82,33 @@ export type TranscribeResponse = {
    * the host path is the same string with `/debug` replaced by `./debug`.
    */
   debug_dir?: string | null;
+  /**
+   * URL path (with leading `/`) to the isolated drum mix as FLAC, or
+   * null if the stem couldn't be produced. Compose against the
+   * configured `TRANSCRIBER_BASE` to get a fetchable URL (e.g.
+   * `${TRANSCRIBER_BASE}${drum_stem_url}` -> `/api/outputs/<id>/drum_stem.flac`
+   * in dev). See `stemUrl()` below for the canonical helper.
+   */
+  drum_stem_url?: string | null;
+  /**
+   * URL path to the drumless (bass + other + vocals) mix as FLAC.
+   * Same composition rules as `drum_stem_url`. Useful for backing-track
+   * practice — pair with the rendered Jot to play along.
+   */
+  no_drums_url?: string | null;
 };
+
+/**
+ * Compose a stem URL path returned in a `TranscribeResponse` against the
+ * configured transcriber base. Handles dev (`/api` -> Vite proxy) and
+ * prod (absolute URL) uniformly.
+ */
+export function stemUrl(path: string | null | undefined): string | null {
+  if (!path) return null;
+  // Leading-slash paths join cleanly against any base (relative or absolute).
+  const prefix = path.startsWith('/') ? '' : '/';
+  return `${TRANSCRIBER_BASE}${prefix}${path}`;
+}
 
 export type TranscribeOptions = {
   includeCandidates?: boolean;

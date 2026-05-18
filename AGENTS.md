@@ -201,7 +201,10 @@ Debug folder layout (when DEBUG_DIR is set or debug=true on a request):
 /debug/<timestamp>_<id>_<slug>/
 ├── input.<ext>           # raw upload
 ├── stems_all/            # stage `stems_all` output (Demucs)
-│   └── drum_stem.wav
+│   ├── drum_stem.wav     # isolated drums (consumed by stems_per)
+│   ├── no_drums.wav      # bass+other+vocals summed; ready-to-play
+│   │                     # drumless mix (e.g. for backing-track practice)
+│   └── bass/other/vocals # individual sibling stems (audit aid)
 ├── stems_per/            # stage `stems_per` output (MDX23C)
 │   ├── k.wav, s.wav, h.wav, d.wav, c.wav, t.wav
 ├── beats.json            # stage `beats` output (BeatStructure dump)
@@ -218,6 +221,23 @@ Debug folder layout (when DEBUG_DIR is set or debug=true on a request):
 ├── llm/NN_<purpose>.txt  # full hydrated prompts for every LLM call
 └── request.json          # filename + options + scores + timings summary
 ```
+
+Outputs folder layout (always populated, regardless of the `debug` flag):
+
+```
+/outputs/<timestamp>_<id>_<slug>/   # same slug as the debug folder
+├── drum_stem.flac        # isolated drum mix (lossless re-encode of
+│                         # Demucs's drum stem; FLAC keeps size modest)
+└── no_drums.flac         # bass+other+vocals summed; the "music minus
+                          # drums" backing track surfaced as a URL
+                          # in TranscribeResponse.no_drums_url.
+```
+
+The FastAPI app serves this folder via `StaticFiles` at `/outputs/...`,
+so `TranscribeResponse.drum_stem_url` and `no_drums_url` (paths with
+leading `/`) compose against the configured `TRANSCRIBER_BASE` (`/api`
+in dev → routes through the Vite proxy; absolute URL in prod). See
+`src/transcriber.ts::stemUrl` for the canonical client-side helper.
 
 ---
 
@@ -353,15 +373,13 @@ phase produced concrete files you can find in the layout above.
     `start_time` / `end_time` / `tempo_bpm` and the global initial
     tempo. Drum-stem onsets are detected once on `ctx.drum_stem`
     inside `_do_beats` and passed into `analyze_beats(..., align_onsets=...)`.
-18. **Silent pattern definitions in the prompt**. The DSL has two
-    forms for naming a repeated bar: `[?Name=(...)]` is **silent**
-    (definition only — referenced later by `[Name]`); `[Name=(...)]`
-    **plays at its position** like an inline element. The LLM
-    originally emitted the playing form for pattern definitions,
-    causing everything in the anacrusis to stack on top of itself
-    and play "4 bars in 1 second". `prompts/transcribe.md` now
-    mandates the `?` prefix; if the symptom recurs, check the
-    LLM's output for missing `?` on top-of-chart definitions.
+18. **Pattern definitions are always silent**. `[Name=(...)]` defines
+    a pattern but does not play it at the definition's position; only
+    `[Name]` references play it. The `?`-prefixed silent form
+    (`[?Name=(...)]`) and the older "plays at its position" semantics
+    have both been removed — there is now only one definition form.
+    To play a pattern at the same time as defining it, follow the
+    definition with an explicit reference: `[Name=(...)][Name]`.
 
 ---
 
@@ -614,8 +632,7 @@ Top-level structure:
 
 ```
 {{ globalMetadata }}
-[Pattern=(...)] (definitions, played inline if non-silent)
-[?SilentPattern=(...)]
+[Pattern=(...)] (silent definitions; play via [Pattern] references)
 | bar1 elements | bar2 elements |
 ||
 | voice 2 bar 1 | voice 2 bar 2 |
@@ -730,14 +747,11 @@ preprocessing. Tests cover every spec example.
     `_do_onsets` re-detects per-stem — these are different stems
     (combined drum vs. per-instrument) and the duplicate cost is
     cheap relative to the accuracy win.
-16. **`[?Name=(...)]` is silent; `[Name=(...)]` plays at its
-    position.** Easy to swap by accident. The `?` prefix turns the
-    definition into "pattern declaration only, body invoked later
-    via `[Name]`". Without `?`, the body is played inline at the
-    position the definition appears in. If you ever see playback
-    speed appear orders of magnitude too fast, suspect an LLM
-    emission that dropped the `?` on top-of-chart definitions
-    inside the anacrusis.
+16. **Pattern definitions never play at their position.**
+    `[Name=(...)]` only declares the pattern; the body plays exclusively
+    through `[Name]` references. To play a pattern at the same point
+    you define it, write the reference explicitly: `[Name=(...)][Name]`.
+    The older `?`-prefixed silent form has been removed.
 
 ---
 

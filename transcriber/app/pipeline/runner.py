@@ -36,6 +36,7 @@ from app.models import (
     RefinementIteration,
     RefinementLog,
 )
+from app.outputs import OutputSink
 from app.pipeline.beats import (
     BeatStructure,
     analyze_beats,
@@ -131,6 +132,7 @@ def run_pipeline(
     separator: Separator,
     options: PipelineOptions,
     sink: DebugSink | None,
+    output_sink: OutputSink | None = None,
 ) -> PipelineContext:
     """Run stages from `start_stage` onward, mutating and returning `ctx`."""
     if ctx.duration <= 0 and ctx.audio_path.exists():
@@ -140,7 +142,7 @@ def run_pipeline(
     for stage in STAGE_ORDER[start_idx:]:
         log.info("Running stage: %s", stage.value)
         try:
-            _run_stage(stage, ctx, separator, options, sink)
+            _run_stage(stage, ctx, separator, options, sink, output_sink)
         except StageError:
             raise
         except Exception as exc:
@@ -155,9 +157,10 @@ def _run_stage(
     separator: Separator,
     options: PipelineOptions,
     sink: DebugSink | None,
+    output_sink: OutputSink | None,
 ) -> None:
     if stage is Stage.STEMS_ALL:
-        _do_stems_all(ctx, separator)
+        _do_stems_all(ctx, separator, output_sink)
     elif stage is Stage.STEMS_PER:
         _do_stems_per(ctx, separator)
     elif stage is Stage.BEATS:
@@ -170,12 +173,19 @@ def _run_stage(
         _do_refine(ctx, options, sink)
 
 
-def _do_stems_all(ctx: PipelineContext, separator: Separator) -> None:
+def _do_stems_all(
+    ctx: PipelineContext, separator: Separator, output_sink: OutputSink | None,
+) -> None:
     if not ctx.audio_path.exists():
         raise RuntimeError(
             f"stems_all: input audio missing at {ctx.audio_path}"
         )
-    ctx.drum_stem = separator.run_stems_all(ctx.audio_path, ctx.work_dir)
+    result = separator.run_stems_all(ctx.audio_path, ctx.work_dir)
+    ctx.drum_stem = result.drum_stem
+    if output_sink is not None:
+        output_sink.save_flac_from_wav("drum_stem", result.drum_stem)
+        if result.no_drums is not None:
+            output_sink.save_flac_from_wav("no_drums", result.no_drums)
 
 
 def _do_stems_per(ctx: PipelineContext, separator: Separator) -> None:
@@ -345,9 +355,9 @@ def _do_refine(
     if not refinement_levels:
         # No levels requested; final == initial. Still emit final.jot
         # so downstream tooling has a stable artifact name to read.
-        ctx.final_jot = ctx.initial_jot
+        ctx.final_jot = _inject_start_offset(ctx.initial_jot, ctx.structure)
         if sink is not None:
-            sink.write_text("final.jot", ctx.initial_jot)
+            sink.write_text("final.jot", ctx.final_jot)
         return
 
     if not ctx.per_instrument_stems:
@@ -382,6 +392,12 @@ def _do_refine(
         log.exception("Refinement failed; returning unrefined Jot")
         ctx.final_jot = ctx.initial_jot
 
+    # Stamp the lead-in (audio time of the first detected beat) onto the
+    # DSL after refinement so the LLM can't accidentally drop it during
+    # revision. Browser playback reads this off `globalMetadata` to delay
+    # its schedule and match the original recording's offset.
+    ctx.final_jot = _inject_start_offset(ctx.final_jot, ctx.structure)
+
     if sink is not None:
         sink.write_text("final.jot", ctx.final_jot)
         if ctx.refinement_log is not None:
@@ -398,3 +414,29 @@ def _probe_duration(audio_path: Path) -> float:
             return float(len(f) / f.samplerate)
     except Exception:
         return 0.0
+
+
+def _inject_start_offset(dsl: str, structure: BeatStructure) -> str:
+    """Prepend a `{{ startOffset: X }}` block to `dsl`.
+
+    `X` is the audio time (seconds) of the first detected beat in the
+    source recording — i.e. how much silence / non-drum intro preceded
+    bar 0 of the transcription. The TS player honours this on
+    `globalMetadata` to delay browser playback so the rendered drums
+    hit at the same wall-clock offset as in the original.
+
+    A separate top-level block is prepended (rather than merged into
+    the LLM-emitted block) so we don't have to parse and rewrite the
+    LLM's metadata; the TS parser merges successive `{{...}}` blocks
+    into one `globalMetadata` dict so the order doesn't matter.
+
+    No-op when no beats were detected or the offset is non-positive
+    (≤ ~0 means the song starts at audio time 0, no lead-in worth
+    encoding).
+    """
+    if not structure.bars or not structure.bars[0].beats:
+        return dsl
+    offset = float(structure.bars[0].start_time)
+    if offset <= 1e-3:
+        return dsl
+    return f"{{{{ startOffset: {offset:.3f} }}}}\n{dsl}"

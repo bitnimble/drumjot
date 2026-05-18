@@ -1128,7 +1128,6 @@ const PatternBracket = observer(
       <div
         className={classNames(
           styles.patternBracket,
-          span.isDefinition && styles.patternBracketDefinition,
           highlighted && styles.patternBracketHighlight
         )}
         style={{ left: span.x, width: span.width }}
@@ -1137,7 +1136,6 @@ const PatternBracket = observer(
           type="button"
           className={classNames(
             styles.patternLabel,
-            span.isDefinition && styles.patternLabelDefinition,
             highlighted && styles.patternLabelHighlight
           )}
           onClick={(e) => {
@@ -1145,11 +1143,7 @@ const PatternBracket = observer(
             onClick(span.name);
           }}
           onMouseDown={(e) => e.stopPropagation()}
-          title={
-            span.isDefinition
-              ? `Pattern definition: ${span.name} (click to highlight all usages)`
-              : `Pattern usage: ${span.name} (click to highlight the definition)`
-          }
+          title={`Pattern usage: ${span.name} (click to highlight other usages)`}
         >
           {span.name}
         </button>

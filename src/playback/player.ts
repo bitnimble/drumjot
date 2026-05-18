@@ -221,9 +221,20 @@ export class JotPlayer {
 
       const timeline = buildTimeline(rendered);
       const audioStartTime = ctx.currentTime + SCHEDULE_LEAD_SECONDS;
+      // `startOffset` on globalMetadata is the audio-time of jot-time 0 in
+      // the original recording — i.e. how much silence / non-drum intro
+      // preceded the first detected beat. Anchor jot time at -offset so
+      // the rAF loop's `jotTime > 0 ? jotTime : 0` clamp parks the
+      // playhead at position 0 during the lead-in, then it advances
+      // naturally once the first hit fires. Scheduling from -offset
+      // pushes every event's audio time forward by offset/speed so the
+      // drums come in delayed to match the original.
+      const rawOffset = rendered.resolved.globalMetadata.startOffset;
+      const startOffsetSec =
+        typeof rawOffset === 'number' && rawOffset > 0 ? rawOffset : 0;
       this.startContextTime = audioStartTime;
-      this.startJotTime = 0;
-      const lastTime = this.scheduleEvents(0, audioStartTime);
+      this.startJotTime = -startOffsetSec;
+      const lastTime = this.scheduleEvents(-startOffsetSec, audioStartTime);
 
       runInAction(() => {
         this.state = 'playing';

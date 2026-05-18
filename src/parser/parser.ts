@@ -86,13 +86,8 @@ function parseJot(c: Cursor): Jot {
       const def = parseDefinition(c);
       patterns[def.name] = {
         name: def.name,
-        silent: def.silent,
         elements: def.elements,
       };
-      if (!def.silent) {
-        const ref: PatternRef = { kind: 'patternRef', name: def.name };
-        items.push({ kind: 'el', el: applySuffixesAndSimul(c, ref) });
-      }
       continue;
     }
     items.push({ kind: 'el', el: parseElement(c) });
@@ -212,15 +207,11 @@ function hasAnyMeta(m: BarMeta): boolean {
 /**
  * Look ahead to determine whether `[` starts a pattern definition (which is
  * only legal at the top level) versus a pattern reference. We tentatively
- * scan past optional `?`, an identifier, whitespace, and check for `=`.
+ * scan past an identifier and whitespace and check for `=`.
  */
 function isLikelyDefinition(c: Cursor): boolean {
   let i = c.pos + 1; // skip '['
   while (i < c.src.length && /\s/.test(c.src[i])) i++;
-  if (c.src[i] === '?') {
-    i++;
-    while (i < c.src.length && /\s/.test(c.src[i])) i++;
-  }
   if (!/[A-Za-z]/.test(c.src[i] ?? '')) return false;
   while (i < c.src.length && /[A-Za-z0-9_]/.test(c.src[i])) i++;
   while (i < c.src.length && /\s/.test(c.src[i])) i++;
@@ -229,23 +220,16 @@ function isLikelyDefinition(c: Cursor): boolean {
 
 function parseDefinition(c: Cursor): {
   name: string;
-  silent: boolean;
   elements: Element[];
 } {
   c.consume('[');
   c.skipWs();
-  let silent = false;
-  if (c.peek() === '?') {
-    silent = true;
-    c.advance();
-    c.skipWs();
-  }
   const name = parseIdentifier(c);
   c.skipWs();
   c.consume('=');
   const elements = parseElementSequence(c, ']');
   c.consume(']');
-  return { name, silent, elements };
+  return { name, elements };
 }
 
 function parseIdentifier(c: Cursor): string {

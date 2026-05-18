@@ -58,6 +58,11 @@ services:
       # are immediately accessible on the host under ./debug/ so you can
       # listen back to stems or replay the refinement loop.
       - /codebox-workspace/drumjot/debug:/debug
+      # Stem deliverables (drumless + drum-only FLACs). Always populated
+      # per request and served back to the caller as URLs. Kept separate
+      # from /debug so the operator can prune debug freely without
+      # invalidating live response URLs the frontend is still using.
+      - /codebox-workspace/drumjot/outputs:/outputs
       # Benchmark fixture + output volumes. Pasting dataset files into
       # transcriber/benchmarks/datasets/<dataset>/ on the host makes
       # them visible inside the container; benchmark results land in

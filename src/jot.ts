@@ -98,12 +98,6 @@ export type PatternSpan = {
   x: Pixels;
   /** Pixel width within the bar (aligns with the padded note area). */
   width: Pixels;
-  /**
-   * True for the first non-silent occurrence of the pattern across the whole
-   * jot (in voice-then-bar source order). Silent patterns never have a
-   * definition span - they're only rendered through their usages.
-   */
-  isDefinition: boolean;
 };
 
 export type ResolvedBar = {
@@ -186,22 +180,6 @@ export class RenderedJot {
 
   private layoutJot = computedFn((jot: Jot): ResolvedJot => {
     const voices = jot.voices.map((v) => this.layoutVoice(v, jot));
-
-    // Mark the first non-silent occurrence of each pattern as its definition.
-    // Subsequent occurrences are usages; silent patterns have no inline def
-    // (their pattern body lives in `jot.patterns` only).
-    const seenPattern = new Set<string>();
-    for (const voice of voices) {
-      for (const bar of voice.bars) {
-        for (const span of bar.patternSpans) {
-          if (seenPattern.has(span.name)) continue;
-          seenPattern.add(span.name);
-          const pattern = jot.patterns?.[span.name];
-          if (pattern && !pattern.silent) span.isDefinition = true;
-        }
-      }
-    }
-
     const width = px(Math.max(0, ...voices.map((v) => v.width)));
     return {
       title: jot.title,
@@ -377,16 +355,14 @@ export class RenderedJot {
           return;
         case 'group':
           if (el.patternSource) {
-            // Record the pattern usage span; `isDefinition` is assigned in a
-            // second pass once we know the global source order, and the pixel
-            // x/width are filled in below once `pxPerBeat` is known.
+            // Record the pattern usage span; pixel x/width are filled in
+            // below once `pxPerBeat` is known.
             patternSpans.push({
               name: el.patternSource.name,
               startBeat: atBeat,
               endBeat: atBeat + span,
               x: px(0),
               width: px(0),
-              isDefinition: false,
             });
           }
           visit(el.elements, atBeat, span);

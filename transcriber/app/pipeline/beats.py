@@ -171,6 +171,7 @@ def analyze_beats(
         structure = _librosa_fallback(audio_path)
     if align_onsets:
         align_beats_to_onsets(structure, align_onsets)
+    _finalize_bar_tempos(structure)
     if duration_seconds is not None and duration_seconds > 0:
         _pad_trailing_bars(structure, duration_seconds)
     return structure
@@ -382,6 +383,60 @@ def _summarize(beats: list[BeatTick], bars: list[BarInfo]) -> BeatStructure:
         initial_time_signature=initial_ts,
         has_tempo_changes=len(tempo_set) > 1,
         has_time_sig_changes=len(sig_set) > 1,
+    )
+
+
+# Width (in bars) of the median filter applied to per-bar tempos. Each
+# bar's raw `60 / mean(gaps)` estimate uses only 3-4 beat gaps, so 10-20
+# ms of beat-time variance (normal even after onset alignment) translates
+# into 5-10 BPM swings. A 5-bar median smooths that out without flattening
+# multi-bar tempo motion that's actually present in the audio.
+TEMPO_SMOOTHING_WINDOW = 5
+
+# Treat a song as having real tempo changes only if the smoothed bar
+# tempos span more than this much. Below this is residual wobble and the
+# prompt should not emit per-bar `{{ bpm: ... }}` blocks.
+SUSTAINED_TEMPO_CHANGE_BPM = 5.0
+
+
+def _finalize_bar_tempos(structure: BeatStructure) -> None:
+    """Smooth per-bar tempos in place and rederive the global change flag.
+
+    `_finalize_bar` / `_rebuild_bar_fields` set each `bar.tempo_bpm` to
+    `60 / mean(gaps)` over the bar's own 3-4 beat gaps; that estimate
+    wobbles 5-10 BPM at typical tempos even on a constant-tempo song.
+    The transcribe prompt asks the LLM to emit `{{ bpm: N }}` whenever
+    consecutive bars differ by >2 BPM, which the raw wobble triggers
+    between essentially every bar. Replacing each tempo with a local
+    median collapses the wobble so the LLM only sees real motion.
+
+    Also recomputes `initial_tempo` and `has_tempo_changes` from the
+    smoothed series — the old `len({round(bpm,1) for ...}) > 1` test
+    was flipping `has_tempo_changes` to True on any 0.1 BPM jitter.
+    """
+    bars = structure.bars
+    if not bars:
+        return
+    raw = np.asarray([b.tempo_bpm for b in bars], dtype=np.float64)
+    half = TEMPO_SMOOTHING_WINDOW // 2
+    smoothed = np.empty_like(raw)
+    for i in range(len(bars)):
+        lo = max(0, i - half)
+        hi = min(len(bars), i + half + 1)
+        smoothed[i] = float(np.median(raw[lo:hi]))
+    for bar, s in zip(bars, smoothed, strict=True):
+        bar.tempo_bpm = float(s)
+
+    # Bar 0 frequently has fewer beats (anacrusis / pickup), so its
+    # tempo estimate is unreliable — exclude it from the reference set
+    # when there's enough material to do so.
+    reference = bars[1:] if len(bars) >= 2 else bars
+    if not reference:
+        return
+    ref_tempos = [b.tempo_bpm for b in reference]
+    structure.initial_tempo = float(ref_tempos[0])
+    structure.has_tempo_changes = (
+        max(ref_tempos) - min(ref_tempos) >= SUSTAINED_TEMPO_CHANGE_BPM
     )
 
 

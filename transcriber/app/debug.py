@@ -76,6 +76,19 @@ def _slugify(name: str) -> str:
     return base[:64] or "audio"
 
 
+def mint_request_folder_name(original_filename: str | None) -> str:
+    """Build a per-request folder name shared by DebugSink and OutputSink.
+
+    Layout: `<YYYYMMDD-HHMMSS>_<8 hex>_<slugified-filename-stem>`. Stable
+    enough that an operator listening to `outputs/<name>/` and inspecting
+    `debug/<name>/` can correlate the two by sight.
+    """
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    short_id = uuid.uuid4().hex[:8]
+    slug = _slugify(Path(original_filename or "audio").stem)
+    return f"{stamp}_{short_id}_{slug}"
+
+
 class DebugSink:
     """Writes intermediate artifacts for a single /transcribe request."""
 
@@ -92,7 +105,16 @@ class DebugSink:
         cls,
         base_dir: Path | None,
         original_filename: str | None,
+        *,
+        folder_name: str | None = None,
     ) -> DebugSink | None:
+        """Construct a sink for one request.
+
+        `folder_name`, if given, is used verbatim under `base_dir` so the
+        caller can match the debug folder to a co-minted OutputSink (the
+        operator can then see the two folders side by side under
+        `/debug/<name>/` and `/outputs/<name>/`).
+        """
         if base_dir is None:
             return None
         try:
@@ -100,10 +122,8 @@ class DebugSink:
         except OSError as exc:
             log.warning("Could not create debug dir %s: %s", base_dir, exc)
             return None
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        short_id = uuid.uuid4().hex[:8]
-        slug = _slugify(Path(original_filename or "audio").stem)
-        request_dir = base_dir / f"{stamp}_{short_id}_{slug}"
+        name = folder_name or mint_request_folder_name(original_filename)
+        request_dir = base_dir / name
         try:
             return cls(request_dir)
         except OSError as exc:

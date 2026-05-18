@@ -90,6 +90,12 @@ class Settings(BaseSettings):
     models_dir: Path = Path("/models")
     spec_path: Path = Path("/app/SPEC.md")
 
+    # Where the user-facing stem deliverables (drumless + drum-only mixes)
+    # are written. Unlike `debug_dir`, these are produced every run, served
+    # by the FastAPI app under `/outputs/...`, and surfaced as URLs on the
+    # /transcribe response so the caller can play them back in a browser.
+    outputs_dir: Path = Path("/outputs")
+
     # --- Debug artifact persistence ---
     # If set, every /transcribe request persists its intermediate files
     # (input audio, drum stem, per-instrument stems, beats.json,

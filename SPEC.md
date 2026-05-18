@@ -141,6 +141,11 @@ type Metadata = {
   // Maps each pitch letter to an Instrument. Order is the rendered lane order.
   instrumentMapping?: Record<string, Instrument>;
   comment?: string;
+  // Lead-in (seconds) before jot-time 0. Used on globalMetadata to preserve
+  // the silence / non-drum intro that preceded the first detected beat in a
+  // transcribed recording; browser playback delays its schedule by this amount
+  // so the drums hit at the same wall-clock offset as in the source audio.
+  startOffset?: number;
   // user-defined keys allowed
 };
 ```
@@ -149,7 +154,7 @@ type Metadata = {
 
 ## Patterns
 
-`[Name=(...)]` defines and plays a pattern. `[?Name=(...)]` defines silently (no playback).
+`[Name=(...)]` defines a pattern silently — the definition itself does not play at its position. To play it at the same time as defining, follow it with an explicit reference: `[Name=(...)][Name]`.
 
 Reference: `[Name]`.
 
@@ -174,7 +179,7 @@ Macro names follow the same identifier rules. Macros and patterns occupy separat
 ([$grv])*4
 ```
 
-`[?$name=...]` is **not** valid — macros are always silent by virtue of preprocessing.
+Macros are always silent by virtue of preprocessing — the definition itself produces no output, only its references do.
 
 ---
 
@@ -203,7 +208,6 @@ Macro names follow the same identifier rules. Macros and patterns occupy separat
 | `-` | Position range in `#N-M` |
 | `,` | Separator in metadata and pattern arg lists |
 | `$` | Macro identifier prefix |
-| `?` | Silent pattern definition (`[?Name=...]`) |
 | `"` | String delimiter inside metadata |
 
 ---

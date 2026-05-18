@@ -18,7 +18,11 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass
 from pathlib import Path
+
+import numpy as np
+import soundfile as sf
 
 from app.config import settings
 from app.debug import current_debug_sink
@@ -35,6 +39,21 @@ log = logging.getLogger(__name__)
 # `<title>_(Drums)_htdemucs_ft_(<stem>)_<model>.wav`. Anchoring the
 # match on the parenthesised segment avoids false-positive substring
 # hits against arbitrary characters elsewhere in the filename.
+@dataclass
+class StemsAllResult:
+    """Outputs of the `stems_all` separation stage.
+
+    `drum_stem` feeds the downstream `stems_per` stage. `no_drums` is the
+    bass+other+vocals sum, used purely as a deliverable (FLAC-encoded
+    into the request's outputs folder + copied to debug) — no later
+    stage consumes it. `None` when the sum couldn't be built (e.g.
+    Demucs returned only the drum stem on a single-stem variant).
+    """
+
+    drum_stem: Path
+    no_drums: Path | None
+
+
 STEM_NAME_TO_PITCH: dict[str, str] = {
     "(kick)": "k",
     "(snare)": "s",
@@ -115,13 +134,14 @@ class Separator:
             time.perf_counter() - t0,
         )
 
-    def run_stems_all(self, audio_path: Path, work_dir: Path) -> Path:
-        """Extract a drum stem from the full mix. Returns its absolute path.
+    def run_stems_all(self, audio_path: Path, work_dir: Path) -> StemsAllResult:
+        """Extract a drum stem from the full mix, plus a drumless mix.
 
-        Also persists the drum stem (and any sibling stems Demucs emits —
-        bass / other / vocals) into the current debug sink under
-        `stems_all/`, so the operator can listen back to intermediates
-        while later stages are still running.
+        Returns a `StemsAllResult` with absolute paths to both. Also
+        persists the drum stem, the drumless sum, and any sibling stems
+        Demucs emits (bass / other / vocals) into the current debug sink
+        under `stems_all/`, so the operator can listen back to
+        intermediates while later stages are still running.
         """
         self.load()
         assert self._stems_all is not None
@@ -139,17 +159,32 @@ class Separator:
                 f"Got: {[p.name for p in stems_paths]}"
             )
         drum_stem = drum_candidates[0]
+        non_drum_stems = [p for p in stems_paths if p != drum_stem]
+
+        # Sum bass + other + vocals into a single drumless mix so the
+        # consumer (and the operator listening through /debug) gets a
+        # ready-to-play "music minus drums" track without having to mix
+        # the three Demucs sub-stems themselves.
+        no_drums_path: Path | None = None
+        if non_drum_stems:
+            no_drums_path = out_dir / f"no_drums{drum_stem.suffix}"
+            try:
+                _sum_audio(non_drum_stems, no_drums_path)
+            except Exception as exc:
+                log.warning("Failed to build drumless mix (%s); skipping.", exc)
+                no_drums_path = None
 
         sink = current_debug_sink()
         if sink is not None:
             sink.copy_audio("stems_all/drum_stem", drum_stem)
-            for path in stems_paths:
-                if path == drum_stem:
-                    continue
+            if no_drums_path is not None:
+                sink.copy_audio("stems_all/no_drums", no_drums_path)
+            for path in non_drum_stems:
                 # bass / other / vocals (htdemucs_ft outputs four stems).
-                # Useful for confirming the drum stem is actually clean.
+                # Kept individually too so the operator can audit which
+                # sub-stem contains any drum bleed.
                 sink.copy_audio(f"stems_all/{path.stem}", path)
-        return drum_stem
+        return StemsAllResult(drum_stem=drum_stem, no_drums=no_drums_path)
 
     def run_stems_per(self, drum_stem: Path, work_dir: Path) -> dict[str, Path]:
         """Split the drum stem into per-instrument stems keyed by pitch."""
@@ -188,3 +223,31 @@ def _pitch_for_stem_name(stem_name: str) -> str | None:
         if needle in name:
             return pitch
     return None
+
+
+def _sum_audio(inputs: list[Path], out_path: Path) -> None:
+    """Sample-wise sum of equal-rate wavs into `out_path`.
+
+    Demucs's four stems sum back to (approximately) the original mix, so
+    bass + other + vocals is a usable "music minus drums" track without
+    additional gain staging. Subtype is preserved from the first input to
+    keep file size in line with the per-stem outputs.
+    """
+    summed: np.ndarray | None = None
+    sr_ref: int | None = None
+    subtype_ref: str | None = None
+    for p in inputs:
+        data, sr = sf.read(str(p), always_2d=True, dtype="float32")
+        if summed is None:
+            summed = data.copy()
+            sr_ref = sr
+            subtype_ref = sf.info(str(p)).subtype
+            continue
+        if sr != sr_ref:
+            raise RuntimeError(f"sample-rate mismatch summing stems: {p} ({sr}) vs {sr_ref}")
+        n = min(summed.shape[0], data.shape[0])
+        summed = summed[:n] + data[:n]
+    assert summed is not None and sr_ref is not None
+    np.clip(summed, -1.0, 1.0, out=summed)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(str(out_path), summed, sr_ref, subtype=subtype_ref)

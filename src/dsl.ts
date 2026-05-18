@@ -72,6 +72,16 @@ export type Metadata = {
    * `[key: string]: unknown` index signature.
    */
   title?: string;
+  /**
+   * Lead-in (seconds) before jot-time 0. Carried on `globalMetadata` so a
+   * transcribed jot can preserve the silence / non-drum intro that
+   * preceded the first detected beat in the source audio; browser
+   * playback delays its schedule by this amount so the rendered drums hit
+   * at the same wall-clock offset as in the original recording. Optional
+   * — undefined / 0 mean playback starts immediately, matching pre-offset
+   * behaviour.
+   */
+  startOffset?: number;
   [key: string]: unknown;
 };
 
@@ -229,8 +239,6 @@ export type Voice = {
 
 export type Pattern = {
   name: string;
-  /** `[?Name=...]` defines silently; not played in-line. */
-  silent: boolean;
   elements: Element[];
 };
 

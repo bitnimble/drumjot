@@ -23,10 +23,12 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.debug import (
     DebugSink,
+    mint_request_folder_name,
     reset_current_debug_sink,
     set_current_debug_sink,
 )
@@ -36,6 +38,7 @@ from app.models import (
     TranscribeMetadata,
     TranscribeResponse,
 )
+from app.outputs import OutputSink, make_output_sink
 from app.pipeline.beats import summarize_bar_for_prompt
 from app.pipeline.resume import (
     find_input_audio,
@@ -129,6 +132,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Serve the per-request stem deliverables produced by `OutputSink`. The
+# directory is created eagerly so the mount never points at a missing
+# path; the volume mount in docker-compose maps it to the host's
+# `./outputs/` for inspection and cleanup.
+settings.outputs_dir.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/outputs",
+    StaticFiles(directory=str(settings.outputs_dir)),
+    name="outputs",
+)
+
 
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
@@ -178,7 +192,11 @@ async def transcribe(
     debug_base: Path | None = settings.debug_dir
     if debug and debug_base is None:
         debug_base = DEFAULT_DEBUG_DIR
-    sink = DebugSink.for_request(debug_base, file.filename)
+    # Mint a single per-request folder name so the debug and outputs
+    # folders use the same slug — operators can correlate them at sight.
+    folder_name = mint_request_folder_name(file.filename)
+    sink = DebugSink.for_request(debug_base, file.filename, folder_name=folder_name)
+    output_sink = make_output_sink(folder_name, settings.outputs_dir)
 
     with tempfile.TemporaryDirectory(prefix="drumjot_") as tmp_str, _scoped_debug_sink(sink):
         work = Path(tmp_str)
@@ -199,6 +217,7 @@ async def transcribe(
                 separator=sep,
                 options=options,
                 sink=sink,
+                output_sink=output_sink,
             )
         except StageError as exc:
             raise HTTPException(
@@ -238,6 +257,7 @@ async def transcribe(
         ctx=ctx,
         include_candidates=include_candidates,
         debug_dir=str(sink.dir) if sink is not None else None,
+        output_sink=output_sink,
     )
 
 
@@ -317,6 +337,11 @@ async def transcribe_resume(
 
     audio_path = find_input_audio(resume_dir) or (resume_dir / "input")
     sink = DebugSink(resume_dir)
+    # Reuse the resume folder's basename as the outputs folder name so
+    # any FLACs the original /transcribe run wrote are still surfaced in
+    # the resumed response (and a resume-from-stems_all overwrites them
+    # in place rather than orphaning the originals).
+    output_sink = make_output_sink(resume_dir.name, settings.outputs_dir)
     options = PipelineOptions(
         refine=refine, lint=lint, best_of_k=best_of_k, beat_input=beat_input,
     )
@@ -343,6 +368,7 @@ async def transcribe_resume(
                 separator=sep,
                 options=options,
                 sink=sink,
+                output_sink=output_sink,
             )
         except StageError as exc:
             raise HTTPException(
@@ -382,6 +408,7 @@ async def transcribe_resume(
         ctx=ctx,
         include_candidates=include_candidates,
         debug_dir=str(resume_dir),
+        output_sink=output_sink,
     )
 
 
@@ -390,6 +417,7 @@ def _build_response(
     ctx: PipelineContext,
     include_candidates: bool,
     debug_dir: str | None,
+    output_sink: OutputSink | None,
 ) -> TranscribeResponse:
     """Assemble the HTTP response from a completed PipelineContext."""
     if ctx.structure is None:
@@ -406,6 +434,16 @@ def _build_response(
         BarSummary(**summarize_bar_for_prompt(b)) for b in ctx.structure.bars
     ]
     stems_used = sorted(ctx.per_instrument_stems.keys())
+    # Surface stem URLs only when the FLACs actually exist on disk —
+    # covers both fresh /transcribe (just produced) and resume that
+    # skipped stems_all but found leftover FLACs from a prior run.
+    drum_stem_url: str | None = None
+    no_drums_url: str | None = None
+    if output_sink is not None:
+        if output_sink.existing_path("drum_stem") is not None:
+            drum_stem_url = output_sink.url_for("drum_stem")
+        if output_sink.existing_path("no_drums") is not None:
+            no_drums_url = output_sink.url_for("no_drums")
     return TranscribeResponse(
         jot_dsl=ctx.final_jot,
         metadata=TranscribeMetadata(
@@ -421,4 +459,6 @@ def _build_response(
         best_of_k=ctx.best_of_k_log,
         candidates=ctx.onsets_by_pitch if include_candidates else {},
         debug_dir=debug_dir,
+        drum_stem_url=drum_stem_url,
+        no_drums_url=no_drums_url,
     )

@@ -83,6 +83,15 @@ class TranscribeResponse(BaseModel):
     or `None` if debug persistence was disabled for this request. When
     running under docker-compose with the default `./debug:/debug` mount,
     this path corresponds 1:1 with a host folder.
+
+    `drum_stem_url` and `no_drums_url` are paths (with leading `/`) to
+    FLAC-encoded stem deliverables — the isolated drum mix and the
+    bass+other+vocals "music minus drums" mix respectively. They are
+    served by the same transcriber service under `/outputs/...` and
+    are intended to be composed against the caller's transcriber base
+    URL (e.g. `/api` in dev, `https://...` in prod). Either can be
+    `None` if the corresponding stem couldn't be produced (e.g. resume
+    skipping stems_all and no cached FLAC on disk).
     """
 
     jot_dsl: str
@@ -91,6 +100,8 @@ class TranscribeResponse(BaseModel):
     best_of_k: BestOfKLog | None = None
     candidates: dict[str, list[OnsetCandidate]] = Field(default_factory=dict)
     debug_dir: str | None = None
+    drum_stem_url: str | None = None
+    no_drums_url: str | None = None
 
 
 class HealthResponse(BaseModel):

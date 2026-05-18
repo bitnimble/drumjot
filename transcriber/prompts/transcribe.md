@@ -37,12 +37,10 @@ one-third of the way into beat 2, i.e. an 1/8 triplet position).
    different instruments). Example: `k+s` plays a kick and a snare
    together.
 6. Detect repeating bar-level patterns. When two or more bars are
-   byte-identical, **define them silently** as `[?Name=(...)]` (note
-   the leading `?`) at the top of the chart, and reference each bar
-   that uses them with `[Name]`. The `?` prefix is mandatory — without
-   it, the definition itself plays at the position it appears, which
-   stacks every pattern body into the anacrusis and ruins playback
-   timing.
+   byte-identical, define them as `[Name=(...)]` at the top of the
+   chart, and reference each bar that uses them with `[Name]`.
+   Pattern definitions are silent — the body does not play at the
+   position the definition appears; only `[Name]` references play it.
 7. Add `:a` to notes whose strength is noticeably above the median
    for that instrument (>30 % above); add `:g` to notes noticeably
    below median (>30 % below). Don't tag every note.
