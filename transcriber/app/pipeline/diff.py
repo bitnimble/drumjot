@@ -28,6 +28,24 @@ log = logging.getLogger(__name__)
 ONSET_TOLERANCE_SECONDS = 0.03
 STRENGTH_FILTER_RATIO = 0.30  # drop source onsets below 30% of median strength
 
+# Pitches that play steady time and therefore generate dense, noisy
+# onset detections (decay re-triggering, bleed from kick/snare). A weak
+# source onset that falls *inside* one already-regular pulse of these —
+# i.e. it would merely subdivide a pattern the LLM deliberately thinned —
+# is almost always a detector artifact, not a hit that was wrongly
+# dropped. Flagging it as `missing_onset` is what makes the refine loop
+# re-spam 1/16 hats. Kick/snare are intentionally excluded: a missing
+# kick or snare is almost always a real, musically significant miss.
+REPETITIVE_PITCHES = {"h", "d"}
+
+# How close the gap between the two predicted hits bracketing an
+# unmatched onset must be to the local pulse for it to count as "one
+# regular pulse". Within tolerance => the onset just subdivides that
+# pulse (a flicker; suppress). Roughly 2x the pulse => the predicted
+# pattern actually skipped a pulse position and this is a genuine
+# missed hit (keep it).
+PULSE_REGULARITY_TOLERANCE = 0.35
+
 IssueType = Literal[
     "missing_onset",
     "extra_onset",
@@ -52,6 +70,64 @@ class Issue:
 
 
 # ---------- onset diff ----------
+
+def _is_subpulse_flicker(
+    pitch: str,
+    onset_time: float,
+    onset_strength: float,
+    pred_times: list[float],
+    kept_median_strength: float,
+) -> bool:
+    """True if an unmatched source onset merely subdivides a regular pulse.
+
+    Only applies to repetitive timekeeping pitches (hi-hat / ride). The
+    onset is treated as a detector flicker — and therefore NOT reported
+    as a `missing_onset` — when all of:
+
+      - the pitch is repetitive (steady time, dense noisy detections);
+      - it sits strictly between two predicted hits of this pitch;
+      - those two hits are ~one local pulse apart (a ~2x gap instead
+        means the predicted pattern skipped a pulse position, so the
+        onset is a genuinely missed hit and we keep flagging it);
+      - it is weaker than the median of the hits the LLM kept (so a
+        dropped *accent* is never silently suppressed).
+
+    Anything that fails a check falls through to the normal
+    missing-onset path, so this only ever removes the specific
+    re-spam-the-hats case, never real misses.
+    """
+    if pitch not in REPETITIVE_PITCHES:
+        return False
+    if len(pred_times) < 3:
+        # Too little predicted structure to establish a pulse; don't
+        # second-guess the deterministic diff.
+        return False
+
+    prev_t: float | None = None
+    next_t: float | None = None
+    for t in pred_times:
+        if t < onset_time:
+            prev_t = t
+        elif t > onset_time:
+            next_t = t
+            break
+    if prev_t is None or next_t is None:
+        # At the edges of the predicted pattern: treat as a normal
+        # missing onset rather than guessing.
+        return False
+
+    gaps = np.diff(pred_times)
+    local_pulse = float(np.median(gaps))
+    if local_pulse <= 0:
+        return False
+    bracket = next_t - prev_t
+    if abs(bracket - local_pulse) > PULSE_REGULARITY_TOLERANCE * local_pulse:
+        # The bracketing hits are not one regular pulse apart -> this
+        # is a skipped pulse position, i.e. a real missed hit.
+        return False
+    # Strength gate: only suppress flickers quieter than what was kept.
+    return onset_strength < kept_median_strength
+
 
 def diff_onsets(
     pitch: str,
@@ -98,6 +174,17 @@ def diff_onsets(
             used_actual.add(best_ai)
 
     matched_pred_idx = {pi for pi, _ in matched}
+
+    # Reference strength of the hits the LLM actually kept (matched to a
+    # predicted note). Used by the sub-pulse flicker gate so a dropped
+    # accent is never silently suppressed. Fall back to the overall
+    # source median when nothing matched (e.g. timing is badly off).
+    kept_strengths = [actual_sorted[ai].strength for _, ai in matched]
+    kept_median_strength = (
+        float(np.median(kept_strengths)) if kept_strengths else median_strength
+    )
+    pred_times = [p.time for p in pred_sorted]
+
     issues: list[Issue] = []
 
     for pi, p in enumerate(pred_sorted):
@@ -117,6 +204,14 @@ def diff_onsets(
 
     for ai, c in enumerate(actual_sorted):
         if ai in used_actual:
+            continue
+        if _is_subpulse_flicker(
+            pitch, c.time, c.strength, pred_times, kept_median_strength
+        ):
+            # A weak hi-hat/ride detection sitting inside an already
+            # regular pulse. Reporting it would make the refine loop
+            # re-add the 1/16 spam the transcription deliberately
+            # thinned, so skip it entirely.
             continue
         # In source but missing from Jot
         strength_ratio = c.strength / max(median_strength, 1e-6)

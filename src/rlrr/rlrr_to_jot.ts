@@ -5,8 +5,10 @@
  *  [R1] RLRR has no notion of time signature; we default to 4/4 (configurable).
  *  [R2] Events are quantized onto a configurable grid (default sixteenths)
  *       relative to the first bpm event's tempo. Tempo CHANGES at runtime
- *       are honoured for second->beat conversion, but the grid is uniform
- *       in beat-space.
+ *       are honoured for second->beat conversion (the grid is uniform in
+ *       beat-space) AND surfaced as per-bar `{{ bpm: ... }}` metadata so
+ *       playback / the playhead / the waveform follow the song's real
+ *       tempo instead of running the whole chart at the initial bpm.
  *  [R3] Multiple events at the same quantized slot collapse into a `simul`.
  *  [R4] Each event preserves its original RLRR `name`, `vel` and `loc` via
  *       a custom `metadata.rlrr` field on the Note so a round trip back to
@@ -60,7 +62,9 @@ type TempoSegment = {
 export function rlrrToJot(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
   const opts = { ...DEFAULTS, ...options };
 
-  const tempoTimeline = buildTempoTimeline(rlrr);
+  // Pre-real-tempo intro -> startOffset lead-in (see computeLeadInSeconds).
+  const leadInSec = computeLeadInSeconds(rlrr);
+  const tempoTimeline = buildTempoTimeline(rlrr, leadInSec);
   const initialBpm = tempoTimeline[0]?.bpm ?? 120;
 
   const time = opts.timeSignature;
@@ -86,7 +90,9 @@ export function rlrrToJot(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
   const pitchByName = allocateFallbackLetters(rlrr.events.map((e) => e.name));
 
   for (const event of rlrr.events) {
-    const seconds = eventTimeSeconds(event);
+    // Times are rebased so the real-tempo downbeat sits at beat 0; the
+    // dropped intro is reinstated as `startOffset` on global metadata below.
+    const seconds = Math.max(0, eventTimeSeconds(event) - leadInSec);
     const beats = secondsToBeats(seconds, tempoTimeline);
     const snapped = Math.round(beats / gridBeats) * gridBeats;
     const barIdx = Math.max(0, Math.floor(snapped / barBeats));
@@ -116,6 +122,11 @@ export function rlrrToJot(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
   const slotsPerBar = Math.max(1, Math.round(barBeats / gridBeats));
 
   const bars: Bar[] = [];
+  // Effective tempo at each bar's start beat, emitted as a sticky per-bar
+  // `{{ bpm }}` override whenever it changes. Bar 0 is covered by
+  // `globalMetadata.bpm` (= initialBpm = the tempo at beat 0), so it never
+  // needs its own override; later bars only carry one on a change.
+  let prevBpm = initialBpm;
   for (let bi = 0; bi < barCount; bi++) {
     const bucket = slots.get(bi);
     const elements: Element[] = [];
@@ -133,7 +144,13 @@ export function rlrrToJot(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
         elements.push(simul);
       }
     }
-    bars.push({ elements });
+    const bar: Bar = { elements };
+    const barBpm = bpmAtBeat(bi * barBeats, tempoTimeline);
+    if (bi > 0 && barBpm !== prevBpm) {
+      bar.metadata = { bpm: barBpm };
+    }
+    prevBpm = barBpm;
+    bars.push(bar);
   }
 
   // Strip trailing all-rest bars.
@@ -178,6 +195,10 @@ export function rlrrToJot(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
     time,
     instrumentMapping,
     rlrr: rlrrSidecar,
+    // Recording's intro before the real-tempo downbeat: playback delays its
+    // schedule by this so the drums hit at the same wall-clock offset as the
+    // audio (and the audio plays its own intro during the lead-in).
+    ...(leadInSec > 0 ? { startOffset: leadInSec } : {}),
   };
 
   const voice: Voice = { bars };
@@ -190,13 +211,50 @@ export function rlrrToJot(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
 
 // ---------- helpers ----------
 
-function buildTempoTimeline(rlrr: RlrrFile): TempoSegment[] {
+/**
+ * Paradiddle charts frequently carry a placeholder `{ bpm: 120, time: 0 }`
+ * left by the authoring tool, with the song's real tempo appearing as a
+ * later bpm event at the first downbeat — often *exactly* the first note's
+ * time. Treating that pre-real-tempo region as 120-bpm music shifts the
+ * whole drum grid against the audio, because playback can only change tempo
+ * at bar boundaries (per-bar `{{ bpm }}`) and so cannot reproduce a mid-bar
+ * tempo change. The fix: the lead-in is the time of the last bpm event at or
+ * before the first drum onset (everything before it is intro). It is dropped
+ * from the tempo timeline and surfaced as `globalMetadata.startOffset`, so
+ * playback delays its schedule by it and the audio plays its own intro while
+ * the grid waits. A chart whose real tempo already starts at time 0 yields
+ * `leadInSec === 0` and is unaffected. A note that precedes the later bpm
+ * event (a genuine pickup) also keeps `leadInSec` at 0, since that bpm event
+ * is then *after* the first onset.
+ */
+function computeLeadInSeconds(rlrr: RlrrFile): number {
+  const events = rlrr.events ?? [];
+  if (events.length === 0) return 0;
+  let firstEventSec = Number.POSITIVE_INFINITY;
+  for (const ev of events) {
+    const t = eventTimeSeconds(ev);
+    if (t < firstEventSec) firstEventSec = t;
+  }
+  if (!Number.isFinite(firstEventSec)) return 0;
+  let leadIn = 0;
+  for (const ev of rlrr.bpmEvents ?? []) {
+    if (ev.time <= firstEventSec + 1e-6 && ev.time > leadIn) leadIn = ev.time;
+  }
+  return leadIn;
+}
+
+function buildTempoTimeline(rlrr: RlrrFile, leadInSec: number): TempoSegment[] {
   const out: TempoSegment[] = [];
   let beats = 0;
   let lastSeconds = 0;
   let lastBpm = 120;
   let first = true;
-  const events = [...(rlrr.bpmEvents ?? [])].sort((a, b) => a.time - b.time);
+  // Drop bpm events before the lead-in and rebase the rest so the governing
+  // real-tempo event sits at time 0. With leadInSec === 0 this is a no-op.
+  const events = [...(rlrr.bpmEvents ?? [])]
+    .filter((e) => e.time >= leadInSec - 1e-6)
+    .map((e) => ({ bpm: e.bpm, time: Math.max(0, e.time - leadInSec) }))
+    .sort((a, b) => a.time - b.time);
   if (events.length === 0 || events[0].time > 0) {
     events.unshift({ bpm: 120, time: 0 });
   }
@@ -215,6 +273,18 @@ function buildTempoTimeline(rlrr: RlrrFile): TempoSegment[] {
     lastBpm = ev.bpm;
   }
   return out;
+}
+
+/**
+ * Effective tempo at a given beat position: the bpm of the last tempo
+ * segment whose `startBeats` is at or before `beat`. Beat-space analogue
+ * of {@link secondsToBeats}'s segment scan; used to stamp each bar with
+ * the tempo in force at its start.
+ */
+function bpmAtBeat(beat: number, timeline: TempoSegment[]): number {
+  let i = 0;
+  while (i + 1 < timeline.length && timeline[i + 1].startBeats <= beat) i++;
+  return timeline[i].bpm;
 }
 
 function secondsToBeats(seconds: number, timeline: TempoSegment[]): number {

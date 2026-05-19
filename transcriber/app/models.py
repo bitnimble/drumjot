@@ -66,9 +66,20 @@ class RefinementLog(BaseModel):
 
 
 class BestOfKLog(BaseModel):
+    """Best-of-K sampling log.
+
+    Transcription is per-instrument, so best-of-K is applied per
+    instrument: `per_instrument[pitch]` carries that instrument's K
+    sample scores + chosen index. The top-level `scores`/`chosen_index`
+    are unused in the per-instrument case (left empty / 0) and retained
+    for the per-instrument *sub*-logs and backward-compatible decoding
+    of older `best_of_k.json` artifacts.
+    """
+
     samples: int
     scores: list[float] = Field(default_factory=list)
     chosen_index: int = 0
+    per_instrument: dict[str, BestOfKLog] | None = None
 
 
 class TranscribeResponse(BaseModel):

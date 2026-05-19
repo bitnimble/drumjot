@@ -26,7 +26,7 @@ export const px = (n: number) => n as Pixels;
 
 export class ViewConfig {
   /** Pixel width of one whole bar at default zoom. */
-  barWidth = px(640);
+  barWidth = px(448);
   /** Vertical height of one rendered pitch track. */
   trackHeight = px(36);
   /** Padding above/below each voice block. */
@@ -34,14 +34,16 @@ export class ViewConfig {
   /** Note dot diameter. */
   noteDiameter = px(14);
   /**
-   * Horizontal padding inside each bar before the first note (and after the
-   * last). The note area is `barWidth - barNotePaddingLeft - barNotePaddingRight`;
-   * notes and pattern brackets are positioned within this inner area to mimic
-   * conventional engraved notation where the first note sits inside the bar
-   * line rather than directly on it.
+   * Constant horizontal offset applied to every note from its bar's left
+   * edge, so the first note sits inside the bar line rather than centred on
+   * it (mimicking conventional engraved notation). It is a pure offset, not
+   * a subtraction from the note area: one beat is always `barWidth / beats`
+   * px wide, so the gap across a bar boundary stays exactly one note step
+   * (the trailing space before the next bar line works out to
+   * `oneStep - barNotePaddingLeft`, and the next bar's first note is itself
+   * `barNotePaddingLeft` in, summing back to one full step).
    */
   barNotePaddingLeft = px(14);
-  barNotePaddingRight = px(8);
   /** Palette used when a pitch has no explicit colour. */
   palette: string[] = [
     '#FF8C55',
@@ -74,6 +76,15 @@ export type ResolvedNote = {
   roll: boolean;
   /** Position within bar, in beats (0 = bar start, bar.length = bar end). */
   beat: number;
+  /**
+   * True when the onset lands on the binary (dyadic) grid — i.e. an
+   * integer multiple of 1/2^m of a quarter note (whole/half/quarter/
+   * eighth/sixteenth/...). False for triplet/quintuplet/swing positions
+   * and anything else that isn't a "standard straight note". The
+   * renderer flags non-straight notes that aren't already covered by a
+   * tuplet bracket.
+   */
+  straight: boolean;
   /** Onset duration, in beats. */
   duration: number;
   /** Pixel x within the bar. */
@@ -100,6 +111,25 @@ export type PatternSpan = {
   width: Pixels;
 };
 
+/**
+ * A tuplet (triplet, quintuplet, sextuplet, swing group, ...) detected
+ * from a non-pattern `group` whose internal subdivision lands off the
+ * binary grid. The renderer draws a bracket spanning `[startBeat,
+ * endBeat)` with `count` shown above it, the conventional engraved-
+ * notation indicator that the enclosed notes are not straight.
+ */
+export type TupletSpan = {
+  /** Slot count shown in the bracket (3 = triplet, 5 = quintuplet, ...). */
+  count: number;
+  /** Position within the bar in beats. */
+  startBeat: number;
+  endBeat: number;
+  /** Pixel x within the bar (aligns with the padded note area). */
+  x: Pixels;
+  /** Pixel width within the bar (aligns with the padded note area). */
+  width: Pixels;
+};
+
 export type ResolvedBar = {
   source: Bar;
   /** Pixel x relative to start of the voice. */
@@ -115,6 +145,12 @@ export type ResolvedBar = {
    * around each span.
    */
   patternSpans: PatternSpan[];
+  /**
+   * Tuplet brackets within this bar, in source order. Renderer draws a
+   * numbered bracket over each so triplets / non-straight subdivisions
+   * are visually obvious.
+   */
+  tupletSpans: TupletSpan[];
   /** Bar number within the voice (1-based; anacrusis is bar 0). */
   index: number;
 };
@@ -131,6 +167,31 @@ export type ResolvedVoice = {
    */
   pitches: string[];
   width: Pixels;
+  /**
+   * Empty pixel space reserved before the first bar, representing the
+   * recording's lead-in (`globalMetadata.startOffset` seconds of
+   * silence / non-drum intro before jot-time 0). Scaled at the same
+   * pixels-per-second as the bars so the drum notation lines up with a
+   * loaded audio-track waveform: audio second `startOffset` (where the
+   * drums actually enter) sits exactly at bar 1's left edge. `0` when
+   * there is no offset.
+   */
+  leadInPx: Pixels;
+  /** Lead-in duration in seconds (mirrors `globalMetadata.startOffset`). */
+  leadInSec: number;
+  /**
+   * Constant horizontal offset (px) the note grid is shifted right of
+   * each bar's left edge — `viewConfig.barNotePaddingLeft`, the
+   * engraving inset applied to every note/pattern/tuplet position (see
+   * {@link ViewConfig.barNotePaddingLeft}). Barlines are time-anchored
+   * but notes are drawn `notePadPx` inside them, so the playback
+   * playhead, the audio-track waveform and click-to-seek must apply the
+   * SAME offset or the score reads a constant `notePadPx` px ahead of
+   * where its onsets actually sound. Surfaced here so the playback
+   * layer (which only sees the `RenderedJot`, not the `ViewConfig`) can
+   * stay in the note grid's coordinate frame.
+   */
+  notePadPx: Pixels;
 };
 
 export type ResolvedJot = {
@@ -149,6 +210,82 @@ export function barBeats(time: TimeSignature): number {
 }
 
 const DEFAULT_TIME: TimeSignature = { count: 4, unit: 4 };
+
+/**
+ * Onset density (note onsets per quarter-note beat) that the static
+ * `ViewConfig.barWidth` was tuned for — a 4/4 bar of straight eighths
+ * (8 onsets / 4 beats). A song at this density gets `densityFactor = 1`
+ * and renders exactly as before; sparser songs are compressed and
+ * busier ones expanded so on-screen note spacing stays roughly
+ * constant regardless of time signature or how many notes a bar holds.
+ */
+const REFERENCE_ONSETS_PER_BEAT = 2;
+/**
+ * Clamp on the density factor so a near-empty score isn't a sliver and
+ * a blast-beat isn't kilometres wide. The asymmetric upper bound keeps
+ * dense bars readable without runaway width.
+ */
+const MIN_DENSITY_FACTOR = 0.4;
+const MAX_DENSITY_FACTOR = 1.6;
+
+/**
+ * Count note onsets (horizontal columns) in an already-expanded element
+ * list. Rests contribute nothing; a simultaneity is one column; groups
+ * recurse. Used only as a density heuristic, so weights/timing are
+ * irrelevant — just how many things you'd see across the bar.
+ */
+function countOnsets(els: Element[]): number {
+  let n = 0;
+  for (const el of els) {
+    switch (el.kind) {
+      case 'note':
+        n += 1;
+        break;
+      case 'rest':
+      case 'patternRef': // already expanded away upstream
+        break;
+      case 'simul':
+        if (el.elements.some((c) => c.kind !== 'rest')) n += 1;
+        break;
+      case 'group':
+        n += countOnsets(el.elements);
+        break;
+    }
+  }
+  return n;
+}
+
+/**
+ * Whole-jot onset density: the maximum, across voices, of
+ * onsets-per-beat. We take the max (not the mean) because the bars are
+ * a shared horizontal grid — the busiest voice is the one that needs
+ * the room; sparser voices just carry more whitespace, which is fine.
+ * Mirrors `layoutVoice`'s running time-signature logic so the beat
+ * totals line up with what actually gets laid out.
+ */
+function measureOnsetDensity(jot: Jot): number {
+  const patterns = jot.patterns ?? {};
+  const globalTime = jot.globalMetadata.time ?? DEFAULT_TIME;
+  let maxRatio = 0;
+  for (const voice of jot.voices) {
+    let onsets = 0;
+    let beats = 0;
+    let activeTime = globalTime;
+    if (voice.anacrusis && voice.anacrusis.length > 0) {
+      const els = expandElements(voice.anacrusis, patterns);
+      beats += sumWeights(els);
+      onsets += countOnsets(els);
+    }
+    for (const b of voice.bars) {
+      const barTime = b.metadata?.time ?? activeTime;
+      activeTime = barTime;
+      beats += barBeats(barTime);
+      onsets += countOnsets(expandElements(b.elements, patterns));
+    }
+    if (beats > 0) maxRatio = Math.max(maxRatio, onsets / beats);
+  }
+  return maxRatio;
+}
 
 // ---------- RenderedJot: MobX-observable layout container ----------
 
@@ -179,7 +316,19 @@ export class RenderedJot {
   // ----- Layout pipeline -----
 
   private layoutJot = computedFn((jot: Jot): ResolvedJot => {
-    const voices = jot.voices.map((v) => this.layoutVoice(v, jot));
+    // Derive a per-song horizontal scale from note density so a sparse
+    // score (e.g. a quarter-note 2/4 tune) doesn't render as wide as a
+    // 16th-note blast beat. Threaded through layout rather than stored
+    // as observable state so this stays a pure function of `jot`.
+    const density = measureOnsetDensity(jot);
+    const densityFactor =
+      density > 0
+        ? Math.max(
+            MIN_DENSITY_FACTOR,
+            Math.min(MAX_DENSITY_FACTOR, density / REFERENCE_ONSETS_PER_BEAT)
+          )
+        : 1;
+    const voices = jot.voices.map((v) => this.layoutVoice(v, jot, densityFactor));
     const width = px(Math.max(0, ...voices.map((v) => v.width)));
     return {
       title: jot.title,
@@ -189,14 +338,34 @@ export class RenderedJot {
     };
   });
 
-  private layoutVoice = (voice: Voice, jot: Jot): ResolvedVoice => {
+  private layoutVoice = (
+    voice: Voice,
+    jot: Jot,
+    densityFactor: number
+  ): ResolvedVoice => {
     const patterns = jot.patterns ?? {};
     const globalTime = jot.globalMetadata.time ?? DEFAULT_TIME;
     const instrumentMap = jot.globalMetadata.instrumentMapping ?? {};
 
+    // Lead-in: reserve empty space before bar 1 for the recording's
+    // pre-roll (startOffset seconds before the first beat). Scaled at
+    // the SAME pixels-per-second the bars use — one beat is
+    // `barWidth*densityFactor/4` px wide and lasts `60/bpm` s, so
+    // px/s = (barWidth*df/4)*(bpm/60) — which is exactly what
+    // `buildTimeline` + the waveform mapping assume. That equivalence
+    // is what makes the drum notes line up with the audio-track waveform.
+    const rawOffset = jot.globalMetadata.startOffset;
+    const leadInSec =
+      typeof rawOffset === 'number' && rawOffset > 0 ? rawOffset : 0;
+    const bpmField = jot.globalMetadata.bpm;
+    const bpm = typeof bpmField === 'number' && bpmField > 0 ? bpmField : 120;
+    const pxPerSecond =
+      ((this.viewConfig.barWidth * densityFactor) / 4) * (bpm / 60);
+    const leadInPx = px(leadInSec * pxPerSecond);
+
     const bars: ResolvedBar[] = [];
     const pitchOrder: string[] = [];
-    let cursor = 0 as Pixels;
+    let cursor = leadInPx;
     let activeTime = globalTime;
 
     const noteSeenForPitch = (p: string) => {
@@ -207,8 +376,8 @@ export class RenderedJot {
     if (voice.anacrusis && voice.anacrusis.length > 0) {
       const elements = expandElements(voice.anacrusis, patterns);
       const beats = sumWeights(elements); // anacrusis is unconstrained
-      const widthPx = px(this.beatsToPx(beats, activeTime));
-      const { tracks, patternSpans } = this.layoutBarContents(
+      const widthPx = px(this.beatsToPx(beats, densityFactor));
+      const { tracks, patternSpans, tupletSpans } = this.layoutBarContents(
         elements,
         beats,
         widthPx,
@@ -224,6 +393,7 @@ export class RenderedJot {
         beats,
         tracks,
         patternSpans,
+        tupletSpans,
         index: 0,
       });
       cursor = px(cursor + widthPx);
@@ -235,9 +405,9 @@ export class RenderedJot {
       const barTime = b.metadata?.time ?? activeTime;
       activeTime = barTime;
       const beats = barBeats(barTime);
-      const widthPx = px(this.beatsToPx(beats, barTime));
+      const widthPx = px(this.beatsToPx(beats, densityFactor));
       const elements = expandElements(b.elements, patterns);
-      const { tracks, patternSpans } = this.layoutBarContents(
+      const { tracks, patternSpans, tupletSpans } = this.layoutBarContents(
         elements,
         beats,
         widthPx,
@@ -253,6 +423,7 @@ export class RenderedJot {
         beats,
         tracks,
         patternSpans,
+        tupletSpans,
         index: barIndex++,
       });
       cursor = px(cursor + widthPx);
@@ -285,6 +456,9 @@ export class RenderedJot {
       bars,
       pitches: orderedPitches,
       width: cursor,
+      leadInPx,
+      leadInSec,
+      notePadPx: this.viewConfig.barNotePaddingLeft,
     };
   };
 
@@ -323,9 +497,14 @@ export class RenderedJot {
     barWidthPx: Pixels,
     instrumentMap: Record<string, Instrument>,
     _time: TimeSignature
-  ): { tracks: Record<string, ResolvedTrack>; patternSpans: PatternSpan[] } {
+  ): {
+    tracks: Record<string, ResolvedTrack>;
+    patternSpans: PatternSpan[];
+    tupletSpans: TupletSpan[];
+  } {
     const flatNotes: Array<{ note: Note; beat: number; duration: number }> = [];
     const patternSpans: PatternSpan[] = [];
+    const tupletSpans: TupletSpan[] = [];
 
     // Walk the element tree and place every note onto the timeline in beats.
     const visit = (els: Element[], startBeat: number, totalBeats: number) => {
@@ -364,6 +543,42 @@ export class RenderedJot {
               x: px(0),
               width: px(0),
             });
+          } else if (el.elements.length > 1 && span > 0) {
+            // Tuplet detection. Subdividing this group's span among its
+            // children produces interior boundaries at cumulative
+            // weight fractions. If any of those fractions is not a
+            // dyadic rational (k / 2^m) the group isn't a straight
+            // binary subdivision — it's a triplet, quintuplet, swing
+            // group, etc. The test is on the local *fraction*, not the
+            // absolute beat, so a straight pair nested inside a triplet
+            // doesn't itself get bracketed (the triplet's own bracket
+            // covers it).
+            const ws = el.elements.map(elementWeight);
+            const tw = ws.reduce((a, b) => a + b, 0) || 1;
+            let acc = 0;
+            let nonStraight = false;
+            for (let i = 0; i < ws.length - 1; i++) {
+              acc += ws[i];
+              if (!isDyadic(acc / tw)) {
+                nonStraight = true;
+                break;
+              }
+            }
+            if (nonStraight) {
+              // The bracket should run from the first slot's onset to
+              // the *last* slot's onset (where the note dots are
+              // centred), not to the end of the group's rhythmic
+              // duration — otherwise the right leg lands a full slot
+              // past the final note.
+              const lastOnsetFrac = (tw - ws[ws.length - 1]) / tw;
+              tupletSpans.push({
+                count: el.elements.length,
+                startBeat: atBeat,
+                endBeat: atBeat + lastOnsetFrac * span,
+                x: px(0),
+                width: px(0),
+              });
+            }
           }
           visit(el.elements, atBeat, span);
           return;
@@ -375,15 +590,23 @@ export class RenderedJot {
 
     visit(elements, 0, beats);
 
-    // Map beats -> pixel x using the padded inner note area so the first
-    // note sits inside the bar line instead of being centered on it.
+    // Map beats -> pixel x on a continuous grid: one beat is always
+    // `barWidthPx / beats`, so two onsets `Δbeats` apart are the same
+    // pixel distance apart everywhere — including across a bar boundary,
+    // where the previous bar's trailing space plus the next bar's
+    // `padLeft` offset sum to exactly one note step. `padLeft` is a pure
+    // constant offset (first note inside the bar line), NOT subtracted
+    // from the area, which is what previously inflated boundary gaps.
     const padLeft = this.viewConfig.barNotePaddingLeft;
-    const padRight = this.viewConfig.barNotePaddingRight;
-    const noteArea = Math.max(1, barWidthPx - padLeft - padRight);
-    const pxPerBeat = noteArea / (beats || 1);
+    const pxPerBeat = barWidthPx / (beats || 1);
 
-    // Fill in the pixel positions on pattern spans now that we know pxPerBeat.
+    // Fill in the pixel positions on pattern + tuplet spans now that we
+    // know pxPerBeat.
     for (const span of patternSpans) {
+      span.x = px(padLeft + span.startBeat * pxPerBeat);
+      span.width = px((span.endBeat - span.startBeat) * pxPerBeat);
+    }
+    for (const span of tupletSpans) {
       span.x = px(padLeft + span.startBeat * pxPerBeat);
       span.width = px((span.endBeat - span.startBeat) * pxPerBeat);
     }
@@ -413,21 +636,53 @@ export class RenderedJot {
         sticking: note.sticking,
         roll: !!note.roll,
         beat,
+        straight: isDyadic(beat),
         duration,
         x: px(padLeft + beat * pxPerBeat),
         width: px(duration * pxPerBeat),
       });
     }
 
-    return { tracks, patternSpans };
+    return { tracks, patternSpans, tupletSpans };
   }
 
-  private beatsToPx(beats: number, _time: TimeSignature): number {
-    // Default scale: one 4/4 bar == viewConfig.barWidth. Other bar lengths
-    // scale proportionally so an 8th-note keeps the same pixel width across
-    // time signatures.
-    return (beats / 4) * this.viewConfig.barWidth;
+  private beatsToPx(beats: number, densityFactor: number): number {
+    // Base scale: one 4/4 bar == viewConfig.barWidth. Other bar lengths
+    // scale proportionally so an 8th-note keeps the same pixel width
+    // across time signatures. `densityFactor` (a whole-song constant
+    // derived from onset density) then compresses sparse scores and
+    // expands busy ones so on-screen note spacing stays roughly
+    // constant; the zoom slider still multiplies on top via
+    // viewConfig.barWidth.
+    return (beats / 4) * this.viewConfig.barWidth * densityFactor;
   }
+}
+
+// ---------- Straightness ----------
+
+/**
+ * True when `x` is a dyadic rational — an integer multiple of 1/2^m for
+ * some small m. Used two ways:
+ *
+ *  - on a note's beat position within the bar: a "standard straight
+ *    note" sits on the binary grid (whole/half/quarter/eighth/16th/...);
+ *  - on a group's cumulative weight fractions: a straight subdivision
+ *    splits at dyadic fractions, a tuplet (triplet/quintuplet/swing)
+ *    does not.
+ *
+ * m runs up to 6 (down to 1/64-of-a-quarter), which comfortably covers
+ * everything the renderer needs while still rejecting thirds, fifths,
+ * sevenths, etc. The tolerance is on the scaled value so float drift
+ * from weight division (e.g. 1/3 = 0.3333…) doesn't read as straight.
+ */
+function isDyadic(x: number): boolean {
+  if (!Number.isFinite(x)) return false;
+  const a = Math.abs(x);
+  for (let m = 0; m <= 6; m++) {
+    const scaled = a * (1 << m);
+    if (Math.abs(scaled - Math.round(scaled)) < 1e-4) return true;
+  }
+  return false;
 }
 
 // ---------- Element weights ----------

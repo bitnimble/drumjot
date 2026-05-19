@@ -19,16 +19,27 @@ one-third of the way into beat 2, i.e. an 1/8 triplet position).
    - Pick neutral, generic identifiers for pattern names: `[Groove]`,
      `[Verse]`, `[Chorus]`, `[FillA]`, `[Intro]`, `[Outro]`. Never
      invent narrative / lyrical / proper-noun names.
-2. **Drop only onsets that look like detection errors** — typically
-   bleed-through from another instrument (very low strength relative
-   to that instrument's median), a doubled detection of one hit
-   (two onsets within ~10 ms of each other), or analysis artifacts
-   (isolated low-strength flickers between obvious downbeat groups).
-   Do **not** drop an onset just because it doesn't fit a grid. Every
-   surviving onset must map to exactly one note in your output —
-   write it at the closest beat fraction the bar's subdivision can
-   represent, and choose the subdivision (see below) to fit the
-   onsets, never the other way around.
+2. **Transcribe the rhythm that was played, not every onset.** The
+   onset list is noisy: per-instrument stems still carry bleed from
+   other drums, cymbal and hi-hat decay can re-trigger the detector,
+   and weak flickers appear between the real strikes. Recover the
+   intended part, which is almost always simpler and more regular
+   than the raw onset count. You are **not** required to emit a note
+   for every onset.
+   - Judge each onset against that instrument's median strength for
+     the bar. An onset well below the median (roughly < 40 %) sitting
+     *between* an otherwise clear, consistent pattern of stronger
+     hits is almost always an artifact — **drop it**.
+   - Drop doubled detections (two onsets for one strike, ~10 ms apart).
+   - For a repetitive instrument — hi-hat above all — if the strong,
+     evenly-spaced onsets form a clear 1/8 or 1/4 pulse, write that
+     pulse. Do **not** fill in 1/16 hi-hats just because weaker
+     onsets were detected between the pulses.
+   - Keep weak onsets only when they are *regular* and clearly an
+     intended ghost pattern (e.g. snare ghost notes); tag those `:g`.
+   - Don't force the onsets you keep onto a grid: choose each bar's
+     subdivision (see below) to fit those hits, never snap the hits
+     to a subdivision you picked first.
 3. Each bar in your output must correspond to a bar in the input list,
    in order. Do **not** add or remove bars.
 4. Match each bar's content to the time signature and feel given in
@@ -53,7 +64,7 @@ one-third of the way into beat 2, i.e. an 1/8 triplet position).
 ### Tempo and time-signature changes
 
 When the input reports `tempo_changes: yes`, watch for bars whose
-`tempo_bpm` differs from the previous bar by more than 2 BPM. Emit
+`tempo_bpm` differs from the previous bar by more than 4 BPM. Emit
 an **inline** `{{ bpm: N }}` block **between** those two bars in your
 output, just before the new bar's `|`. The new tempo stays in effect
 for all subsequent bars until you emit another `{{ bpm: ... }}`.
@@ -77,9 +88,17 @@ write that bar:
   per 4/4 bar). LCM of 4 and 3 = 12, so every common rhythm lands
   exactly on a grid slot without snapping.
 
-The grid is **chosen to fit the onsets, not the other way around**.
-If a bar's onsets all sit at clean 1/16 positions, write 16 elements.
-If even one onset is a triplet, expand to 12-per-beat for that bar.
+The feel sets the **finest** subdivision a bar might need so positions
+can be written exactly — it is a resolution ceiling, **not** a quota.
+Empty positions are rests (`.`). A bar whose real hits are
+quarter-note hi-hats is four elements, not sixteen, even if its feel
+is `straight16`. Pick the *coarsest* subdivision that still places
+every kept hit exactly.
+
+The grid is **chosen to fit the onsets you keep, not the other way
+around**. After culling weak/artifact onsets per rule 2, if the
+remaining onsets all sit at clean 1/16 positions, write 16 elements.
+If even one kept onset is a triplet, expand to 12-per-beat for that bar.
 If a bar contains nested subdivisions inside a single beat (e.g.
 a quintuplet fill), use a sub-bar group like `(k k k k k)` to host
 the local subdivision.

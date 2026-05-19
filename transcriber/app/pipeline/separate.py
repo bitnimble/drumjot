@@ -43,10 +43,11 @@ log = logging.getLogger(__name__)
 class StemsAllResult:
     """Outputs of the `stems_all` separation stage.
 
-    `drum_stem` feeds the downstream `stems_per` stage. `no_drums` is the
-    bass+other+vocals sum, used purely as a deliverable (FLAC-encoded
-    into the request's outputs folder + copied to debug) — no later
-    stage consumes it. `None` when the sum couldn't be built (e.g.
+    `drum_stem` feeds the downstream `stems_per` stage (and is also
+    FLAC-encoded into the request's outputs folder the instant this stage
+    finishes). `no_drums` is the bass+other+vocals sum, used purely as a
+    deliverable (FLAC-encoded into the outputs folder + copied to debug) —
+    no later stage consumes it. `None` when the sum couldn't be built (e.g.
     Demucs returned only the drum stem on a single-stem variant).
     """
 
@@ -151,7 +152,9 @@ class Separator:
         self._stems_all.output_dir = str(out_dir)
 
         log.info("stems_all: extracting drum stem from %s", audio_path.name)
-        stems_paths = [Path(p) for p in self._stems_all.separate(str(audio_path))]
+        stems_paths = _resolve_outputs(
+            self._stems_all.separate(str(audio_path)), out_dir
+        )
         drum_candidates = [p for p in stems_paths if "drum" in p.stem.lower()]
         if not drum_candidates:
             raise RuntimeError(
@@ -196,7 +199,9 @@ class Separator:
         self._stems_per.output_dir = str(out_dir)
 
         log.info("stems_per: splitting drum stem into pieces")
-        piece_paths = [Path(p) for p in self._stems_per.separate(str(drum_stem))]
+        piece_paths = _resolve_outputs(
+            self._stems_per.separate(str(drum_stem)), out_dir
+        )
 
         per_instrument: dict[str, Path] = {}
         for path in piece_paths:
@@ -215,6 +220,24 @@ class Separator:
             for pitch, path in per_instrument.items():
                 sink.copy_audio(f"stems_per/{pitch}", path)
         return per_instrument
+
+
+def _resolve_outputs(raw_paths: list[str], out_dir: Path) -> list[Path]:
+    """Normalise `audio-separator`'s `separate()` return value to absolute paths.
+
+    The library has changed this contract across releases — some versions
+    return absolute paths, others return bare basenames relative to the
+    configured `output_dir`. We pin `>=0.44`, but rather than couple to one
+    version's behaviour we anchor any non-absolute result to `out_dir`. A
+    silently-relative path here would otherwise read as "file does not
+    exist" everywhere downstream: the FLAC deliverable would be skipped
+    (empty `outputs/<name>/`) and `stems_per` would abort.
+    """
+    resolved: list[Path] = []
+    for raw in raw_paths:
+        p = Path(raw)
+        resolved.append(p if p.is_absolute() else out_dir / p.name)
+    return resolved
 
 
 def _pitch_for_stem_name(stem_name: str) -> str | None:

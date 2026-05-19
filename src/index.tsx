@@ -5,6 +5,7 @@ import { EXAMPLE_JOTS, ExampleJot, rockJot, tripletJot } from 'src/fakes';
 import { RenderedJot } from 'src/jot';
 import { JotViewStore, createJotView } from 'src/jot_view';
 import { parse } from 'src/parser';
+import { jotPlayer } from 'src/playback';
 
 class Drumjot {
   readonly store: JotViewStore;
@@ -38,7 +39,19 @@ class Drumjot {
   }
 }
 
-(window as unknown as { Drumjot: typeof Drumjot }).Drumjot = Drumjot;
+// Exposed for the browser console and e2e probing. `Drumjot` is the
+// class; `drumjot` is the live instance (set on bootstrap below);
+// `jotPlayer` is the playback singleton — the canonical surface for
+// asserting playback / audio-track state from tests rather than scraping the
+// DOM for things that only exist in JS (decoded AudioBuffers, etc.).
+type DrumjotGlobals = {
+  Drumjot: typeof Drumjot;
+  drumjot?: Drumjot;
+  jotPlayer: typeof jotPlayer;
+};
+const globals = window as unknown as DrumjotGlobals;
+globals.Drumjot = Drumjot;
+globals.jotPlayer = jotPlayer;
 export default Drumjot;
 
 // Auto-bootstrap when loaded as the Vite entry. Load the first registered
@@ -46,6 +59,7 @@ export default Drumjot;
 const mount = document.getElementById('app');
 if (mount) {
   const app = new Drumjot(mount);
+  globals.drumjot = app;
   if (EXAMPLE_JOTS.length > 0) {
     app.loadExample(EXAMPLE_JOTS[0].id);
   }

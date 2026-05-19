@@ -1,6 +1,16 @@
 export { JotPlayer, jotPlayer, PASSTHROUGH_FILTER, isAudibleUnder } from './player';
 export type { PlayerState, PlayerFilter } from './player';
+export type { SampleLoadProgress } from './sample_storage';
+export type { KitInfo } from './gm_kit';
 export { jotToEvents } from './events';
 export type { PlaybackEvent } from './events';
-export { buildTimeline, timeToX, EMPTY_TIMELINE } from './timeline';
+export { buildTimeline, timeToX, xToTime, EMPTY_TIMELINE } from './timeline';
 export type { BarTiming, JotTimeline } from './timeline';
+export {
+  computeWaveformPeaks,
+  computeWaveformPeaksForJot,
+  isAudioTrackAudibleUnder,
+  audioTrackGainUnder,
+  PASSTHROUGH_AUDIO_TRACK_FILTER,
+} from './audio_tracks';
+export type { AudioTrackFilter, AudioTrackId, AudioTrack } from './audio_tracks';

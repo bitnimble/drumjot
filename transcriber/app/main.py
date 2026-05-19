@@ -38,7 +38,7 @@ from app.models import (
     TranscribeMetadata,
     TranscribeResponse,
 )
-from app.outputs import OutputSink, make_output_sink
+from app.outputs import OutputSink, make_output_sink, materialize_pending
 from app.pipeline.beats import summarize_bar_for_prompt
 from app.pipeline.resume import (
     find_input_audio,
@@ -225,6 +225,19 @@ async def transcribe(
                 detail=str(exc),
             ) from exc
 
+        # Backfill any deliverable the stage bodies didn't write (e.g.
+        # final.jot, which no stage emits) before the temp work_dir is
+        # torn down. Fresh full runs already wrote the stems in-stage;
+        # this is mostly a no-op here but keeps the two endpoints
+        # symmetric.
+        materialize_pending(
+            output_sink,
+            drum_stem=ctx.drum_stem,
+            per_instrument_stems=ctx.per_instrument_stems,
+            final_jot=ctx.final_jot,
+            scavenge_dir=sink.dir if sink is not None else None,
+        )
+
         if sink is not None:
             sink.finalize({
                 "filename": file.filename,
@@ -375,6 +388,20 @@ async def transcribe_resume(
                 status_code=_STAGE_HTTP_STATUS[exc.stage],
                 detail=str(exc),
             ) from exc
+
+        # The whole point of this path: a resume that starts at `beats`
+        # or later skips stems_all/stems_per, so the in-stage FLAC writes
+        # never fire. The stems are hydrated into `ctx` from the resume
+        # folder, and `no_drums` still sits under `<resume_dir>/stems_all/`
+        # — backfill every missing deliverable (plus final.jot) from
+        # there, with no recomputation.
+        materialize_pending(
+            output_sink,
+            drum_stem=ctx.drum_stem,
+            per_instrument_stems=ctx.per_instrument_stems,
+            final_jot=ctx.final_jot,
+            scavenge_dir=resume_dir,
+        )
 
         sink.finalize({
             "filename": load_original_filename(resume_dir),

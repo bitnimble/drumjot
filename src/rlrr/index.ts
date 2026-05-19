@@ -16,6 +16,8 @@
  */
 export { rlrrToJot } from './rlrr_to_jot';
 export type { RlrrToJotOptions } from './rlrr_to_jot';
+export { loadParadbZip } from './paradb';
+export type { ParadbMap, ParadbTrack, LoadParadbOptions } from './paradb';
 export { jotToRlrr } from './jot_to_rlrr';
 export type { JotToRlrrOptions } from './jot_to_rlrr';
 export { midiToRlrr } from './midi_to_rlrr';

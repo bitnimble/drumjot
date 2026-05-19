@@ -127,6 +127,10 @@ RUN bun --bun run --silent /app/tools/jot_to_onsets.ts < /dev/null \
     || echo "jot_to_onsets bridge smoke test exited non-zero (expected if no DSL on stdin)"
 RUN bun --bun run --silent /app/tools/lint_jot.ts < /dev/null \
     || echo "lint_jot bridge smoke test exited non-zero (expected if no DSL on stdin)"
+RUN bun --bun run --silent /app/tools/recompose_jot.ts < /dev/null \
+    || echo "recompose_jot bridge smoke test exited non-zero (expected if no JSON on stdin)"
+RUN bun --bun run --silent /app/tools/format_jot.ts < /dev/null \
+    || echo "format_jot bridge smoke test exited non-zero (expected if no DSL on stdin)"
 
 # Models cache lives on a Docker volume so weights persist across rebuilds.
 # Pre-create the runtime-writable paths and chown them to the `app` user.
@@ -140,7 +144,9 @@ ENV AUDIO_SEPARATOR_MODEL_FILE_DIR=/models \
     HF_HOME=/models/huggingface \
     TRANSFORMERS_CACHE=/models/huggingface \
     TORCH_HOME=/models/torch \
-    JOT_TO_ONSETS_TOOL=/app/tools/jot_to_onsets.ts
+    JOT_TO_ONSETS_TOOL=/app/tools/jot_to_onsets.ts \
+    RECOMPOSE_JOT_TOOL=/app/tools/recompose_jot.ts \
+    FORMAT_JOT_TOOL=/app/tools/format_jot.ts
 
 USER app:app
 

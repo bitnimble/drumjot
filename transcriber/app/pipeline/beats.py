@@ -386,58 +386,128 @@ def _summarize(beats: list[BeatTick], bars: list[BarInfo]) -> BeatStructure:
     )
 
 
-# Width (in bars) of the median filter applied to per-bar tempos. Each
-# bar's raw `60 / mean(gaps)` estimate uses only 3-4 beat gaps, so 10-20
-# ms of beat-time variance (normal even after onset alignment) translates
-# into 5-10 BPM swings. A 5-bar median smooths that out without flattening
-# multi-bar tempo motion that's actually present in the audio.
+# Width (in bars) of the median filter used to test for *sustained*
+# tempo motion. Each bar's raw `60 / mean(gaps)` estimate uses only 3-4
+# beat gaps, so 10-20 ms of beat-time variance (normal even after onset
+# alignment) translates into 5-10 BPM swings. The median over 5 bars
+# strips that high-frequency wobble so what's left is real drift.
 TEMPO_SMOOTHING_WINDOW = 5
 
-# Treat a song as having real tempo changes only if the smoothed bar
-# tempos span more than this much. Below this is residual wobble and the
-# prompt should not emit per-bar `{{ bpm: ... }}` blocks.
-SUSTAINED_TEMPO_CHANGE_BPM = 5.0
+# A song is treated as having real tempo changes only if its *smoothed*
+# bar tempos span more than this much. A 5-bar median of constant-tempo
+# audio still wobbles ~3-6 BPM (the variance doesn't fully cancel), so
+# the threshold sits above that band; genuine sectional accelerandos
+# (band pushing into a chorus, etc.) comfortably exceed it. When the
+# song is judged constant, every bar is pinned to one global tempo so
+# beats.json and the prompt show a flat line instead of residual jitter.
+SUSTAINED_TEMPO_CHANGE_BPM = 8.0
+
+
+def _global_tempo_from_beats(
+    structure: BeatStructure, ref_start: int
+) -> float | None:
+    """Constant tempo from the *full* detected-beat baseline.
+
+    `_finalize_bar_tempos` otherwise pins a constant song to
+    `median(per-bar 60/mean(gaps))` — a median of short, 3-4-gap window
+    estimates. Those windows throw away almost all the available
+    baseline, and `median(60/mean(x))` is a biased estimator of the true
+    rate, so the pinned tempo lands a few tenths of a BPM off. The
+    frontend plays that single value at a constant rate, so the error
+    becomes a fixed fractional offset and the drum grid drifts linearly
+    away from the recording over the track.
+
+    For a genuinely constant tempo the maximum-precision estimate is the
+    slope of beat time vs beat ordinal across every detected beat: the
+    long baseline shrinks the residual error to ~1/N of a per-bar
+    estimate, collapsing the cumulative drift. Bar 0 (often a short
+    anacrusis whose beats are unreliable) is excluded for the same
+    reason it's excluded from `ref_start`.
+
+    Returns None when there aren't enough clean beats to fit, so the
+    caller falls back to the per-bar median (never a regression).
+    """
+    times = np.asarray(
+        [b.time for b in structure.beats if b.bar_index >= ref_start],
+        dtype=np.float64,
+    )
+    if times.size < 2:
+        times = np.asarray(
+            [b.time for b in structure.beats], dtype=np.float64
+        )
+    if times.size < 2:
+        return None
+    # Least-squares slope (seconds per beat) over contiguous beat
+    # ordinals. The pipeline already builds bars from a contiguous,
+    # regular beat sequence, so ordinal == beat number here.
+    idx = np.arange(times.size, dtype=np.float64)
+    slope = float(np.polyfit(idx, times, 1)[0])
+    if not np.isfinite(slope) or slope <= 0.0:
+        return None
+    return 60.0 / slope
 
 
 def _finalize_bar_tempos(structure: BeatStructure) -> None:
-    """Smooth per-bar tempos in place and rederive the global change flag.
+    """Pin or smooth per-bar tempos in place and rederive the change flag.
 
     `_finalize_bar` / `_rebuild_bar_fields` set each `bar.tempo_bpm` to
     `60 / mean(gaps)` over the bar's own 3-4 beat gaps; that estimate
     wobbles 5-10 BPM at typical tempos even on a constant-tempo song.
     The transcribe prompt asks the LLM to emit `{{ bpm: N }}` whenever
-    consecutive bars differ by >2 BPM, which the raw wobble triggers
-    between essentially every bar. Replacing each tempo with a local
-    median collapses the wobble so the LLM only sees real motion.
+    consecutive bars differ by >2 BPM, so the raw wobble produces a
+    bpm change between essentially every bar.
 
-    Also recomputes `initial_tempo` and `has_tempo_changes` from the
-    smoothed series — the old `len({round(bpm,1) for ...}) > 1` test
-    was flipping `has_tempo_changes` to True on any 0.1 BPM jitter.
+    A median filter alone only *reduces* the wobble (a 5-bar median of
+    constant-tempo audio still swings ~5 BPM). So instead we use the
+    smoothed series only to *decide* whether the song is constant: if
+    its span is under `SUSTAINED_TEMPO_CHANGE_BPM`, every bar is pinned
+    to a single global tempo (flat beats.json, no spurious `{{ bpm }}`);
+    otherwise the smoothed contour is kept so genuine motion survives.
+
+    Replaces the old `len({round(bpm,1) for ...}) > 1` test, which
+    flipped `has_tempo_changes` to True on any 0.1 BPM jitter.
     """
     bars = structure.bars
     if not bars:
         return
+
+    # Bar 0 frequently has fewer beats (anacrusis / pickup), so its
+    # tempo estimate is unreliable — exclude it from the reference set
+    # used for the global tempo + change decision when possible.
+    ref_start = 1 if len(bars) >= 2 else 0
     raw = np.asarray([b.tempo_bpm for b in bars], dtype=np.float64)
+    global_tempo = float(np.median(raw[ref_start:]))
+
     half = TEMPO_SMOOTHING_WINDOW // 2
     smoothed = np.empty_like(raw)
     for i in range(len(bars)):
         lo = max(0, i - half)
         hi = min(len(bars), i + half + 1)
         smoothed[i] = float(np.median(raw[lo:hi]))
-    for bar, s in zip(bars, smoothed, strict=True):
-        bar.tempo_bpm = float(s)
 
-    # Bar 0 frequently has fewer beats (anacrusis / pickup), so its
-    # tempo estimate is unreliable — exclude it from the reference set
-    # when there's enough material to do so.
-    reference = bars[1:] if len(bars) >= 2 else bars
-    if not reference:
-        return
-    ref_tempos = [b.tempo_bpm for b in reference]
-    structure.initial_tempo = float(ref_tempos[0])
-    structure.has_tempo_changes = (
-        max(ref_tempos) - min(ref_tempos) >= SUSTAINED_TEMPO_CHANGE_BPM
+    ref_smoothed = smoothed[ref_start:]
+    span = (
+        float(ref_smoothed.max() - ref_smoothed.min())
+        if ref_smoothed.size
+        else 0.0
     )
+
+    if span < SUSTAINED_TEMPO_CHANGE_BPM:
+        # Constant song: prefer the long-baseline fit over the per-bar
+        # median so the single emitted bpm matches the recording's true
+        # rate and the drum grid doesn't drift against it. Fall back to
+        # the median only if there aren't enough beats to fit.
+        fitted = _global_tempo_from_beats(structure, ref_start)
+        constant_tempo = global_tempo if fitted is None else fitted
+        for bar in bars:
+            bar.tempo_bpm = constant_tempo
+        structure.initial_tempo = constant_tempo
+        structure.has_tempo_changes = False
+    else:
+        for bar, s in zip(bars, smoothed, strict=True):
+            bar.tempo_bpm = float(s)
+        structure.initial_tempo = float(smoothed[ref_start])
+        structure.has_tempo_changes = True
 
 
 def _pad_trailing_bars(structure: BeatStructure, duration_seconds: float) -> None:
@@ -504,24 +574,46 @@ def _pad_trailing_bars(structure: BeatStructure, duration_seconds: float) -> Non
         next_index += 1
 
 
+# Minimum fraction of beats that must have a strong drum onset within
+# the alignment window before we trust the median offset enough to
+# shift the whole grid. Drum stems normally hit this easily (most beats
+# coincide with a kick/snare/hat); sparse or heavily-syncopated material
+# that falls below it keeps the raw tracker grid rather than risk a
+# bogus global shift.
+MIN_ALIGN_COVERAGE = 0.30
+
+
 def align_beats_to_onsets(
     structure: BeatStructure,
     onsets: list[tuple[float, float]],
     max_distance: float = 0.05,
 ) -> None:
-    """Snap each beat in `structure` to the strongest nearby drum onset.
+    """Shift the whole beat grid by the tracker's *systematic* lag.
 
-    For each beat, scans onsets in `[beat.time - max_distance,
-    beat.time + max_distance]` and snaps the beat to the strongest one in
-    that window. Strongest-not-closest because a quiet ghost hi-hat hit
-    sitting closer to the activation peak shouldn't outrank a stronger
-    kick/snare transient slightly further out — the strong transient is
-    the strike that defines the beat. Beats with no onset in their
-    window are left alone.
+    Neural beat trackers (Beat Transformer especially) report each beat
+    ~30-50 ms after the transient, because the activation peak lags the
+    strike. We still want to correct that.
 
-    After snapping, per-bar `start_time`, `end_time`, `tempo_bpm` and
-    the global `initial_tempo` / `has_tempo_changes` are recomputed from
-    the new beat times.
+    The previous implementation snapped **each beat independently** to
+    the strongest drum onset within ±`max_distance`. That removed the
+    lag but also absorbed the drummer's natural micro-timing into the
+    grid: every beat's gap to its neighbours changed, so the per-bar
+    tempo (`60 / mean(gap)` over a bar's 3-4 gaps) wobbled 5-10 BPM
+    even on a dead-steady song — the LLM then emitted a `{{ bpm }}`
+    change between nearly every bar.
+
+    Instead, estimate ONE offset — the median over all beats of
+    `(nearest strong onset − beat time)` — and shift every beat by it.
+    The grid stays exactly as metrically regular as the DBN produced
+    it (per-bar tempo is therefore stable), while the systematic lag is
+    still removed. A uniform shift leaves inter-beat gaps unchanged, so
+    a genuine accelerando the DBN tracked is preserved untouched.
+
+    The offset is only applied when enough beats actually had a nearby
+    onset (`MIN_ALIGN_COVERAGE`); a handful of coincidental matches
+    shouldn't drag the whole grid. `_rebuild_bar_fields` then refreshes
+    per-bar `start_time` / `end_time` (which the shift moved) and the
+    global tempo fields.
     """
     if not structure.beats or not onsets:
         return
@@ -531,22 +623,43 @@ def align_beats_to_onsets(
     times = times[order]
     strengths = strengths[order]
 
-    snapped = 0
+    # Strongest-not-closest: a quiet ghost hi-hat sitting nearer the
+    # activation peak shouldn't outrank a louder kick/snare transient
+    # slightly further out — the strong transient is the strike that
+    # defines the beat.
+    deltas: list[float] = []
     for beat in structure.beats:
         lo = int(np.searchsorted(times, beat.time - max_distance, side="left"))
         hi = int(np.searchsorted(times, beat.time + max_distance, side="right"))
         if lo >= hi:
             continue
-        window_strengths = strengths[lo:hi]
-        j = lo + int(np.argmax(window_strengths))
-        new_time = float(times[j])
-        if new_time != beat.time:
-            snapped += 1
-            beat.time = new_time
+        j = lo + int(np.argmax(strengths[lo:hi]))
+        deltas.append(float(times[j] - beat.time))
 
+    if not deltas:
+        log.info(
+            "beat alignment: no beats had an onset within ±%.0f ms; "
+            "grid left unchanged",
+            max_distance * 1000,
+        )
+        return
+
+    coverage = len(deltas) / len(structure.beats)
+    offset = float(np.median(deltas))
+    if coverage < MIN_ALIGN_COVERAGE:
+        log.info(
+            "beat alignment: only %.0f%% of beats had a nearby onset "
+            "(< %.0f%% required); offset %+.1f ms rejected, grid unchanged",
+            coverage * 100, MIN_ALIGN_COVERAGE * 100, offset * 1000,
+        )
+        return
+
+    for beat in structure.beats:
+        beat.time += offset
     log.info(
-        "beat alignment: snapped %d/%d beats to drum onsets (±%.0f ms)",
-        snapped, len(structure.beats), max_distance * 1000,
+        "beat alignment: shifted all %d beats by %+.1f ms "
+        "(median of %d beat→onset deltas, coverage %.0f%%)",
+        len(structure.beats), offset * 1000, len(deltas), coverage * 100,
     )
     _rebuild_bar_fields(structure)
 

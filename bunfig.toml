@@ -1,0 +1,9 @@
+# Confine `bun test` to the unit-test tree. Playwright e2e specs live in
+# `e2e/` and are driven by `playwright test` (a different runner that
+# imports `@playwright/test`, which is not bun-test compatible). Without
+# this, `bun test` would scan `e2e/*.spec.ts`, import Playwright, and
+# fail. All existing unit tests live under `src/`, so scoping the root
+# here keeps `bun test` behaviour identical while isolating the two
+# runners cleanly.
+[test]
+root = "src"

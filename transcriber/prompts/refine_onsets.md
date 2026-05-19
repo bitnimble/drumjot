@@ -2,9 +2,16 @@
 
 You previously transcribed a drum recording into the Drumjot DSL. A
 deterministic comparison between your transcription and the source
-drum stems has flagged specific hits that look wrong - either present
-in the source but missing from the Jot, or in the Jot but not in the
+drum stems has flagged hits that *may* be wrong - either present in
+the source but missing from the Jot, or in the Jot but not in the
 source.
+
+These flags are **evidence, not instructions**. The comparison is
+purely numeric: it matches detected onsets and cannot tell a real
+strike from cymbal/hi-hat decay re-triggering the detector, bleed
+from another drum, or a doubled detection of one hit. You have the
+musical context it doesn't. Treat each issue as a hypothesis to
+evaluate, and apply your judgement about what was actually played.
 
 {PARSE_ERROR_HINT}
 
@@ -27,16 +34,34 @@ evidence the source disagrees with the Jot.
 
 ## Your task
 
-Revise the Jot so that:
+For each issue, decide whether it reflects a real transcription error
+or a detector artifact, then:
 
-- `missing_onset` issues are addressed by adding a hit at the
+- For a `missing_onset` you judge **real**, add a hit at the
   referenced bar+beat on the listed pitch. The integer part of the
   beat number is the beat (1-indexed); the fractional part tells you
   where inside the beat the hit lands (0.000 = on the beat, 0.333 =
   triplet middle, 0.500 = the "and", 0.667 = triplet last / shuffle,
   0.750 = "a" of a 1/16 grid).
-- `extra_onset` issues are addressed by removing the offending hit
+- For an `extra_onset` you judge **real**, remove the offending hit
   at the reported bar+beat.
+- For an issue you judge to be a **detector artifact or musically
+  wrong**, leave the Jot unchanged for that hit. This is expected and
+  correct — do not add a note you don't believe was played just
+  because it was flagged.
+
+Use `confidence` as a prior, not a verdict: higher confidence means
+stronger numeric evidence, but a confident flag on a hi-hat that would
+turn a clean 1/8 pulse into 1/16 spam is still an artifact you should
+reject. The most common bad flag is a weak `missing_onset` that sits
+*between* the hits of an already-regular hi-hat/ride pulse — adding it
+back is exactly the over-transcription to avoid.
+
+Do **not** mechanically re-apply a change a previous pass already
+considered and left out. If the Jot already represents a deliberate
+musical reading and the issues would only push it back toward a
+literal onset-for-onset dump, prefer keeping the Jot as-is. It is fine
+to address none of the issues in a bar if none of them are real.
 
 **Hard constraints**:
 
@@ -48,11 +73,5 @@ Revise the Jot so that:
    entire pattern.
 3. Don't introduce new pitches or instruments - only use pitches that
    already appear in the Jot.
-4. If a flagged issue conflicts with a musically-obvious pattern
-   (e.g. removing a hit would break a `(k.s.kks.)`-style groove
-   identically in every bar), prefer to keep the original Jot and
-   silently ignore that issue.
-5. Address every issue in the input where doing so is musically
-   plausible. Don't selectively fix only a subset.
 
 Output **only** the revised Drumjot DSL. No commentary, no fences.

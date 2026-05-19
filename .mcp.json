@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "bunx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--headless",
+        "--no-sandbox",
+        "--browser=chromium",
+        "--user-data-dir=.playwright/mcp-profile",
+        "--save-session",
+        "--output-dir=.playwright/mcp-output"
+      ]
+    }
+  }
+}

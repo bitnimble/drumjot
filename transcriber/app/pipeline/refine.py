@@ -20,6 +20,7 @@ score-gated acceptance, and bounded in iterations to a small constant.
 """
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import time
@@ -32,6 +33,11 @@ import anthropic
 import numpy as np
 
 from app.config import settings
+from app.debug import (
+    current_debug_sink,
+    reset_current_debug_sink,
+    set_current_debug_sink,
+)
 from app.models import OnsetCandidate
 from app.pipeline.beats import BeatStructure
 from app.pipeline.critic import triage_issues
@@ -58,6 +64,7 @@ from app.pipeline.llm_util import (
     call_messages_with_refusal_retry,
     strip_code_fence,
 )
+from app.pipeline.recompose import recompose
 from app.pipeline.score import score_jot
 
 log = logging.getLogger(__name__)
@@ -846,3 +853,288 @@ def _generator_revise(
     )
     text = "".join(b.text for b in response.content if hasattr(b, "text")).strip()
     return strip_code_fence(text)
+
+
+# --------------------------------------------------------------------
+# Per-instrument refinement
+#
+# Transcription is per-instrument, so refinement mirrors it: the
+# F1-gated audio levels (ONSETS, VELOCITY) run on each instrument's
+# monophonic fragment independently, scored against that instrument's
+# source onsets alone. The refined fragments are then recomposed into
+# one Jot, and the whole-chart levels (LINT, MACRO) run once on the
+# merged result via the existing `refine_jot`.
+#
+# Per-instrument isolation means a kick fix can't perturb the hi-hat,
+# each loop is cheap + parallelizable, and the accept-gate is on the
+# right quantity (this pitch's F1, not a chart-wide mean that dilutes
+# a single instrument's improvement).
+# --------------------------------------------------------------------
+
+_PER_INSTRUMENT_LEVELS = (RefineLevel.ONSETS, RefineLevel.VELOCITY)
+_MERGED_LEVELS = (RefineLevel.LINT, RefineLevel.MACRO)
+
+
+def _score_fragment(
+    fragment: str,
+    pitch: str,
+    onsets: list[OnsetCandidate],
+    structure: BeatStructure,
+    debug_tag: str | None = None,
+) -> tuple[ExtractedJot, float]:
+    """Parse a single-instrument fragment and score it against that
+    instrument's source onsets. Scoring is structure-anchored, so the
+    bun-bridge BPM is irrelevant."""
+    extracted = extract_jot(fragment)
+    time_offset = structure.bars[0].start_time if structure.bars else 0.0
+    f1 = score_jot(
+        extracted,
+        {pitch: onsets},
+        time_offset=time_offset,
+        structure=structure,
+        debug_tag=debug_tag,
+    ).onset_f1
+    return extracted, f1
+
+
+def _refine_one_instrument(
+    pitch: str,
+    fragment: str,
+    onsets: list[OnsetCandidate],
+    audio: tuple[np.ndarray, int] | None,
+    structure: BeatStructure,
+    levels: list[RefineLevel],
+) -> tuple[str, list[IterationLog]]:
+    """Run the F1-gated ONSETS/VELOCITY loop on one instrument's
+    fragment. Same monotone-accept logic as `refine_jot`, scoped to a
+    single pitch. Returns the best fragment + per-iteration logs."""
+    iterations: list[IterationLog] = []
+    try:
+        best_extracted, best_score = _score_fragment(
+            fragment, pitch, onsets, structure,
+            debug_tag=f"per_instrument_{pitch}_initial",
+        )
+    except JotParseError as exc:
+        log.error(
+            "Per-instrument %s: initial fragment failed to parse: %s",
+            pitch, exc,
+        )
+        return fragment, iterations
+    best_fragment = fragment
+
+    stem_onsets = {pitch: onsets}
+    stem_audios = {pitch: audio} if audio is not None else {}
+
+    active = [lvl for lvl in _PER_INSTRUMENT_LEVELS if lvl in set(levels)]
+    for level in active:
+        for iteration in range(LEVEL_MAX_ITERATIONS[level]):
+            t_iter = time.perf_counter()
+            issues = _compute_issues_for_level(
+                level, best_extracted, stem_onsets, stem_audios, structure
+            )
+            if not issues:
+                log.info(
+                    "Per-instrument %s: no issues at %s/%d; advancing",
+                    pitch, level.value, iteration,
+                )
+                break
+            triaged = triage_issues(issues, level.value, max_issues=25)
+            purpose = f"refine_{pitch}_{level.value}_iter{iteration}"
+            try:
+                candidate = _generator_revise(
+                    best_fragment, triaged, level, debug_purpose=purpose,
+                )
+            except Exception as exc:
+                log.warning(
+                    "Per-instrument %s generator failed at %s/%d: %s",
+                    pitch, level.value, iteration, exc,
+                )
+                iterations.append(IterationLog(
+                    level=f"{level.value}[{pitch}]", iteration=iteration,
+                    issues_detected=len(issues), issues_sent_to_llm=len(triaged),
+                    score_before=best_score, score_after=best_score,
+                    accepted=False, note=f"generator error: {exc}",
+                ))
+                break
+
+            try:
+                cand_extracted, cand_score = _score_fragment(
+                    candidate, pitch, onsets, structure,
+                    debug_tag=f"per_instrument_{pitch}_{level.value}_iter{iteration}",
+                )
+            except JotParseError as exc:
+                log.info(
+                    "Per-instrument %s candidate didn't parse at %s/%d: %s; "
+                    "retrying once", pitch, level.value, iteration, exc,
+                )
+                try:
+                    candidate = _generator_revise(
+                        best_fragment, triaged, level,
+                        parse_error=str(exc),
+                        debug_purpose=f"{purpose}__parse_retry",
+                    )
+                    cand_extracted, cand_score = _score_fragment(
+                        candidate, pitch, onsets, structure,
+                    )
+                except Exception as exc2:
+                    iterations.append(IterationLog(
+                        level=f"{level.value}[{pitch}]", iteration=iteration,
+                        issues_detected=len(issues),
+                        issues_sent_to_llm=len(triaged),
+                        score_before=best_score, score_after=best_score,
+                        accepted=False, note=f"parse retry failed: {exc2}",
+                    ))
+                    continue
+
+            accept = cand_score > best_score
+            iterations.append(IterationLog(
+                level=f"{level.value}[{pitch}]",
+                iteration=iteration,
+                issues_detected=len(issues),
+                issues_sent_to_llm=len(triaged),
+                score_before=best_score,
+                score_after=cand_score,
+                accepted=accept,
+                note=f"{time.perf_counter() - t_iter:.1f}s {pitch}={cand_score:.3f}",
+            ))
+            if accept:
+                log.info(
+                    "Per-instrument %s accepted %s/%d: F1 %.4f -> %.4f",
+                    pitch, level.value, iteration, best_score, cand_score,
+                )
+                best_fragment = candidate
+                best_extracted = cand_extracted
+                best_score = cand_score
+            else:
+                log.info(
+                    "Per-instrument %s rejected %s/%d: F1 %.4f -> %.4f "
+                    "(stopping level)",
+                    pitch, level.value, iteration, best_score, cand_score,
+                )
+                break
+
+    return best_fragment, iterations
+
+
+def refine_jot_per_instrument(
+    lines_by_pitch: dict[str, str],
+    stem_onsets: dict[str, list[OnsetCandidate]],
+    stem_audios: dict[str, tuple[np.ndarray, int]],
+    structure: BeatStructure,
+    levels: list[RefineLevel] | None,
+    feet_pitches: frozenset[str],
+) -> tuple[str, RefinementLog]:
+    """Per-instrument refinement then recomposition.
+
+    1. Run the F1-gated ONSETS/VELOCITY loop on every instrument's
+       monophonic fragment, in parallel, each scored on its own pitch.
+    2. Recompose the refined fragments into one Jot.
+    3. Run the whole-chart levels (LINT, MACRO) on the merged Jot via
+       the existing `refine_jot`.
+
+    `initial_score` / `final_score` are the overall onset F1 of the
+    recomposed Jot before and after, so they stay comparable with the
+    single-call pipeline's numbers.
+    """
+    started = time.perf_counter()
+    requested = (
+        list(LEVEL_ORDER) if levels is None
+        else [lvl for lvl in LEVEL_ORDER if lvl in set(levels)]
+    )
+
+    # Overall initial score: score the recomposed *unrefined* Jot.
+    initial_merged = recompose(lines_by_pitch, structure, feet_pitches)
+    time_offset = structure.bars[0].start_time if structure.bars else 0.0
+    try:
+        initial_score = score_jot(
+            extract_jot(initial_merged), stem_onsets,
+            time_offset=time_offset, structure=structure,
+            debug_tag="per_instrument_merged_initial",
+        ).onset_f1
+    except JotParseError:
+        initial_score = 0.0
+
+    per_levels = [lvl for lvl in requested if lvl in _PER_INSTRUMENT_LEVELS]
+    iterations: list[IterationLog] = []
+    refined_lines = dict(lines_by_pitch)
+
+    if per_levels:
+        workers = max(1, settings.instrument_concurrency)
+        sink = current_debug_sink()
+
+        def work(pitch: str) -> tuple[str, str, list[IterationLog]]:
+            token = set_current_debug_sink(sink)
+            try:
+                frag, logs = _refine_one_instrument(
+                    pitch=pitch,
+                    fragment=lines_by_pitch[pitch],
+                    onsets=stem_onsets.get(pitch, []),
+                    audio=stem_audios.get(pitch),
+                    structure=structure,
+                    levels=per_levels,
+                )
+                return pitch, frag, logs
+            finally:
+                reset_current_debug_sink(token)
+
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=workers
+        ) as executor:
+            futures = {
+                executor.submit(work, p): p for p in lines_by_pitch
+            }
+            for fut in concurrent.futures.as_completed(futures):
+                pitch = futures[fut]
+                try:
+                    p, frag, logs = fut.result()
+                except Exception as exc:
+                    log.warning(
+                        "Per-instrument refine for %s failed (%s); keeping "
+                        "its unrefined line", pitch, exc,
+                    )
+                    continue
+                refined_lines[p] = frag
+                iterations.extend(logs)
+
+    merged = recompose(refined_lines, structure, feet_pitches)
+
+    # Whole-chart levels on the recomposed Jot (reuses the existing
+    # LINT segment patcher + MACRO tempo diff).
+    merged_levels = [lvl for lvl in requested if lvl in _MERGED_LEVELS]
+    final_dsl = merged
+    if merged_levels:
+        try:
+            final_dsl, sub_log = refine_jot(
+                initial_dsl=merged,
+                stem_onsets=stem_onsets,
+                stem_audios=stem_audios,
+                structure=structure,
+                levels=merged_levels,
+            )
+            iterations.extend(sub_log.iterations)
+        except Exception:
+            log.exception(
+                "Whole-chart refinement failed; keeping recomposed Jot"
+            )
+
+    try:
+        final_score = score_jot(
+            extract_jot(final_dsl), stem_onsets,
+            time_offset=time_offset, structure=structure,
+            debug_tag="per_instrument_merged_final",
+        ).onset_f1
+    except JotParseError:
+        final_score = initial_score
+
+    elapsed = time.perf_counter() - started
+    log.info(
+        "Per-instrument refinement complete in %.2fs. Overall F1 "
+        "%.4f -> %.4f over %d iterations",
+        elapsed, initial_score, final_score, len(iterations),
+    )
+    return final_dsl, RefinementLog(
+        initial_score=initial_score,
+        final_score=final_score,
+        elapsed_seconds=elapsed,
+        iterations=iterations,
+    )

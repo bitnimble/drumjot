@@ -42,13 +42,16 @@ from app.pipeline.beats import (
     analyze_beats,
     detect_feel_for_bars,
 )
-from app.pipeline.llm import (
-    transcribe_to_jot,
-    transcribe_to_jot_best_of_k,
-)
+from app.pipeline.format import format_dsl
+from app.pipeline.llm import transcribe_all_instruments
 from app.pipeline.onsets import attach_beat_positions, detect_onsets
 from app.pipeline.onsets_midi import onsets_to_midi_bytes
-from app.pipeline.refine import RefineLevel, refine_jot
+from app.pipeline.recompose import FEET_PITCHES, recompose
+from app.pipeline.refine import (
+    RefineLevel,
+    refine_jot,
+    refine_jot_per_instrument,
+)
 from app.pipeline.separate import Separator
 
 log = logging.getLogger(__name__)
@@ -120,6 +123,11 @@ class PipelineContext:
     structure: BeatStructure | None = None
     onsets_by_pitch: dict[str, list[OnsetCandidate]] = field(default_factory=dict)
     initial_jot: str | None = None
+    # Per-instrument monophonic fragments produced by the transcribe
+    # stage, kept so the refine stage can re-run the per-instrument loop
+    # on fresh runs. Empty on a resume-from-refine (only the merged
+    # initial.jot is on disk) — `_do_refine` falls back accordingly.
+    initial_lines_by_pitch: dict[str, str] = field(default_factory=dict)
     best_of_k_log: BestOfKLog | None = None
     final_jot: str | None = None
     refinement_log: RefinementLog | None = None
@@ -162,7 +170,7 @@ def _run_stage(
     if stage is Stage.STEMS_ALL:
         _do_stems_all(ctx, separator, output_sink)
     elif stage is Stage.STEMS_PER:
-        _do_stems_per(ctx, separator)
+        _do_stems_per(ctx, separator, output_sink)
     elif stage is Stage.BEATS:
         _do_beats(ctx, options, sink)
     elif stage is Stage.ONSETS:
@@ -188,7 +196,9 @@ def _do_stems_all(
             output_sink.save_flac_from_wav("no_drums", result.no_drums)
 
 
-def _do_stems_per(ctx: PipelineContext, separator: Separator) -> None:
+def _do_stems_per(
+    ctx: PipelineContext, separator: Separator, output_sink: OutputSink | None,
+) -> None:
     if ctx.drum_stem is None or not ctx.drum_stem.exists():
         raise RuntimeError(
             "stems_per: drum stem missing (expected stems_all/drum_stem.<ext> "
@@ -197,6 +207,12 @@ def _do_stems_per(ctx: PipelineContext, separator: Separator) -> None:
     ctx.per_instrument_stems = separator.run_stems_per(
         ctx.drum_stem, ctx.work_dir,
     )
+    # Export the per-instrument stems as soon as splitting is done — they
+    # are the second batch of deliverables, available long before the
+    # (slow) beats/onsets/transcribe/refine stages run.
+    if output_sink is not None:
+        for pitch, path in ctx.per_instrument_stems.items():
+            output_sink.save_flac_from_wav(f"stem_{pitch}", path)
 
 
 def _do_beats(
@@ -300,29 +316,45 @@ def _do_transcribe(
             "transcribe: onsets missing (expected onsets.json or "
             "resume_stage<=onsets)."
         )
-    if options.best_of_k > 1:
-        jot_dsl, scores = transcribe_to_jot_best_of_k(
-            candidates_by_pitch=ctx.onsets_by_pitch,
-            structure=ctx.structure,
-            samples=options.best_of_k,
+    # One LLM call per instrument (parallel), each emitting a monophonic
+    # line; recompose merges them deterministically into one Jot.
+    lines_by_pitch, scores_by_pitch = transcribe_all_instruments(
+        candidates_by_pitch=ctx.onsets_by_pitch,
+        structure=ctx.structure,
+        samples=options.best_of_k,
+    )
+    if not lines_by_pitch:
+        raise RuntimeError(
+            "transcribe: every per-instrument LLM call failed or produced "
+            "no usable line."
         )
-        chosen_idx = (
-            int(max(range(len(scores)), key=lambda i: scores[i]))
-            if scores
-            else 0
-        )
+    ctx.initial_lines_by_pitch = lines_by_pitch
+    jot_dsl = format_dsl(recompose(lines_by_pitch, ctx.structure, FEET_PITCHES))
+    ctx.initial_jot = jot_dsl
+
+    if options.best_of_k > 1 and scores_by_pitch:
+        per_instrument: dict[str, BestOfKLog] = {}
+        for pitch, scores in scores_by_pitch.items():
+            chosen = (
+                int(max(range(len(scores)), key=lambda i: scores[i]))
+                if scores
+                else 0
+            )
+            per_instrument[pitch] = BestOfKLog(
+                samples=options.best_of_k,
+                scores=scores,
+                chosen_index=chosen,
+            )
         ctx.best_of_k_log = BestOfKLog(
             samples=options.best_of_k,
-            scores=scores,
-            chosen_index=chosen_idx,
+            scores=[],
+            chosen_index=0,
+            per_instrument=per_instrument,
         )
-    else:
-        jot_dsl = transcribe_to_jot(
-            candidates_by_pitch=ctx.onsets_by_pitch,
-            structure=ctx.structure,
-        )
-    ctx.initial_jot = jot_dsl
+
     if sink is not None:
+        for pitch, fragment in lines_by_pitch.items():
+            sink.write_text(f"initial_{pitch}.jot", fragment)
         sink.write_text("initial.jot", jot_dsl)
         if ctx.best_of_k_log is not None:
             sink.write_json("best_of_k.json", ctx.best_of_k_log.model_dump())
@@ -341,13 +373,17 @@ def _do_refine(
     if ctx.structure is None:
         raise RuntimeError("refine: beat structure missing")
 
+    # STRUCTURE (cross-instrument pattern factoring) is intentionally
+    # dropped: per-instrument transcription emits flat monophonic lines
+    # with no shared bar patterns to factor, so the level has nothing to
+    # act on. ONSETS/VELOCITY run per instrument; LINT/MACRO run once on
+    # the recomposed Jot (see refine_jot_per_instrument).
     refinement_levels: list[RefineLevel] = []
     if options.lint:
         refinement_levels.append(RefineLevel.LINT)
     if options.refine:
         refinement_levels.extend([
             RefineLevel.MACRO,
-            RefineLevel.STRUCTURE,
             RefineLevel.ONSETS,
             RefineLevel.VELOCITY,
         ])
@@ -355,7 +391,9 @@ def _do_refine(
     if not refinement_levels:
         # No levels requested; final == initial. Still emit final.jot
         # so downstream tooling has a stable artifact name to read.
-        ctx.final_jot = _inject_start_offset(ctx.initial_jot, ctx.structure)
+        ctx.final_jot = format_dsl(
+            _inject_start_offset(ctx.initial_jot, ctx.structure)
+        )
         if sink is not None:
             sink.write_text("final.jot", ctx.final_jot)
         return
@@ -372,13 +410,27 @@ def _do_refine(
         stem_audios[pitch] = (audio, sr)
 
     try:
-        refined_dsl, log_obj = refine_jot(
-            initial_dsl=ctx.initial_jot,
-            stem_onsets=ctx.onsets_by_pitch,
-            stem_audios=stem_audios,
-            structure=ctx.structure,
-            levels=refinement_levels,
-        )
+        if ctx.initial_lines_by_pitch:
+            # Fresh run: per-instrument ONSETS/VELOCITY loop, then
+            # recompose, then LINT/MACRO on the merged Jot.
+            refined_dsl, log_obj = refine_jot_per_instrument(
+                lines_by_pitch=ctx.initial_lines_by_pitch,
+                stem_onsets=ctx.onsets_by_pitch,
+                stem_audios=stem_audios,
+                structure=ctx.structure,
+                levels=refinement_levels,
+                feet_pitches=FEET_PITCHES,
+            )
+        else:
+            # Resume-from-refine: only the merged initial.jot is on
+            # disk; refine it directly (no per-instrument fragments).
+            refined_dsl, log_obj = refine_jot(
+                initial_dsl=ctx.initial_jot,
+                stem_onsets=ctx.onsets_by_pitch,
+                stem_audios=stem_audios,
+                structure=ctx.structure,
+                levels=refinement_levels,
+            )
         ctx.final_jot = refined_dsl
         ctx.refinement_log = RefinementLog(
             initial_score=log_obj.initial_score,
@@ -396,7 +448,9 @@ def _do_refine(
     # DSL after refinement so the LLM can't accidentally drop it during
     # revision. Browser playback reads this off `globalMetadata` to delay
     # its schedule and match the original recording's offset.
-    ctx.final_jot = _inject_start_offset(ctx.final_jot, ctx.structure)
+    ctx.final_jot = format_dsl(
+        _inject_start_offset(ctx.final_jot, ctx.structure)
+    )
 
     if sink is not None:
         sink.write_text("final.jot", ctx.final_jot)

@@ -1,9 +1,15 @@
 """Per-request stem deliverable sink.
 
-`OutputSink` writes a small, fixed set of audio artifacts (currently the
-isolated drum mix and the drumless mix) into `<settings.outputs_dir>/<id>/`
-as FLAC, and exposes URL paths that the FastAPI app serves via a
-`StaticFiles` mount.
+`OutputSink` writes a small, fixed set of audio artifacts (the isolated
+drum mix and the drumless mix from `stems_all`, plus the per-instrument
+stems from `stems_per`) into `<settings.outputs_dir>/<id>/` as FLAC, and
+exposes URL paths that the FastAPI app serves via a `StaticFiles` mount.
+
+Each artifact is written the instant its producing stage finishes, not
+at the end of the request, so deliverables are downloadable while the
+slow LLM stages are still running. The request directory is created
+lazily on the first successful write, so an `outputs/<id>/` folder that
+exists at all is guaranteed to be non-empty.
 
 Unlike `DebugSink`, this sink:
   - is always created for every /transcribe and /transcribe/resume call
@@ -55,12 +61,26 @@ class OutputSink:
         self.base_dir = base_dir
         self.folder_name = folder_name
         self.dir = base_dir / folder_name
+        # NB: the request directory is created lazily on the first
+        # successful write (see `_ensure_dir`), not here. An eagerly
+        # mkdir'd-but-empty `outputs/<name>/` is indistinguishable from
+        # "the pipeline died before producing any deliverable", which is
+        # exactly the confusing state we want to avoid: with lazy
+        # creation, the folder's mere existence guarantees ≥1 FLAC landed.
+
+    def _ensure_dir(self) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)
 
     # ----------------------------------------------------------- writes
 
     def save_flac_from_wav(self, name: str, src: Path) -> Path | None:
         """Re-encode `src` (any libsndfile-readable format) into `<dir>/<name>.flac`.
+
+        Writes happen as soon as the caller has the source on disk (e.g.
+        the drum stem the instant `stems_all` finishes, the per-instrument
+        stems the instant `stems_per` finishes) — never deferred to the
+        end of the request — so the deliverables are downloadable while
+        the slow LLM stages are still running.
 
         Returns the destination path on success, or `None` on failure
         (logged, not raised — a missing deliverable is recoverable from
@@ -71,12 +91,29 @@ class OutputSink:
             return None
         dest = self.dir / f"{name}.flac"
         try:
+            self._ensure_dir()
             data, sr = sf.read(str(src), always_2d=True, dtype="float32")
             np.clip(data, -1.0, 1.0, out=data)
             sf.write(str(dest), data, sr, format="FLAC", subtype=FLAC_SUBTYPE)
         except (OSError, RuntimeError, ValueError) as exc:
             log.warning("OutputSink: encoding %s -> %s failed: %s", src, dest, exc)
             return None
+        log.info("OutputSink: wrote %s", dest)
+        return dest
+
+    def save_text(self, name: str, text: str) -> Path | None:
+        """Write `text` verbatim to `<dir>/<name>` (name carries its own
+        extension, e.g. `final.jot`). Same lazy-dir + log-don't-raise
+        contract as `save_flac_from_wav`.
+        """
+        dest = self.dir / name
+        try:
+            self._ensure_dir()
+            dest.write_text(text, encoding="utf-8")
+        except OSError as exc:
+            log.warning("OutputSink: writing %s failed: %s", dest, exc)
+            return None
+        log.info("OutputSink: wrote %s", dest)
         return dest
 
     # -------------------------------------------------------------- read
@@ -97,15 +134,70 @@ def make_output_sink(folder_name: str, base_dir: Path) -> OutputSink | None:
 
     Falls back to None rather than raising so a misconfigured volume mount
     degrades to "no URLs in the response" rather than failing the whole
-    transcription request.
+    transcription request. Only the `StaticFiles` root is created here;
+    the per-request directory is created lazily on the first successful
+    write (see `OutputSink._ensure_dir`).
     """
     try:
         base_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         log.warning("Could not create outputs dir %s: %s", base_dir, exc)
         return None
-    try:
-        return OutputSink(base_dir, folder_name)
-    except OSError as exc:
-        log.warning("Could not create outputs request dir %s/%s: %s", base_dir, folder_name, exc)
+    return OutputSink(base_dir, folder_name)
+
+
+def _scavenge_no_drums(folder: Path | None) -> Path | None:
+    """Find a previous run's drumless mix under `<folder>/stems_all/`.
+
+    `no_drums` is the one deliverable not carried on `PipelineContext`
+    (no stage consumes it), so on a resume that skips `stems_all` it can
+    only be recovered from the debug folder the resume is replaying.
+    """
+    if folder is None:
         return None
+    stems_all = folder / "stems_all"
+    if not stems_all.is_dir():
+        return None
+    for child in sorted(stems_all.iterdir()):
+        if child.is_file() and child.stem == "no_drums":
+            return child
+    return None
+
+
+def materialize_pending(
+    output_sink: OutputSink | None,
+    *,
+    drum_stem: Path | None,
+    per_instrument_stems: dict[str, Path],
+    final_jot: str | None,
+    scavenge_dir: Path | None = None,
+) -> None:
+    """Backfill any deliverable the stage bodies didn't already write.
+
+    The early, in-stage writes (`_do_stems_all` / `_do_stems_per`) only
+    fire when those stages actually run. A `/transcribe/resume` that
+    starts at `beats` or later skips them entirely, so without this the
+    outputs folder would stay empty even though the source stems are
+    hydrated into the context straight from the resume folder. This runs
+    once after the pipeline and fills the gaps from whatever sources are
+    available — no recomputation. Already-present FLACs are left as the
+    stage wrote them (fresh runs); only the gaps are filled. `final.jot`
+    is always (re)written so it reflects the latest refine result.
+    """
+    if output_sink is None:
+        return
+    if (
+        output_sink.existing_path("drum_stem") is None
+        and drum_stem is not None
+        and drum_stem.exists()
+    ):
+        output_sink.save_flac_from_wav("drum_stem", drum_stem)
+    for pitch, path in per_instrument_stems.items():
+        if output_sink.existing_path(f"stem_{pitch}") is None and path.exists():
+            output_sink.save_flac_from_wav(f"stem_{pitch}", path)
+    if output_sink.existing_path("no_drums") is None:
+        scavenged = _scavenge_no_drums(scavenge_dir)
+        if scavenged is not None:
+            output_sink.save_flac_from_wav("no_drums", scavenged)
+    if final_jot is not None:
+        output_sink.save_text("final.jot", final_jot)

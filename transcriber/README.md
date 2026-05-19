@@ -7,9 +7,15 @@ runs:
 2. **MDX23C 6-stem DrumSep** (aufr33 / jarredou) - drum stem into kick /
    snare / hi-hat / ride / crash / toms
 3. **librosa** per-stem high-recall onset detection
-4. **madmom RNN + DBN downbeat tracker** - per-beat anchors with
-   downbeat classification. From this we recover the tempo curve, the
-   per-bar time signature, and (via the intra-beat fraction
+4. **madmom RNN + DBN downbeat tracker** (or Beat Transformer) -
+   per-beat anchors with downbeat classification. The whole grid is
+   shifted by a single median offset to undo the tracker's ~30-50 ms
+   activation-peak lag *without* per-beat re-timing (per-beat snapping
+   manufactured 5-10 BPM per-bar tempo wobble on steady songs). Per-bar
+   tempos are then finalized: pinned to one global value for
+   constant-tempo material, or kept as a smoothed contour when a
+   sustained change is present. From this we recover the (stabilized)
+   tempo, the per-bar time signature, and (via the intra-beat fraction
    distribution) the bar-level "feel": `straight16` / `straight8` /
    `triplet` / `shuffle` / `sparse` / `mixed`. Onsets are mapped to
    `(bar, beat_in_bar)` rather than a fixed 1/16 grid - so triplets,
@@ -23,12 +29,18 @@ runs:
    on by default in compose):
    - *Macro* pass - tempo / time-signature fixes
    - *Structure* pass - factor repeating bars into `[Name=(...)]`
-   - *Onsets* pass - missing / extra hits (up to 3 iterations)
+   - *Onsets* pass - missing / extra hits (up to 3 iterations).
+     `missing_onset` is pattern-aware: a weak hi-hat/ride detection
+     between two hits of an already-regular pulse is suppressed
+     (it would only re-spam 1/16s the transcription thinned), and
+     the generator is told flagged issues are *evidence it may
+     overrule on musical grounds*, not commands.
    - *Velocity* pass - dynamics matching
    Each iteration uses a deterministic diff against the per-stem onsets
    (`mir_eval` F1) to gate revisions: only revisions that *improve* the
-   score are kept. A cheap critic LLM (Haiku) triages issues before the
-   expensive generator (Opus) revises.
+   score are kept (so the LLM rejecting a bogus flag is a safe no-op,
+   not a regression). A cheap critic LLM (Haiku) triages issues before
+   the expensive generator (Opus) revises.
 
 …and returns a DSL string the Drumjot frontend parses and renders, plus
 a structured refinement log that the UI surfaces (initial F1, final F1,

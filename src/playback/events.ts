@@ -8,10 +8,12 @@
  *     scheduler uses it to filter by mute/solo row — MIDI bytes don't
  *     carry that information, so the previous round-trip stripped it.
  *
- *  2. The per-bar tempo / time-sig logic in `toMidi` is overkill for
- *     playback today (only the initial BPM is emitted as a `setTempo`
- *     meta event anyway). Walking the rendered bars with a constant
- *     `secondsPerBeat` matches what playback actually does.
+ *  2. `toMidi` only emits a `setTempo` at tick 0, so the MIDI bytes
+ *     can't carry per-bar `{{ bpm }}` overrides. Walking the rendered
+ *     bars lets us accumulate the effective tempo bar by bar (same logic
+ *     as `buildTimeline`), which is what keeps a variable-tempo chart —
+ *     e.g. a ParaDB import whose `bpmEvents` became per-bar overrides —
+ *     locked to its backing recording instead of slewing apart.
  *
  * The MIDI-byte path is still the source of truth for downstream MIDI
  * consumers — `toMidi` is unchanged.
@@ -19,6 +21,7 @@
 import { Volume } from 'src/dsl';
 import { RenderedJot, ResolvedNote, ResolvedTrack } from 'src/jot';
 import { defaultMidiNote } from 'src/midi/gm';
+import { resolveBpm } from './timeline';
 
 export type PlaybackEvent = {
   /** Absolute time from the start of the jot, in seconds. */
@@ -47,15 +50,19 @@ const VOLUME_TO_VELOCITY: Record<Volume, number> = {
 
 export function jotToEvents(rendered: RenderedJot): PlaybackEvent[] {
   const resolved = rendered.resolved;
-  const bpmField = resolved.globalMetadata.bpm;
-  const bpm = typeof bpmField === 'number' && bpmField > 0 ? bpmField : 120;
-  const secondsPerBeat = 60 / bpm;
+  const globalBpm = resolveBpm(resolved.globalMetadata.bpm, 120);
   const events: PlaybackEvent[] = [];
 
   for (const voice of resolved.voices) {
     let barOffsetSec = 0;
+    // Per-bar `{{ bpm }}` overrides are sticky; carry the effective
+    // tempo across bars exactly as `buildTimeline` does so the playhead
+    // and the scheduled audio stay on the same clock.
+    let currentBpm = globalBpm;
     for (const bar of voice.bars) {
-      const barDurationSec = bar.beats * secondsPerBeat;
+      const override = bar.source.metadata?.bpm;
+      if (override !== undefined) currentBpm = resolveBpm(override, currentBpm);
+      const barDurationSec = bar.beats * (60 / currentBpm);
       for (const pitch of voice.pitches) {
         const track = bar.tracks[pitch];
         if (!track) continue;

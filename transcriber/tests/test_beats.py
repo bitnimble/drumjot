@@ -204,3 +204,48 @@ def test_align_no_op_when_no_onsets() -> None:
     align_beats_to_onsets(structure, [])
     for i, b in enumerate(structure.beats):
         assert b.time == i * 0.5
+
+
+def test_align_preserves_per_bar_tempo_under_humanized_onsets() -> None:
+    # Regression for the per-bar BPM wobble. The DBN grid is perfectly
+    # regular at 160 BPM over two 4/4 bars. The drummer's actual onsets
+    # are humanized — each sits a few ms off its grid position by a
+    # *different* amount. Per-beat snapping would chase that jitter and
+    # make every bar's tempo swing; the global-offset alignment must
+    # keep the grid regular so per-bar tempo stays put.
+    beat_gap = 60.0 / 160.0
+    bars: list[BarInfo] = []
+    beats: list[BeatTick] = []
+    for i in range(8):
+        tick = BeatTick(
+            time=i * beat_gap, beat_in_bar=(i % 4) + 1, bar_index=i // 4
+        )
+        beats.append(tick)
+    for b_idx in range(2):
+        bb = beats[b_idx * 4:(b_idx + 1) * 4]
+        bars.append(
+            BarInfo(
+                index=b_idx,
+                start_time=bb[0].time,
+                end_time=bb[-1].time + beat_gap,
+                beats=list(bb),
+                time_signature=(4, 4),
+                tempo_bpm=160.0,
+            )
+        )
+    structure = BeatStructure(beats=list(beats), bars=bars)
+
+    # Per-beat, zero-mean-ish humanization (different offset each beat).
+    jitter = [0.012, -0.009, 0.014, -0.011, 0.010, -0.013, 0.008, -0.012]
+    onsets = [(i * beat_gap + jitter[i], 5.0) for i in range(8)]
+    align_beats_to_onsets(structure, onsets, max_distance=0.05)
+
+    # Inter-beat gaps stay uniform => no manufactured tempo wobble.
+    gaps = [
+        structure.beats[i + 1].time - structure.beats[i].time
+        for i in range(len(structure.beats) - 1)
+    ]
+    assert max(gaps) - min(gaps) < 1e-9
+    assert abs(structure.bars[0].tempo_bpm - 160.0) < 0.05
+    assert abs(structure.bars[1].tempo_bpm - 160.0) < 0.05
+    assert structure.bars[0].tempo_bpm == structure.bars[1].tempo_bpm

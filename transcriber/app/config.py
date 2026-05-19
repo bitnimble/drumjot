@@ -36,7 +36,15 @@ class Settings(BaseSettings):
     # that's at least musically well-formed) and is independently
     # toggleable so cost-sensitive callers can skip it.
     lint_by_default: bool = True
+    # Transcription is per-instrument, so best-of-K is applied PER
+    # INSTRUMENT: K candidates per drum pitch, each scored on that
+    # pitch's onset F1, best kept. Cost ≈ K × (#instruments) LLM calls,
+    # but the calls are tiny and run in parallel (`instrument_concurrency`).
     best_of_k_default: int = 1
+    # Max concurrent per-instrument LLM calls in the transcribe stage
+    # (and the per-instrument refinement loop). Each call is small; the
+    # ceiling mostly guards Anthropic rate limits, not local resources.
+    instrument_concurrency: int = 4
 
     # --- Separation models ---
     # `htdemucs_ft` gives drums stem; community drum-piece separator turns

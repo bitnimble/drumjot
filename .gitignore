@@ -141,3 +141,10 @@ Thumbs.db
 
 # Bun caches (per-project / per-user)
 .bun/
+
+# Playwright e2e artifacts. Browser binaries live in the per-user
+# ~/.cache/ms-playwright (not in-repo). These are the run outputs.
+test-results/
+playwright-report/
+blob-report/
+.playwright/

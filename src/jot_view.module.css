@@ -17,6 +17,14 @@
   backdrop-filter: blur(4px);
   flex: 0 0 auto;
   user-select: none;
+  /* The header forms a stacking context (backdrop-filter) and its
+     dropdown panels overflow downward into the score region. Without
+     an explicit z-index the later-painted .jotContainer sibling sits
+     on top in hit-testing (it's visually transparent there, so the
+     menu still *looks* right but isn't clickable). Lift the whole
+     header above the scrolling content. */
+  position: relative;
+  z-index: 20;
 }
 
 .toolbarLabel {
@@ -224,21 +232,221 @@
   cursor: pointer;
 }
 
+/* One-time drum-sample download indicator, shown in the transport's aux
+   slot only while the player is in the `loading` state. */
+.sampleProgress {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #6b6256;
+  white-space: nowrap;
+}
+
+.sampleProgressTrack {
+  width: 72px;
+  height: 6px;
+  border-radius: 999px;
+  background: #e7e0d2;
+  overflow: hidden;
+}
+
+.sampleProgressFill {
+  display: block;
+  height: 100%;
+  background: #b95c1e;
+  border-radius: 999px;
+  transition: width 0.15s linear;
+}
+
+.dropdown {
+  position: relative;
+  display: inline-flex;
+}
+
+.dropdownPanel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 180px;
+  padding: 10px;
+  background: #fff;
+  border: 1px solid #c9bfae;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
+
+.dropdownPanelWide {
+  min-width: 230px;
+}
+
+.dropdownItem {
+  font-size: 13px;
+  font-family: inherit;
+  text-align: left;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #2b2b2b;
+  cursor: pointer;
+}
+
+.dropdownItem:hover {
+  background: #f6efe0;
+}
+
+.dropdownItem:focus {
+  outline: 2px solid #ff8c55;
+  outline-offset: 1px;
+}
+
+.dropdownDivider {
+  height: 1px;
+  background: #e7e0d5;
+  margin: 2px 0;
+}
+
+.playbackBar {
+  /* Three tracks: an empty left spacer, the centred transport group,
+     and the right-aligned aux controls (speed / error). The 1fr side
+     tracks keep the transport optically centred in the bar regardless
+     of how wide the aux content is. */
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 24px;
+  border-top: 1px solid #e7e0d5;
+  background: rgba(255, 255, 255, 0.65);
+  backdrop-filter: blur(4px);
+  flex: 0 0 auto;
+  /* Stays pinned to the bottom even when no jot is loaded (the empty
+     placeholder doesn't grow to fill the column). With a jot, the
+     scrolling .jotContainer is flex:1 so this is already at the bottom
+     and the auto margin is a no-op. */
+  margin-top: auto;
+  user-select: none;
+}
+
+.transportSpacer {
+  /* Occupies the left 1fr grid track; no content. */
+}
+
+.transportCenter {
+  /* Only the play/pause button is in flow, so the centred `auto` grid
+     track is exactly its width and the button stays optically centred
+     in the bar whether or not Stop is shown. Stop is positioned
+     absolutely to its right so it never shifts the play button. */
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.transportStop {
+  position: absolute;
+  left: calc(100% + 12px);
+  top: 0;
+}
+
+.transportAux {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.transportButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  font-size: 22px;
+  line-height: 1;
+  border: 1px solid #c9bfae;
+  border-radius: 10px;
+  background: #fff;
+  color: #2b2b2b;
+  cursor: pointer;
+  font-family: inherit;
+  /* Keep the glyph optically centred (▶ / ■ sit slightly off otherwise). */
+  padding: 0;
+}
+
+.transportButton:hover:not(:disabled) {
+  background: #f6efe0;
+  border-color: #b09d80;
+}
+
+.transportButton:disabled {
+  color: #b9b0a0;
+  cursor: not-allowed;
+}
+
+.transportButton:focus-visible {
+  outline: 2px solid #ff8c55;
+  outline-offset: 2px;
+}
+
+.transportButtonStop {
+  color: #b00020;
+}
+
+.transportButtonStop:hover:not(:disabled) {
+  background: #ffecec;
+  border-color: #b00020;
+}
+
+.transportButtonStop:focus-visible {
+  outline-color: #b00020;
+}
+
+.transportButtonError {
+  border-color: #b00020;
+  color: #b00020;
+}
+
+.transportButtonError:hover:not(:disabled) {
+  background: #ffecec;
+}
+
 .jotContainer {
   position: relative;
   width: 100%;
   flex: 1 1 auto;
   min-height: 0;
-  padding: 32px 24px;
+  /* No horizontal padding: the lane/stem gutters are `position: sticky;
+     left: 0`, and sticky offsets are measured from this scroller's
+     padding edge. Any left padding here would leave a strip where the
+     scrolled .barsRow notes show through to the left of the gutter
+     (the gutter would no longer be flush with the viewport edge).
+     Inset is reapplied per-block to the text content below instead. */
+  padding: 32px 0;
   overflow: auto;
+  /* Keep the two-finger horizontal-swipe gesture contained to this
+     scroller instead of letting an overscroll past either edge trigger
+     the browser's back/forward history navigation. Scoped to this site
+     only; no system-level setting required. */
+  overscroll-behavior-x: contain;
   box-sizing: border-box;
   user-select: none;
 }
 
+/* The text blocks aren't sticky and shouldn't run to the bare viewport
+   edge — reapply the inset that used to come from .jotContainer's
+   padding so they stay aligned with each other. */
 .title {
   font-size: 18px;
   font-weight: 600;
   margin: 0 0 4px 0;
+  padding: 0 24px;
   letter-spacing: 0.02em;
 }
 
@@ -246,6 +454,7 @@
   color: #6b6b6b;
   font-size: 12px;
   margin: 0 0 20px 0;
+  padding: 0 24px;
 }
 
 .legend {
@@ -253,6 +462,7 @@
   gap: 12px;
   flex-wrap: wrap;
   margin-bottom: 16px;
+  padding: 0 24px;
   font-size: 12px;
 }
 
@@ -273,6 +483,114 @@
   display: inline-block;
 }
 
+.musicTracks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 20px;
+  /* Match the staff's width-fitting so the gutter + canvas align with
+     the voice rows below even when the canvas overflows the viewport. */
+  min-width: max-content;
+}
+
+.musicTrack {
+  position: relative;
+  display: flex;
+  /* Same border treatment as the voiceStaff so the music tracks read
+     as part of the same vertical stack — distinct row, same grid. */
+  min-width: max-content;
+  border-top: 1px solid #c9bfae;
+  border-bottom: 1px solid #c9bfae;
+  background: #fbf6ec;
+}
+
+.musicTrackGutter {
+  /* Same width and sticky behaviour as the score's laneGutter, so the
+     stem labels stay pinned during horizontal scroll exactly like the
+     pitch labels do below. */
+  position: sticky;
+  left: 0;
+  z-index: 6;
+  flex: 0 0 auto;
+  width: 132px;
+  box-sizing: border-box;
+  border-right: 1px solid #c9bfae;
+  background: #fbf6ec;
+  padding: 4px 6px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.musicTrackLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  transition: opacity 120ms ease;
+  overflow: hidden;
+}
+
+.musicTrackLabelDim {
+  opacity: 0.6;
+}
+
+.musicTrackName {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #6b6b6b;
+}
+
+.musicTrackFile {
+  font-size: 10px;
+  color: #999;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.musicTrackButtons {
+  display: flex;
+  gap: 3px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.musicTrackClear {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1;
+  border: 1px solid #c9bfae;
+  border-radius: 3px;
+  background: #fff;
+  color: #888;
+  cursor: pointer;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.musicTrackClear:hover {
+  border-color: #b00020;
+  color: #b00020;
+}
+
+.musicTrackBarsRow {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.musicTrackWaveform {
+  display: block;
+  /* `transition` keeps the dim/undim flip smooth when M/S toggles. */
+  transition: opacity 120ms ease;
+}
+
 .voices {
   display: flex;
   flex-direction: column;
@@ -289,6 +607,7 @@
   text-transform: uppercase;
   letter-spacing: 0.08em;
   margin-bottom: 6px;
+  padding-left: 24px;
 }
 
 .voiceStaff {
@@ -316,7 +635,7 @@
   left: 0;
   z-index: 6;
   flex: 0 0 auto;
-  width: 96px;
+  width: 132px;
   display: flex;
   flex-direction: column;
   border-right: 1px solid #c9bfae;
@@ -413,6 +732,25 @@
   border-color: #b88600;
 }
 
+/* Per-row volume fader, shared by the pitch gutter and the stem gutter.
+   Kept narrow so it fits beside the M/S buttons without widening the
+   sticky gutter further. */
+.rowVolume {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 14px;
+  margin: 0;
+  padding: 0;
+  accent-color: #ff8c55;
+  cursor: pointer;
+  align-self: center;
+}
+
+.rowVolume:focus {
+  outline: 2px solid #ff8c55;
+  outline-offset: 1px;
+}
+
 .laneDim {
   opacity: 0.25;
   transition: opacity 120ms ease;
@@ -426,6 +764,12 @@
 
 .bar {
   position: relative;
+  /* border-box so the 1px barline draws INSIDE `bar.width`. With the
+     default content-box the border added 1px to every bar's flow
+     footprint, accumulating ~1px/bar against the border-free model
+     `timeToX` / the waveform use — noteheads drifted progressively
+     right of the playhead and audio. */
+  box-sizing: border-box;
   border-right: 1px solid #c9bfae;
   flex: 0 0 auto;
 }
@@ -437,6 +781,33 @@
 .barAnacrusis {
   border-right: 1px dashed #c9bfae;
   background: rgba(255, 140, 85, 0.04);
+}
+
+/* Empty pre-roll region before bar 1 (recording lead-in). Hatched so
+   it reads as non-musical space rather than a measure, and sized to
+   the startOffset so the notes line up with the music-stem waveform. */
+.leadIn {
+  position: relative;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  border-right: 1px dashed #c9bfae;
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(201, 191, 174, 0.12) 0 6px,
+    transparent 6px 12px
+  );
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.leadInLabel {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #b0a48c;
+  user-select: none;
+  pointer-events: none;
 }
 
 .lane {
@@ -492,12 +863,55 @@
   background: #b03d00;
 }
 
+/* Conventional tuplet bracket: a thin line with downward end ticks
+   sitting above the bar's notes, the slot count centred on it. Muted
+   ink so it reads as notation chrome rather than competing with the
+   coloured note dots or the orange pattern brackets. */
+.tupletBracket {
+  position: absolute;
+  top: -17px;
+  height: 13px;
+  box-sizing: border-box;
+  border-top: 1.5px solid #6b6b6b;
+  border-left: 1.5px solid #6b6b6b;
+  border-right: 1.5px solid #6b6b6b;
+  pointer-events: none;
+  z-index: 3;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.tupletNumber {
+  /* Sits on the bracket line; the opaque chip masks the line so the
+     numeral stays legible. Cream matches the score surface. */
+  transform: translateY(-50%);
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 700;
+  font-style: italic;
+  font-variant-numeric: tabular-nums;
+  color: #4a4a4a;
+  background: #fbf6ec;
+  line-height: 1;
+}
+
 .note {
   position: absolute;
   border-radius: 50%;
   transform: translate(-50%, -50%);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
   cursor: pointer;
+}
+
+/* A non-straight onset (triplet/tuplet/swing) that isn't already
+   covered by a tuplet bracket — flag it individually with a dotted
+   teal ring so "anything that isn't a standard straight note" is
+   still visible even when it wasn't authored as a group. `outline`
+   (not box-shadow) so it composes with the accent ring. */
+.note.offGrid {
+  outline: 1.5px dotted #2aa198;
+  outline-offset: 2px;
 }
 
 .note.accent {
