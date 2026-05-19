@@ -139,16 +139,26 @@ export function isAudioTrackAudibleUnder(
 }
 
 /**
+ * Master trim applied to every audio (music) track on top of its
+ * per-track volume fader. The GM drum kit sits hot relative to typical
+ * backing recordings, so the music is halved by default — a 100% fader
+ * now sounds like the old 50%. Adjust here to retune the drums-to-music
+ * balance globally.
+ */
+const AUDIO_TRACK_MASTER_GAIN = 0.5;
+
+/**
  * Resolved playback gain for an audio track: 0 when filtered out,
- * otherwise the per-track volume fader (default 1). This is what the
- * controller writes straight onto the track's `GainNode`.
+ * otherwise the per-track volume fader (default 1) scaled by
+ * {@link AUDIO_TRACK_MASTER_GAIN}. This is what the controller writes
+ * straight onto the track's `GainNode`.
  */
 export function audioTrackGainUnder(
   id: AudioTrackId,
   filter: AudioTrackFilter,
 ): number {
   if (!isAudioTrackAudibleUnder(id, filter)) return 0;
-  return filter.volumes.get(id) ?? 1;
+  return (filter.volumes.get(id) ?? 1) * AUDIO_TRACK_MASTER_GAIN;
 }
 
 /**
