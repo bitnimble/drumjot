@@ -182,17 +182,22 @@ export type ResolvedVoice = {
   pitches: string[];
   width: Pixels;
   /**
-   * Empty pixel space reserved before the first bar, representing the
-   * recording's lead-in (`globalMetadata.startOffset` seconds of
-   * silence / non-drum intro before jot-time 0). Scaled at the same
-   * pixels-per-second as the bars so the drum notation lines up with a
-   * loaded audio-track waveform: audio second `startOffset` (where the
-   * drums actually enter) sits exactly at bar 1's left edge. `0` when
-   * there is no offset.
+   * Empty pixel space reserved before bar 1, representing the recording's
+   * pre-drum interval (`globalMetadata.drumsT0Sec` seconds of silence /
+   * non-drum intro before drums enter). Scaled at the same pixels-per-
+   * second as the bars so the drum notation lines up with a loaded audio-
+   * track waveform: audio second `drumsT0Sec` (where the drums actually
+   * enter) sits exactly at bar 1's left edge. `0` when drums start at
+   * audioT0.
    */
   leadInPx: Pixels;
-  /** Lead-in duration in seconds (mirrors `globalMetadata.startOffset`). */
-  leadInSec: number;
+  /**
+   * Pre-drum interval in seconds (mirrors `globalMetadata.drumsT0Sec`).
+   * Named `drumsLeadInSec` to distinguish it from any future "signal
+   * lead-in" (silence before the first non-silent sample); current code
+   * only cares about the drum boundary.
+   */
+  drumsLeadInSec: number;
   /**
    * Constant horizontal offset (px) the note grid is shifted right of
    * each bar's left edge — `viewConfig.barNotePaddingLeft`, the
@@ -413,12 +418,12 @@ export type StructuralVoice = {
   source: Voice;
   bars: StructuralBar[];
   pitches: string[];
-  /** Lead-in seconds, mirrors `globalMetadata.startOffset`. */
-  leadInSec: number;
+  /** Pre-drum interval in seconds, mirrors `globalMetadata.drumsT0Sec`. */
+  drumsLeadInSec: number;
   /**
-   * Effective bpm for converting lead-in seconds into pixels (chosen
-   * once at structure time from `globalMetadata.bpm`'s `start` value).
-   * Stored here so the pixel pass doesn't have to re-resolve it.
+   * Effective bpm for converting the pre-drum interval into pixels
+   * (chosen once at structure time from `globalMetadata.bpm`'s `start`
+   * value). Stored here so the pixel pass doesn't have to re-resolve it.
    */
   leadInBpm: number;
 };
@@ -467,19 +472,54 @@ export class RenderedJot {
    * so changing it reflows the score and (via the player) reschedules
    * playback live. See {@link applyDrumOffset}.
    *
-   * Independent of the player's audio-track offset: this moves the notes
-   * relative to the bars, that moves the backing audio relative to the
-   * notes — both can be non-zero at once.
+   * Deliberately independent of the player's `drumsT0Sec` (audio offset).
+   * The two sliders fix different problems and shouldn't auto-couple:
+   * - `drumOffsetBeats` shifts every note by Δ beats in jot time, so the
+   *   scheduled synth fires at `media = (jot + Δs) + drumsT0Sec`. The
+   *   recorded audio's media positions don't move. If the user is
+   *   correcting a transcription error (notation Δ beats off the actual
+   *   audio drums), the synth-vs-audio alignment now matches exactly.
+   * - `drumsT0Sec` shifts the audio relative to the notation (visually
+   *   and audibly). Used when the audio file's load offset is off.
+   *
+   * Auto-shifting `drumsT0Sec` whenever `drumOffsetBeats` changed would
+   * defeat the transcription-correction use case — the synth would move
+   * with the notes, but so would the audio, preserving the very mismatch
+   * the user is trying to remove. Both knobs can be non-zero at once;
+   * keeping them orthogonal is the feature.
    */
   drumOffsetBeats = 0;
+
+  /**
+   * Zero point for the beat-grid offset control. The shift actually
+   * applied to the score is `drumOffsetBeats - drumOffsetBeatsBaseline`,
+   * so when both fields hold the same value the rendering matches the
+   * raw source. Hydrated when loading a transcriber debug bundle: the
+   * downbeat detector's `beat_alignment_offset_sec` becomes the baseline
+   * (and the initial control value) so the user sees the alignment the
+   * pipeline applied while the notes stay where the MIDI placed them.
+   * Resetting the control to 0 then exposes the pre-alignment positions.
+   */
+  drumOffsetBeatsBaseline = 0;
 
   setDrumOffset(beats: number) {
     this.drumOffsetBeats = Number.isFinite(beats) ? beats : 0;
   }
 
+  setDrumOffsetBaseline(beats: number) {
+    this.drumOffsetBeatsBaseline = Number.isFinite(beats) ? beats : 0;
+  }
+
+  /** Net beat shift applied to the source — the user-visible control
+   * value minus its baseline (see {@link drumOffsetBeatsBaseline}). */
+  get effectiveDrumOffsetBeats(): number {
+    return this.drumOffsetBeats - this.drumOffsetBeatsBaseline;
+  }
+
   get resolved(): ResolvedJot {
     const base = this.layoutJot(this.source);
-    return this.drumOffsetBeats === 0 ? base : applyDrumOffset(base, this.drumOffsetBeats);
+    const effective = this.effectiveDrumOffsetBeats;
+    return effective === 0 ? base : applyDrumOffset(base, effective);
   }
 
   /**
@@ -492,9 +532,8 @@ export class RenderedJot {
    */
   get structure(): JotStructure {
     const base = this.structureForJot(this.source);
-    return this.drumOffsetBeats === 0
-      ? base
-      : applyDrumOffsetStructure(base, this.drumOffsetBeats);
+    const effective = this.effectiveDrumOffsetBeats;
+    return effective === 0 ? base : applyDrumOffsetStructure(base, effective);
   }
 
   /**
@@ -576,8 +615,8 @@ export class RenderedJot {
     const patterns = jot.patterns ?? {};
     const globalTime = jot.globalMetadata.time ?? DEFAULT_TIME;
     const instrumentMap = jot.globalMetadata.instrumentMapping ?? {};
-    const rawOffset = jot.globalMetadata.startOffset;
-    const leadInSec =
+    const rawOffset = jot.globalMetadata.drumsT0Sec;
+    const drumsLeadInSec =
       typeof rawOffset === 'number' && rawOffset > 0 ? rawOffset : 0;
     const bpmField = jot.globalMetadata.bpm;
     const leadInBpm =
@@ -619,8 +658,21 @@ export class RenderedJot {
       });
     }
 
-    let barIndex = 1;
-    for (const b of voice.bars) {
+    // Bar numbering is drums-t0 anchored: bar 1 = first drum bar, with
+    // any pre-drum lead-in bars getting negative indices and bar 0
+    // reserved for the anacrusis (which IS drum content, so doesn't fall
+    // in the negative range). The skip from -1 → 1 when there's no
+    // anacrusis matches musical convention (no "bar 0" in most scoring
+    // systems). `leadBars` on globalMetadata comes from `from_midi.ts`
+    // when it absorbs a transcribed drumless intro; hand-authored DSL
+    // typically omits it.
+    const rawLeadBars = jot.globalMetadata.leadBars;
+    const leadBars =
+      typeof rawLeadBars === 'number' && rawLeadBars > 0
+        ? Math.min(rawLeadBars, voice.bars.length)
+        : 0;
+    for (let i = 0; i < voice.bars.length; i++) {
+      const b = voice.bars[i];
       const barTime = b.metadata?.time ?? activeTime;
       activeTime = barTime;
       const beats = barBeats(barTime);
@@ -631,6 +683,9 @@ export class RenderedJot {
         instrumentMap
       );
       Object.keys(tracks).forEach(noteSeenForPitch);
+      // Pre-drum bar: negative index counting up to -1. First drum bar:
+      // index 1. Skip 0 (reserved for anacrusis if present).
+      const index = i < leadBars ? i - leadBars : i - leadBars + 1;
       bars.push({
         source: b,
         time: barTime,
@@ -638,7 +693,7 @@ export class RenderedJot {
         tracks,
         patternSpans,
         tupletSpans,
-        index: barIndex++,
+        index,
       });
     }
 
@@ -661,7 +716,7 @@ export class RenderedJot {
       source: voice,
       bars,
       pitches: orderedPitches,
-      leadInSec,
+      drumsLeadInSec,
       leadInBpm,
     };
   }
@@ -806,7 +861,7 @@ export class RenderedJot {
     // `buildTimeline` and the waveform mapping assume, which is what
     // keeps drum notes lined up with the audio-track waveform.
     const pxPerSecond = pxPerBeat * (sv.leadInBpm / 60);
-    const leadInPx = px(sv.leadInSec * pxPerSecond);
+    const leadInPx = px(sv.drumsLeadInSec * pxPerSecond);
     const bars: ResolvedBar[] = new Array(sv.bars.length);
     let cursor: number = leadInPx;
     for (let i = 0; i < sv.bars.length; i++) {
@@ -881,7 +936,7 @@ export class RenderedJot {
       pitches: sv.pitches,
       width: px(cursor),
       leadInPx,
-      leadInSec: sv.leadInSec,
+      drumsLeadInSec: sv.drumsLeadInSec,
       notePadPx: padLeft,
     };
   }

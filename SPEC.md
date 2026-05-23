@@ -141,11 +141,25 @@ type Metadata = {
   // Maps each pitch letter to an Instrument. Order is the rendered lane order.
   instrumentMapping?: Record<string, Instrument>;
   comment?: string;
-  // Lead-in (seconds) before jot-time 0. Used on globalMetadata to preserve
-  // the silence / non-drum intro that preceded the first detected beat in a
-  // transcribed recording; browser playback delays its schedule by this amount
-  // so the drums hit at the same wall-clock offset as in the source audio.
-  startOffset?: number;
+  // Three timeline epochs the playback / score / waveform code coordinates
+  // around. All seconds, measured forward from t=0 of the loaded audio file
+  // (audioT0, the origin by definition — no field). Expected ordering:
+  // audioT0 (=0) <= signalT0Sec <= drumsT0Sec.
+  //
+  // drumsT0Sec — audio time of the first drum onset. Bar 1 of the score
+  //   sits exactly here; the player delays its schedule by this much so
+  //   rendered drums hit at the same wall-clock offset as in the source.
+  //   Replaces the legacy `startOffset` field.
+  // signalT0Sec — audio time of the first non-silent sample (e.g. a vocal
+  //   or guitar pickup before drums). Informational today; the waveform /
+  //   debug overlays may use it to mark "music starts here" distinct from
+  //   "drums start here".
+  // leadBars — number of pre-drum bars in the rendered score (those that
+  //   sit before bar 1; they get negative bar indices). Carried so
+  //   consumers don't have to recount the leading rest bars themselves.
+  drumsT0Sec?: number;
+  signalT0Sec?: number;
+  leadBars?: number;
   // user-defined keys allowed
 };
 ```

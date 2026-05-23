@@ -99,6 +99,18 @@
     box-sizing: border-box;
     border-right: 1px solid var(--color-border);
     flex: 0 0 auto;
+    /* Stretch to the full barsRow height (the pitch gutter is taller
+       than one lane), so the right-edge barline reads as one continuous
+       line down the entire row instead of stopping at the lane's bottom
+       a few pixels above the row separator. Lanes have explicit
+       `height: trackHeight` and are kept vertically centred inside the
+       now-taller bar via this flex-column layout. Pattern brackets and
+       tuplet brackets remain absolute-positioned children of `.bar`
+       (their `top` offsets sit slightly outside the bar's top edge). */
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
     /* `--bar-beats` is set inline per BarView (zoom-invariant);
        `--px-per-beat` lives on the score root. */
     width: calc(var(--bar-beats) * var(--px-per-beat) * 1px);
@@ -415,6 +427,15 @@
     color: var(--color-text);
     box-shadow: var(--shadow-md);
     pointer-events: auto;
+    /* Re-enable text selection inside the label — `.jotContainer` sets
+       `user-select: none` to prevent marquee-drag from highlighting
+       score chrome, but the label's debug-details values (timestamps,
+       beat positions, MIDI numbers) are explicitly meant to be copied. */
+    user-select: text;
+    /* Override `.note`'s `cursor: pointer` (inherited because the label
+       is a descendant of the clickable note) — only the Debug-details
+       toggle inside should look clickable. */
+    cursor: default;
     line-height: 1.2;
     display: flex;
     flex-direction: column;
@@ -476,6 +497,10 @@
     composes: readoutSm from '../typography.module.css';
     display: grid;
     grid-template-columns: max-content 1fr;
+    /* `align-items: baseline` so the dt's `line-height: 1` text baseline
+       lines up with the dd's `line-height: 1.35` baseline — without it
+       the keys sit visibly higher than their values inside the row. */
+    align-items: baseline;
     gap: 1px 8px;
     margin: 0;
     line-height: 1.35;
@@ -502,6 +527,155 @@
     /* Values may include parenthetical units (e.g. "1.234 (+8 ms snap)")
        — the parent label widens to fit them rather than wrapping. */
     white-space: nowrap;
+}
+
+/* Per-onset timing diagram, drawn above the textual debug grid.
+   Fixed pixel width (set inline; see TIMING_VIZ_WIDTH in score.tsx) so
+   the waveform pixel ↔ audio-time mapping is stable as the parent
+   label expands to fit other rows. */
+.timingViz {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-bottom: 4px;
+}
+
+.timingVizHeader {
+    composes: metaCaption from '../typography.module.css';
+    display: flex;
+    justify-content: space-between;
+    color: var(--color-text-faint);
+    line-height: 1;
+}
+
+.timingVizHeaderBar {
+    color: var(--color-text-faint-strong);
+}
+
+.timingVizHeaderRange {
+    font-variant-numeric: tabular-nums;
+}
+
+/* Waveform row hosts the canvas plus absolutely-positioned overlays:
+   bar boundaries, the detected line, and the final-position line.
+   `outline` (not `border`) for the frame so it sits in the box's
+   padding box and doesn't shift the canvas inwards — pixel ↔ time
+   alignment depends on the canvas covering the row exactly. */
+.timingVizWaveformRow {
+    position: relative;
+    background: var(--color-bg-cream);
+    outline: 1px solid var(--color-border-soft);
+    border-radius: var(--radius-xs);
+    overflow: hidden;
+}
+
+.timingVizCanvas {
+    display: block;
+}
+
+.timingVizNoAudio {
+    composes: metaCaption from '../typography.module.css';
+    color: var(--color-text-faint);
+    text-align: center;
+    padding: 12px 0;
+}
+
+/* Bar boundary — thin dashed line spanning the canvas height. */
+.timingVizBarLine {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 0;
+    border-left: 1px dashed var(--color-border);
+    pointer-events: none;
+}
+
+.timingVizBarLabel {
+    composes: metaCaption from '../typography.module.css';
+    position: absolute;
+    top: 1px;
+    transform: translateX(2px);
+    color: var(--color-text-faint);
+    font-size: 9px;
+    line-height: 1;
+    pointer-events: none;
+}
+
+/* Original detected onset on the waveform — solid neutral line so it
+   reads as the "starting point" of every subsequent diff row. */
+.timingVizDetectedLine {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 0;
+    border-left: 1.5px solid var(--color-text);
+    pointer-events: none;
+}
+
+/* Final landing position — same chrome as the detected line but in the
+   accent colour so the two are visually distinguishable at a glance. */
+.timingVizFinalLine {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 0;
+    border-left: 1.5px solid var(--color-accent);
+    pointer-events: none;
+}
+
+/* Each diff row is a horizontal slot containing one coloured bar that
+   shows the displacement applied at that stage. `position: relative`
+   anchors the bar's `left` to the row's left edge — which is aligned
+   with the waveform canvas above, so a stage's bar lines up with the
+   audio-time position it represents. */
+.timingVizDiffRow {
+    position: relative;
+}
+
+.timingVizDiffBar {
+    position: absolute;
+    top: 1px;
+    bottom: 1px;
+    display: flex;
+    align-items: center;
+    padding: 0 4px;
+    border-radius: var(--radius-xs);
+    overflow: hidden;
+    /* `border-box` is critical: the inline `width` is the bar's delta
+       in pixels (audio-time end minus anchor), and the bar's edges
+       must land exactly there so one edge sits flush with the
+       detected line on the waveform. With the default `content-box`
+       the 4 px horizontal padding extends each edge outward, which
+       reads as the line being centered inside narrow bars instead of
+       at one edge. */
+    box-sizing: border-box;
+}
+
+.timingVizDiffBarQuant {
+    background: var(--color-pattern-5);
+    color: var(--color-bg-base);
+}
+
+.timingVizDiffBarAlign {
+    background: var(--color-pattern-9);
+    color: var(--color-bg-base);
+}
+
+.timingVizDiffLabel {
+    composes: metaCaption from '../typography.module.css';
+    font-size: 9px;
+    line-height: 1;
+    white-space: nowrap;
+    /* Flex children default to `min-width: auto` (content size), which
+       prevents ellipsis from triggering inside narrow bars — the span
+       just overflows its parent instead. `min-width: 0` + `flex: 1`
+       lets the label shrink to fit the bar's actual width so the
+       ellipsis engages; the parent's `title` attribute carries the
+       full text for hover-disclosure. */
+    flex: 1;
+    min-width: 0;
+    text-overflow: ellipsis;
+    overflow: hidden;
 }
 
 /* Filtered-onset ghost — rendered at a rejected onset's detected
@@ -554,6 +728,12 @@
     color: var(--color-text);
     box-shadow: var(--shadow-md);
     pointer-events: auto;
+    /* Match `.noteLabel`: re-enable text selection so debug values can
+       be copied (parent `.jotContainer` disables it globally). */
+    user-select: text;
+    /* Match `.noteLabel`: reset the inherited pointer cursor — only the
+       Debug-details toggle inside should look clickable. */
+    cursor: default;
     line-height: 1.2;
     /* Match `.noteLabel`: size to the widest non-wrapping row inside. */
     width: max-content;

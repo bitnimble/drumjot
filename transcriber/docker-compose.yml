@@ -8,8 +8,6 @@
 # - The `deploy.resources.reservations.devices` block requires the NVIDIA
 #   Container Toolkit on the host. If you don't have a GPU, comment it
 #   out and the container will fall back to CPU automatically (slow).
-# - SPEC.md is mounted in read-only from the repo root so the LLM prompt
-#   stays in sync with the live spec without having to vendor a copy.
 services:
   transcriber:
     build:
@@ -32,12 +30,9 @@ services:
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       LLM_MODEL: ${LLM_MODEL:-claude-opus-4-7}
-      CRITIC_MODEL: ${CRITIC_MODEL:-claude-haiku-3-5}
+      INSTRUMENT_CONCURRENCY: ${INSTRUMENT_CONCURRENCY:-4}
       CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:5173","http://127.0.0.1:5173"]}
       DEVICE: ${DEVICE:-auto}
-      REFINE_BY_DEFAULT: ${REFINE_BY_DEFAULT:-true}
-      LINT_BY_DEFAULT: ${LINT_BY_DEFAULT:-true}
-      BEST_OF_K_DEFAULT: ${BEST_OF_K_DEFAULT:-1}
       # `madmom` (default) or `beat_transformer`. The latter requires
       # transcriber/checkpoints/beat_transformer.pt to exist at build
       # time; see transcriber/checkpoints/README.md.

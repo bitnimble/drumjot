@@ -62,10 +62,15 @@ type TempoSegment = {
 export function rlrrToJot(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
   const opts = { ...DEFAULTS, ...options };
 
-  // Pre-real-tempo intro -> startOffset lead-in (see computeLeadInSeconds).
-  const leadInSec = computeLeadInSeconds(rlrr);
-  const tempoTimeline = buildTempoTimeline(rlrr, leadInSec);
-  const initialBpm = tempoTimeline[0]?.bpm ?? 120;
+  // drumsT0Sec is literally the audio time of the first drum onset —
+  // the three-epoch model the rest of the codebase agrees on. The
+  // initial bpm is the most recent tempo event at or before that point;
+  // that's what governs bar 1's downbeat. See `computeDrumsT0Sec` and
+  // `chooseInitialBpm` for the detailed rationale (a placeholder 120-bpm
+  // event during a guitar intro must not become the drum-grid anchor).
+  const drumsT0Sec = computeDrumsT0Sec(rlrr);
+  const initialBpm = chooseInitialBpm(rlrr, drumsT0Sec);
+  const tempoTimeline = buildTempoTimeline(rlrr, drumsT0Sec, initialBpm);
 
   const time = opts.timeSignature;
   const barBeats = (time.count * 4) / time.unit;
@@ -91,8 +96,8 @@ export function rlrrToJot(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
 
   for (const event of rlrr.events) {
     // Times are rebased so the real-tempo downbeat sits at beat 0; the
-    // dropped intro is reinstated as `startOffset` on global metadata below.
-    const seconds = Math.max(0, eventTimeSeconds(event) - leadInSec);
+    // dropped intro is reinstated as `drumsT0Sec` on global metadata below.
+    const seconds = Math.max(0, eventTimeSeconds(event) - drumsT0Sec);
     const beats = secondsToBeats(seconds, tempoTimeline);
     const snapped = Math.round(beats / gridBeats) * gridBeats;
     const barIdx = Math.max(0, Math.floor(snapped / barBeats));
@@ -198,7 +203,7 @@ export function rlrrToJot(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
     // Recording's intro before the real-tempo downbeat: playback delays its
     // schedule by this so the drums hit at the same wall-clock offset as the
     // audio (and the audio plays its own intro during the lead-in).
-    ...(leadInSec > 0 ? { startOffset: leadInSec } : {}),
+    ...(drumsT0Sec > 0 ? { drumsT0Sec } : {}),
   };
 
   const voice: Voice = { bars };
@@ -212,22 +217,21 @@ export function rlrrToJot(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
 // ---------- helpers ----------
 
 /**
- * Paradiddle charts frequently carry a placeholder `{ bpm: 120, time: 0 }`
- * left by the authoring tool, with the song's real tempo appearing as a
- * later bpm event at the first downbeat — often *exactly* the first note's
- * time. Treating that pre-real-tempo region as 120-bpm music shifts the
- * whole drum grid against the audio, because playback can only change tempo
- * at bar boundaries (per-bar `{{ bpm }}`) and so cannot reproduce a mid-bar
- * tempo change. The fix: the lead-in is the time of the last bpm event at or
- * before the first drum onset (everything before it is intro). It is dropped
- * from the tempo timeline and surfaced as `globalMetadata.startOffset`, so
- * playback delays its schedule by it and the audio plays its own intro while
- * the grid waits. A chart whose real tempo already starts at time 0 yields
- * `leadInSec === 0` and is unaffected. A note that precedes the later bpm
- * event (a genuine pickup) also keeps `leadInSec` at 0, since that bpm event
- * is then *after* the first onset.
+ * `drumsT0Sec` per the three-epoch model: literally the audio time of
+ * the first drum onset, period. RLRR has no separate "drum start"
+ * signal, so we infer it from the earliest drum event in the file.
+ *
+ * This replaces the older "last bpm event at or before first onset"
+ * heuristic, which conflated two distinct things: the audio-time when
+ * the drum grid begins (drumsT0) and the audio-time when the song's
+ * real tempo took effect (which can sit during a guitar/vocal intro
+ * before drums enter — that's a different epoch). The bpm-event time
+ * is still used as the bar-1 starting tempo via `chooseInitialBpm`; only
+ * the time-origin moved.
+ *
+ * A chart whose first drum sits at time 0 returns 0 — no lead-in.
  */
-function computeLeadInSeconds(rlrr: RlrrFile): number {
+function computeDrumsT0Sec(rlrr: RlrrFile): number {
   const events = rlrr.events ?? [];
   if (events.length === 0) return 0;
   let firstEventSec = Number.POSITIVE_INFINITY;
@@ -235,37 +239,57 @@ function computeLeadInSeconds(rlrr: RlrrFile): number {
     const t = eventTimeSeconds(ev);
     if (t < firstEventSec) firstEventSec = t;
   }
-  if (!Number.isFinite(firstEventSec)) return 0;
-  let leadIn = 0;
-  for (const ev of rlrr.bpmEvents ?? []) {
-    if (ev.time <= firstEventSec + 1e-6 && ev.time > leadIn) leadIn = ev.time;
-  }
-  return leadIn;
+  return Number.isFinite(firstEventSec) ? Math.max(0, firstEventSec) : 0;
 }
 
-function buildTempoTimeline(rlrr: RlrrFile, leadInSec: number): TempoSegment[] {
+/**
+ * The bpm in effect at bar 1's downbeat — the bpm of the latest tempo
+ * event at or before `drumsT0Sec`. Paradiddle charts commonly carry a
+ * placeholder `{ bpm: 120, time: 0 }` left by the authoring tool with
+ * the song's real tempo appearing as a later bpm event at (or just
+ * before) the first drum. Choosing the latest-at-or-before-drums event
+ * picks the real tempo and ignores the placeholder.
+ *
+ * Falls back to 120 if no bpm event exists or none is at-or-before
+ * drumsT0Sec (which means the first bpm event is itself a pickup after
+ * the first drum — rare, but treat as standard 120-bpm until that event
+ * lands).
+ */
+function chooseInitialBpm(rlrr: RlrrFile, drumsT0Sec: number): number {
+  let bpm = 120;
+  let bestTime = Number.NEGATIVE_INFINITY;
+  for (const ev of rlrr.bpmEvents ?? []) {
+    if (ev.time <= drumsT0Sec + 1e-6 && ev.time > bestTime) {
+      bestTime = ev.time;
+      bpm = ev.bpm;
+    }
+  }
+  return bpm;
+}
+
+function buildTempoTimeline(
+  rlrr: RlrrFile,
+  drumsT0Sec: number,
+  initialBpm: number,
+): TempoSegment[] {
   const out: TempoSegment[] = [];
   let beats = 0;
   let lastSeconds = 0;
-  let lastBpm = 120;
-  let first = true;
-  // Drop bpm events before the lead-in and rebase the rest so the governing
-  // real-tempo event sits at time 0. With leadInSec === 0 this is a no-op.
+  let lastBpm = initialBpm;
+  // Drop bpm events strictly before drumsT0Sec — those govern the
+  // pre-drum lead-in audio that isn't represented in the bar grid. The
+  // event AT drumsT0Sec (if any) collapses with the synthesised t=0
+  // bootstrap below. Subsequent bpm events get rebased so the timeline's
+  // origin is bar 1's downbeat.
   const events = [...(rlrr.bpmEvents ?? [])]
-    .filter((e) => e.time >= leadInSec - 1e-6)
-    .map((e) => ({ bpm: e.bpm, time: Math.max(0, e.time - leadInSec) }))
+    .filter((e) => e.time > drumsT0Sec + 1e-6)
+    .map((e) => ({ bpm: e.bpm, time: Math.max(0, e.time - drumsT0Sec) }))
     .sort((a, b) => a.time - b.time);
-  if (events.length === 0 || events[0].time > 0) {
-    events.unshift({ bpm: 120, time: 0 });
-  }
+  // Synthesise a t=0 segment carrying `initialBpm` so secondsToBeats /
+  // bpmAtBeat always have a starting tempo to anchor against, even
+  // when no original bpm event sat at-or-before drumsT0Sec.
+  out.push({ startSeconds: 0, startBeats: 0, bpm: initialBpm });
   for (const ev of events) {
-    if (first) {
-      out.push({ startSeconds: ev.time, startBeats: 0, bpm: ev.bpm });
-      lastSeconds = ev.time;
-      lastBpm = ev.bpm;
-      first = false;
-      continue;
-    }
     const dt = ev.time - lastSeconds;
     beats += (dt * lastBpm) / 60;
     out.push({ startSeconds: ev.time, startBeats: beats, bpm: ev.bpm });

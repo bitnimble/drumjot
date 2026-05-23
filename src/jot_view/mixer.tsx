@@ -54,6 +54,7 @@ function audioTrackLabel(filename: string): string {
   return filename.replace(/\.[^./\\]+$/, '') || filename;
 }
 
+
 /** Common drag/drop props passed to every mixer row. */
 type MixerRowDragProps = {
   idx: number;
@@ -74,6 +75,16 @@ type MixerRowDragProps = {
    * to gap against.
    */
   groupStart: boolean;
+  /**
+   * True when this row ends a group — it has a `groupId` AND the next
+   * row has a different (or no) `groupId`. Together with `groupStart`
+   * it lets the row know it's on the outer edge of a real group (vs a
+   * solo row that just happens to follow a different cluster), so the
+   * outer border can render thicker than a regular inter-row separator.
+   */
+  groupEnd: boolean;
+  /** True iff this row is part of a group (`key.groupId !== undefined`). */
+  inGroup: boolean;
   /** Pointer-down handler for the gutter-edge resize affordance. */
   onResizeGutterStart: (e: React.PointerEvent<HTMLDivElement>) => void;
 };
@@ -168,7 +179,15 @@ export const MixerView = observer(
           // row's. Solo (groupId undefined) rows are each their own
           // group. The first row never gets a gap (nothing above it).
           const prevGroupId = idx > 0 ? trackOrder[idx - 1].groupId : undefined;
+          const nextGroupId =
+            idx < trackOrder.length - 1 ? trackOrder[idx + 1].groupId : undefined;
           const groupStart = idx > 0 && key.groupId !== prevGroupId;
+          // groupEnd / inGroup only fire on rows that are actually part
+          // of a `groupId` cluster (paired audio↔pitch today). Solo rows
+          // crossing a group boundary still get `groupStart` for the
+          // inter-cluster gap, but aren't treated as a one-row group.
+          const inGroup = key.groupId !== undefined;
+          const groupEnd = inGroup && key.groupId !== nextGroupId;
           const rowProps = {
             idx,
             dragFromIdx,
@@ -179,6 +198,8 @@ export const MixerView = observer(
             onResetDrag: resetDrag,
             mixerLength: trackOrder.length,
             groupStart,
+            groupEnd,
+            inGroup,
             onResizeGutterStart,
           };
           if (key.kind === 'audio') {
@@ -401,6 +422,8 @@ const AudioTrackRow = observer(
     onMoveTrack,
     onResetDrag,
     groupStart,
+    groupEnd,
+    inGroup,
     onResizeGutterStart,
   }: {
     id: AudioTrackId;
@@ -417,7 +440,7 @@ const AudioTrackRow = observer(
     // pixel width itself so only IT re-renders on zoom.
     const structureVoice = jot.structure.voices[0];
     const leadInBeats = structureVoice
-      ? structureVoice.leadInSec * (structureVoice.leadInBpm / 60)
+      ? structureVoice.drumsLeadInSec * (structureVoice.leadInBpm / 60)
       : 0;
     let voiceBeats = leadInBeats;
     if (structureVoice) {
@@ -442,6 +465,8 @@ const AudioTrackRow = observer(
         className={classNames(
           styles.musicTrack,
           groupStart && styles.mixerRowGroupStart,
+          groupEnd && styles.mixerRowGroupEnd,
+          inGroup && styles.mixerRowInGroup,
           isDragging && styles.mixerRowDragging,
           drop.isDropIndicatorAbove && styles.mixerDropIndicatorAbove,
           drop.isDropIndicatorBelow && styles.mixerDropIndicatorBelow,
@@ -556,6 +581,8 @@ const PitchRow = observer(
     onMoveTrack,
     onResetDrag,
     groupStart,
+    groupEnd,
+    inGroup,
     onResizeGutterStart,
   }: {
     pitch: string;
@@ -607,9 +634,9 @@ const PitchRow = observer(
       return { ...b, tracks: track ? { [pitch]: track } : {} };
     });
     // Voice-level totals for the bars-row width (in beats — the row's
-    // pixel width is `voiceBeats × --px-per-beat` via CSS calc). Lead-in
-    // contributes `leadInSec × bpm/60` quarter notes at the row's tempo.
-    const leadInBeats = voice0.leadInSec * (voice0.leadInBpm / 60);
+    // pixel width is `voiceBeats × --px-per-beat` via CSS calc). Pre-drum
+    // contributes `drumsLeadInSec × bpm/60` quarter notes at the row's tempo.
+    const leadInBeats = voice0.drumsLeadInSec * (voice0.leadInBpm / 60);
     let voiceBeats = leadInBeats;
     for (const b of voice0.bars) voiceBeats += b.beats;
 
@@ -662,6 +689,8 @@ const PitchRow = observer(
         className={classNames(
           styles.pitchRow,
           groupStart && styles.mixerRowGroupStart,
+          groupEnd && styles.mixerRowGroupEnd,
+          inGroup && styles.mixerRowInGroup,
           isDragging && styles.mixerRowDragging,
           drop.isDropIndicatorAbove && styles.mixerDropIndicatorAbove,
           drop.isDropIndicatorBelow && styles.mixerDropIndicatorBelow,
@@ -696,6 +725,10 @@ const PitchRow = observer(
                 onChange={(v) => voiceControls.onSetVolume(pitch, v)}
                 label={labelText}
               />
+              {/* Reserves the Clear-button slot so the slider width
+                  matches the audio-track row (which has X/M/S, vs M/S
+                  here). aria-hidden + non-interactive — purely layout. */}
+              <span className={styles.controlSpacer} aria-hidden="true" />
               <MuteButton
                 active={muted}
                 onToggle={() => voiceControls.onToggleMute(pitch)}
@@ -717,7 +750,6 @@ const PitchRow = observer(
           style={
             {
               ['--voice-beats' as string]: voiceBeats,
-              height: trackHeight,
             } as React.CSSProperties
           }
           onClick={(e) => seekFromClick(e, onSeek)}
@@ -728,10 +760,9 @@ const PitchRow = observer(
               style={
                 {
                   ['--lead-in-beats' as string]: leadInBeats,
-                  height: trackHeight,
                 } as React.CSSProperties
               }
-              title={`Lead-in: ${voice0.leadInSec.toFixed(
+              title={`Lead-in: ${voice0.drumsLeadInSec.toFixed(
                 2,
               )}s of pre-roll before the first beat — keeps the drum notation aligned with a loaded audio-track waveform.`}
             >
@@ -809,7 +840,7 @@ const AudioTrackWaveformCanvas = observer(
     // The live drum↔audio offset (Offset control). Reading it here under
     // `observer` re-renders the waveform when the user nudges the offset
     // so it stays aligned with where the audio actually plays.
-    const startOffsetSec = jotPlayer.startOffsetSec;
+    const drumsT0Sec = jotPlayer.drumsT0Sec;
     // Structural voice-beats (zoom-invariant) drives the canvas's
     // rendered CSS width — we always draw the canvas at the px-per-beat
     // that was in effect on the most recent settle, NOT the live
@@ -819,7 +850,7 @@ const AudioTrackWaveformCanvas = observer(
     // GPU composite — no canvas redraw, no layout, no React work.
     const structureVoice = jot.structure.voices[0];
     const voiceBeats = structureVoice
-      ? structureVoice.leadInSec * (structureVoice.leadInBpm / 60) +
+      ? structureVoice.drumsLeadInSec * (structureVoice.leadInBpm / 60) +
         structureVoice.bars.reduce((a, b) => a + b.beats, 0)
       : 0;
     // Read pxPerBeat AFTER voiceBeats so the observer tracks both: a
@@ -828,6 +859,23 @@ const AudioTrackWaveformCanvas = observer(
     // visual scaling is decoupled from this — it's driven by the root
     // `--px-per-beat` flowing into the canvas's CSS transform calc.
     const pxPerBeat = jot.pxPerBeat;
+    // If the audio track is the isolated stem for a known DSL pitch
+    // (debug bundles set this from the bundle's `mapping`), tint the
+    // waveform with that pitch's lane color so it visually pairs with
+    // its instrument row. Best-effort lookup across all voices' bars —
+    // a pitch the loaded jot doesn't contain falls back to the default.
+    let pitchColor: string | undefined;
+    if (track.pitch) {
+      outer: for (const v of jot.structure.voices) {
+        for (const b of v.bars) {
+          const t = b.tracks[track.pitch];
+          if (t?.color) {
+            pitchColor = t.color;
+            break outer;
+          }
+        }
+      }
+    }
     // `renderedPxPerBeat` is the scale the bitmap was last drawn at.
     // Persisted as state (not derived from pxPerBeat) so a zoom-driven
     // re-render of this component DOES NOT update the inline
@@ -867,12 +915,15 @@ const AudioTrackWaveformCanvas = observer(
         const { peaks } = computeWaveformPeaksForJot(
           jot,
           track.buffer,
-          startOffsetSec,
+          drumsT0Sec,
         );
 
         ctx.clearRect(0, 0, widthPx, height);
         const mid = height / 2;
-        ctx.fillStyle = dim ? '#d3c8b6' : '#5BA8E8';
+        // Always rasterise at full pitch color; the muted-track look is
+        // a CSS `filter` on the canvas element (see `musicTrackWaveformDim`
+        // in the module CSS), so mute/solo toggles don't trigger a redraw.
+        ctx.fillStyle = pitchColor ?? '#5BA8E8';
         // Each pixel column is a vertical line from min*scale to
         // max*scale. A single fillRect per column is faster than
         // building a Path2D for thousands of segments and lets us keep
@@ -903,7 +954,7 @@ const AudioTrackWaveformCanvas = observer(
       // so a 500ms wheel gesture triggers ONE redraw instead of 30+.
       const id = window.setTimeout(draw, 150);
       return () => window.clearTimeout(id);
-    }, [jot, track, height, dim, startOffsetSec, pxPerBeat, voiceBeats, renderedPxPerBeat]);
+    }, [jot, track, height, drumsT0Sec, pxPerBeat, voiceBeats, renderedPxPerBeat, pitchColor]);
 
     if (voiceBeats <= 0) return null;
     // The canvas's CSS width is the `renderedWidth` it was last drawn
@@ -916,7 +967,10 @@ const AudioTrackWaveformCanvas = observer(
     return (
       <canvas
         ref={canvasRef}
-        className={styles.musicTrackWaveform}
+        className={classNames(
+          styles.musicTrackWaveform,
+          dim && styles.musicTrackWaveformDim,
+        )}
         style={
           {
             width: renderedWidth,

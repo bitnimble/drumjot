@@ -105,10 +105,8 @@ Other env vars you may want to tune (defaults are sensible):
 
 | Var | Default | Purpose |
 |---|---|---|
-| `LLM_MODEL` | `claude-opus-4-7` | Initial transcription + refinement model. |
-| `CRITIC_MODEL` | `claude-haiku-3-5` | Cheaper model for issue triage; empty string disables the critic. |
-| `REFINE_BY_DEFAULT` | `true` | Whether `/transcribe` runs the multi-level refinement loop unless the request explicitly says otherwise. |
-| `BEST_OF_K_DEFAULT` | `1` | Number of candidate transcriptions to generate at request time when the request doesn't override. |
+| `LLM_MODEL` | `claude-opus-4-7` | Model used by the filter stage (rejects artifact onsets per instrument). |
+| `INSTRUMENT_CONCURRENCY` | `4` | Max concurrent per-instrument filter LLM calls. Calls are small; mainly guards API rate limits. |
 | `DEVICE` | `auto` | `auto` lets audio-separator pick CUDA/MPS/CPU. Force with `cuda` / `cpu`. |
 | `DEBUG_DIR` | _(unset)_ | When set (recommend `/debug`), every request persists drum stems + beat tracking + LLM input/output to `<DEBUG_DIR>/<timestamp>_<id>_<filename>/` so you can listen back and debug. The default compose mount `./debug:/debug` already exposes this on the host. |
 
@@ -144,30 +142,29 @@ so it doubles as a real readiness probe for any orchestrator
 With the service running and `bun run dev` up, click **Transcribe
 audio** in the Drumjot toolbar, pick an audio file (wav / flac / mp3 /
 aac / m4a / opus / ogg), wait ~30–90 s, and the rendered Jot
-replaces whatever was on screen. The success pill shows initial vs
-refined F1, bar count, and whether tempo or time-signature changes
-were detected.
+replaces whatever was on screen. The score is delivered as a MIDI
+file and converted client-side via `src/midi/from_midi.ts`; the
+success pill shows the detected tempo, bar count, and whether tempo or
+time-signature changes were detected.
 
 ### Using it directly
 
 ```bash
 curl -X POST http://localhost:8001/transcribe \
   -F file=@your_song.mp3 \
-  -F refine=true \
-  -F best_of_k=3 \
   -F debug=true
 ```
 
-Response is a JSON `TranscribeResponse` with `jot_dsl` (the canonical
-DSL string), `metadata` (tempo, time signature, per-bar info), and
-optionally `refinement` + `best_of_k` logs.
+Response is a JSON `TranscribeResponse` with `metadata` (tempo, time
+signature, per-bar info), `prediction_midi_url` (the predicted-onsets
+MIDI file), and the per-stem audio deliverable URLs.
 
 When `debug=true` (or `DEBUG_DIR` is set), the response also includes a
 `debug_dir` field pointing at a per-request folder under
 `transcriber/debug/` containing the original upload, separated drum
 stems, per-instrument stems (kick/snare/hat/...), the beat-tracker
-output, the LLM's input candidates, and both the initial and refined
-DSL. The Vite app's "Save debug files" checkbox toggles this.
+output, the detected onsets, the predicted MIDI, and per-note
+provenance. The Vite app's "Save debug files" checkbox toggles this.
 
 Full API docs: see [transcriber/README.md](transcriber/README.md).
 

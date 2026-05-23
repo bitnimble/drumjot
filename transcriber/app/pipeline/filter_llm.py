@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +44,7 @@ from app.debug import (
 from app.models import OnsetCandidate
 from app.pipeline.beats import BeatStructure
 from app.pipeline.llm_util import call_messages_with_refusal_retry
-from app.pipeline.recompose import PITCH_DISPLAY_NAMES
+from app.pipeline.separate import PITCH_DISPLAY_NAMES
 
 log = logging.getLogger(__name__)
 
@@ -163,12 +165,25 @@ def filter_onsets_all_instruments(
     candidates_by_pitch: dict[str, list[OnsetCandidate]],
     structure: BeatStructure,
     max_workers: int | None = None,
+    on_complete: Callable[[str, int, int], None] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, list[OnsetCandidate]]:
     """Filter every instrument that has in-range onsets, in parallel.
 
     Mirrors `llm.transcribe_all_instruments`' threading + debug-sink
     ContextVar propagation. Instruments with no in-range candidates are
     omitted (they weren't played).
+
+    `on_complete`, when provided, is invoked from the futures-completion
+    loop with `(pitch, done, total)` each time an instrument's filter
+    call returns. Used by the HTTP layer to surface live "N/M filtered"
+    progress to the client. Errors in the callback are caught so a
+    misbehaving subscriber can't abort the filter pass.
+
+    `cancel_event`, when set, causes the pool to stop submitting/awaiting
+    new instruments — already-in-flight LLM calls run to completion
+    (the anthropic SDK exposes no cross-thread cancel) but pending ones
+    are cancelled and the function returns whatever it has so far.
     """
     pitches = sorted(
         p for p, cands in candidates_by_pitch.items()
@@ -201,23 +216,49 @@ def filter_onsets_all_instruments(
             reset_current_debug_sink(token)
 
     kept_by_pitch: dict[str, list[OnsetCandidate]] = {}
+    total = len(pitches)
+    done = 0
+    cancelled = False
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
         futures = {ex.submit(work, p): p for p in pitches}
-        for fut in concurrent.futures.as_completed(futures):
-            pitch = futures[fut]
-            try:
-                p, kept = fut.result()
-            except Exception as exc:
-                log.warning(
-                    "filter: instrument %s failed entirely (%s); "
-                    "keeping its raw onsets", pitch, exc,
+        try:
+            for fut in concurrent.futures.as_completed(futures):
+                if cancel_event is not None and cancel_event.is_set():
+                    cancelled = True
+                    break
+                pitch = futures[fut]
+                try:
+                    p, kept = fut.result()
+                except Exception as exc:
+                    log.warning(
+                        "filter: instrument %s failed entirely (%s); "
+                        "keeping its raw onsets", pitch, exc,
+                    )
+                    kept_by_pitch[pitch] = [
+                        c for c in candidates_by_pitch.get(pitch, []) if c.bar >= 0
+                    ]
+                    p = pitch
+                else:
+                    if kept:
+                        kept_by_pitch[p] = kept
+                done += 1
+                if on_complete is not None:
+                    try:
+                        on_complete(p, done, total)
+                    except Exception:  # pragma: no cover - best-effort
+                        log.exception("on_complete callback raised; ignoring")
+        finally:
+            if cancelled:
+                # Cancel everything not yet started; in-flight LLM calls
+                # cannot be interrupted but the pool's __exit__ will at
+                # least skip their result collection.
+                for f in futures:
+                    if not f.done():
+                        f.cancel()
+                log.info(
+                    "filter: cancelled after %d/%d instruments (client disconnected)",
+                    done, total,
                 )
-                kept_by_pitch[pitch] = [
-                    c for c in candidates_by_pitch.get(pitch, []) if c.bar >= 0
-                ]
-                continue
-            if kept:
-                kept_by_pitch[p] = kept
 
     return kept_by_pitch
 

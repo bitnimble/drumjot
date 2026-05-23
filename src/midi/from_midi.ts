@@ -312,6 +312,54 @@ export function fromMidi(
     bars.pop();
   }
 
+  // Count the leading run of all-rest bars: these are the pre-drum lead-in
+  // the transcriber stamped to absorb the audio's drumless intro
+  // (`transcriber/app/pipeline/onsets_midi.py:_inject_start_offset` aligned
+  // bar 1 to a whole number of bar-0-length blocks past tick 0). They stay
+  // in the bars list — the UI renders them with negative `bar.index` so
+  // pre-drum audio still has a position on the timeline — but their count
+  // is surfaced on `globalMetadata.leadBars` so consumers don't have to
+  // recount them, and their cumulative audio duration becomes
+  // `globalMetadata.drumsT0Sec` so playback / waveform alignment match the
+  // transcriber's RLRR/DSL paths.
+  let leadBars = 0;
+  while (
+    leadBars < bars.length &&
+    bars[leadBars].elements.every((e) => e.kind === 'rest')
+  ) {
+    leadBars++;
+  }
+  // If the whole jot is rests (no drums in the file at all) we leave
+  // leadBars = 0 / drumsT0Sec undefined — there's no "bar 1" to anchor
+  // against and emitting a giant pre-drum offset would just hide the
+  // entire content.
+  if (leadBars >= bars.length) leadBars = 0;
+
+  let drumsT0Sec = 0;
+  if (leadBars > 0) {
+    // Walk the pre-drum bars in lockstep with the tempo timeline (same
+    // attribution rule as the main bar loop: "most recent tempo at or
+    // before this bar's startTick"). Each bar contributes `barBeats * 60 /
+    // bpm` seconds; bpm follows tempoChanges across the lead-in so a file
+    // with a back-solved `lead_tempo` at tick 0 distinct from bar 1's
+    // tempo still computes the correct audio duration.
+    let leadTempoIdx = 0;
+    for (let bi = 0; bi < leadBars; bi++) {
+      const span = barSpans[bi];
+      while (
+        leadTempoIdx + 1 < tempoChanges.length &&
+        tempoChanges[leadTempoIdx + 1].tick <= span.startTick
+      ) {
+        leadTempoIdx++;
+      }
+      const barBpm = tempoChanges[leadTempoIdx]?.bpm ?? initialBpm;
+      const barBeats = (span.time.count * 4) / span.time.unit;
+      if (barBpm > 0) {
+        drumsT0Sec += (barBeats * 60) / barBpm;
+      }
+    }
+  }
+
   // Build an instrument mapping from the MIDI notes we actually observed.
   // Reuse the per-song letter allocation so the mapping and the inline
   // pitches agree letter-for-letter even when fallback letters were used.
@@ -321,9 +369,14 @@ export function fromMidi(
     bpm,
     time: barSpans[0].time,
     instrumentMapping,
+    ...(leadBars > 0 ? { leadBars } : {}),
+    ...(drumsT0Sec > 0 ? { drumsT0Sec } : {}),
   };
 
-  // [A9] No anacrusis is inferred; bars run from tick 0 onward.
+  // [A9] No anacrusis is inferred; bars run from tick 0 onward. Pre-drum
+  // bars are preserved in `bars[0..leadBars-1]` and surfaced via
+  // `globalMetadata.leadBars` / `globalMetadata.drumsT0Sec` so the
+  // renderer can label them with negative indices.
   return {
     title: '',
     globalMetadata,

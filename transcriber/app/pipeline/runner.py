@@ -1,4 +1,4 @@
-"""Pipeline runner: dispatches the six named stages in order.
+"""Pipeline runner: dispatches the five named stages in order.
 
 Both `/transcribe` (full run from a fresh upload) and `/transcribe/resume`
 (skip to a chosen stage using a previous debug folder) go through this
@@ -9,11 +9,17 @@ runner walks `STAGE_ORDER[start_stage:]` mutating the context.
 Stage dependencies (output of stage -> consumers):
 
     stems_all  -> drum_stem               (consumed by stems_per)
-    stems_per  -> per_instrument_stems    (consumed by onsets, refine)
-    beats      -> structure               (consumed by onsets, transcribe, refine)
-    onsets     -> onsets_by_pitch         (consumed by transcribe, refine)
-    transcribe -> initial_jot             (consumed by refine)
-    refine     -> final_jot
+    stems_per  -> per_instrument_stems    (consumed by onsets)
+    beats      -> structure               (consumed by onsets, transcribe)
+    onsets     -> onsets_by_pitch         (consumed by transcribe)
+    transcribe -> predicted_midi          (kept-onsets MIDI deliverable)
+
+The legacy `dsl`/`refine` pathway (LLM-emitted Drumjot DSL + F1-gated
+refinement loop) was removed in May 2026; see
+`transcriber/docs/ai-midi-to-jot-notes.md` for the techniques captured
+from it for any future AI-assisted MIDI -> Jot work. The backend now
+produces MIDI only; converting that MIDI to a Drumjot Jot lives on the
+frontend via `src/midi/from_midi.ts`.
 
 If a stage's required upstream artifact is missing, the corresponding
 `_do_*` function raises with a message naming which stage should have
@@ -22,44 +28,33 @@ produced it; the HTTP layer wraps that into a 400.
 from __future__ import annotations
 
 import logging
+import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
-import librosa
-
 from app.debug import DebugSink, beats_dump, onsets_dump
-from app.run_log import current_run_log
-from app.models import (
-    BestOfKLog,
-    OnsetCandidate,
-    RefinementIteration,
-    RefinementLog,
-)
+from app.models import OnsetCandidate
 from app.outputs import OutputSink
-from app.pipeline.adtof_onsets import detect_onsets_adtof_or_librosa
+from app.pipeline.adtof_onsets import (
+    detect_drum_onsets_for_alignment,
+    detect_onsets_adtof,
+)
 from app.pipeline.beats import (
     BeatStructure,
     analyze_beats,
     detect_feel_for_bars,
 )
 from app.pipeline.cymbal_split import split_cymbal_onsets
-from app.pipeline.hihat_split import split_hihat_onsets
 from app.pipeline.filter_llm import filter_onsets_all_instruments
-from app.pipeline.format import format_dsl
-from app.pipeline.llm import transcribe_all_instruments
+from app.pipeline.hihat_split import split_hihat_onsets
 from app.pipeline.note_provenance import build_note_provenance
-from app.pipeline.onsets import attach_beat_positions, detect_onsets
 from app.pipeline.onsets_midi import onsets_to_midi_bytes
-from app.pipeline.recompose import FEET_PITCHES, recompose
-from app.pipeline.refine import (
-    RefineLevel,
-    refine_jot,
-    refine_jot_per_instrument,
-)
 from app.pipeline.separate import Separator
+from app.run_log import current_run_log
 
 log = logging.getLogger(__name__)
 
@@ -72,7 +67,6 @@ class Stage(StrEnum):
     BEATS = "beats"
     ONSETS = "onsets"
     TRANSCRIBE = "transcribe"
-    REFINE = "refine"
 
 
 STAGE_ORDER: list[Stage] = [
@@ -81,7 +75,6 @@ STAGE_ORDER: list[Stage] = [
     Stage.BEATS,
     Stage.ONSETS,
     Stage.TRANSCRIBE,
-    Stage.REFINE,
 ]
 
 
@@ -101,24 +94,55 @@ class StageError(Exception):
         super().__init__(f"{stage.value} failed: {original}")
 
 
+class PipelineCancelled(Exception):
+    """Raised between stages when the client has disconnected (the HTTP
+    layer set `ctx.cancel_event`). The current stage runs to completion —
+    native code in separation/beats/onsets is uninterruptible — but
+    subsequent stages are skipped.
+    """
+
+    def __init__(self, next_stage: Stage) -> None:
+        self.next_stage = next_stage
+        super().__init__(f"cancelled before stage {next_stage.value}")
+
+
 BeatInput = Literal["full_mix", "drum_stem"]
+
+
+# Progress event payload published by the pipeline as stages start/end
+# and (optionally) as substage milestones tick over (e.g. "3/5
+# instruments filtered"). The HTTP layer wraps this in `{"type": ...}`
+# NDJSON envelopes for the streaming response; here we keep it as a
+# plain dict so the runner doesn't pull in HTTP types.
+#
+# Fields:
+#   stage         the StrEnum value of the current stage
+#   phase         "start" | "end" — emitted at the bookends of each stage
+#   detail        free-form human-readable substage label
+#                 (e.g. "filtering snare", "iteration 2 / 3")
+#   elapsed_seconds  set only on "end" events
+ProgressEvent = dict[str, Any]
+ProgressCallback = Callable[[ProgressEvent], None]
+
+
+def _safe_progress(progress: ProgressCallback | None, event: ProgressEvent) -> None:
+    """Invoke `progress` while swallowing exceptions.
+
+    Progress is a debugging / UX aid — a misbehaving callback (or a
+    closed client connection on the HTTP side) must never propagate
+    into the pipeline and abort the actual transcribe.
+    """
+    if progress is None:
+        return
+    try:
+        progress(event)
+    except Exception:  # pragma: no cover - progress is best-effort
+        log.exception("progress callback raised; ignoring")
 
 
 @dataclass
 class PipelineOptions:
-    refine: bool
-    lint: bool
-    best_of_k: int
     beat_input: BeatInput = "full_mix"
-    # "dsl" = LLM emits Drumjot DSL, recompose + refine (legacy path).
-    # "filter" = LLM only rejects artifact onsets; kept onsets render
-    # straight to MIDI with original times. No Jot/recompose/refine.
-    transcribe_mode: Literal["dsl", "filter"] = "dsl"
-    # Per-request onset backend (the `onset_backend` form param).
-    # "librosa" = the legacy spectral-flux detector; "adtof" = ADTOF
-    # CRNN per stem with automatic fallback to librosa if ADTOF or its
-    # weights are unavailable / the model errors.
-    onset_backend: Literal["librosa", "adtof"] = "librosa"
 
 
 @dataclass
@@ -138,25 +162,19 @@ class PipelineContext:
     per_instrument_stems: dict[str, Path] = field(default_factory=dict)
     structure: BeatStructure | None = None
     onsets_by_pitch: dict[str, list[OnsetCandidate]] = field(default_factory=dict)
-    initial_jot: str | None = None
-    # Set only by the `filter` transcribe path: the rendered MIDI of the
-    # LLM-kept onsets. Materialised to `prediction.mid` (debug + output
-    # sink) and surfaced as `prediction_midi_url` on the response.
+    # The rendered MIDI of the LLM-kept onsets. Materialised to
+    # `prediction.mid` (debug + output sink) and surfaced as
+    # `prediction_midi_url` on the response.
     predicted_midi: bytes | None = None
-    # Set only by the `filter` transcribe path: per-note debug provenance
-    # JSON listing every detected onset (kept and rejected) for the UI.
-    # Shipped inside the debug bundle as `note_provenance.json`; absent
-    # for DSL-mode runs (and absent in resume runs that didn't reach
-    # `transcribe`). See `note_provenance.build_note_provenance`.
+    # Per-note debug provenance JSON listing every detected onset (kept
+    # and rejected) for the UI. Shipped inside the debug bundle as
+    # `note_provenance.json`. See `note_provenance.build_note_provenance`.
     note_provenance: dict[str, Any] | None = None
-    # Per-instrument monophonic fragments produced by the transcribe
-    # stage, kept so the refine stage can re-run the per-instrument loop
-    # on fresh runs. Empty on a resume-from-refine (only the merged
-    # initial.jot is on disk) — `_do_refine` falls back accordingly.
-    initial_lines_by_pitch: dict[str, str] = field(default_factory=dict)
-    best_of_k_log: BestOfKLog | None = None
-    final_jot: str | None = None
-    refinement_log: RefinementLog | None = None
+    # Set by the HTTP layer when the client disconnects (Stop button).
+    # Checked between stages and inside the LLM stage's parallel pool;
+    # the current stage cannot be interrupted (native code) but the
+    # pipeline stops advancing once it returns. See PipelineCancelled.
+    cancel_event: threading.Event = field(default_factory=threading.Event)
 
 
 def run_pipeline(
@@ -167,20 +185,38 @@ def run_pipeline(
     options: PipelineOptions,
     sink: DebugSink | None,
     output_sink: OutputSink | None = None,
+    progress: ProgressCallback | None = None,
 ) -> PipelineContext:
-    """Run stages from `start_stage` onward, mutating and returning `ctx`."""
+    """Run stages from `start_stage` onward, mutating and returning `ctx`.
+
+    When `progress` is provided it receives one event at each stage
+    bookend (`phase="start"` / `phase="end"`) plus any substage events
+    emitted by `_do_<stage>` helpers (e.g. per-instrument LLM progress
+    inside `transcribe`). Callback exceptions are caught and logged so a
+    misbehaving sink can never abort the actual pipeline.
+    """
     if ctx.duration <= 0 and ctx.audio_path.exists():
         ctx.duration = _probe_duration(ctx.audio_path)
 
     start_idx = stage_index(start_stage)
     run_log = current_run_log()
     for stage in STAGE_ORDER[start_idx:]:
+        # Client-disconnect / Stop-button cancellation check. Fires between
+        # stages only — native code in the current stage cannot be
+        # interrupted, but skipping the remaining stages saves the rest
+        # of the pipeline (most importantly the LLM stage).
+        if ctx.cancel_event.is_set():
+            log.info("Pipeline cancelled before stage %s", stage.value)
+            raise PipelineCancelled(stage)
         log.info("Running stage: %s", stage.value)
+        _safe_progress(progress, {"stage": stage.value, "phase": "start"})
         stage_start_wall = time.time()
         stage_start_perf = time.perf_counter()
         try:
-            _run_stage(stage, ctx, separator, options, sink, output_sink)
+            _run_stage(stage, ctx, separator, options, sink, output_sink, progress)
         except StageError:
+            raise
+        except PipelineCancelled:
             raise
         except Exception as exc:
             log.exception("Stage %s failed", stage.value)
@@ -190,6 +226,10 @@ def run_pipeline(
             log.info("Stage %s finished in %.2fs", stage.value, elapsed)
             if run_log is not None:
                 run_log.record_stage(stage.value, stage_start_wall, time.time())
+            _safe_progress(
+                progress,
+                {"stage": stage.value, "phase": "end", "elapsed_seconds": elapsed},
+            )
     return ctx
 
 
@@ -200,6 +240,7 @@ def _run_stage(
     options: PipelineOptions,
     sink: DebugSink | None,
     output_sink: OutputSink | None,
+    progress: ProgressCallback | None,
 ) -> None:
     if stage is Stage.STEMS_ALL:
         _do_stems_all(ctx, separator, output_sink)
@@ -208,20 +249,13 @@ def _run_stage(
     elif stage is Stage.BEATS:
         _do_beats(ctx, options, sink)
     elif stage is Stage.ONSETS:
-        _do_onsets(ctx, options, sink)
+        _do_onsets(ctx, sink)
     elif stage is Stage.TRANSCRIBE:
-        if options.transcribe_mode == "filter":
-            _do_transcribe_filter(ctx, options, sink)
-        else:
-            _do_transcribe(ctx, options, sink)
-    elif stage is Stage.REFINE:
-        if options.transcribe_mode == "filter":
-            # Filter mode has no Jot to refine, and the F1-vs-detected-
-            # onsets gate is degenerate for a pure filter (see
-            # transcriber/docs/filter-mode-proxy-reference.md). Skip.
-            log.info("REFINE skipped (transcribe_mode=filter)")
-            return
-        _do_refine(ctx, options, sink)
+        _do_transcribe(ctx, sink, progress)
+    # Re-check cancel after the (possibly long-running) stage finishes so
+    # PipelineCancelled fires at the next stage boundary without one
+    # final "phase=end" event sneaking in for a stage that the user has
+    # already cancelled.
 
 
 def _do_stems_all(
@@ -252,7 +286,7 @@ def _do_stems_per(
     )
     # Export the per-instrument stems as soon as splitting is done — they
     # are the second batch of deliverables, available long before the
-    # (slow) beats/onsets/transcribe/refine stages run.
+    # (slow) beats/onsets/transcribe stages run.
     if output_sink is not None:
         for pitch, path in ctx.per_instrument_stems.items():
             output_sink.save_flac_from_wav(f"stem_{pitch}", path)
@@ -278,15 +312,32 @@ def _do_beats(
     log.info("Beat tracking using audio: %s (mode=%s)", beat_audio.name, options.beat_input)
     duration = ctx.duration if ctx.duration > 0 else None
 
-    # Snap each detected beat to the strongest drum onset within ±50 ms.
-    # Neural trackers report beat times at the activation peak, which lags
-    # the transient by ~50 ms; without this, downbeat kicks register at
-    # beat_in_bar=1.18 instead of 1.00 and the LLM either drops them or
-    # quantizes them to the wrong slot.
+    # Snap the whole beat grid to the strongest drum transients within
+    # ±50 ms. Neural trackers report beat times at the activation peak,
+    # which lags the transient by ~50 ms; without this, downbeat kicks
+    # register at beat_in_bar=1.18 instead of 1.00 and the LLM either
+    # drops them or quantizes them to the wrong slot. We deliberately
+    # reuse the ADTOF backend on the full drum stem — its CRNN gives the
+    # most stable transient peaks for the grid-alignment median, and
+    # keeping the alignment detector independent of the per-stem onsets
+    # the next stage runs avoids any circular dependency between them.
+    #
+    # Pool onsets across all five drum lanes (kick / snare / toms /
+    # hi-hat / cymbal) rather than just kick. The alignment median's
+    # coverage gate rejected songs whose kicks weren't on every beat;
+    # adding snare/hat/cymbal multiplies the per-beat hit rate without
+    # biasing the offset — `align_beats_to_onsets` picks the strongest
+    # nearby onset, so a louder kick still wins when one is around.
     align_onsets: list[tuple[float, float]] | None = None
     if ctx.drum_stem is not None and ctx.drum_stem.exists():
-        drum_onsets = detect_onsets(ctx.drum_stem)
-        align_onsets = [(c.time, c.strength) for c in drum_onsets]
+        try:
+            align_onsets = detect_drum_onsets_for_alignment(ctx.drum_stem)
+        except Exception as exc:
+            log.warning(
+                "beats: ADTOF onset detection on drum stem failed (%s); "
+                "skipping grid alignment.", exc,
+            )
+            align_onsets = []
 
     ctx.structure = analyze_beats(
         beat_audio,
@@ -298,7 +349,7 @@ def _do_beats(
 
 
 def _do_onsets(
-    ctx: PipelineContext, options: PipelineOptions, sink: DebugSink | None,
+    ctx: PipelineContext, sink: DebugSink | None,
 ) -> None:
     if not ctx.per_instrument_stems:
         raise RuntimeError(
@@ -310,23 +361,18 @@ def _do_onsets(
             "onsets: beat structure missing (expected beats.json from a "
             "previous run, or resume_stage<=beats to regenerate)."
         )
-    if options.onset_backend == "adtof":
-        # Noisy lanes (hihat/cymbal) detect off the in-distribution drum
-        # stem inside detect_onsets_adtof; pass it through. None on a
-        # resume that didn't cache it -> automatic per-stem fallback.
-        raw_onsets = {
-            pitch: detect_onsets_adtof_or_librosa(
-                path, pitch, drum_stem_path=ctx.drum_stem
-            )
-            for pitch, path in ctx.per_instrument_stems.items()
-        }
-    else:
-        raw_onsets = {
-            pitch: detect_onsets(path)
-            for pitch, path in ctx.per_instrument_stems.items()
-        }
+    # ADTOF runs the noisy lanes (hihat / merged cymbal) on the
+    # in-distribution drum stem; pass it through. None on a resume that
+    # didn't cache it — `detect_onsets_adtof` falls back to the isolated
+    # stem when the drum stem is absent.
+    raw_onsets = {
+        pitch: detect_onsets_adtof(
+            path, pitch, drum_stem_path=ctx.drum_stem
+        )
+        for pitch, path in ctx.per_instrument_stems.items()
+    }
     ctx.onsets_by_pitch = {
-        pitch: attach_beat_positions(cands, ctx.structure)
+        pitch: _attach_beat_positions(cands, ctx.structure)
         for pitch, cands in raw_onsets.items()
     }
     # The Stage-2 separator merges ride + crash into one `cymbals` stem
@@ -372,73 +418,41 @@ def _do_onsets(
             log.warning("onsets -> MIDI render failed (%s); skipping", exc)
 
 
+def _attach_beat_positions(
+    candidates: list[OnsetCandidate],
+    structure: BeatStructure,
+) -> list[OnsetCandidate]:
+    """Annotate each candidate with `(bar, beat_in_bar)` using `structure`.
+
+    Candidates whose timestamps fall outside the tracked range are kept
+    with `bar=-1, beat_in_bar=-1.0` and downstream code should treat
+    them as "out of song" / drop.
+    """
+    out: list[OnsetCandidate] = []
+    for c in candidates:
+        pos = structure.position(c.time)
+        if pos is None:
+            out.append(
+                OnsetCandidate(time=c.time, strength=c.strength, bar=-1, beat_in_bar=-1.0)
+            )
+            continue
+        bar, beat = pos
+        out.append(
+            OnsetCandidate(
+                time=c.time, strength=c.strength, bar=int(bar), beat_in_bar=float(beat)
+            )
+        )
+    return out
+
+
 def _do_transcribe(
     ctx: PipelineContext,
-    options: PipelineOptions,
     sink: DebugSink | None,
-) -> None:
-    if ctx.structure is None:
-        raise RuntimeError(
-            "transcribe: beat structure missing (expected beats.json or "
-            "resume_stage<=beats)."
-        )
-    if not ctx.onsets_by_pitch:
-        raise RuntimeError(
-            "transcribe: onsets missing (expected onsets.json or "
-            "resume_stage<=onsets)."
-        )
-    # One LLM call per instrument (parallel), each emitting a monophonic
-    # line; recompose merges them deterministically into one Jot.
-    lines_by_pitch, scores_by_pitch = transcribe_all_instruments(
-        candidates_by_pitch=ctx.onsets_by_pitch,
-        structure=ctx.structure,
-        samples=options.best_of_k,
-    )
-    if not lines_by_pitch:
-        raise RuntimeError(
-            "transcribe: every per-instrument LLM call failed or produced "
-            "no usable line."
-        )
-    ctx.initial_lines_by_pitch = lines_by_pitch
-    jot_dsl = format_dsl(recompose(lines_by_pitch, ctx.structure, FEET_PITCHES))
-    ctx.initial_jot = jot_dsl
-
-    if options.best_of_k > 1 and scores_by_pitch:
-        per_instrument: dict[str, BestOfKLog] = {}
-        for pitch, scores in scores_by_pitch.items():
-            chosen = (
-                int(max(range(len(scores)), key=lambda i: scores[i]))
-                if scores
-                else 0
-            )
-            per_instrument[pitch] = BestOfKLog(
-                samples=options.best_of_k,
-                scores=scores,
-                chosen_index=chosen,
-            )
-        ctx.best_of_k_log = BestOfKLog(
-            samples=options.best_of_k,
-            scores=[],
-            chosen_index=0,
-            per_instrument=per_instrument,
-        )
-
-    if sink is not None:
-        for pitch, fragment in lines_by_pitch.items():
-            sink.write_text(f"initial_{pitch}.jot", fragment)
-        sink.write_text("initial.jot", jot_dsl)
-        if ctx.best_of_k_log is not None:
-            sink.write_json("best_of_k.json", ctx.best_of_k_log.model_dump())
-
-
-def _do_transcribe_filter(
-    ctx: PipelineContext,
-    options: PipelineOptions,
-    sink: DebugSink | None,
+    progress: ProgressCallback | None = None,
 ) -> None:
     """Filter-mode transcribe: LLM rejects artifact onsets per
     instrument; the kept onsets render straight to MIDI with their
-    original (un-quantized) times. No Jot, no recompose, no refine.
+    original (un-quantized) times.
     """
     if ctx.structure is None:
         raise RuntimeError(
@@ -451,9 +465,32 @@ def _do_transcribe_filter(
             "resume_stage<=onsets)."
         )
 
+    # Filter runs one LLM call per drum pitch in parallel. The progress
+    # callback receives one substage update per *completed* instrument
+    # so the UI can show "filtering N/M instruments" without flickering
+    # between parallel in-flight pitches.
+    def on_instrument_done(pitch: str, done: int, total: int) -> None:
+        _safe_progress(
+            progress,
+            {
+                "stage": Stage.TRANSCRIBE.value,
+                "detail": f"filtering {done}/{total} instruments (latest: {pitch})",
+            },
+        )
+
     kept_by_pitch = filter_onsets_all_instruments(
-        ctx.onsets_by_pitch, ctx.structure,
+        ctx.onsets_by_pitch,
+        ctx.structure,
+        on_complete=on_instrument_done,
+        cancel_event=ctx.cancel_event,
     )
+    if ctx.cancel_event.is_set():
+        # The pool exited early because the client disconnected. Surface
+        # this so the runner stops at the next stage boundary check (the
+        # filter pass may have partial results but the rest of the
+        # transcribe stage and any subsequent persistence would be wasted
+        # work).
+        raise PipelineCancelled(Stage.TRANSCRIBE)
     if not kept_by_pitch:
         raise RuntimeError(
             "transcribe: filter kept no onsets for any instrument."
@@ -474,13 +511,8 @@ def _do_transcribe_filter(
         all_onsets_by_pitch=ctx.onsets_by_pitch,
         kept_by_pitch=kept_by_pitch,
         structure=ctx.structure,
-        onset_backend=options.onset_backend,
+        beat_alignment_offset_sec=ctx.structure.align_offset_sec,
     )
-    # Filter mode produces no Jot. Set empty strings so the shared
-    # response builder (which requires a non-None final_jot) and the
-    # outputs backfill stay happy without special-casing every caller.
-    ctx.initial_jot = ""
-    ctx.final_jot = ""
 
     if sink is not None:
         sink.write_bytes("prediction.mid", midi_bytes)
@@ -502,106 +534,6 @@ def _do_transcribe_filter(
         sink.write_json("note_provenance.json", ctx.note_provenance)
 
 
-def _do_refine(
-    ctx: PipelineContext,
-    options: PipelineOptions,
-    sink: DebugSink | None,
-) -> None:
-    if ctx.initial_jot is None:
-        raise RuntimeError(
-            "refine: initial.jot missing (expected initial.jot from a "
-            "previous run, or resume_stage<=transcribe to regenerate)."
-        )
-    if ctx.structure is None:
-        raise RuntimeError("refine: beat structure missing")
-
-    # STRUCTURE (cross-instrument pattern factoring) is intentionally
-    # dropped: per-instrument transcription emits flat monophonic lines
-    # with no shared bar patterns to factor, so the level has nothing to
-    # act on. ONSETS/VELOCITY run per instrument; LINT/MACRO run once on
-    # the recomposed Jot (see refine_jot_per_instrument).
-    refinement_levels: list[RefineLevel] = []
-    if options.lint:
-        refinement_levels.append(RefineLevel.LINT)
-    if options.refine:
-        refinement_levels.extend([
-            RefineLevel.MACRO,
-            RefineLevel.ONSETS,
-            RefineLevel.VELOCITY,
-        ])
-
-    if not refinement_levels:
-        # No levels requested; final == initial. Still emit final.jot
-        # so downstream tooling has a stable artifact name to read.
-        ctx.final_jot = format_dsl(
-            _inject_start_offset(ctx.initial_jot, ctx.structure)
-        )
-        if sink is not None:
-            sink.write_text("final.jot", ctx.final_jot)
-        return
-
-    if not ctx.per_instrument_stems:
-        raise RuntimeError(
-            "refine: per-instrument stems missing (refinement re-loads them "
-            "via librosa for score sampling)."
-        )
-
-    stem_audios: dict[str, tuple[Any, int]] = {}
-    for pitch, path in ctx.per_instrument_stems.items():
-        audio, sr = librosa.load(str(path), sr=44100, mono=True)
-        stem_audios[pitch] = (audio, sr)
-
-    try:
-        if ctx.initial_lines_by_pitch:
-            # Fresh run: per-instrument ONSETS/VELOCITY loop, then
-            # recompose, then LINT/MACRO on the merged Jot.
-            refined_dsl, log_obj = refine_jot_per_instrument(
-                lines_by_pitch=ctx.initial_lines_by_pitch,
-                stem_onsets=ctx.onsets_by_pitch,
-                stem_audios=stem_audios,
-                structure=ctx.structure,
-                levels=refinement_levels,
-                feet_pitches=FEET_PITCHES,
-            )
-        else:
-            # Resume-from-refine: only the merged initial.jot is on
-            # disk; refine it directly (no per-instrument fragments).
-            refined_dsl, log_obj = refine_jot(
-                initial_dsl=ctx.initial_jot,
-                stem_onsets=ctx.onsets_by_pitch,
-                stem_audios=stem_audios,
-                structure=ctx.structure,
-                levels=refinement_levels,
-            )
-        ctx.final_jot = refined_dsl
-        ctx.refinement_log = RefinementLog(
-            initial_score=log_obj.initial_score,
-            final_score=log_obj.final_score,
-            elapsed_seconds=log_obj.elapsed_seconds,
-            iterations=[
-                RefinementIteration(**vars(it)) for it in log_obj.iterations
-            ],
-        )
-    except Exception:
-        log.exception("Refinement failed; returning unrefined Jot")
-        ctx.final_jot = ctx.initial_jot
-
-    # Stamp the lead-in (audio time of the first detected beat) onto the
-    # DSL after refinement so the LLM can't accidentally drop it during
-    # revision. Browser playback reads this off `globalMetadata` to delay
-    # its schedule and match the original recording's offset.
-    ctx.final_jot = format_dsl(
-        _inject_start_offset(ctx.final_jot, ctx.structure)
-    )
-
-    if sink is not None:
-        sink.write_text("final.jot", ctx.final_jot)
-        if ctx.refinement_log is not None:
-            sink.write_json(
-                "refinement.json", ctx.refinement_log.model_dump(),
-            )
-
-
 def _probe_duration(audio_path: Path) -> float:
     try:
         import soundfile as sf
@@ -610,29 +542,3 @@ def _probe_duration(audio_path: Path) -> float:
             return float(len(f) / f.samplerate)
     except Exception:
         return 0.0
-
-
-def _inject_start_offset(dsl: str, structure: BeatStructure) -> str:
-    """Prepend a `{{ startOffset: X }}` block to `dsl`.
-
-    `X` is the audio time (seconds) of the first detected beat in the
-    source recording — i.e. how much silence / non-drum intro preceded
-    bar 0 of the transcription. The TS player honours this on
-    `globalMetadata` to delay browser playback so the rendered drums
-    hit at the same wall-clock offset as in the original.
-
-    A separate top-level block is prepended (rather than merged into
-    the LLM-emitted block) so we don't have to parse and rewrite the
-    LLM's metadata; the TS parser merges successive `{{...}}` blocks
-    into one `globalMetadata` dict so the order doesn't matter.
-
-    No-op when no beats were detected or the offset is non-positive
-    (≤ ~0 means the song starts at audio time 0, no lead-in worth
-    encoding).
-    """
-    if not structure.bars or not structure.bars[0].beats:
-        return dsl
-    offset = float(structure.bars[0].start_time)
-    if offset <= 1e-3:
-        return dsl
-    return f"{{{{ startOffset: {offset:.3f} }}}}\n{dsl}"

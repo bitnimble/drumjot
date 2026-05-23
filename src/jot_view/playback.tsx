@@ -2,6 +2,7 @@ import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import {
+  JotTimeline,
   jotPlayer,
   KitInfo,
   PlayerState,
@@ -272,13 +273,13 @@ export const PlaybackBar = observer(({ store }: { store: JotViewStore }) => (
       drumKits={jotPlayer.drumKits}
       drumPreset={jotPlayer.drumPreset}
       hasAudioTracks={jotPlayer.audioTracks.size > 0}
-      audioOffsetSec={jotPlayer.startOffsetSec}
+      audioOffsetSec={jotPlayer.drumsT0Sec}
       drumOffsetBeats={store.drumOffsetBeats}
       onTogglePlayPause={() => store.togglePlayPause()}
       onStop={() => store.stopPlayback()}
       onSetPlaybackSpeed={(s) => jotPlayer.setPlaybackSpeed(s)}
       onSetDrumPreset={(p) => jotPlayer.setDrumPreset(p)}
-      onSetAudioOffset={(sec) => jotPlayer.setStartOffset(sec)}
+      onSetAudioOffset={(sec) => jotPlayer.setDrumsT0Sec(sec)}
       onSetDrumOffset={(beats) => store.setDrumOffset(beats)}
     />
   </div>
@@ -333,7 +334,13 @@ export const Playhead = observer(
       >
         {showLabel && (
           <div className={styles.playheadLabel}>
-            {formatPlayheadTime(jotPlayer.currentTime)}
+            <div>{formatPlayheadTime(jotPlayer.currentTime)}</div>
+            {(() => {
+              const pos = playheadBarBeat(timeline, jotPlayer.currentTime);
+              return pos ? (
+                <div className={styles.playheadLabelBarBeat}>{pos}</div>
+              ) : null;
+            })()}
           </div>
         )}
       </div>
@@ -349,6 +356,33 @@ function formatPlayheadTime(seconds: number): string {
   const sec = totalSec % 60;
   const cs = Math.floor((abs - totalSec) * 100);
   return `${negative ? '-' : ''}${min}:${String(sec).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
+}
+
+/**
+ * Convert the playhead's jot-time position to `Bar N, X.XXb` for the
+ * second line of the label. Walks the timeline's per-bar timings to
+ * find the bar containing `jotTime`, then computes beat-in-bar in the
+ * bar's time-signature beats (1-indexed at the downbeat). Returns
+ * `null` when no bar can be resolved (empty timeline / no rendered
+ * voice).
+ */
+function playheadBarBeat(timeline: JotTimeline, jotTime: number): string | null {
+  const renderedBars = timeline.rendered?.structure.voices[0]?.bars ?? [];
+  if (renderedBars.length === 0 || timeline.bars.length === 0) return null;
+  for (let i = 0; i < timeline.bars.length; i++) {
+    const t = timeline.bars[i]!;
+    if (jotTime < t.startSec + t.durationSec) {
+      const rb = renderedBars[i];
+      if (!rb || t.durationSec <= 0) return null;
+      const beatInBar = 1 + ((jotTime - t.startSec) / t.durationSec) * rb.time.count;
+      return `Bar ${rb.index}, ${beatInBar.toFixed(2)}b`;
+    }
+  }
+  // Past the end of the last bar — pin to its final beat so the label
+  // doesn't blank out when scrubbing slightly past the score's tail.
+  const last = renderedBars[renderedBars.length - 1];
+  if (!last) return null;
+  return `Bar ${last.index}, ${(last.time.count + 1).toFixed(2)}b`;
 }
 
 /**

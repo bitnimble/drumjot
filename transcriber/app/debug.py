@@ -12,10 +12,10 @@ Usage:
     )
     if sink:
         sink.copy_audio("input", in_path)
-        sink.copy_audio("stage1/drum_stem", stems.drum_stem)
+        sink.copy_audio("stems_all/drum_stem", stems.drum_stem)
         for pitch, p in stems.per_instrument.items():
-            sink.copy_audio(f"stage2/{pitch}", p)
-        sink.write_text("initial.jot", jot_dsl)
+            sink.copy_audio(f"stems_per/{pitch}", p)
+        sink.write_bytes("prediction.mid", predicted_midi)
         sink.write_json("beats.json", _beats_dump(structure))
         sink.finalize(...)
 
@@ -79,11 +79,14 @@ def _slugify(name: str) -> str:
 def mint_request_folder_name(original_filename: str | None) -> str:
     """Build a per-request folder name shared by DebugSink and OutputSink.
 
-    Layout: `<YYYYMMDD-HHMMSS>_<8 hex>_<slugified-filename-stem>`. Stable
-    enough that an operator listening to `outputs/<name>/` and inspecting
-    `debug/<name>/` can correlate the two by sight.
+    Layout: `<YYYYMMDD-HHMMSS>_<8 hex>_<slugified-filename-stem>`. The
+    timestamp is **UTC** so folder names sort chronologically regardless
+    of where the container/host runs; the UI converts to the operator's
+    local time at display time. Stable enough that an operator listening
+    to `outputs/<name>/` and inspecting `debug/<name>/` can correlate
+    the two by sight.
     """
-    stamp = time.strftime("%Y%m%d-%H%M%S")
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     short_id = uuid.uuid4().hex[:8]
     slug = _slugify(Path(original_filename or "audio").stem)
     return f"{stamp}_{short_id}_{slug}"
@@ -260,6 +263,11 @@ def beats_dump(structure: Any) -> dict[str, Any]:
             "has_time_sig_changes": getattr(
                 structure, "has_time_sig_changes", False
             ),
+            # `None` until alignment runs (or when it ran but didn't
+            # apply a shift — see `align_beats_to_onsets`). Persisted
+            # here so resumed runs reading beats.json keep the value
+            # without re-detecting onsets.
+            "align_offset_sec": getattr(structure, "align_offset_sec", None),
             "beats": [
                 {
                     "time": round(b.time, 4),

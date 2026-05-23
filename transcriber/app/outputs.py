@@ -261,7 +261,6 @@ def materialize_pending(
     *,
     drum_stem: Path | None,
     per_instrument_stems: dict[str, Path],
-    final_jot: str | None,
     predicted_midi: bytes | None = None,
     scavenge_dir: Path | None = None,
 ) -> None:
@@ -277,12 +276,11 @@ def materialize_pending(
     stage wrote them: a stage that actually ran has already overwritten
     its FLAC in-place via `save_flac_from_wav` (soundfile truncates the
     dest), so the no-op here is correct for non-skipped stages too; a
-    skipped stage's FLAC is intentionally kept. `final.jot` is always
-    (re)written so it reflects the latest refine result, and
-    `prediction.mid` is (re)written whenever `predicted_midi` is present
-    — it is set only when the filter-mode transcribe stage actually ran
-    this invocation, so a non-skipped transcribe overwrites the stale
-    MIDI from a prior run instead of leaving it.
+    skipped stage's FLAC is intentionally kept. `prediction.mid` is
+    (re)written whenever `predicted_midi` is present — it is set only
+    when the transcribe stage actually ran this invocation, so a
+    non-skipped transcribe overwrites the stale MIDI from a prior run
+    instead of leaving it.
     """
     if output_sink is None:
         return
@@ -299,12 +297,10 @@ def materialize_pending(
         scavenged = _scavenge_no_drums(scavenge_dir)
         if scavenged is not None:
             output_sink.save_flac_from_wav("no_drums", scavenged)
-    if final_jot:
-        output_sink.save_text("final.jot", final_jot)
     if predicted_midi is not None:
         # Unguarded by design: predicted_midi is set only when the
-        # filter-mode transcribe stage ran this invocation (it stays
-        # None on a resume that skips transcribe), so its presence means
-        # the stage was not skipped and any prior prediction.mid is
-        # stale and must be overwritten.
+        # transcribe stage ran this invocation (it stays None on a
+        # resume that skips transcribe), so its presence means the
+        # stage was not skipped and any prior prediction.mid is stale
+        # and must be overwritten.
         output_sink.save_bytes("prediction.mid", predicted_midi)

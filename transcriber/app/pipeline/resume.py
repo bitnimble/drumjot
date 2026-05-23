@@ -17,7 +17,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.models import BestOfKLog, OnsetCandidate, TranscriptionSummary
+from app.models import OnsetCandidate, TranscriptionSummary
 from app.pipeline.beats import BarInfo, BeatStructure, BeatTick
 from app.pipeline.runner import STAGE_ORDER, PipelineContext, Stage, stage_index
 
@@ -120,27 +120,6 @@ def hydrate_context_from_resume(
             )
         ctx.onsets_by_pitch = _load_onsets(onsets_path)
 
-    if stage_index(Stage.TRANSCRIBE) < start_idx:
-        initial_path = folder / "initial.jot"
-        if not initial_path.exists():
-            raise FileNotFoundError(
-                f"resume({start_stage.value}): expected {initial_path} from "
-                "the previous run, but it's missing. Re-run with "
-                "resume_stage=transcribe to regenerate it."
-            )
-        ctx.initial_jot = initial_path.read_text(encoding="utf-8")
-        # best_of_k.json is optional — only present when K>1 was used.
-        bk_path = folder / "best_of_k.json"
-        if bk_path.exists():
-            try:
-                payload = json.loads(bk_path.read_text(encoding="utf-8"))
-                ctx.best_of_k_log = BestOfKLog(**payload)
-            except (OSError, ValueError, TypeError) as exc:
-                log.warning(
-                    "Could not load existing best_of_k.json (%s); "
-                    "continuing without best-of-K metadata.", exc,
-                )
-
 
 def load_original_filename(folder: Path) -> str | None:
     """Recover the uploaded filename from `request.json` if present.
@@ -171,16 +150,17 @@ def _parse_folder_timestamp(name: str) -> str | None:
 
     Returns None when the prefix doesn't parse — likely an old folder or
     one created by hand. Callers fall back to file mtimes in that case.
+
+    The folder-name stamp is UTC (see `mint_request_folder_name`); emit
+    it with a `Z` suffix so the UI can convert to the operator's local
+    time unambiguously.
     """
     stamp = name.split("_", 1)[0]
     try:
         dt = datetime.strptime(stamp, "%Y%m%d-%H%M%S")
     except ValueError:
         return None
-    # The stamp is local-time per `time.strftime`; emit it as a naive
-    # ISO string (no tz) so the UI can format it however it likes
-    # without us claiming a timezone we don't know.
-    return dt.isoformat(timespec="seconds")
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _resumable_stages(folder: Path) -> list[str]:
@@ -207,13 +187,10 @@ def _resumable_stages(folder: Path) -> list[str]:
         out.append(Stage.BEATS.value)
     has_beats = (folder / "beats.json").is_file()
     has_onsets = (folder / "onsets.json").is_file()
-    has_initial = (folder / "initial.jot").is_file()
     if has_per and has_beats:
         out.append(Stage.ONSETS.value)
     if has_per and has_beats and has_onsets:
         out.append(Stage.TRANSCRIBE.value)
-    if has_per and has_beats and has_onsets and has_initial:
-        out.append(Stage.REFINE.value)
     # Preserve STAGE_ORDER so the UI can render the picker without
     # re-sorting (and so a future stage insertion lands where it
     # should).
@@ -268,11 +245,8 @@ def _summarize_folder(folder: Path) -> TranscriptionSummary | None:
             request_payload = None
         try:
             mtime = request_path.stat().st_mtime
-            last_run_at = (
-                datetime.fromtimestamp(mtime, tz=UTC)
-                .astimezone()
-                .replace(tzinfo=None)
-                .isoformat(timespec="seconds")
+            last_run_at = datetime.fromtimestamp(mtime, tz=UTC).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
             )
         except OSError:
             last_run_at = None
@@ -298,11 +272,8 @@ def _summarize_folder(folder: Path) -> TranscriptionSummary | None:
         # Fall back to mtime so the row still has a usable timestamp.
         try:
             stat = folder.stat()
-            requested_at = (
-                datetime.fromtimestamp(stat.st_mtime, tz=UTC)
-                .astimezone()
-                .replace(tzinfo=None)
-                .isoformat(timespec="seconds")
+            requested_at = datetime.fromtimestamp(stat.st_mtime, tz=UTC).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
             )
         except OSError:
             requested_at = ""
@@ -349,6 +320,14 @@ def _load_beats(path: Path) -> BeatStructure:
         )
         for bt in data.get("beats", [])
     ]
+    # Older beats.json files (pre-alignment-tracking) won't have the
+    # field, and earlier code wrote `null` on rejected alignments —
+    # default both to 0.0 so the rest of the pipeline always sees a
+    # number. New runs always persist a numeric value.
+    raw_offset = data.get("align_offset_sec")
+    align_offset_sec = (
+        float(raw_offset) if isinstance(raw_offset, (int, float)) else 0.0
+    )
     return BeatStructure(
         beats=all_beats,
         bars=bars,
@@ -358,6 +337,7 @@ def _load_beats(path: Path) -> BeatStructure:
         ),
         has_tempo_changes=bool(data.get("has_tempo_changes", False)),
         has_time_sig_changes=bool(data.get("has_time_sig_changes", False)),
+        align_offset_sec=align_offset_sec,
     )
 
 

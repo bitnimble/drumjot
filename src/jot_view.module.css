@@ -44,13 +44,20 @@
     user-select: none;
 }
 
-/* The text blocks aren't sticky and shouldn't run to the bare viewport
-   edge — reapply the inset that used to come from .jotContainer's
-   padding so they stay aligned with each other. */
+/* These blocks reapply the horizontal inset that used to come from
+   .jotContainer's padding so they stay aligned with each other.
+   `position: sticky; left: 0` pins them to the scroll viewport's left
+   edge during horizontal timeline scroll — they still scroll
+   vertically with the rest of the content. `width: fit-content` keeps
+   the pinned box narrow so it doesn't span the full scroll width and
+   create stray hit areas / overlap downstream sticky chrome. */
 .title {
     composes: heading from './typography.module.css';
     margin: 0 0 4px 0;
     padding: 0 24px;
+    position: sticky;
+    left: 0;
+    width: fit-content;
 }
 
 .subtitle {
@@ -58,6 +65,9 @@
     color: var(--color-text-muted-alt);
     margin: 0 0 20px 0;
     padding: 0 24px;
+    position: sticky;
+    left: 0;
+    width: fit-content;
 }
 
 .legend {
@@ -67,6 +77,9 @@
     flex-wrap: wrap;
     margin-bottom: 16px;
     padding: 0 24px;
+    position: sticky;
+    left: 0;
+    width: fit-content;
 }
 
 .legendChip {
@@ -255,7 +268,12 @@
     padding: 4px 10px;
     border-radius: var(--radius-pill);
     letter-spacing: 0.02em;
-    max-width: 360px;
+    /* Render the full label by default; only truncate when the toolbar
+       actually runs out of room. `min-width: 0` lets the pill participate
+       in flex shrinking (a flex item's default min-width is its content,
+       which would otherwise force the toolbar to overflow horizontally). */
+    min-width: 0;
+    flex: 0 1 auto;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;

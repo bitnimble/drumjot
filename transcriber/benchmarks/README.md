@@ -67,9 +67,7 @@ Useful knobs:
 | `--limit N` | _(no cap)_ | Hard cap on number of tracks. Applied **after** `--sample-ratio`. |
 | `--sample-ratio R` | `1.0` | Randomly keep this fraction of the test split (0.0–1.0). |
 | `--seed N` | `0` | RNG seed for `--sample-ratio` sampling. |
-| `--refine` / `--no-refine` | `--refine` | Toggle the F1-gated refinement loop (matches the web UI checkbox). |
-| `--lint` / `--no-lint` | `--lint` | Toggle the deterministic Jot lint pass (matches the web UI checkbox). Independent of `--refine`. |
-| `--best-of-k N` | `1` | Number of initial transcription candidates (matches the web UI dropdown). |
+| `--beat-input` | `full_mix` | Which audio feeds the beat tracker (`full_mix` or `drum_stem`). |
 | `--service-url URL` | `http://localhost:8001` | Transcriber base URL. |
 | `--split` | `test` | E-GMD only — which CSV split to evaluate. |
 | `--tolerance SEC` | `0.05` | mir_eval onset match window in seconds (N2N uses 0.05). |
@@ -80,8 +78,6 @@ Per-track results are streamed to `per_track.jsonl` as the run
 progresses; the aggregate `summary.json` is written at the end. Both
 files are safe to inspect mid-run.
 
-Cost note: each track is one /transcribe call. With `--refine` and
-`--lint` on and `--best-of-k 3` that's three LLM calls + a lint pass
-(N small per-segment calls) + a refinement loop per track. For a
-sanity check on a fresh setup, start with
-`--limit 20 --no-refine --no-lint --best-of-k 1`.
+Cost note: each track is one /transcribe call. The pipeline makes one
+filter LLM call per drum pitch (parallel), so cost scales with how many
+instruments are present rather than with knobs at the CLI.

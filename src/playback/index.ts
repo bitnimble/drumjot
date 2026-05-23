@@ -9,6 +9,7 @@ export type { BarTiming, JotTimeline } from './timeline';
 export {
   computeWaveformPeaks,
   computeWaveformPeaksForJot,
+  computeWindowPeaks,
   isAudioTrackAudibleUnder,
   audioTrackGainUnder,
   PASSTHROUGH_AUDIO_TRACK_FILTER,

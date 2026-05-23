@@ -7,33 +7,23 @@ code, plans that exist but haven't been executed yet, and a list of
 gotchas worth knowing before making changes. Read it top to bottom
 once; refer back as needed.
 
-Last updated by the assistant: May 2026, after the frontend
-design-system pass (timeline #25): global color / radius / shadow
-tokens in `src/design_tokens.css`, use-case typography classes in
+Last updated by the assistant: May 2026, after the legacy-pathway
+purge (timeline #26): the DSL-output transcribe endpoint and the
+librosa onset backend are gone. The backend now produces only MIDI
+(via the filter LLM that rejects artifact onsets per instrument),
+and `src/midi/from_midi.ts` on the frontend converts that to a Jot.
+Useful techniques from the deleted DSL pipeline (per-instrument
+prompting, deterministic recompose, F1-gated multi-level refine,
+critic triage, best-of-K, pattern-aware suppression) are captured in
+`transcriber/docs/ai-midi-to-jot-notes.md` for any future AI-assisted
+MIDI → Jot work. Prior session was the frontend design-system pass
+(timeline #25): global color / radius / shadow tokens in
+`src/design_tokens.css`, use-case typography classes in
 `src/typography.module.css` (composed via CSS-modules `composes:`),
 shared mixer-button primitives under `src/jot_view/components/`, and
 a stylelint design-token lint (configured in `.stylelintrc.json`,
 chained into `bun run build`). **Read §5.8 before touching any module CSS** —
-hardcoded colors will fail the lint. Prior session (timeline #24)
-was the per-instrument transcription refactor: the transcribe stage
-now makes one LLM call per drum instrument (each emitting a single
-monophonic line, no `||`/`+`/metadata), and a deterministic
-recomposition in `src/recompose.ts` (called via
-`tools/recompose_jot.ts`; Python is a thin wrapper) merges them back
-into one Jot (hands `+`-joined, genuine polyrhythm as `+`-joined
-groups, kick as the second `||` voice). `||` was removed from the
-LLM-facing spec only; it remains fully in the DSL/parser/renderer.
-Prior session (timeline #23) was a renderer UX pass:
-non-straight/tuplet bracket indicators + per-note off-grid rings,
-song-global density-driven bar width (default 640→448), click-to-seek
-on the score + stem waveforms, and lead-in pre-bars that align the
-notation with a loaded music-stem waveform when the jot has a
-`startOffset`. The session before that stabilized per-bar
-tempo — global-offset beat alignment, `_finalize_bar_tempos`
-pin/smooth, pattern-aware `missing_onset` suppression, onsets-refine
-prompt reframed (timeline #17–19); the one before added the
-drumless-stem deliverable + `/outputs` URLs, in-app music/drum stem
-tracks, and the Playwright e2e + MCP setup (see §3.1 / §3.2).
+hardcoded colors will fail the lint.
 
 ---
 
@@ -52,12 +42,16 @@ A browser-based drum notation tool with three deeply integrated layers:
    `mobx-react-lite`) + CSS modules. Bun is the package manager and
    test runner; **do not use npm**.
 3. **A transcriber service** (separate Python backend, Docker-deployed)
-   that takes arbitrary audio and produces Drumjot DSL via an LLM
-   pipeline: Demucs separation -> drum-piece separation -> librosa
-   onset detection -> madmom beat tracking -> **per-instrument** Claude
-   DSL emission (one monophonic-line call per drum, recomposed
-   deterministically) with an optional per-instrument multi-level
-   refinement loop.
+   that takes arbitrary audio and produces a predicted-onsets MIDI
+   file via: BS-Roformer SW separation -> MDX23C DrumSep -> madmom
+   beat tracking -> ADTOF Frame_RNN per-stem onset detection -> Claude
+   filter LLM that rejects artifact onsets per instrument. The kept
+   onsets render straight to MIDI with their original un-quantized
+   times; `src/midi/from_midi.ts` on the frontend converts that MIDI
+   into a Jot. (The earlier DSL-output / refinement pathway was
+   deleted in May 2026 — see
+   `transcriber/docs/ai-midi-to-jot-notes.md` for the captured
+   techniques.)
 
 The DSL is the lingua franca that all three layers share. The
 in-memory model of a parsed Jot is `Jot` from [src/dsl.ts](src/dsl.ts);
@@ -185,27 +179,17 @@ drumjot/
     ├── docker-compose.yml          Build context = REPO ROOT (so src/ is
     │                               available to the bun bridge).
     ├── pyproject.toml              Deps: fastapi, audio-separator[gpu],
-    │                               librosa, madmom (from git), mir_eval,
-    │                               anthropic.
+    │                               adtof_pytorch, madmom (from git),
+    │                               mir_eval, anthropic.
     ├── .env.example                ANTHROPIC_API_KEY, LLM_MODEL,
-    │                               CRITIC_MODEL, REFINE_BY_DEFAULT, etc.
-    ├── tools/jot_to_onsets.ts      Bun bridge: DSL stdin -> JSON onset list
-    │                               (uses the canonical TS parser).
-    ├── tools/recompose_jot.ts      Bun bridge: per-instrument fragments
-    │                               + beat frame JSON -> merged Jot DSL
-    │                               (wraps src/recompose.ts).
+    │                               INSTRUMENT_CONCURRENCY, DEBUG_DIR.
+    ├── docs/ai-midi-to-jot-notes.md   Captured techniques from the now-
+    │                               deleted DSL pathway; reference for any
+    │                               future AI-assisted MIDI → Jot pass.
     ├── prompts/                    Markdown prompt templates with placeholders.
-    │   ├── transcribe_instrument.md Per-instrument first-pass prompt
-    │   │                           (monophonic, no `||`/`+`/metadata).
-    │   ├── examples_instrument.md  Monophonic single-pitch few-shots.
-    │   ├── transcribe.md           Legacy whole-chart prompt (unused by
-    │   │                           the pipeline; kept for reference).
-    │   ├── examples.md             Legacy multi-voice few-shots (unused).
-    │   ├── critic.md               Haiku-based issue triage.
-    │   ├── refine_macro.md         Tempo / time-sig refinement.
-    │   ├── refine_structure.md     Pattern factoring.
-    │   ├── refine_onsets.md        Missing/extra hit corrections.
-    │   └── refine_velocity.md      Dynamics adjustments.
+    │   ├── filter_onsets.md         Filter-stage artifact rejection prompt.
+    │   ├── split_cymbals.md         Ride/crash classification.
+    │   └── split_hihat.md           Closed/open hi-hat classification.
     └── app/
         ├── main.py                 FastAPI: GET /health, POST /transcribe,
         │                           POST /transcribe/resume.
@@ -216,8 +200,8 @@ drumjot/
         │                           without threading the sink.
         ├── models.py               Request/response schemas:
         │                           TranscribeResponse, OnsetCandidate (with
-        │                           bar/beat_in_bar), BarSummary, RefinementLog,
-        │                           BestOfKLog.
+        │                           bar/beat_in_bar), BarSummary,
+        │                           TranscriptionSummary.
         └── pipeline/
             ├── runner.py           Stage enum + PipelineContext +
             │                       run_pipeline(). Both endpoints dispatch
@@ -231,11 +215,11 @@ drumjot/
             │                       missing piece for HTTP 400.
             ├── separate.py         Two-stage separator with INDEPENDENT
             │                       run_stems_all() / run_stems_per() so
-            │                       resume can re-run either alone. Demucs
-            │                       htdemucs_ft for `stems_all`, Jarredou
-            │                       MDX23C 6-stem for `stems_per`. Debug
-            │                       output folders: `stems_all/`, `stems_per/`
-            │                       (previously stage1/, stage2/).
+            │                       resume can re-run either alone.
+            │                       BS-Roformer SW for `stems_all`, Jarredou
+            │                       MDX23C 5-stem DrumSep for `stems_per`.
+            │                       Owns STEM_NAME_TO_PITCH +
+            │                       PITCH_DISPLAY_NAMES.
             ├── beats.py            madmom RNN+DBN downbeat tracker (default)
             │                       OR Beat Transformer activations into the
             │                       shared DBN (selectable via `beat_tracker`
@@ -244,37 +228,26 @@ drumjot/
             │                       fraction analysis for feel detection.
             │                       `_summarize` excludes bar 0 when ≥2
             │                       bars present (anacrusis handling).
-            ├── onsets.py           librosa high-recall onset detection
-            │                       per stem; attaches bar/beat positions.
-            │                       Tight detection window (pre_max=post_max=3,
-            │                       wait=3) since input is per-instrument
-            │                       stems where transients are isolated.
-            ├── llm.py              Per-instrument Claude transcription:
-            │                       transcribe_all_instruments (parallel,
-            │                       one monophonic call per pitch),
-            │                       per-instrument best-of-K, _load_spec_subset
-            │                       (strips `||` from the LLM-facing spec).
-            ├── recompose.py        Thin subprocess wrapper around the TS
-            │                       recomposition (tools/recompose_jot.ts ->
-            │                       src/recompose.ts). Owns only the domain
-            │                       facts: FEET_PITCHES ({"k"}) +
-            │                       PITCH_DISPLAY_NAMES; shapes the
-            │                       BeatStructure into the bridge JSON.
-            ├── llm_util.py         Refusal/content-filter retry helper.
-            ├── jot_extract.py      Subprocess wrapper around the bun bridge.
-            ├── diff.py             Typed issue detectors with confidence
-            │                       scores: missing_onset, extra_onset,
-            │                       velocity_mismatch, tempo_mismatch.
-            ├── score.py            Per-stem F1 via mir_eval (the loop's
-            │                       fitness function).
-            ├── critic.py           Haiku triage of the issue list via
-            │                       Anthropic tool-use channel (structured
-            │                       output, no JSON parsing).
-            └── refine.py           Multi-level convergence loop (LINT +
-                                    MACRO/STRUCTURE/ONSETS/VELOCITY). LINT
-                                    is per-segment patches; the F1-gated
-                                    levels are critic (Haiku) → generator
-                                    (Opus) per iteration.
+            ├── adtof_onsets.py     ADTOF Frame_RNN onset detection per stem
+            │                       (the sole onset detector). Noisy lanes
+            │                       (hihat / merged cymbals) read off the
+            │                       in-distribution drum stem.
+            ├── cymbal_split.py     Splits the merged `c` cymbals lane into
+            │                       ride (`d`) / crash (`c`) via features +
+            │                       a small LLM classification pass.
+            ├── hihat_split.py     Splits the hi-hat lane into closed (`h`)
+            │                       / open (`H`) via features + LLM.
+            ├── filter_llm.py       Per-instrument Claude filter that
+            │                       rejects artifact onsets. Tool-use
+            │                       channel for structured output.
+            ├── onsets_midi.py      Render kept onsets to `prediction.mid`
+            │                       with per-bar tempo + time-sig map.
+            ├── note_provenance.py  Per-note debug sidecar listing every
+            │                       detected onset (kept and rejected) so
+            │                       the UI can annotate notes + render
+            │                       rejected onsets as ghost overlays.
+            └── llm_util.py         Refusal/content-filter retry helper +
+                                    code-fence strip.
 ```
 
 Debug folder layout (when DEBUG_DIR is set or debug=true on a request):
@@ -296,12 +269,11 @@ Debug folder layout (when DEBUG_DIR is set or debug=true on a request):
 │                         # percentile-normalised velocity). Drop into a DAW
 │                         # to hear *exactly* what the detector heard, with
 │                         # no LLM filtering or quantization in the way.
-├── initial.jot           # stage `transcribe` output
-├── best_of_k.json        # K candidates + scores + chosen_index (when K>1)
-├── final.jot             # stage `refine` output
-├── refinement.json       # per-iteration accept/reject log
+├── prediction.mid        # stage `transcribe` output: kept-onset MIDI (the score)
+├── note_provenance.json  # per-note debug sidecar (kept + rejected onsets)
+├── filter/kept_onsets.json  # per-pitch list of onsets the filter kept
 ├── llm/NN_<purpose>.txt  # full hydrated prompts for every LLM call
-└── request.json          # filename + options + scores + timings summary
+└── request.json          # filename + options + timings summary
 ```
 
 Outputs folder layout (always populated, regardless of the `debug` flag).
@@ -325,8 +297,8 @@ so it tracks the latest refine result.
 ```
 /outputs/<timestamp>_<id>_<slug>/   # same slug as the debug folder
 ├── drum_stem.flac        # `stems_all` (or resume backfill): isolated
-│                         # drum mix (lossless re-encode of Demucs's drum
-│                         # stem; FLAC keeps size modest). Surfaced as
+│                         # drum mix (lossless re-encode; FLAC keeps
+│                         # size modest). Surfaced as
 │                         # TranscribeResponse.drum_stem_url.
 ├── no_drums.flac         # `stems_all` (or resume backfill, scavenged
 │                         # from the debug folder): bass+other+vocals
@@ -335,9 +307,14 @@ so it tracks the latest refine result.
 ├── stem_<k|s|h|d|c|t>.flac  # `stems_per` (or resume backfill): one FLAC
 │                         # per recovered per-instrument stem (only the
 │                         # pitches the drum-piece separator found).
-└── final.jot             # the recomposed + refined Drumjot DSL (same
-                          # text as TranscribeResponse.jot_dsl); written
-                          # post-pipeline, overwritten on every resume.
+├── prediction.mid        # `transcribe` output: the kept-onset MIDI
+│                         # (the score). Surfaced as
+│                         # TranscribeResponse.prediction_midi_url.
+└── debug.zip             # full debug bundle (prediction.mid +
+                          # note_provenance.json + MP3-encoded audio
+                          # tracks + JSON manifest with stage timings +
+                          # captured logs). Loaded back into the UI
+                          # via "Load debug bundle".
 ```
 
 The FastAPI app serves this folder via `StaticFiles` at `/outputs/...`,
@@ -655,11 +632,11 @@ phase produced concrete files you can find in the layout above.
       stem waveforms get a click handler; notes / pattern label
       carry `data-noseek`. `cued` makes the playhead show before
       play; `clearCue()` on jot replace.
-    - **Lead-in pre-bars**. A jot with `globalMetadata.startOffset`
+    - **Lead-in pre-bars**. A jot with `globalMetadata.drumsT0Sec`
       reserves `leadInPx` of hatched pre-roll before bar 1, scaled
       at the bars' exact px/s so a loaded music-stem waveform lines
       up with the notation (drum entrance under bar 1). `timeToX`
-      maps `[-startOffset,0)` into the lead-in; the rAF clamp now
+      maps `[-drumsT0Sec,0)` into the lead-in; the rAF clamp now
       allows negative `currentTime` so the playhead travels it.
       See §8.7 / §8.18.
 24. **Per-instrument transcription + deterministic recomposition.**
@@ -843,9 +820,8 @@ stages' artifacts from a previous run's debug folder. Form params:
   `DEBUG_DIR` (default `/debug`). A path-traversal guard rejects
   anything outside the configured base.
 - `resume_stage` — one of `stems_all`, `stems_per`, `beats`, `onsets`,
-  `transcribe`, `refine`. Required.
-- `refine`, `lint`, `best_of_k`, `include_candidates` — same as
-  `/transcribe`.
+  `transcribe`. Required.
+- `beat_input`, `include_candidates` — same as `/transcribe`.
 
 Required upstream artifacts depend on `resume_stage`:
 
@@ -853,7 +829,6 @@ Required upstream artifacts depend on `resume_stage`:
 - `beats` needs `stems_per/*.<ext>` (consumed downstream by `onsets`).
 - `onsets` needs `stems_per/*.<ext>` + `beats.json`.
 - `transcribe` needs `beats.json` + `onsets.json` + `stems_per/*.<ext>`.
-- `refine` needs `initial.jot` + the four above.
 
 Missing artifacts surface as HTTP 400 with a message naming which
 `resume_stage` value would regenerate them. Output overwrites the
@@ -864,27 +839,23 @@ idempotent.
 ### 5.7 Named-stage pipeline runner
 
 Both endpoints dispatch through `pipeline/runner.run_pipeline()`. The
-six stages and their data dependencies:
+five stages and their data dependencies:
 
 ```
 stems_all  -> drum_stem               (consumed by stems_per)
-stems_per  -> per_instrument_stems    (consumed by onsets, refine)
-beats      -> structure               (consumed by onsets, transcribe, refine)
-onsets     -> onsets_by_pitch         (consumed by transcribe, refine)
-transcribe -> initial_jot             (consumed by refine)
-refine     -> final_jot
+stems_per  -> per_instrument_stems    (consumed by onsets)
+beats      -> structure               (consumed by onsets, transcribe)
+onsets     -> onsets_by_pitch         (consumed by transcribe)
+transcribe -> predicted_midi          (kept-onsets MIDI deliverable)
 ```
 
-`transcribe` internally fans out to one LLM call per instrument
-(`transcribe_all_instruments`) and `recompose`s the monophonic lines
-into `initial_jot`; it also stashes the per-pitch fragments on
-`PipelineContext.initial_lines_by_pitch` so `refine` can run the
-per-instrument loop on a fresh run (a resume-from-refine has only the
-merged `initial.jot`, so it falls back to whole-chart `refine_jot`).
-Cost shape changed: ≈ `best_of_k × (#instruments)` small LLM calls
-instead of one big call, run in parallel (`instrument_concurrency`);
-the per-song dollar figure in §6.1 is unchanged in order of magnitude
-(smaller prompts offset more calls) but is now an estimate, untested.
+`transcribe` runs the per-instrument filter LLM
+(`filter_onsets_all_instruments`, one parallel call per drum pitch
+rejecting artifact onsets) and renders the kept onsets straight to
+`prediction.mid` with their original times. There is no refine stage:
+the legacy F1-gated multi-level refinement loop was removed in May
+2026 along with the DSL-output pathway it depended on. See
+`transcriber/docs/ai-midi-to-jot-notes.md` for the captured techniques.
 
 Each `_do_<stage>(...)` function reads its inputs from a shared
 `PipelineContext`, writes its output back, and persists artifacts via
@@ -1200,7 +1171,7 @@ preprocessing. Tests cover every spec example.
    *Two song-global scalars now sit on top of this*: `densityFactor`
    (timeline #23) scales every bar by the song's onset density, and
    `leadInPx` reserves pre-roll space before bar 1 from
-   `globalMetadata.startOffset`. Both are derived at the bars' exact
+   `globalMetadata.drumsT0Sec`. Both are derived at the bars' exact
    px/second (`(barWidth·densityFactor/4)·(bpm/60)`) — that
    equivalence with `buildTimeline` is load-bearing for waveform /
    playhead alignment; change one side and you must change the other.

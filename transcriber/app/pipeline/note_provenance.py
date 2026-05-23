@@ -47,8 +47,7 @@ def build_note_provenance(
     all_onsets_by_pitch: dict[str, list[OnsetCandidate]],
     kept_by_pitch: dict[str, list[OnsetCandidate]],
     structure: BeatStructure,
-    onset_backend: str,
-    beat_alignment_offset_sec: float | None = None,
+    beat_alignment_offset_sec: float = 0.0,
 ) -> dict[str, Any]:
     """Return the JSON-serialisable provenance payload for one filter run.
 
@@ -90,7 +89,6 @@ def build_note_provenance(
                 # rendered Note's `metadata.midi.tick` against this.
                 "tick": tick,
                 "detected_time_sec": float(c.time),
-                "detection_backend": onset_backend,
                 "strength": float(c.strength),
                 "bar": bar,
                 "beat_in_bar": float(c.beat_in_bar),
@@ -112,7 +110,6 @@ def build_note_provenance(
     return {
         "format": FORMAT_VERSION,
         "generated_at": datetime.now(UTC).isoformat(),
-        "onset_backend": onset_backend,
         # Audio-time shift applied uniformly to the beat grid before
         # beat positions were computed. The detected `time` fields here
         # predate this shift; the `bar`/`beat_in_bar` values are

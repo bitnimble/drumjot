@@ -61,6 +61,22 @@ class StemsAllResult:
     no_drums: Path | None
 
 
+# Pitch letter → display name. Used by the filter prompt and the split
+# helpers for human-readable labels in logs / prompts. `H` is a
+# synthetic open-hi-hat routing pitch introduced by
+# `pipeline/hihat_split.py` so the filter pass can see closed (`h`) and
+# open (`H`) hits as separate lanes.
+PITCH_DISPLAY_NAMES: dict[str, str] = {
+    "k": "Kick",
+    "s": "Snare",
+    "h": "HiHat",
+    "H": "Open Hi-Hat",
+    "d": "Ride",
+    "c": "Crash",
+    "t": "Tom",
+}
+
+
 STEM_NAME_TO_PITCH: dict[str, str] = {
     "(kick)": "k",
     "(snare)": "s",

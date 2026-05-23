@@ -22,39 +22,16 @@ class Settings(BaseSettings):
     )
 
     # --- LLM ---
+    # Used by the filter stage (the only LLM call in the live pipeline)
+    # to reject artifact onsets per instrument before the kept onsets
+    # render to MIDI.
     anthropic_api_key: str = ""
     llm_model: str = "claude-opus-4-7"
     llm_max_tokens: int = 8192
 
-    # Which transcribe pathway to run:
-    # - `dsl`    = the LLM emits a Drumjot DSL line per instrument,
-    #              recomposed into a Jot, then F1-gated refinement.
-    # - `filter` = the LLM only *filters* the detected onsets (rejects
-    #              separation/detection artifacts); the kept onsets are
-    #              rendered straight to a MIDI file with their original
-    #              un-quantized times. No Jot, no recompose, no refine.
-    # Overridable per-request via the `transcribe_mode` form parameter.
-    transcribe_mode: Literal["dsl", "filter"] = "dsl"
-    # Cheaper model used by the refinement critic (issue triage). Set to
-    # empty string to disable the critic call entirely (fall back to
-    # deterministic confidence ranking).
-    critic_model: str = "claude-haiku-4-5-20251001"
-
-    # --- Refinement defaults ---
-    refine_by_default: bool = True
-    # Lint pass is a separate toggle from the F1-gated refinement levels.
-    # It runs first when enabled (so the F1-gated levels see a chart
-    # that's at least musically well-formed) and is independently
-    # toggleable so cost-sensitive callers can skip it.
-    lint_by_default: bool = True
-    # Transcription is per-instrument, so best-of-K is applied PER
-    # INSTRUMENT: K candidates per drum pitch, each scored on that
-    # pitch's onset F1, best kept. Cost ≈ K × (#instruments) LLM calls,
-    # but the calls are tiny and run in parallel (`instrument_concurrency`).
-    best_of_k_default: int = 1
-    # Max concurrent per-instrument LLM calls in the transcribe stage
-    # (and the per-instrument refinement loop). Each call is small; the
-    # ceiling mostly guards Anthropic rate limits, not local resources.
+    # --- Filter stage ---
+    # Max concurrent per-instrument filter LLM calls. Each call is small;
+    # the ceiling mostly guards Anthropic rate limits, not local resources.
     instrument_concurrency: int = 4
 
     # --- Separation models ---
@@ -70,38 +47,13 @@ class Settings(BaseSettings):
     demucs_model: str = "model_bs_roformer_sw.ckpt"
     drum_pieces_model: str = "drumsep_5stems_mdx23c_jarredou.ckpt"
 
-    # --- Onset detector tuning (librosa) ---
-    # Windows are tight because we run on per-instrument stems, not the
-    # full mix — each stem's transients are well isolated, so the
-    # ±35ms local-max window (pre_max=post_max=3 at hop=512 / sr=44100)
-    # still suppresses double-counting one transient while preserving
-    # back-to-back hits like kick doubles or hi-hat 16ths (~125ms at
-    # 120bpm). The pre_avg / post_avg window is also halved relative
-    # to librosa's defaults to keep the running threshold responsive
-    # to short loud passages.
-    onset_delta: float = 0.05
-    onset_wait: int = 3
-    onset_pre_max: int = 3
-    onset_post_max: int = 3
-    onset_pre_avg: int = 50
-    onset_post_avg: int = 50
-
-    # --- Onset backend selection ---
-    # Which mechanism produces the per-stem onset array:
-    # - `librosa` = the high-recall spectral-flux detector above (default).
-    # - `adtof`   = ADTOF CRNN run per stem, reading only that stem's
-    #               matching class lane. Out-of-distribution (ADTOF is
-    #               trained on full mixes, we run it on isolated stems) so
-    #               it auto-falls-back to librosa if unavailable/erroring.
-    # This is ONLY the default for the `onset_backend` /transcribe form
-    # parameter — callers switch backend per request, not via the env.
-    onset_backend: Literal["librosa", "adtof"] = "librosa"
+    # --- ADTOF onset detector tuning ---
     # ADTOF (xavriley/ADTOF-pytorch Frame_RNN) is a fixed pretrained
     # model whose weights ship inside the package — there is no model /
     # scenario / fold / weights-dir to select. We only tune a
     # deterministic peak-pick over its per-frame activations. The
-    # threshold is kept low on purpose: same "high-recall, the LLM
-    # prunes" contract the librosa detector uses.
+    # threshold is kept low on purpose: high-recall, the filter LLM
+    # prunes.
     adtof_peak_threshold: float = 0.10
     adtof_peak_min_distance_s: float = 0.020
     # The hihat + merged-cymbal ADTOF lanes are OOD-compressed and
@@ -165,7 +117,6 @@ class Settings(BaseSettings):
 
     # --- Paths (Docker volumes mount these) ---
     models_dir: Path = Path("/models")
-    spec_path: Path = Path("/app/SPEC.md")
 
     # Where the user-facing stem deliverables (drumless + drum-only mixes)
     # are written. Unlike `debug_dir`, these are produced every run, served
@@ -176,7 +127,7 @@ class Settings(BaseSettings):
     # --- Debug artifact persistence ---
     # If set, every /transcribe request persists its intermediate files
     # (input audio, drum stem, per-instrument stems, beats.json,
-    # onsets.json, initial.jot, final.jot, refinement.json) into a
+    # onsets.json, prediction.mid, note_provenance.json) into a
     # per-request subdir under this path. Leave unset (or empty) to use
     # ephemeral tempdirs that are deleted on request completion.
     #
@@ -190,6 +141,19 @@ class Settings(BaseSettings):
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ]
+
+    # Which role this process is playing inside the multi-process Docker
+    # image (see transcriber/entrypoint.sh + transcriber/Caddyfile):
+    # - `pipeline` (default) = eager-loads the separation models and
+    #                          serves `/transcribe` + `/transcribe/resume`.
+    #                          Single-process local runs leave it here.
+    # - `api`                = no model load; serves the lightweight
+    #                          control endpoints (`/health`,
+    #                          `/transcribe/list`, `/outputs/*`) so they
+    #                          stay responsive while the pipeline worker's
+    #                          GIL is pinned by a transcription.
+    # Caddy fans incoming requests across the two roles by method+path.
+    worker_role: Literal["pipeline", "api"] = "pipeline"
 
     # --- GPU ---
     # `auto` = detect CUDA / MPS / CPU; `cuda`, `cpu`, `mps` for explicit.

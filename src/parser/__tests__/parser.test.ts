@@ -211,14 +211,14 @@ describe('metadata', () => {
     expect(map.s.limb).toBe('lh');
   });
 
-  it('parses startOffset from a separately-prepended global block', () => {
+  it('parses drumsT0Sec from a separately-prepended global block', () => {
     // The transcriber stamps the audio lead-in as its own `{{ }}` block at
     // the top of the DSL so the LLM-emitted metadata block doesn't have to
     // be rewritten. Both blocks must merge into a single `globalMetadata`.
     const jot = parse(
-      '{{ startOffset: 5.321 }}\n{{ bpm: 120, time: "4/4" }}\n| k . s . k . s . |'
+      '{{ drumsT0Sec: 5.321 }}\n{{ bpm: 120, time: "4/4" }}\n| k . s . k . s . |'
     );
-    expect(jot.globalMetadata.startOffset).toBe(5.321);
+    expect(jot.globalMetadata.drumsT0Sec).toBe(5.321);
     expect(jot.globalMetadata.bpm).toBe(120);
     expect(jot.globalMetadata.time).toEqual({ count: 4, unit: 4 });
   });

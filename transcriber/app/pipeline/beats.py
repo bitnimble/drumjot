@@ -75,6 +75,14 @@ class BeatStructure:
     initial_time_signature: tuple[int, int] = (4, 4)
     has_tempo_changes: bool = False
     has_time_sig_changes: bool = False
+    # The seconds-space shift `align_beats_to_onsets` applied uniformly
+    # to every beat (added to `beat.time`). Defaults to `0.0` and stays
+    # that way when alignment didn't run, found no matches, or was
+    # rejected by the coverage gate — so the value is always a number,
+    # which lets the frontend's Beat control and the per-note "Global
+    # beat alignment" row render `+0.000s` consistently instead of
+    # disappearing on rejection.
+    align_offset_sec: float = 0.0
 
     def position(self, t: float) -> tuple[int, float] | None:
         """Map an absolute time `t` (seconds) to `(bar_index, beat_in_bar)`.
@@ -712,6 +720,7 @@ def align_beats_to_onsets(
 
     for beat in structure.beats:
         beat.time += offset
+    structure.align_offset_sec = offset
     if first_beat_delta is not None:
         log.info(
             "beat alignment: shifted all %d beats by %+.1f ms "

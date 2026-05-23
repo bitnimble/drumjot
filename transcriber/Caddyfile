@@ -1,0 +1,54 @@
+# Drumjot transcriber edge router.
+#
+# Caddy listens on the container's only externally-exposed port (8001)
+# and fans out to two internal uvicorn workers:
+#
+#   POST /transcribe        \
+#   POST /transcribe/resume  } -> 127.0.0.1:8002   (pipeline worker)
+#                              eager-loads separation models, hosts the
+#                              long-running NDJSON streaming pipeline.
+#
+#   everything else         -> 127.0.0.1:8003     (api worker)
+#                              no model load, ~0 VRAM. Serves /health,
+#                              GET /transcribe/list, and /outputs/*.
+#                              Stays responsive while the pipeline
+#                              worker's GIL is pinned by a transcription.
+#
+# Both workers are `app.main:app` with WORKER_ROLE set in
+# transcriber/entrypoint.sh. The healthcheck baked into the Dockerfile
+# (`curl http://localhost:8001/health`) hits Caddy -> api worker, so a
+# successful 200 confirms the routing layer itself.
+
+{
+	# We don't reconfigure Caddy at runtime; disable the admin API so
+	# nothing inside the container can mutate the routing.
+	admin off
+	# Container speaks plain HTTP only — TLS terminates at the Vite dev
+	# proxy in dev, or an external reverse proxy in prod.
+	auto_https off
+	# Container stdout (picked up by `docker compose logs transcriber`).
+	log {
+		format console
+	}
+}
+
+:8001 {
+	# Heavy: streaming NDJSON transcription jobs. Method-matched so a
+	# GET /transcribe/list still falls through to the api worker below.
+	@pipeline {
+		method POST
+		path /transcribe /transcribe/resume
+	}
+	reverse_proxy @pipeline 127.0.0.1:8002 {
+		# NDJSON: flush every write through to the frontend so stage
+		# progress events arrive live, not in a buffered burst at the
+		# end. -1 == flush after every write.
+		flush_interval -1
+	}
+
+	# Lightweight control-plane endpoints (/health, GET /transcribe/list,
+	# /outputs/*, CORS preflights). The api worker has the full route
+	# table mounted but rejects the heavy POSTs with 503 — see
+	# `_require_pipeline_role` in app/main.py.
+	reverse_proxy 127.0.0.1:8003
+}

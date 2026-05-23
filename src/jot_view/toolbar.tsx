@@ -5,7 +5,6 @@ import { ExampleJot } from 'src/fakes';
 import { jotPlayer, SampleLoadProgress } from 'src/playback';
 import {
   BeatInput,
-  OnsetBackend,
   TranscribeStage,
   TranscriptionSummary,
 } from 'src/transcriber';
@@ -21,7 +20,6 @@ const STAGE_ORDER: readonly TranscribeStage[] = [
   'beats',
   'onsets',
   'transcribe',
-  'refine',
 ];
 
 /**
@@ -126,6 +124,42 @@ const DropdownButton = observer(({
   );
 });
 
+/**
+ * A nested menu item inside a {@link DropdownButton} panel. Renders as a
+ * regular dropdown row with a trailing ▸; clicking toggles a fly-out
+ * panel anchored to its right edge. Outside-click + Escape are already
+ * handled by the enclosing DropdownButton (which will tear down this
+ * whole subtree), so we only need local open/close state.
+ */
+const SubmenuItem = ({
+  label,
+  children,
+}: {
+  label: React.ReactNode;
+  children: (close: () => void) => React.ReactNode;
+}) => {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <div className={styles.submenu}>
+      <button
+        type="button"
+        className={classNames(styles.dropdownItem, styles.submenuTrigger)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span>{label}</span>
+        <span aria-hidden="true" className={styles.submenuArrow}>▸</span>
+      </button>
+      {open && (
+        <div className={styles.submenuPanel} role="menu">
+          {children(() => setOpen(false))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 /** Format one row of the resume picker. The label needs to compress
  *  three things into the cramped space of a native `<option>`: the
  *  original upload filename, when the run was originally requested, and
@@ -147,15 +181,35 @@ function formatTranscriptionSummary(s: TranscriptionSummary): string {
   return `${filename} — ${detail}`;
 }
 
+/** Human-readable label for one pipeline stage, used in the status
+ *  pill. Mirrors the StrEnum values one-for-one but with friendlier
+ *  wording where the raw identifier ("stems_per") reads worse than its
+ *  description ("separating drum pieces"). */
+function formatStageLabel(stage: TranscribeStage): string {
+  switch (stage) {
+    case 'stems_all':
+      return 'separating drums';
+    case 'stems_per':
+      return 'separating drum pieces';
+    case 'beats':
+      return 'tracking beats';
+    case 'onsets':
+      return 'detecting onsets';
+    case 'transcribe':
+      return 'transcribing';
+  }
+}
+
 function formatTimestamp(iso: string): string {
-  // The backend emits naive local-time ISO strings (no `Z`/offset) —
-  // `new Date(iso)` would interpret those as UTC and shift them by the
-  // user's local offset. Parse the YYYY-MM-DDTHH:MM:SS prefix manually
-  // so the displayed string matches the operator's wall clock.
-  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/);
-  if (!m) return iso;
-  const [, y, mo, d, h, mi] = m;
-  return `${y}-${mo}-${d} ${h}:${mi}`;
+  // The backend stamps timestamps as UTC ISO (Z-suffixed) — see
+  // `mint_request_folder_name` + `_parse_folder_timestamp` in
+  // transcriber/app/pipeline/resume.py. Parse with `Date` and emit the
+  // user's local wall clock so the picker doesn't surprise operators in
+  // non-UTC timezones.
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 export const Toolbar = observer(
@@ -174,7 +228,6 @@ export const Toolbar = observer(
     onLoadAudioTrack,
     onCancelTranscribe,
     onClearTranscribeStatus,
-    onSetOnsetBackend,
     onSetBeatInput,
     zoom,
     onSetZoom,
@@ -202,7 +255,6 @@ export const Toolbar = observer(
     onLoadAudioTrack: (file: File) => void;
     onCancelTranscribe: () => void;
     onClearTranscribeStatus: () => void;
-    onSetOnsetBackend: (backend: OnsetBackend) => void;
     onSetBeatInput: (input: BeatInput) => void;
     zoom: number;
     onSetZoom: (z: number) => void;
@@ -266,34 +318,36 @@ export const Toolbar = observer(
 
     return (
       <div className={styles.toolbar}>
-        {examples.length > 0 && (
-          <>
-            <label htmlFor="drumjot-example-select" className={styles.toolbarLabel}>
-              Example
-            </label>
-            <Select
-              id="drumjot-example-select"
-              className={styles.exampleSelect}
-              value={currentId ?? ''}
-              onChange={(e) => onSelect(e.target.value)}
-            >
-              {currentId === undefined && (
-                <option value="" disabled>
-                  Select an example...
-                </option>
-              )}
-              {examples.map((ex) => (
-                <option key={ex.id} value={ex.id}>
-                  {ex.label}
-                </option>
-              ))}
-            </Select>
-            <span className={styles.toolbarDivider} aria-hidden="true" />
-          </>
-        )}
         <DropdownButton label="Load" title="Load a score or audio tracks from disk">
           {(close) => (
             <>
+              {examples.length > 0 && (
+                <>
+                  <SubmenuItem label="Examples">
+                    {(closeSub) =>
+                      examples.map((ex) => (
+                        <button
+                          key={ex.id}
+                          type="button"
+                          className={classNames(
+                            styles.dropdownItem,
+                            ex.id === currentId && styles.dropdownItemActive,
+                          )}
+                          onClick={() => {
+                            onSelect(ex.id);
+                            closeSub();
+                            close();
+                          }}
+                          title={`Load the built-in example "${ex.label}".`}
+                        >
+                          {ex.label}
+                        </button>
+                      ))
+                    }
+                  </SubmenuItem>
+                  <span className={styles.dropdownDivider} aria-hidden="true" />
+                </>
+              )}
               <button
                 type="button"
                 className={styles.dropdownItem}
@@ -370,23 +424,6 @@ export const Toolbar = observer(
               resumableSet.has(selectedResumeStage);
             return (
               <>
-                <label
-                  className={sharedStyles.toolbarCheckbox}
-                  title="Per-stem onset detector. `librosa` is the high-recall spectral-flux detector; `adtof` is the ADTOF CRNN run per stem with automatic per-stem librosa fallback when ADTOF/its weights are unavailable."
-                >
-                  <span>Onset backend</span>
-                  <Select
-                    className={sharedStyles.samplesSelect}
-                    value={transcribeOptions.onsetBackend}
-                    disabled={uploading}
-                    onChange={(e) =>
-                      onSetOnsetBackend(e.target.value as OnsetBackend)
-                    }
-                  >
-                    <option value="librosa">librosa</option>
-                    <option value="adtof">adtof</option>
-                  </Select>
-                </label>
                 <label
                   className={sharedStyles.toolbarCheckbox}
                   title="Which audio feeds the beat tracker. `full_mix` (default) is madmom's training distribution; `drum_stem` can help on tracks with heavy non-drum syncopation."
@@ -653,9 +690,21 @@ const TranscribeStatusPill = observer(
   ({ status, onClear }: { status: TranscribeStatus; onClear: () => void }) => {
     if (status.phase === 'idle') return null;
     if (status.phase === 'uploading') {
+      // Surface the live pipeline stage (and substage detail, if any)
+      // alongside the filename so the operator can see what the server
+      // is actually working on. Fed from the NDJSON progress stream via
+      // `JotViewStore.applyProgress`; the inline spinner reinforces
+      // that work is in flight while text labels swap between stages.
+      const stagePart = status.stage
+        ? ` · ${formatStageLabel(status.stage)}${status.substage ? ` (${status.substage})` : ''}`
+        : '';
       return (
-        <span className={classNames(sharedStyles.statusPill, sharedStyles.statusPillBusy)}>
-          Transcribing {status.filename}...
+        <span
+          className={classNames(sharedStyles.statusPill, sharedStyles.statusPillBusy)}
+          title={status.substage ?? status.stage ?? 'starting'}
+        >
+          <span className={styles.statusPillSpinner} aria-hidden="true" />
+          Transcribing {status.filename}{stagePart}…
         </span>
       );
     }
@@ -671,25 +720,13 @@ const TranscribeStatusPill = observer(
         </span>
       );
     }
-    const refinement = status.refinement;
     let detail = `@ ${status.tempo.toFixed(0)} bpm, ${status.barCount} bars`;
     if (status.hasTempoChanges) detail += ', tempo changes';
     if (status.hasTimeSigChanges) detail += ', time-sig changes';
-    if (refinement) {
-      const accepted = refinement.iterations.filter((i) => i.accepted).length;
-      const delta = refinement.final_score - refinement.initial_score;
-      const sign = delta >= 0 ? '+' : '';
-      detail += `, F1 ${refinement.initial_score.toFixed(2)} → ${refinement.final_score.toFixed(2)} (${sign}${delta.toFixed(2)}, ${accepted} revisions)`;
-    }
     if (status.debugDir) {
       detail += `, debug @ ${status.debugDir}`;
     }
     const titleLines: string[] = [];
-    if (refinement) {
-      titleLines.push(
-        `Refined ${refinement.iterations.length} iterations in ${refinement.elapsed_seconds.toFixed(1)}s.`,
-      );
-    }
     if (status.debugDir) {
       titleLines.push(
         `Debug artifacts saved to ${status.debugDir} (under ./debug/ on the host with the default docker-compose mount).`,

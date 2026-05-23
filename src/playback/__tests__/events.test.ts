@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'bun:test';
 import { parse } from 'src/parser';
 import { RenderedJot } from 'src/jot';
+import { buildTimeline } from '../timeline';
 import { jotToEvents } from '../events';
 
 function events(src: string) {
@@ -45,5 +46,28 @@ describe('jotToEvents timing', () => {
     );
     // 120 BPM → 60/120 = 0.5s per beat.
     expect(evs[1].time).toBeCloseTo(0.5, 6);
+  });
+
+  it('anchors bar 1 at jot 0 when leadBars shifts bars[0] into the pre-drum window', () => {
+    // Two empty lead-in bars then a kick on bar-1 downbeat at 120 BPM:
+    // bar 1 (= voice.bars[2]) lives at jot 0, so the kick fires at t=0,
+    // even though the rendered jot has two preceding (empty) bars at
+    // negative jot time.
+    const jot = parse(
+      '{{ bpm: 120, time: "4/4", leadBars: 2, instrumentMapping: { k:{name:"Kick"} } }} | . . . . | . . . . | k . . . |',
+    );
+    const rendered = new RenderedJot(jot);
+    const evs = jotToEvents(rendered);
+    expect(evs).toHaveLength(1);
+    expect(evs[0].time).toBeCloseTo(0, 6);
+    // The timeline mirrors that anchor: pre-drum bars sit at negative
+    // startSec, bar 1 at 0, total playable jot duration spans the drum
+    // bars only (the lead-in is reachable via negative seek but not
+    // counted toward the end-of-playback sentinel).
+    const timeline = buildTimeline(rendered);
+    expect(timeline.bars[0].startSec).toBeCloseTo(-4, 6);
+    expect(timeline.bars[1].startSec).toBeCloseTo(-2, 6);
+    expect(timeline.bars[2].startSec).toBeCloseTo(0, 6);
+    expect(timeline.totalDurationSec).toBeCloseTo(2, 6);
   });
 });

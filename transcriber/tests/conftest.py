@@ -1,20 +1,10 @@
 """Shared test setup.
 
-`jot_extract` resolves the bun bridge tool path from `JOT_TO_ONSETS_TOOL`
-at import time, defaulting to the in-container `/app/...` path. Point it
-at the repo copy so tests that exercise the real TS parser (recompose,
-round-trip) work outside Docker. Set before any `app.pipeline` import.
+Empty for now — earlier versions pointed the bun-bridge env vars at the
+repo copy of the now-removed `transcriber/tools/` so the DSL-pathway
+tests could exercise the TS parser outside Docker. With the DSL pathway
+and bun bridges gone, there is no setup left to do here. Keeping the
+file (rather than deleting it) is a pytest convention — auto-discovered
+`conftest.py` is the natural extension point for future shared fixtures.
 """
 from __future__ import annotations
-
-import os
-from pathlib import Path
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_TOOLS = _REPO_ROOT / "transcriber" / "tools"
-os.environ.setdefault(
-    "JOT_TO_ONSETS_TOOL", str(_TOOLS / "jot_to_onsets.ts")
-)
-os.environ.setdefault(
-    "RECOMPOSE_JOT_TOOL", str(_TOOLS / "recompose_jot.ts")
-)

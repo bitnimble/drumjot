@@ -170,11 +170,22 @@
     font-weight: 700;
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.02em;
-    line-height: 1;
+    line-height: 1.15;
     padding: 3px 5px;
     border-radius: var(--radius-xs);
     white-space: nowrap;
     z-index: 6;
     box-shadow: var(--shadow-playhead-label);
     cursor: ew-resize;
+    text-align: center;
+}
+
+/* Second line of the playhead label: bar number + beat-in-bar, sized
+   down and de-emphasised so the primary timecode stays the dominant
+   readout while still surfacing the musical position underneath. */
+.playheadLabelBarBeat {
+    font-size: 9px;
+    font-weight: 600;
+    opacity: 0.85;
+    margin-top: 1px;
 }

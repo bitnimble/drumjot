@@ -1,1 +1,6 @@
-- allow layering of song + drums in web ui playback
+- change open + closed hihat classifier -> filter, to a combo one
+- fix beat alignment issues
+  - maybe the peak finding backtracking? are we passing that through debug manifest?
+- redo midi -> jot conversion, using smart stuff
+- verify stop transcription button works
+- improve UX for beat + audio alignment controls (including issue where it keeps focus so spacebar to play/pause doesn't work)

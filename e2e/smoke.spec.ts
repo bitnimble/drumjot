@@ -1,6 +1,5 @@
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
-import { CANNED_JOT_DSL, mockTranscriber } from './helpers/transcriber-mock';
 
 const JOT_FIXTURE = fileURLToPath(new URL('./fixtures/loop.jot', import.meta.url));
 
@@ -26,24 +25,8 @@ test('loads a .jot file from disk', async ({ page }) => {
   await expect(page.locator('h2')).toContainText('E2E Fixture Loop');
 });
 
-test('transcribe flow loads the mocked DSL', async ({ page }) => {
-  await mockTranscriber(page);
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Transcribe', exact: true }).click();
-  const [chooser] = await Promise.all([
-    page.waitForEvent('filechooser'),
-    page.getByRole('button', { name: 'Transcribe audio' }).click(),
-  ]);
-  await chooser.setFiles({
-    name: 'song.wav',
-    mimeType: 'audio/wav',
-    buffer: Buffer.from('not-real-audio-the-backend-is-mocked'),
-  });
-  // titleFromFilename overrides the DSL title with the upload's stem,
-  // so the rendered heading is "song" (not the canned DSL title).
-  await expect(page.locator('h2')).toContainText('song');
-  // The success pill confirms the transcribe round-trip completed.
-  await expect(page.getByText(/Loaded song\.wav/)).toBeVisible();
-  // Sanity: the mock returned parseable DSL.
-  expect(CANNED_JOT_DSL).toContain('| h h h h');
-});
+// The transcribe-flow e2e was removed when the DSL-output backend was
+// deleted (May 2026): the new MIDI-bundle pathway needs a real .zip
+// containing a valid prediction.mid to round-trip through the auto-load
+// path, which requires more mock infrastructure than the unit-style smoke
+// surface was built for. Re-add when a small MIDI/zip fixture is wired up.

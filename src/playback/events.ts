@@ -65,16 +65,40 @@ export function jotToEvents(rendered: RenderedJot): PlaybackEvent[] {
   const globalBpm = resolveBpm(resolved.globalMetadata.bpm, 120);
   const events: PlaybackEvent[] = [];
 
+  // Bar 1 (= `voice.bars[leadBars]`) sits at jot time 0 by convention,
+  // matching `buildTimeline`'s anchor. Pre-drum bars get a negative
+  // bar-offset so an empty lead-in produces no events but a lead-in bar
+  // that DOES contain notes (rare; today only relevant if the upstream
+  // generator stamps drums into a pre-drum bar) would fire its events
+  // at negative jot time — at media `jot + drumsT0Sec >= 0` in audio
+  // time, which is still valid. Without a leadBars hint we default to
+  // bar 0 = jot 0 (unchanged from the pre-three-epoch behaviour).
+  const rawLeadBars = resolved.globalMetadata.leadBars;
   for (const voice of resolved.voices) {
-    let barOffsetSec = 0;
+    const leadBars =
+      typeof rawLeadBars === 'number' && rawLeadBars > 0
+        ? Math.min(rawLeadBars, voice.bars.length)
+        : 0;
     // Per-bar `{{ bpm }}` overrides are sticky; carry the effective
     // tempo across bars exactly as `buildTimeline` does so the playhead
-    // and the scheduled audio stay on the same clock.
+    // and the scheduled audio stay on the same clock. Compute durations
+    // in one forward pass, then derive each bar's jot-time anchor from
+    // the leadBars offset.
     let currentBpm = globalBpm;
-    for (const bar of voice.bars) {
+    const durations: number[] = new Array(voice.bars.length);
+    for (let i = 0; i < voice.bars.length; i++) {
+      const bar = voice.bars[i];
       const override = bar.source.metadata?.bpm;
       if (override !== undefined) currentBpm = resolveBpm(override, currentBpm);
-      const barDurationSec = bar.beats * (60 / currentBpm);
+      durations[i] = bar.beats * (60 / currentBpm);
+    }
+    let leadOffsetSec = 0;
+    for (let i = 0; i < leadBars; i++) leadOffsetSec += durations[i];
+
+    let barOffsetSec = -leadOffsetSec;
+    for (let i = 0; i < voice.bars.length; i++) {
+      const bar = voice.bars[i];
+      const barDurationSec = durations[i];
       for (const pitch of voice.pitches) {
         const track = bar.tracks[pitch];
         if (!track) continue;
@@ -85,12 +109,14 @@ export function jotToEvents(rendered: RenderedJot): PlaybackEvent[] {
           const time = barOffsetSec + (note.beat / bar.beats) * barDurationSec;
           events.push({ time, midiNote, velocity, pitch });
           if (note.modifiers.has('fl')) {
-            // The grace stroke gets clamped if it would precede jot-time 0
-            // (a flam on bar 1 beat 1 with no lead-in). It'll then sound
-            // simultaneously with the main hit — a slightly louder single
-            // strike rather than a flam — which is the right degenerate
-            // behaviour: better than silently dropping the grace.
-            const graceTime = Math.max(0, time - FLAM_GRACE_OFFSET_SEC);
+            // The grace stroke clamps to -leadOffsetSec so it can't run
+            // past the start of the pre-drum window (a flam on bar 1
+            // beat 1 with no lead-in clamps to 0 = bar 1 downbeat). Above
+            // that floor it sounds the configured offset earlier than the
+            // main hit; at the floor it collapses with the main hit
+            // rather than disappearing entirely.
+            const graceFloor = -leadOffsetSec;
+            const graceTime = Math.max(graceFloor, time - FLAM_GRACE_OFFSET_SEC);
             const graceVel = Math.max(1, Math.round(velocity * FLAM_GRACE_VELOCITY_RATIO));
             events.push({ time: graceTime, midiNote, velocity: graceVel, pitch });
           }

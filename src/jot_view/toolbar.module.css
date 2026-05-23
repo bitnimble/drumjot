@@ -32,22 +32,6 @@
     color: var(--color-text-muted-alt);
 }
 
-.exampleSelect {
-    composes: bodyMd from '../typography.module.css';
-    padding: 4px 8px;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    background: var(--color-bg-base);
-    color: var(--color-text);
-    cursor: pointer;
-    min-width: 220px;
-}
-
-.exampleSelect:focus {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 1px;
-}
-
 .toolbarDivider {
     width: 1px;
     height: 18px;
@@ -231,10 +215,70 @@
     outline-offset: 1px;
 }
 
+.dropdownItemActive {
+    background: var(--color-bg-hover);
+    color: var(--color-accent);
+}
+
+.submenu {
+    position: relative;
+    display: flex;
+}
+
+.submenuTrigger {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+}
+
+.submenuArrow {
+    color: var(--color-text-muted-alt);
+}
+
+.submenuPanel {
+    position: absolute;
+    top: 0;
+    left: calc(100% + 6px);
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+    min-width: 200px;
+    padding: 10px;
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+}
+
 .dropdownDivider {
     height: 1px;
     background: var(--color-border-soft);
     margin: 2px 0;
+}
+
+/* Inline spinner shown next to the "Transcribing …" status pill while a
+   /transcribe stream is in flight. Matches the look of the full-screen
+   .loadingSpinner but at toolbar-pill size. */
+.statusPillSpinner {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    margin-right: 4px;
+    border: 1.5px solid var(--color-border-translucent);
+    border-top-color: var(--color-accent);
+    border-radius: var(--radius-circle);
+    vertical-align: -1px;
+    animation: statusPillSpinnerRotate 0.8s linear infinite;
+}
+
+@keyframes statusPillSpinnerRotate {
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 /* DebugPanel: a collapsible drawer pinned to the bottom of the app,

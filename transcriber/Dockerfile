@@ -5,10 +5,10 @@
 # automatically if no GPU is exposed to the container (audio-separator
 # handles the device selection).
 #
-# Build context: the repo root (see transcriber/docker-compose.yml). We
-# need both `transcriber/` (Python service) and `src/` (canonical TS
-# parser and code-share with the Vite frontend) in the same image, so the
-# refinement loop can use the same parser via a `bun` subprocess.
+# Build context: the repo root (see transcriber/docker-compose.yml). The
+# image only needs `transcriber/` today — `bun` and the bun bridges used
+# by the legacy DSL pathway are gone — but the build context is left at
+# the repo root so adding a future TS bridge stays a one-line change.
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -17,13 +17,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1
 
 # System dependencies. libsndfile + ffmpeg for librosa/soundfile;
-# build-essential is required by madmom's C extensions; unzip + curl
-# install bun.
+# build-essential is required by madmom's C extensions; curl/ca-certificates
+# for the in-image downloads below.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         software-properties-common \
         build-essential \
         ffmpeg libsndfile1 \
-        git curl ca-certificates unzip \
+        git curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # transcriber/pyproject.toml requires Python >= 3.11 (StrEnum etc.).
@@ -36,12 +36,15 @@ RUN add-apt-repository -y ppa:deadsnakes/ppa \
     && curl -fsSL https://bootstrap.pypa.io/get-pip.py | python3.11 \
     && rm -rf /var/lib/apt/lists/*
 
-# Bun for the TS parser bridge (jot_to_onsets.ts). Pinned to keep
-# behaviour reproducible across rebuilds. Installed under /usr/local so
-# the non-root runtime user (created below) can also invoke it without
-# needing access to /root.
-RUN curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local/bun bash -s "bun-v1.3.5"
-ENV PATH=/usr/local/bun/bin:$PATH
+# Caddy: in-container reverse proxy that routes POST /transcribe* to the
+# pipeline worker (loads models) and everything else to the api worker
+# (no GPU). Pulled as the official static binary so the install doesn't
+# drag in apt repository keys / systemd units we don't need. Version
+# pinned for reproducibility — bump deliberately, not by floating tag.
+ARG CADDY_VERSION=2.8.4
+RUN curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_amd64.tar.gz" \
+        | tar -xz -C /usr/local/bin caddy \
+    && chmod +x /usr/local/bin/caddy
 
 # Runtime user. Matches the typical host UID 1000:1000 so bind-mounted
 # files written by the container (debug artifacts, benchmark results,
@@ -83,34 +86,15 @@ RUN python3.11 -m pip install --upgrade pip setuptools wheel \
 # (then the request falls back to librosa) if the package or its
 # bundled weights are somehow unavailable.
 
-# TS source the bun bridge needs (parser, jot model, etc.).
-COPY src/ ./src/
-COPY transcriber/tools/ ./tools/
-# Synthesise a tsconfig at /app so `bun` resolves the `src/*` path alias
-# the bridge script uses. Keeping this inline (rather than COPYing a
-# shipped file) avoids the local-vs-Docker baseUrl mismatch.
-RUN printf '%s\n' \
-    '{' \
-    '  "compilerOptions": {' \
-    '    "target": "ES2022",' \
-    '    "module": "ESNext",' \
-    '    "moduleResolution": "bundler",' \
-    '    "allowImportingTsExtensions": true,' \
-    '    "noEmit": true,' \
-    '    "strict": false,' \
-    '    "skipLibCheck": true,' \
-    '    "esModuleInterop": true,' \
-    '    "baseUrl": ".",' \
-    '    "paths": { "src/*": ["src/*"] },' \
-    '    "types": ["bun"]' \
-    '  },' \
-    '  "include": ["src", "tools"]' \
-    '}' > tsconfig.json
-
-# Python app + prompts + SPEC.
+# Python app + prompts.
 COPY transcriber/app/ ./app/
 COPY transcriber/prompts/ ./prompts/
-COPY SPEC.md ./SPEC.md
+
+# Caddy config + the entrypoint that launches both uvicorn workers and
+# Caddy as siblings. See the file comments for the routing split.
+COPY transcriber/Caddyfile /etc/caddy/Caddyfile
+COPY transcriber/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 # Beat Transformer checkpoint (optional). If the directory is empty
 # the image still builds; BT just fails-loud at first use when
@@ -127,20 +111,6 @@ COPY transcriber/benchmarks/__init__.py \
 COPY transcriber/benchmarks/core/ ./benchmarks/core/
 COPY transcriber/benchmarks/loaders/ ./benchmarks/loaders/
 
-# Pre-resolve the bun tools' TS imports so the first request doesn't pay
-# resolution latency. (Bun JIT-compiles; this is mostly a smoke test
-# that imports work before we hit /transcribe.) Both bridges share the
-# same `src/` tree and tsconfig, so a broken import fails here at build
-# time rather than mid-request.
-RUN bun --bun run --silent /app/tools/jot_to_onsets.ts < /dev/null \
-    || echo "jot_to_onsets bridge smoke test exited non-zero (expected if no DSL on stdin)"
-RUN bun --bun run --silent /app/tools/lint_jot.ts < /dev/null \
-    || echo "lint_jot bridge smoke test exited non-zero (expected if no DSL on stdin)"
-RUN bun --bun run --silent /app/tools/recompose_jot.ts < /dev/null \
-    || echo "recompose_jot bridge smoke test exited non-zero (expected if no JSON on stdin)"
-RUN bun --bun run --silent /app/tools/format_jot.ts < /dev/null \
-    || echo "format_jot bridge smoke test exited non-zero (expected if no DSL on stdin)"
-
 # Models cache lives on a Docker volume so weights persist across rebuilds.
 # Pre-create the runtime-writable paths and chown them to the `app` user.
 # A named-volume mount onto a directory the image owns at app:app will
@@ -152,10 +122,7 @@ RUN mkdir -p /models /debug /app/benchmarks/datasets /app/benchmarks/results \
 ENV AUDIO_SEPARATOR_MODEL_FILE_DIR=/models \
     HF_HOME=/models/huggingface \
     TRANSFORMERS_CACHE=/models/huggingface \
-    TORCH_HOME=/models/torch \
-    JOT_TO_ONSETS_TOOL=/app/tools/jot_to_onsets.ts \
-    RECOMPOSE_JOT_TOOL=/app/tools/recompose_jot.ts \
-    FORMAT_JOT_TOOL=/app/tools/format_jot.ts
+    TORCH_HOME=/models/torch
 
 USER app:app
 
@@ -168,4 +135,4 @@ EXPOSE 8001
 HEALTHCHECK --interval=30s --timeout=10s --start-period=600s --retries=3 \
     CMD curl -fsS http://localhost:8001/health || exit 1
 
-CMD ["python3.11", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["/app/entrypoint.sh"]

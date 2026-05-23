@@ -39,7 +39,7 @@ Design choices:
   reading the full tempo map still sees per-bar `set_tempo` events at
   every bar boundary, so bar 0's audio duration stays exact. The
   lead-in itself is the MIDI counterpart of the DSL path's
-  `{{ startOffset }}`. Without a structure (the raw
+  `{{ drumsT0Sec }}`. Without a structure (the raw
   `onsets_only.mid` diagnostic, where onsets may have no bar) it
   falls back to a single `set_tempo` at tick 0 from
   `initial_tempo_bpm` and a flat seconds->ticks scaling.

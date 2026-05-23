@@ -93,8 +93,36 @@
 
 .pitchRow:first-of-type,
 .musicTrack + .pitchRow,
-.gutterMasterRow + .pitchRow {
+.gutterMasterRow + .pitchRow,
+/* A group-start pitch row sits 12px below the previous row's
+   border-bottom (see .mixerRowGroupStart), so it needs its own
+   border-top — otherwise its upper edge floats in the gap with no
+   visible separator. */
+.pitchRow.mixerRowGroupStart {
     border-top: 1px solid var(--color-border);
+}
+
+/* Paired (audio↔pitch) group inner edge: the musicTrack above already
+   draws its own bottom border, so suppress the pitchRow's top border
+   to avoid a doubled-up 2×1px line between them. A pitchRow that
+   STARTS a new group (different groupId from the audio above it) keeps
+   its top border so the cluster boundary still reads. */
+.musicTrack + .pitchRow:not(.mixerRowGroupStart) {
+    border-top: none;
+}
+
+/* Outer edges of a real group (top of the first row, bottom of the
+   last row): bumped to 2px so the cluster reads as a single unit
+   against the surrounding flat rows. Only fires on rows that actually
+   belong to a group — solo rows transitioning across a group boundary
+   still get the 12px gap from `mixerRowGroupStart` but keep their 1px
+   border. */
+.mixerRowInGroup.mixerRowGroupStart {
+    border-top-width: 2px;
+}
+
+.mixerRowInGroup.mixerRowGroupEnd {
+    border-bottom-width: 2px;
 }
 
 .pitchRowGutter {
@@ -147,6 +175,16 @@
     justify-content: flex-end;
     gap: 3px;
     flex: 0 0 auto;
+}
+
+/* Invisible, non-interactive placeholder that occupies the same width
+   as an icon button so the pitch row's volume slider lines up with the
+   audio-track row's slider (which has an extra Clear button before
+   M/S). Width matches `.iconButton` in components/icon_button.module.css. */
+.controlSpacer {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
 }
 
 .pitchRowName {
@@ -332,7 +370,16 @@
     transform: scaleX(calc(var(--px-per-beat) / var(--rendered-px-per-beat)));
     will-change: transform;
     /* `transition` keeps the dim/undim flip smooth when M/S toggles. */
-    transition: opacity 120ms ease;
+    transition: filter 120ms ease;
+}
+
+/* Muted-track waveform: drop saturation hard and lighten so the row
+   reads as silenced, while leaving enough hue to pair the wave with its
+   instrument row at a glance. Applied as a CSS filter rather than
+   re-rasterising the canvas in a different color so M/S toggles never
+   trigger a redraw. */
+.musicTrackWaveformDim {
+    filter: saturate(0.25) brightness(1.35) opacity(0.7);
 }
 
 .gutterPitch {
@@ -363,13 +410,15 @@
     position: relative;
     display: flex;
     flex: 0 0 auto;
-    /* The pitch gutter is now taller than the bar lane (two-line
-       layout — label + slider/M/S — vs one trackHeight-tall lane), so
-       stretch this row to the gutter's height via the parent flex's
-       default `align-items: stretch` and centre the bars/leadIn block
-       inside it. Without this, bars would sit at the top of the row
-       leaving 20px of empty space below. */
-    align-items: center;
+    /* The pitch gutter is taller than a single trackHeight lane (two-line
+       layout — label + slider/M/S), so the bars row stretches to match
+       the gutter's height via the parent flex's default
+       `align-items: stretch`. Children (.bar, .leadIn) also stretch
+       (align-items: stretch here) so their right barlines — and the
+       playhead, which is top:0/bottom:0 of this row — extend all the
+       way to the row's bottom border. Lane content stays vertically
+       centred inside .bar via its own flex column. */
+    align-items: stretch;
     /* Width driven by `--voice-beats` (set per row) × `--px-per-beat`
        (set on the score container, the one variable that the zoom
        slider changes). Reading `--px-per-beat` purely from CSS means

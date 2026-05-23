@@ -1,11 +1,17 @@
+import { untracked } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { Point } from 'src/geom';
 import { RenderedJot } from 'src/jot';
-import { jotPlayer, timeToX } from 'src/playback';
+import { BarTiming, buildTimeline, jotPlayer, timeToX } from 'src/playback';
 import { SelectionStore } from 'src/selection';
 import styles from './jot_view.module.css';
-import { NoteProvenanceContext, NoteProvenanceContextValue, SelectionContext } from './jot_view/contexts';
+import {
+  BarTimingsContext,
+  NoteProvenanceContext,
+  NoteProvenanceContextValue,
+  SelectionContext,
+} from './jot_view/contexts';
 import {
   AudioTrackControls,
   MixerView,
@@ -112,6 +118,13 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
           showFiltered: store.showFilteredOnsets,
           beatAlignmentOffsetSec:
             store.noteProvenance.beat_alignment_offset_sec ?? null,
+          // Bundle manifest mapping is `Record<string, string>`; rebuild
+          // it as a Map for ergonomic .get() lookups inside the per-onset
+          // timing visualization. Empty when the current bundle didn't
+          // ship a manifest (hand-authored jots, legacy bundles).
+          audioFilenameByPitch: new Map(
+            Object.entries(store.lastDebugBundle?.mapping ?? {}),
+          ),
         }
       : null;
 
@@ -136,7 +149,6 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
           onLoadAudioTrack={(file) => store.loadAudioTrack(file)}
           onCancelTranscribe={() => store.cancelTranscribe()}
           onClearTranscribeStatus={() => store.clearTranscribeStatus()}
-          onSetOnsetBackend={(b) => store.setOnsetBackend(b)}
           onSetBeatInput={(b) => store.setBeatInput(b)}
           zoom={store.zoom}
           onSetZoom={(z) => store.setZoom(z)}
@@ -183,7 +195,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
               onToggleSolo: (id) => store.toggleAudioTrackSolo(id),
               onClear: (id) => store.clearAudioTrack(id),
             }}
-            gutterWidth={store.gutterWidth}
+            getGutterWidth={() => store.gutterWidth}
             onSetGutterWidth={(px) => store.setGutterWidth(px)}
           />
         ) : (
@@ -226,9 +238,12 @@ type JotViewProps = {
   onMoveTrack: (from: number, to: number) => void;
   voiceControls: VoiceControls;
   audioTrackControls: AudioTrackControls;
-  /** Current sticky-gutter width (px); pushed to the `--gutter-width`
-   * CSS variable on the container so every gutter resizes together. */
-  gutterWidth: number;
+  /** Read the current sticky-gutter width (px). A getter (not a value)
+   * so the parent View doesn't reactively re-render on every resize
+   * tick — the value flows into the DOM via `GutterWidthVar` as a
+   * side-effect-only CSS-var update, and is also read once at drag
+   * start to snapshot the starting width. */
+  getGutterWidth: () => number;
   /** Apply a new sticky-gutter width (px); called by the gutter resize
    * handle's pointer-move stream. */
   onSetGutterWidth: (px: number) => void;
@@ -248,7 +263,7 @@ const JotView = observer((props: JotViewProps) => {
     onMoveTrack,
     voiceControls,
     audioTrackControls,
-    gutterWidth,
+    getGutterWidth,
     onSetGutterWidth,
   } = props;
   // Intentionally NOT reading `jot.resolved` here — every observable
@@ -350,30 +365,62 @@ const JotView = observer((props: JotViewProps) => {
   }, []);
 
   // `--note-pad-px` is the engraving inset every note's CSS `left`
-  // calc() reads; it never changes at runtime. `--px-per-beat` is the
-  // ONE value the zoom slider mutates — both live on the same root so
-  // every descendant calc() chain reads from a single ancestor. The
-  // pad var goes in inline style (set once). `--px-per-beat` is
-  // updated by `ScoreZoomVar`, a side-effect-only observer that
-  // writes via `setProperty` on `containerRef.current` so a zoom tick
-  // doesn't re-render JotView — only mutates one DOM attribute.
-  // `--gutter-width` flows from the store's user-resizable gutter
-  // width and feeds every sticky gutter element below; tracking it on
-  // the container re-renders JotView on resize, which is cheap (the
-  // mixer/score subtrees read it via CSS var, not React).
+  // calc() reads; it never changes at runtime. `--px-per-beat` and
+  // `--gutter-width` are the two values that get mutated at runtime —
+  // both live on the same root so every descendant calc() chain reads
+  // from a single ancestor. The pad var goes in inline style (set
+  // once). `--px-per-beat` and `--gutter-width` are updated by
+  // `ScoreZoomVar` / `GutterWidthVar`, side-effect-only observers
+  // that write via `setProperty` on `containerRef.current` so the
+  // tick doesn't re-render JotView — only mutates one DOM attribute.
+  // With many tracks loaded a JotView re-render is expensive enough
+  // to make a 120 Hz resize drag visibly laggy, so we keep both reads
+  // off the render path.
+  //
+  // We do, however, seed the *initial* `--gutter-width` value inline
+  // so the very first paint has the right value — otherwise the var
+  // would be undefined for one frame and every gutter's
+  // `width: var(--gutter-width)` would fall back to `auto`, sizing
+  // each row to its own content (a visible staggered-edge flash
+  // until `GutterWidthVar`'s `useLayoutEffect` could update the
+  // children). The seed is read with mobx's `untracked` so this
+  // render doesn't subscribe — `GutterWidthVar` is still the only
+  // reactive reader.
+  const initialGutterPx = React.useMemo(
+    () => untracked(() => getGutterWidth()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- seed only.
+    [],
+  );
   const containerStyle = {
     ['--note-pad-px' as string]: `${config.barNotePaddingLeft}px`,
-    ['--gutter-width' as string]: `${gutterWidth}px`,
+    ['--gutter-width' as string]: `${initialGutterPx}px`,
   } as React.CSSProperties;
-  // `gutterWidth` is captured in the closure at the start of each drag
-  // (the pointermove deltas then read against that snapshot) so an in-
-  // flight resize stays anchored to where the user grabbed even though
-  // the live `gutterWidth` observable is being updated every frame.
+  // Eager bar-timings table for `BarTimingsContext`. Built once per jot
+  // identity here so deep consumers (NoteProvenanceDetails' "Final
+  // position" row) don't need the player's timeline to have been
+  // initialized — pre-Play, `jotPlayer.timeline` is `EMPTY_TIMELINE`.
+  // `buildTimeline` now reads zoom-invariant fields only, so calling
+  // it here doesn't bind JotView's render to the zoom variable.
+  const barTimings = React.useMemo<ReadonlyMap<number, BarTiming>>(() => {
+    const timeline = buildTimeline(jot);
+    const structBars = jot.structure.voices[0]?.bars ?? [];
+    const map = new Map<number, BarTiming>();
+    for (let i = 0; i < structBars.length; i++) {
+      const timing = timeline.bars[i];
+      if (timing) map.set(structBars[i].index, timing);
+    }
+    return map;
+  }, [jot]);
+  // The starting width is captured at the start of each drag (the
+  // pointermove deltas then read against that snapshot) so an in-
+  // flight resize stays anchored to where the user grabbed even
+  // though the live `gutterWidth` observable is being updated every
+  // frame. Read via the getter so JotView itself doesn't subscribe.
   const onResizeGutterStart = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
     const startX = e.clientX;
-    const startWidth = gutterWidth;
+    const startWidth = getGutterWidth();
     const target = e.currentTarget;
     target.setPointerCapture(e.pointerId);
     const onMove = (ev: PointerEvent) => {
@@ -390,34 +437,37 @@ const JotView = observer((props: JotViewProps) => {
     target.addEventListener('pointercancel', onUp);
   };
   return (
-    <div
-      ref={containerRef}
-      className={styles.jotContainer}
-      style={containerStyle}
-      onMouseDown={onMouseDown}
-      onMouseMove={onMouseMove}
-      onMouseUp={onMouseUp}
-    >
-      <ScoreZoomVar jot={jot} containerRef={containerRef} />
-      <h2 className={styles.title}>{jot.title || 'Untitled jot'}</h2>
-      <p className={styles.subtitle}>{formatSubtitle(jot)}</p>
-      <Legend jot={jot} />
-      <TimelineHeader jot={jot} onSeek={onSeek} onResizeGutterStart={onResizeGutterStart} />
-      <MixerView
-        jot={jot}
-        config={config}
-        trackOrder={trackOrder}
-        highlightedPattern={highlightedPattern}
-        onPatternClick={onPatternClick}
-        onSeek={onSeek}
-        onMoveTrack={onMoveTrack}
-        voiceControls={voiceControls}
-        audioTrackControls={audioTrackControls}
-        onResizeGutterStart={onResizeGutterStart}
-      />
-      <PlayheadAutoScroller containerRef={containerRef} />
-      <MarqueeOverlay />
-    </div>
+    <BarTimingsContext.Provider value={barTimings}>
+      <div
+        ref={containerRef}
+        className={styles.jotContainer}
+        style={containerStyle}
+        onMouseDown={onMouseDown}
+        onMouseMove={onMouseMove}
+        onMouseUp={onMouseUp}
+      >
+        <ScoreZoomVar jot={jot} containerRef={containerRef} />
+        <GutterWidthVar getGutterWidth={getGutterWidth} containerRef={containerRef} />
+        <h2 className={styles.title}>{jot.title || 'Untitled jot'}</h2>
+        <p className={styles.subtitle}>{formatSubtitle(jot)}</p>
+        <Legend jot={jot} />
+        <TimelineHeader jot={jot} onSeek={onSeek} onResizeGutterStart={onResizeGutterStart} />
+        <MixerView
+          jot={jot}
+          config={config}
+          trackOrder={trackOrder}
+          highlightedPattern={highlightedPattern}
+          onPatternClick={onPatternClick}
+          onSeek={onSeek}
+          onMoveTrack={onMoveTrack}
+          voiceControls={voiceControls}
+          audioTrackControls={audioTrackControls}
+          onResizeGutterStart={onResizeGutterStart}
+        />
+        <PlayheadAutoScroller containerRef={containerRef} />
+        <MarqueeOverlay />
+      </div>
+    </BarTimingsContext.Provider>
   );
 });
 
@@ -449,6 +499,33 @@ const ScoreZoomVar = observer(
       // a unitless `--rendered-px-per-beat` for a clean number result.
       el.style.setProperty('--px-per-beat', String(pxPerBeat));
     }, [pxPerBeat, containerRef]);
+    return null;
+  }
+);
+
+/**
+ * Side-effect-only observer that writes `--gutter-width` onto the
+ * JotView container whenever the store's gutter width changes. Same
+ * trick as `ScoreZoomVar`: a resize tick mutates one CSS variable on
+ * the root and CSS propagates the new width to every sticky gutter
+ * (score header, mixer rows) without React touching the subtree —
+ * which matters on a debug bundle with lots of tracks, where a full
+ * JotView re-render at 120 Hz pointermove rate is visibly laggy.
+ * `useLayoutEffect` (not `useEffect`) so the var is set before paint
+ * — avoids a one-frame flash of zero-width gutters on initial mount.
+ */
+const GutterWidthVar = observer(
+  ({
+    getGutterWidth,
+    containerRef,
+  }: {
+    getGutterWidth: () => number;
+    containerRef: React.RefObject<HTMLDivElement>;
+  }) => {
+    const px = getGutterWidth();
+    React.useLayoutEffect(() => {
+      containerRef.current?.style.setProperty('--gutter-width', `${px}px`);
+    }, [px, containerRef]);
     return null;
   }
 );

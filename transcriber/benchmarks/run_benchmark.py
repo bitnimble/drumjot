@@ -19,7 +19,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from .core.jot_events import jot_dsl_to_events
 from .core.midi_events import midi_bytes_to_events
 from .core.score import (
     DEFAULT_TOLERANCE_SECONDS,
@@ -51,11 +50,7 @@ class CliArgs:
     limit: int | None
     sample_ratio: float
     seed: int
-    refine: bool
-    lint: bool
-    best_of_k: int
-    transcribe_mode: str
-    onset_backend: str
+    beat_input: str
     service_url: str
     split: str
     tolerance: float
@@ -82,58 +77,14 @@ def parse_args(argv: list[str] | None = None) -> CliArgs:
         help="Randomly keep this fraction of the test split (0.0-1.0). Default: 1.0.",
     )
     p.add_argument("--seed", type=int, default=0, help="RNG seed for --sample-ratio sampling.")
-    refine_group = p.add_mutually_exclusive_group()
-    refine_group.add_argument(
-        "--refine",
-        dest="refine",
-        action="store_true",
-        help="Enable the F1-gated refinement loop (matches the UI checkbox). Default.",
-    )
-    refine_group.add_argument(
-        "--no-refine",
-        dest="refine",
-        action="store_false",
-        help="Disable F1-gated refinement / post-processing.",
-    )
-    p.set_defaults(refine=True)
-    lint_group = p.add_mutually_exclusive_group()
-    lint_group.add_argument(
-        "--lint",
-        dest="lint",
-        action="store_true",
-        help="Enable the deterministic Jot linter pass (matches the UI checkbox). Default.",
-    )
-    lint_group.add_argument(
-        "--no-lint",
-        dest="lint",
-        action="store_false",
-        help="Disable the lint pass.",
-    )
-    p.set_defaults(lint=True)
     p.add_argument(
-        "--best-of-k",
-        type=int,
-        default=1,
-        help="Number of initial-transcription candidates (matches the UI dropdown). Default: 1.",
-    )
-    p.add_argument(
-        "--transcribe-mode",
-        choices=["dsl", "filter"],
-        default="dsl",
+        "--beat-input",
+        choices=["full_mix", "drum_stem"],
+        default="full_mix",
         help=(
-            "Which transcribe pathway to exercise. 'dsl' (default) scores "
-            "the returned Jot; 'filter' scores the returned prediction.mid "
-            "directly (no Jot conversion)."
-        ),
-    )
-    p.add_argument(
-        "--onset-backend",
-        choices=["librosa", "adtof"],
-        default="librosa",
-        help=(
-            "Per-stem onset detector. 'librosa' (default) = spectral-flux; "
-            "'adtof' = ADTOF CRNN per stem. Flip between two seeded runs "
-            "for the A/B."
+            "Which audio feeds the beat tracker. `full_mix` (default) is "
+            "madmom's training distribution; `drum_stem` can help on tracks "
+            "with heavy non-drum syncopation."
         ),
     )
     p.add_argument(
@@ -170,8 +121,6 @@ def parse_args(argv: list[str] | None = None) -> CliArgs:
         p.error("--sample-ratio must be in (0.0, 1.0]")
     if ns.limit is not None and ns.limit <= 0:
         p.error("--limit must be positive")
-    if ns.best_of_k < 1:
-        p.error("--best-of-k must be >= 1")
 
     output_dir = ns.output_dir
     if output_dir is None:
@@ -183,11 +132,7 @@ def parse_args(argv: list[str] | None = None) -> CliArgs:
         limit=ns.limit,
         sample_ratio=ns.sample_ratio,
         seed=ns.seed,
-        refine=ns.refine,
-        lint=ns.lint,
-        best_of_k=ns.best_of_k,
-        transcribe_mode=ns.transcribe_mode,
-        onset_backend=ns.onset_backend,
+        beat_input=ns.beat_input,
         service_url=ns.service_url,
         split=ns.split,
         tolerance=ns.tolerance,
@@ -300,13 +245,7 @@ def run(args: CliArgs) -> DatasetSummary:
     wait_for_service(args.service_url)
     log.info("Service ready. Starting benchmark run -> %s", args.output_dir)
 
-    options = TranscribeOptions(
-        refine=args.refine,
-        lint=args.lint,
-        best_of_k=args.best_of_k,
-        transcribe_mode=args.transcribe_mode,
-        onset_backend=args.onset_backend,
-    )
+    options = TranscribeOptions(beat_input=args.beat_input)
 
     track_scores: list[TrackScore] = []
     # If resuming, re-load previously-scored tracks so the summary
@@ -335,18 +274,12 @@ def run(args: CliArgs) -> DatasetSummary:
                 continue
 
             try:
-                if args.transcribe_mode == "filter":
-                    if not result.prediction_midi_url:
-                        raise ValueError(
-                            "service returned no prediction_midi_url in "
-                            "filter mode"
-                        )
-                    midi_bytes = fetch_prediction_midi(
-                        args.service_url, result.prediction_midi_url
-                    )
-                    predicted = midi_bytes_to_events(midi_bytes)
-                else:
-                    predicted = jot_dsl_to_events(result.jot_dsl)
+                if not result.prediction_midi_url:
+                    raise ValueError("service returned no prediction_midi_url")
+                midi_bytes = fetch_prediction_midi(
+                    args.service_url, result.prediction_midi_url
+                )
+                predicted = midi_bytes_to_events(midi_bytes)
             except Exception as exc:
                 n_failed += 1
                 log.warning(
@@ -364,8 +297,6 @@ def run(args: CliArgs) -> DatasetSummary:
 
             record = score.as_jsonable()
             record["elapsed_seconds"] = round(time.perf_counter() - t0, 3)
-            record["service_initial_score"] = result.initial_score
-            record["service_final_score"] = result.final_score
             record["n_reference"] = len(track.reference)
             record["n_estimated"] = len(predicted)
             out_fh.write(json.dumps(record) + "\n")
@@ -391,10 +322,7 @@ def run(args: CliArgs) -> DatasetSummary:
     summary_payload["wall_clock_seconds"] = round(elapsed, 1)
     summary_payload["n_failed"] = n_failed
     summary_payload["options"] = {
-        "refine": args.refine,
-        "transcribe_mode": args.transcribe_mode,
-        "onset_backend": args.onset_backend,
-        "best_of_k": args.best_of_k,
+        "beat_input": args.beat_input,
         "sample_ratio": args.sample_ratio,
         "limit": args.limit,
         "seed": args.seed,

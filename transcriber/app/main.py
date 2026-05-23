@@ -2,7 +2,7 @@
 
 Endpoints:
     GET  /health             - readiness + GPU info
-    POST /transcribe         - accept an audio file, return Drumjot DSL
+    POST /transcribe         - accept an audio file, return a predicted-onset MIDI
     POST /transcribe/resume  - re-run from a chosen pipeline stage using
                                a previous debug folder's intermediate
                                artifacts
@@ -14,16 +14,21 @@ and so orchestrators can use /health as a true readiness probe.
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import json
 import logging
+import shutil
 import tempfile
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
-from typing import Literal
+from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
@@ -51,6 +56,7 @@ from app.pipeline.resume import (
 )
 from app.pipeline.runner import (
     BeatInput,
+    PipelineCancelled,
     PipelineContext,
     PipelineOptions,
     Stage,
@@ -74,8 +80,24 @@ _STAGE_HTTP_STATUS: dict[Stage, int] = {
     Stage.BEATS: 500,
     Stage.ONSETS: 500,
     Stage.TRANSCRIBE: 502,
-    Stage.REFINE: 500,
 }
+
+
+def _require_pipeline_role() -> None:
+    """Defense-in-depth: refuse heavy endpoints on the `api` worker.
+
+    Caddy is the source of truth for routing (POSTs to /transcribe go to
+    the pipeline worker); this guard only fires if someone bypasses
+    Caddy and hits the api worker directly on its private port.
+    """
+    if settings.worker_role != "pipeline":
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"This worker is running in '{settings.worker_role}' role "
+                "and does not host the transcription pipeline."
+            ),
+        )
 
 
 @contextmanager
@@ -123,13 +145,25 @@ log = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # The image runs two uvicorn processes (`pipeline` + `api`) behind
+    # Caddy — the `api` role serves the lightweight control endpoints
+    # while a transcription occupies the pipeline worker. Only the
+    # pipeline role touches the GPU; the api role skips the eager model
+    # load entirely so it adds ~0 VRAM. See transcriber/entrypoint.sh.
+    if settings.worker_role != "pipeline":
+        log.info(
+            "Starting up in '%s' role: skipping separation-model load.",
+            settings.worker_role,
+        )
+        app.state.separator = None
+        yield
+        log.info("Shutting down.")
+        return
+
     # Eagerly warm the separation models so the first /transcribe call
     # doesn't pay model-load latency. The model load is blocking I/O +
     # GPU memory allocation, so we run it on a worker thread to avoid
     # blocking the event loop while uvicorn negotiates startup.
-    import asyncio
-    import time
-
     log.info("Starting up: warming separation models...")
     started = time.perf_counter()
     separator = Separator()
@@ -200,29 +234,33 @@ async def list_transcriptions() -> list[TranscriptionSummary]:
     return list_transcription_summaries(base)
 
 
-@app.post("/transcribe", response_model=TranscribeResponse)
+@app.post("/transcribe")
 async def transcribe(
     request: Request,
     file: UploadFile = File(...),
     include_candidates: bool = Form(default=False),
-    refine: bool = Form(default=settings.refine_by_default),
-    lint: bool = Form(default=settings.lint_by_default),
-    best_of_k: int = Form(default=settings.best_of_k_default),
     beat_input: BeatInput = Form(default=settings.beat_input_default),
-    transcribe_mode: Literal["dsl", "filter"] = Form(
-        default=settings.transcribe_mode
-    ),
-    onset_backend: Literal["librosa", "adtof"] = Form(
-        default=settings.onset_backend
-    ),
     debug: bool = Form(default=False),
-) -> TranscribeResponse:
-    started = time.perf_counter()
+) -> StreamingResponse:
+    """Streaming NDJSON response: one event per pipeline stage bookend
+    (and substage updates inside transcribe), terminated by a single
+    `{"type": "result", "data": <TranscribeResponse>}` line.
+
+    Event envelopes (one JSON object per line):
+        {"type": "stage", "stage": "stems_all", "phase": "start"}
+        {"type": "stage", "stage": "stems_all", "phase": "end", "elapsed_seconds": 5.2}
+        {"type": "substage", "stage": "transcribe", "detail": "filtering 3/5 instruments (latest: snare)"}
+        {"type": "result", "data": {<TranscribeResponse>}}
+        {"type": "error", "status_code": 502, "message": "..."}
+
+    Pre-validation failures (file too large) still return a 4xx with a
+    JSON error body — we only switch to NDJSON once the pipeline can
+    actually start.
+    """
+    _require_pipeline_role()
     log.info(
-        "Transcribe request: %s (%s bytes) refine=%s lint=%s best_of_k=%d "
-        "beat_input=%s transcribe_mode=%s onset_backend=%s debug=%s",
-        file.filename, file.size, refine, lint, best_of_k, beat_input,
-        transcribe_mode, onset_backend, debug,
+        "Transcribe request: %s (%s bytes) beat_input=%s debug=%s",
+        file.filename, file.size, beat_input, debug,
     )
 
     if file.size is not None and file.size > 200_000_000:
@@ -243,79 +281,43 @@ async def transcribe(
     output_sink = make_output_sink(folder_name, settings.outputs_dir)
     run_log = RunLog()
     request_options = {
-        "refine": refine,
-        "lint": lint,
-        "best_of_k": best_of_k,
         "beat_input": beat_input,
-        "transcribe_mode": transcribe_mode,
-        "onset_backend": onset_backend,
         "include_candidates": include_candidates,
         "debug": debug,
     }
 
-    with (
-        tempfile.TemporaryDirectory(prefix="drumjot_") as tmp_str,
-        _scoped_debug_sink(sink),
-        _scoped_run_log(run_log),
-    ):
-        work = Path(tmp_str)
-        in_path = work / (file.filename or "input.wav")
-        in_path.write_bytes(await file.read())
-        if sink is not None:
-            sink.copy_audio("input", in_path)
+    # Stage 1 (input write) happens up-front so the temp file is on
+    # disk before we hand off to the streaming generator. Reading the
+    # upload requires `await`, and `StreamingResponse` is consumed once
+    # we return it — so we drain the upload here, then the generator
+    # owns the temp dir for the rest of the request.
+    work_dir = Path(tempfile.mkdtemp(prefix="drumjot_"))
+    in_path = work_dir / (file.filename or "input.wav")
+    in_path.write_bytes(await file.read())
+    if sink is not None:
+        sink.copy_audio("input", in_path)
 
-        ctx = PipelineContext(audio_path=in_path, work_dir=work)
-        options = PipelineOptions(
-            refine=refine, lint=lint, best_of_k=best_of_k,
-            beat_input=beat_input, transcribe_mode=transcribe_mode,
-            onset_backend=onset_backend,
-        )
-        sep: Separator = request.app.state.separator
-        try:
-            run_pipeline(
-                ctx=ctx,
-                start_stage=Stage.STEMS_ALL,
-                separator=sep,
-                options=options,
-                sink=sink,
-                output_sink=output_sink,
-            )
-        except StageError as exc:
-            raise HTTPException(
-                status_code=_STAGE_HTTP_STATUS[exc.stage],
-                detail=str(exc),
-            ) from exc
+    ctx = PipelineContext(audio_path=in_path, work_dir=work_dir)
+    options = PipelineOptions(beat_input=beat_input)
+    separator: Separator = request.app.state.separator
 
-        # Backfill any deliverable the stage bodies didn't write (e.g.
-        # final.jot, which no stage emits) before the temp work_dir is
-        # torn down. Fresh full runs already wrote the stems in-stage;
-        # this is mostly a no-op here but keeps the two endpoints
-        # symmetric.
+    async def post_run() -> None:
+        # Backfill any deliverable the stage bodies didn't write before
+        # the temp work_dir is torn down. Fresh full runs already wrote
+        # the stems in-stage; this is mostly a no-op here but keeps the
+        # two endpoints symmetric.
         materialize_pending(
             output_sink,
             drum_stem=ctx.drum_stem,
             per_instrument_stems=ctx.per_instrument_stems,
-            final_jot=ctx.final_jot,
             predicted_midi=ctx.predicted_midi,
             scavenge_dir=sink.dir if sink is not None else None,
         )
-
-        scores = {
-            "initial": (
-                ctx.refinement_log.initial_score
-                if ctx.refinement_log else None
-            ),
-            "final": (
-                ctx.refinement_log.final_score
-                if ctx.refinement_log else None
-            ),
-        }
 
         if sink is not None:
             sink.finalize({
                 "filename": file.filename,
                 "options": request_options,
-                "scores": scores,
                 "stems_used": sorted(ctx.per_instrument_stems.keys()),
                 "duration_seconds": ctx.duration,
             })
@@ -325,18 +327,33 @@ async def transcribe(
             ctx=ctx,
             original_filename=file.filename,
             options=request_options,
-            scores=scores,
             run_log=run_log,
         )
 
-    elapsed = time.perf_counter() - started
-    log.info("Transcribe complete in %.2fs (refined=%s)", elapsed, refine)
+    def build_final_response() -> TranscribeResponse:
+        return _build_response(
+            ctx=ctx,
+            include_candidates=include_candidates,
+            debug_dir=str(sink.dir) if sink is not None else None,
+            output_sink=output_sink,
+        )
 
-    return _build_response(
-        ctx=ctx,
-        include_candidates=include_candidates,
-        debug_dir=str(sink.dir) if sink is not None else None,
-        output_sink=output_sink,
+    return StreamingResponse(
+        _stream_pipeline(
+            request=request,
+            ctx=ctx,
+            start_stage=Stage.STEMS_ALL,
+            separator=separator,
+            options=options,
+            sink=sink,
+            output_sink=output_sink,
+            run_log=run_log,
+            post_run=post_run,
+            build_final_response=build_final_response,
+            cleanup_dir=work_dir,
+            verb="Transcribe",
+        ),
+        media_type="application/x-ndjson",
     )
 
 
@@ -376,71 +393,47 @@ def _resolve_resume_dir(resume_folder: str) -> Path:
     return resolved
 
 
-@app.post("/transcribe/resume", response_model=TranscribeResponse)
+@app.post("/transcribe/resume")
 async def transcribe_resume(
     request: Request,
     resume_folder: str = Form(...),
     resume_stage: Stage = Form(...),
     include_candidates: bool = Form(default=False),
-    refine: bool = Form(default=settings.refine_by_default),
-    lint: bool = Form(default=settings.lint_by_default),
-    best_of_k: int = Form(default=settings.best_of_k_default),
     beat_input: BeatInput = Form(default=settings.beat_input_default),
-    transcribe_mode: Literal["dsl", "filter"] = Form(
-        default=settings.transcribe_mode
-    ),
-    onset_backend: Literal["librosa", "adtof"] = Form(
-        default=settings.onset_backend
-    ),
-) -> TranscribeResponse:
+) -> StreamingResponse:
     """Re-run the pipeline from `resume_stage` onward, hydrating any
     artifacts produced by earlier stages from `resume_folder`.
 
     `resume_stage` is one of:
-        `stems_all`, `stems_per`, `beats`, `onsets`, `transcribe`, `refine`.
+        `stems_all`, `stems_per`, `beats`, `onsets`, `transcribe`.
 
     Required artifacts depend on which stages will be skipped:
-        - `stems_per`: `stems_all/drum_stem.<ext>`
-        - `beats`:     `stems_per/*.<ext>`
-        - `onsets`:    `stems_per/*.<ext>` + `beats.json`
+        - `stems_per`:  `stems_all/drum_stem.<ext>`
+        - `beats`:      `stems_per/*.<ext>`
+        - `onsets`:     `stems_per/*.<ext>` + `beats.json`
         - `transcribe`: `beats.json` + `onsets.json` + `stems_per/*.<ext>`
-        - `refine`:    `initial.jot` + the four above
     Anything missing comes back as a 400 with a stage-specific message.
 
     Stages from `resume_stage` onward run fresh and overwrite whichever
-    of `initial.jot`, `final.jot`, `best_of_k.json`, `refinement.json`,
-    `beats.json`, `onsets.json` they would normally produce. Upstream
-    artifacts are left intact so subsequent resumes from this folder
-    remain idempotent.
+    of `prediction.mid`, `note_provenance.json`, `beats.json`, `onsets.json`
+    they would normally produce. Upstream artifacts are left intact so
+    re-resuming the same folder is idempotent.
     """
-    started = time.perf_counter()
+    _require_pipeline_role()
     resume_dir = _resolve_resume_dir(resume_folder)
     log.info(
-        "Resume request from %s (resume_stage=%s refine=%s lint=%s best_of_k=%d)",
-        resume_dir, resume_stage.value, refine, lint, best_of_k,
+        "Resume request from %s (resume_stage=%s beat_input=%s)",
+        resume_dir, resume_stage.value, beat_input,
     )
 
     audio_path = find_input_audio(resume_dir) or (resume_dir / "input")
     sink = DebugSink(resume_dir)
-    # Reuse the resume folder's basename as the outputs folder name so
-    # any FLACs the original /transcribe run wrote are still surfaced in
-    # the resumed response (and a resume-from-stems_all overwrites them
-    # in place rather than orphaning the originals).
     output_sink = make_output_sink(resume_dir.name, settings.outputs_dir)
-    options = PipelineOptions(
-        refine=refine, lint=lint, best_of_k=best_of_k,
-        beat_input=beat_input, transcribe_mode=transcribe_mode,
-        onset_backend=onset_backend,
-    )
-    sep: Separator = request.app.state.separator
+    options = PipelineOptions(beat_input=beat_input)
+    separator: Separator = request.app.state.separator
     run_log = RunLog()
     request_options = {
-        "refine": refine,
-        "lint": lint,
-        "best_of_k": best_of_k,
         "beat_input": beat_input,
-        "transcribe_mode": transcribe_mode,
-        "onset_backend": onset_backend,
         "include_candidates": include_candidates,
         "resume_folder": str(resume_dir),
         "resume_stage": resume_stage.value,
@@ -449,63 +442,32 @@ async def transcribe_resume(
     # Run stem separation (if it fires) into a temp work_dir so its
     # filenames don't collide with the resume folder; the sink will
     # mirror them into `<resume_dir>/stems_all/` and `/stems_per/`.
-    with (
-        tempfile.TemporaryDirectory(prefix="drumjot_resume_") as tmp_str,
-        _scoped_debug_sink(sink),
-        _scoped_run_log(run_log),
-    ):
-        work = Path(tmp_str)
-        ctx = PipelineContext(audio_path=audio_path, work_dir=work)
-        try:
-            hydrate_context_from_resume(ctx, resume_dir, resume_stage)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    work_dir = Path(tempfile.mkdtemp(prefix="drumjot_resume_"))
+    ctx = PipelineContext(audio_path=audio_path, work_dir=work_dir)
+    try:
+        hydrate_context_from_resume(ctx, resume_dir, resume_stage)
+    except FileNotFoundError as exc:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        try:
-            run_pipeline(
-                ctx=ctx,
-                start_stage=resume_stage,
-                separator=sep,
-                options=options,
-                sink=sink,
-                output_sink=output_sink,
-            )
-        except StageError as exc:
-            raise HTTPException(
-                status_code=_STAGE_HTTP_STATUS[exc.stage],
-                detail=str(exc),
-            ) from exc
-
-        # The whole point of this path: a resume that starts at `beats`
-        # or later skips stems_all/stems_per, so the in-stage FLAC writes
-        # never fire. The stems are hydrated into `ctx` from the resume
-        # folder, and `no_drums` still sits under `<resume_dir>/stems_all/`
-        # — backfill every missing deliverable (plus final.jot) from
-        # there, with no recomputation.
+    async def post_run() -> None:
+        # A resume that starts at `beats` or later skips stems_all /
+        # stems_per, so the in-stage FLAC writes never fire. The stems
+        # are hydrated into `ctx` from the resume folder, and `no_drums`
+        # still sits under `<resume_dir>/stems_all/` — backfill every
+        # missing deliverable from there, with no recomputation.
         materialize_pending(
             output_sink,
             drum_stem=ctx.drum_stem,
             per_instrument_stems=ctx.per_instrument_stems,
-            final_jot=ctx.final_jot,
             predicted_midi=ctx.predicted_midi,
             scavenge_dir=resume_dir,
         )
 
-        scores = {
-            "initial": (
-                ctx.refinement_log.initial_score
-                if ctx.refinement_log else None
-            ),
-            "final": (
-                ctx.refinement_log.final_score
-                if ctx.refinement_log else None
-            ),
-        }
         original_filename = load_original_filename(resume_dir)
         sink.finalize({
             "filename": original_filename,
             "options": request_options,
-            "scores": scores,
             "stems_used": sorted(ctx.per_instrument_stems.keys()),
             "duration_seconds": ctx.duration,
         })
@@ -515,19 +477,250 @@ async def transcribe_resume(
             ctx=ctx,
             original_filename=original_filename,
             options=request_options,
-            scores=scores,
             run_log=run_log,
         )
 
-    elapsed = time.perf_counter() - started
-    log.info("Resume complete in %.2fs (refined=%s)", elapsed, refine)
+    def build_final_response() -> TranscribeResponse:
+        return _build_response(
+            ctx=ctx,
+            include_candidates=include_candidates,
+            debug_dir=str(resume_dir),
+            output_sink=output_sink,
+        )
 
-    return _build_response(
-        ctx=ctx,
-        include_candidates=include_candidates,
-        debug_dir=str(resume_dir),
-        output_sink=output_sink,
+    return StreamingResponse(
+        _stream_pipeline(
+            request=request,
+            ctx=ctx,
+            start_stage=resume_stage,
+            separator=separator,
+            options=options,
+            sink=sink,
+            output_sink=output_sink,
+            run_log=run_log,
+            post_run=post_run,
+            build_final_response=build_final_response,
+            cleanup_dir=work_dir,
+            verb="Resume",
+        ),
+        media_type="application/x-ndjson",
     )
+
+
+async def _stream_pipeline(
+    *,
+    request: Request,
+    ctx: PipelineContext,
+    start_stage: Stage,
+    separator: Separator,
+    options: PipelineOptions,
+    sink: DebugSink | None,
+    output_sink: Any,
+    run_log: RunLog,
+    post_run: Any,
+    build_final_response: Any,
+    cleanup_dir: Path,
+    verb: str,
+) -> AsyncIterator[bytes]:
+    """Run the pipeline in a worker thread, streaming progress events
+    as NDJSON. The pipeline's `progress` callback funnels into an
+    asyncio.Queue via `loop.call_soon_threadsafe`; this generator pumps
+    that queue out as `{"type": "stage", …}` / `{"type": "substage", …}`
+    lines, then yields the final `result` (or `error`) envelope before
+    closing.
+
+    Client disconnect (Stop button -> AbortController.abort()) is
+    signalled two ways:
+      1. `asyncio.CancelledError` raised in the pump loop when Starlette's
+         own disconnect listener cancels the response task group (this is
+         the primary signal — `request.is_disconnected()` is racy because
+         StreamingResponse consumes the same `receive` channel, so the
+         listener almost always wins).
+      2. A belt-and-suspenders `watch_disconnect` poller — harmless if it
+         loses the race, useful in the rare case where it doesn't.
+    Either path sets `ctx.cancel_event`. The pipeline checks the event
+    between stages and inside the LLM stage's parallel pool, so a cancel
+    during stage N lets stage N finish (native code is uninterruptible)
+    but skips everything after it. See `pipeline.runner.PipelineCancelled`.
+
+    The work_dir is `rmtree`d in `finally`. On Linux that races
+    harmlessly with an in-flight uninterruptible stage's file writes
+    (unlinking files that are still open keeps the inode alive until
+    the thread's fds close). ContextVars (sink + run_log) are always
+    reset.
+    """
+    started = time.perf_counter()
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+    def emit(envelope: dict[str, Any]) -> None:
+        # Called from the pipeline worker thread (for "stage"/"substage")
+        # and from the async generator itself (for "result"/"error").
+        # call_soon_threadsafe is the only thing safe to call on an
+        # asyncio.Queue from a non-loop thread.
+        loop.call_soon_threadsafe(queue.put_nowait, envelope)
+
+    def progress(event: dict[str, Any]) -> None:
+        # event already has {stage, phase?, detail?, elapsed_seconds?}.
+        # Tag it as stage vs substage so the frontend can show stage
+        # transitions distinctly from in-stage progress ticks.
+        kind = "stage" if "phase" in event else "substage"
+        emit({"type": kind, **event})
+
+    async def watch_disconnect() -> None:
+        # Poll Starlette's receive channel for an http.disconnect frame.
+        # The pipeline thread can't be killed, but flipping cancel_event
+        # is enough to stop it advancing past the current stage and to
+        # short-circuit the LLM stage's parallel pool.
+        try:
+            while not ctx.cancel_event.is_set():
+                if await request.is_disconnected():
+                    log.info(
+                        "%s: client disconnected; signalling pipeline cancel",
+                        verb,
+                    )
+                    ctx.cancel_event.set()
+                    break
+                await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            pass
+
+    # ContextVars must be set on the event loop side so the worker
+    # thread inherits them via `asyncio.to_thread` (which uses
+    # `copy_context()` under the hood).
+    sink_token = set_current_debug_sink(sink)
+    log_token = set_current_run_log(run_log)
+    run_log.install()
+    watcher: asyncio.Task[None] | None = None
+    task: asyncio.Task[None] | None = None
+    try:
+        async def run_in_thread() -> None:
+            try:
+                await asyncio.to_thread(
+                    run_pipeline,
+                    ctx=ctx,
+                    start_stage=start_stage,
+                    separator=separator,
+                    options=options,
+                    sink=sink,
+                    output_sink=output_sink,
+                    progress=progress,
+                )
+            except PipelineCancelled as exc:
+                # Client disconnected mid-pipeline. Emit an internal
+                # sentinel so the streamer can log + exit without trying
+                # to write a `result`/`error` to a closed socket.
+                emit({
+                    "type": "_cancelled",
+                    "next_stage": exc.next_stage.value,
+                })
+            except StageError as exc:
+                emit({
+                    "type": "error",
+                    "status_code": _STAGE_HTTP_STATUS[exc.stage],
+                    "stage": exc.stage.value,
+                    "message": str(exc),
+                })
+            except Exception as exc:
+                log.exception("Pipeline crashed")
+                emit({
+                    "type": "error",
+                    "status_code": 500,
+                    "message": str(exc),
+                })
+            else:
+                # Sentinel: tells the streamer the pipeline finished
+                # cleanly — post-run + final result come next.
+                emit({"type": "_done"})
+            finally:
+                emit(None)  # second sentinel: stream may close
+
+        watcher = asyncio.create_task(watch_disconnect())
+        task = asyncio.create_task(run_in_thread())
+        pipeline_ok = False
+        cancelled = False
+        try:
+            while True:
+                envelope = await queue.get()
+                if envelope is None:
+                    break
+                env_type = envelope.get("type")
+                if env_type == "_done":
+                    pipeline_ok = True
+                    continue
+                if env_type == "_cancelled":
+                    cancelled = True
+                    log.info(
+                        "%s cancelled (next_stage=%s); skipping result emit",
+                        verb, envelope.get("next_stage"),
+                    )
+                    continue
+                yield (json.dumps(envelope) + "\n").encode("utf-8")
+            await task  # propagate any unexpected internal failure
+        except asyncio.CancelledError:
+            # Starlette's disconnect listener cancelled the response.
+            # Tell the pipeline to stop at its next stage boundary and
+            # re-raise so cleanup runs (we don't try to yield more
+            # events into a closed socket).
+            ctx.cancel_event.set()
+            raise
+
+        if cancelled:
+            elapsed = time.perf_counter() - started
+            log.info("%s cancelled after %.2fs", verb, elapsed)
+            return
+
+        if pipeline_ok:
+            try:
+                await post_run()
+                response = build_final_response()
+                yield (
+                    json.dumps({
+                        "type": "result",
+                        "data": response.model_dump(mode="json"),
+                    })
+                    + "\n"
+                ).encode("utf-8")
+            except HTTPException as exc:
+                yield (
+                    json.dumps({
+                        "type": "error",
+                        "status_code": exc.status_code,
+                        "message": str(exc.detail),
+                    })
+                    + "\n"
+                ).encode("utf-8")
+            except Exception as exc:
+                log.exception("Post-pipeline assembly failed")
+                yield (
+                    json.dumps({
+                        "type": "error",
+                        "status_code": 500,
+                        "message": str(exc),
+                    })
+                    + "\n"
+                ).encode("utf-8")
+        elapsed = time.perf_counter() - started
+        log.info("%s complete in %.2fs", verb, elapsed)
+    finally:
+        if watcher is not None:
+            watcher.cancel()
+            with contextlib.suppress(BaseException):
+                await watcher
+        # If the client disconnected, `task` may still be running (the
+        # pipeline thread is uninterruptible mid-stage). We cancel the
+        # asyncio Task to suppress "Task was destroyed but it is pending!"
+        # warnings; the underlying thread continues until cancel_event
+        # trips at its next stage boundary, then exits cleanly. The
+        # rmtree below races with the in-flight stage's file writes but
+        # on Linux unlinking files that are still open is safe — the
+        # inode persists until the thread's fds close.
+        if task is not None and not task.done():
+            task.cancel()
+        reset_current_debug_sink(sink_token)
+        reset_current_run_log(log_token)
+        run_log.uninstall()
+        shutil.rmtree(cleanup_dir, ignore_errors=True)
 
 
 def _build_debug_zip_if_possible(
@@ -536,7 +729,6 @@ def _build_debug_zip_if_possible(
     ctx: PipelineContext,
     original_filename: str | None,
     options: dict[str, object],
-    scores: dict[str, object],
     run_log: RunLog,
 ) -> None:
     """Best-effort build of the per-request debug zip. Logs and swallows
@@ -554,11 +746,10 @@ def _build_debug_zip_if_possible(
             "has_tempo_changes": ctx.structure.has_tempo_changes,
             "has_time_sig_changes": ctx.structure.has_time_sig_changes,
         }
-    # Filter mode produces MIDI instead of DSL; bundle it as the score so
-    # the UI can rehydrate via the existing MIDI -> Jot path. For a resume
-    # that skipped the transcribe stage `ctx.predicted_midi` is None even
-    # though `prediction.mid` is still on disk from the prior run, so fall
-    # back to the OutputSink's on-disk copy in that case.
+    # The transcribe stage emits prediction.mid; on a resume that skipped
+    # transcribe `ctx.predicted_midi` is None even though prediction.mid
+    # is still on disk from the prior run, so fall back to the
+    # OutputSink's on-disk copy in that case.
     predicted_midi = ctx.predicted_midi
     if predicted_midi is None:
         on_disk = output_sink.existing_file("prediction.mid")
@@ -569,12 +760,11 @@ def _build_debug_zip_if_possible(
                 log.warning(
                     "debug_bundle: could not read %s: %s", on_disk, exc
                 )
-    # Note provenance follows the same shape — only filter mode produces
-    # it, and a resume from `refine` (or later) skips the build but the
-    # JSON is still on disk in the debug folder from the previous run.
-    # The DebugSink writes it under the request folder; for resumes we
-    # scavenge from `<resume_dir>/note_provenance.json`. None for DSL
-    # mode (no provenance in either ctx or disk).
+    # Note provenance follows the same shape — a resume from after the
+    # transcribe stage skips the build but the JSON is still on disk in
+    # the debug folder from the previous run. The DebugSink writes it
+    # under the request folder; for resumes we scavenge from
+    # `<resume_dir>/note_provenance.json`.
     note_provenance: dict[str, object] | None = ctx.note_provenance
     if note_provenance is None and ctx.audio_path.parent.name:
         # `audio_path.parent` is the debug folder when resuming (we set
@@ -597,8 +787,6 @@ def _build_debug_zip_if_possible(
             original_filename=original_filename,
             options=options,
             metadata=metadata,
-            scores=scores,
-            final_jot=ctx.final_jot,
             predicted_midi=predicted_midi,
             note_provenance=note_provenance,
             per_instrument_stem_pitches=list(ctx.per_instrument_stems.keys()),
@@ -621,10 +809,10 @@ def _build_response(
             status_code=500,
             detail="Pipeline completed but produced no beat structure.",
         )
-    if ctx.final_jot is None:
+    if ctx.predicted_midi is None:
         raise HTTPException(
             status_code=500,
-            detail="Pipeline completed but produced no final jot.",
+            detail="Pipeline completed but produced no prediction MIDI.",
         )
     bar_summaries = [
         BarSummary(**summarize_bar_for_prompt(b)) for b in ctx.structure.bars
@@ -647,7 +835,6 @@ def _build_response(
         if output_sink.existing_file("debug.zip") is not None:
             debug_zip_url = output_sink.url_for_file("debug.zip")
     return TranscribeResponse(
-        jot_dsl=ctx.final_jot,
         metadata=TranscribeMetadata(
             initial_tempo=ctx.structure.initial_tempo,
             initial_time_signature=list(ctx.structure.initial_time_signature),
@@ -657,8 +844,6 @@ def _build_response(
             has_tempo_changes=ctx.structure.has_tempo_changes,
             has_time_sig_changes=ctx.structure.has_time_sig_changes,
         ),
-        refinement=ctx.refinement_log,
-        best_of_k=ctx.best_of_k_log,
         candidates=ctx.onsets_by_pitch if include_candidates else {},
         debug_dir=debug_dir,
         drum_stem_url=drum_stem_url,

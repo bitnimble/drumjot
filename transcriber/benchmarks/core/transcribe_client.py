@@ -2,12 +2,13 @@
 
 The benchmark harness is deliberately decoupled from the service's
 heavyweight ML deps (audio-separator, librosa, madmom, torch) — we just
-POST the audio file to a running service and read back the DSL. That
-also matches how the web UI exercises the service, so the benchmark
-numbers reflect the same path users hit in production.
+POST the audio file to a running service and read back the predicted
+MIDI. That also matches how the web UI exercises the service, so the
+benchmark numbers reflect the same path users hit in production.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,26 +19,16 @@ import httpx
 class TranscribeOptions:
     """Knobs that map 1:1 to the web UI's controls in the toolbar."""
 
-    refine: bool = True
-    lint: bool = True
-    best_of_k: int = 1
-    # "dsl" (default) scores the returned Jot; "filter" scores the
-    # returned prediction.mid directly (no Jot in the loop).
-    transcribe_mode: str = "dsl"
-    # Onset backend to exercise: "librosa" (default) or "adtof". Lets the
-    # harness run the A/B by flipping this between two seeded runs.
-    onset_backend: str = "librosa"
+    # Which audio is fed into the beat tracker.
+    beat_input: str = "full_mix"
 
 
 @dataclass(frozen=True, slots=True)
 class TranscribeResult:
-    jot_dsl: str
-    initial_score: float | None
-    final_score: float | None
     elapsed_seconds: float
-    # Set only in `filter` mode: URL path (no host) of the predicted
-    # MIDI. Compose against `service_url` to download it.
-    prediction_midi_url: str | None = None
+    # URL path (no host) of the predicted MIDI. Compose against
+    # `service_url` to download it.
+    prediction_midi_url: str | None
 
 
 def transcribe_file(
@@ -46,10 +37,14 @@ def transcribe_file(
     service_url: str = "http://localhost:8001",
     timeout_seconds: float = 600.0,
 ) -> TranscribeResult:
-    """POST one audio file to /transcribe and parse the response."""
+    """POST one audio file to /transcribe and parse the NDJSON stream.
+
+    The service streams stage progress as NDJSON; we only care about the
+    final `result` envelope which carries the response body.
+    """
     url = service_url.rstrip("/") + "/transcribe"
-    # Service caps uploads at 200 MB (main.py:132); surface a clear
-    # error here rather than letting httpx swallow the 413.
+    # Service caps uploads at 200 MB; surface a clear error here rather
+    # than letting httpx swallow the 413.
     size = audio_path.stat().st_size
     if size > 200_000_000:
         raise ValueError(
@@ -59,26 +54,42 @@ def transcribe_file(
     with audio_path.open("rb") as fh:
         files = {"file": (audio_path.name, fh, "application/octet-stream")}
         data = {
-            "refine": "true" if options.refine else "false",
-            "lint": "true" if options.lint else "false",
-            "best_of_k": str(options.best_of_k),
-            "transcribe_mode": options.transcribe_mode,
-            "onset_backend": options.onset_backend,
+            "beat_input": options.beat_input,
             # include_candidates is heavy and we don't need it for scoring.
             "include_candidates": "false",
             "debug": "false",
         }
-        # Long timeout: refinement + best-of-K can each take a minute on CPU.
-        resp = httpx.post(url, files=files, data=data, timeout=timeout_seconds)
-    resp.raise_for_status()
-    payload = resp.json()
+        # Long timeout: separation + filter LLM can each take ~minute on CPU.
+        with httpx.stream(
+            "POST", url, files=files, data=data, timeout=timeout_seconds
+        ) as resp:
+            resp.raise_for_status()
+            payload: dict | None = None
+            elapsed_seconds = 0.0
+            for line in resp.iter_lines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                kind = event.get("type")
+                if kind == "result":
+                    payload = event.get("data") or {}
+                elif kind == "stage" and event.get("phase") == "end":
+                    elapsed_seconds += float(event.get("elapsed_seconds", 0.0))
+                elif kind == "error":
+                    raise RuntimeError(
+                        f"transcribe failed (status={event.get('status_code')}): "
+                        f"{event.get('message')}"
+                    )
 
-    refinement = payload.get("refinement") or {}
+    if payload is None:
+        raise RuntimeError("transcribe stream ended without a result event")
+
     return TranscribeResult(
-        jot_dsl=payload.get("jot_dsl", ""),
-        initial_score=refinement.get("initial_score"),
-        final_score=refinement.get("final_score"),
-        elapsed_seconds=float(refinement.get("elapsed_seconds", 0.0)),
+        elapsed_seconds=elapsed_seconds,
         prediction_midi_url=payload.get("prediction_midi_url"),
     )
 
@@ -88,7 +99,7 @@ def fetch_prediction_midi(
     midi_url_path: str,
     timeout_seconds: float = 60.0,
 ) -> bytes:
-    """Download the `filter`-pathway prediction MIDI.
+    """Download the predicted MIDI.
 
     `midi_url_path` is the host-less path from the response
     (`/outputs/<id>/prediction.mid`), composed against `service_url`.

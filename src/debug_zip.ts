@@ -10,7 +10,8 @@
  * Expected layout:
  *
  *    <name>.zip
- *    ├── final.jot
+ *    ├── prediction.mid
+ *    ├── note_provenance.json
  *    ├── no_drums.mp3
  *    ├── stem_<pitch>.mp3 ...
  *    └── debug.json            # see DebugBundleManifest below
@@ -57,21 +58,14 @@ export type DebugBundleManifest = {
   options?: Record<string, unknown>;
   /** Pitch letter (or `no_drums`) -> MP3 filename inside the zip. */
   mapping: Record<string, string>;
-  /**
-   * Set in filter-transcribe mode (which emits MIDI instead of DSL):
-   * the filename inside the zip of the predicted-onsets MIDI file. The
-   * UI rehydrates the score from this MIDI when `final.jot` is absent.
-   */
+  /** Filename inside the zip of the predicted-onsets MIDI file. The UI
+   *  rehydrates the score from this MIDI via `src/midi/from_midi.ts`. */
   prediction_midi?: string | null;
-  /**
-   * Set in filter-transcribe mode: filename of the per-note debug
-   * provenance JSON sidecar. Lists every detected onset (kept or
-   * rejected) so the UI can annotate rendered notes + render rejected
-   * onsets as ghost overlays. Absent for DSL-mode runs.
-   */
+  /** Filename of the per-note debug provenance JSON sidecar. Lists every
+   *  detected onset (kept or rejected) so the UI can annotate rendered
+   *  notes + render rejected onsets as ghost overlays. */
   note_provenance?: string | null;
   metadata?: Record<string, unknown>;
-  scores?: Record<string, unknown>;
   stage_timings?: DebugBundleStageTiming[];
   logs?: DebugBundleLogEntry[];
 };
@@ -94,7 +88,6 @@ export type NoteProvenanceEntry = {
    */
   tick: number | null;
   detected_time_sec: number;
-  detection_backend: string;
   strength: number;
   /** 0-indexed bar in the transcriber's BeatStructure (NOT the rendered
    * jot's bar index — see {@link NoteProvenanceFile.lead_bars}). */
@@ -108,15 +101,15 @@ export type NoteProvenanceEntry = {
 export type NoteProvenanceFile = {
   format: number;
   generated_at?: string;
-  onset_backend?: string;
   beat_alignment_offset_sec?: number | null;
   /**
-   * Count of bar-0-sized empty blocks the MIDI lays down before bar 0
+   * Count of empty bar-1-sized blocks the MIDI lays down before bar 1
    * to absorb the audio lead-in. The rendered jot (from `from_midi.ts`)
-   * carries one bar per leading block; struct bar `b` maps to the
-   * rendered jot's `bars[lead_bars + b]` (or equivalently bar index
-   * `lead_bars + b + 1`, since jot bar indices are 1-based with no
-   * anacrusis for MIDI imports).
+   * carries one bar per leading block; transcriber bar `b` (0-indexed
+   * in the BeatStructure) maps to the rendered jot's
+   * `bars[lead_bars + b]`, which has `bar.index === b + 1` under the
+   * drums-t0-anchored 1-based numbering. Pre-drum bars in the rendered
+   * jot have `bar.index` in `[-lead_bars, -1]`.
    */
   lead_bars: number;
   per_pitch: Record<string, NoteProvenanceEntry[]>;
@@ -132,21 +125,16 @@ export type DebugBundleAudioTrack = {
 };
 
 export type DebugBundle = {
-  /** Drumjot DSL text from `final.jot`. Empty string if the bundle
-   * didn't include one (e.g. filter-mode transcribe). */
-  jotDsl: string;
   /**
-   * Raw MIDI bytes of `prediction.mid` if the bundle contained one
-   * (filter-transcribe mode produces MIDI rather than DSL). The caller
-   * runs this through `fromMidi` to rehydrate the score when `jotDsl`
-   * is empty.
+   * Raw MIDI bytes of `prediction.mid`. The caller runs this through
+   * `fromMidi` to rehydrate the score.
    */
   predictionMidi: ArrayBuffer | null;
   /**
-   * Parsed `note_provenance.json` if the bundle contained one
-   * (filter-transcribe mode only). Drives per-note debug details in
-   * the selection label and the rendered ghost overlays for rejected
-   * onsets. `null` when the bundle has no provenance.
+   * Parsed `note_provenance.json` if the bundle contained one. Drives
+   * per-note debug details in the selection label and the rendered
+   * ghost overlays for rejected onsets. `null` when the bundle has no
+   * provenance (legacy / hand-built bundles).
    */
   noteProvenance: NoteProvenanceFile | null;
   audioTracks: DebugBundleAudioTrack[];
@@ -190,15 +178,9 @@ export async function loadDebugZip(file: File): Promise<DebugBundle> {
     throw new Error('debug.json is missing the required `mapping` field.');
   }
 
-  let jotDsl = '';
-  const jotEntry = byBasename.get('final.jot');
-  if (jotEntry) {
-    jotDsl = new TextDecoder('utf-8').decode(await inflateEntry(bytes, jotEntry));
-  }
-
-  // Predicted MIDI (filter-transcribe mode). Resolved via the manifest's
-  // `prediction_midi` field with a fallback to the canonical filename so
-  // older bundles without the field still rehydrate.
+  // Predicted MIDI. Resolved via the manifest's `prediction_midi` field
+  // with a fallback to the canonical filename so older bundles without
+  // the field still rehydrate.
   let predictionMidi: ArrayBuffer | null = null;
   const midiFilename =
     (typeof manifest.prediction_midi === 'string' && manifest.prediction_midi) ||
@@ -214,12 +196,12 @@ export async function loadDebugZip(file: File): Promise<DebugBundle> {
     ) as ArrayBuffer;
   }
 
-  // Per-note debug provenance (filter-transcribe mode). Same resolution
-  // pattern as the MIDI: prefer the manifest field, fall back to the
-  // canonical filename so older bundles produced before the manifest
-  // gained the field still load if the sidecar was present by name.
-  // Parse failures are swallowed — provenance is purely diagnostic, so
-  // the score should still load even if the JSON is malformed.
+  // Per-note debug provenance. Same resolution pattern as the MIDI:
+  // prefer the manifest field, fall back to the canonical filename so
+  // older bundles produced before the manifest gained the field still
+  // load if the sidecar was present by name. Parse failures are
+  // swallowed — provenance is purely diagnostic, so the score should
+  // still load even if the JSON is malformed.
   let noteProvenance: NoteProvenanceFile | null = null;
   const provenanceFilename =
     (typeof manifest.note_provenance === 'string' && manifest.note_provenance) ||
@@ -271,5 +253,5 @@ export async function loadDebugZip(file: File): Promise<DebugBundle> {
     if (result) audioTracks.push(result);
   }
 
-  return { jotDsl, predictionMidi, noteProvenance, audioTracks, manifest };
+  return { predictionMidi, noteProvenance, audioTracks, manifest };
 }

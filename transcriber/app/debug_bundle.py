@@ -1,6 +1,6 @@
 """Build the debug `.zip` deliverable for one /transcribe request.
 
-The bundle is the new headline artifact for "I want to inspect what
+The bundle is the headline artifact for "I want to inspect what
 happened" workflows: a single file the operator can download, archive,
 re-share, or load back into the web UI to reconstitute the score + every
 audio track + the per-stage timings + the full log stream of the run.
@@ -8,7 +8,8 @@ audio track + the per-stage timings + the full log stream of the run.
 Layout:
 
     <slug>_debug.zip
-    ├── final.jot            # the recomposed + refined Drumjot DSL
+    ├── prediction.mid       # the kept-onsets predicted MIDI (the score)
+    ├── note_provenance.json # per-note keep/reject info for the UI
     ├── no_drums.mp3         # backing audio (drumless mix)
     ├── stem_k.mp3 ...       # one per per-instrument stem
     └── debug.json
@@ -20,7 +21,6 @@ Layout:
             "k": "stem_k.mp3", ...
           },
           "metadata": { ... },    # TranscribeMetadata-shaped
-          "scores": { ... },
           "stage_timings": [ ... ],
           "logs": [ ... ]
         }
@@ -58,16 +58,14 @@ MANIFEST_FILENAME = "debug.json"
 # `n` (none currently exist, but conceivable) can't collide.
 NO_DRUMS_KEY = "no_drums"
 
-# Filename used for the MIDI score inside the zip when the filter
-# transcribe path produced one (filter mode emits MIDI instead of DSL,
-# so this is the "score" the UI rehydrates). Surfaced in the manifest's
-# top-level `prediction_midi` field.
+# Filename of the MIDI score inside the zip. The frontend converts it
+# to a Jot via `src/midi/from_midi.ts`.
 PREDICTION_MIDI_FILENAME = "prediction.mid"
 
-# Filename used for the per-note debug provenance sidecar (filter mode
-# only) — lists every detected onset with its filter decision so the UI
-# can show per-note debug details + render rejected onsets as ghosts.
-# Surfaced in the manifest's top-level `note_provenance` field.
+# Filename of the per-note debug provenance sidecar — lists every
+# detected onset with its filter decision so the UI can show per-note
+# debug details + render rejected onsets as ghosts. Surfaced in the
+# manifest's top-level `note_provenance` field.
 NOTE_PROVENANCE_FILENAME = "note_provenance.json"
 
 
@@ -77,8 +75,6 @@ def build_debug_zip(
     original_filename: str | None,
     options: dict[str, object],
     metadata: dict[str, object] | None,
-    scores: dict[str, object] | None,
-    final_jot: str | None,
     predicted_midi: bytes | None,
     note_provenance: dict[str, object] | None,
     per_instrument_stem_pitches: list[str],
@@ -90,11 +86,6 @@ def build_debug_zip(
     already-on-disk FLAC. Stages that didn't run produce no FLAC and are
     silently skipped from the bundle — the manifest's `mapping` only
     includes audio files that actually landed in the zip.
-
-    `final_jot` and `predicted_midi` are alternatives — DSL transcribe
-    sets the former, filter transcribe sets the latter, and either one
-    rehydrates the score in the UI. Manifests carry whichever is present
-    under `prediction_midi` / by virtue of `final.jot` being in the zip.
 
     Returns the path to the written zip, or `None` if no bundle could be
     assembled (e.g. no FLACs and no score).
@@ -125,7 +116,6 @@ def build_debug_zip(
         "options": options,
         "mapping": mapping,
         "metadata": metadata or {},
-        "scores": scores or {},
     }
     if predicted_midi is not None:
         manifest["prediction_midi"] = PREDICTION_MIDI_FILENAME
@@ -140,7 +130,6 @@ def build_debug_zip(
 
     has_payload = (
         bool(audio_entries)
-        or bool(final_jot)
         or bool(predicted_midi)
         or bool(note_provenance)
         or bool(run_log)
@@ -154,8 +143,6 @@ def build_debug_zip(
     # log dump eats; the MP3 entries are already compressed so DEFLATE on
     # those is a no-op but doesn't hurt — kept uniform for simplicity.
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        if final_jot:
-            zf.writestr("final.jot", final_jot)
         if predicted_midi is not None:
             zf.writestr(PREDICTION_MIDI_FILENAME, predicted_midi)
         if note_provenance is not None:

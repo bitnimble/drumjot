@@ -34,41 +34,14 @@ export type TranscribeMetadata = {
   has_time_sig_changes: boolean;
 };
 
-export type RefinementIteration = {
-  level: 'lint' | 'macro' | 'structure' | 'onsets' | 'velocity';
-  iteration: number;
-  issues_detected: number;
-  issues_sent_to_llm: number;
-  score_before: number;
-  score_after: number;
-  accepted: boolean;
-  note: string;
-};
-
-export type RefinementLog = {
-  initial_score: number;
-  final_score: number;
-  elapsed_seconds: number;
-  iterations: RefinementIteration[];
-};
-
-export type BestOfKLog = {
-  samples: number;
-  scores: number[];
-  chosen_index: number;
-};
-
 export type TranscribeResponse = {
-  jot_dsl: string;
   metadata: TranscribeMetadata;
-  refinement?: RefinementLog | null;
-  best_of_k?: BestOfKLog | null;
   /**
-   * Onset candidates that fed the LLM, per pitch. Only populated when the
-   * request set `include_candidates=true`. `bar` is 0-indexed; `beat_in_bar`
-   * is a 1-indexed float (integer part = beat number, fraction = position
-   * inside the beat). Both are -1 / -1.0 for onsets outside the tracked
-   * beat range.
+   * Onset candidates that fed the filter LLM, per pitch. Only populated
+   * when the request set `include_candidates=true`. `bar` is 0-indexed;
+   * `beat_in_bar` is a 1-indexed float (integer part = beat number,
+   * fraction = position inside the beat). Both are -1 / -1.0 for onsets
+   * outside the tracked beat range.
    */
   candidates?: Record<
     string,
@@ -76,10 +49,11 @@ export type TranscribeResponse = {
   >;
   /**
    * Absolute path inside the transcriber container where intermediate
-   * artifacts (drum stems, per-instrument stems, beats.json, initial.jot,
-   * refinement.json, ...) were written. Null when debug persistence is
-   * disabled. With the default docker-compose mount (`./debug:/debug`),
-   * the host path is the same string with `/debug` replaced by `./debug`.
+   * artifacts (drum stems, per-instrument stems, beats.json, onsets.json,
+   * prediction.mid, note_provenance.json) were written. Null when debug
+   * persistence is disabled. With the default docker-compose mount
+   * (`./debug:/debug`), the host path is the same string with `/debug`
+   * replaced by `./debug`.
    */
   debug_dir?: string | null;
   /**
@@ -97,18 +71,18 @@ export type TranscribeResponse = {
    */
   no_drums_url?: string | null;
   /**
-   * Set only by the `filter` transcribe path: URL path to the predicted
-   * onsets rendered as a MIDI file. Either this OR `jot_dsl` carries
-   * the score depending on `transcribe_mode`.
+   * URL path to the predicted onsets rendered as a MIDI file. The
+   * frontend converts this to a Drumjot Jot via `src/midi/from_midi.ts`.
    */
   prediction_midi_url?: string | null;
   /**
-   * URL path to the debug `.zip` bundle for this run — the score
-   * (`final.jot`), MP3-encoded per-stem + drumless audio tracks, and a
-   * JSON manifest with per-stage timings + the full captured log stream.
-   * The web UI can load this zip back to reconstitute the score + audio
-   * tracks + debug info offline (see {@link loadDebugZip}). Null when the
-   * bundle couldn't be assembled (e.g. nothing to bundle).
+   * URL path to the debug `.zip` bundle for this run — the predicted
+   * MIDI, per-note provenance, MP3-encoded per-stem + drumless audio
+   * tracks, and a JSON manifest with per-stage timings + the full
+   * captured log stream. The web UI can load this zip back to
+   * reconstitute the score + audio tracks + debug info offline (see
+   * {@link loadDebugZip}). Null when the bundle couldn't be assembled
+   * (e.g. nothing to bundle).
    */
   debug_zip_url?: string | null;
 };
@@ -121,23 +95,11 @@ export type TranscribeStage =
   | 'stems_per'
   | 'beats'
   | 'onsets'
-  | 'transcribe'
-  | 'refine';
+  | 'transcribe';
 
 /** Audio fed into the beat tracker.
  *  See `transcriber/app/pipeline/runner.py::BeatInput`. */
 export type BeatInput = 'full_mix' | 'drum_stem';
-
-/** Which transcribe pathway runs. `dsl` = LLM emits a Drumjot DSL line
- *  per instrument, recomposed + (optionally) F1-refined. `filter` = LLM
- *  only filters artifact onsets per instrument; kept onsets render
- *  straight to MIDI with their original times. */
-export type TranscribeMode = 'dsl' | 'filter';
-
-/** Per-stem onset detector backend. `librosa` = the legacy spectral-flux
- *  detector. `adtof` = ADTOF CRNN run per stem, with automatic per-stem
- *  fallback to `librosa` if ADTOF is unavailable/erroring. */
-export type OnsetBackend = 'librosa' | 'adtof';
 
 /**
  * One entry in `GET /transcribe/list`. Mirrors the server-side
@@ -154,6 +116,27 @@ export type TranscriptionSummary = {
 };
 
 /**
+ * One progress update streamed from /transcribe and /transcribe/resume.
+ *
+ * `stage` events bookend each pipeline stage with `phase: 'start'` /
+ * `'end'`; `substage` events fire as in-stage milestones tick over
+ * (e.g. per-instrument filter completions). The frontend uses these to
+ * keep the toolbar pill live while the pipeline runs.
+ */
+export type TranscribeProgress =
+  | {
+      kind: 'stage';
+      stage: TranscribeStage;
+      phase: 'start' | 'end';
+      elapsedSeconds?: number;
+    }
+  | {
+      kind: 'substage';
+      stage: TranscribeStage;
+      detail: string;
+    };
+
+/**
  * Compose a stem URL path returned in a `TranscribeResponse` against the
  * configured transcriber base. Handles dev (`/api` -> Vite proxy) and
  * prod (absolute URL) uniformly.
@@ -168,22 +151,6 @@ export function stemUrl(path: string | null | undefined): string | null {
 export type TranscribeOptions = {
   includeCandidates?: boolean;
   /**
-   * Run the F1-gated multi-level convergence loop (macro / structure /
-   * onsets / velocity). Independent of `lint`. Filter mode ignores this
-   * (the refine stage is skipped).
-   */
-  refine?: boolean;
-  /**
-   * Run the deterministic Jot linter (instrument-tier + performance-tier
-   * checks) and ask the LLM to fix flagged regions surgically.
-   * Independent of `refine` — you can enable either alone, both, or
-   * neither. Filter mode ignores this.
-   */
-  lint?: boolean;
-  /** Generate K candidate transcriptions and pick the highest-scoring one.
-   *  Filter mode ignores this (single deterministic filter pass). */
-  bestOfK?: number;
-  /**
    * Which audio is fed into the beat tracker. `full_mix` (default) is
    * madmom's training distribution; `drum_stem` can help on tracks with
    * heavy non-drum syncopation. Server-side default lives in
@@ -191,24 +158,21 @@ export type TranscribeOptions = {
    */
   beatInput?: BeatInput;
   /**
-   * Which transcribe pathway runs. `dsl` (default) emits Drumjot DSL +
-   * refinement; `filter` emits a predicted-onsets MIDI plus per-note
-   * provenance and skips the refine stage entirely.
-   */
-  transcribeMode?: TranscribeMode;
-  /**
-   * Per-stem onset detector backend. `librosa` is the legacy
-   * spectral-flux detector; `adtof` is the ADTOF CRNN run per stem with
-   * a per-stem librosa fallback when ADTOF/its weights aren't available.
-   */
-  onsetBackend?: OnsetBackend;
-  /**
    * Persist all intermediate audio + JSON artifacts to the transcriber's
    * debug directory. Required for the run to be resumable later (the
    * resume endpoint reads from `/debug/<folder>/`). See
    * transcriber/README.md for the layout.
    */
   debug?: boolean;
+  /**
+   * Fires once per `stage`/`substage` NDJSON event streamed from the
+   * server. The store wires this to update `transcribeStatus` with the
+   * live stage label so the toolbar pill reads e.g.
+   * "Transcribing song.mp3 · stems_all…" then advances as the pipeline
+   * progresses. Optional — omitting it loses progress visibility but
+   * doesn't affect correctness.
+   */
+  onProgress?: (event: TranscribeProgress) => void;
   /** AbortSignal lets callers cancel slow requests (separation can take ~60s). */
   signal?: AbortSignal;
 };
@@ -223,12 +187,8 @@ export type ResumeOptions = {
   resumeFolder: string;
   resumeStage: TranscribeStage;
   includeCandidates?: boolean;
-  refine?: boolean;
-  lint?: boolean;
-  bestOfK?: number;
   beatInput?: BeatInput;
-  transcribeMode?: TranscribeMode;
-  onsetBackend?: OnsetBackend;
+  onProgress?: (event: TranscribeProgress) => void;
   signal?: AbortSignal;
 };
 
@@ -268,11 +228,7 @@ export class TranscriberClient {
       body: form,
       signal: options.signal,
     });
-    if (!res.ok) {
-      const detail = await safeReadError(res);
-      throw new Error(`Transcribe failed (${res.status}): ${detail}`);
-    }
-    return (await res.json()) as TranscribeResponse;
+    return this.readStream(res, options, 'Transcribe');
   }
 
   /**
@@ -281,8 +237,7 @@ export class TranscriberClient {
    * every stage strictly before `resumeStage` to be on disk under
    * `<DEBUG_DIR>/<resumeFolder>/` — surface a 400 with a stage-specific
    * message if anything is missing. Mirrors `/transcribe`'s response
-   * shape so callers can reuse the same `parse(jot_dsl)` / debug-zip-load
-   * path.
+   * shape so callers can reuse the same debug-zip-load path.
    */
   async resume(options: ResumeOptions): Promise<TranscribeResponse> {
     const form = new FormData();
@@ -295,11 +250,130 @@ export class TranscriberClient {
       body: form,
       signal: options.signal,
     });
+    return this.readStream(res, options, 'Resume');
+  }
+
+  /**
+   * Consume the NDJSON progress stream from /transcribe or /transcribe/resume.
+   *
+   * The server emits one JSON object per line:
+   *   - `{type:"stage",   stage, phase, elapsed_seconds?}` — stage bookends
+   *   - `{type:"substage",stage, detail}` — in-stage milestones
+   *   - `{type:"result",  data: <TranscribeResponse>}` — terminal success
+   *   - `{type:"error",   status_code, message}` — terminal failure
+   *
+   * The first three feed `options.onProgress`; the terminal event
+   * resolves the returned promise (or throws). The stream may close
+   * without a terminal event if the connection drops mid-pipeline —
+   * we treat that as an error so the caller can show a sensible pill.
+   */
+  private async readStream(
+    res: Response,
+    options: TranscribeOptions | ResumeOptions,
+    verb: string,
+  ): Promise<TranscribeResponse> {
     if (!res.ok) {
       const detail = await safeReadError(res);
-      throw new Error(`Resume failed (${res.status}): ${detail}`);
+      throw new Error(`${verb} failed (${res.status}): ${detail}`);
     }
-    return (await res.json()) as TranscribeResponse;
+    const body = res.body;
+    if (!body) {
+      throw new Error(`${verb} returned no response body`);
+    }
+    const reader = body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    let final: TranscribeResponse | null = null;
+    let terminalError: { statusCode: number; message: string } | null = null;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        // Split on newline; the last fragment may be a partial line so
+        // keep it in `buffer` for the next chunk.
+        let newlineIdx: number;
+        while ((newlineIdx = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, newlineIdx).trim();
+          buffer = buffer.slice(newlineIdx + 1);
+          if (!line) continue;
+          const event = safeParseJson(line);
+          if (!event) continue;
+          this.dispatchEvent(event, options.onProgress, (r) => {
+            final = r;
+          }, (e) => {
+            terminalError = e;
+          });
+          if (final || terminalError) break;
+        }
+        if (final || terminalError) break;
+      }
+      // Drain any remaining buffered line (servers SHOULD terminate with
+      // a newline, but tolerate a missing trailing newline anyway).
+      const tail = buffer.trim();
+      if (tail && !final && !terminalError) {
+        const event = safeParseJson(tail);
+        if (event) {
+          this.dispatchEvent(event, options.onProgress, (r) => {
+            final = r;
+          }, (e) => {
+            terminalError = e;
+          });
+        }
+      }
+    } finally {
+      // Reader cleanup is best-effort; aborts surface as a rejection
+      // from `reader.read()` above and we just let the cancel chain run.
+      try {
+        await reader.cancel();
+      } catch {
+        // ignore — the stream is already done or aborted.
+      }
+    }
+    if (terminalError) {
+      const err = terminalError as { statusCode: number; message: string };
+      throw new Error(`${verb} failed (${err.statusCode}): ${err.message}`);
+    }
+    if (!final) {
+      throw new Error(
+        `${verb} stream ended without a terminal result event`,
+      );
+    }
+    return final;
+  }
+
+  private dispatchEvent(
+    event: Record<string, unknown>,
+    onProgress: TranscribeOptions['onProgress'],
+    onResult: (r: TranscribeResponse) => void,
+    onError: (e: { statusCode: number; message: string }) => void,
+  ): void {
+    const type = event.type;
+    if (type === 'stage' && onProgress) {
+      onProgress({
+        kind: 'stage',
+        stage: event.stage as TranscribeStage,
+        phase: event.phase as 'start' | 'end',
+        elapsedSeconds:
+          typeof event.elapsed_seconds === 'number'
+            ? event.elapsed_seconds
+            : undefined,
+      });
+    } else if (type === 'substage' && onProgress) {
+      onProgress({
+        kind: 'substage',
+        stage: event.stage as TranscribeStage,
+        detail: String(event.detail ?? ''),
+      });
+    } else if (type === 'result') {
+      onResult(event.data as TranscribeResponse);
+    } else if (type === 'error') {
+      onError({
+        statusCode:
+          typeof event.status_code === 'number' ? event.status_code : 500,
+        message: String(event.message ?? 'unknown error'),
+      });
+    }
   }
 
   /** List recent /transcribe runs available on the server, most-recently
@@ -324,24 +398,24 @@ export class TranscriberClient {
     if (options.includeCandidates) {
       form.append('include_candidates', 'true');
     }
-    if (options.refine !== undefined) {
-      form.append('refine', options.refine ? 'true' : 'false');
-    }
-    if (options.lint !== undefined) {
-      form.append('lint', options.lint ? 'true' : 'false');
-    }
-    if (options.bestOfK !== undefined && options.bestOfK > 1) {
-      form.append('best_of_k', String(options.bestOfK));
-    }
     if (options.beatInput !== undefined) {
       form.append('beat_input', options.beatInput);
     }
-    if (options.transcribeMode !== undefined) {
-      form.append('transcribe_mode', options.transcribeMode);
-    }
-    if (options.onsetBackend !== undefined) {
-      form.append('onset_backend', options.onsetBackend);
-    }
+  }
+}
+
+/** Parse one NDJSON line without throwing — malformed events are logged
+ *  and skipped so a single bad line can't kill the whole stream. */
+function safeParseJson(line: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(line);
+    return typeof parsed === 'object' && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('Skipping malformed NDJSON event:', line, err);
+    return null;
   }
 }
 
@@ -369,12 +443,6 @@ export const transcriber = new TranscriberClient();
  * file extension and trims whitespace; returns null when the input is
  * null/empty or yields an empty stem (so callers can skip applying it
  * rather than overwrite an LLM-emitted title with the empty string).
- *
- * This used to live in `transcriber/app/pipeline/title.py` as a regex
- * pass over the DSL inside the Python service. It now lives here so
- * the canonical TS parser owns the DSL — the frontend sets
- * `jot.title` directly on the parsed Jot rather than mutating the
- * DSL text.
  */
 export function titleFromFilename(filename: string | null | undefined): string | null {
   if (!filename) return null;

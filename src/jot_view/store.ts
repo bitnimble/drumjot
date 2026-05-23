@@ -21,19 +21,28 @@ import {
 import { loadParadbZip } from 'src/rlrr';
 import {
   BeatInput,
-  OnsetBackend,
-  RefinementLog,
   stemUrl,
   titleFromFilename,
   transcriber,
-  TranscribeMode,
+  TranscribeProgress,
   TranscribeStage,
   TranscriptionSummary,
 } from 'src/transcriber';
 
 export type TranscribeStatus =
   | { phase: 'idle' }
-  | { phase: 'uploading'; filename: string }
+  | {
+      phase: 'uploading';
+      filename: string;
+      /** Current pipeline stage (`stems_all`, `beats`, `transcribe`, …)
+       *  reported by the server's NDJSON progress stream. `undefined`
+       *  until the first stage event arrives — the initial "uploading"
+       *  read covers everything before the first stage starts. */
+      stage?: TranscribeStage;
+      /** Optional in-stage detail, e.g. "filtering 3/5 instruments
+       *  (latest: snare)". Cleared whenever the stage advances. */
+      substage?: string;
+    }
   | { phase: 'error'; message: string }
   | {
       phase: 'success';
@@ -42,7 +51,6 @@ export type TranscribeStatus =
       hasTempoChanges: boolean;
       hasTimeSigChanges: boolean;
       barCount: number;
-      refinement?: RefinementLog | null;
       debugDir?: string | null;
       /** Resolved URL of the debug bundle for this run (see
        * `TranscribeResponse.debug_zip_url`). The success pill renders a
@@ -52,12 +60,7 @@ export type TranscribeStatus =
     };
 
 export type TranscribeOptions = {
-  refine: boolean;
-  lint: boolean;
-  bestOfK: number;
   debug: boolean;
-  transcribeMode: TranscribeMode;
-  onsetBackend: OnsetBackend;
   beatInput: BeatInput;
 };
 
@@ -78,7 +81,11 @@ export const VOLUME_STEP = 0.05;
 // the gutter's right edge to widen it when long track names are clipped
 // with `…` and `fit-content` would be too jumpy.
 export const DEFAULT_GUTTER_WIDTH = 132;
-export const MIN_GUTTER_WIDTH = 80;
+// Floor at the width needed to fit the row gutter's minimum content:
+// padding + drag handle + a short volume slider + the X/M/S button trio
+// (audio-track rows have all three; pitch rows render an invisible
+// spacer where X would sit so both rows share the same geometry).
+export const MIN_GUTTER_WIDTH = 128;
 export const MAX_GUTTER_WIDTH = 480;
 
 export function clampVolume(v: number): number {
@@ -141,18 +148,10 @@ export class JotViewStore {
   examples: readonly ExampleJot[] = [];
   currentExampleId: string | undefined = undefined;
   transcribeStatus: TranscribeStatus = { phase: 'idle' };
-  /** UI-controlled options for the next transcribe call. The defaults
-   *  reflect the dropdown's filter+MIDI workflow: `transcribe_mode=filter`,
-   *  `debug=true` so the run is resumable, and refine/lint/best-of-K are
-   *  off (they don't apply to filter mode — the refine stage is skipped
-   *  server-side and there's no Jot to lint). */
+  /** UI-controlled options for the next transcribe call. `debug=true`
+   *  so the run is resumable. */
   transcribeOptions: TranscribeOptions = {
-    refine: false,
-    lint: false,
-    bestOfK: 1,
     debug: true,
-    transcribeMode: 'filter',
-    onsetBackend: 'adtof',
     beatInput: 'full_mix',
   };
   /** Server-side picker of recent /transcribe runs that can be resumed.
@@ -345,7 +344,7 @@ export class JotViewStore {
       { fireImmediately: true },
     );
     // Seed the player's live drum↔audio offset from each loaded jot's
-    // transcribed lead-in (`globalMetadata.startOffset`). Tracking
+    // transcribed lead-in (`globalMetadata.drumsT0Sec`). Tracking
     // `currentJot` (an observable reference) re-fires whenever a new jot
     // is loaded, resetting the offset to that recording's value; manual
     // nudges via the Offset control persist until the next load. We read
@@ -353,10 +352,10 @@ export class JotViewStore {
     // doesn't force a layout pass.
     reaction(
       () => {
-        const raw = this.currentJot?.globalMetadata.startOffset;
+        const raw = this.currentJot?.globalMetadata.drumsT0Sec;
         return typeof raw === 'number' && raw > 0 ? raw : 0;
       },
-      (offsetSec) => jotPlayer.setStartOffset(offsetSec),
+      (offsetSec) => jotPlayer.setDrumsT0Sec(offsetSec),
       { fireImmediately: true },
     );
 
@@ -552,10 +551,10 @@ export class JotViewStore {
    * files to get N tracks. Returns the new track's id, or `undefined`
    * if the load failed (so callers can e.g. default it to muted).
    */
-  async loadAudioTrack(file: File): Promise<AudioTrackId | undefined> {
+  async loadAudioTrack(file: File, pitch?: string): Promise<AudioTrackId | undefined> {
     return this.withLoading(`Loading ${file.name}…`, async () => {
       try {
-        return await jotPlayer.loadAudioTrack(file);
+        return await jotPlayer.loadAudioTrack(file, pitch);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         runInAction(() => {
@@ -675,32 +674,12 @@ export class JotViewStore {
     jotPlayer.clearCue();
   }
 
-  setRefine(enabled: boolean) {
-    this.transcribeOptions.refine = enabled;
-  }
-
-  setLint(enabled: boolean) {
-    this.transcribeOptions.lint = enabled;
-  }
-
-  setBestOfK(n: number) {
-    this.transcribeOptions.bestOfK = Math.max(1, Math.min(5, n));
-  }
-
   setDebug(enabled: boolean) {
     this.transcribeOptions.debug = enabled;
   }
 
-  setOnsetBackend(backend: OnsetBackend) {
-    this.transcribeOptions.onsetBackend = backend;
-  }
-
   setBeatInput(input: BeatInput) {
     this.transcribeOptions.beatInput = input;
-  }
-
-  setTranscribeMode(mode: TranscribeMode) {
-    this.transcribeOptions.transcribeMode = mode;
   }
 
   setSelectedResumeFolder(folder: string | undefined) {
@@ -744,14 +723,10 @@ export class JotViewStore {
     });
     try {
       const response = await transcriber.transcribe(file, {
-        refine: this.transcribeOptions.refine,
-        lint: this.transcribeOptions.lint,
-        bestOfK: this.transcribeOptions.bestOfK,
         debug: this.transcribeOptions.debug,
-        transcribeMode: this.transcribeOptions.transcribeMode,
-        onsetBackend: this.transcribeOptions.onsetBackend,
         beatInput: this.transcribeOptions.beatInput,
         signal: controller.signal,
+        onProgress: (event) => this.applyProgress(file.name, event),
       });
       await this.applyTranscribeResponse(response, file.name, controller.signal);
     } catch (err) {
@@ -789,13 +764,9 @@ export class JotViewStore {
       const response = await transcriber.resume({
         resumeFolder: folder,
         resumeStage: stage,
-        refine: this.transcribeOptions.refine,
-        lint: this.transcribeOptions.lint,
-        bestOfK: this.transcribeOptions.bestOfK,
-        transcribeMode: this.transcribeOptions.transcribeMode,
-        onsetBackend: this.transcribeOptions.onsetBackend,
         beatInput: this.transcribeOptions.beatInput,
         signal: controller.signal,
+        onProgress: (event) => this.applyProgress(label, event),
       });
       // The resumed run reuses the original folder, so the original
       // upload filename is the most informative pill label — fall back
@@ -815,11 +786,10 @@ export class JotViewStore {
   }
 
   /**
-   * Shared post-transcribe handling. DSL mode parses `jot_dsl` directly
-   * (legacy path); filter mode + DSL fallback both auto-load the debug
-   * bundle returned via `debug_zip_url` so the score, audio tracks, and
-   * note provenance all hydrate in one go without the user having to
-   * download and re-load the zip by hand.
+   * Shared post-transcribe handling. The backend produces a MIDI
+   * prediction; we auto-load the bundled debug.zip so the score (via
+   * `from_midi.ts`), audio tracks, and note provenance hydrate in one
+   * go without the user having to download and re-load the zip by hand.
    */
   private async applyTranscribeResponse(
     response: Awaited<ReturnType<typeof transcriber.transcribe>>,
@@ -827,28 +797,19 @@ export class JotViewStore {
     signal: AbortSignal,
   ): Promise<void> {
     const bundleUrl = stemUrl(response.debug_zip_url ?? null);
-    // Filter mode returns an empty jot_dsl; the score lives only inside
-    // the prediction MIDI bundled in debug.zip. DSL mode has both — we
-    // still prefer auto-loading the bundle when present so audio tracks
-    // + provenance + logs come along for free; the bundle's `final.jot`
-    // is the same DSL the response carried, so it doesn't matter which
-    // path renders it.
-    if (bundleUrl) {
-      const ok = await this.autoLoadDebugBundle(bundleUrl, fallbackName, signal);
-      if (!ok && response.jot_dsl.trim()) {
-        // Bundle fetch / parse failed but we still have DSL — fall back
-        // to the legacy DSL-direct path so the score still renders.
-        this.applyDslResponse(response.jot_dsl, fallbackName);
-      }
-    } else if (response.jot_dsl.trim()) {
-      this.applyDslResponse(response.jot_dsl, fallbackName);
-    } else {
+    if (!bundleUrl) {
       runInAction(() => {
         this.transcribeStatus = {
           phase: 'error',
-          message: 'Transcriber returned no jot and no debug bundle.',
+          message: 'Transcriber returned no debug bundle.',
         };
       });
+      return;
+    }
+    const ok = await this.autoLoadDebugBundle(bundleUrl, fallbackName, signal);
+    if (!ok) {
+      // The auto-loader already populated `transcribeStatus` with the
+      // specific failure reason; bail without overwriting it.
       return;
     }
     runInAction(() => {
@@ -859,38 +820,20 @@ export class JotViewStore {
         hasTempoChanges: response.metadata.has_tempo_changes,
         hasTimeSigChanges: response.metadata.has_time_sig_changes,
         barCount: response.metadata.bars.length,
-        refinement: response.refinement ?? null,
         debugDir: response.debug_dir ?? null,
         debugZipUrl: bundleUrl,
       };
     });
   }
 
-  private applyDslResponse(jotDsl: string, fallbackName: string): void {
-    const jot = parse(jotDsl);
-    // The transcriber service no longer injects a title (the regex pass
-    // over the DSL lived in Python and was the only string-level
-    // mutation we did to LLM output). Set it here from the upload
-    // filename so the rendered jot shows a useful heading.
-    const derivedTitle = titleFromFilename(fallbackName);
-    if (derivedTitle) jot.title = derivedTitle;
-    runInAction(() => {
-      this.currentJot = new RenderedJot(jot, this.viewConfig);
-      this.currentExampleId = undefined;
-      this.clearNoteProvenance();
-      jotPlayer.clearCue();
-    });
-  }
-
   /**
    * Fetch the debug zip from `url`, parse it, and load every artifact
-   * via {@link applyDebugBundle}. The score (whether DSL `final.jot` or
-   * filter-mode `prediction.mid`), audio tracks, note provenance, and
-   * stage timings / logs all come along in one round trip.
+   * via {@link applyDebugBundle}. The predicted-MIDI score, audio
+   * tracks, note provenance, and stage timings / logs all come along
+   * in one round trip.
    *
    * Returns `true` on success, `false` if either the fetch or the
-   * parse failed (in which case `transcribeAudio` falls back to the
-   * legacy DSL parse path so the score still renders).
+   * parse failed (in which case the caller surfaces an error pill).
    */
   private async autoLoadDebugBundle(
     url: string,
@@ -927,6 +870,40 @@ export class JotViewStore {
 
   /** Shared transcribe / resume failure handler. Routes aborts to idle
    *  (user cancelled), everything else to the error pill. */
+  /**
+   * Fold one streamed `TranscribeProgress` event into the live
+   * `transcribeStatus` pill so the user sees the pipeline advancing
+   * through each stage. `stage` events with `phase='start'` set the
+   * current stage and clear any substage label from the previous one;
+   * `substage` events overwrite the in-stage detail without changing
+   * the stage itself. `phase='end'` is ignored for UI purposes — the
+   * pill rolls straight from one stage's `start` to the next stage's
+   * `start`, which reads more clearly than briefly showing "(done)".
+   */
+  private applyProgress(filename: string, event: TranscribeProgress): void {
+    runInAction(() => {
+      const status = this.transcribeStatus;
+      // If the request was aborted or already terminal (success/error)
+      // before this late event fires, ignore — late progress shouldn't
+      // resurrect the spinner over an idle/success/error pill.
+      if (status.phase !== 'uploading') return;
+      if (event.kind === 'stage' && event.phase === 'start') {
+        this.transcribeStatus = {
+          phase: 'uploading',
+          filename,
+          stage: event.stage,
+        };
+      } else if (event.kind === 'substage') {
+        this.transcribeStatus = {
+          phase: 'uploading',
+          filename,
+          stage: event.stage,
+          substage: event.detail,
+        };
+      }
+    });
+  }
+
   private handleTranscribeError(
     err: unknown,
     controller: AbortController,
@@ -1221,9 +1198,9 @@ export class JotViewStore {
       this.resetPitchMixer();
       this.lastDebugBundle = bundle.manifest;
       // Replace (or clear) the per-note debug provenance whenever a
-      // new bundle loads. Filter-mode bundles carry one; DSL-mode
-      // bundles don't, in which case the previous bundle's
-      // provenance must not leak onto the new score.
+      // new bundle loads. Older bundles may not carry one (e.g. a
+      // hand-built or legacy zip); the absent-case clears the previous
+      // bundle's provenance so it doesn't leak onto the new score.
       this.noteProvenance = bundle.noteProvenance ?? undefined;
       // Reset the visibility toggle so a freshly loaded bundle reads
       // as just "the score" — operator opts into the ghost overlays.
@@ -1231,44 +1208,41 @@ export class JotViewStore {
       this.debugPanelOpen = true;
     });
 
-    // Prefer `final.jot` (DSL-mode bundle) over `prediction.mid` (filter-
-    // mode bundle) — DSL is the richer artifact when both are present.
-    // Filter mode emits no `final.jot`, so the MIDI fallback is the score
-    // for that pathway.
+    // The bundle's score is the `prediction.mid` produced by the
+    // transcribe stage; `src/midi/from_midi.ts` converts it to a Jot.
     let scoreLoaded = false;
-    if (bundle.jotDsl.trim()) {
-      try {
-        const jot = parse(bundle.jotDsl);
-        if (!jot.title) {
-          const derivedTitle = titleFromFilename(fallbackName);
-          if (derivedTitle) jot.title = derivedTitle;
-        }
-        runInAction(() => {
-          this.currentJot = new RenderedJot(jot, this.viewConfig);
-          this.currentExampleId = undefined;
-          jotPlayer.clearCue();
-        });
-        scoreLoaded = true;
-      } catch (err) {
-        const message =
-          err instanceof ParseError
-            ? `Could not parse final.jot: ${err.message}`
-            : err instanceof Error
-              ? err.message
-              : String(err);
-        runInAction(() => {
-          this.transcribeStatus = { phase: 'error', message };
-        });
-      }
-    } else if (bundle.predictionMidi) {
+    if (bundle.predictionMidi) {
       try {
         const jot = fromMidi(bundle.predictionMidi);
         if (!jot.title) {
           const derivedTitle = titleFromFilename(fallbackName);
           if (derivedTitle) jot.title = derivedTitle;
         }
+        // The downbeat detector recorded the global beat-alignment offset
+        // it applied in the provenance sidecar. Convert it into the same
+        // quarter-note-beat coordinates the Beat control uses (negate
+        // because adding `offset_sec` to every beat.time moves notes by
+        // `-offset_sec * bpm/60` on the beat grid) and seed it as both
+        // the control value AND the baseline — net applied shift is 0,
+        // so notes stay at the MIDI positions while the operator can
+        // see the alignment value and reset it to expose the pre-
+        // alignment positions.
+        const alignmentSec = bundle.noteProvenance?.beat_alignment_offset_sec;
+        const bpm = jot.globalMetadata.bpm;
+        const alignmentBeats =
+          typeof alignmentSec === 'number' &&
+          Number.isFinite(alignmentSec) &&
+          typeof bpm === 'number' &&
+          bpm > 0
+            ? (-alignmentSec * bpm) / 60
+            : 0;
         runInAction(() => {
-          this.currentJot = new RenderedJot(jot, this.viewConfig);
+          const rendered = new RenderedJot(jot, this.viewConfig);
+          if (alignmentBeats !== 0) {
+            rendered.setDrumOffsetBaseline(alignmentBeats);
+            rendered.setDrumOffset(alignmentBeats);
+          }
+          this.currentJot = rendered;
           this.currentExampleId = undefined;
           jotPlayer.clearCue();
         });
@@ -1293,7 +1267,10 @@ export class JotViewStore {
     // post-load pair-with-instrument-row logic stable.
     const resolved = await Promise.all(
       bundle.audioTracks.map((track) =>
-        this.loadAudioTrack(track.file).then((id) => ({ key: track.key, id })),
+        this.loadAudioTrack(
+          track.file,
+          track.key !== NO_DRUMS_KEY ? track.key : undefined,
+        ).then((id) => ({ key: track.key, id })),
       ),
     );
     const loadedByKey = new Map<string, AudioTrackId>();

@@ -45,7 +45,7 @@ from app.debug import current_debug_sink
 from app.models import OnsetCandidate
 from app.pipeline.beats import BeatStructure
 from app.pipeline.llm_util import call_messages_with_refusal_retry
-from app.pipeline.recompose import PITCH_DISPLAY_NAMES
+from app.pipeline.separate import PITCH_DISPLAY_NAMES
 
 log = logging.getLogger(__name__)
 

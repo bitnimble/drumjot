@@ -54,4 +54,28 @@ describe('drum beat-grid offset', () => {
     expect(note.beat).toBeCloseTo(1.5, 6);
     expect(note.straight).toBe(true);
   });
+
+  it('cancels the control value when the baseline matches it', () => {
+    // Hydrates the way `applyDebugBundle` does after a transcriber run:
+    // the control shows the alignment value, but baseline matching it
+    // means the score still renders at the source positions.
+    const rendered = new RenderedJot(parse(SRC));
+    rendered.setDrumOffsetBaseline(0.5);
+    rendered.setDrumOffset(0.5);
+    expect(rendered.effectiveDrumOffsetBeats).toBe(0);
+    expect(jotToEvents(rendered).map((e) => e.time)).toEqual([0, 2]);
+  });
+
+  it('shifts by the delta when the control diverges from the baseline', () => {
+    // Reset-to-zero exposes the pre-alignment positions when a baseline
+    // is set: effective offset = 0 - 0.5 = -0.5 beats earlier.
+    const rendered = new RenderedJot(parse(SRC));
+    rendered.setDrumOffsetBaseline(0.5);
+    rendered.setDrumOffset(0);
+    expect(rendered.effectiveDrumOffsetBeats).toBe(-0.5);
+    // abs 0 -> -0.5 (dropped); abs 4 -> 3.5 in bar 1.
+    const evs = jotToEvents(rendered);
+    expect(evs).toHaveLength(1);
+    expect(evs[0].time).toBeCloseTo(1.75, 6);
+  });
 });

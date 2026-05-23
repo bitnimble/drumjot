@@ -1,5 +1,6 @@
 import React from 'react';
 import { NoteProvenanceEntry } from 'src/debug_zip';
+import { BarTiming } from 'src/playback';
 import { SelectionStore } from 'src/selection';
 
 /**
@@ -46,7 +47,41 @@ export type NoteProvenanceContextValue = {
    * sidecar didn't record one (older bundles).
    */
   beatAlignmentOffsetSec: number | null;
+  /**
+   * Bundle-manifest mapping from pitch letter (and the synthetic
+   * `no_drums` key) to the audio filename inside the bundle, e.g.
+   * `k` → `stem_k.mp3`. Sourced from `DebugBundleManifest.mapping`.
+   * Used by the per-onset timing visualization to pick the right
+   * loaded audio track for a given pitch (the isolated stem shows
+   * the drum hit far more clearly than the full mix or the
+   * `no_drums` backing). Empty when the bundle didn't ship a mapping
+   * — the visualization falls back to filename heuristics in that
+   * case.
+   */
+  audioFilenameByPitch: ReadonlyMap<string, string>;
 };
 
 export const NoteProvenanceContext =
   React.createContext<NoteProvenanceContextValue | null>(null);
+
+/**
+ * Per-bar audio-time timings (start + duration, in seconds) for the
+ * current jot, keyed by {@link StructuralBar.index}. Computed once at
+ * the JotView level so deep consumers (today: NoteProvenanceDetails'
+ * "Final position" row) can read a bar's absolute audio time without
+ * depending on the playback timeline — the player's timeline is
+ * `EMPTY_TIMELINE` until the first Play, but the math only needs the
+ * jot's structure + tempos, so building it eagerly here makes the
+ * lookup work even on an idle score.
+ *
+ * Keyed by `bar.index` rather than by `StructuralBar` reference
+ * because the rendering chain shallow-clones bars (PitchRow rewrites
+ * `tracks` for its lane) — the original reference doesn't survive the
+ * walk down to NoteView. `bar.index` is preserved across those clones
+ * and across `drumOffsetBeats` reflows, so it's the stable key.
+ *
+ * `null` outside the View or when the jot has no voices/bars.
+ */
+export const BarTimingsContext = React.createContext<
+  ReadonlyMap<number, BarTiming> | null
+>(null);

@@ -75,6 +75,14 @@ export type AudioTrack = {
    */
   objectUrl: string;
   durationSec: number;
+  /**
+   * DSL pitch letter (e.g. `k`, `s`, `h`) this audio track is the isolated
+   * stem of, when known. Set from a debug bundle's `mapping` entry; the
+   * waveform canvas tints itself with that pitch's lane color so the
+   * audio track reads as visually paired with its instrument row.
+   * Undefined for ad-hoc / drumless tracks.
+   */
+  pitch?: string;
 };
 
 /**
@@ -225,16 +233,17 @@ export async function decodeAudioTrackUrl(
  * there is no upfront full-buffer pass — that used to be the dominant
  * blocking cost when loading several tracks back to back.
  *
- * `startOffsetSec` shifts buffer-time relative to jot-time: at jot
- * t=0 the audio is at t=startOffsetSec (the recording's lead-in
- * before the first drum hit). Samples outside the buffer collapse
- * to 0 / 0, leaving blank space on either side of the waveform.
+ * `drumsT0Sec` shifts buffer-time relative to jot-time: at jot
+ * t=0 the audio is at t=drumsT0Sec — i.e. the audio time when drums
+ * first enter, measured from the audio file's t=0. Samples outside the
+ * buffer collapse to 0 / 0, leaving blank space on either side of the
+ * waveform.
  */
 export function computeWaveformPeaks(
   buffer: AudioBuffer,
   timeline: JotTimeline,
   totalWidthPx: number,
-  startOffsetSec: number,
+  drumsT0Sec: number,
 ): Float32Array {
   const peaks = new Float32Array(totalWidthPx * 2);
   if (totalWidthPx <= 0 || timeline.bars.length === 0) return peaks;
@@ -260,20 +269,20 @@ export function computeWaveformPeaks(
   // in `pxPerBeat` so `scaleX` and the redraw line up exactly.
 
   // Lead-in: the pixels before bar 1 (reserved for the recording's
-  // pre-roll) show audio seconds [0, startOffset). Bar 1's left edge
+  // pre-roll) show audio seconds [0, drumsT0Sec). Bar 1's left edge
   // is at `firstX`, which the layout scaled so `firstX` px ==
-  // `startOffset` s at the same px/s the bars use — so audio is
+  // `drumsT0Sec` s at the same px/s the bars use — so audio is
   // continuous across the bar-1 boundary and the drum notes line up
   // with where the drums actually enter in the waveform.
   const firstX = renderedBars.length ? (renderedBars[0].x as number) : 0;
-  if (startOffsetSec > 0 && firstX > 0) {
+  if (drumsT0Sec > 0 && firstX > 0) {
     // Pre-roll occupies [0, firstX) in the bitmap. The caller offsets
     // the canvas by `notePadPx` so the visible left edge still lines
     // up with the score's note grid.
     const pxEnd = Math.min(totalWidthPx, Math.ceil(firstX));
     for (let p = 0; p < pxEnd; p++) {
-      const tAudio0 = (p / firstX) * startOffsetSec;
-      const tAudio1 = ((p + 1) / firstX) * startOffsetSec;
+      const tAudio0 = (p / firstX) * drumsT0Sec;
+      const tAudio1 = ((p + 1) / firstX) * drumsT0Sec;
       const s0 = Math.max(0, Math.floor(tAudio0 * sampleRate));
       const s1 = Math.min(sampleLen, Math.ceil(tAudio1 * sampleRate));
       writePixelPeak(channels, numChannels, channelScale, s0, s1, peaks, p * 2);
@@ -293,8 +302,8 @@ export function computeWaveformPeaks(
       const frac1 = (p + 1 - x0) / w;
       const tJot0 = timing.startSec + frac0 * timing.durationSec;
       const tJot1 = timing.startSec + frac1 * timing.durationSec;
-      const tAudio0 = tJot0 + startOffsetSec;
-      const tAudio1 = tJot1 + startOffsetSec;
+      const tAudio0 = tJot0 + drumsT0Sec;
+      const tAudio1 = tJot1 + drumsT0Sec;
       const s0 = Math.max(0, Math.floor(tAudio0 * sampleRate));
       const s1 = Math.min(sampleLen, Math.ceil(tAudio1 * sampleRate));
       writePixelPeak(channels, numChannels, channelScale, s0, s1, peaks, p * 2);
@@ -361,6 +370,40 @@ function writePixelPeak(
 }
 
 /**
+ * Compute min/max envelope peaks for an arbitrary audio-time window —
+ * unlike {@link computeWaveformPeaks} this is independent of the jot
+ * timeline, so it can render short snippets (e.g. for the per-onset
+ * debug visualization) at any zoom and any time range. `startSec` /
+ * `durationSec` are in the buffer's own time frame (seconds from the
+ * file's t=0). Out-of-buffer pixels write 0/0 so silent edges render
+ * flat instead of throwing.
+ */
+export function computeWindowPeaks(
+  buffer: AudioBuffer,
+  startSec: number,
+  durationSec: number,
+  widthPx: number,
+): Float32Array {
+  const peaks = new Float32Array(widthPx * 2);
+  if (widthPx <= 0 || durationSec <= 0) return peaks;
+  const sampleRate = buffer.sampleRate;
+  const numChannels = buffer.numberOfChannels;
+  const sampleLen = buffer.length;
+  const channels: Float32Array[] = new Array(numChannels);
+  for (let ch = 0; ch < numChannels; ch++) channels[ch] = buffer.getChannelData(ch);
+  const channelScale = 1 / numChannels;
+  const secPerPx = durationSec / widthPx;
+  for (let p = 0; p < widthPx; p++) {
+    const t0 = startSec + p * secPerPx;
+    const t1 = startSec + (p + 1) * secPerPx;
+    const s0 = Math.max(0, Math.floor(t0 * sampleRate));
+    const s1 = Math.min(sampleLen, Math.ceil(t1 * sampleRate));
+    writePixelPeak(channels, numChannels, channelScale, s0, s1, peaks, p * 2);
+  }
+  return peaks;
+}
+
+/**
  * Convenience wrapper: takes a {@link RenderedJot} and an audio track,
  * returns the waveform peaks at the score's current pixel width.
  * Re-call when zoom changes (the rendered bars' `width` changes
@@ -369,7 +412,7 @@ function writePixelPeak(
 export function computeWaveformPeaksForJot(
   rendered: RenderedJot,
   buffer: AudioBuffer,
-  startOffsetSec: number,
+  drumsT0Sec: number,
 ): { peaks: Float32Array; widthPx: Pixels } {
   const timeline = buildTimeline(rendered);
   const voice = rendered.resolved.voices[0];
@@ -378,7 +421,7 @@ export function computeWaveformPeaksForJot(
     buffer,
     timeline,
     widthPx as number,
-    startOffsetSec,
+    drumsT0Sec,
   );
   return { peaks, widthPx };
 }
@@ -424,7 +467,7 @@ export class AudioTrackPlaybackController {
     audioStartTime: number,
     jotOffsetSec: number,
     speed: number,
-    startOffsetSec: number,
+    drumsT0Sec: number,
     gainFor: (id: AudioTrackId) => number,
   ): void {
     for (const track of tracks) {
@@ -433,7 +476,7 @@ export class AudioTrackPlaybackController {
         audioStartTime,
         jotOffsetSec,
         speed,
-        startOffsetSec,
+        drumsT0Sec,
         gainFor(track.id),
       );
     }
@@ -444,13 +487,13 @@ export class AudioTrackPlaybackController {
     audioStartTime: number,
     jotOffsetSec: number,
     speed: number,
-    startOffsetSec: number,
+    drumsT0Sec: number,
     gain: number,
   ): void {
-    // Media time = jot time + startOffset. A negative jot offset
+    // Media time = jot time + drumsT0Sec. A negative jot offset
     // (lead-in) clamps to 0 so the recording's own intro is what plays
     // during the lead-in, exactly as the old buffer path did.
-    const mediaOffset = Math.max(0, jotOffsetSec + startOffsetSec);
+    const mediaOffset = Math.max(0, jotOffsetSec + drumsT0Sec);
     const slot = this.ensureSlot(track);
     slot.gainNode.gain.value = gain;
 

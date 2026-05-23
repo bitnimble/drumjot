@@ -2,18 +2,19 @@
 
 Pipeline (beat-aware, no fixed grid):
     audio bytes
-        -> Demucs v4 (htdemucs_ft)            (full mix -> drum stem)
-        -> Jarredou MDX23C 6-stem DrumSep     (drum stem -> per-instrument stems)
-        -> librosa peak picker per stem       (per-stem onset candidates)
-        -> madmom RNN+DBN downbeat tracker    (per-beat anchors, downbeats,
-                                               per-bar time signature + feel)
+        -> BS-Roformer SW                       (full mix -> drum stem)
+        -> Jarredou MDX23C 6-stem DrumSep       (drum stem -> per-instrument stems)
+        -> ADTOF Frame_RNN per stem             (per-stem onset candidates)
+        -> madmom RNN+DBN downbeat tracker      (per-beat anchors, downbeats,
+                                                 per-bar time signature + feel)
         -> attach (bar, beat_in_bar) positions to each onset
-        -> LLM (Claude) with per-bar listings (-> Drumjot DSL)
-        -> optional multi-level refinement loop (score-gated revisions)
-        -> Drumjot DSL string returned to client.
+        -> Claude filter (per instrument) → rejects artifact onsets
+        -> render kept onsets to MIDI (prediction.mid)
+        -> client receives the prediction MIDI URL + a per-note debug
+           provenance sidecar; the frontend converts the MIDI to a
+           Drumjot Jot via src/midi/from_midi.ts.
 
-The grid quantizer that used to live between onset detection and the LLM
-was removed when the pipeline went beat-aware: triplets, tempo changes
-and time-signature changes are now first-class because every onset
-carries a beat-relative position rather than a fixed-grid slot index.
+The legacy DSL-output pathway (LLM-emitted Drumjot DSL + F1-gated
+refinement) and the librosa onset backend were removed in May 2026; see
+docs/ai-midi-to-jot-notes.md for the techniques captured from them.
 """

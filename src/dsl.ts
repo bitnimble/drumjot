@@ -73,15 +73,31 @@ export type Metadata = {
    */
   title?: string;
   /**
-   * Lead-in (seconds) before jot-time 0. Carried on `globalMetadata` so a
-   * transcribed jot can preserve the silence / non-drum intro that
-   * preceded the first detected beat in the source audio; browser
-   * playback delays its schedule by this amount so the rendered drums hit
-   * at the same wall-clock offset as in the original recording. Optional
-   * — undefined / 0 mean playback starts immediately, matching pre-offset
-   * behaviour.
+   * Three timeline epochs the playback / score / waveform code coordinates
+   * around. All are seconds, measured forward from t=0 of the loaded audio
+   * file (`audioT0`, which has no field because it's the origin by
+   * definition). The expected ordering is
+   * `audioT0 (=0) <= signalT0Sec <= drumsT0Sec`.
+   *
+   * - `drumsT0Sec` — audio time of the first drum onset. Bar 1 of the
+   *   score sits exactly here; the player delays its schedule by this much
+   *   so rendered drums hit at the same wall-clock offset as in the source
+   *   audio. Replaces the previous `startOffset` field. Optional —
+   *   undefined / 0 mean drums start at the file head.
+   * - `signalT0Sec` — audio time of the first non-silent sample (e.g. a
+   *   vocal pickup, a guitar intro). Strictly informational today; the
+   *   waveform + debug overlays may use it to show "music starts here"
+   *   distinct from "drums start here". Optional.
+   *
+   * Pre-drum bars (audio that exists before the first drum hit) get
+   * negative `bar.index` in the rendered jot. `leadBars` counts how many
+   * such bars precede bar 1; carried here so consumers (mixer, debug
+   * provenance, etc.) don't have to recount the leading rest bars
+   * themselves.
    */
-  startOffset?: number;
+  drumsT0Sec?: number;
+  signalT0Sec?: number;
+  leadBars?: number;
   [key: string]: unknown;
 };
 

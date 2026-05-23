@@ -1,8 +1,10 @@
 """ADTOF onset backend — per-stem CRNN drum-onset detection.
 
-Selected per request via the `onset_backend=adtof` /transcribe form
-parameter (default stays `librosa`). We read only the stem's matching
-class lane; per-stem identity still comes from MDX23C separation (we do
+The sole per-stem onset detector. (The legacy librosa spectral-flux
+detector was removed in May 2026; see
+`transcriber/docs/ai-midi-to-jot-notes.md` for the techniques captured
+from the previous pathway.) We read only the stem's matching class
+lane; per-stem identity still comes from MDX23C separation (we do
 NOT use ADTOF to classify).
 
 Input source per lane:
@@ -25,21 +27,19 @@ Design notes / deliberate constraints:
 * This uses the PyTorch port of ADTOF (xavriley/ADTOF-pytorch), not the
   original TensorFlow/Keras ADTOF. It's torch-only and bundles its
   pretrained Frame_RNN weights inside the package, so it's a core dep
-  baked into the default image (no build arg, no Zenodo download). The
-  heavy imports still live inside `_load_model()` so a broken/absent
-  install degrades gracefully rather than failing this module's import.
+  baked into the default image (no build arg, no Zenodo download).
 
 * ADTOF was trained on full mixes; we run it on isolated stems, which
-  is out-of-distribution. Every failure mode — missing package, missing
-  weights, or an API mismatch against the pinned commit — degrades to
-  the librosa detector via `detect_onsets_adtof_or_librosa()` rather
-  than breaking the request. librosa stays the safe default.
+  is out-of-distribution. Failures (missing package, missing weights,
+  per-stem inference error) raise — there is no fallback detector
+  anymore. The Dockerfile bakes the package + its weights in at build
+  time, so this should never fire in production.
 
 * We take ADTOF's dense per-frame activations and run our OWN
-  deterministic peak-pick (threshold + min-distance) so the output
-  keeps the librosa path's "high-recall, the LLM prunes" contract and
-  is reproducible run-to-run. We deliberately do NOT use the package's
-  own `PeakPicker` / `transcribe_to_midi` for this reason.
+  deterministic peak-pick (threshold + min-distance) so the output is
+  reproducible run-to-run and tuned for the "high-recall, the LLM
+  prunes" contract. We deliberately do NOT use the package's own
+  `PeakPicker` / `transcribe_to_midi` for this reason.
 """
 from __future__ import annotations
 
@@ -57,7 +57,6 @@ from scipy.signal import find_peaks
 
 from app.config import settings
 from app.models import OnsetCandidate
-from app.pipeline.onsets import detect_onsets
 
 log = logging.getLogger(__name__)
 
@@ -136,9 +135,9 @@ def _load_model():
         )
     except ImportError as exc:  # adtof_pytorch / torch not importable
         raise RuntimeError(
-            "ADTOF backend requested but `adtof_pytorch` is not "
-            "importable. It is a core dependency baked into the image; "
-            "rebuild the image or use onset_backend=librosa."
+            "ADTOF onset backend is the only detector but "
+            "`adtof_pytorch` is not importable. It is a core dependency "
+            "baked into the image; rebuild the image."
         ) from exc
 
     weights_path = get_default_weights_path()
@@ -147,7 +146,7 @@ def _load_model():
             "adtof_pytorch is installed but its bundled Frame_RNN "
             f"weights are missing (get_default_weights_path()={weights_path!r}). "
             "The wheel should ship them; rebuild the image from the "
-            "pinned commit or use onset_backend=librosa."
+            "pinned commit."
         )
 
     device = _resolve_device()
@@ -297,11 +296,10 @@ def detect_onsets_adtof(
     `drum_stem_path` is missing the noisy lanes fall back to the isolated
     stem.
 
-    Preserves the `OnsetCandidate` contract exactly. NOTE: `strength`
-    here is the ADTOF sigmoid activation in [0, 1] — a different (and
-    differently-scaled) proxy from the librosa spectral-flux magnitude.
-    This flows into the LLM prompt at `llm.py` `(%.3f,%.2f)`; it is left
-    un-rescaled on purpose.
+    Returns `OnsetCandidate`s with the ADTOF sigmoid activation in
+    [0, 1] as `strength` — a per-frame model-confidence proxy. It feeds
+    the filter LLM's `(beat_in_bar, strength)` prompt block and the
+    velocity-mapping percentile lookup in `onsets_to_midi_bytes`.
 
     For the noisy lanes the inference audio is RMS-normalized and the
     peak threshold is computed adaptively from that lane's activation;
@@ -395,7 +393,7 @@ def detect_onsets_adtof(
                 bar=-1,
                 beat_in_bar=-1.0,
             )
-            for peak_idx, bt_idx in zip(peaks, backtracked)
+            for peak_idx, bt_idx in zip(peaks, backtracked, strict=False)
         ]
         log.info(
             "ADTOF: %d onsets in %s (lane=%d, src=%s, thr=%.3f%s, prom=%s, "
@@ -424,33 +422,96 @@ def detect_onsets_adtof(
             tmp_path.unlink(missing_ok=True)
 
 
-def detect_onsets_adtof_or_librosa(
-    audio_path: Path,
-    pitch: str,
-    sample_rate: int = 44100,
-    *,
-    drum_stem_path: Path | None = None,
-) -> list[OnsetCandidate]:
-    """ADTOF detection with automatic librosa fallback.
+# Lane index → pitch letter for the alignment pool. Includes one entry
+# per ADTOF lane (the merged cymbal lane is keyed by `d` so it's picked
+# up once; pulling both `d` and `c` would double-count the same peaks).
+_ALIGNMENT_LANES: tuple[tuple[str, int], ...] = (
+    ("k", 0),
+    ("s", 1),
+    ("t", 2),
+    ("h", 3),
+    ("d", 4),
+)
 
-    Any ADTOF-side failure — package missing, weights missing, API
-    mismatch against the pinned commit, or a per-stem inference error —
-    logs loudly and falls back to the librosa detector for that stem.
-    The librosa fallback always runs on the isolated `audio_path` (its
-    high-recall spectral-flux design wants the per-instrument stem, not
-    the drum mix). librosa is the safe default; ADTOF never takes the
-    request down.
+
+def detect_drum_onsets_for_alignment(
+    audio_path: Path,
+) -> list[tuple[float, float]]:
+    """Pool ADTOF onsets across all 5 drum lanes for beat-grid alignment.
+
+    Runs a single ADTOF inference pass on `audio_path` (intended to be
+    the full drum stem) and peak-picks each lane with its standard
+    `detect_onsets_adtof` parameters. Returns a flat `(time, strength)`
+    list sorted by time, suitable for `align_beats_to_onsets`.
+
+    Pooling all five lanes — kick / snare / toms / hi-hat / cymbal —
+    multiplies the alignment coverage on songs where the kick alone
+    leaves too few beats with a nearby onset (the median-offset
+    coverage gate rejects the offset otherwise). Quiet or off-the-beat
+    hi-hat hits don't bias the result: `align_beats_to_onsets` picks
+    the strongest onset within ±50 ms of each beat, so a louder kick
+    or snare nearby still wins.
+
+    No RMS-normalize / drum-stem-substitution for the noisy lanes — we
+    only want the union of strong drum transients, not high-fidelity
+    per-lane identity. Inference failures are caught and surfaced as
+    an empty list so the caller can degrade to "no alignment" cleanly.
     """
     try:
-        return detect_onsets_adtof(
-            audio_path, pitch, sample_rate, drum_stem_path=drum_stem_path
-        )
-    except Exception as exc:  # noqa: BLE001 — deliberate broad fallback
+        model, device = _load_model()
+        acts, fps = _adtof_activations(model, device, audio_path)
+    except Exception as exc:
         log.warning(
-            "ADTOF onset detection failed for %s (pitch=%s): %s — "
-            "falling back to librosa for this stem.",
-            audio_path.name,
-            pitch,
-            exc,
+            "ADTOF alignment inference failed (%s); pool empty.", exc,
         )
-        return detect_onsets(audio_path, sample_rate)
+        return []
+
+    pool: list[tuple[float, float]] = []
+    for pitch, lane in _ALIGNMENT_LANES:
+        if lane >= acts.shape[1]:
+            continue
+        activation = acts[:, lane]
+        if activation.size == 0:
+            continue
+        is_noisy = pitch in _NOISY_LANE_PITCHES
+        threshold = _resolve_threshold(pitch, activation)
+        min_dist_s = (
+            settings.adtof_noisy_peak_min_distance_s
+            if is_noisy
+            else settings.adtof_peak_min_distance_s
+        )
+        min_distance_frames = max(1, round(min_dist_s * fps))
+        prominence = (
+            settings.adtof_noisy_peak_prominence
+            if is_noisy and settings.adtof_noisy_peak_prominence > 0.0
+            else None
+        )
+        peaks, _props = find_peaks(
+            activation,
+            height=threshold,
+            distance=min_distance_frames,
+            prominence=prominence,
+        )
+        reset_frac = settings.adtof_noisy_decay_reset_frac
+        if is_noisy and reset_frac > 0.0:
+            peaks = _decay_reset_filter(
+                activation,
+                peaks,
+                reset_frac,
+                settings.adtof_noisy_decay_reset_floor,
+            )
+        if peaks.size == 0:
+            continue
+        backtracked = onset_backtrack(peaks, activation)
+        for peak_idx, bt_idx in zip(peaks, backtracked, strict=False):
+            pool.append((
+                float(bt_idx) / fps,
+                float(activation[peak_idx]),
+            ))
+
+    pool.sort(key=lambda x: x[0])
+    log.info(
+        "ADTOF alignment pool: %d onsets across %d lanes (%s)",
+        len(pool), len(_ALIGNMENT_LANES), audio_path.name,
+    )
+    return pool
