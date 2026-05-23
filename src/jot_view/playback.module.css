@@ -13,8 +13,8 @@
     align-items: center;
     gap: 10px;
     padding: 10px 24px;
-    border-top: 1px solid #e7e0d5;
-    background: rgba(255, 255, 255, 0.65);
+    border-top: 1px solid var(--color-border-soft);
+    background: var(--color-bg-overlay);
     backdrop-filter: blur(4px);
     flex: 0 0 auto;
     /* Stays pinned to the bottom even when no jot is loaded (the empty
@@ -61,10 +61,10 @@
     height: 52px;
     font-size: 22px;
     line-height: 1;
-    border: 1px solid #c9bfae;
-    border-radius: 10px;
-    background: #fff;
-    color: #2b2b2b;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    background: var(--color-bg-base);
+    color: var(--color-text);
     cursor: pointer;
     font-family: inherit;
     /* Keep the glyph optically centred (▶ / ■ sit slightly off otherwise). */
@@ -72,40 +72,40 @@
 }
 
 .transportButton:hover:not(:disabled) {
-    background: #f6efe0;
-    border-color: #b09d80;
+    background: var(--color-bg-hover);
+    border-color: var(--color-border-strong);
 }
 
 .transportButton:disabled {
-    color: #b9b0a0;
+    color: var(--color-text-disabled-strong);
     cursor: not-allowed;
 }
 
 .transportButton:focus-visible {
-    outline: 2px solid #ff8c55;
+    outline: 2px solid var(--color-accent);
     outline-offset: 2px;
 }
 
 .transportButtonStop {
-    color: #b00020;
+    color: var(--color-error);
 }
 
 .transportButtonStop:hover:not(:disabled) {
-    background: #ffecec;
-    border-color: #b00020;
+    background: var(--color-error-bg);
+    border-color: var(--color-error);
 }
 
 .transportButtonStop:focus-visible {
-    outline-color: #b00020;
+    outline-color: var(--color-error);
 }
 
 .transportButtonError {
-    border-color: #b00020;
-    color: #b00020;
+    border-color: var(--color-error);
+    color: var(--color-error);
 }
 
 .transportButtonError:hover:not(:disabled) {
-    background: #ffecec;
+    background: var(--color-error-bg);
 }
 
 .masterVolumes {
@@ -115,11 +115,11 @@
 }
 
 .masterVolume {
+    composes: body from '../typography.module.css';
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    font-size: 12px;
-    color: #4a4a4a;
+    color: var(--color-text-secondary);
     user-select: none;
     cursor: pointer;
 }
@@ -129,9 +129,8 @@
 }
 
 .masterVolumeValue {
-    font-variant-numeric: tabular-nums;
-    font-size: 11px;
-    color: #6b6b6b;
+    composes: readout from '../typography.module.css';
+    color: var(--color-text-muted-alt);
     min-width: 30px;
     text-align: right;
 }
@@ -141,9 +140,9 @@
     top: 0;
     bottom: 0;
     width: 2px;
-    background: #ff5c0a;
+    background: var(--color-accent-strong);
     z-index: 5;
-    box-shadow: 0 0 4px rgba(255, 92, 10, 0.5);
+    box-shadow: var(--shadow-accent-glow);
     cursor: ew-resize;
 }
 
@@ -165,17 +164,17 @@
     top: 0;
     left: 1px;
     transform: translateX(-50%);
-    background: #ff5c0a;
-    color: #fff;
+    background: var(--color-accent-strong);
+    color: var(--color-bg-base);
     font-size: 10px;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.02em;
     line-height: 1;
     padding: 3px 5px;
-    border-radius: 2px;
+    border-radius: var(--radius-xs);
     white-space: nowrap;
     z-index: 6;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    box-shadow: var(--shadow-playhead-label);
     cursor: ew-resize;
 }

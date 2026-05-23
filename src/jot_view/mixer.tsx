@@ -8,6 +8,7 @@ import {
   computeWaveformPeaksForJot,
   jotPlayer,
 } from 'src/playback';
+import { ClearButton, MuteButton, SoloButton } from './components/icon_button';
 import { NoteProvenanceContext } from './contexts';
 import styles from './mixer.module.css';
 import { Playhead } from './playback';
@@ -441,50 +442,25 @@ const AudioTrackRow = observer(
               {/* Clear sits first so Mute/Solo stay flush with the gutter's
                   right edge — lining up with the M/S column on the
                   instrument rows below (both gutters share a width). */}
-              <button
-                type="button"
-                className={styles.musicTrackClear}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  controls.onClear(id);
-                }}
-                onMouseDown={(e) => e.stopPropagation()}
-                title={`Remove the ${lc} audio track`}
-                aria-label={`Remove the ${lc} audio track`}
-                data-testid={`audio-track-clear-${id}`}
-              >
-                ×
-              </button>
-              <button
-                type="button"
-                className={classNames(styles.muteButton, muted && styles.muteButtonActive)}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  controls.onToggleMute(id);
-                }}
-                onMouseDown={(e) => e.stopPropagation()}
-                title={muted ? `Unmute ${lc} audio track` : `Mute ${lc} audio track`}
-                aria-label={muted ? `Unmute ${lc} audio track` : `Mute ${lc} audio track`}
-                aria-pressed={muted}
-                data-testid={`audio-track-mute-${id}`}
-              >
-                M
-              </button>
-              <button
-                type="button"
-                className={classNames(styles.soloButton, soloed && styles.soloButtonActive)}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  controls.onToggleSolo(id);
-                }}
-                onMouseDown={(e) => e.stopPropagation()}
-                title={soloed ? `Unsolo ${lc} audio track` : `Solo ${lc} audio track`}
-                aria-label={soloed ? `Unsolo ${lc} audio track` : `Solo ${lc} audio track`}
-                aria-pressed={soloed}
-                data-testid={`audio-track-solo-${id}`}
-              >
-                S
-              </button>
+              <ClearButton
+                onClear={() => controls.onClear(id)}
+                label={`Remove the ${lc} audio track`}
+                testId={`audio-track-clear-${id}`}
+              />
+              <MuteButton
+                active={muted}
+                onToggle={() => controls.onToggleMute(id)}
+                offTitle={`Mute ${lc} audio track`}
+                onTitle={`Unmute ${lc} audio track`}
+                testId={`audio-track-mute-${id}`}
+              />
+              <SoloButton
+                active={soloed}
+                onToggle={() => controls.onToggleSolo(id)}
+                offTitle={`Solo ${lc} audio track`}
+                onTitle={`Unsolo ${lc} audio track`}
+                testId={`audio-track-solo-${id}`}
+              />
             </div>
           </div>
         </div>
@@ -619,7 +595,7 @@ const PitchRow = observer(
     // Pitch's lane colour for the ghost dashed outline. Best-effort
     // lookup: a pitch with no kept notes has no `tracks[pitch]` entry
     // in any bar — falls back to neutral grey then.
-    let pitchColor = '#888';
+    let pitchColor = 'var(--color-text-faint-strong)';
     for (const b of bars) {
       const t = b.tracks[pitch];
       if (t?.color) {
@@ -641,7 +617,6 @@ const PitchRow = observer(
     });
     const isDragging = dragFromIdx === idx;
     const labelText = instrumentName ?? `Pitch ${pitch}`;
-    const stopBubble = (e: React.MouseEvent) => e.stopPropagation();
     return (
       <div
         className={classNames(
@@ -676,34 +651,18 @@ const PitchRow = observer(
               onChange={(v) => voiceControls.onSetVolume(pitch, v)}
               label={labelText}
             />
-            <button
-              type="button"
-              className={classNames(styles.muteButton, muted && styles.muteButtonActive)}
-              onClick={(e) => {
-                stopBubble(e);
-                voiceControls.onToggleMute(pitch);
-              }}
-              onMouseDown={stopBubble}
-              title={muted ? `Unmute ${pitch}` : `Mute ${pitch}`}
-              aria-label={muted ? `Unmute ${pitch}` : `Mute ${pitch}`}
-              aria-pressed={muted}
-            >
-              M
-            </button>
-            <button
-              type="button"
-              className={classNames(styles.soloButton, soloed && styles.soloButtonActive)}
-              onClick={(e) => {
-                stopBubble(e);
-                voiceControls.onToggleSolo(pitch);
-              }}
-              onMouseDown={stopBubble}
-              title={soloed ? `Unsolo ${pitch}` : `Solo ${pitch}`}
-              aria-label={soloed ? `Unsolo ${pitch}` : `Solo ${pitch}`}
-              aria-pressed={soloed}
-            >
-              S
-            </button>
+            <MuteButton
+              active={muted}
+              onToggle={() => voiceControls.onToggleMute(pitch)}
+              offTitle={`Mute ${pitch}`}
+              onTitle={`Unmute ${pitch}`}
+            />
+            <SoloButton
+              active={soloed}
+              onToggle={() => voiceControls.onToggleSolo(pitch)}
+              offTitle={`Solo ${pitch}`}
+              onTitle={`Unsolo ${pitch}`}
+            />
           </div>
         </div>
         <div

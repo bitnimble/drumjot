@@ -647,7 +647,7 @@ export const DebugPanel = observer(({ store }: { store: JotViewStore }) => {
         <div className={styles.debugPanelColumn}>
           <h4>Stage timings</h4>
           {stages.length === 0 ? (
-            <p style={{ color: '#888', fontSize: 11 }}>No stage timings recorded.</p>
+            <p className={styles.debugPanelEmpty}>No stage timings recorded.</p>
           ) : (
             <ul className={styles.debugStageList}>
               {stages.map((s, i) => (
@@ -664,7 +664,7 @@ export const DebugPanel = observer(({ store }: { store: JotViewStore }) => {
         <div className={styles.debugPanelColumn}>
           <h4>Logs</h4>
           {logs.length === 0 ? (
-            <p style={{ color: '#888', fontSize: 11 }}>No logs captured.</p>
+            <p className={styles.debugPanelEmpty}>No logs captured.</p>
           ) : (
             <ul className={styles.debugLogList}>
               {logs.map((entry, i) => (

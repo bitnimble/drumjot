@@ -1,0 +1,129 @@
+/* Typography use cases.
+ *
+ * One class per "use case" rather than separate atomic tokens for size,
+ * weight, letter-spacing, and so on. Each class bundles everything a
+ * given role needs (font-size, font-weight, letter-spacing, text-transform,
+ * line-height, font-variant-numeric, font-family).
+ *
+ * Consumers in other CSS modules pull a use case in with the standard
+ * CSS Modules `composes:` directive, e.g.
+ *
+ *   .toolbarLabel {
+ *       composes: labelSm from '../typography.module.css';
+ *       color: var(--color-text-muted-alt);
+ *   }
+ *
+ * The composed class gets concatenated into the element's classList at
+ * build time, so the typography rules and the consumer's chrome rules
+ * stay neatly separated.
+ *
+ * True one-off typography (the tuplet bracket's italic numeral, the
+ * 22px transport-button glyph, single-use sizes on patternLabel /
+ * pitchRowName / modifierBadge / timelineHeaderTime) deliberately stays
+ * inline in its owning module — promoting a class for a single caller
+ * adds indirection without consolidation.
+ */
+
+/* ─── Display / heading ─────────────────────────────────────────────── */
+
+.heading {
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    line-height: 1.2;
+}
+
+/* ─── Body copy ─────────────────────────────────────────────────────── */
+
+/* Default UI body text (subtitle, legend, toolbar checkbox labels, the
+   master-volume label, samples select, offset input, debug-panel body, …). */
+.body {
+    font-size: 12px;
+}
+
+/* Small body — status pills, the inline note label, debug-panel stats,
+   sample-progress, the placeholder text used when stage/log lists are empty. */
+.bodySm {
+    font-size: 11px;
+}
+
+/* Medium body — toolbar selects, buttons, dropdown items, loading label. */
+.bodyMd {
+    font-size: 13px;
+}
+
+/* Emphasis body — action buttons (transcribe / play / cancel) and the
+   loading-overlay status pill. */
+.bodyEmphasis {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+/* ─── Uppercase tracked labels ──────────────────────────────────────── */
+
+/* Standard label — music-track name strip. */
+.label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    line-height: 1;
+}
+
+/* Small label — timeline-header label, lead-in label, debug-details dt. */
+.labelSm {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    line-height: 1;
+}
+
+/* Section-title label — debug-panel title + debug-panel column headers. */
+.metaLabel {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    line-height: 1;
+}
+
+/* Caption label — debug-details toggle button and the debug-details dt. */
+.metaCaption {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    line-height: 1;
+}
+
+/* ─── Numeric readouts ──────────────────────────────────────────────── */
+
+/* Standard readout — master-volume %, zoom %, timeline bar number. */
+.readout {
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Small readout — gutter-master value, debug-details list values. */
+.readoutSm {
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ─── Subtle ────────────────────────────────────────────────────────── */
+
+/* Small subtle text — music-track filename. */
+.subtle {
+    font-size: 10px;
+}
+
+/* ─── Monospace (debug logs / stages) ───────────────────────────────── */
+
+.mono {
+    font-family: 'SF Mono', 'Menlo', monospace;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.45;
+}

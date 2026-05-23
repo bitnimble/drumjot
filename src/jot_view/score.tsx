@@ -396,7 +396,7 @@ const NoteView = observer(
             top: (config.trackHeight as number) / 2,
             width: config.noteDiameter,
             height: config.noteDiameter,
-            background: isCross ? '#fff' : color,
+            background: isCross ? 'var(--color-bg-base)' : color,
             color,
             borderStyle: isCross ? 'solid' : undefined,
             border: isCross ? `2px solid ${color}` : undefined,

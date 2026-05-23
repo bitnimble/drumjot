@@ -7,16 +7,23 @@ code, plans that exist but haven't been executed yet, and a list of
 gotchas worth knowing before making changes. Read it top to bottom
 once; refer back as needed.
 
-Last updated by the assistant: May 2026, after the per-instrument
-transcription refactor (timeline #24): the transcribe stage now makes
-one LLM call per drum instrument (each emitting a single monophonic
-line, no `||`/`+`/metadata), and a deterministic recomposition in
-`src/recompose.ts` (called via `tools/recompose_jot.ts`; Python is a
-thin wrapper) merges them back into one Jot (hands `+`-joined, genuine
-polyrhythm as `+`-joined groups, kick as the second `||` voice). `||`
-was removed
-from the LLM-facing spec only; it remains fully in the DSL/parser/
-renderer. Prior session (timeline #23) was a renderer UX pass:
+Last updated by the assistant: May 2026, after the frontend
+design-system pass (timeline #25): global color / radius / shadow
+tokens in `src/design_tokens.css`, use-case typography classes in
+`src/typography.module.css` (composed via CSS-modules `composes:`),
+shared mixer-button primitives under `src/jot_view/components/`, and
+a stylelint design-token lint (configured in `.stylelintrc.json`,
+chained into `bun run build`). **Read §5.8 before touching any module CSS** —
+hardcoded colors will fail the lint. Prior session (timeline #24)
+was the per-instrument transcription refactor: the transcribe stage
+now makes one LLM call per drum instrument (each emitting a single
+monophonic line, no `||`/`+`/metadata), and a deterministic
+recomposition in `src/recompose.ts` (called via
+`tools/recompose_jot.ts`; Python is a thin wrapper) merges them back
+into one Jot (hands `+`-joined, genuine polyrhythm as `+`-joined
+groups, kick as the second `||` voice). `||` was removed from the
+LLM-facing spec only; it remains fully in the DSL/parser/renderer.
+Prior session (timeline #23) was a renderer UX pass:
 non-straight/tuplet bracket indicators + per-note off-grid rings,
 song-global density-driven bar width (default 640→448), click-to-seek
 on the score + stem waveforms, and lead-in pre-bars that align the
@@ -74,6 +81,12 @@ drumjot/
 ├── vite.config.ts                  /api proxy -> http://localhost:8001 (transcriber).
 ├── index.html                      Vite entry; mounts #app.
 ├── src/                            Frontend (TS, all client + library code).
+│   ├── design_tokens.css           Global :root design tokens (colors,
+│   │                               radii, shadows). Loaded once from
+│   │                               index.tsx. See §5.8.
+│   ├── typography.module.css       Use-case typography classes (heading,
+│   │                               body, label, …) pulled in via
+│   │                               `composes:` by other modules. See §5.8.
 │   ├── dsl.ts                      Types: Note, Rest, Group, Simultaneity,
 │   │                               PatternRef, Bar, Voice, Pattern, Jot,
 │   │                               Metadata, Instrument, Modifier, Sticking, Limb.
@@ -83,7 +96,22 @@ drumjot/
 │   │                               Toolbar (example picker, transcribe button,
 │   │                               refine checkbox), staff/bar/note components,
 │   │                               pattern brackets, status pill.
-│   ├── jot_view.module.css         CSS modules for the above.
+│   ├── jot_view.module.css         CSS modules for the above (shared form
+│   │                               chrome — toolbarCheckbox, samplesSelect,
+│   │                               offsetInput, statusPill*, global slider).
+│   ├── jot_view/                   Per-component chrome split out of jot_view.tsx.
+│   │   ├── toolbar.tsx + .module.css   Header strip + dropdowns + DebugPanel.
+│   │   ├── playback.tsx + .module.css  Bottom transport bar + master volume
+│   │   │                               + playhead line/label.
+│   │   ├── mixer.tsx + .module.css     Unified mixer (audio tracks +
+│   │   │                               drum-instrument pitch rows).
+│   │   ├── score.tsx + .module.css     Timeline header, bars, notes, brackets,
+│   │   │                               note label popovers, filtered-onset ghosts.
+│   │   ├── store.ts                    JotViewStore (MobX) + TrackKey + constants.
+│   │   ├── contexts.ts                 React contexts (NoteProvenanceContext, …).
+│   │   └── components/                 Cross-module shared React UI primitives
+│   │                                   (icon_button.tsx + .module.css today; the
+│   │                                   home for future shared widgets).
 │   ├── fakes.ts                    EXAMPLE_JOTS (rockJot, tripletJot).
 │   ├── geom.ts                     Tiny Point/Box helpers.
 │   ├── selection.ts                Marquee + pattern selection store.
@@ -145,6 +173,11 @@ drumjot/
 │   └── helpers/transcriber-mock.ts page.route stub for /api/transcribe.
 ├── playwright.config.ts            Headless Chromium; webServer = bun run dev.
 ├── bunfig.toml                     Scopes `bun test` to src/ (runner split).
+├── .stylelintrc.json               Design-token lint config: bans hex / rgb /
+│                                   rgba / hsl / hsla in any `src/**/*.css`
+│                                   outside `src/design_tokens.css`. Run via
+│                                   `bun run lint:design`; chained into
+│                                   `bun run build`. See §5.8.
 ├── .mcp.json                       Project-scoped @playwright/mcp server.
 └── transcriber/                    Python backend (FastAPI + Docker).
     ├── README.md                   Service-level docs (formats, API, perf).
@@ -323,9 +356,10 @@ Always use **bun**, not npm. From the repo root:
 |---|---|
 | `bun install` | Install npm deps + project. |
 | `bun run dev` | Start Vite dev server on http://localhost:5173. |
-| `bun run build` | Run `tsc --noEmit` then Vite production build. |
+| `bun run build` | Run `lint:design` + `tsc --noEmit` then Vite production build. |
 | `bun test` | Run all tests via Bun's test runner. |
 | `bunx tsc --noEmit` | Typecheck only (fast iteration). |
+| `bun run lint:design` | Design-token lint: fails on hex / rgba literals in any `src/**/*.css` outside `src/design_tokens.css`. See §5.8. |
 | `bun run preview` | Serve the production build. |
 | `bunx --bun vite build` | Direct Vite build (used inside `bun run build`). |
 
@@ -662,6 +696,30 @@ phase produced concrete files you can find in the layout above.
     resume-from-refine has no per-pitch fragments on disk so it falls
     back to whole-chart `refine_jot`. The build/test constraint in §3
     (Python is Docker-only on the dev box) was added this session.
+25. **Frontend design system + lint** (see §5.8). Three new
+    source-of-truth files:
+    `src/design_tokens.css` (global `:root` color / radius / shadow
+    tokens, loaded via `index.tsx`),
+    `src/typography.module.css` (use-case typography classes pulled in
+    by other modules via `composes:` — `heading`, `body`, `bodyMd`,
+    `bodyEmphasis`, `label`, `labelSm`, `metaLabel`, `metaCaption`,
+    `readout`, `readoutSm`, `subtle`, `mono`),
+    and `src/jot_view/components/icon_button.tsx` (shared
+    `IconButton` + `MuteButton` / `SoloButton` / `ClearButton` used by
+    both AudioTrackRow and PitchRow in the mixer, replacing
+    ~50 lines of duplicated JSX).
+    Every hex / rgba / shadow / radius literal across the five
+    `*.module.css` files was migrated to `var(--…)` references; the
+    standalone slider thumb restyle landed alongside this so the
+    knob sits flush inside the track on all sliders. Stylelint
+    (configured via `.stylelintrc.json` — `color-no-hex` +
+    `function-disallowed-list` for `rgb`/`rgba`/`hsl`/`hsla`, with an
+    `overrides` block exempting `src/design_tokens.css`) enforces "no
+    naked color literals" and runs at `bun run lint:design` /
+    `bun run build`. Stylelint is configured **without a preset** —
+    presets like `stylelint-config-standard` would fire on
+    CSS-modules conventions (`composes:` as unknown property,
+    camelCase class names vs default kebab-case selector pattern).
 
 ---
 
@@ -837,6 +895,112 @@ original)`; the HTTP layer maps `StageError.stage == TRANSCRIBE` to
 The runner is the single place where the pipeline order lives.
 Adding a stage means: extend the enum, add a `_do_*`, add a case to
 `_run_stage`, add a hydration entry in `resume.py`.
+
+### 5.8 Frontend design system
+
+The frontend has a small, deliberate design system. **Use it.** Don't
+hardcode colors, radii, shadows, or shared text styles in module CSS —
+that's exactly the kind of drift the design-token lint catches.
+
+**Three source-of-truth files**:
+
+- **[src/design_tokens.css](src/design_tokens.css)** — global `:root`
+  custom properties for every color, border-radius, and shadow used in
+  the app. Loaded once from [src/index.tsx](src/index.tsx) as a plain
+  (non-module) stylesheet so the vars are visible to every module.
+  Grouped semantically: `--color-bg-*`, `--color-border-*`,
+  `--color-text-*`, `--color-accent-*`, `--color-error-*`,
+  `--color-success-*`, `--color-busy-*`, `--color-toggle-active-*`,
+  `--radius-{xs,sm,md,lg,xl,circle,pill}`, `--shadow-{sm,md,lg,note,
+  playhead-label,accent-glow}`.
+- **[src/typography.module.css](src/typography.module.css)** — one
+  CSS-modules class per typography **use case**, not per atomic
+  property: `heading`, `body`, `bodySm`, `bodyMd`, `bodyEmphasis`,
+  `label`, `labelSm`, `metaLabel`, `metaCaption`, `readout`,
+  `readoutSm`, `subtle`, `mono`. Each bundles font-size + font-weight
+  + letter-spacing + text-transform + line-height + family for its
+  use case in one place.
+- **[src/jot_view/components/](src/jot_view/components/)** — shared
+  React UI primitives. Today: `icon_button.tsx` (the 18×18
+  `IconButton` base + `MuteButton` / `SoloButton` / `ClearButton`
+  used by the mixer rows). New shared chrome goes here, not inlined
+  into the page-level modules.
+
+**How consumers use it**:
+
+```css
+/* module CSS: pull in a use case, then layer your own chrome. */
+.toolbarLabel {
+    composes: labelSm from '../typography.module.css';
+    color: var(--color-text-muted-alt);
+}
+
+.transcribeButton {
+    composes: bodyEmphasis from '../typography.module.css';
+    padding: 5px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-accent);
+    color: var(--color-bg-base);
+    /* …rest of per-component chrome */
+}
+```
+
+In React inline styles — JSX `style={{ … }}` props accept `var(...)`
+strings, so colors still flow through tokens:
+
+```tsx
+<div style={{ color: 'var(--color-text-faint-strong)' }}>…</div>
+```
+
+**The rules** (rule 1 enforced by stylelint via
+[`.stylelintrc.json`](.stylelintrc.json) — run with `bun run lint:design`,
+chained into `bun run build`):
+
+1. **No hex literals (`#xxx` / `#xxxxxx`) or `rgb()`/`rgba()`/`hsl()`/`hsla()`
+   calls in any `src/**/*.css` outside `src/design_tokens.css`.** Every
+   color is a named token. If you genuinely need a new color, add it
+   to `design_tokens.css` first and reference the var. Caught by
+   stylelint's `color-no-hex` + `function-disallowed-list` rules; the
+   `overrides` block in `.stylelintrc.json` is the one place those
+   are permitted.
+2. **Prefer `composes:` over reinventing typography.** When you find
+   yourself writing `font-size: 11px; font-weight: 700;
+   letter-spacing: 0.08em; text-transform: uppercase;` from scratch,
+   stop — that's a use case (`labelSm`), compose it. Stylelint
+   doesn't enforce this (legitimate per-site overrides exist) but
+   reviewers will.
+3. **Shared visual chrome goes through a primitive.** A 3rd mixer
+   row reaching for a 4th hand-rolled M/S button pair is a smell —
+   it belongs as a variant of `IconButton`.
+
+**Carve-outs** (these stay as raw values, by design):
+
+- `LANE_COLORS` in [src/jot.ts](src/jot.ts) — an 8-color data
+  palette consumed by JS to set per-lane note colors, not styling
+  chrome. Lives in TS, not CSS.
+- Canvas drawing in [src/jot_view/mixer.tsx](src/jot_view/mixer.tsx)
+  (`ctx.fillStyle = '#…'` for waveform painting). The Canvas2D API
+  requires literal color strings; using `var(--…)` would mean a
+  `getComputedStyle` lookup per paint. Not worth it.
+- True one-off typography (the tuplet number's italic, the 22px
+  transport-button glyph, single-use `font-size: 14px` empty-state
+  text, etc.) — the typography file's header comment lists which
+  are deliberately inline. Promoting them to a class for one caller
+  would add indirection without consolidation.
+
+**Adding a new visual primitive**:
+
+1. If it's a *color/radius/shadow*, add the token to
+   `src/design_tokens.css`. Pick a semantic name; descriptive
+   suffixes (`-strong`, `-alt`, `-overlay-medium`) are fine when
+   close-but-distinct variants are genuinely needed.
+2. If it's a *typography use case* that appears in ≥2 places, add a
+   class to `src/typography.module.css` and have consumers
+   `composes:` it.
+3. If it's a *React UI widget* used by ≥2 pages, drop it under
+   `src/jot_view/components/`.
+4. Run `bun run lint:design` before committing.
 
 ---
 
@@ -1115,6 +1279,18 @@ preprocessing. Tests cover every spec example.
     `timeToX` *does* map negative time into it for the playhead.
     Anything timing wall-clock against `JotPlayer.currentTime` must
     now tolerate negative values during the lead-in (see §8.11).
+19. **No naked color literals in CSS modules — the lint will catch you.**
+    `bun run lint:design` (also chained into `bun run build`) fails on
+    any hex or `rgba()` literal in `src/**/*.css` outside
+    `src/design_tokens.css`. If you genuinely need a new color, add
+    a named token there first and reference it via `var(--…)`. See
+    §5.8 for the broader design-system rules: typography goes through
+    `composes:` from `src/typography.module.css`, and shared UI
+    primitives live under `src/jot_view/components/`. The lint is
+    deliberately scoped to CSS — TSX inline styles (`style={{ color:
+    '...' }}`) and Canvas/data-color literals are *not* checked, but
+    the same intent applies: prefer `'var(--token)'` strings in JSX
+    inline styles where the browser will resolve them.
 
 ---
 

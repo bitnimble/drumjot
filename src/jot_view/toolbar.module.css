@@ -10,8 +10,8 @@
     align-items: center;
     gap: 10px;
     padding: 10px 24px;
-    border-bottom: 1px solid #e7e0d5;
-    background: rgba(255, 255, 255, 0.65);
+    border-bottom: 1px solid var(--color-border-soft);
+    background: var(--color-bg-overlay);
     backdrop-filter: blur(4px);
     flex: 0 0 auto;
     user-select: none;
@@ -29,115 +29,110 @@
     font-size: 11px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: #6b6b6b;
+    color: var(--color-text-muted-alt);
 }
 
 .exampleSelect {
-    font-size: 13px;
+    composes: bodyMd from '../typography.module.css';
     padding: 4px 8px;
-    border: 1px solid #c9bfae;
-    border-radius: 4px;
-    background: #fff;
-    color: #2b2b2b;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-base);
+    color: var(--color-text);
     cursor: pointer;
     min-width: 220px;
 }
 
 .exampleSelect:focus {
-    outline: 2px solid #ff8c55;
+    outline: 2px solid var(--color-accent);
     outline-offset: 1px;
 }
 
 .toolbarDivider {
     width: 1px;
     height: 18px;
-    background: #c9bfae;
+    background: var(--color-border);
     margin: 0 6px;
 }
 
 .transcribeButton {
-    font-size: 13px;
+    composes: bodyEmphasis from '../typography.module.css';
     padding: 5px 12px;
-    border: 1px solid #c9bfae;
-    border-radius: 4px;
-    background: #ff8c55;
-    color: #fff;
-    font-weight: 600;
-    letter-spacing: 0.02em;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-accent);
+    color: var(--color-bg-base);
     cursor: pointer;
     font-family: inherit;
 }
 
 .transcribeButton:hover:not(:disabled) {
-    background: #ff7335;
+    background: var(--color-accent-hover);
 }
 
 .transcribeButton:disabled {
-    background: #c9bfae;
+    background: var(--color-border);
     cursor: progress;
 }
 
 .transcribeButton:focus {
-    outline: 2px solid #ff8c55;
+    outline: 2px solid var(--color-accent);
     outline-offset: 1px;
 }
 
 .playButton {
-    font-size: 13px;
+    composes: bodyEmphasis from '../typography.module.css';
     padding: 5px 12px;
-    border: 1px solid #c9bfae;
-    border-radius: 4px;
-    background: #fff;
-    color: #2b2b2b;
-    font-weight: 600;
-    letter-spacing: 0.02em;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-base);
+    color: var(--color-text);
     cursor: pointer;
     font-family: inherit;
 }
 
 .playButton:hover:not(:disabled) {
-    background: #f6efe0;
-    border-color: #b09d80;
+    background: var(--color-bg-hover);
+    border-color: var(--color-border-strong);
 }
 
 .playButton:disabled {
-    color: #b9b0a0;
+    color: var(--color-text-disabled-strong);
     cursor: not-allowed;
 }
 
 .playButton:focus {
-    outline: 2px solid #ff8c55;
+    outline: 2px solid var(--color-accent);
     outline-offset: 1px;
 }
 
 .playButtonError {
-    border-color: #b00020;
-    color: #b00020;
+    border-color: var(--color-error);
+    color: var(--color-error);
 }
 
 .playButtonError:hover:not(:disabled) {
-    background: #ffecec;
+    background: var(--color-error-bg);
 }
 
 .cancelButton {
-    font-size: 13px;
+    composes: bodyEmphasis from '../typography.module.css';
     padding: 5px 10px;
-    border: 1px solid #c9bfae;
-    border-radius: 4px;
-    background: #fff;
-    color: #b00020;
-    font-weight: 600;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-base);
+    color: var(--color-error);
     cursor: pointer;
     font-family: inherit;
 }
 
 .cancelButton:hover {
-    background: #ffecec;
-    border-color: #b00020;
+    background: var(--color-error-bg);
+    border-color: var(--color-error);
 }
 
 .cancelButton:focus {
-    outline: 2px solid #b00020;
+    outline: 2px solid var(--color-error);
     outline-offset: 1px;
 }
 
@@ -150,9 +145,8 @@
 }
 
 .zoomValue {
-    font-variant-numeric: tabular-nums;
-    font-size: 11px;
-    color: #6b6b6b;
+    composes: readout from '../typography.module.css';
+    color: var(--color-text-muted-alt);
     min-width: 36px;
     text-align: right;
 }
@@ -163,11 +157,11 @@
    `flex-shrink: 0` keeps the label fully visible no matter how crowded
    the header gets. */
 .sampleProgress {
+    composes: bodySm from '../typography.module.css';
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    font-size: 11px;
-    color: #6b6256;
+    color: var(--color-text-muted-warm);
     white-space: nowrap;
     margin-left: auto;
     flex-shrink: 0;
@@ -176,8 +170,8 @@
 .sampleProgressTrack {
     width: 144px;
     height: 6px;
-    border-radius: 999px;
-    background: #e7e0d2;
+    border-radius: var(--radius-pill);
+    background: var(--color-border-soft-alt);
     overflow: hidden;
     flex-shrink: 0;
 }
@@ -185,8 +179,8 @@
 .sampleProgressFill {
     display: block;
     height: 100%;
-    background: #b95c1e;
-    border-radius: 999px;
+    background: var(--color-accent-busy);
+    border-radius: var(--radius-pill);
     transition: width 0.15s linear;
 }
 
@@ -206,10 +200,10 @@
     gap: 8px;
     min-width: 180px;
     padding: 10px;
-    background: #fff;
-    border: 1px solid #c9bfae;
-    border-radius: 6px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
 }
 
 .dropdownPanelWide {
@@ -217,29 +211,29 @@
 }
 
 .dropdownItem {
-    font-size: 13px;
+    composes: bodyMd from '../typography.module.css';
     font-family: inherit;
     text-align: left;
     padding: 7px 10px;
     border: none;
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     background: transparent;
-    color: #2b2b2b;
+    color: var(--color-text);
     cursor: pointer;
 }
 
 .dropdownItem:hover {
-    background: #f6efe0;
+    background: var(--color-bg-hover);
 }
 
 .dropdownItem:focus {
-    outline: 2px solid #ff8c55;
+    outline: 2px solid var(--color-accent);
     outline-offset: 1px;
 }
 
 .dropdownDivider {
     height: 1px;
-    background: #e7e0d5;
+    background: var(--color-border-soft);
     margin: 2px 0;
 }
 
@@ -248,12 +242,12 @@
    `Load > Load debug bundle (.zip)` action populates it; it shows the
    per-stage timings + the full captured log stream from that run. */
 .debugPanel {
+    composes: body from '../typography.module.css';
     position: relative;
     flex: 0 0 auto;
-    border-top: 1px solid #e7e0d5;
-    background: #fafaf7;
-    font-size: 12px;
-    color: #333;
+    border-top: 1px solid var(--color-border-soft);
+    background: var(--color-bg-neutral);
+    color: var(--color-text-strong);
     display: flex;
     flex-direction: column;
     min-height: 80px;
@@ -270,7 +264,7 @@
 
 .debugPanelResizeHandle:hover,
 .debugPanelResizeHandle:active {
-    background: #d5cab4;
+    background: var(--color-border-subtle-2);
 }
 
 .debugPanelHeader {
@@ -278,22 +272,19 @@
     align-items: center;
     gap: 10px;
     padding: 6px 16px;
-    background: #f0ebe2;
+    background: var(--color-bg-cream-warm);
     cursor: pointer;
     user-select: none;
 }
 
 .debugPanelTitle {
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    font-size: 11px;
-    color: #555;
+    composes: metaLabel from '../typography.module.css';
+    color: var(--color-text-muted);
 }
 
 .debugPanelStats {
-    font-size: 11px;
-    color: #888;
+    composes: bodySm from '../typography.module.css';
+    color: var(--color-text-faint-strong);
     margin-left: auto;
 }
 
@@ -313,20 +304,16 @@
 }
 
 .debugPanelColumn h4 {
+    composes: metaLabel from '../typography.module.css';
     margin: 0 0 6px;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: #777;
+    color: var(--color-text-faint-alt);
 }
 
 .debugStageList {
+    composes: mono from '../typography.module.css';
     margin: 0;
     padding: 0;
     list-style: none;
-    font-family: 'SF Mono', 'Menlo', monospace;
-    font-size: 11px;
     overflow-y: auto;
     flex: 1;
 }
@@ -336,28 +323,26 @@
     justify-content: space-between;
     gap: 12px;
     padding: 2px 0;
-    border-bottom: 1px dotted #e7e0d5;
+    border-bottom: 1px dotted var(--color-border-soft);
 }
 
 .debugStageName {
-    color: #333;
+    color: var(--color-text-strong);
 }
 
 .debugStageElapsed {
-    color: #666;
+    color: var(--color-text-faint);
 }
 
 .debugLogList {
+    composes: mono from '../typography.module.css';
     margin: 0;
     padding: 0;
     list-style: none;
-    font-family: 'SF Mono', 'Menlo', monospace;
-    font-size: 11px;
-    line-height: 1.45;
     overflow-y: auto;
-    background: #fff;
-    border: 1px solid #e7e0d5;
-    border-radius: 4px;
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--radius-md);
     padding: 6px 10px;
     flex: 1;
 }
@@ -371,7 +356,7 @@
 }
 
 .debugLogTimestamp {
-    color: #888;
+    color: var(--color-text-faint-strong);
     flex: 0 0 auto;
 }
 
@@ -379,37 +364,45 @@
     flex: 0 0 auto;
     font-weight: 600;
     width: 56px;
-    color: #555;
+    color: var(--color-text-muted);
 }
 
 .debugLogLevelWARNING {
-    color: #b46100;
+    color: var(--color-accent-on-text-alt);
 }
 
 .debugLogLevelERROR {
-    color: #b1281c;
+    color: var(--color-error-alt);
 }
 
 .debugLogLogger {
     flex: 0 0 auto;
-    color: #5a7d9a;
+    color: var(--color-blue-info);
     min-width: 140px;
 }
 
 .debugLogMessage {
     flex: 1;
-    color: #2b2b2b;
+    color: var(--color-text);
+}
+
+/* Placeholder text shown when one of the debug-panel columns has no
+   stage timings or no log entries to display. */
+.debugPanelEmpty {
+    composes: bodySm from '../typography.module.css';
+    color: var(--color-text-faint-strong);
+    margin: 0;
 }
 
 .debugPanelToggleBar {
+    composes: bodySm from '../typography.module.css';
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 4px;
-    background: #f0ebe2;
-    border-top: 1px solid #e7e0d5;
+    background: var(--color-bg-cream-warm);
+    border-top: 1px solid var(--color-border-soft);
     cursor: pointer;
     user-select: none;
-    font-size: 11px;
-    color: #555;
+    color: var(--color-text-muted);
 }

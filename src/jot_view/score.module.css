@@ -25,31 +25,28 @@
     align-items: center;
     justify-content: flex-end;
     padding: 4px 8px;
-    background: #fbf6ec;
-    border-right: 1px solid #c9bfae;
+    background: var(--color-bg-cream);
+    border-right: 1px solid var(--color-border);
 }
 
 .timelineHeaderLabel {
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: #6b6b6b;
+    composes: labelSm from '../typography.module.css';
+    color: var(--color-text-muted-alt);
 }
 
 .timelineHeaderBarsRow {
     position: relative;
     flex: 0 0 auto;
     height: 28px;
-    background: #fbf6ec;
+    background: var(--color-bg-cream);
     /* `border-box` so the right border draws INSIDE `voice.width`, matching
      the `box-sizing: border-box` `.bar` cells below — their accumulated
      widths include each bar's right barline, so the closing right border
      here lands exactly on the final barline below. */
     box-sizing: border-box;
-    border-top: 1px solid #c9bfae;
-    border-bottom: 1px solid #c9bfae;
-    border-right: 1px solid #c9bfae;
+    border-top: 1px solid var(--color-border);
+    border-bottom: 1px solid var(--color-border);
+    border-right: 1px solid var(--color-border);
     cursor: pointer;
 }
 
@@ -59,7 +56,7 @@
     position: absolute;
     top: 0;
     bottom: 0;
-    border-left: 1px solid #c9bfae;
+    border-left: 1px solid var(--color-border);
     padding-left: 4px;
     display: flex;
     flex-direction: column;
@@ -70,16 +67,15 @@
 }
 
 .timelineHeaderBar {
-    font-size: 11px;
+    composes: readout from '../typography.module.css';
     font-weight: 700;
-    color: #4a4a4a;
+    color: var(--color-text-secondary);
     line-height: 1;
-    font-variant-numeric: tabular-nums;
 }
 
 .timelineHeaderTime {
     font-size: 9px;
-    color: #888;
+    color: var(--color-text-faint-strong);
     line-height: 1;
     font-variant-numeric: tabular-nums;
 }
@@ -92,7 +88,7 @@
      `timeToX` / the waveform use — noteheads drifted progressively
      right of the playhead and audio. */
     box-sizing: border-box;
-    border-right: 1px solid #c9bfae;
+    border-right: 1px solid var(--color-border);
     flex: 0 0 auto;
     /* `--bar-beats` is set inline per BarView (zoom-invariant);
        `--px-per-beat` lives on the score root. */
@@ -100,12 +96,12 @@
 }
 
 .bar:first-child {
-    border-left: 1px solid #c9bfae;
+    border-left: 1px solid var(--color-border);
 }
 
 .barAnacrusis {
-    border-right: 1px dashed #c9bfae;
-    background: rgba(255, 140, 85, 0.04);
+    border-right: 1px dashed var(--color-border);
+    background: var(--color-accent-overlay-faint);
 }
 
 /* Subtle dashed beat divider inside a bar. Position is `padLeft +
@@ -121,13 +117,13 @@
     bottom: 0;
     width: 0;
     left: calc(var(--note-pad-px) + var(--divider-beat) * var(--px-per-beat));
-    border-left: 1px dashed #b8a98c;
+    border-left: 1px dashed var(--color-border-subtle-3);
     pointer-events: none;
 }
 
 .lane {
     position: relative;
-    border-bottom: 1px dashed #e2d8c4;
+    border-bottom: 1px dashed var(--color-border-subtle);
 }
 
 .lane:last-child {
@@ -143,8 +139,8 @@
     position: absolute;
     top: -2px;
     bottom: -2px;
-    border: 1.5px dashed #ff8c55;
-    border-radius: 4px;
+    border: 1.5px dashed var(--color-accent);
+    border-radius: var(--radius-md);
     box-sizing: border-box;
     pointer-events: none;
     z-index: 2;
@@ -156,9 +152,9 @@
 }
 
 .patternBracketHighlight {
-    background: rgba(255, 140, 85, 0.12);
-    border-color: #ff5c0a;
-    box-shadow: 0 0 0 1px rgba(255, 92, 10, 0.35);
+    background: var(--color-accent-overlay-medium);
+    border-color: var(--color-accent-strong);
+    box-shadow: 0 0 0 1px var(--color-accent-strong-ring);
 }
 
 .patternLabel {
@@ -169,11 +165,11 @@
     font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: #fff;
-    background: #ff8c55;
+    color: var(--color-bg-base);
+    background: var(--color-accent);
     padding: 2px 6px;
     border: none;
-    border-radius: 2px 2px 0 0;
+    border-radius: var(--radius-xs) var(--radius-xs) 0 0;
     pointer-events: auto;
     cursor: pointer;
     white-space: nowrap;
@@ -184,7 +180,7 @@
 
 .patternLabel:hover,
 .patternLabelHighlight {
-    background: #b03d00;
+    background: var(--color-accent-on-text);
 }
 
 /* Conventional tuplet bracket: a thin line with downward end ticks
@@ -196,9 +192,9 @@
     top: -17px;
     height: 13px;
     box-sizing: border-box;
-    border-top: 1.5px solid #6b6b6b;
-    border-left: 1.5px solid #6b6b6b;
-    border-right: 1.5px solid #6b6b6b;
+    border-top: 1.5px solid var(--color-text-muted-alt);
+    border-left: 1.5px solid var(--color-text-muted-alt);
+    border-right: 1.5px solid var(--color-text-muted-alt);
     pointer-events: none;
     z-index: 3;
     display: flex;
@@ -217,16 +213,16 @@
     font-weight: 700;
     font-style: italic;
     font-variant-numeric: tabular-nums;
-    color: #4a4a4a;
-    background: #fbf6ec;
+    color: var(--color-text-secondary);
+    background: var(--color-bg-cream);
     line-height: 1;
 }
 
 .note {
     position: absolute;
-    border-radius: 50%;
+    border-radius: var(--radius-circle);
     transform: translate(-50%, -50%);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+    box-shadow: var(--shadow-note);
     cursor: pointer;
     /* Position from `padLeft + beat × pxPerBeat` — beat is stable per
        note (set inline), pxPerBeat changes on zoom (read from the score
@@ -241,13 +237,13 @@
    still visible even when it wasn't authored as a group. `outline`
    (not box-shadow) so it composes with the accent ring. */
 .note.offGrid {
-    outline: 1.5px dotted #2aa198;
+    outline: 1.5px dotted var(--color-teal);
     outline-offset: 2px;
 }
 
 .note.accent {
     box-shadow:
-        0 0 0 2px #fff,
+        0 0 0 2px var(--color-bg-base),
         0 0 0 3px currentColor;
 }
 
@@ -282,7 +278,7 @@
     content: '';
     position: absolute;
     inset: 0;
-    border-radius: 50%;
+    border-radius: var(--radius-circle);
     background: currentColor;
     opacity: 0.6;
     pointer-events: none;
@@ -297,7 +293,7 @@
 .note.roll {
     background-image: repeating-linear-gradient(
         45deg,
-        rgba(255, 255, 255, 0.5) 0 2px,
+        var(--color-bg-overlay-soft) 0 2px,
         transparent 2px 4px
     );
 }
@@ -309,7 +305,7 @@
     transform: translateX(-50%);
     font-size: 9px;
     font-weight: 700;
-    color: #555;
+    color: var(--color-text-muted);
     pointer-events: none;
     letter-spacing: 0.04em;
 }
@@ -320,7 +316,7 @@
     left: 50%;
     transform: translateX(-50%);
     font-size: 9px;
-    color: #888;
+    color: var(--color-text-faint-strong);
     pointer-events: none;
 }
 
@@ -329,8 +325,8 @@
    shift layout. Sits above the off-grid dotted outline. */
 .note.noteSelected {
     box-shadow:
-        0 0 0 2px #fff,
-        0 0 0 4px #ff5c0a;
+        0 0 0 2px var(--color-bg-base),
+        0 0 0 4px var(--color-accent-strong);
 }
 
 /* Lift any note that's currently rendering its `.noteLabel` (hover OR
@@ -361,20 +357,20 @@
    for legibility but the wrapper allows vertical expansion when the
    collapsible block opens. */
 .noteLabel {
+    composes: bodySm from '../typography.module.css';
     position: absolute;
     top: 100%;
     left: 50%;
     transform: translateX(-50%);
     margin-top: 16px;
     z-index: 12;
-    background: #fff;
-    border: 1px solid #c9bfae;
-    border-radius: 4px;
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
     padding: 4px 8px;
-    font-size: 11px;
     font-weight: 500;
-    color: #2b2b2b;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+    color: var(--color-text);
+    box-shadow: var(--shadow-md);
     pointer-events: auto;
     line-height: 1.2;
     display: flex;
@@ -400,23 +396,20 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
-    border-top: 1px dashed #e7e0d5;
+    border-top: 1px dashed var(--color-border-soft);
     padding-top: 3px;
     margin-top: 1px;
 }
 
 .debugDetailsToggle {
-    font: inherit;
-    font-size: 10px;
-    font-weight: 600;
-    color: #666;
+    composes: metaCaption from '../typography.module.css';
+    font-family: inherit;
+    color: var(--color-text-faint);
     background: transparent;
     border: none;
     padding: 1px 0;
     cursor: pointer;
     text-align: left;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
     /* "▸ Debug details" must stay on one line — without this the
        narrow parent label can wrap the arrow and label across two
        rows. */
@@ -424,40 +417,37 @@
 }
 
 .debugDetailsToggle:hover {
-    color: #2b2b2b;
+    color: var(--color-text);
 }
 
 .debugDetailsToggle:focus-visible {
-    outline: 2px solid #ff8c55;
+    outline: 2px solid var(--color-accent);
     outline-offset: 1px;
-    border-radius: 2px;
+    border-radius: var(--radius-xs);
 }
 
 /* Compact two-column key/value dump. `dt`/`dd` floated into a grid so
    the keys stay aligned across multiple rows; `dl` margin reset because
    we're nested inside the label's tight padding. */
 .debugDetailsList {
+    composes: readoutSm from '../typography.module.css';
     display: grid;
     grid-template-columns: max-content 1fr;
     gap: 1px 8px;
     margin: 0;
-    font-size: 10px;
     line-height: 1.35;
-    font-variant-numeric: tabular-nums;
 }
 
 .debugDetailsList dt {
-    color: #888;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    composes: metaCaption from '../typography.module.css';
+    color: var(--color-text-faint-strong);
     /* Keep keys on one line so the grid columns stay flush. */
     white-space: nowrap;
 }
 
 .debugDetailsList dd {
     margin: 0;
-    color: #2b2b2b;
+    color: var(--color-text);
     /* Values may include parenthetical units (e.g. "1.234 (+8 ms snap)")
        — the parent label widens to fit them rather than wrapping. */
     white-space: nowrap;
@@ -473,7 +463,7 @@
     position: absolute;
     width: 14px;
     height: 14px;
-    border-radius: 50%;
+    border-radius: var(--radius-circle);
     border: 1.5px dashed currentColor;
     background: transparent;
     transform: translate(-50%, -50%);
@@ -498,20 +488,20 @@
    exactly like .noteLabel. Wraps the shared NoteProvenanceDetails block
    so the debug data has the same visual treatment as on real notes. */
 .filteredOnsetLabel {
+    composes: bodySm from '../typography.module.css';
     position: absolute;
     top: 100%;
     left: 50%;
     transform: translateX(-50%);
     margin-top: 8px;
     z-index: 13;
-    background: #fff;
-    border: 1px solid #c9bfae;
-    border-radius: 4px;
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
     padding: 4px 8px;
-    font-size: 11px;
     font-weight: 500;
-    color: #2b2b2b;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+    color: var(--color-text);
+    box-shadow: var(--shadow-md);
     pointer-events: auto;
     line-height: 1.2;
     /* Match `.noteLabel`: size to the widest non-wrapping row inside. */

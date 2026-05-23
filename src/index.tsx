@@ -1,5 +1,6 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
+import 'src/design_tokens.css';
 import { Jot } from 'src/dsl';
 import { EXAMPLE_JOTS, ExampleJot, rockJot, tripletJot } from 'src/fakes';
 import { RenderedJot } from 'src/jot';

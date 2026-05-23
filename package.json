@@ -8,9 +8,10 @@
   "license": "MIT",
   "scripts": {
     "dev": "bunx --bun vite",
-    "build": "bunx tsc --noEmit && bunx --bun vite build",
+    "build": "bun run lint:design && bunx tsc --noEmit && bunx --bun vite build",
     "preview": "bunx --bun vite preview",
     "typecheck": "bunx tsc --noEmit",
+    "lint:design": "stylelint 'src/**/*.css'",
     "test": "bun test",
     "e2e": "playwright test",
     "e2e:report": "playwright show-report --host 0.0.0.0"
@@ -34,6 +35,7 @@
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
+    "stylelint": "^17.12.0",
     "typescript": "^5.7.2",
     "vite": "^6.0.5"
   }

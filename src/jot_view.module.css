@@ -18,7 +18,7 @@
 
 .empty {
     font-size: 14px;
-    color: #888;
+    color: var(--color-text-faint-strong);
     padding: 24px;
 }
 
@@ -48,27 +48,25 @@
    edge — reapply the inset that used to come from .jotContainer's
    padding so they stay aligned with each other. */
 .title {
-    font-size: 18px;
-    font-weight: 600;
+    composes: heading from './typography.module.css';
     margin: 0 0 4px 0;
     padding: 0 24px;
-    letter-spacing: 0.02em;
 }
 
 .subtitle {
-    color: #6b6b6b;
-    font-size: 12px;
+    composes: body from './typography.module.css';
+    color: var(--color-text-muted-alt);
     margin: 0 0 20px 0;
     padding: 0 24px;
 }
 
 .legend {
+    composes: body from './typography.module.css';
     display: flex;
     gap: 12px;
     flex-wrap: wrap;
     margin-bottom: 16px;
     padding: 0 24px;
-    font-size: 12px;
 }
 
 .legendChip {
@@ -76,22 +74,22 @@
     align-items: center;
     gap: 6px;
     padding: 2px 8px 2px 4px;
-    border-radius: 999px;
-    background: #fff;
-    border: 1px solid #e7e0d5;
+    border-radius: var(--radius-pill);
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border-soft);
 }
 
 .legendSwatch {
     width: 10px;
     height: 10px;
-    border-radius: 50%;
+    border-radius: var(--radius-circle);
     display: inline-block;
 }
 
 .marquee {
     position: absolute;
-    box-shadow: 0 0 0 1px #ff8c55;
-    background: rgba(255, 140, 85, 0.1);
+    box-shadow: 0 0 0 1px var(--color-accent);
+    background: var(--color-accent-overlay-light);
     pointer-events: none;
 }
 
@@ -110,7 +108,7 @@
     align-items: center;
     justify-content: center;
     gap: 14px;
-    background: rgba(251, 246, 236, 0.55);
+    background: var(--color-bg-cream-translucent);
     backdrop-filter: blur(2px);
     user-select: none;
 }
@@ -118,21 +116,21 @@
 .loadingSpinner {
     width: 44px;
     height: 44px;
-    border: 4px solid rgba(201, 191, 174, 0.55);
-    border-top-color: #ff8c55;
-    border-radius: 50%;
+    border: 4px solid var(--color-border-translucent);
+    border-top-color: var(--color-accent);
+    border-radius: var(--radius-circle);
     animation: drumjot-spinner-rotate 0.8s linear infinite;
 }
 
 .loadingLabel {
-    font-size: 13px;
-    color: #4a4a4a;
+    composes: bodyMd from './typography.module.css';
+    color: var(--color-text-secondary);
     letter-spacing: 0.02em;
-    background: rgba(255, 255, 255, 0.85);
+    background: var(--color-bg-overlay-strong);
     padding: 4px 12px;
-    border-radius: 999px;
-    border: 1px solid #c9bfae;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--color-border);
+    box-shadow: var(--shadow-sm);
     white-space: nowrap;
     max-width: 70vw;
     overflow: hidden;
@@ -148,17 +146,17 @@
 /* ─── Shared form chrome (used by toolbar + playback) ───────────────── */
 
 .toolbarCheckbox {
+    composes: body from './typography.module.css';
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    font-size: 12px;
-    color: #4a4a4a;
+    color: var(--color-text-secondary);
     user-select: none;
     cursor: pointer;
 }
 
 .toolbarCheckbox input[type='checkbox'] {
-    accent-color: #ff8c55;
+    accent-color: var(--color-accent);
     cursor: pointer;
 }
 
@@ -184,14 +182,14 @@
 
     input[type='range']::-webkit-slider-runnable-track {
         height: 8px;
-        border-radius: 4px;
-        background: #e7e0d5;
+        border-radius: var(--radius-md);
+        background: var(--color-border-soft);
     }
 
     input[type='range']::-moz-range-track {
         height: 8px;
-        border-radius: 4px;
-        background: #e7e0d5;
+        border-radius: var(--radius-md);
+        background: var(--color-border-soft);
         border: none;
     }
 
@@ -200,45 +198,45 @@
         appearance: none;
         width: 8px;
         height: 8px;
-        border-radius: 50%;
-        background: #ff8c55;
+        border-radius: var(--radius-circle);
+        background: var(--color-accent);
         border: none;
     }
 
     input[type='range']::-moz-range-thumb {
         width: 8px;
         height: 8px;
-        border-radius: 50%;
-        background: #ff8c55;
+        border-radius: var(--radius-circle);
+        background: var(--color-accent);
         border: none;
     }
 }
 
 .samplesSelect {
-    font-size: 12px;
+    composes: body from './typography.module.css';
     padding: 2px 6px;
-    border: 1px solid #c9bfae;
-    border-radius: 4px;
-    background: #fff;
-    color: #2b2b2b;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-base);
+    color: var(--color-text);
     cursor: pointer;
 }
 
 .offsetInput {
+    composes: body from './typography.module.css';
     width: 56px;
-    font-size: 12px;
     padding: 2px 4px;
-    border: 1px solid #c9bfae;
-    border-radius: 4px;
-    background: #fff;
-    color: #2b2b2b;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-base);
+    color: var(--color-text);
     font-variant-numeric: tabular-nums;
 }
 
 .statusPill {
-    font-size: 11px;
+    composes: bodySm from './typography.module.css';
     padding: 4px 10px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     letter-spacing: 0.02em;
     max-width: 360px;
     overflow: hidden;
@@ -247,21 +245,21 @@
 }
 
 .statusPillBusy {
-    background: #fff3e6;
-    color: #b95c1e;
-    border: 1px solid #ffd4a8;
+    background: var(--color-busy-bg);
+    color: var(--color-accent-busy);
+    border: 1px solid var(--color-busy-border);
 }
 
 .statusPillError {
-    background: #ffecec;
-    color: #b00020;
-    border: 1px solid #ffc7c7;
+    background: var(--color-error-bg);
+    color: var(--color-error);
+    border: 1px solid var(--color-error-border);
     cursor: pointer;
 }
 
 .statusPillSuccess {
-    background: #e8f5e9;
-    color: #1b5e20;
-    border: 1px solid #b7dfb9;
+    background: var(--color-success-bg);
+    color: var(--color-success);
+    border: 1px solid var(--color-success-border);
     cursor: pointer;
 }
