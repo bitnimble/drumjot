@@ -26,13 +26,15 @@
 
 .gutterMasterGutter {
     /* Same width + sticky behaviour as .laneGutter / .musicTrackGutter so
-     this header lines up with the per-row controls below it. */
+     this header lines up with the per-row controls below it. Width is
+     driven by `--gutter-width` (set on the JotView root, mutated by the
+     gutter resize handle) so every gutter resizes together. */
     composes: bodySm from '../typography.module.css';
     position: sticky;
     left: 0;
     z-index: 6;
     flex: 0 0 auto;
-    width: 132px;
+    width: var(--gutter-width);
     box-sizing: border-box;
     display: flex;
     align-items: center;
@@ -100,22 +102,37 @@
     left: 0;
     z-index: 6;
     flex: 0 0 auto;
-    width: 132px;
+    width: var(--gutter-width);
     box-sizing: border-box;
     border-right: 1px solid var(--color-border);
     background: var(--color-bg-cream-strong);
-    padding: 2px 6px;
+    padding: 4px 6px;
     display: flex;
-    align-items: center;
-    gap: 5px;
+    align-items: stretch;
+    gap: 4px;
+}
+
+/* Stacked content column inside the pitch gutter: label on top, the
+   slider + M/S buttons on a second line below. Matches `musicTrackContent`
+   so audio and drum rows have the same right-hand-side anatomy; the
+   stacking is what lets the label use the full gutter width instead of
+   sharing it with the controls. */
+.pitchRowContent {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 4px;
 }
 
 .pitchRowLabel {
     composes: bodySm from '../typography.module.css';
     display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    flex: 1 1 auto;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 6px;
+    flex: 0 0 auto;
     min-width: 0;
     font-weight: 600;
     color: var(--color-text-secondary);
@@ -123,14 +140,24 @@
     transition: opacity 120ms ease;
 }
 
+.pitchRowControls {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 3px;
+    flex: 0 0 auto;
+}
+
 .pitchRowName {
-    font-size: 9px;
+    font-size: 11px;
     color: var(--color-text-faint-strong);
     font-weight: 500;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 100%;
+    flex: 1 1 auto;
+    min-width: 0;
 }
 
 /* The drag handle — only the handle is `draggable`, so the user can
@@ -225,7 +252,7 @@
     left: 0;
     z-index: 6;
     flex: 0 0 auto;
-    width: 132px;
+    width: var(--gutter-width);
     box-sizing: border-box;
     border-right: 1px solid var(--color-border);
     background: var(--color-bg-cream);
@@ -282,22 +309,47 @@
 
 .musicTrackWaveform {
     display: block;
+    position: absolute;
+    top: 0;
+    /* `notePadPx` is the score's engraving inset — notes sit that many
+       pixels right of their bar's left edge. The bitmap deliberately
+       does NOT bake this offset in (see `computeWaveformPeaks`); we
+       apply it here so a transient still sits directly under its
+       note. Keeping it out of the bitmap is what makes the live
+       `scaleX` zoom and the settled redraw line up exactly — a
+       constant-pixel prefix would scale with `scaleX` (visually
+       shifting the waveform right by `pad × scale`) and then snap
+       back to a fixed `pad` shift on redraw. */
+    left: var(--note-pad-px);
+    /* Visual zoom is a pure GPU composite: the bitmap was drawn at
+       `--rendered-px-per-beat` (set inline when the canvas last
+       re-rasterised) and is scaled to the live root `--px-per-beat`
+       via `scaleX`. No canvas redraw, no React work, no layout — only
+       composite. A settle-debounced effect re-rasterises at the new
+       scale so the bitmap snaps back to crisp shortly after the
+       gesture ends. */
+    transform-origin: top left;
+    transform: scaleX(calc(var(--px-per-beat) / var(--rendered-px-per-beat)));
+    will-change: transform;
     /* `transition` keeps the dim/undim flip smooth when M/S toggles. */
     transition: opacity 120ms ease;
 }
 
 .gutterPitch {
-    flex: 1 1 auto;
-    text-align: right;
+    flex: 0 0 auto;
     font-variant-numeric: tabular-nums;
+    color: var(--color-text-muted-alt);
+    /* The instrument-name span beside it takes the rest of the row, so
+       the letter just needs to claim its own column width. */
 }
 
 /* Per-row volume fader, shared by the pitch gutter and the stem gutter.
-   Kept narrow so it fits beside the M/S buttons without widening the
-   sticky gutter further. */
+   On its own line in the pitch gutter, so it grows to fill the available
+   width on the left of the M/S buttons; in the audio-track gutter it
+   sits inline with M/S/Clear and grows the same way. */
 .rowVolume {
-    flex: 0 0 auto;
-    width: 40px;
+    flex: 1 1 auto;
+    min-width: 32px;
     margin: 0;
     align-self: center;
 }
@@ -311,13 +363,20 @@
     position: relative;
     display: flex;
     flex: 0 0 auto;
+    /* The pitch gutter is now taller than the bar lane (two-line
+       layout — label + slider/M/S — vs one trackHeight-tall lane), so
+       stretch this row to the gutter's height via the parent flex's
+       default `align-items: stretch` and centre the bars/leadIn block
+       inside it. Without this, bars would sit at the top of the row
+       leaving 20px of empty space below. */
+    align-items: center;
     /* Width driven by `--voice-beats` (set per row) × `--px-per-beat`
        (set on the score container, the one variable that the zoom
        slider changes). Reading `--px-per-beat` purely from CSS means
        a zoom tick mutates a single property on the root and reflows
        every descendant width/left at the browser layer — no React
        re-render, no style-prop diff. */
-    width: calc(var(--voice-beats) * var(--px-per-beat));
+    width: calc(var(--voice-beats) * var(--px-per-beat) * 1px);
 }
 
 /* Empty pre-roll region before bar 1 (recording lead-in). Hatched so
@@ -337,7 +396,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: calc(var(--lead-in-beats) * var(--px-per-beat));
+    width: calc(var(--lead-in-beats) * var(--px-per-beat) * 1px);
 }
 
 .leadInLabel {

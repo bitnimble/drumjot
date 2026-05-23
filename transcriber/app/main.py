@@ -39,13 +39,14 @@ from app.models import (
     HealthResponse,
     TranscribeMetadata,
     TranscribeResponse,
+    TranscriptionSummary,
 )
 from app.outputs import OutputSink, make_output_sink, materialize_pending
-from app.run_log import RunLog, reset_current_run_log, set_current_run_log
 from app.pipeline.beats import summarize_bar_for_prompt
 from app.pipeline.resume import (
     find_input_audio,
     hydrate_context_from_resume,
+    list_transcription_summaries,
     load_original_filename,
 )
 from app.pipeline.runner import (
@@ -57,6 +58,7 @@ from app.pipeline.runner import (
     run_pipeline,
 )
 from app.pipeline.separate import Separator
+from app.run_log import RunLog, reset_current_run_log, set_current_run_log
 
 # Fallback debug dir used when `debug=true` is requested but `DEBUG_DIR`
 # env var wasn't set. Matches the docker-compose volume mount.
@@ -183,6 +185,19 @@ async def health() -> HealthResponse:
         gpu_available=gpu_available,
         gpu_name=gpu_name,
     )
+
+
+@app.get("/transcribe/list", response_model=list[TranscriptionSummary])
+async def list_transcriptions() -> list[TranscriptionSummary]:
+    """Recent /transcribe runs available for resume.
+
+    Walks the configured debug base (`/debug` when `DEBUG_DIR` is unset)
+    and emits one summary per per-request subfolder. Sorted with the
+    most-recently-run folder first so the UI picker reads top-down by
+    recency.
+    """
+    base = (settings.debug_dir or DEFAULT_DEBUG_DIR).resolve()
+    return list_transcription_summaries(base)
 
 
 @app.post("/transcribe", response_model=TranscribeResponse)

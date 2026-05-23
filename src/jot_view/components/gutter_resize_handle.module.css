@@ -1,0 +1,29 @@
+/* Vertical strip that overlays the right edge of every sticky gutter
+   element. Absolute-positioned so it sits ON the gutter's right border
+   (centred on it via the negative right offset + 6px width) and spans
+   the gutter's full height. Higher z-index than the gutter itself so the
+   pointer lands on the handle when grabbing the very edge. */
+.gutterResizeHandle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: -3px;
+    width: 6px;
+    cursor: ew-resize;
+    z-index: 7;
+    touch-action: none;
+    background: transparent;
+    transition: background 120ms ease;
+}
+
+/* All handles drive the same gutter width, so hovering any one of them
+   lights up every handle in the column — the affordance reads as "drag
+   the whole edge" rather than "drag this row's edge". Implemented with
+   `:has()` so the highlight is purely declarative: when any descendant
+   matches `.gutterResizeHandle:hover`, every handle in the page picks up
+   the highlight. (Self-referencing the same local class works because
+   CSS Modules mangles both occurrences to the same name within a single
+   file.) `:has()` is Baseline 2023; every target browser supports it. */
+:global(html):has(.gutterResizeHandle:hover) .gutterResizeHandle {
+    background: var(--color-border-subtle-2);
+}

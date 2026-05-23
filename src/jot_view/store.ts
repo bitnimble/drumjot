@@ -19,7 +19,17 @@ import {
   xToTime,
 } from 'src/playback';
 import { loadParadbZip } from 'src/rlrr';
-import { RefinementLog, stemUrl, titleFromFilename, transcriber } from 'src/transcriber';
+import {
+  BeatInput,
+  OnsetBackend,
+  RefinementLog,
+  stemUrl,
+  titleFromFilename,
+  transcriber,
+  TranscribeMode,
+  TranscribeStage,
+  TranscriptionSummary,
+} from 'src/transcriber';
 
 export type TranscribeStatus =
   | { phase: 'idle' }
@@ -46,6 +56,9 @@ export type TranscribeOptions = {
   lint: boolean;
   bestOfK: number;
   debug: boolean;
+  transcribeMode: TranscribeMode;
+  onsetBackend: OnsetBackend;
+  beatInput: BeatInput;
 };
 
 /**
@@ -59,6 +72,14 @@ export const MAX_ZOOM = 3.0;
 // Row volume faders are pure attenuation (0 = silent, 1 = unscaled).
 // The kit's overall loudness is handled by the drum master gain.
 export const VOLUME_STEP = 0.05;
+
+// Sticky gutter column width (px). Default matches the legacy
+// hardcoded 132px so existing layouts are unchanged; the user can drag
+// the gutter's right edge to widen it when long track names are clipped
+// with `…` and `fit-content` would be too jumpy.
+export const DEFAULT_GUTTER_WIDTH = 132;
+export const MIN_GUTTER_WIDTH = 80;
+export const MAX_GUTTER_WIDTH = 480;
 
 export function clampVolume(v: number): number {
   if (!Number.isFinite(v)) return 1;
@@ -98,11 +119,16 @@ export function trackKeyEq(a: TrackKey, b: TrackKey): boolean {
  * matches the legacy stacked-staves order (e.g. hands then feet); a
  * pitch that shows up in two voices is listed once at its first
  * appearance.
+ *
+ * Reads the zoom-invariant structural cache (not `jot.resolved`) so the
+ * mixer-order reaction that wraps this doesn't re-evaluate on every
+ * wheel tick — pitch identity is a function of the source DSL, not the
+ * pixel layout.
  */
 export function collectJotPitches(jot: RenderedJot | undefined): string[] {
   if (!jot) return [];
   const out: string[] = [];
-  for (const voice of jot.resolved.voices) {
+  for (const voice of jot.structure.voices) {
     for (const p of voice.pitches) {
       if (!out.includes(p)) out.push(p);
     }
@@ -115,13 +141,36 @@ export class JotViewStore {
   examples: readonly ExampleJot[] = [];
   currentExampleId: string | undefined = undefined;
   transcribeStatus: TranscribeStatus = { phase: 'idle' };
-  /** UI-controlled options for the next transcribe call. */
+  /** UI-controlled options for the next transcribe call. The defaults
+   *  reflect the dropdown's filter+MIDI workflow: `transcribe_mode=filter`,
+   *  `debug=true` so the run is resumable, and refine/lint/best-of-K are
+   *  off (they don't apply to filter mode — the refine stage is skipped
+   *  server-side and there's no Jot to lint). */
   transcribeOptions: TranscribeOptions = {
-    refine: true,
-    lint: true,
+    refine: false,
+    lint: false,
     bestOfK: 1,
-    debug: false,
+    debug: true,
+    transcribeMode: 'filter',
+    onsetBackend: 'adtof',
+    beatInput: 'full_mix',
   };
+  /** Server-side picker of recent /transcribe runs that can be resumed.
+   *  Populated by {@link refreshRecentTranscriptions}; an empty array
+   *  before the first fetch (the picker shows "Loading…" in that state).
+   *  Refreshed lazily whenever the toolbar opens the Transcribe dropdown
+   *  so the operator sees their just-completed run without needing to
+   *  reload the page. */
+  recentTranscriptions: TranscriptionSummary[] = [];
+  /** Folder name of the currently-selected recent transcription, or
+   *  `undefined` when nothing is selected. Drives the stage picker (we
+   *  read `resumable_stages` off the matching summary). */
+  selectedResumeFolder: string | undefined = undefined;
+  /** Stage the user has picked to resume from. `undefined` until they
+   *  pick one; reset whenever {@link selectedResumeFolder} changes so
+   *  stale picks from one folder can't leak into another folder's
+   *  request. */
+  selectedResumeStage: TranscribeStage | undefined = undefined;
   /**
    * Shared layout config threaded into every new `RenderedJot` we
    * construct, so the zoom slider mutates a single config object and
@@ -199,6 +248,11 @@ export class JotViewStore {
   /** Height of the DebugPanel (px) when expanded; adjusted by dragging
    * the resize handle along its top edge. */
   debugPanelHeight: number = 280;
+  /** Width (px) of the sticky mixer/score gutter column; user-resizable
+   * by dragging the gutter's right edge. Propagated to every gutter
+   * element through the `--gutter-width` CSS variable set on the JotView
+   * container. */
+  gutterWidth: number = DEFAULT_GUTTER_WIDTH;
   /**
    * Controller for the in-flight `/transcribe` request, if any. The
    * "Stop" toolbar button calls `.abort()` here; the request's
@@ -637,6 +691,30 @@ export class JotViewStore {
     this.transcribeOptions.debug = enabled;
   }
 
+  setOnsetBackend(backend: OnsetBackend) {
+    this.transcribeOptions.onsetBackend = backend;
+  }
+
+  setBeatInput(input: BeatInput) {
+    this.transcribeOptions.beatInput = input;
+  }
+
+  setTranscribeMode(mode: TranscribeMode) {
+    this.transcribeOptions.transcribeMode = mode;
+  }
+
+  setSelectedResumeFolder(folder: string | undefined) {
+    this.selectedResumeFolder = folder;
+    // Clearing the folder (or picking a different one) invalidates any
+    // stage selection — different folders have different `resumable_stages`,
+    // so a stale pick could land on a stage missing its prerequisites.
+    this.selectedResumeStage = undefined;
+  }
+
+  setSelectedResumeStage(stage: TranscribeStage | undefined) {
+    this.selectedResumeStage = stage;
+  }
+
   setZoom(z: number) {
     const clamped = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
     this.zoom = clamped;
@@ -670,59 +748,238 @@ export class JotViewStore {
         lint: this.transcribeOptions.lint,
         bestOfK: this.transcribeOptions.bestOfK,
         debug: this.transcribeOptions.debug,
+        transcribeMode: this.transcribeOptions.transcribeMode,
+        onsetBackend: this.transcribeOptions.onsetBackend,
+        beatInput: this.transcribeOptions.beatInput,
         signal: controller.signal,
       });
-      const jot = parse(response.jot_dsl);
-      // The transcriber service no longer injects a title (the regex
-      // pass over the DSL lived in Python and was the only string-level
-      // mutation we did to LLM output). Set it here from the upload
-      // filename so the rendered jot shows a useful heading.
-      const derivedTitle = titleFromFilename(file.name);
-      if (derivedTitle) jot.title = derivedTitle;
-      runInAction(() => {
-        this.currentJot = new RenderedJot(jot, this.viewConfig);
-        this.currentExampleId = undefined;
-        this.clearNoteProvenance();
-        jotPlayer.clearCue();
-        this.transcribeStatus = {
-          phase: 'success',
-          filename: file.name,
-          tempo: response.metadata.initial_tempo,
-          hasTempoChanges: response.metadata.has_tempo_changes,
-          hasTimeSigChanges: response.metadata.has_time_sig_changes,
-          barCount: response.metadata.bars.length,
-          refinement: response.refinement ?? null,
-          debugDir: response.debug_dir ?? null,
-          debugZipUrl: stemUrl(response.debug_zip_url ?? null),
-        };
-      });
+      await this.applyTranscribeResponse(response, file.name, controller.signal);
     } catch (err) {
-      // AbortError surfaces as DOMException with name='AbortError' (and
-      // wraps as TypeError in some runtimes when the fetch was already
-      // aborted at start). Treat the user-initiated cancellation
-      // distinctly from real errors so we don't show a scary red pill.
-      const isAbort =
-        controller.signal.aborted ||
-        (err instanceof DOMException && err.name === 'AbortError');
-      if (isAbort) {
-        runInAction(() => {
-          this.transcribeStatus = { phase: 'idle' };
-        });
-      } else {
-        const message =
-          err instanceof ParseError
-            ? `Transcriber returned invalid DSL: ${err.message}`
-            : err instanceof Error
-              ? err.message
-              : String(err);
-        runInAction(() => {
-          this.transcribeStatus = { phase: 'error', message };
-        });
-      }
+      this.handleTranscribeError(err, controller, 'Transcribe');
     } finally {
       if (this.transcribeController === controller) {
         this.transcribeController = undefined;
       }
+      // The folder list has a new entry (the just-finished run); refresh
+      // best-effort so the picker is up to date without the operator
+      // having to reopen the dropdown.
+      void this.refreshRecentTranscriptions();
+    }
+  }
+
+  /**
+   * Re-run the transcribe pipeline from a chosen stage against a
+   * previously-cached debug folder. Same status / auto-load semantics as
+   * {@link transcribeAudio}: progress pill while in flight, the response
+   * either parses straight (DSL mode) or auto-loads the rebuilt debug
+   * bundle (filter mode), and the resume controller shares
+   * `transcribeController` so the Stop button cancels both flows.
+   */
+  async resumeTranscribe(folder: string, stage: TranscribeStage): Promise<void> {
+    if (this.transcribeController) {
+      this.transcribeController.abort();
+    }
+    const controller = new AbortController();
+    this.transcribeController = controller;
+    const label = `${folder} from ${stage}`;
+    runInAction(() => {
+      this.transcribeStatus = { phase: 'uploading', filename: label };
+    });
+    try {
+      const response = await transcriber.resume({
+        resumeFolder: folder,
+        resumeStage: stage,
+        refine: this.transcribeOptions.refine,
+        lint: this.transcribeOptions.lint,
+        bestOfK: this.transcribeOptions.bestOfK,
+        transcribeMode: this.transcribeOptions.transcribeMode,
+        onsetBackend: this.transcribeOptions.onsetBackend,
+        beatInput: this.transcribeOptions.beatInput,
+        signal: controller.signal,
+      });
+      // The resumed run reuses the original folder, so the original
+      // upload filename is the most informative pill label — fall back
+      // to the resume folder name when the server doesn't know it.
+      const fallbackName =
+        this.recentTranscriptions.find((t) => t.folder === folder)
+          ?.original_filename ?? folder;
+      await this.applyTranscribeResponse(response, fallbackName, controller.signal);
+    } catch (err) {
+      this.handleTranscribeError(err, controller, 'Resume');
+    } finally {
+      if (this.transcribeController === controller) {
+        this.transcribeController = undefined;
+      }
+      void this.refreshRecentTranscriptions();
+    }
+  }
+
+  /**
+   * Shared post-transcribe handling. DSL mode parses `jot_dsl` directly
+   * (legacy path); filter mode + DSL fallback both auto-load the debug
+   * bundle returned via `debug_zip_url` so the score, audio tracks, and
+   * note provenance all hydrate in one go without the user having to
+   * download and re-load the zip by hand.
+   */
+  private async applyTranscribeResponse(
+    response: Awaited<ReturnType<typeof transcriber.transcribe>>,
+    fallbackName: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const bundleUrl = stemUrl(response.debug_zip_url ?? null);
+    // Filter mode returns an empty jot_dsl; the score lives only inside
+    // the prediction MIDI bundled in debug.zip. DSL mode has both — we
+    // still prefer auto-loading the bundle when present so audio tracks
+    // + provenance + logs come along for free; the bundle's `final.jot`
+    // is the same DSL the response carried, so it doesn't matter which
+    // path renders it.
+    if (bundleUrl) {
+      const ok = await this.autoLoadDebugBundle(bundleUrl, fallbackName, signal);
+      if (!ok && response.jot_dsl.trim()) {
+        // Bundle fetch / parse failed but we still have DSL — fall back
+        // to the legacy DSL-direct path so the score still renders.
+        this.applyDslResponse(response.jot_dsl, fallbackName);
+      }
+    } else if (response.jot_dsl.trim()) {
+      this.applyDslResponse(response.jot_dsl, fallbackName);
+    } else {
+      runInAction(() => {
+        this.transcribeStatus = {
+          phase: 'error',
+          message: 'Transcriber returned no jot and no debug bundle.',
+        };
+      });
+      return;
+    }
+    runInAction(() => {
+      this.transcribeStatus = {
+        phase: 'success',
+        filename: fallbackName,
+        tempo: response.metadata.initial_tempo,
+        hasTempoChanges: response.metadata.has_tempo_changes,
+        hasTimeSigChanges: response.metadata.has_time_sig_changes,
+        barCount: response.metadata.bars.length,
+        refinement: response.refinement ?? null,
+        debugDir: response.debug_dir ?? null,
+        debugZipUrl: bundleUrl,
+      };
+    });
+  }
+
+  private applyDslResponse(jotDsl: string, fallbackName: string): void {
+    const jot = parse(jotDsl);
+    // The transcriber service no longer injects a title (the regex pass
+    // over the DSL lived in Python and was the only string-level
+    // mutation we did to LLM output). Set it here from the upload
+    // filename so the rendered jot shows a useful heading.
+    const derivedTitle = titleFromFilename(fallbackName);
+    if (derivedTitle) jot.title = derivedTitle;
+    runInAction(() => {
+      this.currentJot = new RenderedJot(jot, this.viewConfig);
+      this.currentExampleId = undefined;
+      this.clearNoteProvenance();
+      jotPlayer.clearCue();
+    });
+  }
+
+  /**
+   * Fetch the debug zip from `url`, parse it, and load every artifact
+   * via {@link applyDebugBundle}. The score (whether DSL `final.jot` or
+   * filter-mode `prediction.mid`), audio tracks, note provenance, and
+   * stage timings / logs all come along in one round trip.
+   *
+   * Returns `true` on success, `false` if either the fetch or the
+   * parse failed (in which case `transcribeAudio` falls back to the
+   * legacy DSL parse path so the score still renders).
+   */
+  private async autoLoadDebugBundle(
+    url: string,
+    fallbackName: string,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    let bundle: Awaited<ReturnType<typeof loadDebugZip>>;
+    try {
+      const res = await fetch(url, { signal });
+      if (!res.ok) {
+        throw new Error(`fetch ${url} failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const file = new File([blob], `${fallbackName}.debug.zip`, {
+        type: 'application/zip',
+      });
+      bundle = await loadDebugZip(file);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') throw err;
+      // eslint-disable-next-line no-console
+      console.warn('Auto-load debug bundle failed:', err);
+      return false;
+    }
+    try {
+      const ok = await this.applyDebugBundle(bundle, fallbackName);
+      return ok;
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') throw err;
+      // eslint-disable-next-line no-console
+      console.warn('Auto-load debug bundle apply failed:', err);
+      return false;
+    }
+  }
+
+  /** Shared transcribe / resume failure handler. Routes aborts to idle
+   *  (user cancelled), everything else to the error pill. */
+  private handleTranscribeError(
+    err: unknown,
+    controller: AbortController,
+    verb: string,
+  ): void {
+    // AbortError surfaces as DOMException with name='AbortError' (and
+    // wraps as TypeError in some runtimes when the fetch was already
+    // aborted at start). Treat the user-initiated cancellation
+    // distinctly from real errors so we don't show a scary red pill.
+    const isAbort =
+      controller.signal.aborted ||
+      (err instanceof DOMException && err.name === 'AbortError');
+    if (isAbort) {
+      runInAction(() => {
+        this.transcribeStatus = { phase: 'idle' };
+      });
+      return;
+    }
+    const message =
+      err instanceof ParseError
+        ? `${verb} returned invalid DSL: ${err.message}`
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    runInAction(() => {
+      this.transcribeStatus = { phase: 'error', message };
+    });
+  }
+
+  /**
+   * Refresh the recent-transcriptions picker from the server. Failures
+   * are logged but never surfaced — the picker just stays as-is, which
+   * is the right behaviour when the backend is briefly unavailable.
+   * Safe to call from a fire-and-forget context.
+   */
+  async refreshRecentTranscriptions(): Promise<void> {
+    try {
+      const list = await transcriber.listTranscriptions();
+      runInAction(() => {
+        this.recentTranscriptions = list;
+        // Drop the selection if its target folder vanished server-side
+        // (e.g. operator pruned the debug dir between dropdown opens).
+        if (
+          this.selectedResumeFolder !== undefined &&
+          !list.some((s) => s.folder === this.selectedResumeFolder)
+        ) {
+          this.selectedResumeFolder = undefined;
+          this.selectedResumeStage = undefined;
+        }
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('Could not refresh recent transcriptions:', err);
     }
   }
 
@@ -924,104 +1181,139 @@ export class JotViewStore {
         });
         return;
       }
-
+      const ok = await this.applyDebugBundle(bundle, file.name);
+      // The shared apply path doesn't touch `transcribeStatus` (callers
+      // own that pill — `transcribeAudio` keeps its success state visible
+      // after auto-loading the bundle). For the explicit "load a bundle"
+      // path the user expects the pill to clear on success or carry the
+      // bundle-specific error on failure.
       runInAction(() => {
-        this.clearAllAudioTracks();
-        this.resetPitchMixer();
-        this.lastDebugBundle = bundle.manifest;
-        // Replace (or clear) the per-note debug provenance whenever a
-        // new bundle loads. Filter-mode bundles carry one; DSL-mode
-        // bundles don't, in which case the previous bundle's
-        // provenance must not leak onto the new score.
-        this.noteProvenance = bundle.noteProvenance ?? undefined;
-        // Reset the visibility toggle so a freshly loaded bundle reads
-        // as just "the score" — operator opts into the ghost overlays.
-        this.showFilteredOnsets = false;
-        this.debugPanelOpen = true;
-      });
-
-      // Prefer `final.jot` (DSL-mode bundle) over `prediction.mid` (filter-
-      // mode bundle) — DSL is the richer artifact when both are present.
-      // Filter mode emits no `final.jot`, so the MIDI fallback is the score
-      // for that pathway.
-      if (bundle.jotDsl.trim()) {
-        try {
-          const jot = parse(bundle.jotDsl);
-          if (!jot.title) {
-            const derivedTitle = titleFromFilename(file.name);
-            if (derivedTitle) jot.title = derivedTitle;
-          }
-          runInAction(() => {
-            this.currentJot = new RenderedJot(jot, this.viewConfig);
-            this.currentExampleId = undefined;
-            jotPlayer.clearCue();
-            this.transcribeStatus = { phase: 'idle' };
-          });
-        } catch (err) {
-          const message =
-            err instanceof ParseError
-              ? `Could not parse final.jot: ${err.message}`
-              : err instanceof Error
-                ? err.message
-                : String(err);
-          runInAction(() => {
-            this.transcribeStatus = { phase: 'error', message };
-          });
-        }
-      } else if (bundle.predictionMidi) {
-        try {
-          const jot = fromMidi(bundle.predictionMidi);
-          if (!jot.title) {
-            const derivedTitle = titleFromFilename(file.name);
-            if (derivedTitle) jot.title = derivedTitle;
-          }
-          runInAction(() => {
-            this.currentJot = new RenderedJot(jot, this.viewConfig);
-            this.currentExampleId = undefined;
-            jotPlayer.clearCue();
-            this.transcribeStatus = { phase: 'idle' };
-          });
-        } catch (err) {
-          const message =
-            err instanceof Error
-              ? `Could not convert prediction.mid: ${err.message}`
-              : String(err);
-          runInAction(() => {
-            this.transcribeStatus = { phase: 'error', message };
-          });
-        }
-      }
-
-      // Decode every audio track in parallel — `decodeAudioData` runs on
-      // browser-side codec threads, so concurrent calls overlap well and
-      // turn what used to be a one-by-one wait into a single combined
-      // wait. `Promise.all` preserves input order so the resolved array
-      // still matches `bundle.audioTracks` (which is already in manifest
-      // order — `no_drums` first, then pitch letters), keeping the
-      // post-load pair-with-instrument-row logic stable.
-      const resolved = await Promise.all(
-        bundle.audioTracks.map((track) =>
-          this.loadAudioTrack(track.file).then((id) => ({ key: track.key, id })),
-        ),
-      );
-      const loadedByKey = new Map<string, AudioTrackId>();
-      const toMute: AudioTrackId[] = [];
-      for (const { key, id } of resolved) {
-        if (!id) continue;
-        loadedByKey.set(key, id);
-        // Mute the per-pitch stems by default so the (audible) drums come
-        // from the smplr score scheduler; the drumless backing stays unmuted.
-        if (key !== NO_DRUMS_KEY) toMute.push(id);
-      }
-
-      // Batch the mute updates and the reorder into a single observable
-      // mutation so the mixer renders once at the end instead of once
-      // per loaded track.
-      runInAction(() => {
-        for (const id of toMute) this.mutedAudioTracks.add(id);
-        this.applyDebugBundleTrackOrder(loadedByKey);
+        this.transcribeStatus = ok
+          ? { phase: 'idle' }
+          : {
+              phase: 'error',
+              message: `Could not parse score from ${file.name}.`,
+            };
       });
     });
+  }
+
+  /**
+   * Apply an already-parsed {@link DebugBundle} to the store: replace the
+   * current song with the bundle's score (DSL → MIDI fallback), load each
+   * audio track, pair stems with their instrument rows, and mount the
+   * manifest on the DebugPanel.
+   *
+   * Returns `true` if a score was loaded, `false` if neither `final.jot`
+   * nor `prediction.mid` could be turned into a jot (the audio tracks
+   * still load either way so the operator can at least listen).
+   *
+   * Status-pill management is left to the caller — `loadDebugBundleFile`
+   * sets it to idle/error on completion, while `transcribeAudio` keeps
+   * its success pill visible after the auto-load.
+   */
+  private async applyDebugBundle(
+    bundle: Awaited<ReturnType<typeof loadDebugZip>>,
+    fallbackName: string,
+  ): Promise<boolean> {
+    runInAction(() => {
+      this.clearAllAudioTracks();
+      this.resetPitchMixer();
+      this.lastDebugBundle = bundle.manifest;
+      // Replace (or clear) the per-note debug provenance whenever a
+      // new bundle loads. Filter-mode bundles carry one; DSL-mode
+      // bundles don't, in which case the previous bundle's
+      // provenance must not leak onto the new score.
+      this.noteProvenance = bundle.noteProvenance ?? undefined;
+      // Reset the visibility toggle so a freshly loaded bundle reads
+      // as just "the score" — operator opts into the ghost overlays.
+      this.showFilteredOnsets = false;
+      this.debugPanelOpen = true;
+    });
+
+    // Prefer `final.jot` (DSL-mode bundle) over `prediction.mid` (filter-
+    // mode bundle) — DSL is the richer artifact when both are present.
+    // Filter mode emits no `final.jot`, so the MIDI fallback is the score
+    // for that pathway.
+    let scoreLoaded = false;
+    if (bundle.jotDsl.trim()) {
+      try {
+        const jot = parse(bundle.jotDsl);
+        if (!jot.title) {
+          const derivedTitle = titleFromFilename(fallbackName);
+          if (derivedTitle) jot.title = derivedTitle;
+        }
+        runInAction(() => {
+          this.currentJot = new RenderedJot(jot, this.viewConfig);
+          this.currentExampleId = undefined;
+          jotPlayer.clearCue();
+        });
+        scoreLoaded = true;
+      } catch (err) {
+        const message =
+          err instanceof ParseError
+            ? `Could not parse final.jot: ${err.message}`
+            : err instanceof Error
+              ? err.message
+              : String(err);
+        runInAction(() => {
+          this.transcribeStatus = { phase: 'error', message };
+        });
+      }
+    } else if (bundle.predictionMidi) {
+      try {
+        const jot = fromMidi(bundle.predictionMidi);
+        if (!jot.title) {
+          const derivedTitle = titleFromFilename(fallbackName);
+          if (derivedTitle) jot.title = derivedTitle;
+        }
+        runInAction(() => {
+          this.currentJot = new RenderedJot(jot, this.viewConfig);
+          this.currentExampleId = undefined;
+          jotPlayer.clearCue();
+        });
+        scoreLoaded = true;
+      } catch (err) {
+        const message =
+          err instanceof Error
+            ? `Could not convert prediction.mid: ${err.message}`
+            : String(err);
+        runInAction(() => {
+          this.transcribeStatus = { phase: 'error', message };
+        });
+      }
+    }
+
+    // Decode every audio track in parallel — `decodeAudioData` runs on
+    // browser-side codec threads, so concurrent calls overlap well and
+    // turn what used to be a one-by-one wait into a single combined
+    // wait. `Promise.all` preserves input order so the resolved array
+    // still matches `bundle.audioTracks` (which is already in manifest
+    // order — `no_drums` first, then pitch letters), keeping the
+    // post-load pair-with-instrument-row logic stable.
+    const resolved = await Promise.all(
+      bundle.audioTracks.map((track) =>
+        this.loadAudioTrack(track.file).then((id) => ({ key: track.key, id })),
+      ),
+    );
+    const loadedByKey = new Map<string, AudioTrackId>();
+    const toMute: AudioTrackId[] = [];
+    for (const { key, id } of resolved) {
+      if (!id) continue;
+      loadedByKey.set(key, id);
+      // Mute the per-pitch stems by default so the (audible) drums come
+      // from the smplr score scheduler; the drumless backing stays unmuted.
+      if (key !== NO_DRUMS_KEY) toMute.push(id);
+    }
+
+    // Batch the mute updates and the reorder into a single observable
+    // mutation so the mixer renders once at the end instead of once
+    // per loaded track.
+    runInAction(() => {
+      for (const id of toMute) this.mutedAudioTracks.add(id);
+      this.applyDebugBundleTrackOrder(loadedByKey);
+    });
+    return scoreLoaded;
   }
 
   /**
@@ -1095,6 +1387,14 @@ export class JotViewStore {
   setDebugPanelHeight(px: number): void {
     const max = Math.max(120, window.innerHeight - 160);
     this.debugPanelHeight = Math.min(max, Math.max(80, px));
+  }
+
+  /** Resize the sticky gutter column. Clamped to a sensible range so a
+   * runaway drag can't collapse the controls or push the bars row off
+   * screen. */
+  setGutterWidth(px: number): void {
+    if (!Number.isFinite(px)) return;
+    this.gutterWidth = Math.min(MAX_GUTTER_WIDTH, Math.max(MIN_GUTTER_WIDTH, px));
   }
 
   async playCurrent(): Promise<void> {

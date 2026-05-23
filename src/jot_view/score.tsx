@@ -13,6 +13,7 @@ import {
 } from 'src/jot';
 import { buildTimeline, jotPlayer } from 'src/playback';
 import sharedStyles from '../jot_view.module.css';
+import { GutterResizeHandle } from './components/gutter_resize_handle';
 import {
   NoteProvenanceContext,
   NoteProvenanceContextValue,
@@ -106,8 +107,24 @@ export const Legend = observer(({ jot }: { jot: RenderedJot }) => {
  * user hits Play.
  */
 export const TimelineHeader = observer(
-  ({ jot, onSeek }: { jot: RenderedJot; onSeek: (x: number) => void }) => {
-    const voice = jot.resolved.voices[0];
+  ({
+    jot,
+    onSeek,
+    onResizeGutterStart,
+  }: {
+    jot: RenderedJot;
+    onSeek: (x: number) => void;
+    /** Pointer-down handler for the gutter resize affordance rendered
+     * on the right edge of this header's gutter. */
+    onResizeGutterStart: (e: React.PointerEvent<HTMLDivElement>) => void;
+  }) => {
+    // Reading the structural cache (not `jot.resolved`) keeps this
+    // header stable across zoom — the per-tick `--bar-start-beat` is
+    // set inline, and CSS calc() multiplies by the score-root's
+    // `--px-per-beat` to get the final pixel position. Without this
+    // the header re-rendered every wheel tick, re-creating 100+ tick
+    // marks just to reposition each by one calc-arithmetic step.
+    const voice = jot.structure.voices[0];
     if (!voice || voice.bars.length === 0) return null;
 
     const liveTimeline = jotPlayer.timeline;
@@ -116,24 +133,38 @@ export const TimelineHeader = observer(
         ? liveTimeline
         : buildTimeline(jot);
 
+    const leadInBeats = voice.leadInSec * (voice.leadInBpm / 60);
+    let voiceBeats = leadInBeats;
+    for (const b of voice.bars) voiceBeats += b.beats;
+
+    let cumBeats = leadInBeats;
     return (
       <div className={styles.timelineHeader}>
         <div className={styles.timelineHeaderGutter}>
           <span className={styles.timelineHeaderLabel}>Bar / Time</span>
+          <GutterResizeHandle onResizeStart={onResizeGutterStart} />
         </div>
         <div
           className={styles.timelineHeaderBarsRow}
-          style={{ width: voice.width }}
+          style={
+            { ['--voice-beats' as string]: voiceBeats } as React.CSSProperties
+          }
           onClick={(e) => seekFromClick(e, onSeek)}
         >
           {voice.bars.map((bar, i) => {
             const timing = timeline.bars[i];
             const timeSec = timing?.startSec ?? 0;
+            const startBeat = cumBeats;
+            cumBeats += bar.beats;
             return (
               <div
                 key={i}
                 className={styles.timelineHeaderTick}
-                style={{ left: bar.x }}
+                style={
+                  {
+                    ['--bar-start-beat' as string]: startBeat,
+                  } as React.CSSProperties
+                }
               >
                 <span className={styles.timelineHeaderBar}>{bar.index}</span>
                 <span className={styles.timelineHeaderTime}>{formatTime(timeSec)}</span>
@@ -164,6 +195,8 @@ export const BarView = observer(
     onPatternClick,
     isPitchAudible,
     showBrackets = true,
+    rowPitch,
+    pitchOrder,
   }: {
     bar: StructuralBar;
     pitches: string[];
@@ -173,14 +206,29 @@ export const BarView = observer(
     onPatternClick: (name: string) => void;
     isPitchAudible: (pitch: string) => boolean;
     /**
-     * Whether to draw the bar's pattern + tuplet brackets on top of the
-     * lane. In the unified mixer the brackets describe the score
-     * structure (not any one instrument), so only the topmost
-     * drum-pitch row of each contiguous drum block renders them — every
-     * other pitch row sets this `false` to avoid duplicating the same
-     * overlay on every lane.
+     * Whether to draw bar chrome that belongs to the score as a whole
+     * (tuplet brackets and lead-in label). Pattern brackets are drawn
+     * per-row instead — see {@link rowPitch} — so this flag doesn't
+     * gate them.
      */
     showBrackets?: boolean;
+    /**
+     * In the unified mixer, the DSL pitch this BarView's row represents.
+     * Pattern brackets only render when this pitch is in the span's
+     * `pitches` set — rows for pitches the pattern doesn't play get no
+     * bracket on that span, so the outline visually "skips" them.
+     * Undefined falls back to drawing every span (label always shown).
+     */
+    rowPitch?: string;
+    /**
+     * Drum pitches in mixer-row order. Used together with {@link rowPitch}
+     * to decide which row is the topmost / bottommost contributor for a
+     * given span — the topmost shows the pattern label and the top edge
+     * of the bracket, the bottommost shows the bottom edge, middles show
+     * only the left/right sides so the outline reads as one connected
+     * box across all participating rows.
+     */
+    pitchOrder?: readonly string[];
   }) => {
     const beatCount = bar.time.count;
     // Beat spacing inside the bar, in quarter notes. Each beat divider
@@ -237,15 +285,19 @@ export const BarView = observer(
             </div>
           );
         })}
-        {showBrackets &&
-          bar.patternSpans.map((span, i) => (
+        {bar.patternSpans.map((span, i) => {
+          const position = bracketPositionForRow(span, rowPitch, pitchOrder);
+          if (position === 'hidden') return null;
+          return (
             <PatternBracket
               key={i}
               span={span}
               highlighted={highlightedPattern === span.name}
               onClick={onPatternClick}
+              position={position}
             />
-          ))}
+          );
+        })}
         {showBrackets &&
           bar.tupletSpans.map((span, i) => <TupletBracket key={i} span={span} />)}
       </div>
@@ -253,45 +305,122 @@ export const BarView = observer(
   }
 );
 
+/**
+ * Where this row's slice of a pattern bracket sits within the
+ * top-to-bottom span across all contributing rows.
+ *
+ *   - `single`: this is the only contributing row — render a full box.
+ *   - `top`:    this is the topmost contributor — render top edge + sides + label.
+ *   - `middle`: a contributor between top and bottom — render sides only;
+ *               the bracket reads as continuous across stacked rows.
+ *   - `bottom`: the bottommost contributor — render bottom edge + sides.
+ *   - `hidden`: this row's pitch isn't in the pattern — render nothing.
+ */
+type BracketPosition = 'single' | 'top' | 'middle' | 'bottom' | 'hidden';
+
+function bracketPositionForRow(
+  span: StructuralPatternSpan,
+  rowPitch: string | undefined,
+  pitchOrder: readonly string[] | undefined,
+): BracketPosition {
+  // No row context (non-mixer caller) → render as a self-contained box,
+  // same as the pre-mixer behaviour.
+  if (rowPitch === undefined || !pitchOrder) return 'single';
+  if (!span.pitches.has(rowPitch)) return 'hidden';
+  let firstIdx = -1;
+  let lastIdx = -1;
+  for (let i = 0; i < pitchOrder.length; i++) {
+    if (span.pitches.has(pitchOrder[i])) {
+      if (firstIdx === -1) firstIdx = i;
+      lastIdx = i;
+    }
+  }
+  // The pattern body could in principle include pitches the mixer doesn't
+  // surface (e.g. a brand-new pitch type that hasn't been added to the
+  // row order yet). Treat the row as a single contributor in that case
+  // rather than silently producing an open-ended bracket.
+  if (firstIdx === -1 || lastIdx === -1) return 'single';
+  if (firstIdx === lastIdx) return 'single';
+  const myIdx = pitchOrder.indexOf(rowPitch);
+  if (myIdx === firstIdx) return 'top';
+  if (myIdx === lastIdx) return 'bottom';
+  return 'middle';
+}
+
+/**
+ * Pattern bracket colors, cycled in `colorIndex` order. Each entry
+ * resolves at runtime to the matching `--color-pattern-N` token in
+ * src/design_tokens.css, so updating a shade only requires editing the
+ * token — this array just names the slots. Length intentionally
+ * matches the token list; if it ever shrinks, the modulo wrap below
+ * silently recycles colors.
+ */
+const PATTERN_COLOR_VARS: readonly string[] = [
+  'var(--color-pattern-1)',
+  'var(--color-pattern-2)',
+  'var(--color-pattern-3)',
+  'var(--color-pattern-4)',
+  'var(--color-pattern-5)',
+  'var(--color-pattern-6)',
+  'var(--color-pattern-7)',
+  'var(--color-pattern-8)',
+  'var(--color-pattern-9)',
+  'var(--color-pattern-10)',
+  'var(--color-pattern-11)',
+  'var(--color-pattern-12)',
+];
+
 const PatternBracket = observer(
   ({
     span,
     highlighted,
     onClick,
+    position,
   }: {
     span: StructuralPatternSpan;
     highlighted: boolean;
     onClick: (name: string) => void;
+    position: Exclude<BracketPosition, 'hidden'>;
   }) => {
+    const color =
+      PATTERN_COLOR_VARS[span.colorIndex % PATTERN_COLOR_VARS.length];
     return (
       <div
         className={classNames(
           styles.patternBracket,
+          (position === 'top' || position === 'single') && styles.patternBracketTop,
+          (position === 'bottom' || position === 'single') && styles.patternBracketBottom,
           highlighted && styles.patternBracketHighlight
         )}
         style={
           {
             ['--span-start-beat' as string]: span.startBeat,
             ['--span-end-beat' as string]: span.endBeat,
+            ['--pattern-color' as string]: color,
           } as React.CSSProperties
         }
       >
-        <button
-          type="button"
-          data-noseek="true"
-          className={classNames(
-            styles.patternLabel,
-            highlighted && styles.patternLabelHighlight
-          )}
-          onClick={(e) => {
-            e.stopPropagation();
-            onClick(span.name);
-          }}
-          onMouseDown={(e) => e.stopPropagation()}
-          title={`Pattern usage: ${span.name} (click to highlight other usages)`}
-        >
-          {span.name}
-        </button>
+        {/* Label sits with the bracket's top edge — only render on the
+            topmost contributing row so a multi-row bracket doesn't stack
+            duplicate labels down the score. */}
+        {(position === 'top' || position === 'single') && (
+          <button
+            type="button"
+            data-noseek="true"
+            className={classNames(
+              styles.patternLabel,
+              highlighted && styles.patternLabelHighlight
+            )}
+            onClick={(e) => {
+              e.stopPropagation();
+              onClick(span.name);
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            title={`Pattern usage: ${span.name} (click to highlight other usages)`}
+          >
+            {span.name}
+          </button>
+        )}
       </div>
     );
   }

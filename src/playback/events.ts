@@ -48,6 +48,18 @@ const VOLUME_TO_VELOCITY: Record<Volume, number> = {
   ff: 96,
 };
 
+// Flam = a grace stroke shortly before the main hit on the same drum.
+// Acoustic flams sit ~25-35 ms apart, but two SF2 voices that close on the
+// same key get swallowed by voice-stealing / overlapping attack envelopes
+// and read as one strike. 50 ms is the standard "wide flam" — clearly two
+// hits and survives smplr retriggering.
+const FLAM_GRACE_OFFSET_SEC = 0.03;
+// Grace stroke loudness, relative to the main hit. Flam grace notes are
+// slightly softer than the primary, but not as quiet as a ghost — keep
+// it well above the SF2's near-silent low-velocity layers. Scaling
+// (rather than a fixed value) keeps an accented flam's grace proportional.
+const FLAM_GRACE_VELOCITY_RATIO = 0.9;
+
 export function jotToEvents(rendered: RenderedJot): PlaybackEvent[] {
   const resolved = rendered.resolved;
   const globalBpm = resolveBpm(resolved.globalMetadata.bpm, 120);
@@ -72,6 +84,16 @@ export function jotToEvents(rendered: RenderedJot): PlaybackEvent[] {
           const velocity = resolveVelocity(note);
           const time = barOffsetSec + (note.beat / bar.beats) * barDurationSec;
           events.push({ time, midiNote, velocity, pitch });
+          if (note.modifiers.has('fl')) {
+            // The grace stroke gets clamped if it would precede jot-time 0
+            // (a flam on bar 1 beat 1 with no lead-in). It'll then sound
+            // simultaneously with the main hit — a slightly louder single
+            // strike rather than a flam — which is the right degenerate
+            // behaviour: better than silently dropping the grace.
+            const graceTime = Math.max(0, time - FLAM_GRACE_OFFSET_SEC);
+            const graceVel = Math.max(1, Math.round(velocity * FLAM_GRACE_VELOCITY_RATIO));
+            events.push({ time: graceTime, midiNote, velocity: graceVel, pitch });
+          }
         }
       }
       barOffsetSec += barDurationSec;

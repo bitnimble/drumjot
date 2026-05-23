@@ -251,27 +251,29 @@ export function computeWaveformPeaks(
   // so build a piecewise-linear table over the bar's pixel range.
   const voice = timeline.rendered?.resolved.voices[0];
   const renderedBars = voice?.bars ?? [];
-  // The note grid (and thus the playhead — see timeToX) sits `pad` px
-  // right of the bar boxes. Shift the waveform by the same amount so a
-  // transient renders directly under the note it belongs to instead of
-  // a constant `pad` px to its left.
-  const pad = (voice?.notePadPx as number) ?? 0;
+  // No `notePadPx` shift here: the waveform bitmap is positioned in
+  // the DOM with a CSS `left: var(--note-pad-px)` instead. Baking the
+  // pad into the bitmap broke the GPU-scaled live zoom — a constant-
+  // pixel prefix doesn't scale with `--px-per-beat`, so the transform
+  // shifted everything right by `pad × scale` and snapped left on the
+  // crisp redraw. With pad applied via CSS, pixel→time is fully linear
+  // in `pxPerBeat` so `scaleX` and the redraw line up exactly.
 
   // Lead-in: the pixels before bar 1 (reserved for the recording's
-  // pre-roll) show audio seconds [0, startOffset). Bar 1's left edge is
-  // at `firstX`, which the layout scaled so `firstX` px == `startOffset`
-  // s at the same px/s the bars use — so audio is continuous across the
-  // bar-1 boundary and the drum notes line up with where the drums
-  // actually enter in the waveform.
+  // pre-roll) show audio seconds [0, startOffset). Bar 1's left edge
+  // is at `firstX`, which the layout scaled so `firstX` px ==
+  // `startOffset` s at the same px/s the bars use — so audio is
+  // continuous across the bar-1 boundary and the drum notes line up
+  // with where the drums actually enter in the waveform.
   const firstX = renderedBars.length ? (renderedBars[0].x as number) : 0;
   if (startOffsetSec > 0 && firstX > 0) {
-    // Pre-roll occupies [pad, firstX + pad) once the note-grid shift is
-    // applied; pixels left of `pad` are before the recording starts.
-    const pxStart = Math.max(0, Math.floor(pad));
-    const pxEnd = Math.min(totalWidthPx, Math.ceil(firstX + pad));
-    for (let p = pxStart; p < pxEnd; p++) {
-      const tAudio0 = ((p - pad) / firstX) * startOffsetSec;
-      const tAudio1 = ((p + 1 - pad) / firstX) * startOffsetSec;
+    // Pre-roll occupies [0, firstX) in the bitmap. The caller offsets
+    // the canvas by `notePadPx` so the visible left edge still lines
+    // up with the score's note grid.
+    const pxEnd = Math.min(totalWidthPx, Math.ceil(firstX));
+    for (let p = 0; p < pxEnd; p++) {
+      const tAudio0 = (p / firstX) * startOffsetSec;
+      const tAudio1 = ((p + 1) / firstX) * startOffsetSec;
       const s0 = Math.max(0, Math.floor(tAudio0 * sampleRate));
       const s1 = Math.min(sampleLen, Math.ceil(tAudio1 * sampleRate));
       writePixelPeak(channels, numChannels, channelScale, s0, s1, peaks, p * 2);
@@ -282,7 +284,7 @@ export function computeWaveformPeaks(
     const rb = renderedBars[bi];
     const timing = timeline.bars[bi];
     if (!timing) continue;
-    const x0 = (rb.x as number) + pad;
+    const x0 = rb.x as number;
     const w = rb.width as number;
     const pxStart = Math.max(0, Math.floor(x0));
     const pxEnd = Math.min(totalWidthPx, Math.ceil(x0 + w));

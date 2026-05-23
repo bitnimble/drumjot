@@ -88,6 +88,27 @@
     --color-toggle-active-hover-border: #b88600;
     --color-toggle-active-text: #2b2b2b;
 
+    /* ─── Pattern bracket palette ─────────────────────────────────── */
+    /* Distinct colors cycled through to tell pattern brackets apart in
+       the score. Each is dark/saturated enough that the small white
+       pattern label text stays legible. The assigner in jot.ts wraps
+       at the end of this list so all 12 slots are consumed before a
+       jot starts reusing colors. Keep them visually distinct (different
+       hues, not just shades) since adjacent patterns often sit on the
+       same row in the mixer. */
+    --color-pattern-1: #ff7f50;         /* coral */
+    --color-pattern-2: #5ba8e8;         /* sky blue */
+    --color-pattern-3: #7bc74d;         /* leaf green */
+    --color-pattern-4: #a155e0;         /* violet */
+    --color-pattern-5: #daa520;         /* goldenrod */
+    --color-pattern-6: #ef476f;         /* rose */
+    --color-pattern-7: #06aed5;         /* cyan */
+    --color-pattern-8: #8d6e63;         /* warm brown */
+    --color-pattern-9: #2a9d8f;         /* teal */
+    --color-pattern-10: #e76f51;        /* terracotta */
+    --color-pattern-11: #6a5acd;        /* slate-blue */
+    --color-pattern-12: #b85590;        /* magenta */
+
     /* ─── Misc one-off colors ─────────────────────────────────────── */
     /* These appear once each but still belong in the palette so the
        "no naked color literals" rule holds end-to-end. */

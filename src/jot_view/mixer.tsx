@@ -8,6 +8,7 @@ import {
   computeWaveformPeaksForJot,
   jotPlayer,
 } from 'src/playback';
+import { GutterResizeHandle } from './components/gutter_resize_handle';
 import { ClearButton, MuteButton, SoloButton } from './components/icon_button';
 import { NoteProvenanceContext } from './contexts';
 import styles from './mixer.module.css';
@@ -73,6 +74,8 @@ type MixerRowDragProps = {
    * to gap against.
    */
   groupStart: boolean;
+  /** Pointer-down handler for the gutter-edge resize affordance. */
+  onResizeGutterStart: (e: React.PointerEvent<HTMLDivElement>) => void;
 };
 
 /**
@@ -96,6 +99,7 @@ export const MixerView = observer(
     onMoveTrack,
     voiceControls,
     audioTrackControls,
+    onResizeGutterStart,
   }: {
     jot: RenderedJot;
     config: ViewConfig;
@@ -106,6 +110,9 @@ export const MixerView = observer(
     onMoveTrack: (from: number, to: number) => void;
     voiceControls: VoiceControls;
     audioTrackControls: AudioTrackControls;
+    /** Pointer-down handler for the gutter resize affordance painted on
+     * the right edge of every row's gutter. */
+    onResizeGutterStart: (e: React.PointerEvent<HTMLDivElement>) => void;
   }) => {
     // The drop indicator is rendered above the row at `dropTargetIdx`
     // when it lies in [0, length]; `length` is the "after the last row"
@@ -119,11 +126,19 @@ export const MixerView = observer(
     };
 
     // The topmost drum-pitch row in the user's mixer order hosts the
-    // pattern/tuplet bracket overlay. Brackets describe score structure
-    // (not a specific instrument), so anchoring them to whichever drum
-    // row currently sits at the top of the drum block keeps the overlay
-    // visible no matter how the user rearranges the mixer.
+    // tuplet brackets and the lead-in label — chrome that belongs to
+    // the score as a whole, not to any one instrument.
     const firstPitchIdx = trackOrder.findIndex((k) => k.kind === 'pitch');
+    // Drum pitches in mixer order. Pattern brackets are drawn on every
+    // row whose pitch participates in the pattern; this list lets each
+    // row know whether it's the topmost / bottommost participant for a
+    // given span so the bracket reads as one continuous outline across
+    // rows (with non-participating rows in between visually skipped).
+    const pitchOrder = React.useMemo(
+      () =>
+        trackOrder.flatMap((k) => (k.kind === 'pitch' ? [k.pitch] : [])),
+      [trackOrder],
+    );
 
     return (
       <div className={styles.mixer}>
@@ -133,6 +148,7 @@ export const MixerView = observer(
           value={jotPlayer.audioTrackMasterVolume}
           onChange={(v) => jotPlayer.setAudioTrackMasterVolume(v)}
           testId="audio-track-master"
+          onResizeGutterStart={onResizeGutterStart}
         />
         <GutterMasterRow
           label="Drums"
@@ -140,6 +156,7 @@ export const MixerView = observer(
           value={jotPlayer.drumMasterVolume}
           onChange={(v) => jotPlayer.setDrumMasterVolume(v)}
           testId="drum-master"
+          onResizeGutterStart={onResizeGutterStart}
         />
         {trackOrder.map((key, idx) => {
           // Reuse a stable React key per row so dragging doesn't tear
@@ -162,6 +179,7 @@ export const MixerView = observer(
             onResetDrag: resetDrag,
             mixerLength: trackOrder.length,
             groupStart,
+            onResizeGutterStart,
           };
           if (key.kind === 'audio') {
             const track = jotPlayer.audioTracks.get(key.id);
@@ -188,6 +206,7 @@ export const MixerView = observer(
               jot={jot}
               config={config}
               showBrackets={idx === firstPitchIdx}
+              pitchOrder={pitchOrder}
               highlightedPattern={highlightedPattern}
               onPatternClick={onPatternClick}
               onSeek={onSeek}
@@ -382,6 +401,7 @@ const AudioTrackRow = observer(
     onMoveTrack,
     onResetDrag,
     groupStart,
+    onResizeGutterStart,
   }: {
     id: AudioTrackId;
     track: AudioTrack;
@@ -389,8 +409,20 @@ const AudioTrackRow = observer(
     controls: AudioTrackControls;
     onSeek: (x: number) => void;
   } & MixerRowDragProps) => {
-    const voice = jot.resolved.voices[0];
-    const width = (voice?.width ?? 0) as number;
+    // Voice-level total beats for the bars-row width (in beats — the
+    // row's pixel width is `voiceBeats × --px-per-beat` via CSS calc).
+    // Reading the structural cache (not `jot.resolved`) keeps this row
+    // stable across zoom changes; pixel width updates via CSS variable
+    // on the score root. The waveform canvas reads the zoom-dependent
+    // pixel width itself so only IT re-renders on zoom.
+    const structureVoice = jot.structure.voices[0];
+    const leadInBeats = structureVoice
+      ? structureVoice.leadInSec * (structureVoice.leadInBpm / 60)
+      : 0;
+    let voiceBeats = leadInBeats;
+    if (structureVoice) {
+      for (const b of structureVoice.bars) voiceBeats += b.beats;
+    }
     const audible = controls.isAudioTrackAudible(id);
     const muted = controls.mutedAudioTracks.has(id);
     const soloed = controls.soloedAudioTracks.has(id);
@@ -426,6 +458,7 @@ const AudioTrackRow = observer(
             onResetDrag={onResetDrag}
             ariaLabel={`${label} audio track`}
           />
+          <GutterResizeHandle onResizeStart={onResizeGutterStart} />
           <div className={styles.musicTrackContent}>
             <div className={classNames(styles.musicTrackLabel, !audible && styles.musicTrackLabelDim)}>
               <span className={styles.musicTrackName}>{label}</span>
@@ -466,13 +499,17 @@ const AudioTrackRow = observer(
         </div>
         <div
           className={styles.musicTrackBarsRow}
-          style={{ width, height: AUDIO_TRACK_HEIGHT }}
+          style={
+            {
+              ['--voice-beats' as string]: voiceBeats,
+              height: AUDIO_TRACK_HEIGHT,
+            } as React.CSSProperties
+          }
           onClick={(e) => seekFromClick(e, onSeek)}
         >
           <AudioTrackWaveformCanvas
             jot={jot}
             track={track}
-            width={width}
             height={AUDIO_TRACK_HEIGHT}
             dim={!audible}
             testId={`audio-track-waveform-${id}`}
@@ -506,6 +543,7 @@ const PitchRow = observer(
     jot,
     config,
     showBrackets,
+    pitchOrder,
     highlightedPattern,
     onPatternClick,
     onSeek,
@@ -518,11 +556,13 @@ const PitchRow = observer(
     onMoveTrack,
     onResetDrag,
     groupStart,
+    onResizeGutterStart,
   }: {
     pitch: string;
     jot: RenderedJot;
     config: ViewConfig;
     showBrackets: boolean;
+    pitchOrder: readonly string[];
     highlightedPattern: string | undefined;
     onPatternClick: (name: string) => void;
     onSeek: (x: number) => void;
@@ -631,38 +671,44 @@ const PitchRow = observer(
         onDragLeave={drop.onDragLeave}
         onDrop={drop.onDrop}
       >
-        <div className={styles.pitchRowGutter} style={{ height: trackHeight }}>
+        <div className={styles.pitchRowGutter}>
           <MixerDragHandle
             idx={idx}
             onDragStartIdx={onDragStartIdx}
             onResetDrag={onResetDrag}
             ariaLabel={labelText}
           />
-          <div
-            className={classNames(styles.pitchRowLabel, !audible && styles.musicTrackLabelDim)}
-            title={instrumentName ? `${instrumentName} (pitch ${pitch})` : `Pitch ${pitch}`}
-          >
-            <span className={styles.gutterPitch}>{pitch}</span>
-            {instrumentName && <span className={styles.pitchRowName}>{instrumentName}</span>}
-          </div>
-          <div className={styles.musicTrackButtons}>
-            <RowVolumeSlider
-              value={voiceControls.volumeFor(pitch)}
-              onChange={(v) => voiceControls.onSetVolume(pitch, v)}
-              label={labelText}
-            />
-            <MuteButton
-              active={muted}
-              onToggle={() => voiceControls.onToggleMute(pitch)}
-              offTitle={`Mute ${pitch}`}
-              onTitle={`Unmute ${pitch}`}
-            />
-            <SoloButton
-              active={soloed}
-              onToggle={() => voiceControls.onToggleSolo(pitch)}
-              offTitle={`Solo ${pitch}`}
-              onTitle={`Unsolo ${pitch}`}
-            />
+          <GutterResizeHandle onResizeStart={onResizeGutterStart} />
+          {/* Two-row stack: the label gets the full gutter width on top
+              so long instrument names breathe instead of getting clipped
+              with `…`; the slider + M/S sit on a second line below. */}
+          <div className={styles.pitchRowContent}>
+            <div
+              className={classNames(styles.pitchRowLabel, !audible && styles.musicTrackLabelDim)}
+              title={instrumentName ? `${instrumentName} (pitch ${pitch})` : `Pitch ${pitch}`}
+            >
+              <span className={styles.gutterPitch}>{pitch}</span>
+              {instrumentName && <span className={styles.pitchRowName}>{instrumentName}</span>}
+            </div>
+            <div className={styles.pitchRowControls}>
+              <RowVolumeSlider
+                value={voiceControls.volumeFor(pitch)}
+                onChange={(v) => voiceControls.onSetVolume(pitch, v)}
+                label={labelText}
+              />
+              <MuteButton
+                active={muted}
+                onToggle={() => voiceControls.onToggleMute(pitch)}
+                offTitle={`Mute ${pitch}`}
+                onTitle={`Unmute ${pitch}`}
+              />
+              <SoloButton
+                active={soloed}
+                onToggle={() => voiceControls.onToggleSolo(pitch)}
+                offTitle={`Solo ${pitch}`}
+                onTitle={`Unsolo ${pitch}`}
+              />
+            </div>
           </div>
         </div>
         <div
@@ -705,6 +751,8 @@ const PitchRow = observer(
               onPatternClick={onPatternClick}
               isPitchAudible={voiceControls.isPitchAudible}
               showBrackets={showBrackets}
+              rowPitch={pitch}
+              pitchOrder={pitchOrder}
             />
           ))}
           {rejectedForPitch.map((entry, i) => {
@@ -747,14 +795,12 @@ const AudioTrackWaveformCanvas = observer(
   ({
     jot,
     track,
-    width,
     height,
     dim,
     testId,
   }: {
     jot: RenderedJot;
     track: AudioTrack;
-    width: number;
     height: number;
     dim: boolean;
     testId?: string;
@@ -764,60 +810,120 @@ const AudioTrackWaveformCanvas = observer(
     // `observer` re-renders the waveform when the user nudges the offset
     // so it stays aligned with where the audio actually plays.
     const startOffsetSec = jotPlayer.startOffsetSec;
+    // Structural voice-beats (zoom-invariant) drives the canvas's
+    // rendered CSS width — we always draw the canvas at the px-per-beat
+    // that was in effect on the most recent settle, NOT the live
+    // zoom-driven value. Visual scaling for in-between zoom states is
+    // done with `transform: scaleX(--px-per-beat / --rendered-px-per-beat)`
+    // (see `.musicTrackWaveform` in the css module), which is a pure
+    // GPU composite — no canvas redraw, no layout, no React work.
+    const structureVoice = jot.structure.voices[0];
+    const voiceBeats = structureVoice
+      ? structureVoice.leadInSec * (structureVoice.leadInBpm / 60) +
+        structureVoice.bars.reduce((a, b) => a + b.beats, 0)
+      : 0;
+    // Read pxPerBeat AFTER voiceBeats so the observer tracks both: a
+    // wheel tick still re-runs the body (cheap — same JSX out), which
+    // lets the debounced redraw effect re-arm. The component's actual
+    // visual scaling is decoupled from this — it's driven by the root
+    // `--px-per-beat` flowing into the canvas's CSS transform calc.
+    const pxPerBeat = jot.pxPerBeat;
+    // `renderedPxPerBeat` is the scale the bitmap was last drawn at.
+    // Persisted as state (not derived from pxPerBeat) so a zoom-driven
+    // re-render of this component DOES NOT update the inline
+    // `--rendered-px-per-beat` until the bitmap is actually
+    // re-rasterised — otherwise scale would collapse to 1 and the
+    // bitmap would visually snap to its old CSS width during the gap.
+    // `null` until the first paint completes.
+    const [renderedPxPerBeat, setRenderedPxPerBeat] =
+      React.useState<number | null>(null);
 
     React.useEffect(() => {
       const canvas = canvasRef.current;
-      if (!canvas || width <= 0) return;
-      const dpr = window.devicePixelRatio || 1;
-      // Browsers cap a canvas's backing-store dimensions (and total
-      // area). A long score at high zoom × dpr easily blows past that
-      // and throws "Canvas exceeds max size". Clamp the backing store;
-      // the element stays CSS-sized to `width`, so past the cap it just
-      // renders at reduced horizontal resolution instead of crashing.
-      // 16384 is the safe cross-browser per-axis limit (Safari/iOS is
-      // the tightest; Chrome/Firefox allow more).
-      const MAX_CANVAS_DIM = 16384;
-      const backingW = Math.min(Math.max(1, Math.floor(width * dpr)), MAX_CANVAS_DIM);
-      const backingH = Math.min(Math.max(1, Math.floor(height * dpr)), MAX_CANVAS_DIM);
-      canvas.width = backingW;
-      canvas.height = backingH;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-      // Map CSS-pixel drawing coords (0..width, 0..height) onto the
-      // possibly-clamped backing store. Reduces to ctx.scale(dpr, dpr)
-      // when nothing was clamped.
-      ctx.setTransform(backingW / width, 0, 0, backingH / height, 0, 0);
+      if (!canvas || voiceBeats <= 0) return;
+      const draw = () => {
+        const widthPx = voiceBeats * pxPerBeat;
+        if (widthPx <= 0) return;
+        const dpr = window.devicePixelRatio || 1;
+        // Browsers cap a canvas's backing-store dimensions (and total
+        // area). A long score at high zoom × dpr easily blows past that
+        // and throws "Canvas exceeds max size". Clamp the backing store;
+        // the element stays CSS-sized to `widthPx`, so past the cap it
+        // just renders at reduced horizontal resolution instead of
+        // crashing. 16384 is the safe cross-browser per-axis limit
+        // (Safari/iOS is the tightest; Chrome/Firefox allow more).
+        const MAX_CANVAS_DIM = 16384;
+        const backingW = Math.min(Math.max(1, Math.floor(widthPx * dpr)), MAX_CANVAS_DIM);
+        const backingH = Math.min(Math.max(1, Math.floor(height * dpr)), MAX_CANVAS_DIM);
+        canvas.width = backingW;
+        canvas.height = backingH;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        // Map CSS-pixel drawing coords (0..widthPx, 0..height) onto the
+        // possibly-clamped backing store. Reduces to ctx.scale(dpr, dpr)
+        // when nothing was clamped.
+        ctx.setTransform(backingW / widthPx, 0, 0, backingH / height, 0, 0);
 
-      const { peaks } = computeWaveformPeaksForJot(
-        jot,
-        track.buffer,
-        startOffsetSec,
-      );
+        const { peaks } = computeWaveformPeaksForJot(
+          jot,
+          track.buffer,
+          startOffsetSec,
+        );
 
-      ctx.clearRect(0, 0, width, height);
-      const mid = height / 2;
-      ctx.fillStyle = dim ? '#d3c8b6' : '#5BA8E8';
-      // Each pixel column is a vertical line from min*scale to max*scale.
-      // A single fillRect per column is faster than building a Path2D
-      // for thousands of segments and lets us keep the colour-by-column
-      // option open if we ever want to tint clipped peaks differently.
-      const scale = mid * 0.95;
-      for (let p = 0; p < width; p++) {
-        const mn = peaks[p * 2];
-        const mx = peaks[p * 2 + 1];
-        if (mn === 0 && mx === 0) continue;
-        const y0 = mid - mx * scale;
-        const y1 = mid - mn * scale;
-        ctx.fillRect(p, y0, 1, Math.max(1, y1 - y0));
+        ctx.clearRect(0, 0, widthPx, height);
+        const mid = height / 2;
+        ctx.fillStyle = dim ? '#d3c8b6' : '#5BA8E8';
+        // Each pixel column is a vertical line from min*scale to
+        // max*scale. A single fillRect per column is faster than
+        // building a Path2D for thousands of segments and lets us keep
+        // the colour-by-column option open if we ever want to tint
+        // clipped peaks differently.
+        const scale = mid * 0.95;
+        for (let p = 0; p < widthPx; p++) {
+          const mn = peaks[p * 2];
+          const mx = peaks[p * 2 + 1];
+          if (mn === 0 && mx === 0) continue;
+          const y0 = mid - mx * scale;
+          const y1 = mid - mn * scale;
+          ctx.fillRect(p, y0, 1, Math.max(1, y1 - y0));
+        }
+        // Publish the scale we just rasterised at so the CSS transform
+        // collapses to scaleX(1) (crisp) until the next zoom interaction.
+        setRenderedPxPerBeat(pxPerBeat);
+      };
+      if (renderedPxPerBeat === null) {
+        // First paint: draw immediately so the waveform appears on load.
+        draw();
+        return;
       }
-    }, [jot, track, width, height, dim, startOffsetSec]);
+      // Subsequent changes (zoom, dim, offset, track): debounce. During
+      // an interactive zoom the bitmap is visually rescaled by the GPU
+      // via `transform: scaleX` (no JS, no layout, no redraw) — we only
+      // commit a crisp re-rasterisation 150ms after the user settles
+      // so a 500ms wheel gesture triggers ONE redraw instead of 30+.
+      const id = window.setTimeout(draw, 150);
+      return () => window.clearTimeout(id);
+    }, [jot, track, height, dim, startOffsetSec, pxPerBeat, voiceBeats, renderedPxPerBeat]);
 
-    if (width <= 0) return null;
+    if (voiceBeats <= 0) return null;
+    // The canvas's CSS width is the `renderedWidth` it was last drawn
+    // at — fixed across zoom interactions. The visual stretch to the
+    // current zoom happens via the CSS `transform: scaleX(...)` rule,
+    // which reads `--px-per-beat` (root, zoom-driven) and
+    // `--rendered-px-per-beat` (set inline here, draw-driven).
+    const renderScale = renderedPxPerBeat ?? pxPerBeat;
+    const renderedWidth = voiceBeats * renderScale;
     return (
       <canvas
         ref={canvasRef}
         className={styles.musicTrackWaveform}
-        style={{ width, height }}
+        style={
+          {
+            width: renderedWidth,
+            height,
+            ['--rendered-px-per-beat' as string]: renderScale,
+          } as React.CSSProperties
+        }
         data-testid={testId}
       />
     );
@@ -827,11 +933,12 @@ const AudioTrackWaveformCanvas = observer(
 /**
  * A per-section master fader that sits in the sticky lane gutter,
  * directly above the section it controls (the loaded audio tracks, or
- * the drum/instrument staff). Gutter-aligned (same 132px sticky column
- * as the per-row M/S/volume controls below it) so it reads as the
- * "header" for that column. Reads/writes the global observable
- * `jotPlayer`; all pointer events are kept from bubbling so dragging
- * the fader doesn't start the page marquee or trip seek-on-click.
+ * the drum/instrument staff). Gutter-aligned (same sticky column width
+ * — `--gutter-width` — as the per-row M/S/volume controls below it) so
+ * it reads as the "header" for that column. Reads/writes the global
+ * observable `jotPlayer`; all pointer events are kept from bubbling so
+ * dragging the fader doesn't start the page marquee or trip
+ * seek-on-click.
  */
 const GutterMasterRow = observer(
   ({
@@ -840,12 +947,14 @@ const GutterMasterRow = observer(
     value,
     onChange,
     testId,
+    onResizeGutterStart,
   }: {
     label: string;
     title: string;
     value: number;
     onChange: (v: number) => void;
     testId?: string;
+    onResizeGutterStart: (e: React.PointerEvent<HTMLDivElement>) => void;
   }) => {
     const stop = (e: React.MouseEvent) => e.stopPropagation();
     const pct = Math.round(value * 100);
@@ -869,6 +978,7 @@ const GutterMasterRow = observer(
             style={{ ['--value' as string]: value } as React.CSSProperties}
           />
           <span className={styles.gutterMasterValue}>{pct}%</span>
+          <GutterResizeHandle onResizeStart={onResizeGutterStart} />
         </div>
       </div>
     );

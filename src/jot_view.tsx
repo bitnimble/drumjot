@@ -126,6 +126,9 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
           transcribeStatus={store.transcribeStatus}
           transcribeOptions={store.transcribeOptions}
           onTranscribe={(file) => store.transcribeAudio(file)}
+          onResumeTranscribe={(folder, stage) =>
+            store.resumeTranscribe(folder, stage)
+          }
           onLoadJot={(file) => store.loadJotFile(file)}
           onLoadMidi={(file) => store.loadMidiFile(file)}
           onLoadParadb={(file) => store.loadParadbMap(file)}
@@ -133,15 +136,21 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
           onLoadAudioTrack={(file) => store.loadAudioTrack(file)}
           onCancelTranscribe={() => store.cancelTranscribe()}
           onClearTranscribeStatus={() => store.clearTranscribeStatus()}
-          onSetRefine={(v) => store.setRefine(v)}
-          onSetLint={(v) => store.setLint(v)}
-          onSetBestOfK={(n) => store.setBestOfK(n)}
-          onSetDebug={(v) => store.setDebug(v)}
+          onSetOnsetBackend={(b) => store.setOnsetBackend(b)}
+          onSetBeatInput={(b) => store.setBeatInput(b)}
           zoom={store.zoom}
           onSetZoom={(z) => store.setZoom(z)}
           hasNoteProvenance={store.noteProvenance !== undefined}
           showFilteredOnsets={store.showFilteredOnsets}
           onSetShowFilteredOnsets={(v) => store.setShowFilteredOnsets(v)}
+          recentTranscriptions={store.recentTranscriptions}
+          selectedResumeFolder={store.selectedResumeFolder}
+          selectedResumeStage={store.selectedResumeStage}
+          onSetSelectedResumeFolder={(f) => store.setSelectedResumeFolder(f)}
+          onSetSelectedResumeStage={(s) => store.setSelectedResumeStage(s)}
+          onRefreshRecentTranscriptions={() =>
+            store.refreshRecentTranscriptions()
+          }
         />
         {jot ? (
           <JotView
@@ -174,6 +183,8 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
               onToggleSolo: (id) => store.toggleAudioTrackSolo(id),
               onClear: (id) => store.clearAudioTrack(id),
             }}
+            gutterWidth={store.gutterWidth}
+            onSetGutterWidth={(px) => store.setGutterWidth(px)}
           />
         ) : (
           <div className={styles.empty}>No jot loaded</div>
@@ -215,6 +226,12 @@ type JotViewProps = {
   onMoveTrack: (from: number, to: number) => void;
   voiceControls: VoiceControls;
   audioTrackControls: AudioTrackControls;
+  /** Current sticky-gutter width (px); pushed to the `--gutter-width`
+   * CSS variable on the container so every gutter resizes together. */
+  gutterWidth: number;
+  /** Apply a new sticky-gutter width (px); called by the gutter resize
+   * handle's pointer-move stream. */
+  onSetGutterWidth: (px: number) => void;
 };
 
 const JotView = observer((props: JotViewProps) => {
@@ -231,6 +248,8 @@ const JotView = observer((props: JotViewProps) => {
     onMoveTrack,
     voiceControls,
     audioTrackControls,
+    gutterWidth,
+    onSetGutterWidth,
   } = props;
   // Intentionally NOT reading `jot.resolved` here — every observable
   // touched in this body triggers a JotView re-render on zoom, and the
@@ -338,9 +357,38 @@ const JotView = observer((props: JotViewProps) => {
   // updated by `ScoreZoomVar`, a side-effect-only observer that
   // writes via `setProperty` on `containerRef.current` so a zoom tick
   // doesn't re-render JotView — only mutates one DOM attribute.
+  // `--gutter-width` flows from the store's user-resizable gutter
+  // width and feeds every sticky gutter element below; tracking it on
+  // the container re-renders JotView on resize, which is cheap (the
+  // mixer/score subtrees read it via CSS var, not React).
   const containerStyle = {
     ['--note-pad-px' as string]: `${config.barNotePaddingLeft}px`,
+    ['--gutter-width' as string]: `${gutterWidth}px`,
   } as React.CSSProperties;
+  // `gutterWidth` is captured in the closure at the start of each drag
+  // (the pointermove deltas then read against that snapshot) so an in-
+  // flight resize stays anchored to where the user grabbed even though
+  // the live `gutterWidth` observable is being updated every frame.
+  const onResizeGutterStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startWidth = gutterWidth;
+    const target = e.currentTarget;
+    target.setPointerCapture(e.pointerId);
+    const onMove = (ev: PointerEvent) => {
+      onSetGutterWidth(startWidth + (ev.clientX - startX));
+    };
+    const onUp = (ev: PointerEvent) => {
+      target.releasePointerCapture(ev.pointerId);
+      target.removeEventListener('pointermove', onMove);
+      target.removeEventListener('pointerup', onUp);
+      target.removeEventListener('pointercancel', onUp);
+    };
+    target.addEventListener('pointermove', onMove);
+    target.addEventListener('pointerup', onUp);
+    target.addEventListener('pointercancel', onUp);
+  };
   return (
     <div
       ref={containerRef}
@@ -354,7 +402,7 @@ const JotView = observer((props: JotViewProps) => {
       <h2 className={styles.title}>{jot.title || 'Untitled jot'}</h2>
       <p className={styles.subtitle}>{formatSubtitle(jot)}</p>
       <Legend jot={jot} />
-      <TimelineHeader jot={jot} onSeek={onSeek} />
+      <TimelineHeader jot={jot} onSeek={onSeek} onResizeGutterStart={onResizeGutterStart} />
       <MixerView
         jot={jot}
         config={config}
@@ -365,6 +413,7 @@ const JotView = observer((props: JotViewProps) => {
         onMoveTrack={onMoveTrack}
         voiceControls={voiceControls}
         audioTrackControls={audioTrackControls}
+        onResizeGutterStart={onResizeGutterStart}
       />
       <PlayheadAutoScroller containerRef={containerRef} />
       <MarqueeOverlay />
@@ -393,7 +442,12 @@ const ScoreZoomVar = observer(
     React.useEffect(() => {
       const el = containerRef.current;
       if (!el) return;
-      el.style.setProperty('--px-per-beat', `${pxPerBeat}px`);
+      // Set as a unitless number, not a CSS length, so it can be
+      // divided in calc() (CSS forbids dividing length / length).
+      // Layout calcs multiply by `1px` to recover a length; the
+      // waveform's `transform: scaleX(...)` reads it directly against
+      // a unitless `--rendered-px-per-beat` for a clean number result.
+      el.style.setProperty('--px-per-beat', String(pxPerBeat));
     }, [pxPerBeat, containerRef]);
     return null;
   }

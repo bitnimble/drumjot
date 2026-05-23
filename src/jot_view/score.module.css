@@ -5,9 +5,10 @@
    ghost overlays. */
 
 /* Sticky-gutter ruler above the audio tracks / score that labels each
-   bar boundary with bar number and playback time. Same 132px sticky
-   gutter as `.laneGutter` / `.musicTrackGutter` so the column stays
-   pinned during horizontal scroll exactly like the rows below it. */
+   bar boundary with bar number and playback time. Same sticky gutter
+   width as `.musicTrackGutter` / `.pitchRowGutter` (`--gutter-width`,
+   driven by the resize handle) so the column stays pinned during
+   horizontal scroll exactly like the rows below it. */
 .timelineHeader {
     display: flex;
     min-width: max-content;
@@ -19,7 +20,7 @@
     left: 0;
     z-index: 6;
     flex: 0 0 auto;
-    width: 132px;
+    width: var(--gutter-width);
     box-sizing: border-box;
     display: flex;
     align-items: center;
@@ -39,25 +40,33 @@
     flex: 0 0 auto;
     height: 28px;
     background: var(--color-bg-cream);
-    /* `border-box` so the right border draws INSIDE `voice.width`, matching
-     the `box-sizing: border-box` `.bar` cells below — their accumulated
-     widths include each bar's right barline, so the closing right border
-     here lands exactly on the final barline below. */
+    /* `border-box` so the right border draws INSIDE the row's width,
+     matching the `box-sizing: border-box` `.bar` cells below — their
+     accumulated widths include each bar's right barline, so the closing
+     right border here lands exactly on the final barline below. */
     box-sizing: border-box;
     border-top: 1px solid var(--color-border);
     border-bottom: 1px solid var(--color-border);
     border-right: 1px solid var(--color-border);
     cursor: pointer;
+    /* Width derived from the row's total beats × score-root
+       `--px-per-beat` (set on the JotView container). Zooming mutates
+       only `--px-per-beat`, so this header doesn't re-render. */
+    width: calc(var(--voice-beats) * var(--px-per-beat) * 1px);
 }
 
 /* One tick per bar boundary; sits on the same x as the score's barline
-   below. Labels are pointer-events:none so click-to-seek hits the row. */
+   below. Labels are pointer-events:none so click-to-seek hits the row.
+   `--bar-start-beat` is the cumulative-beat offset of this bar's left
+   edge from the voice's start (lead-in + sum of previous bar lengths);
+   set inline per tick at render time, zoom-invariant. */
 .timelineHeaderTick {
     position: absolute;
     top: 0;
     bottom: 0;
     border-left: 1px solid var(--color-border);
     padding-left: 4px;
+    left: calc(var(--bar-start-beat) * var(--px-per-beat) * 1px);
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -92,7 +101,7 @@
     flex: 0 0 auto;
     /* `--bar-beats` is set inline per BarView (zoom-invariant);
        `--px-per-beat` lives on the score root. */
-    width: calc(var(--bar-beats) * var(--px-per-beat));
+    width: calc(var(--bar-beats) * var(--px-per-beat) * 1px);
 }
 
 .bar:first-child {
@@ -116,7 +125,7 @@
     top: 0;
     bottom: 0;
     width: 0;
-    left: calc(var(--note-pad-px) + var(--divider-beat) * var(--px-per-beat));
+    left: calc(var(--note-pad-px) + var(--divider-beat) * var(--px-per-beat) * 1px);
     border-left: 1px dashed var(--color-border-subtle-3);
     pointer-events: none;
 }
@@ -135,26 +144,56 @@
     transition: opacity 120ms ease;
 }
 
+/* The bracket is drawn per row in the mixer; a multi-row pattern stacks
+   slices on consecutive rows, with the top/bottom edges only on the
+   outermost contributors. Top: -2px / bottom: -2px overhang lets two
+   adjacent rows' side borders kiss instead of leaving a hairline gap.
+   `--pattern-color` is set inline per-bracket from PATTERN_COLOR_VARS
+   in score.tsx; the fallback covers the rare non-mixer caller that
+   doesn't supply one. */
 .patternBracket {
     position: absolute;
     top: -2px;
     bottom: -2px;
-    border: 1.5px dashed var(--color-accent);
-    border-radius: var(--radius-md);
+    border-left: 2.5px dashed var(--pattern-color, var(--color-accent));
+    border-right: 2.5px dashed var(--pattern-color, var(--color-accent));
     box-sizing: border-box;
     pointer-events: none;
     z-index: 2;
     transition:
         background-color 120ms ease,
         border-color 120ms ease;
-    left: calc(var(--note-pad-px) + var(--span-start-beat) * var(--px-per-beat));
-    width: calc((var(--span-end-beat) - var(--span-start-beat)) * var(--px-per-beat));
+    /* Time-anchored, not note-grid-anchored: beat 0 = the bar's left
+       barline (NOT the note-padded inset). A full-bar pattern then
+       lines up flush with the barlines instead of starting `notePadPx`
+       inside this bar and ending `notePadPx` inside the next — which
+       read like the bracket was leaking across the boundary. The note
+       inset is small (~14 px) relative to a beat, so even a partial
+       pattern still comfortably contains its notes. */
+    left: calc(var(--span-start-beat) * var(--px-per-beat) * 1px);
+    width: calc((var(--span-end-beat) - var(--span-start-beat)) * var(--px-per-beat) * 1px);
 }
 
+.patternBracketTop {
+    border-top: 2.5px dashed var(--pattern-color, var(--color-accent));
+    border-top-left-radius: var(--radius-md);
+    border-top-right-radius: var(--radius-md);
+}
+
+.patternBracketBottom {
+    border-bottom: 2.5px dashed var(--pattern-color, var(--color-accent));
+    border-bottom-left-radius: var(--radius-md);
+    border-bottom-right-radius: var(--radius-md);
+}
+
+/* Highlight overlays the bracket with a translucent wash of its own
+   color and intensifies the ring. `color-mix` keeps the fill keyed to
+   the pattern color rather than the orange accent so coloured patterns
+   don't pick up an unrelated orange tint when highlighted. */
 .patternBracketHighlight {
-    background: var(--color-accent-overlay-medium);
-    border-color: var(--color-accent-strong);
-    box-shadow: 0 0 0 1px var(--color-accent-strong-ring);
+    background: color-mix(in srgb, var(--pattern-color, var(--color-accent)) 14%, transparent);
+    border-color: var(--pattern-color, var(--color-accent));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--pattern-color, var(--color-accent)) 45%, transparent);
 }
 
 .patternLabel {
@@ -166,7 +205,9 @@
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--color-bg-base);
-    background: var(--color-accent);
+    /* Pattern color flows in inline from the bracket parent; fallback to
+       accent for non-mixer callers that don't supply --pattern-color. */
+    background: var(--pattern-color, var(--color-accent));
     padding: 2px 6px;
     border: none;
     border-radius: var(--radius-xs) var(--radius-xs) 0 0;
@@ -178,9 +219,11 @@
     line-height: 1;
 }
 
+/* Hover/highlight darkens the label by mixing its color toward black
+   so the chip stays in the same hue family but reads as "active". */
 .patternLabel:hover,
 .patternLabelHighlight {
-    background: var(--color-accent-on-text);
+    background: color-mix(in srgb, var(--pattern-color, var(--color-accent)) 75%, black);
 }
 
 /* Conventional tuplet bracket: a thin line with downward end ticks
@@ -200,8 +243,8 @@
     display: flex;
     align-items: flex-start;
     justify-content: center;
-    left: calc(var(--note-pad-px) + var(--span-start-beat) * var(--px-per-beat));
-    width: calc((var(--span-end-beat) - var(--span-start-beat)) * var(--px-per-beat));
+    left: calc(var(--note-pad-px) + var(--span-start-beat) * var(--px-per-beat) * 1px);
+    width: calc((var(--span-end-beat) - var(--span-start-beat)) * var(--px-per-beat) * 1px);
 }
 
 .tupletNumber {
@@ -228,7 +271,7 @@
        note (set inline), pxPerBeat changes on zoom (read from the score
        container's CSS var). The note's pixel diameter and vertical
        centring stay in inline style because they don't depend on zoom. */
-    left: calc(var(--note-pad-px) + var(--note-beat) * var(--px-per-beat));
+    left: calc(var(--note-pad-px) + var(--note-beat) * var(--px-per-beat) * 1px);
 }
 
 /* A non-straight onset (triplet/tuplet/swing) that isn't already
@@ -482,7 +525,7 @@
        (the lane below otherwise consumes them). */
     pointer-events: auto;
     z-index: 4;
-    left: calc(var(--note-pad-px) + var(--filtered-beat) * var(--px-per-beat));
+    left: calc(var(--note-pad-px) + var(--filtered-beat) * var(--px-per-beat) * 1px);
     transition: opacity 120ms ease;
 }
 

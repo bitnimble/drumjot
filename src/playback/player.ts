@@ -170,6 +170,15 @@ export class JotPlayer {
    */
   sampleLoadProgress: SampleLoadProgress | undefined;
   /**
+   * Which sub-phase of the soundfont load we're in:
+   *   - `connecting`:  request issued, waiting for the first byte.
+   *   - `downloading`: bytes streaming in (or being read from cache).
+   *   - `decoding`:    bytes done; smplr is parsing the .sf2.
+   * Lets the toolbar tell the user *what* is happening, not just *how
+   * much*. `undefined` outside of `state === 'loading'`.
+   */
+  sampleLoadPhase: 'connecting' | 'downloading' | 'decoding' | undefined;
+  /**
    * Drum kits available in the SoundFont's percussion bank, for the kit
    * picker. Empty until the kit has loaded once (we only know the list
    * after the ~30 MB SoundFont is downloaded + parsed), so the UI hides
@@ -1117,6 +1126,11 @@ export class JotPlayer {
     // straight to destination, so the page fader scales drums too.
     drumGain.connect(this.pageGain ?? ctx.destination);
     this.drumGain = drumGain;
+    // Phase before the first byte arrives — the toolbar shows "waiting
+    // for server…" until the storage layer reports progress.
+    runInAction(() => {
+      this.sampleLoadPhase = 'connecting';
+    });
     const drums = GeneralUserGsKit(ctx, {
       url: GM_SOUNDFONT_URL,
       cacheName: GM_SOUNDFONT_CACHE,
@@ -1126,9 +1140,13 @@ export class JotPlayer {
       // Byte progress for the (large, one-time) .sf2 download; the
       // storage layer also serves it from the Cache API on later
       // sessions, in which case this fires once with fromCache = true.
+      // Storage emits a final tick with `loaded === total` once bytes
+      // are in, which we treat as the start of the decode phase.
       onProgress: (p) => {
+        const downloadComplete = p.total > 0 && p.loaded >= p.total;
         runInAction(() => {
           this.sampleLoadProgress = p;
+          this.sampleLoadPhase = downloadComplete ? 'decoding' : 'downloading';
         });
       },
     });
@@ -1156,6 +1174,7 @@ export class JotPlayer {
       // stale bar doesn't linger; the UI also gates on `state` anyway.
       runInAction(() => {
         this.sampleLoadProgress = undefined;
+        this.sampleLoadPhase = undefined;
       });
     }
 

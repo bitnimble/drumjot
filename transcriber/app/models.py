@@ -131,3 +131,34 @@ class HealthResponse(BaseModel):
     status: str
     gpu_available: bool
     gpu_name: str | None = None
+
+
+class TranscriptionSummary(BaseModel):
+    """One entry in the GET /transcribe/list response.
+
+    Built from a single per-request debug folder (`/debug/<folder>/`).
+    The folder name is the stable identifier the resume endpoint takes
+    as `resume_folder`; the other fields are diagnostic, surfaced so the
+    UI can show a useful picker without having to fetch each folder
+    separately.
+
+    `requested_at` is parsed from the folder name's `<YYYYMMDD-HHMMSS>`
+    stamp (set once when the original /transcribe run minted the folder
+    via `debug.mint_request_folder_name`). `last_run_at` is the
+    modification time of `request.json`, which `DebugSink.finalize`
+    overwrites at the end of every run (initial or resume), so it
+    captures the most-recent run that produced artifacts. When that
+    most-recent run was a resume, `last_resume_stage` carries which
+    stage it restarted from (echoed by `_request_options` into
+    `request.json`).
+    """
+
+    folder: str
+    original_filename: str | None = None
+    requested_at: str
+    last_run_at: str | None = None
+    last_resume_stage: str | None = None
+    # Stages whose required prior artifacts exist on disk, so a resume
+    # request starting from that stage can succeed without a 400.
+    # Ordered by `STAGE_ORDER`.
+    resumable_stages: list[str] = Field(default_factory=list)

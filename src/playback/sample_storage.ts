@@ -22,8 +22,11 @@ import { Storage, StorageResponse } from 'smplr';
 export type SampleLoadProgress = {
   /** Bytes received so far. */
   loaded: number;
-  /** Total bytes expected from `Content-Length`; 0 when the server
-   * didn't send it (then only `loaded` is meaningful — indeterminate). */
+  /** Total bytes expected from `Content-Length` while streaming; 0 when
+   * the server didn't send it. On the *final* progress event the
+   * storage layer always sets `total = loaded` so callers can detect
+   * "download complete" with `loaded === total && total > 0` even when
+   * `Content-Length` was missing mid-stream. */
   total: number;
   /** True when served from the Cache API (no network; effectively instant). */
   fromCache: boolean;
@@ -68,6 +71,10 @@ export class ProgressCacheStorage implements Storage {
       loaded += value.byteLength;
       this.onProgress({ loaded, total, fromCache: false });
     }
+    // Final tick with `total = loaded` so the caller can recognise
+    // "download complete" even when `Content-Length` was missing — see
+    // the `total` doc on `SampleLoadProgress`.
+    this.onProgress({ loaded, total: loaded, fromCache: false });
 
     const buf = concat(chunks, loaded);
     await this.put(cache, url, buf, res);

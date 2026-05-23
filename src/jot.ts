@@ -109,6 +109,20 @@ export type PatternSpan = {
   x: Pixels;
   /** Pixel width within the bar (aligns with the padded note area). */
   width: Pixels;
+  /**
+   * Pitches the pattern actually plays (collected from the expanded
+   * pattern body). The mixer uses this to draw the bracket only on rows
+   * whose pitch participates — intermediate rows that don't, the bracket
+   * skips through.
+   */
+  pitches: ReadonlySet<string>;
+  /**
+   * Stable 0-based color slot for this pattern name, assigned in
+   * first-seen order across the jot. The renderer wraps it modulo the
+   * pattern palette length, so every usage of the same pattern shows
+   * the same color.
+   */
+  colorIndex: number;
 };
 
 /**
@@ -256,6 +270,59 @@ function countOnsets(els: Element[]): number {
 }
 
 /**
+ * Pitches that appear anywhere inside an expanded element tree. Used to
+ * tag a {@link PatternSpan} with the set of pitches its body actually
+ * plays, so the mixer can draw the bracket only on rows whose pitch is
+ * inside it. Pattern bodies are fully expanded before the structural
+ * pass (see {@link expandElement}), so a `patternRef` here would be a
+ * bug — silently skip it.
+ */
+function collectPitches(els: Element[]): Set<string> {
+  const out = new Set<string>();
+  const walk = (es: Element[]) => {
+    for (const e of es) {
+      switch (e.kind) {
+        case 'note':
+          out.add(e.pitch);
+          break;
+        case 'simul':
+        case 'group':
+          walk(e.elements);
+          break;
+        case 'rest':
+        case 'patternRef':
+          break;
+      }
+    }
+  };
+  walk(els);
+  return out;
+}
+
+/**
+ * Walk every patternSpan across every voice/bar in source order and
+ * assign each unique pattern name the next color slot. Same name → same
+ * index everywhere, including across voices. The renderer wraps the
+ * index modulo the pattern palette, so a jot with more unique patterns
+ * than colors quietly recycles instead of failing.
+ */
+function assignPatternColorIndices(voices: StructuralVoice[]): void {
+  const indexByName = new Map<string, number>();
+  for (const voice of voices) {
+    for (const bar of voice.bars) {
+      for (const span of bar.patternSpans) {
+        let idx = indexByName.get(span.name);
+        if (idx === undefined) {
+          idx = indexByName.size;
+          indexByName.set(span.name, idx);
+        }
+        span.colorIndex = idx;
+      }
+    }
+  }
+}
+
+/**
  * Whole-jot onset density: the maximum, across voices, of
  * onsets-per-beat. We take the max (not the mean) because the bars are
  * a shared horizontal grid — the busiest voice is the one that needs
@@ -320,6 +387,10 @@ export type StructuralPatternSpan = {
   name: string;
   startBeat: number;
   endBeat: number;
+  /** See {@link PatternSpan.pitches}. */
+  pitches: ReadonlySet<string>;
+  /** See {@link PatternSpan.colorIndex}. */
+  colorIndex: number;
 };
 
 export type StructuralTupletSpan = {
@@ -492,6 +563,7 @@ export class RenderedJot {
           )
         : 1;
     const voices = jot.voices.map((v) => this.structureForVoice(v, jot));
+    assignPatternColorIndices(voices);
     return {
       title: jot.title,
       voices,
@@ -642,6 +714,12 @@ export class RenderedJot {
               name: el.patternSource.name,
               startBeat: atBeat,
               endBeat: atBeat + span,
+              pitches: collectPitches(el.elements),
+              // Placeholder — `structureForJot` assigns the real
+              // (jot-wide, first-seen-order) index once all voices are
+              // built, so the same pattern name gets the same color
+              // across voices.
+              colorIndex: 0,
             });
           } else if (el.elements.length > 1 && span > 0) {
             // Tuplet detection — see the dyadic-fraction comment on the
@@ -767,6 +845,8 @@ export class RenderedJot {
           name: s.name,
           startBeat: s.startBeat,
           endBeat: s.endBeat,
+          pitches: s.pitches,
+          colorIndex: s.colorIndex,
           x: px((padLeft as number) + s.startBeat * pxPerBeat),
           width: px((s.endBeat - s.startBeat) * pxPerBeat),
         };

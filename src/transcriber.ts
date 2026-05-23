@@ -97,6 +97,12 @@ export type TranscribeResponse = {
    */
   no_drums_url?: string | null;
   /**
+   * Set only by the `filter` transcribe path: URL path to the predicted
+   * onsets rendered as a MIDI file. Either this OR `jot_dsl` carries
+   * the score depending on `transcribe_mode`.
+   */
+  prediction_midi_url?: string | null;
+  /**
    * URL path to the debug `.zip` bundle for this run — the score
    * (`final.jot`), MP3-encoded per-stem + drumless audio tracks, and a
    * JSON manifest with per-stage timings + the full captured log stream.
@@ -105,6 +111,46 @@ export type TranscribeResponse = {
    * bundle couldn't be assembled (e.g. nothing to bundle).
    */
   debug_zip_url?: string | null;
+};
+
+/** Pipeline stage names — kept in lockstep with `transcriber/app/pipeline/runner.py`'s
+ *  `Stage` StrEnum. Used both as `resume_stage` form values and as the
+ *  picker labels in the UI. */
+export type TranscribeStage =
+  | 'stems_all'
+  | 'stems_per'
+  | 'beats'
+  | 'onsets'
+  | 'transcribe'
+  | 'refine';
+
+/** Audio fed into the beat tracker.
+ *  See `transcriber/app/pipeline/runner.py::BeatInput`. */
+export type BeatInput = 'full_mix' | 'drum_stem';
+
+/** Which transcribe pathway runs. `dsl` = LLM emits a Drumjot DSL line
+ *  per instrument, recomposed + (optionally) F1-refined. `filter` = LLM
+ *  only filters artifact onsets per instrument; kept onsets render
+ *  straight to MIDI with their original times. */
+export type TranscribeMode = 'dsl' | 'filter';
+
+/** Per-stem onset detector backend. `librosa` = the legacy spectral-flux
+ *  detector. `adtof` = ADTOF CRNN run per stem, with automatic per-stem
+ *  fallback to `librosa` if ADTOF is unavailable/erroring. */
+export type OnsetBackend = 'librosa' | 'adtof';
+
+/**
+ * One entry in `GET /transcribe/list`. Mirrors the server-side
+ * `TranscriptionSummary` (`transcriber/app/models.py`); see the docstring
+ * there for the field semantics.
+ */
+export type TranscriptionSummary = {
+  folder: string;
+  original_filename: string | null;
+  requested_at: string;
+  last_run_at: string | null;
+  last_resume_stage: string | null;
+  resumable_stages: TranscribeStage[];
 };
 
 /**
@@ -123,25 +169,66 @@ export type TranscribeOptions = {
   includeCandidates?: boolean;
   /**
    * Run the F1-gated multi-level convergence loop (macro / structure /
-   * onsets / velocity). Independent of `lint`.
+   * onsets / velocity). Independent of `lint`. Filter mode ignores this
+   * (the refine stage is skipped).
    */
   refine?: boolean;
   /**
    * Run the deterministic Jot linter (instrument-tier + performance-tier
    * checks) and ask the LLM to fix flagged regions surgically.
    * Independent of `refine` — you can enable either alone, both, or
-   * neither.
+   * neither. Filter mode ignores this.
    */
   lint?: boolean;
-  /** Generate K candidate transcriptions and pick the highest-scoring one. */
+  /** Generate K candidate transcriptions and pick the highest-scoring one.
+   *  Filter mode ignores this (single deterministic filter pass). */
   bestOfK?: number;
   /**
+   * Which audio is fed into the beat tracker. `full_mix` (default) is
+   * madmom's training distribution; `drum_stem` can help on tracks with
+   * heavy non-drum syncopation. Server-side default lives in
+   * `Settings.beat_input_default`.
+   */
+  beatInput?: BeatInput;
+  /**
+   * Which transcribe pathway runs. `dsl` (default) emits Drumjot DSL +
+   * refinement; `filter` emits a predicted-onsets MIDI plus per-note
+   * provenance and skips the refine stage entirely.
+   */
+  transcribeMode?: TranscribeMode;
+  /**
+   * Per-stem onset detector backend. `librosa` is the legacy
+   * spectral-flux detector; `adtof` is the ADTOF CRNN run per stem with
+   * a per-stem librosa fallback when ADTOF/its weights aren't available.
+   */
+  onsetBackend?: OnsetBackend;
+  /**
    * Persist all intermediate audio + JSON artifacts to the transcriber's
-   * debug directory. Useful for debugging stem separation, beat tracking,
-   * or LLM output. See transcriber/README.md for the layout.
+   * debug directory. Required for the run to be resumable later (the
+   * resume endpoint reads from `/debug/<folder>/`). See
+   * transcriber/README.md for the layout.
    */
   debug?: boolean;
   /** AbortSignal lets callers cancel slow requests (separation can take ~60s). */
+  signal?: AbortSignal;
+};
+
+/**
+ * Form-encoded body for `POST /transcribe/resume`. `resumeFolder` is the
+ * basename of a folder under the configured debug base (typically a value
+ * pulled from a {@link TranscriptionSummary}); `resumeStage` is one of
+ * `STAGE_ORDER`. All other fields share their /transcribe semantics.
+ */
+export type ResumeOptions = {
+  resumeFolder: string;
+  resumeStage: TranscribeStage;
+  includeCandidates?: boolean;
+  refine?: boolean;
+  lint?: boolean;
+  bestOfK?: number;
+  beatInput?: BeatInput;
+  transcribeMode?: TranscribeMode;
+  onsetBackend?: OnsetBackend;
   signal?: AbortSignal;
 };
 
@@ -171,18 +258,7 @@ export class TranscriberClient {
   async transcribe(file: File, options: TranscribeOptions = {}): Promise<TranscribeResponse> {
     const form = new FormData();
     form.append('file', file);
-    if (options.includeCandidates) {
-      form.append('include_candidates', 'true');
-    }
-    if (options.refine !== undefined) {
-      form.append('refine', options.refine ? 'true' : 'false');
-    }
-    if (options.lint !== undefined) {
-      form.append('lint', options.lint ? 'true' : 'false');
-    }
-    if (options.bestOfK !== undefined && options.bestOfK > 1) {
-      form.append('best_of_k', String(options.bestOfK));
-    }
+    this.appendTranscribeFields(form, options);
     if (options.debug) {
       form.append('debug', 'true');
     }
@@ -197,6 +273,75 @@ export class TranscriberClient {
       throw new Error(`Transcribe failed (${res.status}): ${detail}`);
     }
     return (await res.json()) as TranscribeResponse;
+  }
+
+  /**
+   * Re-run the pipeline from `options.resumeStage` onward against a prior
+   * /transcribe run's debug folder. The server expects the artifacts of
+   * every stage strictly before `resumeStage` to be on disk under
+   * `<DEBUG_DIR>/<resumeFolder>/` — surface a 400 with a stage-specific
+   * message if anything is missing. Mirrors `/transcribe`'s response
+   * shape so callers can reuse the same `parse(jot_dsl)` / debug-zip-load
+   * path.
+   */
+  async resume(options: ResumeOptions): Promise<TranscribeResponse> {
+    const form = new FormData();
+    form.append('resume_folder', options.resumeFolder);
+    form.append('resume_stage', options.resumeStage);
+    this.appendTranscribeFields(form, options);
+
+    const res = await fetch(`${this.baseUrl}/transcribe/resume`, {
+      method: 'POST',
+      body: form,
+      signal: options.signal,
+    });
+    if (!res.ok) {
+      const detail = await safeReadError(res);
+      throw new Error(`Resume failed (${res.status}): ${detail}`);
+    }
+    return (await res.json()) as TranscribeResponse;
+  }
+
+  /** List recent /transcribe runs available on the server, most-recently
+   *  -run first. Returns an empty array when the debug base is missing or
+   *  empty. */
+  async listTranscriptions(): Promise<TranscriptionSummary[]> {
+    const res = await fetch(`${this.baseUrl}/transcribe/list`);
+    if (!res.ok) {
+      const detail = await safeReadError(res);
+      throw new Error(`List transcriptions failed (${res.status}): ${detail}`);
+    }
+    return (await res.json()) as TranscriptionSummary[];
+  }
+
+  /** Shared form-field encoder for /transcribe + /transcribe/resume.
+   *  Both endpoints accept the same toggles; only the file/resume
+   *  identifier differs. */
+  private appendTranscribeFields(
+    form: FormData,
+    options: TranscribeOptions | ResumeOptions,
+  ): void {
+    if (options.includeCandidates) {
+      form.append('include_candidates', 'true');
+    }
+    if (options.refine !== undefined) {
+      form.append('refine', options.refine ? 'true' : 'false');
+    }
+    if (options.lint !== undefined) {
+      form.append('lint', options.lint ? 'true' : 'false');
+    }
+    if (options.bestOfK !== undefined && options.bestOfK > 1) {
+      form.append('best_of_k', String(options.bestOfK));
+    }
+    if (options.beatInput !== undefined) {
+      form.append('beat_input', options.beatInput);
+    }
+    if (options.transcribeMode !== undefined) {
+      form.append('transcribe_mode', options.transcribeMode);
+    }
+    if (options.onsetBackend !== undefined) {
+      form.append('onset_backend', options.onsetBackend);
+    }
   }
 }
 

@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 
-from app.models import BestOfKLog, OnsetCandidate
+from app.models import BestOfKLog, OnsetCandidate, TranscriptionSummary
 from app.pipeline.beats import BarInfo, BeatStructure, BeatTick
-from app.pipeline.runner import PipelineContext, Stage, stage_index
+from app.pipeline.runner import STAGE_ORDER, PipelineContext, Stage, stage_index
 
 log = logging.getLogger(__name__)
 
@@ -162,6 +163,158 @@ def load_original_filename(folder: Path) -> str | None:
     if len(parts) >= 3 and parts[2]:
         return parts[2]
     return None
+
+
+def _parse_folder_timestamp(name: str) -> str | None:
+    """Parse the `<YYYYMMDD-HHMMSS>` prefix minted by
+    `debug.mint_request_folder_name` back into an ISO-8601 string.
+
+    Returns None when the prefix doesn't parse — likely an old folder or
+    one created by hand. Callers fall back to file mtimes in that case.
+    """
+    stamp = name.split("_", 1)[0]
+    try:
+        dt = datetime.strptime(stamp, "%Y%m%d-%H%M%S")
+    except ValueError:
+        return None
+    # The stamp is local-time per `time.strftime`; emit it as a naive
+    # ISO string (no tz) so the UI can format it however it likes
+    # without us claiming a timezone we don't know.
+    return dt.isoformat(timespec="seconds")
+
+
+def _resumable_stages(folder: Path) -> list[str]:
+    """Return the stages whose `start_stage=…` would succeed for this
+    folder, ordered by `STAGE_ORDER`.
+
+    Mirrors the per-stage hydration checks in
+    `hydrate_context_from_resume`: a stage is resumable iff every
+    artifact strictly *before* it exists on disk. STEMS_ALL is always
+    listed when the input audio is cached (it's the from-scratch resume
+    that re-uses the upload), regardless of any later artifacts.
+    """
+    out: list[str] = []
+    # STEMS_ALL = re-run everything from the cached upload.
+    if find_input_audio(folder) is not None:
+        out.append(Stage.STEMS_ALL.value)
+    # STEMS_PER needs the drum stem.
+    has_drum_stem = find_drum_stem(folder) is not None
+    if has_drum_stem:
+        out.append(Stage.STEMS_PER.value)
+    # BEATS needs per-instrument stems.
+    has_per = bool(find_per_instrument_stems(folder))
+    if has_per:
+        out.append(Stage.BEATS.value)
+    has_beats = (folder / "beats.json").is_file()
+    has_onsets = (folder / "onsets.json").is_file()
+    has_initial = (folder / "initial.jot").is_file()
+    if has_per and has_beats:
+        out.append(Stage.ONSETS.value)
+    if has_per and has_beats and has_onsets:
+        out.append(Stage.TRANSCRIBE.value)
+    if has_per and has_beats and has_onsets and has_initial:
+        out.append(Stage.REFINE.value)
+    # Preserve STAGE_ORDER so the UI can render the picker without
+    # re-sorting (and so a future stage insertion lands where it
+    # should).
+    order = {s.value: i for i, s in enumerate(STAGE_ORDER)}
+    out.sort(key=lambda s: order[s])
+    return out
+
+
+def list_transcription_summaries(base: Path) -> list[TranscriptionSummary]:
+    """Build the GET /transcribe/list payload.
+
+    Tolerant of partial folders (mid-pipeline errors, hand-created
+    directories): each folder is independently parsed and any failure
+    is logged and skipped rather than failing the whole listing.
+    Sorted with the most-recently-run folder first.
+    """
+    if not base.exists() or not base.is_dir():
+        return []
+    summaries: list[TranscriptionSummary] = []
+    for folder in base.iterdir():
+        if not folder.is_dir():
+            continue
+        try:
+            summary = _summarize_folder(folder)
+        except OSError as exc:
+            log.warning("Could not summarize %s: %s", folder, exc)
+            continue
+        if summary is not None:
+            summaries.append(summary)
+    # Sort by `last_run_at` desc, with folders that have no recorded
+    # run time tucked at the bottom (they're least useful to resume).
+    summaries.sort(
+        key=lambda s: (s.last_run_at or "", s.requested_at),
+        reverse=True,
+    )
+    return summaries
+
+
+def _summarize_folder(folder: Path) -> TranscriptionSummary | None:
+    """Read a single debug folder into its summary row. Returns None
+    when the folder is too empty to be a real run (no input audio AND
+    no request.json AND no stage artifacts) — keeps the listing free of
+    noise."""
+    request_payload: dict[str, object] | None = None
+    request_path = folder / "request.json"
+    last_run_at: str | None = None
+    if request_path.is_file():
+        try:
+            request_payload = json.loads(request_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            log.warning("Could not read %s: %s", request_path, exc)
+            request_payload = None
+        try:
+            mtime = request_path.stat().st_mtime
+            last_run_at = (
+                datetime.fromtimestamp(mtime, tz=UTC)
+                .astimezone()
+                .replace(tzinfo=None)
+                .isoformat(timespec="seconds")
+            )
+        except OSError:
+            last_run_at = None
+
+    last_resume_stage: str | None = None
+    if isinstance(request_payload, dict):
+        options = request_payload.get("options")
+        if isinstance(options, dict):
+            stage_val = options.get("resume_stage")
+            if isinstance(stage_val, str) and stage_val:
+                last_resume_stage = stage_val
+
+    resumable = _resumable_stages(folder)
+    requested_at = _parse_folder_timestamp(folder.name)
+
+    # Skip folders that look empty (no input, no artifacts, no
+    # request.json). They're either pre-mature requests that aborted
+    # before any stage wrote anything, or unrelated directories.
+    if request_payload is None and not resumable:
+        return None
+
+    if requested_at is None:
+        # Fall back to mtime so the row still has a usable timestamp.
+        try:
+            stat = folder.stat()
+            requested_at = (
+                datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+                .astimezone()
+                .replace(tzinfo=None)
+                .isoformat(timespec="seconds")
+            )
+        except OSError:
+            requested_at = ""
+
+    return TranscriptionSummary(
+        folder=folder.name,
+        original_filename=load_original_filename(folder),
+        requested_at=requested_at,
+        last_run_at=last_run_at,
+        last_resume_stage=last_resume_stage,
+        resumable_stages=resumable,
+    )
 
 
 def _load_beats(path: Path) -> BeatStructure:

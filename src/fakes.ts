@@ -168,8 +168,79 @@ export const tripletJot: Jot = {
   ],
 };
 
+/**
+ * Demonstrates two patterns whose pitch sets share one instrument but
+ * differ on the other — so the bracketed outline must span a different
+ * set of rows per pattern, and where they overlap in time the brackets
+ * stack on the shared row.
+ *
+ *   - Track A = snare. In BOTH patterns.
+ *   - Track B = hi-hat. Only in Riff1.
+ *   - Track C = kick. Only in Riff2.
+ *
+ * Timeline:
+ *   - Bar 1: Riff1 alone (snare + hi-hat).
+ *   - Bar 2: Riff1 + Riff2 simultaneously (`[Riff1]+[Riff2]`), so the
+ *     snare row carries hits from both patterns and renders both bracket
+ *     slices side by side, while the hi-hat row sees only Riff1's bracket
+ *     and the kick row sees only Riff2's.
+ *   - Bar 3: Riff2 alone (snare + kick).
+ *
+ * With the mixer in declaration order (h, s, k):
+ *   - Riff1's bracket caps the hi-hat row at the top and the snare row
+ *     at the bottom; it skips the kick row entirely.
+ *   - Riff2's bracket caps the snare row at the top and the kick row at
+ *     the bottom; it skips the hi-hat row.
+ *
+ * The two patterns are deliberately offset within the bar — Riff1 hits
+ * on beats 1 and 3, Riff2 hits on beats 2 and 4 — so the overlap bar
+ * reads as a steady stream of snare onsets rather than a doubled hit.
+ */
+export const patternOverlapJot: Jot = {
+  title: 'Pattern overlap',
+  globalMetadata: {
+    bpm: 110,
+    time: { count: 4, unit: 4 },
+    instrumentMapping: {
+      h: { kind: 'hihat', name: 'HiHat', limb: 'rh' },
+      s: { kind: 'snare', name: 'Snare', limb: 'lh' },
+      k: { kind: 'kick', name: 'Kick', limb: 'rf' },
+    },
+  },
+  patterns: {
+    Riff1: {
+      name: 'Riff1',
+      elements: [
+        simul(note('s'), note('h')),
+        rest(),
+        simul(note('s'), note('h')),
+        rest(),
+      ],
+    },
+    Riff2: {
+      name: 'Riff2',
+      elements: [
+        rest(),
+        simul(note('s'), note('k')),
+        rest(),
+        simul(note('s'), note('k')),
+      ],
+    },
+  },
+  voices: [
+    {
+      bars: [
+        bar(patternRef('Riff1')),
+        bar(simul(patternRef('Riff1'), patternRef('Riff2'))),
+        bar(patternRef('Riff2')),
+      ],
+    },
+  ],
+};
+
 /** Registry of example jots offered by the web UI picker. */
 export const EXAMPLE_JOTS: readonly ExampleJot[] = [
   { id: 'rock', label: 'Simple rock loop', jot: rockJot },
   { id: 'triplet', label: 'Triplet showcase', jot: tripletJot },
+  { id: 'overlap', label: 'Pattern overlap', jot: patternOverlapJot },
 ];
