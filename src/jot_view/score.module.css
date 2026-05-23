@@ -1,0 +1,472 @@
+/* Score chrome: the timeline header (bar/time ruler), the bar
+   containers + barlines + beat dividers, lanes, pattern + tuplet
+   brackets, notes (with all modifier variants), the inline note label
+   popover and its Debug-details collapsible, and the filtered-onset
+   ghost overlays. */
+
+/* Sticky-gutter ruler above the audio tracks / score that labels each
+   bar boundary with bar number and playback time. Same 132px sticky
+   gutter as `.laneGutter` / `.musicTrackGutter` so the column stays
+   pinned during horizontal scroll exactly like the rows below it. */
+.timelineHeader {
+    display: flex;
+    min-width: max-content;
+    margin-bottom: 8px;
+}
+
+.timelineHeaderGutter {
+    position: sticky;
+    left: 0;
+    z-index: 6;
+    flex: 0 0 auto;
+    width: 132px;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 4px 8px;
+    background: #fbf6ec;
+    border-right: 1px solid #c9bfae;
+}
+
+.timelineHeaderLabel {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #6b6b6b;
+}
+
+.timelineHeaderBarsRow {
+    position: relative;
+    flex: 0 0 auto;
+    height: 28px;
+    background: #fbf6ec;
+    /* `border-box` so the right border draws INSIDE `voice.width`, matching
+     the `box-sizing: border-box` `.bar` cells below — their accumulated
+     widths include each bar's right barline, so the closing right border
+     here lands exactly on the final barline below. */
+    box-sizing: border-box;
+    border-top: 1px solid #c9bfae;
+    border-bottom: 1px solid #c9bfae;
+    border-right: 1px solid #c9bfae;
+    cursor: pointer;
+}
+
+/* One tick per bar boundary; sits on the same x as the score's barline
+   below. Labels are pointer-events:none so click-to-seek hits the row. */
+.timelineHeaderTick {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-left: 1px solid #c9bfae;
+    padding-left: 4px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1px;
+    pointer-events: none;
+    user-select: none;
+}
+
+.timelineHeaderBar {
+    font-size: 11px;
+    font-weight: 700;
+    color: #4a4a4a;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+}
+
+.timelineHeaderTime {
+    font-size: 9px;
+    color: #888;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+}
+
+.bar {
+    position: relative;
+    /* border-box so the 1px barline draws INSIDE the bar's width. With
+     the default content-box the border added 1px to every bar's flow
+     footprint, accumulating ~1px/bar against the border-free model
+     `timeToX` / the waveform use — noteheads drifted progressively
+     right of the playhead and audio. */
+    box-sizing: border-box;
+    border-right: 1px solid #c9bfae;
+    flex: 0 0 auto;
+    /* `--bar-beats` is set inline per BarView (zoom-invariant);
+       `--px-per-beat` lives on the score root. */
+    width: calc(var(--bar-beats) * var(--px-per-beat));
+}
+
+.bar:first-child {
+    border-left: 1px solid #c9bfae;
+}
+
+.barAnacrusis {
+    border-right: 1px dashed #c9bfae;
+    background: rgba(255, 140, 85, 0.04);
+}
+
+/* Subtle dashed beat divider inside a bar. Position is `padLeft +
+   beatOffset × pxPerBeat`, the same x the renderer places that beat's
+   note at — `--divider-beat` is the per-line beat offset (set inline
+   per divider, stable per render) and the CSS computes the final pixel
+   left from the zoom-driven `--px-per-beat`. Behind the notes (no
+   z-index, rendered before the lane children) and pointer-events:
+   none so it's purely decorative. */
+.beatDivider {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 0;
+    left: calc(var(--note-pad-px) + var(--divider-beat) * var(--px-per-beat));
+    border-left: 1px dashed #b8a98c;
+    pointer-events: none;
+}
+
+.lane {
+    position: relative;
+    border-bottom: 1px dashed #e2d8c4;
+}
+
+.lane:last-child {
+    border-bottom: none;
+}
+
+.laneDim {
+    opacity: 0.25;
+    transition: opacity 120ms ease;
+}
+
+.patternBracket {
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    border: 1.5px dashed #ff8c55;
+    border-radius: 4px;
+    box-sizing: border-box;
+    pointer-events: none;
+    z-index: 2;
+    transition:
+        background-color 120ms ease,
+        border-color 120ms ease;
+    left: calc(var(--note-pad-px) + var(--span-start-beat) * var(--px-per-beat));
+    width: calc((var(--span-end-beat) - var(--span-start-beat)) * var(--px-per-beat));
+}
+
+.patternBracketHighlight {
+    background: rgba(255, 140, 85, 0.12);
+    border-color: #ff5c0a;
+    box-shadow: 0 0 0 1px rgba(255, 92, 10, 0.35);
+}
+
+.patternLabel {
+    position: absolute;
+    top: -11px;
+    left: 4px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #fff;
+    background: #ff8c55;
+    padding: 2px 6px;
+    border: none;
+    border-radius: 2px 2px 0 0;
+    pointer-events: auto;
+    cursor: pointer;
+    white-space: nowrap;
+    user-select: none;
+    font-family: inherit;
+    line-height: 1;
+}
+
+.patternLabel:hover,
+.patternLabelHighlight {
+    background: #b03d00;
+}
+
+/* Conventional tuplet bracket: a thin line with downward end ticks
+   sitting above the bar's notes, the slot count centred on it. Muted
+   ink so it reads as notation chrome rather than competing with the
+   coloured note dots or the orange pattern brackets. */
+.tupletBracket {
+    position: absolute;
+    top: -17px;
+    height: 13px;
+    box-sizing: border-box;
+    border-top: 1.5px solid #6b6b6b;
+    border-left: 1.5px solid #6b6b6b;
+    border-right: 1.5px solid #6b6b6b;
+    pointer-events: none;
+    z-index: 3;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    left: calc(var(--note-pad-px) + var(--span-start-beat) * var(--px-per-beat));
+    width: calc((var(--span-end-beat) - var(--span-start-beat)) * var(--px-per-beat));
+}
+
+.tupletNumber {
+    /* Sits on the bracket line; the opaque chip masks the line so the
+     numeral stays legible. Cream matches the score surface. */
+    transform: translateY(-50%);
+    padding: 0 4px;
+    font-size: 10px;
+    font-weight: 700;
+    font-style: italic;
+    font-variant-numeric: tabular-nums;
+    color: #4a4a4a;
+    background: #fbf6ec;
+    line-height: 1;
+}
+
+.note {
+    position: absolute;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+    cursor: pointer;
+    /* Position from `padLeft + beat × pxPerBeat` — beat is stable per
+       note (set inline), pxPerBeat changes on zoom (read from the score
+       container's CSS var). The note's pixel diameter and vertical
+       centring stay in inline style because they don't depend on zoom. */
+    left: calc(var(--note-pad-px) + var(--note-beat) * var(--px-per-beat));
+}
+
+/* A non-straight onset (triplet/tuplet/swing) that isn't already
+   covered by a tuplet bracket — flag it individually with a dotted
+   teal ring so "anything that isn't a standard straight note" is
+   still visible even when it wasn't authored as a group. `outline`
+   (not box-shadow) so it composes with the accent ring. */
+.note.offGrid {
+    outline: 1.5px dotted #2aa198;
+    outline-offset: 2px;
+}
+
+.note.accent {
+    box-shadow:
+        0 0 0 2px #fff,
+        0 0 0 3px currentColor;
+}
+
+/* Ghost notes (`:g` modifier — soft hits, typically MIDI velocity < 40
+   on import). Rendered as a lighter version of the normal note: same
+   solid filled shape, just dimmed so it reads as quieter without the
+   dashed-outline treatment (the dashed style is now reserved for
+   filtered onsets — see `.filteredOnset`). */
+.note.ghost {
+    opacity: 0.45;
+}
+
+.note.roll {
+    background-image: repeating-linear-gradient(
+        45deg,
+        rgba(255, 255, 255, 0.5) 0 2px,
+        transparent 2px 4px
+    );
+}
+
+.modifierBadge {
+    position: absolute;
+    top: -8px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 9px;
+    font-weight: 700;
+    color: #555;
+    pointer-events: none;
+    letter-spacing: 0.04em;
+}
+
+.stickingBadge {
+    position: absolute;
+    bottom: -10px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 9px;
+    color: #888;
+    pointer-events: none;
+}
+
+/* Ring drawn around the currently-selected note. Sized via box-shadow so
+   it composes cleanly with `.accent` (also box-shadow) and doesn't
+   shift layout. Sits above the off-grid dotted outline. */
+.note.noteSelected {
+    box-shadow:
+        0 0 0 2px #fff,
+        0 0 0 4px #ff5c0a;
+}
+
+/* Lift any note that's currently rendering its `.noteLabel` (hover OR
+   selection) above sibling `.pitchRow`s in the mixer — the inline
+   label extends below the note, and without this the later-painted
+   `.pitchRow` below would cover it (only the bottommost row, typically
+   the kick, escapes that). The lane chain (.lane / .bar / .barsRow /
+   .pitchRow) is all `position: relative; z-index: auto`, so any
+   positive z-index here outranks them. */
+.note.noteShowingLabel {
+    z-index: 20;
+}
+
+/* Hovered notes outrank the selected note's `z-index: 20` so a hover
+   label always paints on top of the selected note's orange ring. Same-
+   z-index source ordering would otherwise hide the hovered label when
+   the selected note comes after it in the DOM. */
+.note.noteHovered {
+    z-index: 30;
+}
+
+/* Inline label below the selected note showing the same text the hover
+   tooltip would. Sticking badges sit at `bottom: -10px`; offset further
+   so the two don't overlap. z-index so the label paints over neighbour
+   noteheads.
+   `pointer-events: auto` so the optional Debug-details toggle inside is
+   clickable; sub-elements like the leading description text are nowrap
+   for legibility but the wrapper allows vertical expansion when the
+   collapsible block opens. */
+.noteLabel {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 16px;
+    z-index: 12;
+    background: #fff;
+    border: 1px solid #c9bfae;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: 500;
+    color: #2b2b2b;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+    pointer-events: auto;
+    line-height: 1.2;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    /* Keep narrow when no debug block; the debug block dictates width
+       organically when present. */
+    max-width: 320px;
+}
+
+.noteLabelText {
+    white-space: nowrap;
+}
+
+/* "Debug details" collapsible block under the regular note label,
+   populated only when a filter-mode debug bundle is loaded AND this
+   note's provenance entry was found (matched by MIDI tick). Also used
+   verbatim as the entire content of the filtered-onset popover. */
+.debugDetails {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    border-top: 1px dashed #e7e0d5;
+    padding-top: 3px;
+    margin-top: 1px;
+}
+
+.debugDetailsToggle {
+    font: inherit;
+    font-size: 10px;
+    font-weight: 600;
+    color: #666;
+    background: transparent;
+    border: none;
+    padding: 1px 0;
+    cursor: pointer;
+    text-align: left;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.debugDetailsToggle:hover {
+    color: #2b2b2b;
+}
+
+.debugDetailsToggle:focus-visible {
+    outline: 2px solid #ff8c55;
+    outline-offset: 1px;
+    border-radius: 2px;
+}
+
+/* Compact two-column key/value dump. `dt`/`dd` floated into a grid so
+   the keys stay aligned across multiple rows; `dl` margin reset because
+   we're nested inside the label's tight padding. */
+.debugDetailsList {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 1px 8px;
+    margin: 0;
+    font-size: 10px;
+    line-height: 1.35;
+    font-variant-numeric: tabular-nums;
+}
+
+.debugDetailsList dt {
+    color: #888;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.debugDetailsList dd {
+    margin: 0;
+    color: #2b2b2b;
+}
+
+/* Filtered-onset ghost — rendered at a rejected onset's detected
+   `(bar, beat_in_bar)` position inside the bars row. Same diameter as
+   the real notes but a hollow dashed outline so it reads as "this is
+   what the detector saw, what the filter LLM dropped" without being
+   mistakable for a kept note. Visibility is gated by the toolbar's
+   "Show filtered" checkbox. */
+.filteredOnset {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1.5px dashed currentColor;
+    background: transparent;
+    transform: translate(-50%, -50%);
+    opacity: 0.6;
+    cursor: help;
+    /* `data-noseek` on the element opts out of click-to-seek; pointer
+       events still need to be enabled so the click/hover registers
+       (the lane below otherwise consumes them). */
+    pointer-events: auto;
+    z-index: 4;
+    left: calc(var(--note-pad-px) + var(--filtered-beat) * var(--px-per-beat));
+    transition: opacity 120ms ease;
+}
+
+.filteredOnset:hover,
+.filteredOnsetShowingLabel {
+    opacity: 1;
+    z-index: 25;
+}
+
+/* Inline popover for a filtered onset, anchored below the ghost circle
+   exactly like .noteLabel. Wraps the shared NoteProvenanceDetails block
+   so the debug data has the same visual treatment as on real notes. */
+.filteredOnsetLabel {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 8px;
+    z-index: 13;
+    background: #fff;
+    border: 1px solid #c9bfae;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: 500;
+    color: #2b2b2b;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+    pointer-events: auto;
+    line-height: 1.2;
+    max-width: 320px;
+}

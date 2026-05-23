@@ -1,0 +1,183 @@
+/* Playback chrome: the bottom transport bar (play/pause/stop, speed,
+   kit, drum/audio offsets), the master volume slider, and the
+   travelling playhead line+label (rendered both by the timeline header
+   and the mixer rows; all three share these styles). */
+
+.playbackBar {
+    /* Three tracks: an empty left spacer, the centred transport group,
+     and the right-aligned aux controls (speed / error). The 1fr side
+     tracks keep the transport optically centred in the bar regardless
+     of how wide the aux content is. */
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 24px;
+    border-top: 1px solid #e7e0d5;
+    background: rgba(255, 255, 255, 0.65);
+    backdrop-filter: blur(4px);
+    flex: 0 0 auto;
+    /* Stays pinned to the bottom even when no jot is loaded (the empty
+     placeholder doesn't grow to fill the column). With a jot, the
+     scrolling .jotContainer is flex:1 so this is already at the bottom
+     and the auto margin is a no-op. */
+    margin-top: auto;
+    user-select: none;
+}
+
+.transportSpacer {
+    /* Occupies the left 1fr grid track; no content. */
+}
+
+.transportCenter {
+    /* Only the play/pause button is in flow, so the centred `auto` grid
+     track is exactly its width and the button stays optically centred
+     in the bar whether or not Stop is shown. Stop is positioned
+     absolutely to its right so it never shifts the play button. */
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.transportStop {
+    position: absolute;
+    left: calc(100% + 12px);
+    top: 0;
+}
+
+.transportAux {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+.transportButton {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 52px;
+    height: 52px;
+    font-size: 22px;
+    line-height: 1;
+    border: 1px solid #c9bfae;
+    border-radius: 10px;
+    background: #fff;
+    color: #2b2b2b;
+    cursor: pointer;
+    font-family: inherit;
+    /* Keep the glyph optically centred (▶ / ■ sit slightly off otherwise). */
+    padding: 0;
+}
+
+.transportButton:hover:not(:disabled) {
+    background: #f6efe0;
+    border-color: #b09d80;
+}
+
+.transportButton:disabled {
+    color: #b9b0a0;
+    cursor: not-allowed;
+}
+
+.transportButton:focus-visible {
+    outline: 2px solid #ff8c55;
+    outline-offset: 2px;
+}
+
+.transportButtonStop {
+    color: #b00020;
+}
+
+.transportButtonStop:hover:not(:disabled) {
+    background: #ffecec;
+    border-color: #b00020;
+}
+
+.transportButtonStop:focus-visible {
+    outline-color: #b00020;
+}
+
+.transportButtonError {
+    border-color: #b00020;
+    color: #b00020;
+}
+
+.transportButtonError:hover:not(:disabled) {
+    background: #ffecec;
+}
+
+.masterVolumes {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.masterVolume {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #4a4a4a;
+    user-select: none;
+    cursor: pointer;
+}
+
+.masterVolume input[type='range'] {
+    width: 72px;
+    accent-color: #ff8c55;
+    cursor: pointer;
+}
+
+.masterVolumeValue {
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+    color: #6b6b6b;
+    min-width: 30px;
+    text-align: right;
+}
+
+.playhead {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: #ff5c0a;
+    z-index: 5;
+    box-shadow: 0 0 4px rgba(255, 92, 10, 0.5);
+    cursor: ew-resize;
+}
+
+/* Widen the playhead's drag hit area without changing its visual width.
+   The 2px line is too narrow to grab reliably; this ::before extends
+   the hit target ±5px while leaving the bars-row click-to-seek behavior
+   intact for anything outside the strip. */
+.playhead::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -5px;
+    right: -5px;
+}
+
+.playheadLabel {
+    position: absolute;
+    top: 0;
+    left: 1px;
+    transform: translateX(-50%);
+    background: #ff5c0a;
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+    line-height: 1;
+    padding: 3px 5px;
+    border-radius: 2px;
+    white-space: nowrap;
+    z-index: 6;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    cursor: ew-resize;
+}

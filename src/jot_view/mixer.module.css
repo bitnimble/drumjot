@@ -1,0 +1,439 @@
+/* The unified mixer (interleaved audio tracks + drum-instrument pitch
+   rows): row containers, sticky gutters, mute/solo/volume controls,
+   drag handles, drop indicators, the audio/drums section masters in
+   the gutter, and the per-row bars row (the score-aligned strip the
+   notes / waveforms paint into). */
+
+/* Unified mixer — audio tracks and drum-instrument pitches interleaved
+   in user-defined order. Each row sets its own height (audio rows are
+   ~56px, pitch rows are ~36px); they're separated visually by their
+   gutter borders, so no flex gap. */
+.mixer {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 20px;
+    min-width: max-content;
+}
+
+/* Per-section master fader, parked in the sticky lane gutter directly
+   above the audio-track / drum-staff rows it controls. */
+.gutterMasterRow {
+    display: flex;
+    /* Match the staff/musicTracks width-fitting so the sticky gutter
+     aligns with the rows below even when the score overflows. */
+    min-width: max-content;
+}
+
+.gutterMasterGutter {
+    /* Same width + sticky behaviour as .laneGutter / .musicTrackGutter so
+     this header lines up with the per-row controls below it. */
+    position: sticky;
+    left: 0;
+    z-index: 6;
+    flex: 0 0 auto;
+    width: 132px;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 6px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #666;
+    background: #fbf6ec;
+    border-right: 1px solid #c9bfae;
+}
+
+.gutterMasterLabel {
+    flex: 0 0 auto;
+}
+
+.gutterMasterSlider {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 14px;
+    margin: 0;
+    accent-color: #ff8c55;
+    cursor: pointer;
+}
+
+.gutterMasterSlider:focus {
+    outline: 2px solid #ff8c55;
+    outline-offset: 1px;
+}
+
+.gutterMasterValue {
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+    font-size: 10px;
+    color: #6b6b6b;
+    min-width: 26px;
+    text-align: right;
+}
+
+/* The master rows are stacked flush at the top of the mixer — no gap
+   between Audio master, Drums master, and the first mixer row, since
+   the rows themselves are visually separated by their gutter borders. */
+.mixer > .gutterMasterRow {
+    margin-bottom: 0;
+}
+
+.mixer > .gutterMasterRow + .gutterMasterRow {
+    margin-top: -1px; /* collapse the row's bottom border into the next row */
+}
+
+/* Drum-instrument row in the unified mixer. Same gutter geometry as
+   .musicTrack so audio and drum rows look like siblings (same sticky
+   132px gutter, matching control column on the right). */
+.pitchRow {
+    position: relative;
+    display: flex;
+    min-width: max-content;
+    border-bottom: 1px solid #c9bfae;
+    background: #fff6e8;
+}
+
+.pitchRow:first-of-type,
+.musicTrack + .pitchRow,
+.gutterMasterRow + .pitchRow {
+    border-top: 1px solid #c9bfae;
+}
+
+.pitchRowGutter {
+    position: sticky;
+    left: 0;
+    z-index: 6;
+    flex: 0 0 auto;
+    width: 132px;
+    box-sizing: border-box;
+    border-right: 1px solid #c9bfae;
+    background: #fff6e8;
+    padding: 2px 6px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.pitchRowLabel {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 11px;
+    font-weight: 600;
+    color: #4a4a4a;
+    line-height: 1.1;
+    transition: opacity 120ms ease;
+}
+
+.pitchRowName {
+    font-size: 9px;
+    color: #888;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+/* The drag handle — only the handle is `draggable`, so the user can
+   still click M/S, drag the volume slider, etc. without lifting the
+   whole row by accident. Uses cursor: grab so the affordance is obvious. */
+.mixerDragHandle {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 100%;
+    color: #b0a48c;
+    font-size: 10px;
+    letter-spacing: -1px;
+    cursor: grab;
+    user-select: none;
+    font-family: inherit;
+    line-height: 1;
+}
+
+.mixerDragHandle:hover {
+    color: #4a4a4a;
+}
+
+.mixerDragHandle:active {
+    cursor: grabbing;
+}
+
+/* The row picked up by the user drops to half opacity so they can see
+   the rows shifting past beneath it. Native HTML5 DnD also generates a
+   browser drag image, but dimming the source row in the live layout
+   removes any ambiguity about which row is being moved. */
+.mixerRowDragging {
+    opacity: 0.4;
+}
+
+/* Marks a row that starts a new group — applied to the first row of
+   each group cluster (its `groupId` differs from the previous row's).
+   Adds a small inter-group gap so adjacent groups read as distinct
+   clusters; same-group rows render flush (no top margin). The first
+   row in the mixer never gets this class — no row above it to gap
+   against. */
+.mixerRowGroupStart {
+    margin-top: 12px;
+}
+
+/* The orange line that marks where the row will land if dropped now.
+   Drawn as a 2px wide top/bottom border on the target row — the position
+   (above vs below) is driven by which half of the row the pointer is in. */
+.mixerDropIndicatorAbove {
+    box-shadow: inset 0 2px 0 0 #ff5c0a;
+}
+
+.mixerDropIndicatorBelow {
+    box-shadow: inset 0 -2px 0 0 #ff5c0a;
+}
+
+/* Persistent "drop at the very end" zone below the last row. Has no
+   height of its own when no drag is in flight; on dragover it shows the
+   same orange indicator the row borders use. */
+.mixerEndDrop {
+    height: 4px;
+    min-width: max-content;
+    flex: 0 0 auto;
+}
+
+.mixerEndDrop.mixerDropIndicator {
+    background: #ff5c0a;
+    height: 2px;
+}
+
+.musicTrack {
+    position: relative;
+    display: flex;
+    /* Same border treatment as the voiceStaff so the music tracks read
+     as part of the same vertical stack — distinct row, same grid. */
+    min-width: max-content;
+    border-top: 1px solid #c9bfae;
+    border-bottom: 1px solid #c9bfae;
+    background: #fbf6ec;
+}
+
+.musicTrackGutter {
+    /* Same width and sticky behaviour as the score's laneGutter, so the
+     stem labels stay pinned during horizontal scroll exactly like the
+     pitch labels do below. Top-level row layout puts the drag handle on
+     the left and a stacked label/buttons column on the right (the
+     `.musicTrackContent` child) — kept in row layout so the handle can
+     `align-self: stretch` to the row's full height for a tall hit area. */
+    position: sticky;
+    left: 0;
+    z-index: 6;
+    flex: 0 0 auto;
+    width: 132px;
+    box-sizing: border-box;
+    border-right: 1px solid #c9bfae;
+    background: #fbf6ec;
+    padding: 4px 6px;
+    display: flex;
+    align-items: stretch;
+    gap: 4px;
+}
+
+.musicTrackContent {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+
+.musicTrackLabel {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    transition: opacity 120ms ease;
+    overflow: hidden;
+}
+
+.musicTrackLabelDim {
+    opacity: 0.6;
+}
+
+.musicTrackName {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #6b6b6b;
+}
+
+.musicTrackFile {
+    font-size: 10px;
+    color: #999;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.musicTrackButtons {
+    display: flex;
+    gap: 3px;
+    align-items: center;
+    justify-content: flex-end;
+}
+
+.musicTrackClear {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    font-size: 13px;
+    line-height: 1;
+    border: 1px solid #c9bfae;
+    border-radius: 3px;
+    background: #fff;
+    color: #888;
+    cursor: pointer;
+    font-family: inherit;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.musicTrackClear:hover {
+    border-color: #b00020;
+    color: #b00020;
+}
+
+.musicTrackBarsRow {
+    position: relative;
+    flex: 0 0 auto;
+}
+
+.musicTrackWaveform {
+    display: block;
+    /* `transition` keeps the dim/undim flip smooth when M/S toggles. */
+    transition: opacity 120ms ease;
+}
+
+.gutterPitch {
+    flex: 1 1 auto;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.muteButton,
+.soloButton {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    border: 1px solid #c9bfae;
+    border-radius: 3px;
+    background: #fff;
+    color: #888;
+    cursor: pointer;
+    font-family: inherit;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.muteButton:hover,
+.soloButton:hover {
+    border-color: #888;
+    color: #444;
+}
+
+.muteButton:focus,
+.soloButton:focus {
+    outline: 2px solid #ff8c55;
+    outline-offset: 1px;
+}
+
+.muteButtonActive {
+    background: #b00020;
+    border-color: #b00020;
+    color: #fff;
+}
+
+.muteButtonActive:hover {
+    background: #8a0019;
+    border-color: #8a0019;
+    color: #fff;
+}
+
+.soloButtonActive {
+    background: #f2b300;
+    border-color: #d99f00;
+    color: #2b2b2b;
+}
+
+.soloButtonActive:hover {
+    background: #d99f00;
+    border-color: #b88600;
+}
+
+/* Per-row volume fader, shared by the pitch gutter and the stem gutter.
+   Kept narrow so it fits beside the M/S buttons without widening the
+   sticky gutter further. */
+.rowVolume {
+    flex: 0 0 auto;
+    width: 40px;
+    height: 14px;
+    margin: 0;
+    padding: 0;
+    accent-color: #ff8c55;
+    cursor: pointer;
+    align-self: center;
+}
+
+.rowVolume:focus {
+    outline: 2px solid #ff8c55;
+    outline-offset: 1px;
+}
+
+.barsRow {
+    position: relative;
+    display: flex;
+    flex: 0 0 auto;
+    /* Width driven by `--voice-beats` (set per row) × `--px-per-beat`
+       (set on the score container, the one variable that the zoom
+       slider changes). Reading `--px-per-beat` purely from CSS means
+       a zoom tick mutates a single property on the root and reflows
+       every descendant width/left at the browser layer — no React
+       re-render, no style-prop diff. */
+    width: calc(var(--voice-beats) * var(--px-per-beat));
+}
+
+/* Empty pre-roll region before bar 1 (recording lead-in). Hatched so
+   it reads as non-musical space rather than a measure, and sized via
+   `--lead-in-beats × --px-per-beat` so the notes line up with the
+   music-stem waveform. */
+.leadIn {
+    position: relative;
+    flex: 0 0 auto;
+    box-sizing: border-box;
+    border-right: 1px dashed #c9bfae;
+    background: repeating-linear-gradient(
+        45deg,
+        rgba(201, 191, 174, 0.12) 0 6px,
+        transparent 6px 12px
+    );
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: calc(var(--lead-in-beats) * var(--px-per-beat));
+}
+
+.leadInLabel {
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #b0a48c;
+    user-select: none;
+    pointer-events: none;
+}

@@ -1,0 +1,417 @@
+/* Toolbar chrome: the header strip, its dropdown menus, file-picker
+   buttons, transcribe button, zoom slider, sample-progress indicator,
+   and the bottom-pinned DebugPanel drawer (also operated from the
+   header).
+   Shared form patterns (toolbarCheckbox, samplesSelect, statusPill*)
+   live in jot_view.module.css and are composed via classNames(). */
+
+.toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 24px;
+    border-bottom: 1px solid #e7e0d5;
+    background: rgba(255, 255, 255, 0.65);
+    backdrop-filter: blur(4px);
+    flex: 0 0 auto;
+    user-select: none;
+    /* The header forms a stacking context (backdrop-filter) and its
+     dropdown panels overflow downward into the score region. Without
+     an explicit z-index the later-painted .jotContainer sibling sits
+     on top in hit-testing (it's visually transparent there, so the
+     menu still *looks* right but isn't clickable). Lift the whole
+     header above the scrolling content. */
+    position: relative;
+    z-index: 20;
+}
+
+.toolbarLabel {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #6b6b6b;
+}
+
+.exampleSelect {
+    font-size: 13px;
+    padding: 4px 8px;
+    border: 1px solid #c9bfae;
+    border-radius: 4px;
+    background: #fff;
+    color: #2b2b2b;
+    cursor: pointer;
+    min-width: 220px;
+}
+
+.exampleSelect:focus {
+    outline: 2px solid #ff8c55;
+    outline-offset: 1px;
+}
+
+.toolbarDivider {
+    width: 1px;
+    height: 18px;
+    background: #c9bfae;
+    margin: 0 6px;
+}
+
+.transcribeButton {
+    font-size: 13px;
+    padding: 5px 12px;
+    border: 1px solid #c9bfae;
+    border-radius: 4px;
+    background: #ff8c55;
+    color: #fff;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    font-family: inherit;
+}
+
+.transcribeButton:hover:not(:disabled) {
+    background: #ff7335;
+}
+
+.transcribeButton:disabled {
+    background: #c9bfae;
+    cursor: progress;
+}
+
+.transcribeButton:focus {
+    outline: 2px solid #ff8c55;
+    outline-offset: 1px;
+}
+
+.playButton {
+    font-size: 13px;
+    padding: 5px 12px;
+    border: 1px solid #c9bfae;
+    border-radius: 4px;
+    background: #fff;
+    color: #2b2b2b;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    font-family: inherit;
+}
+
+.playButton:hover:not(:disabled) {
+    background: #f6efe0;
+    border-color: #b09d80;
+}
+
+.playButton:disabled {
+    color: #b9b0a0;
+    cursor: not-allowed;
+}
+
+.playButton:focus {
+    outline: 2px solid #ff8c55;
+    outline-offset: 1px;
+}
+
+.playButtonError {
+    border-color: #b00020;
+    color: #b00020;
+}
+
+.playButtonError:hover:not(:disabled) {
+    background: #ffecec;
+}
+
+.cancelButton {
+    font-size: 13px;
+    padding: 5px 10px;
+    border: 1px solid #c9bfae;
+    border-radius: 4px;
+    background: #fff;
+    color: #b00020;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+}
+
+.cancelButton:hover {
+    background: #ffecec;
+    border-color: #b00020;
+}
+
+.cancelButton:focus {
+    outline: 2px solid #b00020;
+    outline-offset: 1px;
+}
+
+.hiddenInput {
+    display: none;
+}
+
+.zoomSlider {
+    width: 100px;
+    accent-color: #ff8c55;
+    cursor: pointer;
+}
+
+.zoomValue {
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+    color: #6b6b6b;
+    min-width: 36px;
+    text-align: right;
+}
+
+/* One-time drum-sample download indicator, shown in the header's right
+   side only while the player is in the `loading` state. `margin-left: auto`
+   pushes it (and anything after) to the trailing edge of the toolbar;
+   `flex-shrink: 0` keeps the label fully visible no matter how crowded
+   the header gets. */
+.sampleProgress {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #6b6256;
+    white-space: nowrap;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+.sampleProgressTrack {
+    width: 144px;
+    height: 6px;
+    border-radius: 999px;
+    background: #e7e0d2;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.sampleProgressFill {
+    display: block;
+    height: 100%;
+    background: #b95c1e;
+    border-radius: 999px;
+    transition: width 0.15s linear;
+}
+
+.dropdown {
+    position: relative;
+    display: inline-flex;
+}
+
+.dropdownPanel {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    min-width: 180px;
+    padding: 10px;
+    background: #fff;
+    border: 1px solid #c9bfae;
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
+
+.dropdownPanelWide {
+    min-width: 230px;
+}
+
+.dropdownItem {
+    font-size: 13px;
+    font-family: inherit;
+    text-align: left;
+    padding: 7px 10px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: #2b2b2b;
+    cursor: pointer;
+}
+
+.dropdownItem:hover {
+    background: #f6efe0;
+}
+
+.dropdownItem:focus {
+    outline: 2px solid #ff8c55;
+    outline-offset: 1px;
+}
+
+.dropdownDivider {
+    height: 1px;
+    background: #e7e0d5;
+    margin: 2px 0;
+}
+
+/* DebugPanel: a collapsible drawer pinned to the bottom of the app,
+   rendered when a transcriber debug bundle has been loaded. The
+   `Load > Load debug bundle (.zip)` action populates it; it shows the
+   per-stage timings + the full captured log stream from that run. */
+.debugPanel {
+    position: relative;
+    flex: 0 0 auto;
+    border-top: 1px solid #e7e0d5;
+    background: #fafaf7;
+    font-size: 12px;
+    color: #333;
+    display: flex;
+    flex-direction: column;
+    min-height: 80px;
+}
+
+.debugPanelResizeHandle {
+    flex: 0 0 auto;
+    height: 5px;
+    margin-bottom: -1px;
+    background: transparent;
+    cursor: ns-resize;
+    touch-action: none;
+}
+
+.debugPanelResizeHandle:hover,
+.debugPanelResizeHandle:active {
+    background: #d5cab4;
+}
+
+.debugPanelHeader {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 16px;
+    background: #f0ebe2;
+    cursor: pointer;
+    user-select: none;
+}
+
+.debugPanelTitle {
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-size: 11px;
+    color: #555;
+}
+
+.debugPanelStats {
+    font-size: 11px;
+    color: #888;
+    margin-left: auto;
+}
+
+.debugPanelBody {
+    display: grid;
+    grid-template-columns: minmax(220px, 1fr) 2fr;
+    gap: 16px;
+    padding: 10px 16px 14px;
+    overflow: hidden;
+    min-height: 0;
+}
+
+.debugPanelColumn {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.debugPanelColumn h4 {
+    margin: 0 0 6px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #777;
+}
+
+.debugStageList {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-family: 'SF Mono', 'Menlo', monospace;
+    font-size: 11px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.debugStageRow {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 2px 0;
+    border-bottom: 1px dotted #e7e0d5;
+}
+
+.debugStageName {
+    color: #333;
+}
+
+.debugStageElapsed {
+    color: #666;
+}
+
+.debugLogList {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-family: 'SF Mono', 'Menlo', monospace;
+    font-size: 11px;
+    line-height: 1.45;
+    overflow-y: auto;
+    background: #fff;
+    border: 1px solid #e7e0d5;
+    border-radius: 4px;
+    padding: 6px 10px;
+    flex: 1;
+}
+
+.debugLogRow {
+    display: flex;
+    gap: 8px;
+    padding: 1px 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.debugLogTimestamp {
+    color: #888;
+    flex: 0 0 auto;
+}
+
+.debugLogLevel {
+    flex: 0 0 auto;
+    font-weight: 600;
+    width: 56px;
+    color: #555;
+}
+
+.debugLogLevelWARNING {
+    color: #b46100;
+}
+
+.debugLogLevelERROR {
+    color: #b1281c;
+}
+
+.debugLogLogger {
+    flex: 0 0 auto;
+    color: #5a7d9a;
+    min-width: 140px;
+}
+
+.debugLogMessage {
+    flex: 1;
+    color: #2b2b2b;
+}
+
+.debugPanelToggleBar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px;
+    background: #f0ebe2;
+    border-top: 1px solid #e7e0d5;
+    cursor: pointer;
+    user-select: none;
+    font-size: 11px;
+    color: #555;
+}
