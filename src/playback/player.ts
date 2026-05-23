@@ -106,14 +106,17 @@ const DEFAULT_DRUM_PRESET = 0;
 // place to trim/boost later) rather than the old +12 dB lift, which
 // would clip these samples.
 const DRUM_MASTER_GAIN = 1;
-// Default position (1 = unity) of the three user-facing master faders:
-// the whole page, all drum/instrument rows together, and all audio
-// tracks together. Pure attenuation in [0, 1]; the GM-vs-music balance
-// trims (DRUM_MASTER_GAIN, AUDIO_TRACK_MASTER_GAIN) sit underneath so a
-// fader at 1 keeps today's loudness.
-const DEFAULT_MASTER_VOLUME = 1;
+// Default master volume for the primary gain.
+const DEFAULT_MASTER_VOLUME = 0.5;
+// Unity reference (1 = no attenuation) for the user-facing volume
+// faders. Used as the initial position of the drum and audio-track
+// master faders and as the fallback in `clampMasterVolume` when a bad
+// value comes in. Pure attenuation in [0, 1]; the
+// GM-vs-music balance trims (DRUM_MASTER_GAIN, AUDIO_TRACK_MASTER_GAIN)
+// sit underneath so a fader at 1 keeps today's loudness.
+const DEFAULT_VOLUME = 1;
 function clampMasterVolume(v: number): number {
-  if (!Number.isFinite(v)) return DEFAULT_MASTER_VOLUME;
+  if (!Number.isFinite(v)) return DEFAULT_VOLUME;
   return Math.max(0, Math.min(1, v));
 }
 // Per-row loudness trim applied on top of the user's volume fader,
@@ -207,9 +210,9 @@ export class JotPlayer {
    */
   masterVolume: number = DEFAULT_MASTER_VOLUME;
   /** Master fader for all drum/instrument rows together (0..1). */
-  drumMasterVolume: number = DEFAULT_MASTER_VOLUME;
+  drumMasterVolume: number = DEFAULT_VOLUME;
   /** Master fader for all audio tracks together (0..1). */
-  audioTrackMasterVolume: number = DEFAULT_MASTER_VOLUME;
+  audioTrackMasterVolume: number = DEFAULT_VOLUME;
 
   /**
    * Audio tracks loaded by the user — any number (a ParaDB pack's
@@ -480,7 +483,7 @@ export class JotPlayer {
     id: AudioTrackId,
     filename: string,
     buffer: AudioBuffer,
-    objectUrl: string,
+    objectUrl: string
   ): void {
     const prev = this.audioTracks.get(id);
     const track: AudioTrack = {
@@ -505,7 +508,7 @@ export class JotPlayer {
         jotOffset,
         this.playbackSpeed,
         this.startOffsetSec,
-        (sid) => audioTrackGainUnder(sid, this.currentAudioTrackFilter),
+        (sid) => audioTrackGainUnder(sid, this.currentAudioTrackFilter)
       );
     }
     // The controller has now repointed its element at the new blob
@@ -593,7 +596,7 @@ export class JotPlayer {
         jotOffset,
         clamped,
         this.startOffsetSec,
-        (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter),
+        (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter)
       );
     }
     this.scheduleTailTimer(lastTime);
@@ -630,7 +633,7 @@ export class JotPlayer {
       jotOffset,
       this.playbackSpeed,
       clamped,
-      (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter),
+      (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter)
     );
   }
 
@@ -726,7 +729,7 @@ export class JotPlayer {
         target,
         this.playbackSpeed,
         this.startOffsetSec,
-        (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter),
+        (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter)
       );
     }
     if (this.state === 'playing') {
@@ -815,7 +818,7 @@ export class JotPlayer {
       this.audioTrackController?.dispose();
       this.audioTrackController = new AudioTrackPlaybackController(
         ctx,
-        this.audioBusGain ?? ctx.destination,
+        this.audioBusGain ?? ctx.destination
       );
       this.audioTrackController.scheduleAll(
         this.audioTracks.values(),
@@ -823,7 +826,7 @@ export class JotPlayer {
         anchorJot,
         this.playbackSpeed,
         startOffsetSec,
-        (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter),
+        (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter)
       );
 
       runInAction(() => {
@@ -897,7 +900,7 @@ export class JotPlayer {
         jotOffset,
         this.playbackSpeed,
         this.startOffsetSec,
-        (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter),
+        (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter)
       );
     }
     this.startRaf();
@@ -947,7 +950,7 @@ export class JotPlayer {
     this.tailAudioTime = lastAudioTime;
     const tailMs = Math.max(
       0,
-      (lastAudioTime - this.ctx.currentTime + PLAYBACK_TAIL_SECONDS) * 1000,
+      (lastAudioTime - this.ctx.currentTime + PLAYBACK_TAIL_SECONDS) * 1000
     );
     this.endTimerId = window.setTimeout(() => {
       this.stop();
@@ -996,10 +999,7 @@ export class JotPlayer {
       // right out of the box even before the user touches a fader.
       const vol = this.currentFilter.volumes.get(ev.pitch) ?? 1;
       const defaultGain = DEFAULT_PITCH_GAIN[ev.pitch] ?? 1;
-      const velocity = Math.max(
-        1,
-        Math.min(127, Math.round(ev.velocity * vol * defaultGain)),
-      );
+      const velocity = Math.max(1, Math.min(127, Math.round(ev.velocity * vol * defaultGain)));
       const t = audioStartTime + (ev.time - fromOffset) / speed;
       const stopFn = drums.start({ note: ev.midiNote, time: t, velocity });
       this.scheduledStops.push(stopFn);
@@ -1009,14 +1009,10 @@ export class JotPlayer {
 
     console.log(
       `[jotPlayer] scheduled ${scheduled}/${this.events.length} events ` +
-        `(filtered by mute/solo: ${mutedFiltered})`,
+        `(filtered by mute/solo: ${mutedFiltered})`
     );
 
-    if (
-      scheduled === 0 &&
-      this.events.length - mutedFiltered > 0 &&
-      this.state !== 'playing'
-    ) {
+    if (scheduled === 0 && this.events.length - mutedFiltered > 0 && this.state !== 'playing') {
       // Nothing scheduled but notes survived the mute/solo filter — a
       // genuine, otherwise-invisible failure (e.g. the kit loaded with
       // no usable zones). Notes dropped purely by an active mute/solo
@@ -1024,7 +1020,7 @@ export class JotPlayer {
       // exactly like a live reschedule.
       throw new Error(
         `None of ${this.events.length - mutedFiltered} audible notes could be ` +
-          `scheduled on the GeneralUser GS kit. See console for the breakdown.`,
+          `scheduled on the GeneralUser GS kit. See console for the breakdown.`
       );
     }
     return lastTime;
@@ -1055,7 +1051,10 @@ export class JotPlayer {
       // slew the backing track away from the score over a long take.
       // `expectedMediaSec` mirrors audio_tracks.ts's mediaOffset = max(0,
       // jot + startOffset) so the target matches where the track started.
-      if (this.audioTrackController && now - this.lastDriftCheckTime >= DRIFT_CHECK_INTERVAL_SECONDS) {
+      if (
+        this.audioTrackController &&
+        now - this.lastDriftCheckTime >= DRIFT_CHECK_INTERVAL_SECONDS
+      ) {
         this.lastDriftCheckTime = now;
         const expectedMediaSec = Math.max(0, jotTime + this.startOffsetSec);
         this.audioTrackController.correctDrift(expectedMediaSec, this.playbackSpeed);
@@ -1145,11 +1144,11 @@ export class JotPlayer {
               reject(
                 new Error(
                   `Drum kit failed to load within ${LOAD_TIMEOUT_SECONDS}s — ` +
-                    `check network access to raw.githubusercontent.com from the browser.`,
-                ),
+                    `check network access to raw.githubusercontent.com from the browser.`
+                )
               ),
-            LOAD_TIMEOUT_SECONDS * 1000,
-          ),
+            LOAD_TIMEOUT_SECONDS * 1000
+          )
         ),
       ]);
     } finally {
@@ -1163,9 +1162,7 @@ export class JotPlayer {
     // Give smplr a moment to settle before the first scheduled hit; see
     // POST_LOAD_SETTLE_SECONDS. Only reached on the cold load — the
     // early return at the top of this method skips it on every later play.
-    await new Promise((resolve) =>
-      window.setTimeout(resolve, POST_LOAD_SETTLE_SECONDS * 1000),
-    );
+    await new Promise((resolve) => window.setTimeout(resolve, POST_LOAD_SETTLE_SECONDS * 1000));
 
     this.drums = drums;
     runInAction(() => {

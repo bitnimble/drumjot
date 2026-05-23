@@ -13,7 +13,11 @@ import {
 } from 'src/jot';
 import { buildTimeline, jotPlayer } from 'src/playback';
 import sharedStyles from '../jot_view.module.css';
-import { NoteProvenanceContext, SelectionContext } from './contexts';
+import {
+  NoteProvenanceContext,
+  NoteProvenanceContextValue,
+  SelectionContext,
+} from './contexts';
 import { Playhead } from './playback';
 import styles from './score.module.css';
 
@@ -219,6 +223,7 @@ export const BarView = observer(
                 <NoteView
                   key={i}
                   note={note}
+                  bar={bar}
                   color={track.color}
                   config={config}
                   instrument={track.instrument}
@@ -315,12 +320,21 @@ const TupletBracket = observer(({ span }: { span: StructuralTupletSpan }) => (
 const NoteView = observer(
   ({
     note,
+    bar,
     color,
     config,
     instrument,
     offGrid,
   }: {
     note: StructuralNote;
+    /**
+     * The bar this note lives in. Carried through so the `Debug details`
+     * panel can compute the rendered (post-quantization) beat position
+     * — `note.beat` is in quarter-notes from bar start, and the bar's
+     * time signature is needed to convert into the 1-indexed
+     * `beat_in_bar` convention the provenance entry uses.
+     */
+    bar: StructuralBar;
     color: string;
     config: ViewConfig;
     instrument: Instrument;
@@ -365,6 +379,7 @@ const NoteView = observer(
           styles.note,
           isAccent && styles.accent,
           isGhost && styles.ghost,
+          isCross && styles.cross,
           note.roll && styles.roll,
           offGrid && styles.offGrid,
           selected && styles.noteSelected,
@@ -406,7 +421,12 @@ const NoteView = observer(
         {showLabel && (
           <div className={styles.noteLabel}>
             <div className={styles.noteLabelText}>{description}</div>
-            {provenanceEntry && <NoteProvenanceDetails entry={provenanceEntry} />}
+            {provenanceEntry && (
+              <NoteProvenanceDetails
+                entry={provenanceEntry}
+                rendered={{ note, bar, provenance: provenance! }}
+              />
+            )}
           </div>
         )}
       </div>
@@ -458,12 +478,73 @@ function DragGrace({ color, config }: { color: string; config: ViewConfig }) {
 }
 
 /**
+ * Optional rendering context for {@link NoteProvenanceDetails}.
+ *
+ * Present only when the panel is hosted by a kept note (i.e. by
+ * NoteView). Lets the panel compare the detector's view of the onset
+ * against where the score actually drew it after all post-detection
+ * processing — beat-tracker alignment and the MIDI→Jot quantization
+ * pass in {@link from_midi.ts} that snaps every onset to the 16th
+ * grid. FilteredOnsetView omits this prop (a rejected onset has no
+ * rendered note) and the panel skips the rendered/snap rows.
+ */
+type RenderedNoteContext = {
+  note: StructuralNote;
+  bar: StructuralBar;
+  provenance: NoteProvenanceContextValue;
+};
+
+/**
+ * Computes the rendered (post-quantization) beat position in the same
+ * 1-indexed `beat_in_bar` convention the provenance entry uses, so the
+ * "Detected beat" → "Quantized to" comparison reads natively.
+ *
+ * `note.beat` is in quarter-notes from bar start (0-indexed). The
+ * provenance's `beat_in_bar` counts beats of the bar's time
+ * signature (1-indexed, where downbeat = 1.0). The conversion is
+ * `1 + note.beat × (time.count / bar.beats)` — equals
+ * `1 + note.beat` in 4/4, scales correctly for 6/8, 7/8, etc.
+ */
+function renderedBeatInBar(note: StructuralNote, bar: StructuralBar): number {
+  if (bar.beats <= 0) return 1;
+  return 1 + (note.beat / bar.beats) * bar.time.count;
+}
+
+/**
+ * Approximate seconds-equivalent of `beats` in a given bar, using the
+ * bar's tempo. `bar.beats` is in quarter notes; the time signature
+ * relates beats-of-the-signature to quarter notes
+ * (one beat = 4/unit quarter notes). Returns `null` when the bar has
+ * no resolvable tempo so the panel can fall back to beats-only.
+ */
+function beatsToSecondsInBar(
+  beats: number,
+  bar: StructuralBar,
+  fallbackBpm: number | undefined,
+): number | null {
+  const meta = bar.source.metadata;
+  const inlineBpm =
+    meta && typeof meta.bpm === 'number'
+      ? meta.bpm
+      : meta && meta.bpm && typeof meta.bpm === 'object'
+        ? meta.bpm.start ?? meta.bpm.end
+        : undefined;
+  const bpm = inlineBpm ?? fallbackBpm;
+  if (typeof bpm !== 'number' || bpm <= 0) return null;
+  const quarterNotesPerBeat = 4 / bar.time.unit;
+  const quarterNotes = beats * quarterNotesPerBeat;
+  return (quarterNotes * 60) / bpm;
+}
+
+/**
  * Collapsible "Debug details" block that surfaces a single onset's full
- * provenance (detected time, strength, beat-tracker placement, filter
- * decision, MIDI tick, …) inside the selection label. Shared between
- * {@link NoteView} (where it appears under the human-readable
- * description) and {@link FilteredOnsetView} (where it IS the label —
- * filtered onsets have no description to lead with).
+ * provenance (detected time, strength, beat-tracker placement, MIDI
+ * quantization, filter decision, MIDI tick, …) inside the selection
+ * label. Shared between {@link NoteView} (where it appears under the
+ * human-readable description with the post-quantization comparison
+ * filled in) and {@link FilteredOnsetView} (where it IS the label —
+ * filtered onsets have no rendered counterpart so the rendered/snap
+ * rows are hidden).
  *
  * Toggle state is local to this component, so it resets every time the
  * label remounts. Closing the popover (de-selecting / un-hovering the
@@ -472,9 +553,12 @@ function DragGrace({ color, config }: { color: string; config: ViewConfig }) {
  */
 const NoteProvenanceDetails = ({
   entry,
+  rendered,
   startOpen = false,
 }: {
   entry: NoteProvenanceEntry;
+  /** Present when hosted by a kept note; absent for filtered ghosts. */
+  rendered?: RenderedNoteContext;
   /** Open by default (used by FilteredOnsetView so the user immediately
    * sees why the onset was rejected — for kept notes the toggle is
    * collapsed by default so it doesn't crowd the basic description). */
@@ -485,6 +569,35 @@ const NoteProvenanceDetails = ({
   // begin a marquee selection (which would clear the surrounding note's
   // selection and immediately unmount this component).
   const stop = (e: React.MouseEvent) => e.stopPropagation();
+
+  // Post-quantization position + snap delta — only meaningful when the
+  // panel is hosted by a kept note. The conversion to seconds is
+  // best-effort: it only fires when the bar has a resolvable tempo
+  // (per-bar override or jot global), otherwise the row stays
+  // beats-only.
+  let quantizedBeat: number | undefined;
+  let snapBeats: number | undefined;
+  let snapMs: number | undefined;
+  let displayedBarIndex: number | undefined;
+  if (rendered) {
+    quantizedBeat = renderedBeatInBar(rendered.note, rendered.bar);
+    snapBeats = quantizedBeat - entry.beat_in_bar;
+    displayedBarIndex = rendered.bar.index;
+    const seconds = beatsToSecondsInBar(
+      snapBeats,
+      rendered.bar,
+      undefined,
+    );
+    if (seconds !== null) snapMs = seconds * 1000;
+  }
+
+  const renderSignedMs = (ms: number) =>
+    `${ms >= 0 ? '+' : ''}${ms.toFixed(1)} ms`;
+  const renderSignedBeats = (b: number) =>
+    `${b >= 0 ? '+' : ''}${b.toFixed(3)}`;
+  const renderSignedSec = (s: number) =>
+    `${s >= 0 ? '+' : ''}${s.toFixed(3)}s`;
+
   return (
     <div className={styles.debugDetails} onMouseDown={stop}>
       <button
@@ -505,10 +618,33 @@ const NoteProvenanceDetails = ({
           <dd>{entry.detected_time_sec.toFixed(3)}s</dd>
           <dt>Strength</dt>
           <dd>{entry.strength.toFixed(3)}</dd>
-          <dt>Bar / beat</dt>
+          <dt>Detected beat</dt>
           <dd>
-            {entry.bar} · {entry.beat_in_bar.toFixed(3)}
+            bar {entry.bar} · {entry.beat_in_bar.toFixed(3)}
           </dd>
+          {rendered && rendered.provenance.beatAlignmentOffsetSec !== null && (
+            <>
+              <dt>Grid align</dt>
+              <dd>
+                {renderSignedSec(
+                  rendered.provenance.beatAlignmentOffsetSec,
+                )}
+              </dd>
+            </>
+          )}
+          {quantizedBeat !== undefined && (
+            <>
+              <dt>Quantized to</dt>
+              <dd>
+                bar {displayedBarIndex} · {quantizedBeat.toFixed(3)}
+              </dd>
+              <dt>Snap delta</dt>
+              <dd>
+                {renderSignedBeats(snapBeats!)} beats
+                {snapMs !== undefined && ` (${renderSignedMs(snapMs)})`}
+              </dd>
+            </>
+          )}
           <dt>Backend</dt>
           <dd>{entry.detection_backend}</dd>
           {entry.midi_note !== null && (
@@ -523,6 +659,25 @@ const NoteProvenanceDetails = ({
               <dd>{entry.tick}</dd>
             </>
           )}
+          {(() => {
+            // Raw MIDI velocity is preserved on `note.metadata.midi.velocity`
+            // by from_midi.ts; the same file's [A7] step maps it into the
+            // `:a` (≥100) / `:g` (<40) modifiers visible in the description
+            // above. Surface the raw value so the operator can see exactly
+            // why a note picked up (or didn't) the accent/ghost decoration.
+            const velocity = (
+              rendered?.note.source.metadata as
+                | { midi?: { velocity?: number } }
+                | undefined
+            )?.midi?.velocity;
+            if (typeof velocity !== 'number') return null;
+            return (
+              <>
+                <dt>Velocity</dt>
+                <dd>{velocity}</dd>
+              </>
+            );
+          })()}
           <dt>Filter</dt>
           <dd>
             {entry.kept

@@ -51,10 +51,7 @@
 .gutterMasterSlider {
     flex: 1 1 auto;
     min-width: 0;
-    height: 14px;
     margin: 0;
-    accent-color: #ff8c55;
-    cursor: pointer;
 }
 
 .gutterMasterSlider:focus {
@@ -383,11 +380,7 @@
 .rowVolume {
     flex: 0 0 auto;
     width: 40px;
-    height: 14px;
     margin: 0;
-    padding: 0;
-    accent-color: #ff8c55;
-    cursor: pointer;
     align-self: center;
 }
 

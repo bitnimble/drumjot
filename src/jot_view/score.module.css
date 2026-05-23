@@ -251,13 +251,47 @@
         0 0 0 3px currentColor;
 }
 
+/* Cross-stick marker class. No styling of its own — used solely as the
+   distinguisher for `.note.ghost:not(.cross)` so a cross-stick + ghost
+   note keeps its hollow white interior (and falls through to a different
+   ghost treatment) instead of having the whole disc filled at low
+   opacity. */
+.note.cross {
+}
+
 /* Ghost notes (`:g` modifier — soft hits, typically MIDI velocity < 40
    on import). Rendered as a lighter version of the normal note: same
-   solid filled shape, just dimmed so it reads as quieter without the
-   dashed-outline treatment (the dashed style is now reserved for
-   filtered onsets — see `.filteredOnset`). */
-.note.ghost {
-    opacity: 0.45;
+   solid filled shape but with the FILL alone dimmed (modifier rings,
+   badges, accent box-shadow and off-grid outline stay fully opaque so
+   they don't visually disappear on quiet hits). The dashed-outline
+   treatment is reserved for filtered onsets — see `.filteredOnset`.
+
+   Implementation: the colored disc is drawn by a `::before` pseudo so
+   we can drop just its opacity. Applying `opacity` to `.note` itself
+   would dim everything including the accent ring, off-grid outline,
+   and the modifier badges, which the user requires to stay visible on
+   ghost notes. The `!important` overrides the inline `background:
+   color` set by NoteView — required because inline styles beat plain
+   rules; only ghost notes that AREN'T cross-stick (`:not(.cross)`) get
+   this treatment so cross-stick + ghost still draws its white interior. */
+.note.ghost:not(.cross) {
+    background: transparent !important;
+}
+
+.note.ghost:not(.cross)::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+/* Fallback for the rare cross-stick + ghost combo: just dim the whole
+   thing (we can't easily separate fill from rim on the hollow shape). */
+.note.ghost.cross {
+    opacity: 0.6;
 }
 
 .note.roll {
@@ -346,9 +380,12 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    /* Keep narrow when no debug block; the debug block dictates width
-       organically when present. */
-    max-width: 320px;
+    /* No max-width: the label sizes to whichever child needs the most
+       room. Every text element inside is `white-space: nowrap`, so the
+       label expands horizontally as needed to fit both the leading
+       description (one line) and the widest Debug-details value row
+       (also one line) without wrapping. */
+    width: max-content;
 }
 
 .noteLabelText {
@@ -380,6 +417,10 @@
     text-align: left;
     letter-spacing: 0.04em;
     text-transform: uppercase;
+    /* "▸ Debug details" must stay on one line — without this the
+       narrow parent label can wrap the arrow and label across two
+       rows. */
+    white-space: nowrap;
 }
 
 .debugDetailsToggle:hover {
@@ -410,11 +451,16 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.04em;
+    /* Keep keys on one line so the grid columns stay flush. */
+    white-space: nowrap;
 }
 
 .debugDetailsList dd {
     margin: 0;
     color: #2b2b2b;
+    /* Values may include parenthetical units (e.g. "1.234 (+8 ms snap)")
+       — the parent label widens to fit them rather than wrapping. */
+    white-space: nowrap;
 }
 
 /* Filtered-onset ghost — rendered at a rejected onset's detected
@@ -468,5 +514,6 @@
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
     pointer-events: auto;
     line-height: 1.2;
-    max-width: 320px;
+    /* Match `.noteLabel`: size to the widest non-wrapping row inside. */
+    width: max-content;
 }

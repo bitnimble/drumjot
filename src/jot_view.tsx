@@ -110,6 +110,8 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
           rejectedByPitch: store.filteredOnsetsByPitch,
           leadBars: store.noteProvenance.lead_bars ?? 0,
           showFiltered: store.showFilteredOnsets,
+          beatAlignmentOffsetSec:
+            store.noteProvenance.beat_alignment_offset_sec ?? null,
         }
       : null;
 

@@ -38,6 +38,14 @@ export type NoteProvenanceContextValue = {
    * the rejected-onset overlays. NoteView's Debug details remain
    * available regardless (they are per-kept-note, not gated). */
   showFiltered: boolean;
+  /**
+   * Global beat-grid alignment offset (seconds) the beat tracker
+   * applied. Same value for every entry — surfaced here so the
+   * per-note Debug details panel can show it as "Grid align" without
+   * threading the whole provenance file through. `null` when the
+   * sidecar didn't record one (older bundles).
+   */
+  beatAlignmentOffsetSec: number | null;
 };
 
 export const NoteProvenanceContext =

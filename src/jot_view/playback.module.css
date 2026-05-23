@@ -126,8 +126,6 @@
 
 .masterVolume input[type='range'] {
     width: 72px;
-    accent-color: #ff8c55;
-    cursor: pointer;
 }
 
 .masterVolumeValue {
