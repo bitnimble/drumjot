@@ -17,6 +17,17 @@
  * build time, so the typography rules and the consumer's chrome rules
  * stay neatly separated.
  *
+ * **Constraint**: CSS Modules' `composes:` only works in rules whose
+ * selector is a *single bare class* — `.foo` is OK, `.foo dt` /
+ * `.foo:hover` / `.foo > .bar` are not (postcss-modules will error with
+ * `composition is only allowed when selector is single :local class name`).
+ * For typography that *must* be applied through a compound selector
+ * (an `h4` inside a card, a `dt` inside a `dl`), inline the
+ * properties on the compound rule and add a comment naming which use
+ * case it mirrors so a future change to the use case can be
+ * propagated. Currently `.debugPanelColumn h4` (toolbar.module.css)
+ * and `.debugDetailsList dt` (score.module.css) are the only two.
+ *
  * True one-off typography (the tuplet bracket's italic numeral, the
  * 22px transport-button glyph, single-use sizes on patternLabel /
  * pitchRowName / modifierBadge / timelineHeaderTime) deliberately stays

@@ -377,6 +377,7 @@ const MasterVolumeSlider = ({
       value={value}
       onChange={(e) => onChange(parseFloat(e.target.value))}
       aria-label={`${label} master volume`}
+      style={{ ['--value' as string]: value } as React.CSSProperties}
     />
     <span className={styles.masterVolumeValue}>{Math.round(value * 100)}%</span>
   </label>

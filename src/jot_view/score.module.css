@@ -439,7 +439,15 @@
 }
 
 .debugDetailsList dt {
-    composes: metaCaption from '../typography.module.css';
+    /* Equivalent to `metaCaption` from src/typography.module.css, inlined
+       because CSS Modules' `composes:` only works on rules with a single
+       bare class selector (postcss-modules rejects `.foo dt`). Keep in
+       sync with metaCaption if its definition changes. */
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    line-height: 1;
     color: var(--color-text-faint-strong);
     /* Keep keys on one line so the grid columns stay flush. */
     white-space: nowrap;

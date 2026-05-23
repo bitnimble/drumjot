@@ -166,50 +166,67 @@
 
 /* App-wide range slider chrome. The default browser thumb overflows the
    track top/bottom — restyle so the thumb sits flush inside the track.
-   Per-instance widths/heights still live on their owning module classes. */
-:global {
-    input[type='range'] {
-        -webkit-appearance: none;
-        appearance: none;
-        background: transparent;
-        padding: 0;
-        cursor: pointer;
-    }
+   Per-instance widths/heights still live on their owning module classes.
+   Rules use the `:global(...)` parentheses form rather than a `:global { }`
+   block so esbuild's CSS minifier doesn't trip on the nested syntax.
 
-    input[type='range']:focus {
-        outline: none;
-    }
+   The "filled to the thumb" track look is driven by `--value` (0..1) set
+   inline on the <input> at the consumer site — see e.g.
+   MasterVolumeSlider in src/jot_view/playback.tsx. The fallback `0` keeps
+   any future un-prefilled slider looking sane (all-grey track). */
+:global(input[type='range']) {
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    padding: 0;
+    cursor: pointer;
+}
 
-    input[type='range']::-webkit-slider-runnable-track {
-        height: 8px;
-        border-radius: var(--radius-md);
-        background: var(--color-border-soft);
-    }
+:global(input[type='range']:focus) {
+    outline: none;
+}
 
-    input[type='range']::-moz-range-track {
-        height: 8px;
-        border-radius: var(--radius-md);
-        background: var(--color-border-soft);
-        border: none;
-    }
+:global(input[type='range']::-webkit-slider-runnable-track) {
+    height: 8px;
+    border-radius: var(--radius-md);
+    background: linear-gradient(
+        to right,
+        var(--color-accent) 0%,
+        var(--color-accent) calc(var(--value, 0) * 100%),
+        var(--color-border-soft) calc(var(--value, 0) * 100%),
+        var(--color-border-soft) 100%
+    );
+}
 
-    input[type='range']::-webkit-slider-thumb {
-        -webkit-appearance: none;
-        appearance: none;
-        width: 8px;
-        height: 8px;
-        border-radius: var(--radius-circle);
-        background: var(--color-accent);
-        border: none;
-    }
+:global(input[type='range']::-moz-range-track) {
+    height: 8px;
+    border-radius: var(--radius-md);
+    background: linear-gradient(
+        to right,
+        var(--color-accent) 0%,
+        var(--color-accent) calc(var(--value, 0) * 100%),
+        var(--color-border-soft) calc(var(--value, 0) * 100%),
+        var(--color-border-soft) 100%
+    );
+    border: none;
+}
 
-    input[type='range']::-moz-range-thumb {
-        width: 8px;
-        height: 8px;
-        border-radius: var(--radius-circle);
-        background: var(--color-accent);
-        border: none;
-    }
+:global(input[type='range']::-webkit-slider-thumb) {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 8px;
+    height: 8px;
+    border-radius: var(--radius-circle);
+    background: var(--color-accent);
+    border: none;
+}
+
+:global(input[type='range']::-moz-range-thumb) {
+    width: 8px;
+    height: 8px;
+    border-radius: var(--radius-circle);
+    background: var(--color-accent);
+    border: none;
 }
 
 .samplesSelect {

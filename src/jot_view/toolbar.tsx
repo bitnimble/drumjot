@@ -430,6 +430,7 @@ export const Toolbar = observer(
             value={zoom}
             onChange={(e) => onSetZoom(Number(e.target.value))}
             className={styles.zoomSlider}
+            style={{ ['--value' as string]: (zoom - 0.3) / 2.7 } as React.CSSProperties}
           />
           <span className={styles.zoomValue}>{Math.round(zoom * 100)}%</span>
         </label>

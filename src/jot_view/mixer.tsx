@@ -866,6 +866,7 @@ const GutterMasterRow = observer(
             onMouseUp={stop}
             aria-label={`${label} master volume`}
             title={`${label} master volume: ${pct}%`}
+            style={{ ['--value' as string]: value } as React.CSSProperties}
           />
           <span className={styles.gutterMasterValue}>{pct}%</span>
         </div>
@@ -904,6 +905,7 @@ const RowVolumeSlider = ({
       onMouseUp={stop}
       title={`${label} volume: ${Math.round(value * 100)}%`}
       aria-label={`${label} volume`}
+      style={{ ['--value' as string]: value } as React.CSSProperties}
     />
   );
 };

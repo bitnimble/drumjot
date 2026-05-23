@@ -946,6 +946,21 @@ that's exactly the kind of drift the design-token lint catches.
 }
 ```
 
+**`composes:` constraint** — CSS Modules' `composes:` directive only
+works in a rule whose selector is a *single bare class*: `.foo` is
+fine, `.foo dt` / `.foo:hover` / `.foo > .bar` are NOT (postcss-modules
+errors with *"composition is only allowed when selector is single
+:local class name"* and the build fails). When typography is needed on
+an element targeted by a compound selector (an `<h4>` inside a card, a
+`<dt>` inside a `<dl>`), inline the props on the compound rule and
+leave a comment naming which use case it mirrors so future edits to
+the use case can be propagated by hand. The current exceptions are
+`.debugPanelColumn h4` (toolbar.module.css) and `.debugDetailsList dt`
+(score.module.css). The alternative — adding a `className` to every
+inner element in JSX — is cleaner for one or two call sites but quickly
+becomes verbose (11 `<dt>` inserts in NoteProvenanceDetails was the
+tipping point).
+
 In React inline styles — JSX `style={{ … }}` props accept `var(...)`
 strings, so colors still flow through tokens:
 
