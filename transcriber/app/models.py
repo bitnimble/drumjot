@@ -113,6 +113,18 @@ class TranscribeResponse(BaseModel):
     debug_dir: str | None = None
     drum_stem_url: str | None = None
     no_drums_url: str | None = None
+    # Set only by the `filter` transcribe path: URL path (no host, served
+    # under `/outputs/...`) of the predicted onsets rendered as a MIDI
+    # file. The `filter` path produces this *instead of* `jot_dsl`
+    # (which is then empty); accuracy is scored directly on this MIDI.
+    prediction_midi_url: str | None = None
+    # URL path (no host) to the debug zip bundle for this run. The zip
+    # holds the final.jot, MP3-encoded per-stem + drumless audio, and a
+    # JSON manifest with stage timings + the full captured log stream so
+    # the operator can inspect what happened end-to-end. Designed to be
+    # downloaded and re-loaded in the web UI to reconstitute the score +
+    # audio tracks + debug info offline. None if bundling failed.
+    debug_zip_url: str | None = None
 
 
 class HealthResponse(BaseModel):

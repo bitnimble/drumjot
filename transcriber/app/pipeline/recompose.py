@@ -37,10 +37,20 @@ TOOL_PATH = Path(
 FEET_PITCHES: frozenset[str] = frozenset({"k"})
 
 # Pitch letter → display name for the recomposed `instrumentMapping`.
+#
+# `H` is a synthetic open-hi-hat routing key introduced by
+# `pipeline/hihat_split.py` so the per-instrument transcribe pass can see
+# closed (`h`) and open (`H`) hits as separate monophonic lines. Drumjot's
+# DSL only has ONE notational hi-hat pitch (open vs closed are `:o` / `:c`
+# modifiers on `h`), so `H` is a temporary lane: in the current first
+# cut it lands in the final Jot as its own "Open Hi-Hat" voice; the
+# notation-correct follow-up folds it into the `h` voice with `:o`
+# per-note.
 PITCH_DISPLAY_NAMES: dict[str, str] = {
     "k": "Kick",
     "s": "Snare",
     "h": "HiHat",
+    "H": "Open Hi-Hat",
     "d": "Ride",
     "c": "Crash",
     "t": "Tom",

@@ -64,7 +64,10 @@ COPY transcriber/pyproject.toml ./
 # pyproject.toml (>=2.8,<2.12) matches what cu128 carries, so the
 # subsequent `pip install -e .` won't try to upgrade torch out of range.
 # Use --extra-index-url on the editable install too, so any transitive
-# torchaudio resolution also looks at cu128 wheels.
+# torchaudio resolution also looks at cu128 wheels. The ADTOF onset
+# backend (xavriley/ADTOF-pytorch) is a core dep installed by this same
+# `pip install -e .` — it's torch-only and bundles its own weights, so
+# the default image carries it with no extra build arg.
 RUN python3.11 -m pip install --upgrade pip setuptools wheel \
     && python3.11 -m pip install --no-cache-dir 'numpy>=1.26' cython \
     && python3.11 -m pip install --no-cache-dir \
@@ -73,6 +76,12 @@ RUN python3.11 -m pip install --upgrade pip setuptools wheel \
     && python3.11 -m pip install --no-cache-dir \
         --extra-index-url https://download.pytorch.org/whl/cu128 \
         -e .
+
+# ADTOF pretrained weights are NOT provisioned separately: the
+# adtof_pytorch wheel bundles its Frame_RNN weights, so they come in
+# with the editable install above. `_load_model()` still fails loud
+# (then the request falls back to librosa) if the package or its
+# bundled weights are somehow unavailable.
 
 # TS source the bun bridge needs (parser, jot model, etc.).
 COPY src/ ./src/

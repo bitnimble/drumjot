@@ -140,7 +140,12 @@ Time-signature changes detected: {TIME_SIG_CHANGES}
 Total bars: {BAR_COUNT}
 
 Per-bar onset candidates. Each candidate is `(beat_in_bar, strength)`
-where `beat_in_bar` is a 1-indexed float (1.000 = downbeat).
+where `beat_in_bar` is a 1-indexed float that maps uniformly across
+the bar: `1.000` is the downbeat, and integer values are evenly spaced
+through the bar (in 4/4, `2.000` is exactly 1/4 of the way through the
+bar, `3.000` is 1/2, `4.000` is 3/4). Position is anchored to the bar's
+audio span, not to the tracker's individual beat times, so it is stable
+against per-beat micro-timing wobbles.
 
 {BARS}
 

@@ -29,6 +29,15 @@ dependencies = [
     # the highest CUDA version most consumer drivers (570+) support.
     "torch>=2.8,<2.12",
     "torchaudio>=2.8,<2.12",
+    # ADTOF onset backend (`onset_backend=adtof`). This is the PyTorch
+    # port (xavriley/ADTOF-pytorch), NOT the original TensorFlow ADTOF —
+    # it's torch-only (deps: torch/librosa/pretty_midi) and ships its
+    # pretrained Frame_RNN weights inside the wheel, so it can live in
+    # the core deps and be baked into the default image with no extra
+    # TF/Keras stack and no separate Zenodo weights download. Pinned to a
+    # commit SHA for a reproducible graph + weights map (the A/B against
+    # librosa relies on this being frozen). Bump deliberately.
+    "adtof_pytorch @ git+https://github.com/xavriley/ADTOF-pytorch.git@85c192e78f716ea0b111cc8a5ee4a8f6a3a4f8a9",
     "librosa>=0.10.2",
     "soundfile>=0.12",
     "scipy>=1.11",

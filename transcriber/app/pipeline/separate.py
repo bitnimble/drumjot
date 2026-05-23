@@ -1,13 +1,19 @@
 """Two-stage drum separation: full mix -> drum stem -> per-instrument stems.
 
-Stage `stems_all` uses Demucs v4 (htdemucs_ft) to extract a drum stem from
-the full mix. Stage `stems_per` uses the community MDX23C 6-stem
-drum-piece separator (aufr33 / jarredou model) to break the drum stem
-into kick / snare / toms / hi-hat / ride / crash.
+Stage `stems_all` uses **BS-Roformer SW** (jarredou's BS-ROFO-SW-Fixed) to
+extract a drum stem from the full mix — a 6-stem (vocals / drums / bass /
+guitar / piano / other) Band-Split RoPE Transformer chosen over htdemucs_ft
+for its substantially cleaner drum stem (drums SDR ~14 vs ~10), especially
+its preservation of high-frequency cymbal / hi-hat transients, which is
+what Stage 2 then has to split. Stage `stems_per` uses the **jarredou
+5-stem MDX23C DrumSep** model to break the drum stem into
+kick / snare / toms / hi-hat / cymbals. Note: this 5-stem model merges
+ride + crash into a single `cymbals` stem (see `STEM_NAME_TO_PITCH`).
 
-Both stages run via the `audio-separator` library, which is a thin wrapper
-that downloads weights from Hugging Face and dispatches inference onto CUDA
-(or CPU if no GPU is available).
+Both stages run via the `audio-separator` library, which dispatches
+inference onto CUDA (or CPU if no GPU is available). Neither model ships
+in audio-separator's registry; `pipeline/provision.py` injects them and
+fetches their weights on startup (see that module for the mechanism).
 
 Failure modes intentionally surface up to the caller - if the drum-piece
 separator can't find a kick, we just won't emit candidates for the kick lane
@@ -26,6 +32,7 @@ import soundfile as sf
 
 from app.config import settings
 from app.debug import current_debug_sink
+from app.pipeline.provision import provision_custom_models
 
 log = logging.getLogger(__name__)
 
@@ -34,11 +41,10 @@ log = logging.getLogger(__name__)
 # Drumjot DSL pitch letter. Aligned with `src/midi/gm.ts` defaults so a
 # downstream `fromMidi` would land on the same pitches.
 #
-# Tokens are wrapped in literal `(...)` because the MDX23C-DrumSep model
-# (and Demucs's stems_all output) emit filenames of the shape
-# `<title>_(Drums)_htdemucs_ft_(<stem>)_<model>.wav`. Anchoring the
-# match on the parenthesised segment avoids false-positive substring
-# hits against arbitrary characters elsewhere in the filename.
+# Tokens are wrapped in literal `(...)` because the separator models emit
+# filenames of the shape `<title>_(Drums)_<stage1>_(<stem>)_<model>.wav`.
+# Anchoring the match on the parenthesised segment avoids false-positive
+# substring hits against arbitrary characters elsewhere in the filename.
 @dataclass
 class StemsAllResult:
     """Outputs of the `stems_all` separation stage.
@@ -62,10 +68,19 @@ STEM_NAME_TO_PITCH: dict[str, str] = {
     "(hi-hat)": "h",
     "(hh)": "h",
     "(hat)": "h",
+    # The active Stage-2 model (jarredou 5-stem DrumSep) merges ride +
+    # crash into ONE `cymbals` stem, so there is no separate ride/crash
+    # source here: route the merged cymbals stem to the `c` lane as its
+    # carrier. `pipeline/cymbal_split.py` then splits that lane back into
+    # ride (`d`) / crash (`c`) downstream (deterministic features + LLM).
+    # `(ride)` / `(crash)` are kept for forward-compat if a 6-stem model
+    # is ever swapped back in; first-seen-wins in `run_stems_per` keeps
+    # this deterministic.
+    "(cymbals)": "c",
     "(ride)": "d",  # 'd' for ride - avoids the `:r` rim-shot modifier clash
     "(crash)": "c",
-    # Toms tend to ship as the plural token `(toms)` in MDX23C-DrumSep
-    # output; keep the singular form too for forward compatibility.
+    # Toms tend to ship as the plural token `(toms)` in DrumSep output;
+    # keep the singular form too for forward compatibility.
     "(tom)": "t",
     "(toms)": "t",
 }
@@ -97,6 +112,12 @@ class Separator:
         """
         if self._stems_all is not None and self._stems_per is not None:
             return
+
+        # Neither model is in audio-separator's registry — inject them and
+        # fetch their weights BEFORE audio-separator reads the registry /
+        # the local files in `load_model()` below.
+        provision_custom_models()
+
         # Local import: pulls in heavy ML deps; only needed in worker processes.
         from audio_separator.separator import Separator as AS
 
@@ -135,6 +156,39 @@ class Separator:
             time.perf_counter() - t0,
         )
 
+    @staticmethod
+    def _point_at(separator: object, out_dir: Path) -> None:
+        """Make `audio-separator` write this call's stems into `out_dir`.
+
+        `Separator.__init__` resolves `output_dir=None` to `os.getcwd()`
+        (here `/app`, the container WORKDIR) and `load_model()` *bakes*
+        that value into the loaded `model_instance` via its
+        `common_params` — at startup, long before we know the per-request
+        tmp dir. In `audio-separator>=0.44` the per-call
+        `separator.output_dir` setter is **not** re-propagated to
+        `model_instance` at `separate()` time (that re-sync line only
+        exists on newer `main`), so the model keeps writing to the
+        startup cwd.
+
+        The model's output-path construction reads
+        `model_instance.output_dir`, so we set it directly (plus the
+        wrapper attribute, which newer versions *do* re-read). This is
+        the same attribute `audio-separator` assigns internally, so it's
+        stable across the contract drift.
+        """
+        out = str(out_dir)
+        separator.output_dir = out  # type: ignore[attr-defined]
+        model = getattr(separator, "model_instance", None)
+        if model is not None:
+            model.output_dir = out
+        else:
+            # Lazy-loaded by some versions on first separate(); the
+            # wrapper setter above is then the only lever.
+            log.warning(
+                "audio-separator has no model_instance yet; relying on "
+                "wrapper output_dir alone for %s", out,
+            )
+
     def run_stems_all(self, audio_path: Path, work_dir: Path) -> StemsAllResult:
         """Extract a drum stem from the full mix, plus a drumless mix.
 
@@ -149,12 +203,11 @@ class Separator:
 
         out_dir = work_dir / "stems_all"
         out_dir.mkdir(parents=True, exist_ok=True)
-        self._stems_all.output_dir = str(out_dir)
+        self._point_at(self._stems_all, out_dir)
 
         log.info("stems_all: extracting drum stem from %s", audio_path.name)
-        stems_paths = _resolve_outputs(
-            self._stems_all.separate(str(audio_path)), out_dir
-        )
+        raw = self._stems_all.separate(str(audio_path))
+        stems_paths = _resolve_outputs(raw, out_dir)
         drum_candidates = [p for p in stems_paths if "drum" in p.stem.lower()]
         if not drum_candidates:
             raise RuntimeError(
@@ -162,6 +215,12 @@ class Separator:
                 f"Got: {[p.name for p in stems_paths]}"
             )
         drum_stem = drum_candidates[0]
+        if not drum_stem.exists():
+            raise RuntimeError(
+                f"stems_all: separator reported drum stem {drum_stem} but "
+                f"it is not on disk (separate() returned {list(raw)!r}). "
+                "audio-separator wrote elsewhere or the write failed."
+            )
         non_drum_stems = [p for p in stems_paths if p != drum_stem]
 
         # Sum bass + other + vocals into a single drumless mix so the
@@ -196,12 +255,11 @@ class Separator:
 
         out_dir = work_dir / "stems_per"
         out_dir.mkdir(parents=True, exist_ok=True)
-        self._stems_per.output_dir = str(out_dir)
+        self._point_at(self._stems_per, out_dir)
 
         log.info("stems_per: splitting drum stem into pieces")
-        piece_paths = _resolve_outputs(
-            self._stems_per.separate(str(drum_stem)), out_dir
-        )
+        raw = self._stems_per.separate(str(drum_stem))
+        piece_paths = _resolve_outputs(raw, out_dir)
 
         per_instrument: dict[str, Path] = {}
         for path in piece_paths:
@@ -223,15 +281,13 @@ class Separator:
 
 
 def _resolve_outputs(raw_paths: list[str], out_dir: Path) -> list[Path]:
-    """Normalise `audio-separator`'s `separate()` return value to absolute paths.
+    """Anchor `audio-separator`'s `separate()` return to absolute paths.
 
-    The library has changed this contract across releases — some versions
-    return absolute paths, others return bare basenames relative to the
-    configured `output_dir`. We pin `>=0.44`, but rather than couple to one
-    version's behaviour we anchor any non-absolute result to `out_dir`. A
-    silently-relative path here would otherwise read as "file does not
-    exist" everywhere downstream: the FLAC deliverable would be skipped
-    (empty `outputs/<name>/`) and `stems_per` would abort.
+    With `Separator._point_at` the library writes into `out_dir`; it
+    returns bare basenames relative to it (some versions return absolute
+    paths). Anchor any non-absolute entry to `out_dir`; absolute paths
+    pass through unchanged. The caller's `drum_stem.exists()` check
+    catches the case where the library still wrote elsewhere.
     """
     resolved: list[Path] = []
     for raw in raw_paths:

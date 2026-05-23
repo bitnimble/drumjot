@@ -79,40 +79,44 @@ class BeatStructure:
     def position(self, t: float) -> tuple[int, float] | None:
         """Map an absolute time `t` (seconds) to `(bar_index, beat_in_bar)`.
 
-        The returned `beat_in_bar` is a float - the integer part is the
-        beat index (1-indexed), the fractional part is how far into that
-        beat the onset sits. E.g. `(3, 2.333)` = "bar 3, 1/3 into beat 2".
+        The returned `beat_in_bar` is a float in `[1.0, num_beats + 1)`
+        that linearly maps the bar's audio span to its meter — i.e.
+        position is uniform across the bar, not anchored to the
+        tracker's individual beat times. The downbeat is exactly `1.0`,
+        the next bar's downbeat is exactly `num_beats + 1` (and reported
+        on that next bar as `1.0`); in 4/4, `2.0` is the position 1/4 of
+        the way through the bar regardless of micro-timing wobbles in
+        the detected beat 2. Using the bar's own audio span rather than
+        the bracketing inter-beat gap means the value is stable against
+        per-beat detection noise and reads on the same scale as the
+        meter ("2.5" is always the midpoint between beat 2 and beat 3,
+        across the bar uniformly).
 
-        Returns None if `t` falls outside the tracked range (e.g. silence
-        before the first beat, or after the last). Callers should treat
-        that as "drop this onset" - it's noise or chart padding.
-
-        Trailing audio after the last detected beat is handled upstream:
-        `analyze_beats` pads synthetic bars forward to cover the full
-        duration, so the normal binary-search branch picks them up. We
-        keep the backward-extrapolation branch (for onsets that fire
-        slightly before the first detected beat) because that case is
-        better expressed as a fractional `1.0 + (-frac)` on bar 0 than
-        as a synthetic pre-roll bar.
+        Returns None if `t` falls outside the tracked range. Trailing
+        audio after the last detected beat is handled upstream
+        (`analyze_beats` pads synthetic bars to cover the full duration),
+        so the in-bar branch picks them up. Onsets fractionally before
+        the first beat get extrapolated onto bar 0 with a value < 1.0.
         """
-        if not self.beats:
+        if not self.beats or not self.bars:
             return None
         first_t = self.beats[0].time
         last_t = self.beats[-1].time
-        if t < first_t:
-            if len(self.beats) < 2:
-                return None
-            gap = self.beats[1].time - self.beats[0].time
-            if gap <= 0:
-                return None
-            frac = (t - first_t) / gap  # negative
-            return (self.beats[0].bar_index, 1.0 + frac)
         if t > last_t:
             # With trailing-bar padding this only fires for onsets PAST
             # the audio duration - drop them rather than guessing.
             return None
+        if t < first_t:
+            # Pre-roll: extrapolate using bar 0's expected beat spacing
+            # so the value reads as a fraction below 1.0 on bar 0.
+            bar0 = self.bars[0]
+            span = bar0.end_time - bar0.start_time
+            if span <= 0:
+                return None
+            num_beats = max(int(bar0.time_signature[0]), 1)
+            return (bar0.index, 1.0 + (t - bar0.start_time) / span * num_beats)
 
-        # Binary search for the enclosing beat
+        # Binary search for the enclosing beat to find the bar.
         lo, hi = 0, len(self.beats) - 1
         while lo < hi:
             mid = (lo + hi + 1) // 2
@@ -120,12 +124,15 @@ class BeatStructure:
                 lo = mid
             else:
                 hi = mid - 1
-        bt = self.beats[lo]
-        next_t = self.beats[lo + 1].time if lo + 1 < len(self.beats) else None
-        if next_t is None:
-            return (bt.bar_index, float(bt.beat_in_bar))
-        frac = (t - bt.time) / max(next_t - bt.time, 1e-6)
-        return (bt.bar_index, float(bt.beat_in_bar) + frac)
+        bar_idx = self.beats[lo].bar_index
+        if bar_idx < 0 or bar_idx >= len(self.bars):
+            return None
+        bar = self.bars[bar_idx]
+        span = bar.end_time - bar.start_time
+        if span <= 0:
+            return (bar.index, float(self.beats[lo].beat_in_bar))
+        num_beats = max(int(bar.time_signature[0]), 1)
+        return (bar.index, 1.0 + (t - bar.start_time) / span * num_beats)
 
 
 # ---------- Detection ----------
@@ -582,6 +589,21 @@ def _pad_trailing_bars(structure: BeatStructure, duration_seconds: float) -> Non
 # bogus global shift.
 MIN_ALIGN_COVERAGE = 0.30
 
+# Wider search window for the very first detected beat. The DBN has no
+# preceding-beat context at the song start, so beat 0 is the noisiest
+# tick in the structure -- its delta to the first audible drum hit can
+# easily exceed the regular `max_distance` even when the rest of the
+# song aligns cleanly. Catching that hit anchors the global shift to
+# the song's intended downbeat, fixing the "kick visibly off the first
+# beat after import" symptom.
+FIRST_BEAT_ANCHOR_WINDOW = 0.10
+
+# How much weight the first-beat-to-kick delta gets when folded into
+# the global shift. 0.5 = equal influence with the all-beat median;
+# weaker values keep more of the existing behaviour, stronger values
+# risk over-correcting songs whose first beat happens to be unusual.
+FIRST_BEAT_ANCHOR_WEIGHT = 0.5
+
 
 def align_beats_to_onsets(
     structure: BeatStructure,
@@ -608,6 +630,18 @@ def align_beats_to_onsets(
     it (per-bar tempo is therefore stable), while the systematic lag is
     still removed. A uniform shift leaves inter-beat gaps unchanged, so
     a genuine accelerando the DBN tracked is preserved untouched.
+
+    The first detected beat gets special treatment: we additionally
+    search a wider ±`FIRST_BEAT_ANCHOR_WINDOW` for the strongest drum
+    hit (the "first kick" in the typical kick-on-1 song). When found,
+    its delta is folded into the global shift with
+    `FIRST_BEAT_ANCHOR_WEIGHT`. Rationale: the DBN has no preceding
+    context for beat 0, so its position is the noisiest in the song
+    and a hit 60-90 ms away (outside the regular `max_distance`)
+    won't even register as a deltas-list entry; without this anchor the
+    median shift leaves beat 0 visibly off the first kick after import.
+    Subsequent beats are constrained by the periodic grid so their
+    local deltas stay close to the median and don't need this fixup.
 
     The offset is only applied when enough beats actually had a nearby
     onset (`MIN_ALIGN_COVERAGE`); a handful of coincidental matches
@@ -645,7 +679,29 @@ def align_beats_to_onsets(
         return
 
     coverage = len(deltas) / len(structure.beats)
-    offset = float(np.median(deltas))
+    median_offset = float(np.median(deltas))
+
+    # Wider-window anchor for the first detected beat. Fold its delta
+    # into the global shift only when the search actually finds a hit;
+    # otherwise behave exactly like the median-only path.
+    first_beat = structure.beats[0]
+    lo_a = int(np.searchsorted(
+        times, first_beat.time - FIRST_BEAT_ANCHOR_WINDOW, side="left"
+    ))
+    hi_a = int(np.searchsorted(
+        times, first_beat.time + FIRST_BEAT_ANCHOR_WINDOW, side="right"
+    ))
+    first_beat_delta: float | None = None
+    if hi_a > lo_a:
+        j_a = lo_a + int(np.argmax(strengths[lo_a:hi_a]))
+        first_beat_delta = float(times[j_a] - first_beat.time)
+        offset = (
+            (1.0 - FIRST_BEAT_ANCHOR_WEIGHT) * median_offset
+            + FIRST_BEAT_ANCHOR_WEIGHT * first_beat_delta
+        )
+    else:
+        offset = median_offset
+
     if coverage < MIN_ALIGN_COVERAGE:
         log.info(
             "beat alignment: only %.0f%% of beats had a nearby onset "
@@ -656,11 +712,23 @@ def align_beats_to_onsets(
 
     for beat in structure.beats:
         beat.time += offset
-    log.info(
-        "beat alignment: shifted all %d beats by %+.1f ms "
-        "(median of %d beat→onset deltas, coverage %.0f%%)",
-        len(structure.beats), offset * 1000, len(deltas), coverage * 100,
-    )
+    if first_beat_delta is not None:
+        log.info(
+            "beat alignment: shifted all %d beats by %+.1f ms "
+            "(median %+.1f ms over %d beat→onset deltas, "
+            "anchored to first-beat delta %+.1f ms at weight %.2f, "
+            "coverage %.0f%%)",
+            len(structure.beats), offset * 1000,
+            median_offset * 1000, len(deltas),
+            first_beat_delta * 1000, FIRST_BEAT_ANCHOR_WEIGHT,
+            coverage * 100,
+        )
+    else:
+        log.info(
+            "beat alignment: shifted all %d beats by %+.1f ms "
+            "(median of %d beat→onset deltas, coverage %.0f%%)",
+            len(structure.beats), offset * 1000, len(deltas), coverage * 100,
+        )
     _rebuild_bar_fields(structure)
 
 
@@ -812,7 +880,7 @@ class CandidateOnset:
     time: float
     strength: float
     bar: int
-    beat_in_bar: float  # 1-indexed; integer = on the beat, fractional = inside
+    beat_in_bar: float  # 1-indexed, uniform across the bar; see BeatStructure.position
 
 
 def candidates_with_beat_positions(

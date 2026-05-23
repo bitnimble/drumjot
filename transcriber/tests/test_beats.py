@@ -6,6 +6,8 @@ directly.
 """
 from __future__ import annotations
 
+import pytest
+
 from app.pipeline.beats import (
     BarInfo,
     BeatStructure,
@@ -154,8 +156,8 @@ def test_align_snaps_late_beats_back_to_onsets() -> None:
     for i, b in enumerate(structure.beats):
         assert abs(b.time - i * beat_gap) < 1e-9
     # Bar start/end + tempo recomputed from snapped beats.
-    assert structure.bars[0].start_time == 0.0
-    assert abs(structure.bars[0].tempo_bpm - 160.0) < 0.1
+    assert structure.bars[0].start_time == pytest.approx(0.0, abs=1e-9)
+    assert structure.bars[0].tempo_bpm == pytest.approx(160.0, abs=0.1)
 
 
 def test_align_picks_strongest_onset_in_window_not_closest() -> None:
@@ -248,4 +250,4 @@ def test_align_preserves_per_bar_tempo_under_humanized_onsets() -> None:
     assert max(gaps) - min(gaps) < 1e-9
     assert abs(structure.bars[0].tempo_bpm - 160.0) < 0.05
     assert abs(structure.bars[1].tempo_bpm - 160.0) < 0.05
-    assert structure.bars[0].tempo_bpm == structure.bars[1].tempo_bpm
+    assert structure.bars[0].tempo_bpm == pytest.approx(structure.bars[1].tempo_bpm, abs=1e-9)

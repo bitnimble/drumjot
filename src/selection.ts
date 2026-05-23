@@ -1,12 +1,12 @@
 import { makeAutoObservable, observable } from 'mobx';
 import { Box, Point } from 'src/geom';
-import { ResolvedBar, ResolvedNote, ResolvedVoice } from 'src/jot';
+import { StructuralBar, StructuralNote, StructuralVoice } from 'src/jot';
 import { JotViewStore } from 'src/jot_view';
 
 export type SelectionState =
-  | { type: 'notes'; notes: Set<ResolvedNote> }
-  | { type: 'bars'; bars: ResolvedBar[] }
-  | { type: 'voice'; voice: ResolvedVoice }
+  | { type: 'notes'; notes: Set<StructuralNote> }
+  | { type: 'bars'; bars: StructuralBar[] }
+  | { type: 'voice'; voice: StructuralVoice }
   /**
    * A pattern is "selected" when its definition + all usages should be
    * visually highlighted. Created by clicking a pattern bracket label.
@@ -33,9 +33,18 @@ export class SelectionStore {
   marquee: Box | undefined = undefined;
 
   constructor(private readonly jotStore: JotViewStore) {
+    // `observable.ref` (not `.deep`) for state: every transition replaces
+    // the whole state object — we never mutate the inner Set/array — so a
+    // ref-equality reaction is enough, and crucially it stops MobX from
+    // wrapping inner values (like `ResolvedNote` instances in a `notes`
+    // Set) in observable proxies. Reference identity is what `NoteView`
+    // checks against `selectedNote`, so proxy-wrapped values would
+    // silently never match the prop and the selected-state label would
+    // never appear. (`Set<StructuralNote>` now, but the same reasoning
+    // — selection compares by reference identity.)
     makeAutoObservable(
       this,
-      { state: observable.deep },
+      { state: observable.ref },
       { autoBind: true }
     );
   }
@@ -79,6 +88,22 @@ export class SelectionStore {
   /** Convenience: returns the currently-selected pattern name, if any. */
   get selectedPattern(): string | undefined {
     return this.state?.type === 'pattern' ? this.state.name : undefined;
+  }
+
+  /** Replace the selection with exactly one note. */
+  selectNote(note: StructuralNote) {
+    this.state = { type: 'notes', notes: new Set([note]) };
+  }
+
+  /**
+   * The currently-selected note when exactly one is selected; otherwise
+   * undefined. Drives the inline-label rendering — multi-note selections
+   * (marquee result) deliberately suppress the label.
+   */
+  get selectedNote(): StructuralNote | undefined {
+    if (this.state?.type !== 'notes') return undefined;
+    if (this.state.notes.size !== 1) return undefined;
+    return this.state.notes.values().next().value;
   }
 
   private getSelectionForMarquee(): SelectionState | undefined {

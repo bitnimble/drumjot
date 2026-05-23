@@ -27,12 +27,21 @@ live under `<outputs_dir>/<name>/`).
 from __future__ import annotations
 
 import logging
+import subprocess
 from pathlib import Path
 
 import numpy as np
 import soundfile as sf
 
 log = logging.getLogger(__name__)
+
+
+# MP3 bitrate for the debug-zip audio tracks. 128 kbps is the
+# bandwidth/quality sweet spot for drum stems: high enough that transients
+# survive intact, low enough that an N-stem debug bundle for a 3-minute song
+# stays well under 25 MB. Bump if listenable accuracy of the per-stem audio
+# starts mattering more than the bundle size.
+MP3_BITRATE = "128k"
 
 
 # Public route prefix served by the FastAPI app via `StaticFiles`. Bare
@@ -101,6 +110,64 @@ class OutputSink:
         log.info("OutputSink: wrote %s", dest)
         return dest
 
+    def save_mp3_from_wav(self, name: str, src: Path) -> Path | None:
+        """Re-encode `src` (any ffmpeg-readable audio) into `<dir>/<name>.mp3`.
+
+        Used by the debug-bundle builder so a 5-stem debug zip stays compact
+        enough to email / drop into a chat. ffmpeg is already in the Docker
+        image (libsndfile/librosa pull it in), so we shell out instead of
+        adding a Python MP3 encoder dep (`lameenc` etc.). Same lazy-dir +
+        log-don't-raise contract as the FLAC writer.
+
+        Skips re-encoding when `<dir>/<name>.mp3` already exists and is at
+        least as new as `src` — the common resume case, where a prior run
+        already produced both the FLAC and its MP3 transcode and neither
+        upstream stage re-ran. The MP3 is a deterministic function of the
+        FLAC, so timestamp parity is enough; a resume that re-runs
+        `stems_all` / `stems_per` overwrites the FLACs in place and bumps
+        their mtime past the stale MP3, triggering a fresh encode.
+        """
+        if not src.exists():
+            log.warning("OutputSink: source %s does not exist; skipping %s", src, name)
+            return None
+        dest = self.dir / f"{name}.mp3"
+        if dest.exists():
+            try:
+                if dest.stat().st_mtime >= src.stat().st_mtime:
+                    log.info(
+                        "OutputSink: reusing fresh %s (src %s unchanged)",
+                        dest, src,
+                    )
+                    return dest
+            except OSError as exc:
+                # Stat failure is recoverable — fall through and re-encode.
+                log.debug("OutputSink: stat for reuse check failed: %s", exc)
+        try:
+            self._ensure_dir()
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-loglevel", "error",
+                    "-i", str(src),
+                    "-c:a", "libmp3lame", "-b:a", MP3_BITRATE,
+                    str(dest),
+                ],
+                check=True,
+                capture_output=True,
+            )
+        except (OSError, subprocess.CalledProcessError) as exc:
+            stderr = (
+                exc.stderr.decode("utf-8", errors="replace")
+                if isinstance(exc, subprocess.CalledProcessError) and exc.stderr
+                else ""
+            )
+            log.warning(
+                "OutputSink: ffmpeg encoding %s -> %s failed: %s %s",
+                src, dest, exc, stderr,
+            )
+            return None
+        log.info("OutputSink: wrote %s", dest)
+        return dest
+
     def save_text(self, name: str, text: str) -> Path | None:
         """Write `text` verbatim to `<dir>/<name>` (name carries its own
         extension, e.g. `final.jot`). Same lazy-dir + log-don't-raise
@@ -116,6 +183,21 @@ class OutputSink:
         log.info("OutputSink: wrote %s", dest)
         return dest
 
+    def save_bytes(self, filename: str, data: bytes) -> Path | None:
+        """Write raw `data` to `<dir>/<filename>` (filename carries its
+        own extension, e.g. `prediction.mid`). Same lazy-dir +
+        log-don't-raise contract as `save_flac_from_wav`.
+        """
+        dest = self.dir / filename
+        try:
+            self._ensure_dir()
+            dest.write_bytes(data)
+        except OSError as exc:
+            log.warning("OutputSink: writing %s failed: %s", dest, exc)
+            return None
+        log.info("OutputSink: wrote %s", dest)
+        return dest
+
     # -------------------------------------------------------------- read
 
     def existing_path(self, name: str) -> Path | None:
@@ -123,9 +205,19 @@ class OutputSink:
         candidate = self.dir / f"{name}.flac"
         return candidate if candidate.is_file() else None
 
+    def existing_file(self, filename: str) -> Path | None:
+        """Return `<dir>/<filename>` (extension included) if it exists."""
+        candidate = self.dir / filename
+        return candidate if candidate.is_file() else None
+
     def url_for(self, name: str) -> str:
         """URL path (no host) for a stem deliverable by base name."""
         return f"{ROUTE_PREFIX}/{self.folder_name}/{name}.flac"
+
+    def url_for_file(self, filename: str) -> str:
+        """URL path (no host) for an artifact whose name already
+        carries its extension (e.g. `prediction.mid`)."""
+        return f"{ROUTE_PREFIX}/{self.folder_name}/{filename}"
 
 
 def make_output_sink(folder_name: str, base_dir: Path) -> OutputSink | None:
@@ -170,6 +262,7 @@ def materialize_pending(
     drum_stem: Path | None,
     per_instrument_stems: dict[str, Path],
     final_jot: str | None,
+    predicted_midi: bytes | None = None,
     scavenge_dir: Path | None = None,
 ) -> None:
     """Backfill any deliverable the stage bodies didn't already write.
@@ -181,8 +274,15 @@ def materialize_pending(
     hydrated into the context straight from the resume folder. This runs
     once after the pipeline and fills the gaps from whatever sources are
     available — no recomputation. Already-present FLACs are left as the
-    stage wrote them (fresh runs); only the gaps are filled. `final.jot`
-    is always (re)written so it reflects the latest refine result.
+    stage wrote them: a stage that actually ran has already overwritten
+    its FLAC in-place via `save_flac_from_wav` (soundfile truncates the
+    dest), so the no-op here is correct for non-skipped stages too; a
+    skipped stage's FLAC is intentionally kept. `final.jot` is always
+    (re)written so it reflects the latest refine result, and
+    `prediction.mid` is (re)written whenever `predicted_midi` is present
+    — it is set only when the filter-mode transcribe stage actually ran
+    this invocation, so a non-skipped transcribe overwrites the stale
+    MIDI from a prior run instead of leaving it.
     """
     if output_sink is None:
         return
@@ -199,5 +299,12 @@ def materialize_pending(
         scavenged = _scavenge_no_drums(scavenge_dir)
         if scavenged is not None:
             output_sink.save_flac_from_wav("no_drums", scavenged)
-    if final_jot is not None:
+    if final_jot:
         output_sink.save_text("final.jot", final_jot)
+    if predicted_midi is not None:
+        # Unguarded by design: predicted_midi is set only when the
+        # filter-mode transcribe stage ran this invocation (it stays
+        # None on a resume that skips transcribe), so its presence means
+        # the stage was not skipped and any prior prediction.mid is
+        # stale and must be overwritten.
+        output_sink.save_bytes("prediction.mid", predicted_midi)

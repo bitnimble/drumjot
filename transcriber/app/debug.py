@@ -47,17 +47,17 @@ log = logging.getLogger(__name__)
 # request-local, so concurrent /transcribe calls don't see each other's
 # sinks. Defaults to None when debug persistence is disabled — call sites
 # must handle that.
-_CURRENT_DEBUG_SINK: ContextVar["DebugSink | None"] = ContextVar(
+_CURRENT_DEBUG_SINK: ContextVar[DebugSink | None] = ContextVar(
     "drumjot_debug_sink", default=None
 )
 
 
-def current_debug_sink() -> "DebugSink | None":
+def current_debug_sink() -> DebugSink | None:
     """Return the request-scoped DebugSink, or None if debug is disabled."""
     return _CURRENT_DEBUG_SINK.get()
 
 
-def set_current_debug_sink(sink: "DebugSink | None") -> Token:
+def set_current_debug_sink(sink: DebugSink | None) -> Token:
     """Install `sink` as the request-scoped sink. Returns a Token that
     callers MUST pass to `reset_current_debug_sink` (typically in a
     `finally`) so the ContextVar is restored on exit."""

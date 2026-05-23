@@ -287,6 +287,84 @@ function measureOnsetDensity(jot: Jot): number {
   return maxRatio;
 }
 
+// ---------- Structural cache (beat-only, zoom-invariant) ----------
+//
+// These mirror the public `Resolved*` shapes but drop every field that
+// requires a pixel multiplier (x, width, leadInPx, notePadPx). They're
+// what `structureForJot` produces — a single heavy walk per source jot,
+// cached for the lifetime of that jot reference. The downstream pixel
+// pass turns these into the final `ResolvedJot` by multiplying beats
+// into pixels, which is the cheap part of the pipeline. Splitting it
+// this way means zoom (which only changes `viewConfig.barWidth`) skips
+// the structural walk entirely.
+
+export type StructuralNote = {
+  source: Note;
+  pitch: string;
+  modifiers: ReadonlySet<Modifier>;
+  sticking?: Note['sticking'];
+  roll: boolean;
+  beat: number;
+  straight: boolean;
+  duration: number;
+};
+
+export type StructuralTrack = {
+  pitch: string;
+  instrument: Instrument;
+  color: string;
+  notes: StructuralNote[];
+};
+
+export type StructuralPatternSpan = {
+  name: string;
+  startBeat: number;
+  endBeat: number;
+};
+
+export type StructuralTupletSpan = {
+  count: number;
+  startBeat: number;
+  endBeat: number;
+};
+
+export type StructuralBar = {
+  source: Bar;
+  time: TimeSignature;
+  beats: number;
+  tracks: Record<string, StructuralTrack>;
+  patternSpans: StructuralPatternSpan[];
+  tupletSpans: StructuralTupletSpan[];
+  index: number;
+};
+
+export type StructuralVoice = {
+  source: Voice;
+  bars: StructuralBar[];
+  pitches: string[];
+  /** Lead-in seconds, mirrors `globalMetadata.startOffset`. */
+  leadInSec: number;
+  /**
+   * Effective bpm for converting lead-in seconds into pixels (chosen
+   * once at structure time from `globalMetadata.bpm`'s `start` value).
+   * Stored here so the pixel pass doesn't have to re-resolve it.
+   */
+  leadInBpm: number;
+};
+
+export type JotStructure = {
+  title: string;
+  voices: StructuralVoice[];
+  globalMetadata: Metadata;
+  /**
+   * Whole-song horizontal scale derived from onset density. Same
+   * meaning as the local `densityFactor` the old layout threaded
+   * through every call — promoted onto the structural cache so the
+   * pixel pass can read it without re-measuring.
+   */
+  densityFactor: number;
+};
+
 // ---------- RenderedJot: MobX-observable layout container ----------
 
 export class RenderedJot {
@@ -309,17 +387,102 @@ export class RenderedJot {
     return this.viewConfig;
   }
 
+  /**
+   * Beat-grid offset (in quarter-note beats) applied to every drum note
+   * before rendering / playback. Corrects a consistent beat-detection
+   * error from transcription — e.g. a groove that landed 1.5 beats late
+   * in every bar — by sliding all notes across the (fixed) bar grid until
+   * they line up with the beat. `0` = exactly as transcribed. Observable,
+   * so changing it reflows the score and (via the player) reschedules
+   * playback live. See {@link applyDrumOffset}.
+   *
+   * Independent of the player's audio-track offset: this moves the notes
+   * relative to the bars, that moves the backing audio relative to the
+   * notes — both can be non-zero at once.
+   */
+  drumOffsetBeats = 0;
+
+  setDrumOffset(beats: number) {
+    this.drumOffsetBeats = Number.isFinite(beats) ? beats : 0;
+  }
+
   get resolved(): ResolvedJot {
-    return this.layoutJot(this.source);
+    const base = this.layoutJot(this.source);
+    return this.drumOffsetBeats === 0 ? base : applyDrumOffset(base, this.drumOffsetBeats);
+  }
+
+  /**
+   * Stable beat-coord layout used by React components. Identity is
+   * preserved across zoom changes: when only `viewConfig.barWidth`
+   * mutates, every sub-array and sub-object here keeps the same
+   * reference, so observer components don't re-render their subtree.
+   * Reads `drumOffsetBeats` so a beat-offset adjustment still reflows
+   * the rendering.
+   */
+  get structure(): JotStructure {
+    const base = this.structureForJot(this.source);
+    return this.drumOffsetBeats === 0
+      ? base
+      : applyDrumOffsetStructure(base, this.drumOffsetBeats);
+  }
+
+  /**
+   * Quarter-note-beat to pixel multiplier currently in effect. The
+   * single number that drives every position in the rendered score —
+   * exposed as a `--px-per-beat` CSS custom property by the renderer
+   * so bars/notes/brackets can compute their layout from `var(--*)`
+   * + `calc()` instead of re-rendering on every zoom tick.
+   */
+  get pxPerBeat(): number {
+    return ((this.viewConfig.barWidth as number) * this.structure.densityFactor) / 4;
   }
 
   // ----- Layout pipeline -----
+  //
+  // Two passes, deliberately separated:
+  //
+  //   structureForJot(jot)  → JotStructure   // heavy walk, computedFn(jot)
+  //   layoutJot(jot)        → ResolvedJot    // cheap pixel multiply
+  //
+  // `structureForJot` does every zoom-invariant operation: pattern
+  // expansion, the element-tree walk that places notes onto beat coords,
+  // tuplet/pattern-span detection, pitch ordering, color assignment, and
+  // the onset-density measurement that drives `densityFactor`. It's
+  // memoized by `jot` identity via `computedFn`, so a wheel-tick that
+  // only mutates `viewConfig.barWidth` returns the cached structure
+  // without redoing any of that work.
+  //
+  // `layoutJot` takes the cached structure and multiplies beats into
+  // pixels — the only step that actually depends on the zoom slider.
+  // The output is the same `ResolvedJot` shape consumers (timeline.ts,
+  // audio_tracks.ts, react components) have always seen, so this is
+  // internally invisible.
 
-  private layoutJot = computedFn((jot: Jot): ResolvedJot => {
-    // Derive a per-song horizontal scale from note density so a sparse
-    // score (e.g. a quarter-note 2/4 tune) doesn't render as wide as a
-    // 16th-note blast beat. Threaded through layout rather than stored
-    // as observable state so this stays a pure function of `jot`.
+  private layoutJot(jot: Jot): ResolvedJot {
+    const structure = this.structureForJot(jot);
+    const barWidth = this.viewConfig.barWidth as number;
+    const padLeft = this.viewConfig.barNotePaddingLeft;
+    const pxPerBeat = (barWidth * structure.densityFactor) / 4;
+    const voices = structure.voices.map((sv) =>
+      this.pixelVoice(sv, pxPerBeat, padLeft)
+    );
+    const width = px(Math.max(0, ...voices.map((v) => v.width as number)));
+    return {
+      title: structure.title,
+      voices,
+      width,
+      globalMetadata: structure.globalMetadata,
+    };
+  }
+
+  /**
+   * Heavy, zoom-invariant pass. Memoized on `jot` identity by
+   * `computedFn`, so every wheel tick that only changes `barWidth`
+   * skips it. Only reads `viewConfig.palette` (for color assignment);
+   * the palette is never reassigned in practice, so the cache stays
+   * warm across user interactions.
+   */
+  private structureForJot = computedFn((jot: Jot): JotStructure => {
     const density = measureOnsetDensity(jot);
     const densityFactor =
       density > 0
@@ -328,67 +491,53 @@ export class RenderedJot {
             Math.min(MAX_DENSITY_FACTOR, density / REFERENCE_ONSETS_PER_BEAT)
           )
         : 1;
-    const voices = jot.voices.map((v) => this.layoutVoice(v, jot, densityFactor));
-    const width = px(Math.max(0, ...voices.map((v) => v.width)));
+    const voices = jot.voices.map((v) => this.structureForVoice(v, jot));
     return {
       title: jot.title,
       voices,
-      width,
       globalMetadata: jot.globalMetadata,
+      densityFactor,
     };
   });
 
-  private layoutVoice = (
-    voice: Voice,
-    jot: Jot,
-    densityFactor: number
-  ): ResolvedVoice => {
+  private structureForVoice(voice: Voice, jot: Jot): StructuralVoice {
     const patterns = jot.patterns ?? {};
     const globalTime = jot.globalMetadata.time ?? DEFAULT_TIME;
     const instrumentMap = jot.globalMetadata.instrumentMapping ?? {};
-
-    // Lead-in: reserve empty space before bar 1 for the recording's
-    // pre-roll (startOffset seconds before the first beat). Scaled at
-    // the SAME pixels-per-second the bars use — one beat is
-    // `barWidth*densityFactor/4` px wide and lasts `60/bpm` s, so
-    // px/s = (barWidth*df/4)*(bpm/60) — which is exactly what
-    // `buildTimeline` + the waveform mapping assume. That equivalence
-    // is what makes the drum notes line up with the audio-track waveform.
     const rawOffset = jot.globalMetadata.startOffset;
     const leadInSec =
       typeof rawOffset === 'number' && rawOffset > 0 ? rawOffset : 0;
     const bpmField = jot.globalMetadata.bpm;
-    const bpm = typeof bpmField === 'number' && bpmField > 0 ? bpmField : 120;
-    const pxPerSecond =
-      ((this.viewConfig.barWidth * densityFactor) / 4) * (bpm / 60);
-    const leadInPx = px(leadInSec * pxPerSecond);
+    const leadInBpm =
+      typeof bpmField === 'number' && bpmField > 0
+        ? bpmField
+        : typeof bpmField === 'object' &&
+            bpmField !== null &&
+            typeof bpmField.start === 'number' &&
+            bpmField.start > 0
+          ? bpmField.start
+          : 120;
 
-    const bars: ResolvedBar[] = [];
+    const bars: StructuralBar[] = [];
     const pitchOrder: string[] = [];
-    let cursor = leadInPx;
     let activeTime = globalTime;
 
     const noteSeenForPitch = (p: string) => {
       if (!pitchOrder.includes(p)) pitchOrder.push(p);
     };
 
-    // Anacrusis (bar 0) - treated as a single short "bar" sized to its content.
+    // Anacrusis (bar 0) — single short "bar" sized to its content.
     if (voice.anacrusis && voice.anacrusis.length > 0) {
       const elements = expandElements(voice.anacrusis, patterns);
       const beats = sumWeights(elements); // anacrusis is unconstrained
-      const widthPx = px(this.beatsToPx(beats, densityFactor));
-      const { tracks, patternSpans, tupletSpans } = this.layoutBarContents(
+      const { tracks, patternSpans, tupletSpans } = this.structureForBarContents(
         elements,
         beats,
-        widthPx,
-        instrumentMap,
-        activeTime
+        instrumentMap
       );
       Object.keys(tracks).forEach(noteSeenForPitch);
       bars.push({
         source: { elements: voice.anacrusis },
-        x: cursor,
-        width: widthPx,
         time: activeTime,
         beats,
         tracks,
@@ -396,29 +545,22 @@ export class RenderedJot {
         tupletSpans,
         index: 0,
       });
-      cursor = px(cursor + widthPx);
     }
 
     let barIndex = 1;
     for (const b of voice.bars) {
-      // Per-bar metadata can override time signature.
       const barTime = b.metadata?.time ?? activeTime;
       activeTime = barTime;
       const beats = barBeats(barTime);
-      const widthPx = px(this.beatsToPx(beats, densityFactor));
       const elements = expandElements(b.elements, patterns);
-      const { tracks, patternSpans, tupletSpans } = this.layoutBarContents(
+      const { tracks, patternSpans, tupletSpans } = this.structureForBarContents(
         elements,
         beats,
-        widthPx,
-        instrumentMap,
-        barTime
+        instrumentMap
       );
       Object.keys(tracks).forEach(noteSeenForPitch);
       bars.push({
         source: b,
-        x: cursor,
-        width: widthPx,
         time: barTime,
         beats,
         tracks,
@@ -426,15 +568,10 @@ export class RenderedJot {
         tupletSpans,
         index: barIndex++,
       });
-      cursor = px(cursor + widthPx);
     }
 
-    // Voice lane order. The author's instrumentMapping (when provided) is
-    // authoritative: every mapped pitch that actually appears in the voice
-    // comes first, in declaration order. Any pitches without an entry fall
-    // back to the order they were first seen in the source. Authoring
-    // `instrumentMapping: { h, s, k }` renders hi-hat on top, snare in the
-    // middle, kick on the bottom.
+    // Voice lane order: mapped pitches first in declaration order, then
+    // any unmapped pitches in first-seen order.
     const orderedPitches: string[] = [];
     const seen = new Set(pitchOrder);
     for (const mapped of Object.keys(instrumentMap)) {
@@ -446,67 +583,35 @@ export class RenderedJot {
       if (!orderedPitches.includes(p)) orderedPitches.push(p);
     }
 
-    // Now that the voice-level lane order is known, assign a stable color
-    // to every track of a given pitch. Without this pass, colors would
-    // flicker per bar because `layoutBarContents` doesn't see lane order.
     this.assignTrackColors(bars, orderedPitches);
 
     return {
       source: voice,
       bars,
       pitches: orderedPitches,
-      width: cursor,
-      leadInPx,
       leadInSec,
-      notePadPx: this.viewConfig.barNotePaddingLeft,
+      leadInBpm,
     };
-  };
-
-  /**
-   * Walk every bar's tracks and assign each pitch a color from the palette
-   * based on its index in the voice-level lane order. The result is that
-   * the same pitch is always the same colour for the whole voice, no
-   * matter which bar fires it first.
-   */
-  private assignTrackColors(bars: ResolvedBar[], orderedPitches: string[]): void {
-    const palette = this.viewConfig.palette;
-    if (palette.length === 0) return;
-    for (const bar of bars) {
-      for (const pitch of Object.keys(bar.tracks)) {
-        const idx = orderedPitches.indexOf(pitch);
-        const slot = idx >= 0 ? idx : 0;
-        bar.tracks[pitch].color = palette[slot % palette.length];
-      }
-    }
   }
 
   /**
-   * Lay out a bar's elements (post pattern-expansion) into per-pitch tracks
-   * with absolute pixel positions within the bar.
-   *
-   * Note that the `color` of each emitted track is intentionally a
-   * placeholder here. We don't know the final voice-level lane order until
-   * after every bar has been laid out, so `layoutVoice` does a second pass
-   * to assign stable colors per pitch (see `assignTrackColors`). If we
-   * picked palette indices here, the colors would flicker between bars
-   * based on which pitch happened to fire first in each bar.
+   * Walk a bar's element tree and emit per-pitch tracks, pattern spans
+   * and tuplet spans in BEAT coordinates only. The downstream pixel
+   * pass multiplies beats by `pxPerBeat` to get the final positions.
    */
-  private layoutBarContents(
+  private structureForBarContents(
     elements: Element[],
     beats: number,
-    barWidthPx: Pixels,
-    instrumentMap: Record<string, Instrument>,
-    _time: TimeSignature
+    instrumentMap: Record<string, Instrument>
   ): {
-    tracks: Record<string, ResolvedTrack>;
-    patternSpans: PatternSpan[];
-    tupletSpans: TupletSpan[];
+    tracks: Record<string, StructuralTrack>;
+    patternSpans: StructuralPatternSpan[];
+    tupletSpans: StructuralTupletSpan[];
   } {
     const flatNotes: Array<{ note: Note; beat: number; duration: number }> = [];
-    const patternSpans: PatternSpan[] = [];
-    const tupletSpans: TupletSpan[] = [];
+    const patternSpans: StructuralPatternSpan[] = [];
+    const tupletSpans: StructuralTupletSpan[] = [];
 
-    // Walk the element tree and place every note onto the timeline in beats.
     const visit = (els: Element[], startBeat: number, totalBeats: number) => {
       const weights = els.map(elementWeight);
       const totalWeight = weights.reduce((a, b) => a + b, 0) || 1;
@@ -527,32 +632,20 @@ export class RenderedJot {
         case 'rest':
           return;
         case 'simul':
-          // All children share the same onset; they get the full span.
           for (const child of el.elements) {
             placeElement(child, atBeat, span);
           }
           return;
         case 'group':
           if (el.patternSource) {
-            // Record the pattern usage span; pixel x/width are filled in
-            // below once `pxPerBeat` is known.
             patternSpans.push({
               name: el.patternSource.name,
               startBeat: atBeat,
               endBeat: atBeat + span,
-              x: px(0),
-              width: px(0),
             });
           } else if (el.elements.length > 1 && span > 0) {
-            // Tuplet detection. Subdividing this group's span among its
-            // children produces interior boundaries at cumulative
-            // weight fractions. If any of those fractions is not a
-            // dyadic rational (k / 2^m) the group isn't a straight
-            // binary subdivision — it's a triplet, quintuplet, swing
-            // group, etc. The test is on the local *fraction*, not the
-            // absolute beat, so a straight pair nested inside a triplet
-            // doesn't itself get bracketed (the triplet's own bracket
-            // covers it).
+            // Tuplet detection — see the dyadic-fraction comment on the
+            // pre-refactor layout pass for the why.
             const ws = el.elements.map(elementWeight);
             const tw = ws.reduce((a, b) => a + b, 0) || 1;
             let acc = 0;
@@ -565,68 +658,30 @@ export class RenderedJot {
               }
             }
             if (nonStraight) {
-              // The bracket should run from the first slot's onset to
-              // the *last* slot's onset (where the note dots are
-              // centred), not to the end of the group's rhythmic
-              // duration — otherwise the right leg lands a full slot
-              // past the final note.
               const lastOnsetFrac = (tw - ws[ws.length - 1]) / tw;
               tupletSpans.push({
                 count: el.elements.length,
                 startBeat: atBeat,
                 endBeat: atBeat + lastOnsetFrac * span,
-                x: px(0),
-                width: px(0),
               });
             }
           }
           visit(el.elements, atBeat, span);
           return;
         case 'patternRef':
-          // Pattern refs should already have been expanded; ignore otherwise.
           return;
       }
     };
 
     visit(elements, 0, beats);
 
-    // Map beats -> pixel x on a continuous grid: one beat is always
-    // `barWidthPx / beats`, so two onsets `Δbeats` apart are the same
-    // pixel distance apart everywhere — including across a bar boundary,
-    // where the previous bar's trailing space plus the next bar's
-    // `padLeft` offset sum to exactly one note step. `padLeft` is a pure
-    // constant offset (first note inside the bar line), NOT subtracted
-    // from the area, which is what previously inflated boundary gaps.
-    const padLeft = this.viewConfig.barNotePaddingLeft;
-    const pxPerBeat = barWidthPx / (beats || 1);
-
-    // Fill in the pixel positions on pattern + tuplet spans now that we
-    // know pxPerBeat.
-    for (const span of patternSpans) {
-      span.x = px(padLeft + span.startBeat * pxPerBeat);
-      span.width = px((span.endBeat - span.startBeat) * pxPerBeat);
-    }
-    for (const span of tupletSpans) {
-      span.x = px(padLeft + span.startBeat * pxPerBeat);
-      span.width = px((span.endBeat - span.startBeat) * pxPerBeat);
-    }
-
-    // Group flat notes by pitch into tracks. Colors are placeholders here;
-    // `assignTrackColors` rewrites them once the voice-level lane order is
-    // known so the same pitch keeps a stable color across all bars.
-    const tracks: Record<string, ResolvedTrack> = {};
-
+    const tracks: Record<string, StructuralTrack> = {};
     for (const { note, beat, duration } of flatNotes) {
       const pitch = note.pitch;
       let track = tracks[pitch];
       if (!track) {
         const instrument = instrumentMap[pitch] ?? {};
-        track = {
-          pitch,
-          instrument,
-          color: '',
-          notes: [],
-        };
+        track = { pitch, instrument, color: '', notes: [] };
         tracks[pitch] = track;
       }
       track.notes.push({
@@ -638,24 +693,313 @@ export class RenderedJot {
         beat,
         straight: isDyadic(beat),
         duration,
-        x: px(padLeft + beat * pxPerBeat),
-        width: px(duration * pxPerBeat),
       });
     }
 
     return { tracks, patternSpans, tupletSpans };
   }
 
-  private beatsToPx(beats: number, densityFactor: number): number {
-    // Base scale: one 4/4 bar == viewConfig.barWidth. Other bar lengths
-    // scale proportionally so an 8th-note keeps the same pixel width
-    // across time signatures. `densityFactor` (a whole-song constant
-    // derived from onset density) then compresses sparse scores and
-    // expands busy ones so on-screen note spacing stays roughly
-    // constant; the zoom slider still multiplies on top via
-    // viewConfig.barWidth.
-    return (beats / 4) * this.viewConfig.barWidth * densityFactor;
+  private assignTrackColors(
+    bars: StructuralBar[],
+    orderedPitches: string[]
+  ): void {
+    const palette = this.viewConfig.palette;
+    if (palette.length === 0) return;
+    for (const bar of bars) {
+      for (const pitch of Object.keys(bar.tracks)) {
+        const idx = orderedPitches.indexOf(pitch);
+        const slot = idx >= 0 ? idx : 0;
+        bar.tracks[pitch].color = palette[slot % palette.length];
+      }
+    }
   }
+
+  /**
+   * Cheap pixel pass: take a structural voice and multiply beats into
+   * pixels. Runs on every zoom tick but does no element-tree walking,
+   * no pattern expansion, no tuplet detection.
+   */
+  private pixelVoice(
+    sv: StructuralVoice,
+    pxPerBeat: number,
+    padLeft: Pixels
+  ): ResolvedVoice {
+    // pxPerSecond = pxPerBeat * (bpm/60) — matches the rate
+    // `buildTimeline` and the waveform mapping assume, which is what
+    // keeps drum notes lined up with the audio-track waveform.
+    const pxPerSecond = pxPerBeat * (sv.leadInBpm / 60);
+    const leadInPx = px(sv.leadInSec * pxPerSecond);
+    const bars: ResolvedBar[] = new Array(sv.bars.length);
+    let cursor: number = leadInPx;
+    for (let i = 0; i < sv.bars.length; i++) {
+      const sb = sv.bars[i];
+      const widthPx = px(sb.beats * pxPerBeat);
+      const tracks: Record<string, ResolvedTrack> = {};
+      for (const pitch of Object.keys(sb.tracks)) {
+        const st = sb.tracks[pitch];
+        const notes: ResolvedNote[] = new Array(st.notes.length);
+        for (let j = 0; j < st.notes.length; j++) {
+          const sn = st.notes[j];
+          notes[j] = {
+            source: sn.source,
+            pitch: sn.pitch,
+            modifiers: sn.modifiers,
+            sticking: sn.sticking,
+            roll: sn.roll,
+            beat: sn.beat,
+            straight: sn.straight,
+            duration: sn.duration,
+            x: px((padLeft as number) + sn.beat * pxPerBeat),
+            width: px(sn.duration * pxPerBeat),
+          };
+        }
+        tracks[pitch] = {
+          pitch: st.pitch,
+          instrument: st.instrument,
+          color: st.color,
+          notes,
+        };
+      }
+      const patternSpans: PatternSpan[] = new Array(sb.patternSpans.length);
+      for (let j = 0; j < sb.patternSpans.length; j++) {
+        const s = sb.patternSpans[j];
+        patternSpans[j] = {
+          name: s.name,
+          startBeat: s.startBeat,
+          endBeat: s.endBeat,
+          x: px((padLeft as number) + s.startBeat * pxPerBeat),
+          width: px((s.endBeat - s.startBeat) * pxPerBeat),
+        };
+      }
+      const tupletSpans: TupletSpan[] = new Array(sb.tupletSpans.length);
+      for (let j = 0; j < sb.tupletSpans.length; j++) {
+        const s = sb.tupletSpans[j];
+        tupletSpans[j] = {
+          count: s.count,
+          startBeat: s.startBeat,
+          endBeat: s.endBeat,
+          x: px((padLeft as number) + s.startBeat * pxPerBeat),
+          width: px((s.endBeat - s.startBeat) * pxPerBeat),
+        };
+      }
+      bars[i] = {
+        source: sb.source,
+        x: px(cursor),
+        width: widthPx,
+        time: sb.time,
+        beats: sb.beats,
+        tracks,
+        patternSpans,
+        tupletSpans,
+        index: sb.index,
+      };
+      cursor += widthPx as number;
+    }
+    return {
+      source: sv.source,
+      bars,
+      pitches: sv.pitches,
+      width: px(cursor),
+      leadInPx,
+      leadInSec: sv.leadInSec,
+      notePadPx: padLeft,
+    };
+  }
+}
+
+// ---------- Drum beat-grid offset ----------
+
+/**
+ * Shift every drum note by `offsetBeats` quarter-note beats relative to
+ * the bar grid, re-bucketing each note into whichever bar now contains
+ * it. Drives the "Beat offset" control, which corrects a consistent
+ * beat-detection error from transcription (a groove that landed, say,
+ * 1.5 beats late in every bar) by realigning the notes to the beat.
+ *
+ * The bar grid itself — bar count, time signatures, tempo, total
+ * duration — is deliberately untouched: only note placement moves. That
+ * keeps jot-time 0, the playback timeline, the playhead and the separate
+ * audio-track offset all anchored, so this offset composes cleanly with
+ * the audio one.
+ *
+ * Notes the shift pushes before the first beat or past the final bar are
+ * dropped (no bar holds them); for the consistent, many-bar grooves this
+ * targets that's at most a fraction of a bar at one end. Pattern / tuplet
+ * brackets are cleared while a shift is active because a uniform shift
+ * can leave a span straddling a barline.
+ */
+function applyDrumOffset(resolved: ResolvedJot, offsetBeats: number): ResolvedJot {
+  return { ...resolved, voices: resolved.voices.map((v) => shiftVoice(v, offsetBeats)) };
+}
+
+/**
+ * Beat-only analog of {@link applyDrumOffset}. Shifts every note across
+ * the (fixed) bar grid by `offsetBeats` quarter-notes and rebuckets it
+ * into the new owning bar. Operates purely in beats — no pixel info
+ * involved — so the React components that consume `JotStructure` get
+ * the shifted layout without us re-running the pixel pass first.
+ */
+function applyDrumOffsetStructure(
+  structure: JotStructure,
+  offsetBeats: number
+): JotStructure {
+  return {
+    ...structure,
+    voices: structure.voices.map((v) => shiftStructuralVoice(v, offsetBeats)),
+  };
+}
+
+function shiftStructuralVoice(
+  voice: StructuralVoice,
+  offsetBeats: number
+): StructuralVoice {
+  const bars = voice.bars;
+  if (bars.length === 0) return voice;
+
+  const barStart: number[] = new Array(bars.length);
+  let acc = 0;
+  for (let i = 0; i < bars.length; i++) {
+    barStart[i] = acc;
+    acc += bars[i].beats;
+  }
+  const total = acc;
+  if (total <= 0) return voice;
+
+  // Empty clones preserving each bar's grid; notes re-added below.
+  // Pattern + tuplet spans are cleared (a uniform shift can leave a
+  // span straddling a barline), mirroring the ResolvedJot variant.
+  const newBars: StructuralBar[] = bars.map((b) => ({
+    ...b,
+    tracks: {},
+    patternSpans: [],
+    tupletSpans: [],
+  }));
+
+  const locate = (absBeat: number): number => {
+    for (let i = 0; i < bars.length; i++) {
+      if (absBeat >= barStart[i] && absBeat < barStart[i] + bars[i].beats) return i;
+    }
+    return -1;
+  };
+
+  for (let i = 0; i < bars.length; i++) {
+    const srcBar = bars[i];
+    for (const pitch of Object.keys(srcBar.tracks)) {
+      const srcTrack = srcBar.tracks[pitch];
+      for (const note of srcTrack.notes) {
+        const newAbs = barStart[i] + note.beat + offsetBeats;
+        if (newAbs < 0 || newAbs >= total) continue;
+        const j = locate(newAbs);
+        if (j < 0) continue;
+        const within = newAbs - barStart[j];
+        const destBar = newBars[j];
+        let destTrack = destBar.tracks[pitch];
+        if (!destTrack) {
+          destTrack = {
+            pitch,
+            instrument: srcTrack.instrument,
+            color: srcTrack.color,
+            notes: [],
+          };
+          destBar.tracks[pitch] = destTrack;
+        }
+        destTrack.notes.push({
+          ...note,
+          beat: within,
+          straight: isDyadic(within),
+        });
+      }
+    }
+  }
+
+  for (const bar of newBars) {
+    for (const pitch of Object.keys(bar.tracks)) {
+      bar.tracks[pitch].notes.sort((a, b) => a.beat - b.beat);
+    }
+  }
+
+  return { ...voice, bars: newBars };
+}
+
+function shiftVoice(voice: ResolvedVoice, offsetBeats: number): ResolvedVoice {
+  const bars = voice.bars;
+  if (bars.length === 0) return voice;
+
+  // Cumulative bar start (quarter-note beats) and the voice's total length.
+  const barStart: number[] = new Array(bars.length);
+  let acc = 0;
+  for (let i = 0; i < bars.length; i++) {
+    barStart[i] = acc;
+    acc += bars[i].beats;
+  }
+  const total = acc;
+  if (total <= 0) return voice;
+
+  // pxPerBeat is uniform across the voice (see layoutBarContents), so a
+  // note's within-bar pixel x can be recomputed with the same formula the
+  // layout uses. Derive it from any bar with positive length.
+  const ref = bars.find((b) => b.beats > 0);
+  if (!ref) return voice;
+  const pxPerBeat = (ref.width as number) / ref.beats;
+  const padLeft = voice.notePadPx as number;
+
+  // Empty clones preserving each bar's grid geometry; notes re-added below.
+  const newBars: ResolvedBar[] = bars.map((b) => ({
+    ...b,
+    tracks: {},
+    patternSpans: [],
+    tupletSpans: [],
+  }));
+
+  const locate = (absBeat: number): number => {
+    // Bars tile [start, start+beats) contiguously; linear scan is fine
+    // (jots are typically well under ~64 bars).
+    for (let i = 0; i < bars.length; i++) {
+      if (absBeat >= barStart[i] && absBeat < barStart[i] + bars[i].beats) return i;
+    }
+    return -1;
+  };
+
+  for (let i = 0; i < bars.length; i++) {
+    const srcBar = bars[i];
+    for (const pitch of Object.keys(srcBar.tracks)) {
+      const srcTrack = srcBar.tracks[pitch];
+      for (const note of srcTrack.notes) {
+        const newAbs = barStart[i] + note.beat + offsetBeats;
+        if (newAbs < 0 || newAbs >= total) continue; // shifted off the grid
+        const j = locate(newAbs);
+        if (j < 0) continue;
+        const within = newAbs - barStart[j];
+        const destBar = newBars[j];
+        let destTrack = destBar.tracks[pitch];
+        if (!destTrack) {
+          destTrack = {
+            pitch,
+            instrument: srcTrack.instrument,
+            color: srcTrack.color,
+            notes: [],
+          };
+          destBar.tracks[pitch] = destTrack;
+        }
+        destTrack.notes.push({
+          ...note,
+          beat: within,
+          straight: isDyadic(within),
+          x: px(padLeft + within * pxPerBeat),
+        });
+      }
+    }
+  }
+
+  // Re-bucketing can interleave onsets from adjacent source bars; keep
+  // each destination track's notes in onset order.
+  for (const bar of newBars) {
+    for (const pitch of Object.keys(bar.tracks)) {
+      bar.tracks[pitch].notes.sort((a, b) => a.beat - b.beat);
+    }
+  }
+
+  return { ...voice, bars: newBars };
 }
 
 // ---------- Straightness ----------
@@ -675,7 +1019,7 @@ export class RenderedJot {
  * sevenths, etc. The tolerance is on the scaled value so float drift
  * from weight division (e.g. 1/3 = 0.3333…) doesn't read as straight.
  */
-function isDyadic(x: number): boolean {
+export function isDyadic(x: number): boolean {
   if (!Number.isFinite(x)) return false;
   const a = Math.abs(x);
   for (let m = 0; m <= 6; m++) {

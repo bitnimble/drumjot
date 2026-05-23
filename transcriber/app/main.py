@@ -20,6 +20,7 @@ import time
 from collections.abc import Iterator
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,6 +33,7 @@ from app.debug import (
     reset_current_debug_sink,
     set_current_debug_sink,
 )
+from app.debug_bundle import build_debug_zip
 from app.models import (
     BarSummary,
     HealthResponse,
@@ -39,6 +41,7 @@ from app.models import (
     TranscribeResponse,
 )
 from app.outputs import OutputSink, make_output_sink, materialize_pending
+from app.run_log import RunLog, reset_current_run_log, set_current_run_log
 from app.pipeline.beats import summarize_bar_for_prompt
 from app.pipeline.resume import (
     find_input_audio,
@@ -88,6 +91,25 @@ def _scoped_debug_sink(sink: DebugSink | None) -> Iterator[None]:
         yield
     finally:
         reset_current_debug_sink(token)
+
+
+@contextmanager
+def _scoped_run_log(run_log: RunLog) -> Iterator[None]:
+    """Install `run_log` as the request-scoped run log + attach its
+    logging handler, then detach + restore the previous value.
+
+    The handler is the entire point: while installed, every
+    `logging.getLogger("app.*")` call routes to the run log in addition to
+    its existing destinations, so the debug-bundle JSON captures the same
+    stream the operator would have seen via `docker compose logs`.
+    """
+    run_log.install()
+    token = set_current_run_log(run_log)
+    try:
+        yield
+    finally:
+        reset_current_run_log(token)
+        run_log.uninstall()
 
 
 logging.basicConfig(
@@ -172,13 +194,20 @@ async def transcribe(
     lint: bool = Form(default=settings.lint_by_default),
     best_of_k: int = Form(default=settings.best_of_k_default),
     beat_input: BeatInput = Form(default=settings.beat_input_default),
+    transcribe_mode: Literal["dsl", "filter"] = Form(
+        default=settings.transcribe_mode
+    ),
+    onset_backend: Literal["librosa", "adtof"] = Form(
+        default=settings.onset_backend
+    ),
     debug: bool = Form(default=False),
 ) -> TranscribeResponse:
     started = time.perf_counter()
     log.info(
         "Transcribe request: %s (%s bytes) refine=%s lint=%s best_of_k=%d "
-        "beat_input=%s debug=%s",
-        file.filename, file.size, refine, lint, best_of_k, beat_input, debug,
+        "beat_input=%s transcribe_mode=%s onset_backend=%s debug=%s",
+        file.filename, file.size, refine, lint, best_of_k, beat_input,
+        transcribe_mode, onset_backend, debug,
     )
 
     if file.size is not None and file.size > 200_000_000:
@@ -197,8 +226,23 @@ async def transcribe(
     folder_name = mint_request_folder_name(file.filename)
     sink = DebugSink.for_request(debug_base, file.filename, folder_name=folder_name)
     output_sink = make_output_sink(folder_name, settings.outputs_dir)
+    run_log = RunLog()
+    request_options = {
+        "refine": refine,
+        "lint": lint,
+        "best_of_k": best_of_k,
+        "beat_input": beat_input,
+        "transcribe_mode": transcribe_mode,
+        "onset_backend": onset_backend,
+        "include_candidates": include_candidates,
+        "debug": debug,
+    }
 
-    with tempfile.TemporaryDirectory(prefix="drumjot_") as tmp_str, _scoped_debug_sink(sink):
+    with (
+        tempfile.TemporaryDirectory(prefix="drumjot_") as tmp_str,
+        _scoped_debug_sink(sink),
+        _scoped_run_log(run_log),
+    ):
         work = Path(tmp_str)
         in_path = work / (file.filename or "input.wav")
         in_path.write_bytes(await file.read())
@@ -207,7 +251,9 @@ async def transcribe(
 
         ctx = PipelineContext(audio_path=in_path, work_dir=work)
         options = PipelineOptions(
-            refine=refine, lint=lint, best_of_k=best_of_k, beat_input=beat_input,
+            refine=refine, lint=lint, best_of_k=best_of_k,
+            beat_input=beat_input, transcribe_mode=transcribe_mode,
+            onset_backend=onset_backend,
         )
         sep: Separator = request.app.state.separator
         try:
@@ -235,33 +281,38 @@ async def transcribe(
             drum_stem=ctx.drum_stem,
             per_instrument_stems=ctx.per_instrument_stems,
             final_jot=ctx.final_jot,
+            predicted_midi=ctx.predicted_midi,
             scavenge_dir=sink.dir if sink is not None else None,
         )
+
+        scores = {
+            "initial": (
+                ctx.refinement_log.initial_score
+                if ctx.refinement_log else None
+            ),
+            "final": (
+                ctx.refinement_log.final_score
+                if ctx.refinement_log else None
+            ),
+        }
 
         if sink is not None:
             sink.finalize({
                 "filename": file.filename,
-                "options": {
-                    "refine": refine,
-                    "lint": lint,
-                    "best_of_k": best_of_k,
-                    "beat_input": beat_input,
-                    "include_candidates": include_candidates,
-                    "debug": debug,
-                },
-                "scores": {
-                    "initial": (
-                        ctx.refinement_log.initial_score
-                        if ctx.refinement_log else None
-                    ),
-                    "final": (
-                        ctx.refinement_log.final_score
-                        if ctx.refinement_log else None
-                    ),
-                },
+                "options": request_options,
+                "scores": scores,
                 "stems_used": sorted(ctx.per_instrument_stems.keys()),
                 "duration_seconds": ctx.duration,
             })
+
+        _build_debug_zip_if_possible(
+            output_sink=output_sink,
+            ctx=ctx,
+            original_filename=file.filename,
+            options=request_options,
+            scores=scores,
+            run_log=run_log,
+        )
 
     elapsed = time.perf_counter() - started
     log.info("Transcribe complete in %.2fs (refined=%s)", elapsed, refine)
@@ -320,6 +371,12 @@ async def transcribe_resume(
     lint: bool = Form(default=settings.lint_by_default),
     best_of_k: int = Form(default=settings.best_of_k_default),
     beat_input: BeatInput = Form(default=settings.beat_input_default),
+    transcribe_mode: Literal["dsl", "filter"] = Form(
+        default=settings.transcribe_mode
+    ),
+    onset_backend: Literal["librosa", "adtof"] = Form(
+        default=settings.onset_backend
+    ),
 ) -> TranscribeResponse:
     """Re-run the pipeline from `resume_stage` onward, hydrating any
     artifacts produced by earlier stages from `resume_folder`.
@@ -356,9 +413,23 @@ async def transcribe_resume(
     # in place rather than orphaning the originals).
     output_sink = make_output_sink(resume_dir.name, settings.outputs_dir)
     options = PipelineOptions(
-        refine=refine, lint=lint, best_of_k=best_of_k, beat_input=beat_input,
+        refine=refine, lint=lint, best_of_k=best_of_k,
+        beat_input=beat_input, transcribe_mode=transcribe_mode,
+        onset_backend=onset_backend,
     )
     sep: Separator = request.app.state.separator
+    run_log = RunLog()
+    request_options = {
+        "refine": refine,
+        "lint": lint,
+        "best_of_k": best_of_k,
+        "beat_input": beat_input,
+        "transcribe_mode": transcribe_mode,
+        "onset_backend": onset_backend,
+        "include_candidates": include_candidates,
+        "resume_folder": str(resume_dir),
+        "resume_stage": resume_stage.value,
+    }
 
     # Run stem separation (if it fires) into a temp work_dir so its
     # filenames don't collide with the resume folder; the sink will
@@ -366,6 +437,7 @@ async def transcribe_resume(
     with (
         tempfile.TemporaryDirectory(prefix="drumjot_resume_") as tmp_str,
         _scoped_debug_sink(sink),
+        _scoped_run_log(run_log),
     ):
         work = Path(tmp_str)
         ctx = PipelineContext(audio_path=audio_path, work_dir=work)
@@ -400,33 +472,37 @@ async def transcribe_resume(
             drum_stem=ctx.drum_stem,
             per_instrument_stems=ctx.per_instrument_stems,
             final_jot=ctx.final_jot,
+            predicted_midi=ctx.predicted_midi,
             scavenge_dir=resume_dir,
         )
 
+        scores = {
+            "initial": (
+                ctx.refinement_log.initial_score
+                if ctx.refinement_log else None
+            ),
+            "final": (
+                ctx.refinement_log.final_score
+                if ctx.refinement_log else None
+            ),
+        }
+        original_filename = load_original_filename(resume_dir)
         sink.finalize({
-            "filename": load_original_filename(resume_dir),
-            "options": {
-                "refine": refine,
-                "lint": lint,
-                "best_of_k": best_of_k,
-                "beat_input": beat_input,
-                "include_candidates": include_candidates,
-                "resume_folder": str(resume_dir),
-                "resume_stage": resume_stage.value,
-            },
-            "scores": {
-                "initial": (
-                    ctx.refinement_log.initial_score
-                    if ctx.refinement_log else None
-                ),
-                "final": (
-                    ctx.refinement_log.final_score
-                    if ctx.refinement_log else None
-                ),
-            },
+            "filename": original_filename,
+            "options": request_options,
+            "scores": scores,
             "stems_used": sorted(ctx.per_instrument_stems.keys()),
             "duration_seconds": ctx.duration,
         })
+
+        _build_debug_zip_if_possible(
+            output_sink=output_sink,
+            ctx=ctx,
+            original_filename=original_filename,
+            options=request_options,
+            scores=scores,
+            run_log=run_log,
+        )
 
     elapsed = time.perf_counter() - started
     log.info("Resume complete in %.2fs (refined=%s)", elapsed, refine)
@@ -437,6 +513,84 @@ async def transcribe_resume(
         debug_dir=str(resume_dir),
         output_sink=output_sink,
     )
+
+
+def _build_debug_zip_if_possible(
+    *,
+    output_sink: OutputSink | None,
+    ctx: PipelineContext,
+    original_filename: str | None,
+    options: dict[str, object],
+    scores: dict[str, object],
+    run_log: RunLog,
+) -> None:
+    """Best-effort build of the per-request debug zip. Logs and swallows
+    failures — a missing bundle must never fail the actual transcribe
+    response (the bundle is a debugging aid, not the contract)."""
+    if output_sink is None:
+        return
+    metadata: dict[str, object] | None = None
+    if ctx.structure is not None:
+        metadata = {
+            "initial_tempo": ctx.structure.initial_tempo,
+            "initial_time_signature": list(ctx.structure.initial_time_signature),
+            "duration_seconds": ctx.duration,
+            "stems_used": sorted(ctx.per_instrument_stems.keys()),
+            "has_tempo_changes": ctx.structure.has_tempo_changes,
+            "has_time_sig_changes": ctx.structure.has_time_sig_changes,
+        }
+    # Filter mode produces MIDI instead of DSL; bundle it as the score so
+    # the UI can rehydrate via the existing MIDI -> Jot path. For a resume
+    # that skipped the transcribe stage `ctx.predicted_midi` is None even
+    # though `prediction.mid` is still on disk from the prior run, so fall
+    # back to the OutputSink's on-disk copy in that case.
+    predicted_midi = ctx.predicted_midi
+    if predicted_midi is None:
+        on_disk = output_sink.existing_file("prediction.mid")
+        if on_disk is not None:
+            try:
+                predicted_midi = on_disk.read_bytes()
+            except OSError as exc:
+                log.warning(
+                    "debug_bundle: could not read %s: %s", on_disk, exc
+                )
+    # Note provenance follows the same shape — only filter mode produces
+    # it, and a resume from `refine` (or later) skips the build but the
+    # JSON is still on disk in the debug folder from the previous run.
+    # The DebugSink writes it under the request folder; for resumes we
+    # scavenge from `<resume_dir>/note_provenance.json`. None for DSL
+    # mode (no provenance in either ctx or disk).
+    note_provenance: dict[str, object] | None = ctx.note_provenance
+    if note_provenance is None and ctx.audio_path.parent.name:
+        # `audio_path.parent` is the debug folder when resuming (we set
+        # the resume folder as the input audio's parent in
+        # `transcribe_resume`); the fresh /transcribe path uses a temp
+        # work_dir whose parent has no provenance, so the check below
+        # gracefully no-ops there.
+        candidate = ctx.audio_path.parent / "note_provenance.json"
+        if candidate.is_file():
+            try:
+                import json as _json
+                note_provenance = _json.loads(candidate.read_text())
+            except (OSError, ValueError) as exc:
+                log.warning(
+                    "debug_bundle: could not read %s: %s", candidate, exc
+                )
+    try:
+        build_debug_zip(
+            output_sink=output_sink,
+            original_filename=original_filename,
+            options=options,
+            metadata=metadata,
+            scores=scores,
+            final_jot=ctx.final_jot,
+            predicted_midi=predicted_midi,
+            note_provenance=note_provenance,
+            per_instrument_stem_pitches=list(ctx.per_instrument_stems.keys()),
+            run_log=run_log,
+        )
+    except Exception:
+        log.exception("debug_bundle: build failed; continuing without zip")
 
 
 def _build_response(
@@ -466,11 +620,17 @@ def _build_response(
     # skipped stems_all but found leftover FLACs from a prior run.
     drum_stem_url: str | None = None
     no_drums_url: str | None = None
+    prediction_midi_url: str | None = None
+    debug_zip_url: str | None = None
     if output_sink is not None:
         if output_sink.existing_path("drum_stem") is not None:
             drum_stem_url = output_sink.url_for("drum_stem")
         if output_sink.existing_path("no_drums") is not None:
             no_drums_url = output_sink.url_for("no_drums")
+        if output_sink.existing_file("prediction.mid") is not None:
+            prediction_midi_url = output_sink.url_for_file("prediction.mid")
+        if output_sink.existing_file("debug.zip") is not None:
+            debug_zip_url = output_sink.url_for_file("debug.zip")
     return TranscribeResponse(
         jot_dsl=ctx.final_jot,
         metadata=TranscribeMetadata(
@@ -488,4 +648,6 @@ def _build_response(
         debug_dir=debug_dir,
         drum_stem_url=drum_stem_url,
         no_drums_url=no_drums_url,
+        prediction_midi_url=prediction_midi_url,
+        debug_zip_url=debug_zip_url,
     )

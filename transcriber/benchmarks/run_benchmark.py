@@ -19,7 +19,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from .core.jot_events import JotParseError, jot_dsl_to_events
+from .core.jot_events import jot_dsl_to_events
+from .core.midi_events import midi_bytes_to_events
 from .core.score import (
     DEFAULT_TOLERANCE_SECONDS,
     DatasetSummary,
@@ -29,6 +30,7 @@ from .core.score import (
 )
 from .core.transcribe_client import (
     TranscribeOptions,
+    fetch_prediction_midi,
     transcribe_file,
     wait_for_service,
 )
@@ -52,6 +54,8 @@ class CliArgs:
     refine: bool
     lint: bool
     best_of_k: int
+    transcribe_mode: str
+    onset_backend: str
     service_url: str
     split: str
     tolerance: float
@@ -113,6 +117,26 @@ def parse_args(argv: list[str] | None = None) -> CliArgs:
         help="Number of initial-transcription candidates (matches the UI dropdown). Default: 1.",
     )
     p.add_argument(
+        "--transcribe-mode",
+        choices=["dsl", "filter"],
+        default="dsl",
+        help=(
+            "Which transcribe pathway to exercise. 'dsl' (default) scores "
+            "the returned Jot; 'filter' scores the returned prediction.mid "
+            "directly (no Jot conversion)."
+        ),
+    )
+    p.add_argument(
+        "--onset-backend",
+        choices=["librosa", "adtof"],
+        default="librosa",
+        help=(
+            "Per-stem onset detector. 'librosa' (default) = spectral-flux; "
+            "'adtof' = ADTOF CRNN per stem. Flip between two seeded runs "
+            "for the A/B."
+        ),
+    )
+    p.add_argument(
         "--service-url",
         default="http://localhost:8001",
         help="Transcriber base URL. Default: http://localhost:8001.",
@@ -162,6 +186,8 @@ def parse_args(argv: list[str] | None = None) -> CliArgs:
         refine=ns.refine,
         lint=ns.lint,
         best_of_k=ns.best_of_k,
+        transcribe_mode=ns.transcribe_mode,
+        onset_backend=ns.onset_backend,
         service_url=ns.service_url,
         split=ns.split,
         tolerance=ns.tolerance,
@@ -278,6 +304,8 @@ def run(args: CliArgs) -> DatasetSummary:
         refine=args.refine,
         lint=args.lint,
         best_of_k=args.best_of_k,
+        transcribe_mode=args.transcribe_mode,
+        onset_backend=args.onset_backend,
     )
 
     track_scores: list[TrackScore] = []
@@ -307,11 +335,25 @@ def run(args: CliArgs) -> DatasetSummary:
                 continue
 
             try:
-                predicted = jot_dsl_to_events(result.jot_dsl)
-            except JotParseError as exc:
+                if args.transcribe_mode == "filter":
+                    if not result.prediction_midi_url:
+                        raise ValueError(
+                            "service returned no prediction_midi_url in "
+                            "filter mode"
+                        )
+                    midi_bytes = fetch_prediction_midi(
+                        args.service_url, result.prediction_midi_url
+                    )
+                    predicted = midi_bytes_to_events(midi_bytes)
+                else:
+                    predicted = jot_dsl_to_events(result.jot_dsl)
+            except Exception as exc:
                 n_failed += 1
-                log.warning("DSL parse failed for %s: %s", track.track_id, exc)
-                _write_failure(out_fh, track.track_id, f"parse: {exc}")
+                log.warning(
+                    "prediction decode failed for %s: %s",
+                    track.track_id, exc,
+                )
+                _write_failure(out_fh, track.track_id, f"decode: {exc}")
                 continue
 
             score = score_track(
@@ -350,6 +392,8 @@ def run(args: CliArgs) -> DatasetSummary:
     summary_payload["n_failed"] = n_failed
     summary_payload["options"] = {
         "refine": args.refine,
+        "transcribe_mode": args.transcribe_mode,
+        "onset_backend": args.onset_backend,
         "best_of_k": args.best_of_k,
         "sample_ratio": args.sample_ratio,
         "limit": args.limit,

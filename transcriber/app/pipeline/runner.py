@@ -22,6 +22,7 @@ produced it; the HTTP layer wraps that into a 400.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -30,6 +31,7 @@ from typing import Any, Literal
 import librosa
 
 from app.debug import DebugSink, beats_dump, onsets_dump
+from app.run_log import current_run_log
 from app.models import (
     BestOfKLog,
     OnsetCandidate,
@@ -37,13 +39,18 @@ from app.models import (
     RefinementLog,
 )
 from app.outputs import OutputSink
+from app.pipeline.adtof_onsets import detect_onsets_adtof_or_librosa
 from app.pipeline.beats import (
     BeatStructure,
     analyze_beats,
     detect_feel_for_bars,
 )
+from app.pipeline.cymbal_split import split_cymbal_onsets
+from app.pipeline.hihat_split import split_hihat_onsets
+from app.pipeline.filter_llm import filter_onsets_all_instruments
 from app.pipeline.format import format_dsl
 from app.pipeline.llm import transcribe_all_instruments
+from app.pipeline.note_provenance import build_note_provenance
 from app.pipeline.onsets import attach_beat_positions, detect_onsets
 from app.pipeline.onsets_midi import onsets_to_midi_bytes
 from app.pipeline.recompose import FEET_PITCHES, recompose
@@ -103,6 +110,15 @@ class PipelineOptions:
     lint: bool
     best_of_k: int
     beat_input: BeatInput = "full_mix"
+    # "dsl" = LLM emits Drumjot DSL, recompose + refine (legacy path).
+    # "filter" = LLM only rejects artifact onsets; kept onsets render
+    # straight to MIDI with original times. No Jot/recompose/refine.
+    transcribe_mode: Literal["dsl", "filter"] = "dsl"
+    # Per-request onset backend (the `onset_backend` form param).
+    # "librosa" = the legacy spectral-flux detector; "adtof" = ADTOF
+    # CRNN per stem with automatic fallback to librosa if ADTOF or its
+    # weights are unavailable / the model errors.
+    onset_backend: Literal["librosa", "adtof"] = "librosa"
 
 
 @dataclass
@@ -123,6 +139,16 @@ class PipelineContext:
     structure: BeatStructure | None = None
     onsets_by_pitch: dict[str, list[OnsetCandidate]] = field(default_factory=dict)
     initial_jot: str | None = None
+    # Set only by the `filter` transcribe path: the rendered MIDI of the
+    # LLM-kept onsets. Materialised to `prediction.mid` (debug + output
+    # sink) and surfaced as `prediction_midi_url` on the response.
+    predicted_midi: bytes | None = None
+    # Set only by the `filter` transcribe path: per-note debug provenance
+    # JSON listing every detected onset (kept and rejected) for the UI.
+    # Shipped inside the debug bundle as `note_provenance.json`; absent
+    # for DSL-mode runs (and absent in resume runs that didn't reach
+    # `transcribe`). See `note_provenance.build_note_provenance`.
+    note_provenance: dict[str, Any] | None = None
     # Per-instrument monophonic fragments produced by the transcribe
     # stage, kept so the refine stage can re-run the per-instrument loop
     # on fresh runs. Empty on a resume-from-refine (only the merged
@@ -147,8 +173,11 @@ def run_pipeline(
         ctx.duration = _probe_duration(ctx.audio_path)
 
     start_idx = stage_index(start_stage)
+    run_log = current_run_log()
     for stage in STAGE_ORDER[start_idx:]:
         log.info("Running stage: %s", stage.value)
+        stage_start_wall = time.time()
+        stage_start_perf = time.perf_counter()
         try:
             _run_stage(stage, ctx, separator, options, sink, output_sink)
         except StageError:
@@ -156,6 +185,11 @@ def run_pipeline(
         except Exception as exc:
             log.exception("Stage %s failed", stage.value)
             raise StageError(stage, exc) from exc
+        finally:
+            elapsed = time.perf_counter() - stage_start_perf
+            log.info("Stage %s finished in %.2fs", stage.value, elapsed)
+            if run_log is not None:
+                run_log.record_stage(stage.value, stage_start_wall, time.time())
     return ctx
 
 
@@ -174,10 +208,19 @@ def _run_stage(
     elif stage is Stage.BEATS:
         _do_beats(ctx, options, sink)
     elif stage is Stage.ONSETS:
-        _do_onsets(ctx, sink)
+        _do_onsets(ctx, options, sink)
     elif stage is Stage.TRANSCRIBE:
-        _do_transcribe(ctx, options, sink)
+        if options.transcribe_mode == "filter":
+            _do_transcribe_filter(ctx, options, sink)
+        else:
+            _do_transcribe(ctx, options, sink)
     elif stage is Stage.REFINE:
+        if options.transcribe_mode == "filter":
+            # Filter mode has no Jot to refine, and the F1-vs-detected-
+            # onsets gate is degenerate for a pure filter (see
+            # transcriber/docs/filter-mode-proxy-reference.md). Skip.
+            log.info("REFINE skipped (transcribe_mode=filter)")
+            return
         _do_refine(ctx, options, sink)
 
 
@@ -254,7 +297,9 @@ def _do_beats(
         sink.write_json("beats.json", beats_dump(ctx.structure))
 
 
-def _do_onsets(ctx: PipelineContext, sink: DebugSink | None) -> None:
+def _do_onsets(
+    ctx: PipelineContext, options: PipelineOptions, sink: DebugSink | None,
+) -> None:
     if not ctx.per_instrument_stems:
         raise RuntimeError(
             "onsets: per-instrument stems missing (expected stems_per/*.<ext> "
@@ -265,14 +310,40 @@ def _do_onsets(ctx: PipelineContext, sink: DebugSink | None) -> None:
             "onsets: beat structure missing (expected beats.json from a "
             "previous run, or resume_stage<=beats to regenerate)."
         )
-    raw_onsets = {
-        pitch: detect_onsets(path)
-        for pitch, path in ctx.per_instrument_stems.items()
-    }
+    if options.onset_backend == "adtof":
+        # Noisy lanes (hihat/cymbal) detect off the in-distribution drum
+        # stem inside detect_onsets_adtof; pass it through. None on a
+        # resume that didn't cache it -> automatic per-stem fallback.
+        raw_onsets = {
+            pitch: detect_onsets_adtof_or_librosa(
+                path, pitch, drum_stem_path=ctx.drum_stem
+            )
+            for pitch, path in ctx.per_instrument_stems.items()
+        }
+    else:
+        raw_onsets = {
+            pitch: detect_onsets(path)
+            for pitch, path in ctx.per_instrument_stems.items()
+        }
     ctx.onsets_by_pitch = {
         pitch: attach_beat_positions(cands, ctx.structure)
         for pitch, cands in raw_onsets.items()
     }
+    # The Stage-2 separator merges ride + crash into one `cymbals` stem
+    # (pitch `c`); split that lane into ride (`d`) / crash (`c`) here so
+    # the downstream per-instrument pathways see two real lanes. No-op
+    # when there is no cymbals stem / onsets.
+    ctx.onsets_by_pitch = split_cymbal_onsets(
+        ctx.onsets_by_pitch, ctx.per_instrument_stems, ctx.structure,
+    )
+    # The hi-hat stem mixes closed and open hi-hat hits; classify each
+    # onset and split into closed (`h`) and synthetic open (`H`) lanes so
+    # the per-instrument transcribe pass handles them independently. No-op
+    # when there is no hi-hat stem / onsets. See `hihat_split` docs for
+    # the `H` synthetic-pitch caveat (folded back into `h:o` is a TODO).
+    ctx.onsets_by_pitch = split_hihat_onsets(
+        ctx.onsets_by_pitch, ctx.per_instrument_stems, ctx.structure,
+    )
     flat_times = [c.time for cs in ctx.onsets_by_pitch.values() for c in cs]
     detect_feel_for_bars(ctx.structure, flat_times)
     # Fallback duration probe (when the soundfile probe in run_pipeline
@@ -358,6 +429,77 @@ def _do_transcribe(
         sink.write_text("initial.jot", jot_dsl)
         if ctx.best_of_k_log is not None:
             sink.write_json("best_of_k.json", ctx.best_of_k_log.model_dump())
+
+
+def _do_transcribe_filter(
+    ctx: PipelineContext,
+    options: PipelineOptions,
+    sink: DebugSink | None,
+) -> None:
+    """Filter-mode transcribe: LLM rejects artifact onsets per
+    instrument; the kept onsets render straight to MIDI with their
+    original (un-quantized) times. No Jot, no recompose, no refine.
+    """
+    if ctx.structure is None:
+        raise RuntimeError(
+            "transcribe: beat structure missing (expected beats.json or "
+            "resume_stage<=beats)."
+        )
+    if not ctx.onsets_by_pitch:
+        raise RuntimeError(
+            "transcribe: onsets missing (expected onsets.json or "
+            "resume_stage<=onsets)."
+        )
+
+    kept_by_pitch = filter_onsets_all_instruments(
+        ctx.onsets_by_pitch, ctx.structure,
+    )
+    if not kept_by_pitch:
+        raise RuntimeError(
+            "transcribe: filter kept no onsets for any instrument."
+        )
+
+    midi_bytes = onsets_to_midi_bytes(
+        kept_by_pitch,
+        initial_tempo_bpm=ctx.structure.initial_tempo,
+        structure=ctx.structure,
+    )
+    ctx.predicted_midi = midi_bytes
+    # Per-note debug provenance covering every detected onset (kept and
+    # rejected) — shipped in the debug bundle for the UI to surface in
+    # the selection label + render rejected onsets as ghost overlays.
+    # Built from the pre-filter candidate set so the rejected branch is
+    # actually populated; identity is by `id(c)` against `kept_by_pitch`.
+    ctx.note_provenance = build_note_provenance(
+        all_onsets_by_pitch=ctx.onsets_by_pitch,
+        kept_by_pitch=kept_by_pitch,
+        structure=ctx.structure,
+        onset_backend=options.onset_backend,
+    )
+    # Filter mode produces no Jot. Set empty strings so the shared
+    # response builder (which requires a non-None final_jot) and the
+    # outputs backfill stay happy without special-casing every caller.
+    ctx.initial_jot = ""
+    ctx.final_jot = ""
+
+    if sink is not None:
+        sink.write_bytes("prediction.mid", midi_bytes)
+        sink.write_json(
+            "filter/kept_onsets.json",
+            {
+                pitch: [
+                    {
+                        "time": c.time,
+                        "strength": c.strength,
+                        "bar": c.bar,
+                        "beat_in_bar": c.beat_in_bar,
+                    }
+                    for c in cands
+                ]
+                for pitch, cands in kept_by_pitch.items()
+            },
+        )
+        sink.write_json("note_provenance.json", ctx.note_provenance)
 
 
 def _do_refine(

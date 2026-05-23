@@ -1,866 +1,1233 @@
 .appContainer {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
 }
 
 .toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 24px;
-  border-bottom: 1px solid #e7e0d5;
-  background: rgba(255, 255, 255, 0.65);
-  backdrop-filter: blur(4px);
-  flex: 0 0 auto;
-  user-select: none;
-  /* The header forms a stacking context (backdrop-filter) and its
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 24px;
+    border-bottom: 1px solid #e7e0d5;
+    background: rgba(255, 255, 255, 0.65);
+    backdrop-filter: blur(4px);
+    flex: 0 0 auto;
+    user-select: none;
+    /* The header forms a stacking context (backdrop-filter) and its
      dropdown panels overflow downward into the score region. Without
      an explicit z-index the later-painted .jotContainer sibling sits
      on top in hit-testing (it's visually transparent there, so the
      menu still *looks* right but isn't clickable). Lift the whole
      header above the scrolling content. */
-  position: relative;
-  z-index: 20;
+    position: relative;
+    z-index: 20;
 }
 
 .toolbarLabel {
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #6b6b6b;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #6b6b6b;
 }
 
 .exampleSelect {
-  font-size: 13px;
-  padding: 4px 8px;
-  border: 1px solid #c9bfae;
-  border-radius: 4px;
-  background: #fff;
-  color: #2b2b2b;
-  cursor: pointer;
-  min-width: 220px;
+    font-size: 13px;
+    padding: 4px 8px;
+    border: 1px solid #c9bfae;
+    border-radius: 4px;
+    background: #fff;
+    color: #2b2b2b;
+    cursor: pointer;
+    min-width: 220px;
 }
 
 .exampleSelect:focus {
-  outline: 2px solid #ff8c55;
-  outline-offset: 1px;
+    outline: 2px solid #ff8c55;
+    outline-offset: 1px;
 }
 
 .toolbarDivider {
-  width: 1px;
-  height: 18px;
-  background: #c9bfae;
-  margin: 0 6px;
+    width: 1px;
+    height: 18px;
+    background: #c9bfae;
+    margin: 0 6px;
 }
 
 .transcribeButton {
-  font-size: 13px;
-  padding: 5px 12px;
-  border: 1px solid #c9bfae;
-  border-radius: 4px;
-  background: #ff8c55;
-  color: #fff;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  cursor: pointer;
-  font-family: inherit;
+    font-size: 13px;
+    padding: 5px 12px;
+    border: 1px solid #c9bfae;
+    border-radius: 4px;
+    background: #ff8c55;
+    color: #fff;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    font-family: inherit;
 }
 
 .transcribeButton:hover:not(:disabled) {
-  background: #ff7335;
+    background: #ff7335;
 }
 
 .transcribeButton:disabled {
-  background: #c9bfae;
-  cursor: progress;
+    background: #c9bfae;
+    cursor: progress;
 }
 
 .transcribeButton:focus {
-  outline: 2px solid #ff8c55;
-  outline-offset: 1px;
+    outline: 2px solid #ff8c55;
+    outline-offset: 1px;
 }
 
 .playButton {
-  font-size: 13px;
-  padding: 5px 12px;
-  border: 1px solid #c9bfae;
-  border-radius: 4px;
-  background: #fff;
-  color: #2b2b2b;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  cursor: pointer;
-  font-family: inherit;
+    font-size: 13px;
+    padding: 5px 12px;
+    border: 1px solid #c9bfae;
+    border-radius: 4px;
+    background: #fff;
+    color: #2b2b2b;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    font-family: inherit;
 }
 
 .playButton:hover:not(:disabled) {
-  background: #f6efe0;
-  border-color: #b09d80;
+    background: #f6efe0;
+    border-color: #b09d80;
 }
 
 .playButton:disabled {
-  color: #b9b0a0;
-  cursor: not-allowed;
+    color: #b9b0a0;
+    cursor: not-allowed;
 }
 
 .playButton:focus {
-  outline: 2px solid #ff8c55;
-  outline-offset: 1px;
+    outline: 2px solid #ff8c55;
+    outline-offset: 1px;
 }
 
 .playButtonError {
-  border-color: #b00020;
-  color: #b00020;
+    border-color: #b00020;
+    color: #b00020;
 }
 
 .playButtonError:hover:not(:disabled) {
-  background: #ffecec;
+    background: #ffecec;
 }
 
 .playhead {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: #ff5c0a;
-  pointer-events: none;
-  z-index: 5;
-  box-shadow: 0 0 4px rgba(255, 92, 10, 0.5);
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: #ff5c0a;
+    z-index: 5;
+    box-shadow: 0 0 4px rgba(255, 92, 10, 0.5);
+    cursor: ew-resize;
+}
+
+/* Widen the playhead's drag hit area without changing its visual width.
+   The 2px line is too narrow to grab reliably; this ::before extends
+   the hit target ±5px while leaving the bars-row click-to-seek behavior
+   intact for anything outside the strip. */
+.playhead::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -5px;
+    right: -5px;
+}
+
+.playheadLabel {
+    position: absolute;
+    top: 0;
+    left: 1px;
+    transform: translateX(-50%);
+    background: #ff5c0a;
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+    line-height: 1;
+    padding: 3px 5px;
+    border-radius: 2px;
+    white-space: nowrap;
+    z-index: 6;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    cursor: ew-resize;
 }
 
 .cancelButton {
-  font-size: 13px;
-  padding: 5px 10px;
-  border: 1px solid #c9bfae;
-  border-radius: 4px;
-  background: #fff;
-  color: #b00020;
-  font-weight: 600;
-  cursor: pointer;
-  font-family: inherit;
+    font-size: 13px;
+    padding: 5px 10px;
+    border: 1px solid #c9bfae;
+    border-radius: 4px;
+    background: #fff;
+    color: #b00020;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
 }
 
 .cancelButton:hover {
-  background: #ffecec;
-  border-color: #b00020;
+    background: #ffecec;
+    border-color: #b00020;
 }
 
 .cancelButton:focus {
-  outline: 2px solid #b00020;
-  outline-offset: 1px;
+    outline: 2px solid #b00020;
+    outline-offset: 1px;
 }
 
 .hiddenInput {
-  display: none;
+    display: none;
 }
 
 .toolbarCheckbox {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: #4a4a4a;
-  user-select: none;
-  cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #4a4a4a;
+    user-select: none;
+    cursor: pointer;
 }
 
 .toolbarCheckbox input[type='checkbox'] {
-  accent-color: #ff8c55;
-  cursor: pointer;
+    accent-color: #ff8c55;
+    cursor: pointer;
 }
 
 .toolbarCheckbox input:disabled {
-  cursor: not-allowed;
+    cursor: not-allowed;
 }
 
 .samplesSelect {
-  font-size: 12px;
-  padding: 2px 6px;
-  border: 1px solid #c9bfae;
-  border-radius: 4px;
-  background: #fff;
-  color: #2b2b2b;
-  cursor: pointer;
+    font-size: 12px;
+    padding: 2px 6px;
+    border: 1px solid #c9bfae;
+    border-radius: 4px;
+    background: #fff;
+    color: #2b2b2b;
+    cursor: pointer;
 }
 
 .zoomSlider {
-  width: 100px;
-  accent-color: #ff8c55;
-  cursor: pointer;
+    width: 100px;
+    accent-color: #ff8c55;
+    cursor: pointer;
 }
 
 .zoomValue {
-  font-variant-numeric: tabular-nums;
-  font-size: 11px;
-  color: #6b6b6b;
-  min-width: 36px;
-  text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+    color: #6b6b6b;
+    min-width: 36px;
+    text-align: right;
+}
+
+.offsetInput {
+    width: 56px;
+    font-size: 12px;
+    padding: 2px 4px;
+    border: 1px solid #c9bfae;
+    border-radius: 4px;
+    background: #fff;
+    color: #2b2b2b;
+    font-variant-numeric: tabular-nums;
+}
+
+.masterVolumes {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.masterVolume {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #4a4a4a;
+    user-select: none;
+    cursor: pointer;
+}
+
+.masterVolume input[type='range'] {
+    width: 72px;
+    accent-color: #ff8c55;
+    cursor: pointer;
+}
+
+.masterVolumeValue {
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+    color: #6b6b6b;
+    min-width: 30px;
+    text-align: right;
+}
+
+/* Per-section master fader, parked in the sticky lane gutter directly
+   above the audio-track / drum-staff rows it controls. */
+.gutterMasterRow {
+    display: flex;
+    /* Match the staff/musicTracks width-fitting so the sticky gutter
+     aligns with the rows below even when the score overflows. */
+    min-width: max-content;
+}
+
+.gutterMasterGutter {
+    /* Same width + sticky behaviour as .laneGutter / .musicTrackGutter so
+     this header lines up with the per-row controls below it. */
+    position: sticky;
+    left: 0;
+    z-index: 6;
+    flex: 0 0 auto;
+    width: 132px;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 6px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #666;
+    background: #fbf6ec;
+    border-right: 1px solid #c9bfae;
+}
+
+.gutterMasterLabel {
+    flex: 0 0 auto;
+}
+
+.gutterMasterSlider {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 14px;
+    margin: 0;
+    accent-color: #ff8c55;
+    cursor: pointer;
+}
+
+.gutterMasterSlider:focus {
+    outline: 2px solid #ff8c55;
+    outline-offset: 1px;
+}
+
+.gutterMasterValue {
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+    font-size: 10px;
+    color: #6b6b6b;
+    min-width: 26px;
+    text-align: right;
+}
+
+/* The master rows are stacked flush at the top of the mixer — no gap
+   between Audio master, Drums master, and the first mixer row, since
+   the rows themselves are visually separated by their gutter borders. */
+.mixer > .gutterMasterRow {
+    margin-bottom: 0;
+}
+
+.mixer > .gutterMasterRow + .gutterMasterRow {
+    margin-top: -1px; /* collapse the row's bottom border into the next row */
 }
 
 .statusPill {
-  font-size: 11px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  letter-spacing: 0.02em;
-  max-width: 360px;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    letter-spacing: 0.02em;
+    max-width: 360px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
 }
 
 .statusPillBusy {
-  background: #fff3e6;
-  color: #b95c1e;
-  border: 1px solid #ffd4a8;
+    background: #fff3e6;
+    color: #b95c1e;
+    border: 1px solid #ffd4a8;
 }
 
 .statusPillError {
-  background: #ffecec;
-  color: #b00020;
-  border: 1px solid #ffc7c7;
-  cursor: pointer;
+    background: #ffecec;
+    color: #b00020;
+    border: 1px solid #ffc7c7;
+    cursor: pointer;
 }
 
 .statusPillSuccess {
-  background: #e8f5e9;
-  color: #1b5e20;
-  border: 1px solid #b7dfb9;
-  cursor: pointer;
+    background: #e8f5e9;
+    color: #1b5e20;
+    border: 1px solid #b7dfb9;
+    cursor: pointer;
 }
 
-/* One-time drum-sample download indicator, shown in the transport's aux
-   slot only while the player is in the `loading` state. */
+/* One-time drum-sample download indicator, shown in the header's right
+   side only while the player is in the `loading` state. `margin-left: auto`
+   pushes it (and anything after) to the trailing edge of the toolbar;
+   `flex-shrink: 0` keeps the label fully visible no matter how crowded
+   the header gets. */
 .sampleProgress {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: #6b6256;
-  white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #6b6256;
+    white-space: nowrap;
+    margin-left: auto;
+    flex-shrink: 0;
 }
 
 .sampleProgressTrack {
-  width: 72px;
-  height: 6px;
-  border-radius: 999px;
-  background: #e7e0d2;
-  overflow: hidden;
+    width: 144px;
+    height: 6px;
+    border-radius: 999px;
+    background: #e7e0d2;
+    overflow: hidden;
+    flex-shrink: 0;
 }
 
 .sampleProgressFill {
-  display: block;
-  height: 100%;
-  background: #b95c1e;
-  border-radius: 999px;
-  transition: width 0.15s linear;
+    display: block;
+    height: 100%;
+    background: #b95c1e;
+    border-radius: 999px;
+    transition: width 0.15s linear;
+}
+
+/* Modal overlay shown over the whole appContainer while a file load is in
+   flight. The lightly-transparent backdrop keeps the UI legible (so the
+   user can see what's about to come back), and `pointer-events: auto`
+   (default) plus full coverage blocks every click underneath until the
+   load resolves. Sits above the playback bar / debug panel but below
+   browser-level UI (no `position: fixed` — confined to the app shell). */
+.loadingOverlay {
+    position: absolute;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    background: rgba(251, 246, 236, 0.55);
+    backdrop-filter: blur(2px);
+    user-select: none;
+}
+
+.loadingSpinner {
+    width: 44px;
+    height: 44px;
+    border: 4px solid rgba(201, 191, 174, 0.55);
+    border-top-color: #ff8c55;
+    border-radius: 50%;
+    animation: drumjot-spinner-rotate 0.8s linear infinite;
+}
+
+.loadingLabel {
+    font-size: 13px;
+    color: #4a4a4a;
+    letter-spacing: 0.02em;
+    background: rgba(255, 255, 255, 0.85);
+    padding: 4px 12px;
+    border-radius: 999px;
+    border: 1px solid #c9bfae;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    white-space: nowrap;
+    max-width: 70vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+@keyframes drumjot-spinner-rotate {
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 .dropdown {
-  position: relative;
-  display: inline-flex;
+    position: relative;
+    display: inline-flex;
 }
 
 .dropdownPanel {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 30;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
-  min-width: 180px;
-  padding: 10px;
-  background: #fff;
-  border: 1px solid #c9bfae;
-  border-radius: 6px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    min-width: 180px;
+    padding: 10px;
+    background: #fff;
+    border: 1px solid #c9bfae;
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
 }
 
 .dropdownPanelWide {
-  min-width: 230px;
+    min-width: 230px;
 }
 
 .dropdownItem {
-  font-size: 13px;
-  font-family: inherit;
-  text-align: left;
-  padding: 7px 10px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: #2b2b2b;
-  cursor: pointer;
+    font-size: 13px;
+    font-family: inherit;
+    text-align: left;
+    padding: 7px 10px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: #2b2b2b;
+    cursor: pointer;
 }
 
 .dropdownItem:hover {
-  background: #f6efe0;
+    background: #f6efe0;
 }
 
 .dropdownItem:focus {
-  outline: 2px solid #ff8c55;
-  outline-offset: 1px;
+    outline: 2px solid #ff8c55;
+    outline-offset: 1px;
 }
 
 .dropdownDivider {
-  height: 1px;
-  background: #e7e0d5;
-  margin: 2px 0;
+    height: 1px;
+    background: #e7e0d5;
+    margin: 2px 0;
 }
 
 .playbackBar {
-  /* Three tracks: an empty left spacer, the centred transport group,
+    /* Three tracks: an empty left spacer, the centred transport group,
      and the right-aligned aux controls (speed / error). The 1fr side
      tracks keep the transport optically centred in the bar regardless
      of how wide the aux content is. */
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 24px;
-  border-top: 1px solid #e7e0d5;
-  background: rgba(255, 255, 255, 0.65);
-  backdrop-filter: blur(4px);
-  flex: 0 0 auto;
-  /* Stays pinned to the bottom even when no jot is loaded (the empty
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 24px;
+    border-top: 1px solid #e7e0d5;
+    background: rgba(255, 255, 255, 0.65);
+    backdrop-filter: blur(4px);
+    flex: 0 0 auto;
+    /* Stays pinned to the bottom even when no jot is loaded (the empty
      placeholder doesn't grow to fill the column). With a jot, the
      scrolling .jotContainer is flex:1 so this is already at the bottom
      and the auto margin is a no-op. */
-  margin-top: auto;
-  user-select: none;
+    margin-top: auto;
+    user-select: none;
 }
 
 .transportSpacer {
-  /* Occupies the left 1fr grid track; no content. */
+    /* Occupies the left 1fr grid track; no content. */
 }
 
 .transportCenter {
-  /* Only the play/pause button is in flow, so the centred `auto` grid
+    /* Only the play/pause button is in flow, so the centred `auto` grid
      track is exactly its width and the button stays optically centred
      in the bar whether or not Stop is shown. Stop is positioned
      absolutely to its right so it never shifts the play button. */
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .transportStop {
-  position: absolute;
-  left: calc(100% + 12px);
-  top: 0;
+    position: absolute;
+    left: calc(100% + 12px);
+    top: 0;
 }
 
 .transportAux {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
 }
 
 .transportButton {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 52px;
-  height: 52px;
-  font-size: 22px;
-  line-height: 1;
-  border: 1px solid #c9bfae;
-  border-radius: 10px;
-  background: #fff;
-  color: #2b2b2b;
-  cursor: pointer;
-  font-family: inherit;
-  /* Keep the glyph optically centred (▶ / ■ sit slightly off otherwise). */
-  padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 52px;
+    height: 52px;
+    font-size: 22px;
+    line-height: 1;
+    border: 1px solid #c9bfae;
+    border-radius: 10px;
+    background: #fff;
+    color: #2b2b2b;
+    cursor: pointer;
+    font-family: inherit;
+    /* Keep the glyph optically centred (▶ / ■ sit slightly off otherwise). */
+    padding: 0;
 }
 
 .transportButton:hover:not(:disabled) {
-  background: #f6efe0;
-  border-color: #b09d80;
+    background: #f6efe0;
+    border-color: #b09d80;
 }
 
 .transportButton:disabled {
-  color: #b9b0a0;
-  cursor: not-allowed;
+    color: #b9b0a0;
+    cursor: not-allowed;
 }
 
 .transportButton:focus-visible {
-  outline: 2px solid #ff8c55;
-  outline-offset: 2px;
+    outline: 2px solid #ff8c55;
+    outline-offset: 2px;
 }
 
 .transportButtonStop {
-  color: #b00020;
+    color: #b00020;
 }
 
 .transportButtonStop:hover:not(:disabled) {
-  background: #ffecec;
-  border-color: #b00020;
+    background: #ffecec;
+    border-color: #b00020;
 }
 
 .transportButtonStop:focus-visible {
-  outline-color: #b00020;
+    outline-color: #b00020;
 }
 
 .transportButtonError {
-  border-color: #b00020;
-  color: #b00020;
+    border-color: #b00020;
+    color: #b00020;
 }
 
 .transportButtonError:hover:not(:disabled) {
-  background: #ffecec;
+    background: #ffecec;
 }
 
 .jotContainer {
-  position: relative;
-  width: 100%;
-  flex: 1 1 auto;
-  min-height: 0;
-  /* No horizontal padding: the lane/stem gutters are `position: sticky;
+    position: relative;
+    width: 100%;
+    flex: 1 1 auto;
+    min-height: 0;
+    /* No horizontal padding: the lane/stem gutters are `position: sticky;
      left: 0`, and sticky offsets are measured from this scroller's
      padding edge. Any left padding here would leave a strip where the
      scrolled .barsRow notes show through to the left of the gutter
      (the gutter would no longer be flush with the viewport edge).
      Inset is reapplied per-block to the text content below instead. */
-  padding: 32px 0;
-  overflow: auto;
-  /* Keep the two-finger horizontal-swipe gesture contained to this
+    padding: 32px 0;
+    overflow: auto;
+    /* Keep the two-finger horizontal-swipe gesture contained to this
      scroller instead of letting an overscroll past either edge trigger
      the browser's back/forward history navigation. Scoped to this site
      only; no system-level setting required. */
-  overscroll-behavior-x: contain;
-  box-sizing: border-box;
-  user-select: none;
+    overscroll-behavior-x: contain;
+    box-sizing: border-box;
+    user-select: none;
 }
 
 /* The text blocks aren't sticky and shouldn't run to the bare viewport
    edge — reapply the inset that used to come from .jotContainer's
    padding so they stay aligned with each other. */
 .title {
-  font-size: 18px;
-  font-weight: 600;
-  margin: 0 0 4px 0;
-  padding: 0 24px;
-  letter-spacing: 0.02em;
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0 0 4px 0;
+    padding: 0 24px;
+    letter-spacing: 0.02em;
 }
 
 .subtitle {
-  color: #6b6b6b;
-  font-size: 12px;
-  margin: 0 0 20px 0;
-  padding: 0 24px;
+    color: #6b6b6b;
+    font-size: 12px;
+    margin: 0 0 20px 0;
+    padding: 0 24px;
 }
 
 .legend {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 16px;
-  padding: 0 24px;
-  font-size: 12px;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+    padding: 0 24px;
+    font-size: 12px;
 }
 
 .legendChip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 8px 2px 4px;
-  border-radius: 999px;
-  background: #fff;
-  border: 1px solid #e7e0d5;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px 2px 4px;
+    border-radius: 999px;
+    background: #fff;
+    border: 1px solid #e7e0d5;
 }
 
 .legendSwatch {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
 }
 
-.musicTracks {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 20px;
-  /* Match the staff's width-fitting so the gutter + canvas align with
-     the voice rows below even when the canvas overflows the viewport. */
-  min-width: max-content;
+/* Sticky-gutter ruler above the audio tracks / score that labels each
+   bar boundary with bar number and playback time. Same 132px sticky
+   gutter as `.laneGutter` / `.musicTrackGutter` so the column stays
+   pinned during horizontal scroll exactly like the rows below it. */
+.timelineHeader {
+    display: flex;
+    min-width: max-content;
+    margin-bottom: 8px;
+}
+
+.timelineHeaderGutter {
+    position: sticky;
+    left: 0;
+    z-index: 6;
+    flex: 0 0 auto;
+    width: 132px;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 4px 8px;
+    background: #fbf6ec;
+    border-right: 1px solid #c9bfae;
+}
+
+.timelineHeaderLabel {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #6b6b6b;
+}
+
+.timelineHeaderBarsRow {
+    position: relative;
+    flex: 0 0 auto;
+    height: 28px;
+    background: #fbf6ec;
+    /* `border-box` so the right border draws INSIDE `voice.width`, matching
+     the `box-sizing: border-box` `.bar` cells below — their accumulated
+     widths include each bar's right barline, so the closing right border
+     here lands exactly on the final barline below. */
+    box-sizing: border-box;
+    border-top: 1px solid #c9bfae;
+    border-bottom: 1px solid #c9bfae;
+    border-right: 1px solid #c9bfae;
+    cursor: pointer;
+}
+
+/* One tick per bar boundary; sits on the same x as the score's barline
+   below. Labels are pointer-events:none so click-to-seek hits the row. */
+.timelineHeaderTick {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-left: 1px solid #c9bfae;
+    padding-left: 4px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1px;
+    pointer-events: none;
+    user-select: none;
+}
+
+.timelineHeaderBar {
+    font-size: 11px;
+    font-weight: 700;
+    color: #4a4a4a;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+}
+
+.timelineHeaderTime {
+    font-size: 9px;
+    color: #888;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Unified mixer — audio tracks and drum-instrument pitches interleaved
+   in user-defined order. Each row sets its own height (audio rows are
+   ~56px, pitch rows are ~36px); they're separated visually by their
+   gutter borders, so no flex gap. */
+.mixer {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 20px;
+    min-width: max-content;
+}
+
+/* Drum-instrument row in the unified mixer. Same gutter geometry as
+   .musicTrack so audio and drum rows look like siblings (same sticky
+   132px gutter, matching control column on the right). */
+.pitchRow {
+    position: relative;
+    display: flex;
+    min-width: max-content;
+    border-bottom: 1px solid #c9bfae;
+    background: #fff6e8;
+}
+
+.pitchRow:first-of-type,
+.musicTrack + .pitchRow,
+.gutterMasterRow + .pitchRow {
+    border-top: 1px solid #c9bfae;
+}
+
+.pitchRowGutter {
+    position: sticky;
+    left: 0;
+    z-index: 6;
+    flex: 0 0 auto;
+    width: 132px;
+    box-sizing: border-box;
+    border-right: 1px solid #c9bfae;
+    background: #fff6e8;
+    padding: 2px 6px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.pitchRowLabel {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 11px;
+    font-weight: 600;
+    color: #4a4a4a;
+    line-height: 1.1;
+    transition: opacity 120ms ease;
+}
+
+.pitchRowName {
+    font-size: 9px;
+    color: #888;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+/* The drag handle — only the handle is `draggable`, so the user can
+   still click M/S, drag the volume slider, etc. without lifting the
+   whole row by accident. Uses cursor: grab so the affordance is obvious. */
+.mixerDragHandle {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 100%;
+    color: #b0a48c;
+    font-size: 10px;
+    letter-spacing: -1px;
+    cursor: grab;
+    user-select: none;
+    font-family: inherit;
+    line-height: 1;
+}
+
+.mixerDragHandle:hover {
+    color: #4a4a4a;
+}
+
+.mixerDragHandle:active {
+    cursor: grabbing;
+}
+
+/* The row picked up by the user drops to half opacity so they can see
+   the rows shifting past beneath it. Native HTML5 DnD also generates a
+   browser drag image, but dimming the source row in the live layout
+   removes any ambiguity about which row is being moved. */
+.mixerRowDragging {
+    opacity: 0.4;
+}
+
+/* Marks a row that starts a new group — applied to the first row of
+   each group cluster (its `groupId` differs from the previous row's).
+   Adds a small inter-group gap so adjacent groups read as distinct
+   clusters; same-group rows render flush (no top margin). The first
+   row in the mixer never gets this class — no row above it to gap
+   against. */
+.mixerRowGroupStart {
+    margin-top: 12px;
+}
+
+/* The orange line that marks where the row will land if dropped now.
+   Drawn as a 2px wide top/bottom border on the target row — the position
+   (above vs below) is driven by which half of the row the pointer is in. */
+.mixerDropIndicatorAbove {
+    box-shadow: inset 0 2px 0 0 #ff5c0a;
+}
+
+.mixerDropIndicatorBelow {
+    box-shadow: inset 0 -2px 0 0 #ff5c0a;
+}
+
+/* Persistent "drop at the very end" zone below the last row. Has no
+   height of its own when no drag is in flight; on dragover it shows the
+   same orange indicator the row borders use. */
+.mixerEndDrop {
+    height: 4px;
+    min-width: max-content;
+    flex: 0 0 auto;
+}
+
+.mixerEndDrop.mixerDropIndicator {
+    background: #ff5c0a;
+    height: 2px;
 }
 
 .musicTrack {
-  position: relative;
-  display: flex;
-  /* Same border treatment as the voiceStaff so the music tracks read
+    position: relative;
+    display: flex;
+    /* Same border treatment as the voiceStaff so the music tracks read
      as part of the same vertical stack — distinct row, same grid. */
-  min-width: max-content;
-  border-top: 1px solid #c9bfae;
-  border-bottom: 1px solid #c9bfae;
-  background: #fbf6ec;
+    min-width: max-content;
+    border-top: 1px solid #c9bfae;
+    border-bottom: 1px solid #c9bfae;
+    background: #fbf6ec;
 }
 
 .musicTrackGutter {
-  /* Same width and sticky behaviour as the score's laneGutter, so the
+    /* Same width and sticky behaviour as the score's laneGutter, so the
      stem labels stay pinned during horizontal scroll exactly like the
-     pitch labels do below. */
-  position: sticky;
-  left: 0;
-  z-index: 6;
-  flex: 0 0 auto;
-  width: 132px;
-  box-sizing: border-box;
-  border-right: 1px solid #c9bfae;
-  background: #fbf6ec;
-  padding: 4px 6px;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
+     pitch labels do below. Top-level row layout puts the drag handle on
+     the left and a stacked label/buttons column on the right (the
+     `.musicTrackContent` child) — kept in row layout so the handle can
+     `align-self: stretch` to the row's full height for a tall hit area. */
+    position: sticky;
+    left: 0;
+    z-index: 6;
+    flex: 0 0 auto;
+    width: 132px;
+    box-sizing: border-box;
+    border-right: 1px solid #c9bfae;
+    background: #fbf6ec;
+    padding: 4px 6px;
+    display: flex;
+    align-items: stretch;
+    gap: 4px;
+}
+
+.musicTrackContent {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
 }
 
 .musicTrackLabel {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  transition: opacity 120ms ease;
-  overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    transition: opacity 120ms ease;
+    overflow: hidden;
 }
 
 .musicTrackLabelDim {
-  opacity: 0.6;
+    opacity: 0.6;
 }
 
 .musicTrackName {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: #6b6b6b;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #6b6b6b;
 }
 
 .musicTrackFile {
-  font-size: 10px;
-  color: #999;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+    font-size: 10px;
+    color: #999;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .musicTrackButtons {
-  display: flex;
-  gap: 3px;
-  align-items: center;
-  justify-content: flex-end;
+    display: flex;
+    gap: 3px;
+    align-items: center;
+    justify-content: flex-end;
 }
 
 .musicTrackClear {
-  flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  font-size: 13px;
-  line-height: 1;
-  border: 1px solid #c9bfae;
-  border-radius: 3px;
-  background: #fff;
-  color: #888;
-  cursor: pointer;
-  font-family: inherit;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    font-size: 13px;
+    line-height: 1;
+    border: 1px solid #c9bfae;
+    border-radius: 3px;
+    background: #fff;
+    color: #888;
+    cursor: pointer;
+    font-family: inherit;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .musicTrackClear:hover {
-  border-color: #b00020;
-  color: #b00020;
+    border-color: #b00020;
+    color: #b00020;
 }
 
 .musicTrackBarsRow {
-  position: relative;
-  flex: 0 0 auto;
+    position: relative;
+    flex: 0 0 auto;
 }
 
 .musicTrackWaveform {
-  display: block;
-  /* `transition` keeps the dim/undim flip smooth when M/S toggles. */
-  transition: opacity 120ms ease;
-}
-
-.voices {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-}
-
-.voice {
-  position: relative;
-}
-
-.voiceLabel {
-  font-size: 10px;
-  color: #999;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  margin-bottom: 6px;
-  padding-left: 24px;
-}
-
-.voiceStaff {
-  position: relative;
-  display: flex;
-  /* Force the staff box to be as wide as its content (gutter + barsRow) so
-     the top/bottom borders and centerline gradient extend across the full
-     length of the score. Without this, the staff's box width falls back to
-     its parent's width (viewport-bound) while the flex children overflow
-     visually beyond, leaving the borders cut off at 100vw. */
-  min-width: max-content;
-  border-top: 1px solid #c9bfae;
-  border-bottom: 1px solid #c9bfae;
-  background:
-    linear-gradient(to bottom, transparent calc(100% - 1px), #efe6d2 calc(100% - 1px));
-}
-
-.laneGutter {
-  /* Sticky so the pitch labels + M/S buttons stay visible when the score
-     scrolls horizontally. The scroll container is `.jotContainer`; this
-     element sticks to its left edge as `.barsRow` slides under. The high
-     z-index keeps the gutter above the playhead (z: 5) when the playhead
-     would otherwise cross into the gutter's region during scroll. */
-  position: sticky;
-  left: 0;
-  z-index: 6;
-  flex: 0 0 auto;
-  width: 132px;
-  display: flex;
-  flex-direction: column;
-  border-right: 1px solid #c9bfae;
-  /* Opaque background so notes don't show through during sticky overlap. */
-  background: #fff6e8;
-  box-sizing: border-box;
-}
-
-.laneGutterCell {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 4px;
-  padding: 0 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #666;
-  border-bottom: 1px dashed #e2d8c4;
-  box-sizing: border-box;
-  cursor: help;
-  white-space: nowrap;
-  transition: opacity 120ms ease;
-}
-
-.laneGutterCell:last-child {
-  border-bottom: none;
-}
-
-.laneGutterCellDim {
-  /* Slightly dim the gutter cell when the row is muted/solo-excluded so
-     the user can scan which rows will play. The note lanes themselves
-     get a stronger dim via `.laneDim`. */
-  opacity: 0.65;
+    display: block;
+    /* `transition` keeps the dim/undim flip smooth when M/S toggles. */
+    transition: opacity 120ms ease;
 }
 
 .gutterPitch {
-  flex: 1 1 auto;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
+    flex: 1 1 auto;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
 }
 
 .muteButton,
 .soloButton {
-  flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1;
-  border: 1px solid #c9bfae;
-  border-radius: 3px;
-  background: #fff;
-  color: #888;
-  cursor: pointer;
-  font-family: inherit;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    border: 1px solid #c9bfae;
+    border-radius: 3px;
+    background: #fff;
+    color: #888;
+    cursor: pointer;
+    font-family: inherit;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .muteButton:hover,
 .soloButton:hover {
-  border-color: #888;
-  color: #444;
+    border-color: #888;
+    color: #444;
 }
 
 .muteButton:focus,
 .soloButton:focus {
-  outline: 2px solid #ff8c55;
-  outline-offset: 1px;
+    outline: 2px solid #ff8c55;
+    outline-offset: 1px;
 }
 
 .muteButtonActive {
-  background: #b00020;
-  border-color: #b00020;
-  color: #fff;
+    background: #b00020;
+    border-color: #b00020;
+    color: #fff;
 }
 
 .muteButtonActive:hover {
-  background: #8a0019;
-  border-color: #8a0019;
-  color: #fff;
+    background: #8a0019;
+    border-color: #8a0019;
+    color: #fff;
 }
 
 .soloButtonActive {
-  background: #f2b300;
-  border-color: #d99f00;
-  color: #2b2b2b;
+    background: #f2b300;
+    border-color: #d99f00;
+    color: #2b2b2b;
 }
 
 .soloButtonActive:hover {
-  background: #d99f00;
-  border-color: #b88600;
+    background: #d99f00;
+    border-color: #b88600;
 }
 
 /* Per-row volume fader, shared by the pitch gutter and the stem gutter.
    Kept narrow so it fits beside the M/S buttons without widening the
    sticky gutter further. */
 .rowVolume {
-  flex: 0 0 auto;
-  width: 40px;
-  height: 14px;
-  margin: 0;
-  padding: 0;
-  accent-color: #ff8c55;
-  cursor: pointer;
-  align-self: center;
+    flex: 0 0 auto;
+    width: 40px;
+    height: 14px;
+    margin: 0;
+    padding: 0;
+    accent-color: #ff8c55;
+    cursor: pointer;
+    align-self: center;
 }
 
 .rowVolume:focus {
-  outline: 2px solid #ff8c55;
-  outline-offset: 1px;
+    outline: 2px solid #ff8c55;
+    outline-offset: 1px;
 }
 
 .laneDim {
-  opacity: 0.25;
-  transition: opacity 120ms ease;
+    opacity: 0.25;
+    transition: opacity 120ms ease;
 }
 
 .barsRow {
-  position: relative;
-  display: flex;
-  flex: 0 0 auto;
+    position: relative;
+    display: flex;
+    flex: 0 0 auto;
+    /* Width driven by `--voice-beats` (set per row) × `--px-per-beat`
+       (set on the score container, the one variable that the zoom
+       slider changes). Reading `--px-per-beat` purely from CSS means
+       a zoom tick mutates a single property on the root and reflows
+       every descendant width/left at the browser layer — no React
+       re-render, no style-prop diff. */
+    width: calc(var(--voice-beats) * var(--px-per-beat));
 }
 
 .bar {
-  position: relative;
-  /* border-box so the 1px barline draws INSIDE `bar.width`. With the
-     default content-box the border added 1px to every bar's flow
+    position: relative;
+    /* border-box so the 1px barline draws INSIDE the bar's width. With
+     the default content-box the border added 1px to every bar's flow
      footprint, accumulating ~1px/bar against the border-free model
      `timeToX` / the waveform use — noteheads drifted progressively
      right of the playhead and audio. */
-  box-sizing: border-box;
-  border-right: 1px solid #c9bfae;
-  flex: 0 0 auto;
+    box-sizing: border-box;
+    border-right: 1px solid #c9bfae;
+    flex: 0 0 auto;
+    /* `--bar-beats` is set inline per BarView (zoom-invariant);
+       `--px-per-beat` lives on the score root. */
+    width: calc(var(--bar-beats) * var(--px-per-beat));
 }
 
 .bar:first-child {
-  border-left: 1px solid #c9bfae;
+    border-left: 1px solid #c9bfae;
 }
 
 .barAnacrusis {
-  border-right: 1px dashed #c9bfae;
-  background: rgba(255, 140, 85, 0.04);
+    border-right: 1px dashed #c9bfae;
+    background: rgba(255, 140, 85, 0.04);
+}
+
+/* Subtle dashed beat divider inside a bar. Position is `padLeft +
+   beatOffset × pxPerBeat`, the same x the renderer places that beat's
+   note at — `--divider-beat` is the per-line beat offset (set inline
+   per divider, stable per render) and the CSS computes the final pixel
+   left from the zoom-driven `--px-per-beat`. Behind the notes (no
+   z-index, rendered before the lane children) and pointer-events:
+   none so it's purely decorative. */
+.beatDivider {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 0;
+    left: calc(var(--note-pad-px) + var(--divider-beat) * var(--px-per-beat));
+    border-left: 1px dashed #b8a98c;
+    pointer-events: none;
 }
 
 /* Empty pre-roll region before bar 1 (recording lead-in). Hatched so
-   it reads as non-musical space rather than a measure, and sized to
-   the startOffset so the notes line up with the music-stem waveform. */
+   it reads as non-musical space rather than a measure, and sized via
+   `--lead-in-beats × --px-per-beat` so the notes line up with the
+   music-stem waveform. */
 .leadIn {
-  position: relative;
-  flex: 0 0 auto;
-  box-sizing: border-box;
-  border-right: 1px dashed #c9bfae;
-  background: repeating-linear-gradient(
-    45deg,
-    rgba(201, 191, 174, 0.12) 0 6px,
-    transparent 6px 12px
-  );
-  display: flex;
-  align-items: center;
-  justify-content: center;
+    position: relative;
+    flex: 0 0 auto;
+    box-sizing: border-box;
+    border-right: 1px dashed #c9bfae;
+    background: repeating-linear-gradient(
+        45deg,
+        rgba(201, 191, 174, 0.12) 0 6px,
+        transparent 6px 12px
+    );
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: calc(var(--lead-in-beats) * var(--px-per-beat));
 }
 
 .leadInLabel {
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #b0a48c;
-  user-select: none;
-  pointer-events: none;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #b0a48c;
+    user-select: none;
+    pointer-events: none;
 }
 
 .lane {
-  position: relative;
-  border-bottom: 1px dashed #e2d8c4;
+    position: relative;
+    border-bottom: 1px dashed #e2d8c4;
 }
 
 .lane:last-child {
-  border-bottom: none;
+    border-bottom: none;
 }
 
 .patternBracket {
-  position: absolute;
-  top: -2px;
-  bottom: -2px;
-  border: 1.5px dashed #ff8c55;
-  border-radius: 4px;
-  box-sizing: border-box;
-  pointer-events: none;
-  z-index: 2;
-  transition: background-color 120ms ease, border-color 120ms ease;
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    border: 1.5px dashed #ff8c55;
+    border-radius: 4px;
+    box-sizing: border-box;
+    pointer-events: none;
+    z-index: 2;
+    transition:
+        background-color 120ms ease,
+        border-color 120ms ease;
+    left: calc(var(--note-pad-px) + var(--span-start-beat) * var(--px-per-beat));
+    width: calc((var(--span-end-beat) - var(--span-start-beat)) * var(--px-per-beat));
 }
 
 .patternBracketHighlight {
-  background: rgba(255, 140, 85, 0.12);
-  border-color: #ff5c0a;
-  box-shadow: 0 0 0 1px rgba(255, 92, 10, 0.35);
+    background: rgba(255, 140, 85, 0.12);
+    border-color: #ff5c0a;
+    box-shadow: 0 0 0 1px rgba(255, 92, 10, 0.35);
 }
 
 .patternLabel {
-  position: absolute;
-  top: -11px;
-  left: 4px;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #fff;
-  background: #ff8c55;
-  padding: 2px 6px;
-  border: none;
-  border-radius: 2px 2px 0 0;
-  pointer-events: auto;
-  cursor: pointer;
-  white-space: nowrap;
-  user-select: none;
-  font-family: inherit;
-  line-height: 1;
+    position: absolute;
+    top: -11px;
+    left: 4px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #fff;
+    background: #ff8c55;
+    padding: 2px 6px;
+    border: none;
+    border-radius: 2px 2px 0 0;
+    pointer-events: auto;
+    cursor: pointer;
+    white-space: nowrap;
+    user-select: none;
+    font-family: inherit;
+    line-height: 1;
 }
 
 .patternLabel:hover,
 .patternLabelHighlight {
-  background: #b03d00;
+    background: #b03d00;
 }
 
 /* Conventional tuplet bracket: a thin line with downward end ticks
@@ -868,40 +1235,47 @@
    ink so it reads as notation chrome rather than competing with the
    coloured note dots or the orange pattern brackets. */
 .tupletBracket {
-  position: absolute;
-  top: -17px;
-  height: 13px;
-  box-sizing: border-box;
-  border-top: 1.5px solid #6b6b6b;
-  border-left: 1.5px solid #6b6b6b;
-  border-right: 1.5px solid #6b6b6b;
-  pointer-events: none;
-  z-index: 3;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
+    position: absolute;
+    top: -17px;
+    height: 13px;
+    box-sizing: border-box;
+    border-top: 1.5px solid #6b6b6b;
+    border-left: 1.5px solid #6b6b6b;
+    border-right: 1.5px solid #6b6b6b;
+    pointer-events: none;
+    z-index: 3;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    left: calc(var(--note-pad-px) + var(--span-start-beat) * var(--px-per-beat));
+    width: calc((var(--span-end-beat) - var(--span-start-beat)) * var(--px-per-beat));
 }
 
 .tupletNumber {
-  /* Sits on the bracket line; the opaque chip masks the line so the
+    /* Sits on the bracket line; the opaque chip masks the line so the
      numeral stays legible. Cream matches the score surface. */
-  transform: translateY(-50%);
-  padding: 0 4px;
-  font-size: 10px;
-  font-weight: 700;
-  font-style: italic;
-  font-variant-numeric: tabular-nums;
-  color: #4a4a4a;
-  background: #fbf6ec;
-  line-height: 1;
+    transform: translateY(-50%);
+    padding: 0 4px;
+    font-size: 10px;
+    font-weight: 700;
+    font-style: italic;
+    font-variant-numeric: tabular-nums;
+    color: #4a4a4a;
+    background: #fbf6ec;
+    line-height: 1;
 }
 
 .note {
-  position: absolute;
-  border-radius: 50%;
-  transform: translate(-50%, -50%);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
-  cursor: pointer;
+    position: absolute;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+    cursor: pointer;
+    /* Position from `padLeft + beat × pxPerBeat` — beat is stable per
+       note (set inline), pxPerBeat changes on zoom (read from the score
+       container's CSS var). The note's pixel diameter and vertical
+       centring stay in inline style because they don't depend on zoom. */
+    left: calc(var(--note-pad-px) + var(--note-beat) * var(--px-per-beat));
 }
 
 /* A non-straight onset (triplet/tuplet/swing) that isn't already
@@ -910,61 +1284,416 @@
    still visible even when it wasn't authored as a group. `outline`
    (not box-shadow) so it composes with the accent ring. */
 .note.offGrid {
-  outline: 1.5px dotted #2aa198;
-  outline-offset: 2px;
+    outline: 1.5px dotted #2aa198;
+    outline-offset: 2px;
 }
 
 .note.accent {
-  box-shadow:
-    0 0 0 2px #fff,
-    0 0 0 3px currentColor;
+    box-shadow:
+        0 0 0 2px #fff,
+        0 0 0 3px currentColor;
 }
 
+/* Ghost notes (`:g` modifier — soft hits, typically MIDI velocity < 40
+   on import). Rendered as a lighter version of the normal note: same
+   solid filled shape, just dimmed so it reads as quieter without the
+   dashed-outline treatment (the dashed style is now reserved for
+   filtered onsets — see `.filteredOnset`). */
 .note.ghost {
-  opacity: 0.45;
-  border: 1px dashed currentColor;
-  background: transparent !important;
+    opacity: 0.45;
 }
 
 .note.roll {
-  background-image: repeating-linear-gradient(
-    45deg,
-    rgba(255, 255, 255, 0.5) 0 2px,
-    transparent 2px 4px
-  );
+    background-image: repeating-linear-gradient(
+        45deg,
+        rgba(255, 255, 255, 0.5) 0 2px,
+        transparent 2px 4px
+    );
 }
 
 .modifierBadge {
-  position: absolute;
-  top: -8px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 9px;
-  font-weight: 700;
-  color: #555;
-  pointer-events: none;
-  letter-spacing: 0.04em;
+    position: absolute;
+    top: -8px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 9px;
+    font-weight: 700;
+    color: #555;
+    pointer-events: none;
+    letter-spacing: 0.04em;
 }
 
 .stickingBadge {
-  position: absolute;
-  bottom: -10px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 9px;
-  color: #888;
-  pointer-events: none;
+    position: absolute;
+    bottom: -10px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 9px;
+    color: #888;
+    pointer-events: none;
+}
+
+/* Ring drawn around the currently-selected note. Sized via box-shadow so
+   it composes cleanly with `.accent` (also box-shadow) and doesn't
+   shift layout. Sits above the off-grid dotted outline. */
+.note.noteSelected {
+    box-shadow:
+        0 0 0 2px #fff,
+        0 0 0 4px #ff5c0a;
+}
+
+/* Lift any note that's currently rendering its `.noteLabel` (hover OR
+   selection) above sibling `.pitchRow`s in the mixer — the inline
+   label extends below the note, and without this the later-painted
+   `.pitchRow` below would cover it (only the bottommost row, typically
+   the kick, escapes that). The lane chain (.lane / .bar / .barsRow /
+   .pitchRow) is all `position: relative; z-index: auto`, so any
+   positive z-index here outranks them. */
+.note.noteShowingLabel {
+    z-index: 20;
+}
+
+/* Hovered notes outrank the selected note's `z-index: 20` so a hover
+   label always paints on top of the selected note's orange ring. Same-
+   z-index source ordering would otherwise hide the hovered label when
+   the selected note comes after it in the DOM. */
+.note.noteHovered {
+    z-index: 30;
+}
+
+/* Inline label below the selected note showing the same text the hover
+   tooltip would. Sticking badges sit at `bottom: -10px`; offset further
+   so the two don't overlap. z-index so the label paints over neighbour
+   noteheads.
+   `pointer-events: auto` so the optional Debug-details toggle inside is
+   clickable; sub-elements like the leading description text are nowrap
+   for legibility but the wrapper allows vertical expansion when the
+   collapsible block opens. */
+.noteLabel {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 16px;
+    z-index: 12;
+    background: #fff;
+    border: 1px solid #c9bfae;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: 500;
+    color: #2b2b2b;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+    pointer-events: auto;
+    line-height: 1.2;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    /* Keep narrow when no debug block; the debug block dictates width
+       organically when present. */
+    max-width: 320px;
+}
+
+.noteLabelText {
+    white-space: nowrap;
+}
+
+/* "Debug details" collapsible block under the regular note label,
+   populated only when a filter-mode debug bundle is loaded AND this
+   note's provenance entry was found (matched by MIDI tick). Also used
+   verbatim as the entire content of the filtered-onset popover. */
+.debugDetails {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    border-top: 1px dashed #e7e0d5;
+    padding-top: 3px;
+    margin-top: 1px;
+}
+
+.debugDetailsToggle {
+    font: inherit;
+    font-size: 10px;
+    font-weight: 600;
+    color: #666;
+    background: transparent;
+    border: none;
+    padding: 1px 0;
+    cursor: pointer;
+    text-align: left;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.debugDetailsToggle:hover {
+    color: #2b2b2b;
+}
+
+.debugDetailsToggle:focus-visible {
+    outline: 2px solid #ff8c55;
+    outline-offset: 1px;
+    border-radius: 2px;
+}
+
+/* Compact two-column key/value dump. `dt`/`dd` floated into a grid so
+   the keys stay aligned across multiple rows; `dl` margin reset because
+   we're nested inside the label's tight padding. */
+.debugDetailsList {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 1px 8px;
+    margin: 0;
+    font-size: 10px;
+    line-height: 1.35;
+    font-variant-numeric: tabular-nums;
+}
+
+.debugDetailsList dt {
+    color: #888;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.debugDetailsList dd {
+    margin: 0;
+    color: #2b2b2b;
+}
+
+/* Filtered-onset ghost — rendered at a rejected onset's detected
+   `(bar, beat_in_bar)` position inside the bars row. Same diameter as
+   the real notes but a hollow dashed outline so it reads as "this is
+   what the detector saw, what the filter LLM dropped" without being
+   mistakable for a kept note. Visibility is gated by the toolbar's
+   "Show filtered" checkbox. */
+.filteredOnset {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1.5px dashed currentColor;
+    background: transparent;
+    transform: translate(-50%, -50%);
+    opacity: 0.6;
+    cursor: help;
+    /* `data-noseek` on the element opts out of click-to-seek; pointer
+       events still need to be enabled so the click/hover registers
+       (the lane below otherwise consumes them). */
+    pointer-events: auto;
+    z-index: 4;
+    left: calc(var(--note-pad-px) + var(--filtered-beat) * var(--px-per-beat));
+    transition: opacity 120ms ease;
+}
+
+.filteredOnset:hover,
+.filteredOnsetShowingLabel {
+    opacity: 1;
+    z-index: 25;
+}
+
+/* Inline popover for a filtered onset, anchored below the ghost circle
+   exactly like .noteLabel. Wraps the shared NoteProvenanceDetails block
+   so the debug data has the same visual treatment as on real notes. */
+.filteredOnsetLabel {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 8px;
+    z-index: 13;
+    background: #fff;
+    border: 1px solid #c9bfae;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: 500;
+    color: #2b2b2b;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+    pointer-events: auto;
+    line-height: 1.2;
+    max-width: 320px;
 }
 
 .marquee {
-  position: absolute;
-  box-shadow: 0 0 0 1px #ff8c55;
-  background: rgba(255, 140, 85, 0.1);
-  pointer-events: none;
+    position: absolute;
+    box-shadow: 0 0 0 1px #ff8c55;
+    background: rgba(255, 140, 85, 0.1);
+    pointer-events: none;
 }
 
 .empty {
-  font-size: 14px;
-  color: #888;
-  padding: 24px;
+    font-size: 14px;
+    color: #888;
+    padding: 24px;
+}
+
+/* DebugPanel: a collapsible drawer pinned to the bottom of the app,
+   rendered when a transcriber debug bundle has been loaded. The
+   `Load > Load debug bundle (.zip)` action populates it; it shows the
+   per-stage timings + the full captured log stream from that run. */
+.debugPanel {
+    position: relative;
+    flex: 0 0 auto;
+    border-top: 1px solid #e7e0d5;
+    background: #fafaf7;
+    font-size: 12px;
+    color: #333;
+    display: flex;
+    flex-direction: column;
+    min-height: 80px;
+}
+
+.debugPanelResizeHandle {
+    flex: 0 0 auto;
+    height: 5px;
+    margin-bottom: -1px;
+    background: transparent;
+    cursor: ns-resize;
+    touch-action: none;
+}
+
+.debugPanelResizeHandle:hover,
+.debugPanelResizeHandle:active {
+    background: #d5cab4;
+}
+
+.debugPanelHeader {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 16px;
+    background: #f0ebe2;
+    cursor: pointer;
+    user-select: none;
+}
+
+.debugPanelTitle {
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-size: 11px;
+    color: #555;
+}
+
+.debugPanelStats {
+    font-size: 11px;
+    color: #888;
+    margin-left: auto;
+}
+
+.debugPanelBody {
+    display: grid;
+    grid-template-columns: minmax(220px, 1fr) 2fr;
+    gap: 16px;
+    padding: 10px 16px 14px;
+    overflow: hidden;
+    min-height: 0;
+}
+
+.debugPanelColumn {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.debugPanelColumn h4 {
+    margin: 0 0 6px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #777;
+}
+
+.debugStageList {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-family: 'SF Mono', 'Menlo', monospace;
+    font-size: 11px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.debugStageRow {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 2px 0;
+    border-bottom: 1px dotted #e7e0d5;
+}
+
+.debugStageName {
+    color: #333;
+}
+
+.debugStageElapsed {
+    color: #666;
+}
+
+.debugLogList {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-family: 'SF Mono', 'Menlo', monospace;
+    font-size: 11px;
+    line-height: 1.45;
+    overflow-y: auto;
+    background: #fff;
+    border: 1px solid #e7e0d5;
+    border-radius: 4px;
+    padding: 6px 10px;
+    flex: 1;
+}
+
+.debugLogRow {
+    display: flex;
+    gap: 8px;
+    padding: 1px 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.debugLogTimestamp {
+    color: #888;
+    flex: 0 0 auto;
+}
+
+.debugLogLevel {
+    flex: 0 0 auto;
+    font-weight: 600;
+    width: 56px;
+    color: #555;
+}
+
+.debugLogLevelWARNING {
+    color: #b46100;
+}
+
+.debugLogLevelERROR {
+    color: #b1281c;
+}
+
+.debugLogLogger {
+    flex: 0 0 auto;
+    color: #5a7d9a;
+    min-width: 140px;
+}
+
+.debugLogMessage {
+    flex: 1;
+    color: #2b2b2b;
+}
+
+.debugPanelToggleBar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px;
+    background: #f0ebe2;
+    border-top: 1px solid #e7e0d5;
+    cursor: pointer;
+    user-select: none;
+    font-size: 11px;
+    color: #555;
 }

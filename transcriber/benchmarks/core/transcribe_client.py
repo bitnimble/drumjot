@@ -21,6 +21,12 @@ class TranscribeOptions:
     refine: bool = True
     lint: bool = True
     best_of_k: int = 1
+    # "dsl" (default) scores the returned Jot; "filter" scores the
+    # returned prediction.mid directly (no Jot in the loop).
+    transcribe_mode: str = "dsl"
+    # Onset backend to exercise: "librosa" (default) or "adtof". Lets the
+    # harness run the A/B by flipping this between two seeded runs.
+    onset_backend: str = "librosa"
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +35,9 @@ class TranscribeResult:
     initial_score: float | None
     final_score: float | None
     elapsed_seconds: float
+    # Set only in `filter` mode: URL path (no host) of the predicted
+    # MIDI. Compose against `service_url` to download it.
+    prediction_midi_url: str | None = None
 
 
 def transcribe_file(
@@ -53,6 +62,8 @@ def transcribe_file(
             "refine": "true" if options.refine else "false",
             "lint": "true" if options.lint else "false",
             "best_of_k": str(options.best_of_k),
+            "transcribe_mode": options.transcribe_mode,
+            "onset_backend": options.onset_backend,
             # include_candidates is heavy and we don't need it for scoring.
             "include_candidates": "false",
             "debug": "false",
@@ -64,11 +75,28 @@ def transcribe_file(
 
     refinement = payload.get("refinement") or {}
     return TranscribeResult(
-        jot_dsl=payload["jot_dsl"],
+        jot_dsl=payload.get("jot_dsl", ""),
         initial_score=refinement.get("initial_score"),
         final_score=refinement.get("final_score"),
         elapsed_seconds=float(refinement.get("elapsed_seconds", 0.0)),
+        prediction_midi_url=payload.get("prediction_midi_url"),
     )
+
+
+def fetch_prediction_midi(
+    service_url: str,
+    midi_url_path: str,
+    timeout_seconds: float = 60.0,
+) -> bytes:
+    """Download the `filter`-pathway prediction MIDI.
+
+    `midi_url_path` is the host-less path from the response
+    (`/outputs/<id>/prediction.mid`), composed against `service_url`.
+    """
+    url = service_url.rstrip("/") + midi_url_path
+    resp = httpx.get(url, timeout=timeout_seconds)
+    resp.raise_for_status()
+    return resp.content
 
 
 def wait_for_service(service_url: str, timeout_seconds: float = 5.0) -> None:

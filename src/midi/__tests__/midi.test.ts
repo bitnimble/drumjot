@@ -158,12 +158,13 @@ describe('MIDI <-> Jot synthetic baseline', () => {
     expect(jot.voices[0].bars).toHaveLength(1);
 
     const els = jot.voices[0].bars[0].elements;
-    // 16-slot grid: kick on 1,9; snare on 5,13.
-    expect(els).toHaveLength(16);
+    // Default 1/48 grid (12 slots per quarter): kicks on slot 0/24,
+    // snares on slot 12/36.
+    expect(els).toHaveLength(48);
     expect(els[0].kind).toBe('note');
-    expect(els[4].kind).toBe('note');
-    expect(els[8].kind).toBe('note');
     expect(els[12].kind).toBe('note');
+    expect(els[24].kind).toBe('note');
+    expect(els[36].kind).toBe('note');
     expect(els[1].kind).toBe('rest');
   });
 
@@ -265,10 +266,10 @@ describe('MIDI <-> Jot synthetic baseline', () => {
     }
     const reBytes = new Uint8Array(writeMidi(parsed));
     const jot = fromMidi(reBytes);
-    // Bar 1 default 4/4 (16 slots), bar 2 should carry a time-sig override.
-    expect(jot.voices[0].bars[0].elements).toHaveLength(16);
+    // Default 1/48 grid: 4/4 -> 48 slots, 3/4 -> 36 slots.
+    expect(jot.voices[0].bars[0].elements).toHaveLength(48);
     expect(jot.voices[0].bars[1].metadata?.time).toEqual({ count: 3, unit: 4 });
-    expect(jot.voices[0].bars[1].elements).toHaveLength(12);
+    expect(jot.voices[0].bars[1].elements).toHaveLength(36);
   });
 
   it('round-trips a Jot built from the DSL parser', async () => {

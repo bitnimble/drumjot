@@ -96,6 +96,15 @@ export type TranscribeResponse = {
    * practice — pair with the rendered Jot to play along.
    */
   no_drums_url?: string | null;
+  /**
+   * URL path to the debug `.zip` bundle for this run — the score
+   * (`final.jot`), MP3-encoded per-stem + drumless audio tracks, and a
+   * JSON manifest with per-stage timings + the full captured log stream.
+   * The web UI can load this zip back to reconstitute the score + audio
+   * tracks + debug info offline (see {@link loadDebugZip}). Null when the
+   * bundle couldn't be assembled (e.g. nothing to bundle).
+   */
+  debug_zip_url?: string | null;
 };
 
 /**

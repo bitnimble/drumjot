@@ -24,9 +24,11 @@ contains in that bar and re-encode it correctly". Some examples:
   instruments, or something else. Consult the audio.
 
 Use the **Audio onsets** block below as ground truth for what each bar
-contains. Each onset is `(beat_in_bar, strength)`: a snare hit at
-beat 2.0 with strength 11.0 is a more confident match than one at 2.05
-with strength 3.0. If a bar shows onsets you didn't encode, prefer
+contains. Each onset is `(beat_in_bar, strength)`, where `beat_in_bar`
+is a 1-indexed float that maps uniformly across the bar (in 4/4: `1.0`
+= downbeat, `2.0` = 1/4 through, `3.0` = 1/2, `4.0` = 3/4): a snare hit
+at beat 2.0 with strength 11.0 is a more confident match than one at
+2.05 with strength 3.0. If a bar shows onsets you didn't encode, prefer
 adding them; if the bar shows fewer onsets than your Jot claims, prefer
 removing the extras.
 

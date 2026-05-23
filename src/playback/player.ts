@@ -106,6 +106,16 @@ const DEFAULT_DRUM_PRESET = 0;
 // place to trim/boost later) rather than the old +12 dB lift, which
 // would clip these samples.
 const DRUM_MASTER_GAIN = 1;
+// Default position (1 = unity) of the three user-facing master faders:
+// the whole page, all drum/instrument rows together, and all audio
+// tracks together. Pure attenuation in [0, 1]; the GM-vs-music balance
+// trims (DRUM_MASTER_GAIN, AUDIO_TRACK_MASTER_GAIN) sit underneath so a
+// fader at 1 keeps today's loudness.
+const DEFAULT_MASTER_VOLUME = 1;
+function clampMasterVolume(v: number): number {
+  if (!Number.isFinite(v)) return DEFAULT_MASTER_VOLUME;
+  return Math.max(0, Math.min(1, v));
+}
 // Per-row loudness trim applied on top of the user's volume fader,
 // keyed by DSL pitch letter ('k' = kick, 'h' = hi-hat, …). The GM
 // SoundFont's hats are hot and the kick is weak relative to a real
@@ -133,6 +143,14 @@ const DRIFT_CHECK_INTERVAL_SECONDS = 0.5;
 // one-time download on a slow link (cached loads are instant); a cache
 // hit resolves long before this.
 const LOAD_TIMEOUT_SECONDS = 120;
+// Brief settle window after `drums.load` resolves on the cold path. The
+// SoundFont is parsed but smplr's per-note pipeline (zone lookup, voice
+// allocation) needs a moment before its first scheduled hit lands
+// reliably — without this the very first note of a fresh-session play
+// occasionally drops. Only paid on the one-time load (`ensureLoaded`
+// short-circuits on subsequent plays), so normal play latency is
+// unchanged.
+const POST_LOAD_SETTLE_SECONDS = 0.2;
 
 type Drums = ReturnType<typeof GeneralUserGsKit>;
 type StopFn = (time?: number) => void;
@@ -183,6 +201,17 @@ export class JotPlayer {
   playbackSpeed: number = 1;
 
   /**
+   * Page-wide master fader (0..1). Scales *everything* — drums and audio
+   * tracks alike — because its GainNode is the last stage before
+   * `ctx.destination`. Observable so the slider reflects the live value.
+   */
+  masterVolume: number = DEFAULT_MASTER_VOLUME;
+  /** Master fader for all drum/instrument rows together (0..1). */
+  drumMasterVolume: number = DEFAULT_MASTER_VOLUME;
+  /** Master fader for all audio tracks together (0..1). */
+  audioTrackMasterVolume: number = DEFAULT_MASTER_VOLUME;
+
+  /**
    * Audio tracks loaded by the user — any number (a ParaDB pack's
    * song + drum tracks, a transcriber's `no_drums`/`drum_stem`, ad-hoc
    * backing tracks, …). Each gets a fresh unique id from {@link
@@ -210,12 +239,40 @@ export class JotPlayer {
    * session so there's no teardown to do here.
    */
   private drumGain: GainNode | undefined;
+  /**
+   * Audio-graph bus, built once with the AudioContext and living for its
+   * lifetime:
+   *
+   *   smplr drum voices ─▶ drumGain ──┐
+   *   per audio-track GainNode ─▶ audioBusGain ──┤
+   *                                              ├─▶ pageGain ─▶ destination
+   *
+   * `drumGain` carries the all-drums master fader, `audioBusGain` the
+   * all-audio-tracks fader, and `pageGain` the whole-page fader (last
+   * stage, so it scales both). They exist as soon as the context does
+   * (audio tracks can be loaded before the first play), and their
+   * `gain.value` tracks the observable `*Volume` fields.
+   */
+  private pageGain: GainNode | undefined;
+  private audioBusGain: GainNode | undefined;
   private audioTrackController: AudioTrackPlaybackController | undefined;
   private currentAudioTrackFilter: AudioTrackFilter = PASSTHROUGH_AUDIO_TRACK_FILTER;
-  /** Cached start offset (seconds) of the currently-playing jot, so
-   * `setPlaybackSpeed` can re-anchor audio tracks to the same audio position
-   * the new rate started from. */
-  private startOffsetSec: number = 0;
+  /**
+   * Drum-track ↔ audio-track offset, in seconds — the recording's
+   * lead-in. It's the audio-time that lines up with jot-time 0: each
+   * audio track plays at media time `jotTime + startOffsetSec`, so
+   * raising it slides the backing audio *ahead* of the drums (the drums
+   * come in later relative to the song) and lowering it pulls them
+   * together. Drum scheduling is in jot-time and doesn't depend on this,
+   * so a change only has to reposition the audio tracks.
+   *
+   * Observable and user-adjustable live via {@link setStartOffset} (the
+   * transport bar's Offset control); the store seeds it from each loaded
+   * jot's `globalMetadata.startOffset`, after which manual nudges persist
+   * until a different jot is loaded. `setPlaybackSpeed` / `seek` also read
+   * it to re-anchor audio tracks to the right audio position.
+   */
+  startOffsetSec: number = 0;
   /**
    * AudioContext time of the playback anchor (updated at `play()` and
    * whenever `setPlaybackSpeed` re-anchors mid-flight) — `currentJotTime`
@@ -318,6 +375,38 @@ export class JotPlayer {
     }
   }
 
+  /**
+   * Move the whole-page master fader. Takes effect instantly (it's a
+   * single GainNode at the end of the graph) and persists across plays;
+   * works before any audio exists — the value is stored and applied when
+   * the graph is built.
+   */
+  setMasterVolume(v: number): void {
+    const clamped = clampMasterVolume(v);
+    runInAction(() => {
+      this.masterVolume = clamped;
+    });
+    if (this.pageGain) this.pageGain.gain.value = clamped;
+  }
+
+  /** Move the all-drums master fader. Same instant/persistent semantics. */
+  setDrumMasterVolume(v: number): void {
+    const clamped = clampMasterVolume(v);
+    runInAction(() => {
+      this.drumMasterVolume = clamped;
+    });
+    if (this.drumGain) this.drumGain.gain.value = DRUM_MASTER_GAIN * clamped;
+  }
+
+  /** Move the all-audio-tracks master fader. Same instant/persistent semantics. */
+  setAudioTrackMasterVolume(v: number): void {
+    const clamped = clampMasterVolume(v);
+    runInAction(() => {
+      this.audioTrackMasterVolume = clamped;
+    });
+    if (this.audioBusGain) this.audioBusGain.gain.value = clamped;
+  }
+
   /** Fresh, never-reused audio-track id. Load order ⇒ ascending ids. */
   private allocateAudioTrackId(): AudioTrackId {
     return `track-${++this.audioTrackIdCounter}`;
@@ -339,9 +428,9 @@ export class JotPlayer {
     });
     try {
       const ctx = this.ensureAudioContext();
-      const { buffer, mono, objectUrl } = await decodeAudioTrackFile(ctx, file);
+      const { buffer, objectUrl } = await decodeAudioTrackFile(ctx, file);
       const id = this.allocateAudioTrackId();
-      this.installAudioTrack(id, file.name, buffer, mono, objectUrl);
+      this.installAudioTrack(id, file.name, buffer, objectUrl);
       return id;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -359,9 +448,9 @@ export class JotPlayer {
     });
     try {
       const ctx = this.ensureAudioContext();
-      const { buffer, mono, objectUrl } = await decodeAudioTrackUrl(ctx, url);
+      const { buffer, objectUrl } = await decodeAudioTrackUrl(ctx, url);
       const id = this.allocateAudioTrackId();
-      this.installAudioTrack(id, filename, buffer, mono, objectUrl);
+      this.installAudioTrack(id, filename, buffer, objectUrl);
       return id;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -391,7 +480,6 @@ export class JotPlayer {
     id: AudioTrackId,
     filename: string,
     buffer: AudioBuffer,
-    mono: Float32Array,
     objectUrl: string,
   ): void {
     const prev = this.audioTracks.get(id);
@@ -399,7 +487,6 @@ export class JotPlayer {
       id,
       filename,
       buffer,
-      mono,
       objectUrl,
       durationSec: buffer.duration,
     };
@@ -513,6 +600,66 @@ export class JotPlayer {
   }
 
   /**
+   * Set the drum↔audio offset (lead-in) in seconds. Takes effect
+   * immediately, including mid-playback and while paused: the drums and
+   * playhead are anchored in jot-time and don't move, so we only reseek
+   * the audio tracks to their new media position (`currentJotTime +
+   * offset`). While paused the AudioContext clock is frozen, so the
+   * rescheduled elements stay silent (their `play()` no-ops against a
+   * suspended context) and realign on resume — same approach as `seek`.
+   *
+   * Clamped at 0: media time can't precede the start of the recording,
+   * so a negative offset has no meaning (the audio would just clamp to
+   * its own t=0).
+   */
+  setStartOffset(sec: number): void {
+    const clamped = Number.isFinite(sec) ? Math.max(0, sec) : 0;
+    runInAction(() => {
+      this.startOffsetSec = clamped;
+    });
+    if ((this.state !== 'playing' && this.state !== 'paused') || !this.ctx) return;
+    if (!this.audioTrackController) return;
+    const now = this.ctx.currentTime;
+    const jotOffset = this.currentJotTime(now);
+    // Only the audio tracks depend on the offset — reposition them to the
+    // new media time without disturbing the drum schedule or playhead.
+    this.audioTrackController.cancelSources();
+    this.audioTrackController.scheduleAll(
+      this.audioTracks.values(),
+      now,
+      jotOffset,
+      this.playbackSpeed,
+      clamped,
+      (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter),
+    );
+  }
+
+  /**
+   * Re-derive the drum events from `rendered` and reschedule them live.
+   * Called when the jot's beat-grid offset (the "Beat offset" control,
+   * which slides drum notes across bars to fix a transcription beat
+   * error) changes mid-flight — the notes have moved, so the scheduled
+   * hits must follow. No-op unless playing or paused.
+   *
+   * Mirrors {@link setFilter}'s reschedule: the bar grid (and thus the
+   * timeline) is unchanged, so only the drum schedule is rebuilt; audio
+   * tracks and the playhead stay put. While paused the AudioContext clock
+   * is frozen, so the rescheduled notes line up against it and come alive
+   * on resume (which re-arms the tail timer from `tailAudioTime`).
+   */
+  refreshDrumSchedule(rendered: RenderedJot): void {
+    if ((this.state !== 'playing' && this.state !== 'paused') || !this.ctx) return;
+    this.events = jotToEvents(rendered);
+    const now = this.ctx.currentTime;
+    const jotOffset = this.currentJotTime(now);
+    this.cancelScheduledStops();
+    this.drums?.stop();
+    const lastTime = this.scheduleEvents(jotOffset, now);
+    if (this.state === 'paused') this.tailAudioTime = lastTime;
+    else this.scheduleTailTimer(lastTime);
+  }
+
+  /**
    * Map an absolute AudioContext time to its jot-time position, taking
    * the current `playbackSpeed` (and any prior speed-change anchor) into
    * account.
@@ -537,12 +684,10 @@ export class JotPlayer {
   seek(rendered: RenderedJot, seconds: number): void {
     // The recording's drumless lead-in is jot time [-startOffsetSec, 0).
     // Allow scrubbing back into it instead of clamping at 0 so the user
-    // can play the intro. `this.startOffsetSec` is only populated while
-    // playing, so derive the bound from the jot's metadata (same source
-    // play() uses) to keep idle and live seeks consistent.
-    const rawOffset = rendered.resolved.globalMetadata.startOffset;
-    const leadInSec =
-      typeof rawOffset === 'number' && rawOffset > 0 ? rawOffset : 0;
+    // can play the intro. `this.startOffsetSec` is the live, user-tunable
+    // offset (seeded from the jot's metadata by the store), so it's the
+    // right bound for both idle and live seeks.
+    const leadInSec = this.startOffsetSec;
     let target = Math.max(seconds, -leadInSec);
 
     if (this.state === 'idle') {
@@ -646,9 +791,10 @@ export class JotPlayer {
       // naturally once the first hit fires. Scheduling from -offset
       // pushes every event's audio time forward by offset/speed so the
       // drums come in delayed to match the original.
-      const rawOffset = rendered.resolved.globalMetadata.startOffset;
-      const startOffsetSec =
-        typeof rawOffset === 'number' && rawOffset > 0 ? rawOffset : 0;
+      // The live offset (seeded from the jot's metadata by the store,
+      // tunable via the Offset control) is the source of truth — not a
+      // re-read of the metadata — so a user nudge survives stop/replay.
+      const startOffsetSec = this.startOffsetSec;
       // Start from the click-to-seek cue if one is pending, otherwise
       // from -startOffsetSec so the rAF clamp parks the playhead at 0
       // through the recording's lead-in (unchanged default behaviour).
@@ -661,14 +807,16 @@ export class JotPlayer {
           : -startOffsetSec;
       this.startContextTime = audioStartTime;
       this.startJotTime = anchorJot;
-      this.startOffsetSec = startOffsetSec;
       const lastTime = this.scheduleEvents(anchorJot, audioStartTime);
 
       // Audio tracks play through the same AudioContext so they share the
       // clock with the drum scheduler. The controller is recreated on
       // every play() to drop any residual nodes from the previous run.
       this.audioTrackController?.dispose();
-      this.audioTrackController = new AudioTrackPlaybackController(ctx);
+      this.audioTrackController = new AudioTrackPlaybackController(
+        ctx,
+        this.audioBusGain ?? ctx.destination,
+      );
       this.audioTrackController.scheduleAll(
         this.audioTracks.values(),
         audioStartTime,
@@ -768,7 +916,10 @@ export class JotPlayer {
     this.audioTrackController = undefined;
     this.events = [];
     this.startJotTime = 0;
-    this.startOffsetSec = 0;
+    // `startOffsetSec` is deliberately NOT reset here: it's the loaded
+    // jot's offset (seeded by the store, live-tunable via setStartOffset),
+    // so it must survive stop()/replay. The store re-seeds it when a
+    // different jot is loaded.
     this.lastDriftCheckTime = 0;
     this.pendingStartSec = undefined;
     runInAction(() => {
@@ -944,6 +1095,16 @@ export class JotPlayer {
       throw new Error('Web Audio is not available in this browser.');
     }
     this.ctx = new Ctx();
+    // Build the master bus now (not in ensureLoaded) so audio tracks
+    // loaded before the first play() route through the same faders.
+    const pageGain = this.ctx.createGain();
+    pageGain.gain.value = this.masterVolume;
+    pageGain.connect(this.ctx.destination);
+    const audioBusGain = this.ctx.createGain();
+    audioBusGain.gain.value = this.audioTrackMasterVolume;
+    audioBusGain.connect(pageGain);
+    this.pageGain = pageGain;
+    this.audioBusGain = audioBusGain;
     return this.ctx;
   }
 
@@ -952,8 +1113,10 @@ export class JotPlayer {
 
     const ctx = this.ensureAudioContext();
     const drumGain = ctx.createGain();
-    drumGain.gain.value = DRUM_MASTER_GAIN;
-    drumGain.connect(ctx.destination);
+    drumGain.gain.value = DRUM_MASTER_GAIN * this.drumMasterVolume;
+    // Into the page master (built by ensureAudioContext above), not
+    // straight to destination, so the page fader scales drums too.
+    drumGain.connect(this.pageGain ?? ctx.destination);
     this.drumGain = drumGain;
     const drums = GeneralUserGsKit(ctx, {
       url: GM_SOUNDFONT_URL,
@@ -996,6 +1159,13 @@ export class JotPlayer {
         this.sampleLoadProgress = undefined;
       });
     }
+
+    // Give smplr a moment to settle before the first scheduled hit; see
+    // POST_LOAD_SETTLE_SECONDS. Only reached on the cold load — the
+    // early return at the top of this method skips it on every later play.
+    await new Promise((resolve) =>
+      window.setTimeout(resolve, POST_LOAD_SETTLE_SECONDS * 1000),
+    );
 
     this.drums = drums;
     runInAction(() => {

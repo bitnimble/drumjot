@@ -7,16 +7,31 @@
  *       is read. Notes on other channels are ignored because the DSL is
  *       drums-only.
  *
- *  [A2] Notes are quantized to a fixed grid (default sixteenth notes). Notes
- *       that fall off-grid snap to the nearest grid slot. Multiple notes
- *       landing on the same slot collapse into a `simul` element.
+ *  [A2] Notes are quantized to a fixed grid. The default `gridDivision`
+ *       is 48 — i.e. 1/48-of-a-whole-note slots, twelve per quarter beat.
+ *       12 = LCM(4, 3) is the coarsest grid that represents both straight
+ *       16ths and triplet 8ths exactly, so a transcriber whose onset
+ *       times have ~tens-of-ms jitter snaps to slots much closer to the
+ *       true beat than a 16th grid (±20 ticks of tolerance at TPB=480 vs
+ *       ±60). Multiple notes landing on the same slot collapse into a
+ *       `simul` element. Slots at triplet positions are *representable*
+ *       but currently render with the off-grid styling — wrapping them in
+ *       tuplet groups is left to a downstream pass (deterministic
+ *       clustering or an LLM refinement).
  *
  *  [A3] Note durations are discarded. Drums are modelled as one-shot strikes;
  *       the DSL has no concept of sustain (besides the `:l` modifier which we
  *       do not attempt to infer from MIDI).
  *
- *  [A4] Only the first `setTempo` is honoured; tempo changes mid-track are
- *       dropped. Reading tempo automations is out of scope for v1.
+ *  [A4] Every `setTempo` is honoured. The first event sets `globalMetadata.bpm`
+ *       (so round-trips against `toMidi`, which only writes one tempo at
+ *       tick 0, stay lossless). Subsequent events attach as per-bar
+ *       `metadata.bpm` overrides on the bar that contains them — the playback
+ *       timeline (`playback/timeline.ts`) already walks these overrides bar by
+ *       bar, so the score stays in sync with the audio whenever the writer
+ *       emits per-bar `set_tempo` events (e.g. `prediction.mid` from the
+ *       transcriber, which uses a back-solved lead-in tempo at tick 0 distinct
+ *       from each bar's actual rate).
  *
  *  [A5] Time-signature changes ARE honoured. A new bar is started whenever a
  *       `timeSignature` meta event arrives, and the bar carries inline
@@ -60,7 +75,12 @@ import { GM_PERCUSSION, allocatePitchesForMidi } from './gm';
 export type FromMidiOptions = {
   /** 1-based MIDI channel for drums. Defaults to GM convention (10). */
   drumChannel?: number;
-  /** Subdivisions per quarter note used for quantization (16 = sixteenth). */
+  /**
+   * Subdivisions per whole note used for quantization. The standard
+   * musical naming applies: 16 = sixteenth note (4 slots per quarter
+   * beat), 48 = 1/48 note (12 slots per quarter beat, supports both
+   * 16ths and 8th triplets). See [A2] for why the default is 48.
+   */
   gridDivision?: number;
   /** Velocity at and above which the note also gains a `:a` accent modifier. */
   accentThreshold?: number;
@@ -70,7 +90,7 @@ export type FromMidiOptions = {
 
 const DEFAULTS: Required<FromMidiOptions> = {
   drumChannel: 10,
-  gridDivision: 16,
+  gridDivision: 48,
   accentThreshold: 100,
   ghostThreshold: 40,
 };
@@ -108,16 +128,25 @@ export function fromMidi(
 
   // [A1, A4, A5, A8] First pass: tempo, time-signature changes, drum noteOns.
   let bpm = 120;
-  let foundTempo = false;
+  const tempoChanges: Array<{ tick: number; bpm: number }> = [];
   const timeSigChanges: Array<{ tick: number; time: TimeSignature }> = [];
   const drumNotes: Array<{ tick: number; note: number; velocity: number }> = [];
   const drumChannelIdx = opts.drumChannel - 1;
 
   for (const { tick, ev } of events) {
     if ((ev as { meta?: true }).meta) {
-      if (ev.type === 'setTempo' && !foundTempo) {
-        bpm = Math.max(1, Math.round(60_000_000 / ev.microsecondsPerBeat));
-        foundTempo = true;
+      if (ev.type === 'setTempo') {
+        // First setTempo wins for `globalMetadata.bpm` (preserves the
+        // long-standing round-trip behaviour against `toMidi`, which writes
+        // a single tick-0 tempo). The full list is kept for per-bar
+        // attribution below; precision is preserved as a float because
+        // micros-per-beat from the writer doesn't always land on an integer
+        // BPM and rounding here would let multi-minute scores drift.
+        const evBpm = Math.max(1, 60_000_000 / ev.microsecondsPerBeat);
+        if (tempoChanges.length === 0) {
+          bpm = Math.max(1, Math.round(evBpm));
+        }
+        tempoChanges.push({ tick, bpm: evBpm });
       } else if (ev.type === 'timeSignature') {
         timeSigChanges.push({
           tick,
@@ -139,8 +168,8 @@ export function fromMidi(
   }
 
   // [A2] Quantize tick positions to grid slots.
-  // gridTicks = ticksPerBeat / (gridDivision / 4); for the default 16th-note
-  // grid this is `ticksPerBeat / 4`.
+  // gridTicks = (ticksPerBeat * 4) / gridDivision; for the default 1/48
+  // grid this is `ticksPerBeat / 12`.
   const gridTicks = (ticksPerBeat * 4) / opts.gridDivision;
   if (!Number.isFinite(gridTicks) || gridTicks <= 0) {
     throw new Error(`Invalid gridDivision ${opts.gridDivision}`);
@@ -161,6 +190,13 @@ export function fromMidi(
       modifiers: Modifier[];
       midi: number;
       velocity: number;
+      /**
+       * Original absolute MIDI tick this note came from (pre-quantization).
+       * Preserved on `note.metadata.midi.tick` so per-note debug provenance
+       * sidecars (e.g. `note_provenance.json` from filter-mode transcribe)
+       * can key by the unique `(tick, pitch)` identifier.
+       */
+      tick: number;
     }>;
   };
   const slotsByBar: Map<number, Map<number, Slot>> = new Map();
@@ -191,8 +227,21 @@ export function fromMidi(
       modifiers,
       midi: dn.note,
       velocity: dn.velocity,
+      tick: dn.tick,
     });
   }
+
+  // [A4] Per-bar tempo attribution. Walk `tempoChanges` once forward,
+  // carrying the most recent tempo into each bar. A tempo event that lands
+  // strictly after a bar's start tick belongs to the next bar -- attribution
+  // is "most recent at or before the bar's startTick". The first tempo is
+  // already on `globalMetadata.bpm`, so per-bar overrides are only emitted
+  // on bars where the effective BPM actually changes (matches the per-bar
+  // time-signature behaviour just below).
+  const initialBpm =
+    tempoChanges.length > 0 ? tempoChanges[0].bpm : bpm;
+  let tempoIdx = 0;
+  let lastEmittedBpm = initialBpm;
 
   // Build bar elements: for each grid slot, either a Rest, a Note, or a Simul.
   const bars: Bar[] = [];
@@ -212,7 +261,7 @@ export function fromMidi(
         continue;
       }
       const notes: Note[] = slot.notes.map((s) =>
-        buildNote(s.pitch, s.modifiers, s.midi, s.velocity, opts)
+        buildNote(s.pitch, s.modifiers, s.midi, s.velocity, s.tick, opts)
       );
       if (notes.length === 1) {
         elements.push(notes[0]);
@@ -222,16 +271,38 @@ export function fromMidi(
       }
     }
 
+    // Advance `tempoIdx` to the latest tempo change at or before this bar.
+    while (
+      tempoIdx + 1 < tempoChanges.length &&
+      tempoChanges[tempoIdx + 1].tick <= span.startTick
+    ) {
+      tempoIdx++;
+    }
+    const barBpm = tempoChanges[tempoIdx]?.bpm ?? initialBpm;
+
     // [A5] Attach inline time-signature metadata on bars where the sig changes.
     const bar: Bar = { elements };
+    const meta: Metadata = {};
     if (
       !lastEmittedTime ||
       lastEmittedTime.count !== span.time.count ||
       lastEmittedTime.unit !== span.time.unit
     ) {
       // Only emit on bars after the first; the global time is already on the jot.
-      if (bi > 0) bar.metadata = { time: span.time };
+      if (bi > 0) meta.time = span.time;
       lastEmittedTime = span.time;
+    }
+    // [A4] Same pattern for per-bar BPM. Bar 0's tempo lives on
+    // `globalMetadata.bpm`; subsequent bars only annotate when the effective
+    // tempo changes from the previously-emitted value.
+    if (bi > 0 && barBpm !== lastEmittedBpm) {
+      meta.bpm = barBpm;
+      lastEmittedBpm = barBpm;
+    } else if (bi === 0) {
+      lastEmittedBpm = barBpm;
+    }
+    if (meta.time !== undefined || meta.bpm !== undefined) {
+      bar.metadata = meta;
     }
     bars.push(bar);
   }
@@ -328,6 +399,7 @@ function buildNote(
   baseModifiers: Modifier[],
   midi: number,
   velocity: number,
+  tick: number,
   opts: Required<FromMidiOptions>
 ): Note {
   const modifiers: Modifier[] = [...baseModifiers];
@@ -339,8 +411,12 @@ function buildNote(
   }
   const note: Note = { kind: 'note', pitch };
   if (modifiers.length > 0) note.modifiers = modifiers;
-  // [A6] Stash raw MIDI specifics for lossless round-trip.
-  note.metadata = { midi: { note: midi, velocity } } as Metadata;
+  // [A6] Stash raw MIDI specifics for lossless round-trip. `tick` is the
+  // original absolute tick the noteOn arrived at (before grid snapping); it
+  // is *not* written back by `to_midi.ts` (which recomputes tick from the
+  // jot layout) and is purely diagnostic — it lets per-note debug
+  // provenance sidecars key by the unique `(tick, pitch)` identifier.
+  note.metadata = { midi: { note: midi, velocity, tick } } as Metadata;
   return note;
 }
 
