@@ -347,8 +347,8 @@ def _load_beats(path: Path) -> BeatStructure:
         bar_idx = int(bd["index"])
         # `beats_dump` drops `beat_in_bar` / `bar_index` from per-bar
         # BeatTicks (only the absolute times survive). Reconstruct them
-        # from list order, which is sufficient for the downstream LLM /
-        # refinement path that only reads BarInfo-level fields.
+        # from list order, which is sufficient for the downstream LLM
+        # call (the filter pass) which only reads BarInfo-level fields.
         beats_in_bar = [
             BeatTick(time=float(t), beat_in_bar=i + 1, bar_index=bar_idx)
             for i, t in enumerate(bd.get("beats", []))

@@ -70,7 +70,7 @@ from app.pipeline.hihat_split import split_hihat_onsets
 from app.pipeline.note_provenance import build_note_provenance
 from app.pipeline.onsets_midi import onsets_to_midi_bytes
 from app.pipeline.quantise import quantise_kept_onsets
-from app.pipeline.separate import Separator
+from app.pipeline.separate import PITCH_DISPLAY_NAMES, Separator
 from app.run_log import current_run_log
 
 log = logging.getLogger(__name__)
@@ -217,7 +217,10 @@ class PipelineContext:
     # can match kept-vs-rejected by `id(c)`. Persisted to
     # `filter/kept_onsets.json` for resume; `pipeline/resume.py` re-
     # threads the identity against `onsets_by_pitch` on hydration.
-    kept_by_pitch: dict[str, list[OnsetCandidate]] = field(default_factory=dict)
+    # `None` means the filter stage hasn't run yet (or was skipped on a
+    # resume); `{}` is a legitimate "no drums detected" result that
+    # should produce an empty MIDI, not an error.
+    kept_by_pitch: dict[str, list[OnsetCandidate]] | None = None
     # The rendered MIDI of the LLM-kept onsets. Materialised to
     # `prediction.mid` (debug + output sink) and surfaced as
     # `prediction_midi_url` on the response.
@@ -544,11 +547,12 @@ def _do_filter(
     # instrument so the UI can show "filtering N/M instruments" without
     # flickering between parallel in-flight pitches.
     def on_instrument_done(pitch: str, done: int, total: int) -> None:
+        latest = PITCH_DISPLAY_NAMES.get(pitch, pitch).lower()
         _safe_progress(
             progress,
             {
                 "stage": Stage.FILTER.value,
-                "detail": f"filtering {done}/{total} instruments (latest: {pitch})",
+                "detail": f"filtering {done}/{total} instruments (latest: {latest})",
             },
         )
 
@@ -576,10 +580,12 @@ def _do_filter(
             in_range = [c for c in vetted if c.bar >= 0]
             if in_range:
                 kept_by_pitch[p] = in_range
+    # An empty kept_by_pitch is a legitimate outcome (a song with no
+    # detected drums; e.g. an a cappella file uploaded by mistake); it
+    # should produce an empty MIDI, not an HTTP 502 (which is reserved
+    # for actual LLM call failures per CLEANROOM_SPEC §11.14).
     if not kept_by_pitch:
-        raise RuntimeError(
-            "filter: kept no onsets for any instrument."
-        )
+        log.warning("filter: kept no onsets for any instrument; emitting empty MIDI")
 
     ctx.kept_by_pitch = kept_by_pitch
 
@@ -624,11 +630,14 @@ def _do_quantise(
             "quantise: beat structure missing (expected beats.json or "
             "resume_stage<=beats)."
         )
-    if not ctx.kept_by_pitch:
+    if ctx.kept_by_pitch is None:
         raise RuntimeError(
             "quantise: kept_by_pitch missing (expected "
             "filter/kept_onsets.json or resume_stage<=filter)."
         )
+    if not ctx.kept_by_pitch:
+        log.info("quantise: no kept onsets to quantise; skipping")
+        return
 
     summary = quantise_kept_onsets(
         ctx.kept_by_pitch,
@@ -666,7 +675,7 @@ def _do_transcribe(
             "transcribe: onsets missing (expected onsets.json or "
             "resume_stage<=onsets)."
         )
-    if not ctx.kept_by_pitch:
+    if ctx.kept_by_pitch is None:
         raise RuntimeError(
             "transcribe: kept_by_pitch missing (expected "
             "filter/kept_onsets.json or resume_stage<=filter)."

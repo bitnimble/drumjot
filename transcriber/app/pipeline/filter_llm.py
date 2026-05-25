@@ -87,8 +87,9 @@ def filter_onsets_for_instrument(
     """One LLM call. Returns the kept (non-rejected, in-range) onsets for
     `pitch`, original times preserved.
 
-    On any failure the input onsets are returned unfiltered — a missed
-    filter pass degrades to "no filtering", never to dropped audio.
+    Anthropic-call failures propagate so the runner can map them to
+    HTTP 502 (per CLEANROOM_SPEC §11.14: no silent fallback to "keep
+    everything", which would silently deliver an artifact-heavy MIDI).
     """
     if not settings.anthropic_api_key:
         raise RuntimeError(
@@ -120,25 +121,18 @@ def filter_onsets_for_instrument(
         pitch, settings.llm_model, len(prompt), len(ordered),
     )
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-    try:
-        response = call_messages_with_refusal_retry(
-            client,
-            {
-                "model": settings.llm_model,
-                "max_tokens": settings.llm_max_tokens,
-                "messages": [{"role": "user", "content": prompt}],
-                "tools": [_FILTER_TOOL],
-                "tool_choice": {"type": "tool", "name": _FILTER_TOOL["name"]},
-            },
-            base_prompt=prompt,
-            purpose=purpose,
-        )
-    except Exception as exc:
-        log.warning(
-            "filter %s: LLM call failed (%s); keeping all %d onsets",
-            pitch, exc, len(ordered),
-        )
-        return ordered
+    response = call_messages_with_refusal_retry(
+        client,
+        {
+            "model": settings.llm_model,
+            "max_tokens": settings.llm_max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+            "tools": [_FILTER_TOOL],
+            "tool_choice": {"type": "tool", "name": _FILTER_TOOL["name"]},
+        },
+        base_prompt=prompt,
+        purpose=purpose,
+    )
 
     rejected = _extract_rejected(response, len(ordered))
     kept = [c for i, c in enumerate(ordered) if i not in rejected]
@@ -235,21 +229,9 @@ def filter_onsets_all_instruments(
                 if cancel_event is not None and cancel_event.is_set():
                     cancelled = True
                     break
-                pitch = futures[fut]
-                try:
-                    p, kept = fut.result()
-                except Exception as exc:
-                    log.warning(
-                        "filter: instrument %s failed entirely (%s); "
-                        "keeping its raw onsets", pitch, exc,
-                    )
-                    kept_by_pitch[pitch] = [
-                        c for c in candidates_by_pitch.get(pitch, []) if c.bar >= 0
-                    ]
-                    p = pitch
-                else:
-                    if kept:
-                        kept_by_pitch[p] = kept
+                p, kept = fut.result()
+                if kept:
+                    kept_by_pitch[p] = kept
                 done += 1
                 if on_complete is not None:
                     try:
@@ -342,8 +324,12 @@ def _format_indexed_bars(
 def _extract_rejected(
     response: anthropic.types.Message, n: int
 ) -> set[int]:
-    """Pull `rejected_indices` from the forced tool call, clamped to the
-    valid `[0, n)` range (hallucinated / out-of-range indices ignored)."""
+    """Pull `rejected_indices` from the forced tool call.
+
+    Raises on malformed responses (non-list, non-int items, out-of-range
+    indices) so the runner can surface the model bug as HTTP 502 rather
+    than silently delivering a degraded filter pass.
+    """
     for block in response.content:
         if getattr(block, "type", None) != "tool_use":
             continue
@@ -351,22 +337,28 @@ def _extract_rejected(
             continue
         raw = block.input.get("rejected_indices", [])
         if not isinstance(raw, list):
-            log.warning(
-                "filter: tool returned non-list rejected_indices (%s); "
-                "treating as no rejections", type(raw).__name__,
+            raise RuntimeError(
+                f"filter: tool returned non-list rejected_indices "
+                f"({type(raw).__name__}); model violated schema"
             )
-            return set()
         out: set[int] = set()
         for v in raw:
             try:
                 i = int(v)
-            except (TypeError, ValueError):
-                continue
-            if 0 <= i < n:
-                out.add(i)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    f"filter: rejected_indices item not an integer ({v!r})"
+                ) from exc
+            if not 0 <= i < n:
+                raise RuntimeError(
+                    f"filter: rejected_indices contains out-of-range index "
+                    f"{i} (valid range: [0, {n}))"
+                )
+            out.add(i)
         return out
-    log.warning("filter: no tool_use block in response; no rejections")
-    return set()
+    raise RuntimeError(
+        "filter: no tool_use block in response; tool call was not made"
+    )
 
 
 def _load_prompt_template() -> str:

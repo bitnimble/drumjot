@@ -149,11 +149,17 @@ const LOAD_TIMEOUT_SECONDS = 120;
 // Brief settle window after `drums.load` resolves on the cold path. The
 // SoundFont is parsed but smplr's per-note pipeline (zone lookup, voice
 // allocation) needs a moment before its first scheduled hit lands
-// reliably — without this the very first note of a fresh-session play
+// reliably; without this the very first note of a fresh-session play
 // occasionally drops. Only paid on the one-time load (`ensureLoaded`
 // short-circuits on subsequent plays), so normal play latency is
 // unchanged.
 const POST_LOAD_SETTLE_SECONDS = 0.2;
+
+// Per CLEANROOM_SPEC §7.4: allowed playback speeds. The transport-bar
+// dropdown picks from this list (see `PLAYBACK_SPEEDS` in
+// jot_view/playback.tsx); the player snaps any value reaching it
+// programmatically to the nearest in-spec speed.
+const SUPPORTED_PLAYBACK_SPEEDS: readonly number[] = [0.25, 0.5, 0.75, 1.0, 1.25];
 
 type Drums = ReturnType<typeof GeneralUserGsKit>;
 type StopFn = (time?: number) => void;
@@ -302,6 +308,13 @@ export class JotPlayer {
    * freezes the audio clock) would otherwise let it fire while paused.
    */
   private tailAudioTime: number = 0;
+  // Audio-context time of the last drum event scheduled by the most
+  // recent `scheduleEvents` call. Tracked separately from
+  // `tailAudioTime` (which already takes the max with audio-track
+  // endings) so callers that don't reschedule drums; `setDrumsT0Sec`
+  // is the only one today; can recompute the tail when only the
+  // audio side moves.
+  private lastScheduledDrumTime: number = 0;
   private rafId: number | undefined;
   /**
    * AudioContext time of the last drift check, so the rAF loop can
@@ -569,7 +582,14 @@ export class JotPlayer {
    * complex fill at half speed.
    */
   setPlaybackSpeed(speed: number): void {
-    const clamped = Math.max(0.1, Math.min(2.0, speed));
+    // Per CLEANROOM_SPEC §7.4, allowed speeds are a fixed set; clamp
+    // anything reaching the player programmatically (tests, future
+    // shortcuts) to the nearest in-spec value rather than the broad
+    // [0.1, 2.0] range we used to accept.
+    const clamped = SUPPORTED_PLAYBACK_SPEEDS.reduce(
+      (best, s) => (Math.abs(s - speed) < Math.abs(best - speed) ? s : best),
+      SUPPORTED_PLAYBACK_SPEEDS[0]
+    );
     if (this.state !== 'playing' || !this.ctx) {
       runInAction(() => {
         this.playbackSpeed = clamped;
@@ -581,18 +601,24 @@ export class JotPlayer {
     // playhead doesn't jump when the user changes speed mid-song.
     const jotOffset = this.currentJotTime(now);
 
-    // Kill the old schedule before laying down the new one. The
+    // Kill the old DRUM schedule before laying down the new one. The
     // per-voice stopFns returned by `drums.start({ time: <future> })`
-    // don't actually cancel a voice that hasn't begun yet — smplr only
+    // don't actually cancel a voice that hasn't begun yet; smplr only
     // instantiates the BufferSourceNode when the scheduled time
     // arrives, so calling stopFn early is a no-op. The global
     // `drums.stop()` clears the entire pending queue, which is what we
     // need here. Without this, the old (still-pending) notes play
     // alongside the rescheduled ones and the speed change appears to
     // have no effect.
+    //
+    // Audio tracks DON'T need a cancel + reschedule: setting
+    // `playbackRate` on each live MediaElement changes speed seamlessly
+    // (with `preservesPitch` already on, pitch is preserved too). The
+    // old code's cancel + reschedule path forced each track through a
+    // pause + retimed play, introducing a ~20 ms audible gap on every
+    // speed change.
     this.cancelScheduledStops();
     this.drums?.stop();
-    this.audioTrackController?.cancelSources();
 
     runInAction(() => {
       this.playbackSpeed = clamped;
@@ -600,16 +626,7 @@ export class JotPlayer {
     this.startContextTime = now;
     this.startJotTime = jotOffset;
     const lastTime = this.scheduleEvents(jotOffset, now);
-    if (this.audioTrackController) {
-      this.audioTrackController.scheduleAll(
-        this.audioTracks.values(),
-        now,
-        jotOffset,
-        clamped,
-        this.drumsT0Sec,
-        (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter)
-      );
-    }
+    this.audioTrackController?.setPlaybackRate(clamped);
     this.scheduleTailTimer(lastTime);
   }
 
@@ -635,7 +652,7 @@ export class JotPlayer {
     if (!this.audioTrackController) return;
     const now = this.ctx.currentTime;
     const jotOffset = this.currentJotTime(now);
-    // Only the audio tracks depend on the offset — reposition them to the
+    // Only the audio tracks depend on the offset; reposition them to the
     // new media time without disturbing the drum schedule or playhead.
     this.audioTrackController.cancelSources();
     this.audioTrackController.scheduleAll(
@@ -646,6 +663,16 @@ export class JotPlayer {
       clamped,
       (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter)
     );
+    // The auto-stop fires when the latest of (last drum event, last
+    // audio-track sample) is reached. `computeAudioTracksEndTime` reads
+    // `drumsT0Sec`, so a mid-flight offset change shifts the audio end
+    // time and the tail must be re-armed; otherwise raising the offset
+    // can cause auto-stop to fire before the audio finishes.
+    if (this.state === 'playing') {
+      this.scheduleTailTimer(this.lastScheduledDrumTime);
+    } else {
+      this.tailAudioTime = this.computeAudioTracksEndTime();
+    }
   }
 
   /**
@@ -1065,6 +1092,7 @@ export class JotPlayer {
       scheduled++;
       if (t > lastTime) lastTime = t;
     }
+    this.lastScheduledDrumTime = lastTime;
 
     console.log(
       `[jotPlayer] scheduled ${scheduled}/${this.events.length} events ` +

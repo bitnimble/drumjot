@@ -2,7 +2,8 @@
 
 When enabled, every request copies its intermediate files into a stable
 per-request subdir on disk so an operator can listen back to the stems,
-inspect the LLM input, replay the refinement loop, etc.
+inspect the LLM input, replay the filter pass against alternative
+prompts, etc.
 
 Usage:
 
@@ -41,7 +42,7 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 # Request-scoped current DebugSink. Set by /transcribe at the top of each
-# request so deep callees (the LLM wrapper, refinement helpers) can dump
+# request so deep callees (the LLM wrapper, split/filter helpers) can dump
 # their prompts without having the sink threaded through their signatures.
 # FastAPI's request handlers run in async context where ContextVars are
 # request-local, so concurrent /transcribe calls don't see each other's

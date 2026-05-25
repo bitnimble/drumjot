@@ -33,13 +33,15 @@ Architectural notes:
 
 * **Synthetic pitch `H` for open hi-hat.** Drumjot's DSL has only one
   notational hi-hat pitch (`h`) with `:o` / `:c` modifiers, so `H` is an
-  *internal* routing key for the transcribe pass — it must not leak as a
-  permanent extra voice in finished transcriptions. First cut keeps it
-  visible: `recompose.PITCH_DISPLAY_NAMES["H"] = "Open Hi-Hat"`, so the
-  Jot ends up with an explicit Open Hi-Hat voice while we validate the
-  classifier. The notation-correct follow-up is to fold the `H` fragment
-  into `h` with `:o` applied per note before recompose runs (requires
-  parser-based per-bar merging, easiest as a new bun bridge).
+  *internal* routing key for the transcribe pass; it must not leak as a
+  permanent extra voice in finished transcriptions. Today the backend
+  emits `H` as a distinct MIDI note (46 = GM open hi-hat) and the
+  frontend folds it back via `canonicalProvenancePitch` in
+  `src/jot_view/store.ts` plus the GM table in `src/midi/from_midi.ts`.
+  The notation-correct follow-up is to fold `H` → `h:o` backend-side
+  before MIDI emission so `note_provenance.json` carries the canonical
+  pitch directly (eliminates the asymmetric coupling). See
+  CLEANROOM_SPEC §11.17.
 * The deterministic `_open_tail_filter` stays as a backstop. The ternary
   LLM call should now catch sizzle bumps directly, but the rule
   ("closed-inside-confirmed-open-tail is physically impossible") is a

@@ -111,7 +111,7 @@ def _scoped_debug_sink(sink: DebugSink | None) -> Iterator[None]:
     """Install `sink` as the request-scoped current sink for the duration
     of the `with` block, then restore the previous value.
 
-    Deep callees (the LLM wrapper, refinement helpers) read from a
+    Deep callees (the LLM wrapper, split/filter helpers) read from a
     ContextVar so they can dump their hydrated prompts to the same
     request folder without having the sink threaded through their
     signatures.

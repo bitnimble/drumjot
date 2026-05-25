@@ -15,6 +15,7 @@ import math
 from types import SimpleNamespace
 
 import mido
+import pytest
 
 from app.pipeline.filter_llm import (
     _FILTER_TOOL,
@@ -125,15 +126,38 @@ def _resp(rejected):
     return SimpleNamespace(content=[block])
 
 
-def test_extract_rejected_clamps_and_dedupes() -> None:
-    # 5 onsets; out-of-range / duplicate / non-int entries are ignored.
-    out = _extract_rejected(_resp([0, 2, 2, 4, 9, -1, "x"]), n=5)
+def test_extract_rejected_dedupes_valid_indices() -> None:
+    # 5 onsets; the duplicate `2` collapses, but every index is in range.
+    out = _extract_rejected(_resp([0, 2, 2, 4]), n=5)
     assert out == {0, 2, 4}
 
 
-def test_extract_rejected_no_tool_block_means_keep_all() -> None:
+def test_extract_rejected_raises_on_out_of_range() -> None:
+    # Per CLEANROOM_SPEC §11.14: malformed tool responses are surfaced
+    # (HTTP 502 via StageError) rather than silently corrected, so the
+    # operator notices when the model emits invalid indices instead of
+    # receiving a quietly-degraded filter pass.
+    with pytest.raises(RuntimeError, match="out-of-range"):
+        _extract_rejected(_resp([0, 9]), n=5)
+
+
+def test_extract_rejected_raises_on_negative_index() -> None:
+    with pytest.raises(RuntimeError, match="out-of-range"):
+        _extract_rejected(_resp([-1]), n=5)
+
+
+def test_extract_rejected_raises_on_non_integer_item() -> None:
+    with pytest.raises(RuntimeError, match="not an integer"):
+        _extract_rejected(_resp([0, "x"]), n=5)
+
+
+def test_extract_rejected_raises_when_no_tool_block() -> None:
+    # The filter LLM is forced to use the tool channel; the absence of a
+    # tool_use block means the model refused or otherwise misbehaved.
+    # Treat that as a model failure rather than "no rejections."
     empty = SimpleNamespace(content=[SimpleNamespace(type="text", text="hi")])
-    assert _extract_rejected(empty, n=3) == set()
+    with pytest.raises(RuntimeError, match="no tool_use block"):
+        _extract_rejected(empty, n=3)
 
 
 def test_skip_pitches_short_circuits_when_all_pitches_skipped() -> None:

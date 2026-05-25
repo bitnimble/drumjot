@@ -57,7 +57,7 @@ log = logging.getLogger(__name__)
 
 PROMPT_DIR = Path(__file__).resolve().parent.parent.parent / "prompts"
 
-# Pitch letters (must match separate.STEM_NAME_TO_PITCH / recompose).
+# Pitch letters (must match separate.STEM_NAME_TO_PITCH).
 _CYMBALS_PITCH = "c"  # the merged cymbals stem lands here pre-split
 _RIDE_PITCH = "d"
 _CRASH_PITCH = "c"

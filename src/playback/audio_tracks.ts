@@ -467,6 +467,19 @@ export class AudioTrackPlaybackController {
     }
   }
 
+  /**
+   * Apply a new playback rate to every currently-active track without
+   * tearing down and rescheduling. Used by mid-playback speed changes; * the rescheduling path forces each track through a pause + retimed
+   * play, which introduces an audible gap; setting `playbackRate` on
+   * the live element changes speed seamlessly (and preserves pitch
+   * because `preservesPitch` is already set on each element).
+   */
+  setPlaybackRate(speed: number): void {
+    for (const slot of this.active.values()) {
+      slot.el.playbackRate = speed;
+    }
+  }
+
   private scheduleOne(
     track: AudioTrack,
     audioStartTime: number,

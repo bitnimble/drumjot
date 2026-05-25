@@ -54,7 +54,11 @@ export type ToMidiOptions = {
 const DEFAULTS: Required<ToMidiOptions> = {
   drumChannel: 10,
   defaultVelocity: 80,
-  accentBoost: 24,
+  // `accentBoost` must put `mf + accent` at or above `from_midi`'s
+  // accent threshold (100), otherwise a fresh-authored `:a` note
+  // round-trips into a plain note. Was 24 (→ 88, below threshold);
+  // 36 puts the default-volume accent at 100 exactly.
+  accentBoost: 36,
   ghostReduction: 32,
 };
 
@@ -79,15 +83,25 @@ export function toMidi(jot: Jot, options: ToMidiOptions = {}): Uint8Array {
   type TsChange = { tick: number; count: number; unit: number };
   const tsChanges: TsChange[] = [];
 
+  type TempoChange = { tick: number; bpm: number };
+  const tempoChanges: TempoChange[] = [];
+  const globalBpm = typeof jot.globalMetadata.bpm === 'number' ? jot.globalMetadata.bpm : 120;
+
   // [B1] Merge all voices onto one MIDI stream.
+  // tsChanges/tempoChanges are collected on the first voice only; bar
+  // tick offsets are identical across voices (same time-signature
+  // sequence and bar count), and emitting the same meta event from
+  // every voice would duplicate it on the merged track.
+  let firstVoice = true;
   for (const voice of resolved.voices) {
     let barOffset = 0;
     let prevTime = jot.globalMetadata.time ?? { count: 4, unit: 4 };
+    let prevBpm: number | undefined = globalBpm;
     for (let bi = 0; bi < voice.bars.length; bi++) {
       const bar = voice.bars[bi];
       const barTicks = Math.max(1, Math.round(bar.beats * TICKS_PER_BEAT));
 
-      if (bi > 0 && (prevTime.count !== bar.time.count || prevTime.unit !== bar.time.unit)) {
+      if (firstVoice && bi > 0 && (prevTime.count !== bar.time.count || prevTime.unit !== bar.time.unit)) {
         tsChanges.push({
           tick: barOffset,
           count: bar.time.count,
@@ -95,6 +109,26 @@ export function toMidi(jot: Jot, options: ToMidiOptions = {}): Uint8Array {
         });
       }
       prevTime = bar.time;
+
+      // Per-bar tempo override (CLEANROOM_SPEC §5.3): emit a setTempo
+      // at the bar boundary whenever the active bpm changes. The
+      // parser snapshots active `bpm` onto bar.metadata so we don't
+      // need to walk the bar's elements. Skipped on voice 2+ (see
+      // firstVoice note above) and on bar 0 (covered by the initial
+      // tick-0 setTempo emitted later).
+      if (firstVoice && bi > 0) {
+        const meta = bar.source.metadata as { bpm?: unknown } | undefined;
+        const rawBpm = meta?.bpm;
+        const bpm = typeof rawBpm === 'number'
+          ? rawBpm
+          : (rawBpm && typeof rawBpm === 'object' && 'end' in rawBpm && typeof (rawBpm as { end: unknown }).end === 'number'
+            ? (rawBpm as { end: number }).end
+            : undefined);
+        if (bpm !== undefined && bpm > 0 && bpm !== prevBpm) {
+          tempoChanges.push({ tick: barOffset, bpm });
+          prevBpm = bpm;
+        }
+      }
 
       for (const pitch of voice.pitches) {
         const track = bar.tracks[pitch];
@@ -111,6 +145,7 @@ export function toMidi(jot: Jot, options: ToMidiOptions = {}): Uint8Array {
       }
       barOffset += barTicks;
     }
+    firstVoice = false;
   }
 
   // Sort: by tick, noteOff before noteOn when ticks collide so any same-tick
@@ -125,12 +160,11 @@ export function toMidi(jot: Jot, options: ToMidiOptions = {}): Uint8Array {
   const trackEvents: MidiEvent[] = [];
 
   // [B7] Initial tempo & time signature.
-  const bpmVal = typeof jot.globalMetadata.bpm === 'number' ? jot.globalMetadata.bpm : 120;
   trackEvents.push({
     deltaTime: 0,
     meta: true,
     type: 'setTempo',
-    microsecondsPerBeat: Math.max(1, Math.round(60_000_000 / bpmVal)),
+    microsecondsPerBeat: Math.max(1, Math.round(60_000_000 / globalBpm)),
   });
 
   const initTs = jot.globalMetadata.time ?? { count: 4, unit: 4 };
@@ -153,10 +187,11 @@ export function toMidi(jot: Jot, options: ToMidiOptions = {}): Uint8Array {
     });
   }
 
-  // Merge time-sig change events into the timeline along with note events.
+  // Merge time-sig + tempo change events into the timeline along with note events.
   type Pending =
     | { tick: number; kind: 'noteOn' | 'noteOff'; note: number; velocity: number }
-    | { tick: number; kind: 'timeSig'; count: number; unit: number };
+    | { tick: number; kind: 'timeSig'; count: number; unit: number }
+    | { tick: number; kind: 'tempo'; bpm: number };
 
   const merged: Pending[] = [
     ...abs.map<Pending>((e) => ({ ...e })),
@@ -166,20 +201,32 @@ export function toMidi(jot: Jot, options: ToMidiOptions = {}): Uint8Array {
       count: t.count,
       unit: t.unit,
     })),
+    ...tempoChanges.map<Pending>((t) => ({
+      tick: t.tick,
+      kind: 'tempo',
+      bpm: t.bpm,
+    })),
   ];
   merged.sort((a, b) => {
     if (a.tick !== b.tick) return a.tick - b.tick;
-    // Meta events first at a tick boundary.
-    if (a.kind === 'timeSig') return -1;
-    if (b.kind === 'timeSig') return 1;
-    if (a.kind === b.kind) return 0;
-    return a.kind === 'noteOff' ? -1 : 1;
+    // Meta events first at a tick boundary; tempo before time-sig is
+    // arbitrary (both are meta) but stable so output is deterministic.
+    const metaRank = (k: Pending['kind']) =>
+      k === 'tempo' ? 0 : k === 'timeSig' ? 1 : k === 'noteOff' ? 2 : 3;
+    return metaRank(a.kind) - metaRank(b.kind);
   });
 
   let lastTick = 0;
   for (const ev of merged) {
     const dt = ev.tick - lastTick;
-    if (ev.kind === 'timeSig') {
+    if (ev.kind === 'tempo') {
+      trackEvents.push({
+        deltaTime: dt,
+        meta: true,
+        type: 'setTempo',
+        microsecondsPerBeat: Math.max(1, Math.round(60_000_000 / ev.bpm)),
+      });
+    } else if (ev.kind === 'timeSig') {
       trackEvents.push({
         deltaTime: dt,
         meta: true,
