@@ -12,7 +12,8 @@ Stage dependencies (output of stage -> consumers):
     stems_per  -> per_instrument_stems    (consumed by onsets)
     beats      -> structure               (consumed by onsets, filter, transcribe)
     onsets     -> onsets_by_pitch         (consumed by filter, transcribe)
-    filter     -> kept_by_pitch           (consumed by transcribe)
+    filter     -> kept_by_pitch           (consumed by quantise, transcribe)
+    quantise   -> kept_by_pitch (mutated) (consumed by transcribe)
     transcribe -> predicted_midi          (kept-onsets MIDI deliverable)
 
 The split between `filter` (parallel per-instrument LLM calls that
@@ -20,8 +21,14 @@ reject artifact onsets) and `transcribe` (the deterministic
 `onsets_to_midi_bytes` + `build_note_provenance` render) lets the
 operator iterate on the MIDI / provenance code without paying for LLM
 calls; resume from `transcribe` re-hydrates `kept_by_pitch` from
-`filter/kept_onsets.json` and re-runs only the render. Re-running the
+`filter/kept_onsets.json` (and `quantise/shifts.json` if the prior run
+had quantise enabled) and re-runs only the render. Re-running the
 filter LLM itself means resuming from `filter`.
+
+`quantise` is enabled by default and can be disabled per-request via
+the `quantise` form param. It snaps kept onsets to a 1/48 grid
+deterministically and then runs a Haiku LLM pass for jitter-class
+shifts in cross-instrument context. See `pipeline/quantise.py`.
 
 The legacy `dsl`/`refine` pathway (LLM-emitted Drumjot DSL + F1-gated
 refinement loop) was removed in May 2026; see
@@ -62,6 +69,7 @@ from app.pipeline.filter_llm import filter_onsets_all_instruments
 from app.pipeline.hihat_split import split_hihat_onsets
 from app.pipeline.note_provenance import build_note_provenance
 from app.pipeline.onsets_midi import onsets_to_midi_bytes
+from app.pipeline.quantise import quantise_kept_onsets
 from app.pipeline.separate import Separator
 from app.run_log import current_run_log
 
@@ -76,6 +84,7 @@ class Stage(StrEnum):
     BEATS = "beats"
     ONSETS = "onsets"
     FILTER = "filter"
+    QUANTISE = "quantise"
     TRANSCRIBE = "transcribe"
 
 
@@ -85,6 +94,7 @@ STAGE_ORDER: list[Stage] = [
     Stage.BEATS,
     Stage.ONSETS,
     Stage.FILTER,
+    Stage.QUANTISE,
     Stage.TRANSCRIBE,
 ]
 
@@ -154,6 +164,12 @@ def _safe_progress(progress: ProgressCallback | None, event: ProgressEvent) -> N
 @dataclass
 class PipelineOptions:
     beat_input: BeatInput = "full_mix"
+    # Whether to run the optional `quantise` stage. Enabled by default;
+    # set False to skip both the deterministic joint-snap pass and the
+    # LLM residual pass, leaving `kept_by_pitch` as the filter stage
+    # produced it (raw seconds; frontend's 1/48 snap in
+    # `src/midi/from_midi.ts` handles quantisation).
+    quantise: bool = True
 
 
 @dataclass
@@ -292,6 +308,8 @@ def _run_stage(
         _do_onsets(ctx, sink)
     elif stage is Stage.FILTER:
         _do_filter(ctx, sink, progress)
+    elif stage is Stage.QUANTISE:
+        _do_quantise(ctx, options, sink)
     elif stage is Stage.TRANSCRIBE:
         _do_transcribe(ctx, sink)
     # Re-check cancel after the (possibly long-running) stage finishes so
@@ -581,6 +599,51 @@ def _do_filter(
                 for pitch, cands in kept_by_pitch.items()
             },
         )
+
+
+def _do_quantise(
+    ctx: PipelineContext,
+    options: PipelineOptions,
+    sink: DebugSink | None,
+) -> None:
+    """Snap kept onsets to a 1/48 grid: deterministic joint snap +
+    optional LLM residual pass.
+
+    Mutates `ctx.kept_by_pitch` candidates in place, each shifted onset
+    gets `quantised_time` / `quantised_shift_slots` populated, leaving
+    `time` / `beat_in_bar` as the raw detector hit for provenance.
+    Persists `quantise/shifts.json` for resume + inspection. Skipped
+    entirely when `options.quantise` is False (no-op; downstream sees
+    raw filter output).
+    """
+    if not options.quantise:
+        log.info("quantise: skipped (options.quantise=False)")
+        return
+    if ctx.structure is None:
+        raise RuntimeError(
+            "quantise: beat structure missing (expected beats.json or "
+            "resume_stage<=beats)."
+        )
+    if not ctx.kept_by_pitch:
+        raise RuntimeError(
+            "quantise: kept_by_pitch missing (expected "
+            "filter/kept_onsets.json or resume_stage<=filter)."
+        )
+
+    summary = quantise_kept_onsets(
+        ctx.kept_by_pitch,
+        ctx.structure,
+        use_llm=True,
+        cancel_event=ctx.cancel_event,
+    )
+    log.info(
+        "quantise: deterministic shifted %d, LLM shifted %d (llm_status=%s)",
+        summary.get("deterministic_shifted", 0),
+        summary.get("llm_shifted", 0),
+        summary.get("llm_status", "?"),
+    )
+    if sink is not None:
+        sink.write_json("quantise/shifts.json", summary)
 
 
 def _do_transcribe(

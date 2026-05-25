@@ -71,16 +71,20 @@ from app.run_log import RunLog, reset_current_run_log, set_current_run_log
 DEFAULT_DEBUG_DIR = Path("/debug")
 
 # Map stage -> HTTP status code surfaced when that stage fails. The
-# `filter` stage is the only external dependency (Anthropic LLM calls),
-# so it gets 502 (bad gateway); everything else (including `transcribe`,
-# which is now a pure local render after the LLM bit was split out) is
-# local compute and surfaces as 500.
+# `filter` and `quantise` stages are the only external dependencies
+# (Anthropic LLM calls), so they get 502 (bad gateway); everything else
+# (including `transcribe`, which is now a pure local render after the
+# LLM bit was split out) is local compute and surfaces as 500. The
+# quantise stage degrades gracefully on LLM failure (deterministic-only
+# fallback) so 502 here only fires on unrecoverable errors before any
+# fallback can run, schema mismatches in the deterministic pass, etc.
 _STAGE_HTTP_STATUS: dict[Stage, int] = {
     Stage.STEMS_ALL: 500,
     Stage.STEMS_PER: 500,
     Stage.BEATS: 500,
     Stage.ONSETS: 500,
     Stage.FILTER: 502,
+    Stage.QUANTISE: 502,
     Stage.TRANSCRIBE: 500,
 }
 
@@ -242,6 +246,7 @@ async def transcribe(
     file: UploadFile = File(...),
     include_candidates: bool = Form(default=False),
     beat_input: BeatInput = Form(default=settings.beat_input_default),
+    quantise: bool = Form(default=True),
     debug: bool = Form(default=False),
 ) -> StreamingResponse:
     """Streaming NDJSON response: one event per pipeline stage bookend
@@ -261,8 +266,8 @@ async def transcribe(
     """
     _require_pipeline_role()
     log.info(
-        "Transcribe request: %s (%s bytes) beat_input=%s debug=%s",
-        file.filename, file.size, beat_input, debug,
+        "Transcribe request: %s (%s bytes) beat_input=%s quantise=%s debug=%s",
+        file.filename, file.size, beat_input, quantise, debug,
     )
 
     if file.size is not None and file.size > 200_000_000:
@@ -285,6 +290,7 @@ async def transcribe(
     request_options = {
         "beat_input": beat_input,
         "include_candidates": include_candidates,
+        "quantise": quantise,
         "debug": debug,
     }
 
@@ -300,7 +306,7 @@ async def transcribe(
         sink.copy_audio("input", in_path)
 
     ctx = PipelineContext(audio_path=in_path, work_dir=work_dir)
-    options = PipelineOptions(beat_input=beat_input)
+    options = PipelineOptions(beat_input=beat_input, quantise=quantise)
     separator: Separator = request.app.state.separator
 
     async def post_run() -> None:
@@ -403,6 +409,7 @@ async def transcribe_resume(
     resume_stage: Stage = Form(...),
     include_candidates: bool = Form(default=False),
     beat_input: BeatInput = Form(default=settings.beat_input_default),
+    quantise: bool = Form(default=True),
 ) -> StreamingResponse:
     """Re-run the pipeline from `resume_stage` onward, hydrating any
     artifacts produced by earlier stages from `resume_folder`.
@@ -425,19 +432,20 @@ async def transcribe_resume(
     _require_pipeline_role()
     resume_dir = _resolve_resume_dir(resume_folder)
     log.info(
-        "Resume request from %s (resume_stage=%s beat_input=%s)",
-        resume_dir, resume_stage.value, beat_input,
+        "Resume request from %s (resume_stage=%s beat_input=%s quantise=%s)",
+        resume_dir, resume_stage.value, beat_input, quantise,
     )
 
     audio_path = find_input_audio(resume_dir) or (resume_dir / "input")
     sink = DebugSink(resume_dir)
     output_sink = make_output_sink(resume_dir.name, settings.outputs_dir)
-    options = PipelineOptions(beat_input=beat_input)
+    options = PipelineOptions(beat_input=beat_input, quantise=quantise)
     separator: Separator = request.app.state.separator
     run_log = RunLog()
     request_options = {
         "beat_input": beat_input,
         "include_candidates": include_candidates,
+        "quantise": quantise,
         "resume_folder": str(resume_dir),
         "resume_stage": resume_stage.value,
     }

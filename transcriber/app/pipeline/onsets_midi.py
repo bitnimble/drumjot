@@ -187,7 +187,12 @@ def onsets_to_midi_bytes(
                     skipped += 1
                     continue
                 b = bars[bar]
-                t = float(getattr(c, "time", 0.0) or 0.0)
+                # The `quantise` stage (when enabled) writes a
+                # snap-corrected absolute time to `quantised_time`,
+                # leaving the original `time` field as the raw detector
+                # hit for provenance. Prefer it when present.
+                q = getattr(c, "quantised_time", None)
+                t = float(q if q is not None else (getattr(c, "time", 0.0) or 0.0))
                 local = max(0.0, t - float(b.start_time))
                 tick = bar_start_tick[bar] + int(round(
                     local * TICKS_PER_BEAT * midi_tempos[bar] / 60.0
@@ -222,7 +227,8 @@ def onsets_to_midi_bytes(
                 log.info("Skipping unmapped pitch %r in onsets MIDI", pitch)
                 continue
             for c in cands:
-                t = float(getattr(c, "time", 0.0) or 0.0)
+                q = getattr(c, "quantised_time", None)
+                t = float(q if q is not None else (getattr(c, "time", 0.0) or 0.0))
                 if t < 0:
                     continue
                 vel = velocity_lookup(

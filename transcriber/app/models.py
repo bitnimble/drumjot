@@ -37,12 +37,23 @@ class OnsetCandidate(BaseModel):
 
     Both fields are -1 / -1.0 for onsets that fall outside the
     beat-tracked region.
+
+    `quantised_time` is set by the `quantise` pipeline stage (when
+    enabled) to the snap-corrected absolute time. When None, downstream
+    consumers fall back to `time`. The original `time` / `beat_in_bar`
+    fields are intentionally left untouched so per-note provenance can
+    still report the original detector hit.
     """
 
     time: float
     strength: float
     bar: int = -1
     beat_in_bar: float = -1.0
+    quantised_time: float | None = None
+    # Integer 1/48-slot shift the `quantise` stage applied (sum of the
+    # deterministic joint-snap pass and the LLM residual pass). Inspection
+    # / debug only; the canonical post-quantise time is `quantised_time`.
+    quantised_shift_slots: int | None = None
 
 
 class TranscribeResponse(BaseModel):

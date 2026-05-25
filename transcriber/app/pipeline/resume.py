@@ -155,6 +155,14 @@ def hydrate_context_from_resume(
             )
         ctx.kept_by_pitch = _load_kept_onsets(kept_path, ctx.onsets_by_pitch)
 
+    if stage_index(Stage.QUANTISE) < start_idx:
+        # quantise is optional; a prior run may have skipped it. If
+        # there's no on-disk artifact, the kept_by_pitch onsets stay as
+        # the filter stage produced them (no `quantised_time`).
+        shifts_path = folder / "quantise" / "shifts.json"
+        if shifts_path.exists():
+            _apply_quantise_shifts(shifts_path, ctx.kept_by_pitch)
+
 
 def load_original_filename(folder: Path) -> str | None:
     """Recover the uploaded filename from `request.json` if present.
@@ -227,6 +235,12 @@ def _resumable_stages(folder: Path) -> list[str]:
         out.append(Stage.ONSETS.value)
     if has_per and has_beats and has_onsets:
         out.append(Stage.FILTER.value)
+    # QUANTISE only needs the filter output; it produces an optional
+    # `quantise/shifts.json` sidecar and is itself optional, so the
+    # presence of that sidecar is NOT a precondition for resuming at
+    # quantise (we'll just write a fresh one).
+    if has_per and has_beats and has_onsets and has_filter:
+        out.append(Stage.QUANTISE.value)
     if has_per and has_beats and has_onsets and has_filter:
         out.append(Stage.TRANSCRIBE.value)
     # Preserve STAGE_ORDER so the UI can render the picker without
@@ -450,6 +464,61 @@ def _load_kept_onsets(
             )
         kept[pitch] = matched
     return kept
+
+
+def _apply_quantise_shifts(
+    shifts_path: Path,
+    kept_by_pitch: dict[str, list[OnsetCandidate]],
+) -> None:
+    """Re-attach `quantised_time` / `quantised_shift_slots` to kept
+    onsets from a prior run's `quantise/shifts.json`.
+
+    The shifts file stores per-pitch rows keyed by `idx` (position in
+    `kept_by_pitch[pitch]`). A missing pitch or out-of-range idx is
+    tolerated; the quantise stage logs and skips them too, so a
+    drifted kept_onsets.json doesn't blow up the resume; only the
+    entries that match get reapplied. Onsets that weren't shifted on
+    the prior run had no row in the file and stay untouched.
+    """
+    try:
+        data = json.loads(shifts_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        log.warning(
+            "resume: could not read %s (%s); skipping quantise reapply",
+            shifts_path, exc,
+        )
+        return
+    per_pitch = data.get("per_pitch") if isinstance(data, dict) else None
+    if not isinstance(per_pitch, dict):
+        return
+    applied = 0
+    skipped = 0
+    for pitch, rows in per_pitch.items():
+        cands = kept_by_pitch.get(pitch)
+        if cands is None or not isinstance(rows, list):
+            skipped += len(rows) if isinstance(rows, list) else 0
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                idx = int(row["idx"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if idx < 0 or idx >= len(cands):
+                skipped += 1
+                continue
+            qt = row.get("quantised_time")
+            ts = row.get("total_shift")
+            if qt is not None:
+                cands[idx].quantised_time = float(qt)
+            if ts is not None:
+                cands[idx].quantised_shift_slots = int(ts)
+            applied += 1
+    log.info(
+        "resume: reapplied %d quantise shift(s) from %s (skipped %d)",
+        applied, shifts_path, skipped,
+    )
 
 
 def _infer_duration(structure: BeatStructure) -> float:

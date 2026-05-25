@@ -85,19 +85,35 @@ def build_note_provenance(
             in_range = bar >= 0 and bar < len(bar_start_tick)
             kept = id(c) in kept_set
             tick: int | None = None
+            # When the quantise stage has shifted a kept onset, the
+            # rendered MIDI tick is derived from `quantised_time` (see
+            # `onsets_to_midi_bytes`), so the provenance tick must
+            # match; otherwise the frontend's `(tick, pitch)` key
+            # lookup misses every shifted note.
+            quantised_time = getattr(c, "quantised_time", None)
+            tick_time = quantised_time if quantised_time is not None else float(c.time)
             if kept and in_range and midi_note is not None:
                 b = structure.bars[bar]
-                local = max(0.0, float(c.time) - float(b.start_time))
+                local = max(0.0, float(tick_time) - float(b.start_time))
                 tick = bar_start_tick[bar] + int(round(
                     local * TICKS_PER_BEAT * midi_tempos[bar] / 60.0
                 ))
             entries.append({
                 "pitch": pitch,
                 "midi_note": midi_note,
-                # Unique (tick, pitch) key — the frontend matches each
+                # Unique (tick, pitch) key; the frontend matches each
                 # rendered Note's `metadata.midi.tick` against this.
                 "tick": tick,
+                # The raw detector hit; unchanged by quantise.
                 "detected_time_sec": float(c.time),
+                # Post-quantise absolute time. None when the quantise
+                # stage didn't run or this onset wasn't shifted; the
+                # rendered MIDI tick falls back to `detected_time_sec`
+                # in that case.
+                "quantised_time_sec": (
+                    float(quantised_time) if quantised_time is not None else None
+                ),
+                "quantised_shift_slots": getattr(c, "quantised_shift_slots", None),
                 "strength": float(c.strength),
                 "bar": bar,
                 "beat_in_bar": float(c.beat_in_bar),
