@@ -1,4 +1,5 @@
-"""Split the merged hi-hat stem's onsets into closed (`h`) vs open (`H`).
+"""Split the merged hi-hat stem's onsets into closed (`h`), open (`H`),
+and discard (artifact rejected upstream of the filter LLM).
 
 The Stage-2 separator emits a single `(hh)` stem mapped to pitch `h`, but
 a real hi-hat performance interleaves closed strikes and open (sustained)
@@ -7,12 +8,26 @@ open-hat sizzle/ring as a stream of confident frame-level activations.
 Pushing both flavours through one per-instrument LLM call buries the
 closed pattern under that sizzle.
 
-The split classifies each detected hi-hat onset open vs closed off the
-isolated stem audio (deterministic features the LLM can't hear) and
-routes them into two lanes that the per-instrument transcribe pass handles
-as separate instruments. Identity comes from the audio; the transcription
-LLM gets to reason about a (mostly) clean closed lane and an (open) lane
-in isolation.
+This module classifies each detected hi-hat onset into one of three
+buckets off the isolated stem audio (deterministic features the LLM
+can't hear) plus the LLM's judgement:
+
+* **OPEN** — foot up, the cymbals ring/sizzle together.
+* **CLOSED** — foot down, ticky/articulate.
+* **DISCARD** — not a real hit. Sizzle re-trigger inside an open tail,
+  bleed from another instrument that lines up with `others:`, or a
+  double-trigger ~<30 ms after a real hit.
+
+The unified ternary call replaces an earlier two-pass design (binary
+open/closed here, then `filter_llm` per lane). The seam between the two
+passes was the structural failure mode: when an open tail produced a
+sizzle train, this stage's binary call mis-labelled some bumps as
+*closed*; `filter_llm` then saw `h` in isolation (no features, no view of
+`H`) and had no signal to reject them. By collapsing the decisions, the
+LLM uses the same picture (full features + cross-instrument context) to
+judge "is this a sizzle bump posing as closed?" that it uses to judge
+"is this open?". The `filter_llm` pass is skipped entirely for `h` / `H`
+afterwards — see `pipeline/runner.py::_do_transcribe`.
 
 Architectural notes:
 
@@ -25,10 +40,13 @@ Architectural notes:
   classifier. The notation-correct follow-up is to fold the `H` fragment
   into `h` with `:o` applied per note before recompose runs (requires
   parser-based per-bar merging, easiest as a new bun bridge).
-* Same shape as `cymbal_split.py` on purpose — the `_classify_llm` /
-  `_classify_fallback` seam is re-usable from a future "option B"
-  (single hi-hat lane, per-onset modifier hint to the existing
-  transcribe LLM call) without rewiring the audio analysis.
+* The deterministic `_open_tail_filter` stays as a backstop. The ternary
+  LLM call should now catch sizzle bumps directly, but the rule
+  ("closed-inside-confirmed-open-tail is physically impossible") is a
+  free safety net the LLM cannot violate.
+* The discarded list is returned alongside the split lanes so the
+  runner can hand it to `note_provenance` for the UI's "Show filtered"
+  ghost overlay.
 """
 from __future__ import annotations
 
@@ -113,15 +131,19 @@ _TAIL_MIN_S = 0.08
 _OPEN_IN_TAIL_MAX_PRE_RMS = 0.65
 
 _SPLIT_TOOL: dict[str, Any] = {
-    "name": "report_open_hihat_onsets",
+    "name": "report_hihat_classification",
     "description": (
-        "Return the indices of the hi-hat onsets that are OPEN hi-hat "
-        "hits — the cymbals struck while the foot-pedal is up so the two "
-        "cymbals ring/sizzle together, producing a long sustained decay. "
-        "Every onset NOT returned is treated as a CLOSED hi-hat hit "
-        "(short, articulate, ticky). Return an empty list if the part is "
-        "all closed; return all indices if it is all open. Never include "
-        "an index that wasn't shown to you."
+        "Classify each detected hi-hat onset into one of three buckets: "
+        "OPEN (foot up, the cymbals ring/sizzle together), CLOSED (foot "
+        "down, short/articulate/ticky), or DISCARD (not a real hit — a "
+        "sizzle re-trigger inside an open tail, bleed from another "
+        "instrument that lines up with the `others:` summary, or a "
+        "double-trigger immediately after a real hit). Return TWO arrays "
+        "of `#N` indices: the open ones and the discard ones. Every "
+        "onset NOT in either array is treated as CLOSED. The two arrays "
+        "must be disjoint. Return empty arrays when appropriate (all "
+        "closed; nothing to discard). Never include an index that wasn't "
+        "shown to you."
     ),
     "input_schema": {
         "type": "object",
@@ -129,10 +151,22 @@ _SPLIT_TOOL: dict[str, Any] = {
             "open_indices": {
                 "type": "array",
                 "items": {"type": "integer", "minimum": 0},
-                "description": "The `#N` indices of onsets that are open.",
+                "description": (
+                    "The `#N` indices of onsets that are OPEN hi-hat hits."
+                ),
+            },
+            "discard_indices": {
+                "type": "array",
+                "items": {"type": "integer", "minimum": 0},
+                "description": (
+                    "The `#N` indices of onsets that are NOT real hits "
+                    "(sizzle bumps inside an open tail, bleed, double-"
+                    "triggers). These should be the minority — only "
+                    "clear artifacts."
+                ),
             },
         },
-        "required": ["open_indices"],
+        "required": ["open_indices", "discard_indices"],
         "additionalProperties": False,
     },
 }
@@ -184,62 +218,83 @@ def split_hihat_onsets(
     onsets_by_pitch: dict[str, list[OnsetCandidate]],
     per_instrument_stems: dict[str, Path],
     structure: BeatStructure,
-) -> dict[str, list[OnsetCandidate]]:
-    """Return `onsets_by_pitch` with the hi-hat lane split into closed/open.
+) -> tuple[dict[str, list[OnsetCandidate]], list[OnsetCandidate]]:
+    """Return `(onsets_by_pitch_with_split, discarded_onsets)`.
 
-    No-op (returns the input mapping unchanged) when there is no hi-hat
-    stem, no hi-hat onsets, or no in-range hi-hat onsets to classify.
+    The first element is `onsets_by_pitch` with the hi-hat lane split
+    into closed (`h`) and synthetic open (`H`). The second is the list
+    of in-range hi-hat onsets the classifier (or the deterministic
+    open-tail backstop) rejected as artifacts — kept around so the UI's
+    "Show filtered" ghost overlay can surface them via
+    `note_provenance`. The discards are *not* present in either lane;
+    the runner merges them back into `all_onsets_by_pitch[h]` at the
+    provenance boundary only.
+
+    No-op (returns the input mapping unchanged + an empty discarded list)
+    when there is no hi-hat stem, no hi-hat onsets, or no in-range hi-hat
+    onsets to classify.
     """
     hh = onsets_by_pitch.get(_HIHAT_PITCH)
     stem_path = per_instrument_stems.get(_HIHAT_PITCH)
     if not hh or stem_path is None or not stem_path.exists():
-        return onsets_by_pitch
+        return onsets_by_pitch, []
 
     in_range = sorted(
         (c for c in hh if c.bar >= 0), key=lambda c: (c.bar, c.beat_in_bar)
     )
     out_of_range = [c for c in hh if c.bar < 0]
     if not in_range:
-        return onsets_by_pitch
+        return onsets_by_pitch, []
 
     feats = _measure(stem_path, in_range)
 
-    open_idx = _classify_llm(in_range, feats, structure, onsets_by_pitch)
-    source = "llm"
-    if open_idx is None:
-        open_idx = _classify_fallback(in_range, feats)
+    llm_result = _classify_llm(in_range, feats, structure, onsets_by_pitch)
+    if llm_result is None:
+        open_idx, discard_idx = _classify_fallback(in_range, feats)
         source = "fallback"
+    else:
+        open_idx, discard_idx = llm_result
+        source = "llm"
 
-    # Deterministic post-filter: drop spurious onsets that fall inside
-    # an open's measured ring tail. Closed-inside-tail is dropped
-    # unconditionally (physically impossible); open-inside-tail is
-    # dropped only when it lacks a fresh-attack signature (a sizzle bump
-    # the model labelled open, not a real repeated strike).
-    closed_dropped, open_dropped = _open_tail_filter(
-        in_range, feats, open_idx
+    # Deterministic backstop: a closed-labelled onset inside a confirmed
+    # open tail is physically impossible; an open-labelled onset inside
+    # an open tail without a fresh attack is a sizzle bump. The ternary
+    # LLM call should catch these directly — the rule is left in place
+    # as a free invariant the LLM cannot violate. Discards are excluded
+    # from the sweep (already dropped; do not extend the tail off them).
+    closed_in_tail, open_in_tail = _open_tail_filter(
+        in_range, feats, open_idx, discard_idx,
     )
 
     closed = [
         c for i, c in enumerate(in_range)
-        if i not in open_idx and i not in closed_dropped
+        if i not in open_idx
+        and i not in discard_idx
+        and i not in closed_in_tail
     ]
     opened = [
         c for i, c in enumerate(in_range)
-        if i in open_idx and i not in open_dropped
+        if i in open_idx and i not in open_in_tail
+    ]
+    discarded = [
+        c for i, c in enumerate(in_range)
+        if i in discard_idx or i in closed_in_tail or i in open_in_tail
     ]
     # Out-of-range hi-hat onsets are never consumed downstream (bar < 0);
     # park them on the closed lane so nothing is silently discarded.
     closed.extend(out_of_range)
 
     log.info(
-        "hihat split (%s): %d onsets -> %d closed, %d open "
-        "(tail-filter dropped %d closed + %d open inside open tails)",
+        "hihat split (%s): %d onsets -> %d closed, %d open, %d discard "
+        "(LLM %d + tail-filter %d closed + %d open inside open tails)",
         source,
         len(in_range),
         len(closed) - len(out_of_range),
         len(opened),
-        len(closed_dropped),
-        len(open_dropped),
+        len(discarded),
+        len(discard_idx),
+        len(closed_in_tail),
+        len(open_in_tail),
     )
 
     sink = current_debug_sink()
@@ -251,8 +306,10 @@ def split_hihat_onsets(
                 "n_input": len(in_range),
                 "n_closed": len(closed) - len(out_of_range),
                 "n_open": len(opened),
-                "n_closed_in_tail": len(closed_dropped),
-                "n_open_in_tail": len(open_dropped),
+                "n_discard": len(discarded),
+                "n_discard_llm": len(discard_idx),
+                "n_closed_in_tail": len(closed_in_tail),
+                "n_open_in_tail": len(open_in_tail),
                 "onsets": [
                     {
                         "index": i,
@@ -268,11 +325,9 @@ def split_hihat_onsets(
                         "tail_end_s": round(
                             feats[i].tail_end_t - c.time, 3
                         ),
-                        "label": (
-                            "open_in_tail" if i in open_dropped
-                            else "open" if i in open_idx
-                            else "closed_in_tail" if i in closed_dropped
-                            else "closed"
+                        "label": _label_for(
+                            i, open_idx, discard_idx,
+                            closed_in_tail, open_in_tail,
                         ),
                     }
                     for i, c in enumerate(in_range)
@@ -294,18 +349,47 @@ def split_hihat_onsets(
             out.get(_OPEN_PITCH, []) + opened,
             key=lambda c: (c.bar, c.beat_in_bar),
         )
-    return out
+    return out, discarded
+
+
+def _label_for(
+    i: int,
+    open_idx: set[int],
+    discard_idx: set[int],
+    closed_in_tail: set[int],
+    open_in_tail: set[int],
+) -> str:
+    """Per-onset label for the debug dump. Tail-filter drops are
+    surfaced as their own labels (distinct from LLM `discard`) so an
+    eyeball pass on `decision.json` can tell whether the backstop is
+    catching things the LLM missed.
+    """
+    if i in open_in_tail:
+        return "open_in_tail"
+    if i in closed_in_tail:
+        return "closed_in_tail"
+    if i in discard_idx:
+        return "discard"
+    if i in open_idx:
+        return "open"
+    return "closed"
 
 
 def _open_tail_filter(
     onsets: list[OnsetCandidate],
     feats: list[_Feat],
     open_idx: set[int],
+    discard_idx: set[int],
 ) -> tuple[set[int], set[int]]:
     """Drop spurious onsets inside an open hi-hat's measured ring tail.
 
-    Returns `(closed_dropped, open_dropped)`. Single time-ordered pass
-    with a rolling "current open tail end" tracker:
+    Returns `(closed_dropped, open_dropped)` — the extra drops the
+    deterministic backstop catches on top of the LLM's `discard_idx`.
+    Onsets already in `discard_idx` are skipped (already dropped; do
+    not extend the tail off them, since the LLM judged them artifacts).
+
+    Single time-ordered pass with a rolling "current open tail end"
+    tracker:
 
       * CLOSED inside an open tail -> dropped unconditionally. A
         struck-closed hi-hat needs the pedal down on a ringing cymbal,
@@ -329,6 +413,8 @@ def _open_tail_filter(
     order = sorted(range(len(onsets)), key=lambda i: onsets[i].time)
     current_tail_end = -1.0
     for i in order:
+        if i in discard_idx:
+            continue
         t = onsets[i].time
         in_tail = t <= current_tail_end
         if i in open_idx:
@@ -470,9 +556,19 @@ def _classify_llm(
     feats: list[_Feat],
     structure: BeatStructure,
     onsets_by_pitch: dict[str, list[OnsetCandidate]],
-) -> set[int] | None:
-    """Ask the LLM which onsets are open. Returns the open index set, or
-    `None` to signal the caller to use the deterministic fallback."""
+) -> tuple[set[int], set[int]] | None:
+    """Ask the LLM to classify each onset open / closed / discard.
+
+    Returns `(open_indices, discard_indices)`; everything not in either
+    set is implicitly closed. The two sets are guaranteed disjoint —
+    overlapping entries resolve to **discard** (the safer error: a real
+    hit lost as discard is one missed note; a sizzle bump mislabelled
+    as open creates a phantom note AND extends the open-tail backstop's
+    window, masking nearby closed hits too).
+
+    Returns `None` to signal the caller to use the deterministic
+    fallback (no API key, call error, or malformed tool output).
+    """
     if not settings.anthropic_api_key:
         log.info("hihat split: no ANTHROPIC_API_KEY; using fallback")
         return None
@@ -514,39 +610,52 @@ def _classify_llm(
             continue
         if getattr(block, "name", None) != _SPLIT_TOOL["name"]:
             continue
-        raw = block.input.get("open_indices", [])
-        if not isinstance(raw, list):
+        open_raw = block.input.get("open_indices", [])
+        discard_raw = block.input.get("discard_indices", [])
+        if not isinstance(open_raw, list) or not isinstance(discard_raw, list):
             log.warning(
-                "hihat split: non-list open_indices; using fallback"
+                "hihat split: non-list open/discard indices; using fallback"
             )
             return None
-        out: set[int] = set()
-        for v in raw:
-            try:
-                idx = int(v)
-            except (TypeError, ValueError):
-                continue
-            if 0 <= idx < n:
-                out.add(idx)
-        return out
+        discard_set = _coerce_index_set(discard_raw, n)
+        # Disjointness: discard wins on overlap (see docstring).
+        open_set = _coerce_index_set(open_raw, n) - discard_set
+        return open_set, discard_set
     log.warning("hihat split: no tool_use block; using fallback")
     return None
 
 
+def _coerce_index_set(raw: list[Any], n: int) -> set[int]:
+    """Clamp a list of tool-returned indices into `[0, n)`, ignoring
+    non-int entries and out-of-range values."""
+    out: set[int] = set()
+    for v in raw:
+        try:
+            idx = int(v)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= idx < n:
+            out.add(idx)
+    return out
+
+
 def _classify_fallback(
     onsets: list[OnsetCandidate], feats: list[_Feat]
-) -> set[int]:
+) -> tuple[set[int], set[int]]:
     """Coarse deterministic open/closed split over the measured features.
 
     Open if STILL RINGING after the strike (high `late_rms`) OR riding
     on existing ring energy (high `pre_rms`). Either signature alone is
-    sufficient. Runs only when the LLM is unavailable.
+    sufficient. Never discards — "do nothing about sizzle" is acceptable
+    degraded behaviour when the LLM is unavailable; the open-tail
+    backstop still catches the most egregious cases. Runs only when the
+    LLM is unavailable.
     """
     opened: set[int] = set()
     for i, f in enumerate(feats):
         if f.late_rms >= _FALLBACK_LATE_RMS or f.pre_rms >= _FALLBACK_PRE_RMS:
             opened.add(i)
-    return opened
+    return opened, set()
 
 
 def _format_bars(

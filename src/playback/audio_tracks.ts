@@ -262,32 +262,17 @@ export function computeWaveformPeaks(
   const renderedBars = voice?.bars ?? [];
   // No `notePadPx` shift here: the waveform bitmap is positioned in
   // the DOM with a CSS `left: var(--note-pad-px)` instead. Baking the
-  // pad into the bitmap broke the GPU-scaled live zoom — a constant-
+  // pad into the bitmap broke the GPU-scaled live zoom; a constant-
   // pixel prefix doesn't scale with `--px-per-beat`, so the transform
   // shifted everything right by `pad × scale` and snapped left on the
   // crisp redraw. With pad applied via CSS, pixel→time is fully linear
   // in `pxPerBeat` so `scaleX` and the redraw line up exactly.
-
-  // Lead-in: the pixels before bar 1 (reserved for the recording's
-  // pre-roll) show audio seconds [0, drumsT0Sec). Bar 1's left edge
-  // is at `firstX`, which the layout scaled so `firstX` px ==
-  // `drumsT0Sec` s at the same px/s the bars use — so audio is
-  // continuous across the bar-1 boundary and the drum notes line up
-  // with where the drums actually enter in the waveform.
-  const firstX = renderedBars.length ? (renderedBars[0].x as number) : 0;
-  if (drumsT0Sec > 0 && firstX > 0) {
-    // Pre-roll occupies [0, firstX) in the bitmap. The caller offsets
-    // the canvas by `notePadPx` so the visible left edge still lines
-    // up with the score's note grid.
-    const pxEnd = Math.min(totalWidthPx, Math.ceil(firstX));
-    for (let p = 0; p < pxEnd; p++) {
-      const tAudio0 = (p / firstX) * drumsT0Sec;
-      const tAudio1 = ((p + 1) / firstX) * drumsT0Sec;
-      const s0 = Math.max(0, Math.floor(tAudio0 * sampleRate));
-      const s1 = Math.min(sampleLen, Math.ceil(tAudio1 * sampleRate));
-      writePixelPeak(channels, numChannels, channelScale, s0, s1, peaks, p * 2);
-    }
-  }
+  //
+  // Lead-in (when present) lives in `voice.bars` as negative-indexed
+  // bars with negative `startSec`; the per-bar loop below adds
+  // `drumsT0Sec` to each bar's jot time and maps the resulting audio
+  // window onto the bar's pixel range, so the recording's pre-roll
+  // shows up inside the lead-in bars without a separate chrome branch.
 
   for (let bi = 0; bi < renderedBars.length; bi++) {
     const rb = renderedBars[bi];

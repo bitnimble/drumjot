@@ -10,6 +10,7 @@ import {
   BarTimingsContext,
   NoteProvenanceContext,
   NoteProvenanceContextValue,
+  RenderedJotContext,
   SelectionContext,
 } from './jot_view/contexts';
 import {
@@ -437,10 +438,16 @@ const JotView = observer((props: JotViewProps) => {
     target.addEventListener('pointercancel', onUp);
   };
   return (
+    <RenderedJotContext.Provider value={jot}>
     <BarTimingsContext.Provider value={barTimings}>
       <div
         ref={containerRef}
         className={styles.jotContainer}
+        // Stable hook for descendant popovers (note + filtered-onset
+        // labels) to find the scroll viewport's bottom edge and flip
+        // upward when the natural below-placement would overflow into
+        // the playback bar / debug panel below.
+        data-jot-scroller
         style={containerStyle}
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}
@@ -468,6 +475,7 @@ const JotView = observer((props: JotViewProps) => {
         <MarqueeOverlay />
       </div>
     </BarTimingsContext.Provider>
+    </RenderedJotContext.Provider>
   );
 });
 

@@ -1,28 +1,40 @@
-"""Split the merged cymbals stem's onsets into ride (`d`) vs crash (`c`).
+"""Split the merged cymbals stem's onsets into ride (`d`), crash (`c`),
+and discard (artifact rejected upstream of the filter LLM).
 
 The active Stage-2 separator (jarredou 5-stem MDX23C DrumSep) does not
-separate ride from crash — it emits ONE `cymbals` stem, mapped to pitch
+separate ride from crash; it emits ONE `cymbals` stem, mapped to pitch
 `c` by `separate.STEM_NAME_TO_PITCH`. Ride vs crash is a poor fit for a
 fixed timbre threshold (a washy or "crash-ridden" ride decays long and
 noisy like a crash; the reliably discriminating signal is the musical
-*role* — a sustained timekeeping stream vs a sparse accent — not timbre),
+*role*; a sustained timekeeping stream vs a sparse accent; not timbre),
 so we follow the same line this pipeline draws everywhere: deterministic
 measurement, LLM judgement.
 
   - Deterministic: for each cymbals onset we measure, off the cymbals
     stem audio, a post-onset decay time, spectral flatness, spectral
-    centroid, and the gap to the nearest neighbouring cymbal onset — the
+    centroid, and the gap to the nearest neighbouring cymbal onset; the
     acoustic / density cues the LLM cannot otherwise perceive.
   - LLM: those features plus the musical context (beat positions + a
     one-line summary of what every other instrument did per bar, so it
     can see kick-coincident accents) go to one forced-tool call that
-    returns which onsets are crashes. Everything else is ride.
+    returns the ride / crash / discard classification. Ride is the
+    default (anything the model does not flag is ride).
 
-On any failure (no API key, call error, no tool block) we fall back to a
-coarse deterministic rule over the same features so the cymbal lane is
-never dropped — mirroring `filter_llm`'s degrade-to-safe contract. The
-resulting `d` / `c` streams feed the existing per-instrument
-filter/transcribe pathways completely unchanged.
+The **discard** category mirrors `hihat_split.py`'s ternary classifier:
+the LLM rejects detector artifacts (bleed from hi-hat / snare /
+percussion that lines up with `others:`, double-triggers, and sizzle
+re-triggers inside a long crash tail) in the same call that classifies
+ride vs crash. This collapses two passes (split, then per-lane
+`filter_llm`) into one; the model uses the same picture (full features
++ cross-instrument context) to judge "is this an artifact?" that it
+uses to judge "is this a ride?". The `filter_llm` pass is skipped
+entirely for `c` / `d` afterwards; see
+`pipeline/runner.py::_do_transcribe`.
+
+On any failure (no API key, call error, no tool block) we fall back to
+a coarse deterministic ride/crash rule over the same features (no
+discards) so the cymbal lane is never dropped; mirroring `filter_llm`'s
+degrade-to-safe contract.
 """
 from __future__ import annotations
 
@@ -50,6 +62,19 @@ _CYMBALS_PITCH = "c"  # the merged cymbals stem lands here pre-split
 _RIDE_PITCH = "d"
 _CRASH_PITCH = "c"
 
+# Output-pitch -> input-stem-pitch aliases. After the split runs there
+# are two output lanes (`c` crash and `d` ride) sharing the single
+# combined cymbals stem (`stem_c.mp3`). The debug-bundle builder
+# (`debug_bundle.py`) reads this so the manifest's `mapping` declares
+# the shared stem under BOTH keys; `c → stem_c.mp3` AND
+# `d → stem_c.mp3`; letting the frontend cluster ride alongside crash
+# under the cymbals audio row instead of recomputing the relationship.
+# The crash → crash entry is implicit (it's just the stem's own pitch);
+# only the non-identity alias needs to be listed here.
+STEM_PITCH_ALIASES: dict[str, str] = {
+    _RIDE_PITCH: _CYMBALS_PITCH,
+}
+
 # Feature-extraction windows (seconds). The decay search is capped so a
 # long crash tail can't run into the next phrase; the timbre window is
 # short so it characterises the attack/early-decay, not room ambience.
@@ -64,15 +89,19 @@ _FALLBACK_DECAY_S = 0.70
 _FALLBACK_ISOLATION_S = 0.25
 
 _SPLIT_TOOL: dict[str, Any] = {
-    "name": "report_crash_onsets",
+    "name": "report_cymbal_classification",
     "description": (
-        "Return the indices of the cymbal onsets that are CRASH hits — "
-        "sparse accents, typically at phrase/section boundaries, often "
-        "landing with a kick, with a long sustained decay. Every onset "
-        "NOT returned is treated as a RIDE hit (steady timekeeping "
-        "stream). Return an empty list if the part is pure ride; return "
-        "all indices if it is pure crash. Never include an index that "
-        "wasn't shown to you."
+        "Classify each detected cymbal onset into one of three buckets: "
+        "CRASH (sparse accent, long sustained decay, often coincident "
+        "with a kick on a strong beat), RIDE (steady timekeeping stream, "
+        "short articulate decay), or DISCARD (not a real hit; bleed "
+        "from another cymbal-like instrument lining up with `others:`, "
+        "double-triggers, or sizzle re-triggers inside a long crash "
+        "tail). Return TWO arrays of `#N` indices: the crashes and the "
+        "discards. Every onset NOT in either array is treated as RIDE. "
+        "The two arrays must be disjoint. Return empty arrays when "
+        "appropriate (pure ride; nothing to discard). Never include an "
+        "index that wasn't shown to you."
     ),
     "input_schema": {
         "type": "object",
@@ -80,10 +109,22 @@ _SPLIT_TOOL: dict[str, Any] = {
             "crash_indices": {
                 "type": "array",
                 "items": {"type": "integer", "minimum": 0},
-                "description": "The `#N` indices of onsets that are crashes.",
+                "description": (
+                    "The `#N` indices of onsets that are CRASH hits."
+                ),
+            },
+            "discard_indices": {
+                "type": "array",
+                "items": {"type": "integer", "minimum": 0},
+                "description": (
+                    "The `#N` indices of onsets that are NOT real hits "
+                    "(bleed, double-triggers, sizzle re-triggers in a "
+                    "crash tail). These should be the minority; only "
+                    "clear artifacts."
+                ),
             },
         },
-        "required": ["crash_indices"],
+        "required": ["crash_indices", "discard_indices"],
         "additionalProperties": False,
     },
 }
@@ -108,41 +149,60 @@ def split_cymbal_onsets(
     onsets_by_pitch: dict[str, list[OnsetCandidate]],
     per_instrument_stems: dict[str, Path],
     structure: BeatStructure,
-) -> dict[str, list[OnsetCandidate]]:
-    """Return `onsets_by_pitch` with the cymbals lane split into ride/crash.
+) -> tuple[dict[str, list[OnsetCandidate]], list[OnsetCandidate]]:
+    """Return `(onsets_by_pitch_with_split, discarded_onsets)`.
 
-    No-op (returns the input mapping unchanged) when there is no cymbals
-    stem, no cymbals onsets, or no in-range cymbals onsets to classify.
+    The first element is `onsets_by_pitch` with the cymbals lane split
+    into ride (`d`) and crash (`c`). The second is the list of in-range
+    cymbal onsets the classifier rejected as artifacts; kept around so
+    the UI's "Show filtered" ghost overlay can surface them via
+    `note_provenance`. The discards are *not* present in either lane;
+    the runner merges them back into `all_onsets_by_pitch[c]` at the
+    provenance boundary only.
+
+    No-op (returns the input mapping unchanged + an empty discarded list)
+    when there is no cymbals stem, no cymbals onsets, or no in-range
+    cymbals onsets to classify.
     """
     cym = onsets_by_pitch.get(_CYMBALS_PITCH)
     stem_path = per_instrument_stems.get(_CYMBALS_PITCH)
     if not cym or stem_path is None or not stem_path.exists():
-        return onsets_by_pitch
+        return onsets_by_pitch, []
 
     in_range = sorted(
         (c for c in cym if c.bar >= 0), key=lambda c: (c.bar, c.beat_in_bar)
     )
     out_of_range = [c for c in cym if c.bar < 0]
     if not in_range:
-        return onsets_by_pitch
+        return onsets_by_pitch, []
 
     feats = _measure(stem_path, in_range)
 
-    crash_idx = _classify_llm(in_range, feats, structure, onsets_by_pitch)
-    source = "llm"
-    if crash_idx is None:
-        crash_idx = _classify_fallback(in_range, feats)
+    llm_result = _classify_llm(in_range, feats, structure, onsets_by_pitch)
+    if llm_result is None:
+        crash_idx, discard_idx = _classify_fallback(in_range, feats)
         source = "fallback"
+    else:
+        crash_idx, discard_idx = llm_result
+        source = "llm"
 
-    ride = [c for i, c in enumerate(in_range) if i not in crash_idx]
+    ride = [
+        c for i, c in enumerate(in_range)
+        if i not in crash_idx and i not in discard_idx
+    ]
     crash = [c for i, c in enumerate(in_range) if i in crash_idx]
+    discarded = [c for i, c in enumerate(in_range) if i in discard_idx]
     # Out-of-range cymbal onsets are never consumed downstream (bar < 0);
     # park them on the crash lane so nothing is silently discarded.
     crash.extend(out_of_range)
 
     log.info(
-        "cymbal split (%s): %d onsets -> %d ride, %d crash",
-        source, len(in_range), len(ride), len(crash) - len(out_of_range),
+        "cymbal split (%s): %d onsets -> %d ride, %d crash, %d discard",
+        source,
+        len(in_range),
+        len(ride),
+        len(crash) - len(out_of_range),
+        len(discarded),
     )
 
     sink = current_debug_sink()
@@ -154,6 +214,7 @@ def split_cymbal_onsets(
                 "n_input": len(in_range),
                 "n_ride": len(ride),
                 "n_crash": len(crash) - len(out_of_range),
+                "n_discard": len(discarded),
                 "onsets": [
                     {
                         "index": i,
@@ -164,7 +225,11 @@ def split_cymbal_onsets(
                         "flatness": round(feats[i].flatness, 4),
                         "centroid_hz": round(feats[i].centroid_hz, 1),
                         "gap_s": round(feats[i].gap_s, 3),
-                        "label": "crash" if i in crash_idx else "ride",
+                        "label": (
+                            "discard" if i in discard_idx
+                            else "crash" if i in crash_idx
+                            else "ride"
+                        ),
                     }
                     for i, c in enumerate(in_range)
                 ],
@@ -174,16 +239,18 @@ def split_cymbal_onsets(
     out = dict(onsets_by_pitch)
     # Merge rather than overwrite in case a `d` lane somehow already
     # exists (it won't with the 5-stem model, but stay defensive).
-    out[_RIDE_PITCH] = sorted(
-        out.get(_RIDE_PITCH, []) + ride, key=lambda c: (c.bar, c.beat_in_bar)
-    )
+    if ride:
+        out[_RIDE_PITCH] = sorted(
+            out.get(_RIDE_PITCH, []) + ride,
+            key=lambda c: (c.bar, c.beat_in_bar),
+        )
     if crash:
         out[_CRASH_PITCH] = sorted(
             crash, key=lambda c: (c.bar, c.beat_in_bar)
         )
     else:
         out.pop(_CRASH_PITCH, None)
-    return out
+    return out, discarded
 
 
 def _measure(
@@ -250,9 +317,18 @@ def _classify_llm(
     feats: list[_Feat],
     structure: BeatStructure,
     onsets_by_pitch: dict[str, list[OnsetCandidate]],
-) -> set[int] | None:
-    """Ask the LLM which onsets are crashes. Returns the crash index set,
-    or `None` to signal the caller to use the deterministic fallback."""
+) -> tuple[set[int], set[int]] | None:
+    """Ask the LLM to classify each onset crash / ride / discard.
+
+    Returns `(crash_indices, discard_indices)`; everything not in either
+    set is implicitly ride. The two sets are guaranteed disjoint; overlapping entries resolve to **discard** (the safer error: a real
+    hit lost as discard is one missed note; a sizzle re-trigger
+    mislabelled as a crash creates a phantom accent that the rest of the
+    pipeline will treat as a section boundary).
+
+    Returns `None` to signal the caller to use the deterministic
+    fallback (no API key, call error, or malformed tool output).
+    """
     if not settings.anthropic_api_key:
         log.info("cymbal split: no ANTHROPIC_API_KEY; using fallback")
         return None
@@ -294,40 +370,51 @@ def _classify_llm(
             continue
         if getattr(block, "name", None) != _SPLIT_TOOL["name"]:
             continue
-        raw = block.input.get("crash_indices", [])
-        if not isinstance(raw, list):
+        crash_raw = block.input.get("crash_indices", [])
+        discard_raw = block.input.get("discard_indices", [])
+        if not isinstance(crash_raw, list) or not isinstance(discard_raw, list):
             log.warning(
-                "cymbal split: non-list crash_indices; using fallback"
+                "cymbal split: non-list crash/discard indices; using fallback"
             )
             return None
-        out: set[int] = set()
-        for v in raw:
-            try:
-                idx = int(v)
-            except (TypeError, ValueError):
-                continue
-            if 0 <= idx < n:
-                out.add(idx)
-        return out
+        discard_set = _coerce_index_set(discard_raw, n)
+        # Disjointness: discard wins on overlap (see docstring).
+        crash_set = _coerce_index_set(crash_raw, n) - discard_set
+        return crash_set, discard_set
     log.warning("cymbal split: no tool_use block; using fallback")
     return None
 
 
+def _coerce_index_set(raw: list[Any], n: int) -> set[int]:
+    """Clamp a list of tool-returned indices into `[0, n)`, ignoring
+    non-int entries and out-of-range values."""
+    out: set[int] = set()
+    for v in raw:
+        try:
+            idx = int(v)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= idx < n:
+            out.add(idx)
+    return out
+
+
 def _classify_fallback(
     onsets: list[OnsetCandidate], feats: list[_Feat]
-) -> set[int]:
+) -> tuple[set[int], set[int]]:
     """Coarse deterministic ride/crash split over the measured features.
 
-    Crash = rings long AND is isolated (not part of a tight stream). This
-    is intentionally conservative; it only runs when the LLM is
-    unavailable, and the goal is "never drop the lane", not accuracy
-    parity with the model.
+    Crash = rings long AND is isolated (not part of a tight stream).
+    Never discards; "do nothing about artifacts" is acceptable degraded
+    behaviour when the LLM is unavailable; the goal is "never drop the
+    lane", not accuracy parity with the model. Runs only when the LLM
+    is unavailable.
     """
     crash: set[int] = set()
     for i, f in enumerate(feats):
         if f.decay_s >= _FALLBACK_DECAY_S and f.gap_s >= _FALLBACK_ISOLATION_S:
             crash.add(i)
-    return crash
+    return crash, set()
 
 
 def _format_bars(

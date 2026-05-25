@@ -10,9 +10,18 @@ Stage dependencies (output of stage -> consumers):
 
     stems_all  -> drum_stem               (consumed by stems_per)
     stems_per  -> per_instrument_stems    (consumed by onsets)
-    beats      -> structure               (consumed by onsets, transcribe)
-    onsets     -> onsets_by_pitch         (consumed by transcribe)
+    beats      -> structure               (consumed by onsets, filter, transcribe)
+    onsets     -> onsets_by_pitch         (consumed by filter, transcribe)
+    filter     -> kept_by_pitch           (consumed by transcribe)
     transcribe -> predicted_midi          (kept-onsets MIDI deliverable)
+
+The split between `filter` (parallel per-instrument LLM calls that
+reject artifact onsets) and `transcribe` (the deterministic
+`onsets_to_midi_bytes` + `build_note_provenance` render) lets the
+operator iterate on the MIDI / provenance code without paying for LLM
+calls; resume from `transcribe` re-hydrates `kept_by_pitch` from
+`filter/kept_onsets.json` and re-runs only the render. Re-running the
+filter LLM itself means resuming from `filter`.
 
 The legacy `dsl`/`refine` pathway (LLM-emitted Drumjot DSL + F1-gated
 refinement loop) was removed in May 2026; see
@@ -66,6 +75,7 @@ class Stage(StrEnum):
     STEMS_PER = "stems_per"
     BEATS = "beats"
     ONSETS = "onsets"
+    FILTER = "filter"
     TRANSCRIBE = "transcribe"
 
 
@@ -74,6 +84,7 @@ STAGE_ORDER: list[Stage] = [
     Stage.STEMS_PER,
     Stage.BEATS,
     Stage.ONSETS,
+    Stage.FILTER,
     Stage.TRANSCRIBE,
 ]
 
@@ -160,8 +171,37 @@ class PipelineContext:
     duration: float = 0.0
     drum_stem: Path | None = None
     per_instrument_stems: dict[str, Path] = field(default_factory=dict)
+    # Diagnostic audio track: `drum_stem − sum(per_instrument_stems)`.
+    # Captures auxiliary percussion (cowbell, tambourine, etc.) plus the
+    # separator's reconstruction error. Surfaced in the debug bundle only;
+    # no downstream stage consumes it.
+    residual_stem: Path | None = None
     structure: BeatStructure | None = None
     onsets_by_pitch: dict[str, list[OnsetCandidate]] = field(default_factory=dict)
+    # Hi-hat onsets the unified ternary classifier (or its open-tail
+    # backstop) rejected as artifacts. Kept off `onsets_by_pitch` so the
+    # rest of the pipeline sees a clean split into closed (`h`) / open
+    # (`H`); the runner merges them back into the provenance input at
+    # the `note_provenance` boundary so the UI's "Show filtered" overlay
+    # can surface them as ghosts. Empty when resuming from `transcribe`
+    #; discards live only in memory and `hihat_split/decision.json`,
+    # not in `onsets.json`. See `pipeline/hihat_split.py`.
+    hihat_discarded: list[OnsetCandidate] = field(default_factory=list)
+    # Cymbal onsets the unified ternary classifier rejected as
+    # artifacts. Same shape and lifecycle as `hihat_discarded`: kept off
+    # `onsets_by_pitch` (which holds the clean ride / crash split) and
+    # merged into `all_onsets_by_pitch[c]` at the provenance boundary
+    # only. See `pipeline/cymbal_split.py`.
+    cymbal_discarded: list[OnsetCandidate] = field(default_factory=list)
+    # Output of the `filter` stage (parallel per-instrument LLM calls
+    # rejecting artifact onsets). The keys here are the subset of
+    # `onsets_by_pitch`'s keys for which at least one onset survived
+    # the filter; the `OnsetCandidate` instances are the SAME objects
+    # carried through from `onsets_by_pitch` so that `build_note_provenance`
+    # can match kept-vs-rejected by `id(c)`. Persisted to
+    # `filter/kept_onsets.json` for resume; `pipeline/resume.py` re-
+    # threads the identity against `onsets_by_pitch` on hydration.
+    kept_by_pitch: dict[str, list[OnsetCandidate]] = field(default_factory=dict)
     # The rendered MIDI of the LLM-kept onsets. Materialised to
     # `prediction.mid` (debug + output sink) and surfaced as
     # `prediction_midi_url` on the response.
@@ -250,8 +290,10 @@ def _run_stage(
         _do_beats(ctx, options, sink)
     elif stage is Stage.ONSETS:
         _do_onsets(ctx, sink)
+    elif stage is Stage.FILTER:
+        _do_filter(ctx, sink, progress)
     elif stage is Stage.TRANSCRIBE:
-        _do_transcribe(ctx, sink, progress)
+        _do_transcribe(ctx, sink)
     # Re-check cancel after the (possibly long-running) stage finishes so
     # PipelineCancelled fires at the next stage boundary without one
     # final "phase=end" event sneaking in for a stage that the user has
@@ -281,15 +323,17 @@ def _do_stems_per(
             "stems_per: drum stem missing (expected stems_all/drum_stem.<ext> "
             "from a previous run, or resume_stage<=stems_all to regenerate)."
         )
-    ctx.per_instrument_stems = separator.run_stems_per(
-        ctx.drum_stem, ctx.work_dir,
-    )
+    result = separator.run_stems_per(ctx.drum_stem, ctx.work_dir)
+    ctx.per_instrument_stems = result.per_instrument
+    ctx.residual_stem = result.residual
     # Export the per-instrument stems as soon as splitting is done — they
     # are the second batch of deliverables, available long before the
     # (slow) beats/onsets/transcribe stages run.
     if output_sink is not None:
         for pitch, path in ctx.per_instrument_stems.items():
             output_sink.save_flac_from_wav(f"stem_{pitch}", path)
+        if ctx.residual_stem is not None:
+            output_sink.save_flac_from_wav("residual", ctx.residual_stem)
 
 
 def _do_beats(
@@ -376,18 +420,24 @@ def _do_onsets(
         for pitch, cands in raw_onsets.items()
     }
     # The Stage-2 separator merges ride + crash into one `cymbals` stem
-    # (pitch `c`); split that lane into ride (`d`) / crash (`c`) here so
-    # the downstream per-instrument pathways see two real lanes. No-op
-    # when there is no cymbals stem / onsets.
-    ctx.onsets_by_pitch = split_cymbal_onsets(
+    # (pitch `c`); split that lane into ride (`d`) / crash (`c`) AND a
+    # discard set (sizzle re-triggers in long crash tails, bleed,
+    # double-triggers) rejected by the unified ternary classifier
+    # upstream of the filter LLM. No-op when there is no cymbals stem /
+    # onsets. The filter LLM is skipped for `c` / `d` in `_do_transcribe`
+    # below for the same reason as the hi-hat lanes.
+    ctx.onsets_by_pitch, ctx.cymbal_discarded = split_cymbal_onsets(
         ctx.onsets_by_pitch, ctx.per_instrument_stems, ctx.structure,
     )
     # The hi-hat stem mixes closed and open hi-hat hits; classify each
-    # onset and split into closed (`h`) and synthetic open (`H`) lanes so
-    # the per-instrument transcribe pass handles them independently. No-op
-    # when there is no hi-hat stem / onsets. See `hihat_split` docs for
-    # the `H` synthetic-pitch caveat (folded back into `h:o` is a TODO).
-    ctx.onsets_by_pitch = split_hihat_onsets(
+    # onset and split into closed (`h`) and synthetic open (`H`) lanes
+    # AND a discard set (sizzle re-triggers, bleed, double-triggers)
+    # rejected by the unified ternary classifier upstream of the filter
+    # LLM. No-op when there is no hi-hat stem / onsets. See `hihat_split`
+    # docs for the `H` synthetic-pitch caveat (folded back into `h:o` is
+    # a TODO) and for why the filter LLM is skipped for `h` / `H` in
+    # `_do_transcribe` below.
+    ctx.onsets_by_pitch, ctx.hihat_discarded = split_hihat_onsets(
         ctx.onsets_by_pitch, ctx.per_instrument_stems, ctx.structure,
     )
     flat_times = [c.time for cs in ctx.onsets_by_pitch.values() for c in cs]
@@ -445,77 +495,77 @@ def _attach_beat_positions(
     return out
 
 
-def _do_transcribe(
+def _do_filter(
     ctx: PipelineContext,
     sink: DebugSink | None,
     progress: ProgressCallback | None = None,
 ) -> None:
-    """Filter-mode transcribe: LLM rejects artifact onsets per
-    instrument; the kept onsets render straight to MIDI with their
-    original (un-quantized) times.
+    """Per-instrument LLM filter that rejects artifact onsets.
+
+    Runs one Anthropic call per drum pitch in parallel, populating
+    `ctx.kept_by_pitch` with the surviving onsets. Pre-vetted lanes
+    (`h` / `H` / `c` / `d`, already filtered upstream by their unified
+    ternary classifiers) skip the LLM and pass through verbatim.
+
+    Persists `filter/kept_onsets.json` so resuming from `transcribe`
+    can re-hydrate `kept_by_pitch` without paying for the LLM calls
+    again.
     """
     if ctx.structure is None:
         raise RuntimeError(
-            "transcribe: beat structure missing (expected beats.json or "
+            "filter: beat structure missing (expected beats.json or "
             "resume_stage<=beats)."
         )
     if not ctx.onsets_by_pitch:
         raise RuntimeError(
-            "transcribe: onsets missing (expected onsets.json or "
+            "filter: onsets missing (expected onsets.json or "
             "resume_stage<=onsets)."
         )
 
-    # Filter runs one LLM call per drum pitch in parallel. The progress
-    # callback receives one substage update per *completed* instrument
-    # so the UI can show "filtering N/M instruments" without flickering
-    # between parallel in-flight pitches.
+    # The progress callback receives one substage update per *completed*
+    # instrument so the UI can show "filtering N/M instruments" without
+    # flickering between parallel in-flight pitches.
     def on_instrument_done(pitch: str, done: int, total: int) -> None:
         _safe_progress(
             progress,
             {
-                "stage": Stage.TRANSCRIBE.value,
+                "stage": Stage.FILTER.value,
                 "detail": f"filtering {done}/{total} instruments (latest: {pitch})",
             },
         )
 
+    # `h` / `H` / `c` / `d` are filtered upstream by their unified
+    # ternary classifiers (`hihat_split` and `cymbal_split`). Re-running
+    # the per-instrument filter LLM here would duplicate work and risk
+    # double-rejecting soft real hits, so we skip those pitches in the
+    # pool and re-attach the pre-vetted lanes verbatim afterwards.
     kept_by_pitch = filter_onsets_all_instruments(
         ctx.onsets_by_pitch,
         ctx.structure,
         on_complete=on_instrument_done,
         cancel_event=ctx.cancel_event,
+        skip_pitches={"h", "H", "c", "d"},
     )
     if ctx.cancel_event.is_set():
         # The pool exited early because the client disconnected. Surface
         # this so the runner stops at the next stage boundary check (the
-        # filter pass may have partial results but the rest of the
-        # transcribe stage and any subsequent persistence would be wasted
-        # work).
-        raise PipelineCancelled(Stage.TRANSCRIBE)
+        # filter pass may have partial results but persisting and
+        # advancing into `transcribe` would be wasted work).
+        raise PipelineCancelled(Stage.FILTER)
+    for p in ("h", "H", "c", "d"):
+        vetted = ctx.onsets_by_pitch.get(p)
+        if vetted:
+            in_range = [c for c in vetted if c.bar >= 0]
+            if in_range:
+                kept_by_pitch[p] = in_range
     if not kept_by_pitch:
         raise RuntimeError(
-            "transcribe: filter kept no onsets for any instrument."
+            "filter: kept no onsets for any instrument."
         )
 
-    midi_bytes = onsets_to_midi_bytes(
-        kept_by_pitch,
-        initial_tempo_bpm=ctx.structure.initial_tempo,
-        structure=ctx.structure,
-    )
-    ctx.predicted_midi = midi_bytes
-    # Per-note debug provenance covering every detected onset (kept and
-    # rejected) — shipped in the debug bundle for the UI to surface in
-    # the selection label + render rejected onsets as ghost overlays.
-    # Built from the pre-filter candidate set so the rejected branch is
-    # actually populated; identity is by `id(c)` against `kept_by_pitch`.
-    ctx.note_provenance = build_note_provenance(
-        all_onsets_by_pitch=ctx.onsets_by_pitch,
-        kept_by_pitch=kept_by_pitch,
-        structure=ctx.structure,
-        beat_alignment_offset_sec=ctx.structure.align_offset_sec,
-    )
+    ctx.kept_by_pitch = kept_by_pitch
 
     if sink is not None:
-        sink.write_bytes("prediction.mid", midi_bytes)
         sink.write_json(
             "filter/kept_onsets.json",
             {
@@ -531,6 +581,80 @@ def _do_transcribe(
                 for pitch, cands in kept_by_pitch.items()
             },
         )
+
+
+def _do_transcribe(
+    ctx: PipelineContext,
+    sink: DebugSink | None,
+) -> None:
+    """Deterministic MIDI render + per-note provenance.
+
+    Consumes `ctx.kept_by_pitch` (from the `filter` stage) and writes
+    `prediction.mid` + `note_provenance.json`. No LLM calls; resuming
+    from this stage costs nothing externally.
+    """
+    if ctx.structure is None:
+        raise RuntimeError(
+            "transcribe: beat structure missing (expected beats.json or "
+            "resume_stage<=beats)."
+        )
+    if not ctx.onsets_by_pitch:
+        raise RuntimeError(
+            "transcribe: onsets missing (expected onsets.json or "
+            "resume_stage<=onsets)."
+        )
+    if not ctx.kept_by_pitch:
+        raise RuntimeError(
+            "transcribe: kept_by_pitch missing (expected "
+            "filter/kept_onsets.json or resume_stage<=filter)."
+        )
+
+    midi_bytes = onsets_to_midi_bytes(
+        ctx.kept_by_pitch,
+        initial_tempo_bpm=ctx.structure.initial_tempo,
+        structure=ctx.structure,
+    )
+    ctx.predicted_midi = midi_bytes
+    # Per-note debug provenance covering every detected onset (kept and
+    # rejected); shipped in the debug bundle for the UI to surface in
+    # the selection label + render rejected onsets as ghost overlays.
+    # Built from the pre-filter candidate set so the rejected branch is
+    # actually populated; identity is by `id(c)` against `kept_by_pitch`.
+    # Hi-hat and cymbal discards from their unified ternary classifiers
+    # are spliced back into their source pitches (`h` and `c`
+    # respectively; those were the merged input lanes) *only at this
+    # boundary* so they appear in `all_onsets_by_pitch` (= rendered as
+    # ghosts) without ever entering `kept_by_pitch` (= surviving into
+    # MIDI). Identity-by-`id(c)` naturally keeps them out of the kept
+    # set.
+    all_onsets_for_provenance = ctx.onsets_by_pitch
+    if ctx.hihat_discarded or ctx.cymbal_discarded:
+        all_onsets_for_provenance = dict(ctx.onsets_by_pitch)
+        if ctx.hihat_discarded:
+            all_onsets_for_provenance["h"] = sorted(
+                list(ctx.onsets_by_pitch.get("h", [])) + ctx.hihat_discarded,
+                key=lambda c: (c.bar, c.beat_in_bar),
+            )
+        if ctx.cymbal_discarded:
+            all_onsets_for_provenance["c"] = sorted(
+                list(ctx.onsets_by_pitch.get("c", [])) + ctx.cymbal_discarded,
+                key=lambda c: (c.bar, c.beat_in_bar),
+            )
+    ctx.note_provenance = build_note_provenance(
+        all_onsets_by_pitch=all_onsets_for_provenance,
+        kept_by_pitch=ctx.kept_by_pitch,
+        structure=ctx.structure,
+        beat_alignment_offset_sec=ctx.structure.align_offset_sec,
+        rejected_by_pitch={
+            "h": "hihat_split",
+            "H": "hihat_split",
+            "c": "cymbal_split",
+            "d": "cymbal_split",
+        },
+    )
+
+    if sink is not None:
+        sink.write_bytes("prediction.mid", midi_bytes)
         sink.write_json("note_provenance.json", ctx.note_provenance)
 
 

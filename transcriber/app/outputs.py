@@ -256,11 +256,32 @@ def _scavenge_no_drums(folder: Path | None) -> Path | None:
     return None
 
 
+def _scavenge_residual(folder: Path | None) -> Path | None:
+    """Find a previous run's `stems_per/residual.<ext>` on disk.
+
+    Symmetric to `_scavenge_no_drums`: the residual is diagnostic-only so
+    no stage consumes it, which means a resume that skips `stems_per`
+    has nothing on `PipelineContext` for it. Scavenging from the debug
+    folder lets the residual still land in the outputs folder and the
+    debug bundle on resume.
+    """
+    if folder is None:
+        return None
+    stems_per = folder / "stems_per"
+    if not stems_per.is_dir():
+        return None
+    for child in sorted(stems_per.iterdir()):
+        if child.is_file() and child.stem == "residual":
+            return child
+    return None
+
+
 def materialize_pending(
     output_sink: OutputSink | None,
     *,
     drum_stem: Path | None,
     per_instrument_stems: dict[str, Path],
+    residual_stem: Path | None = None,
     predicted_midi: bytes | None = None,
     scavenge_dir: Path | None = None,
 ) -> None:
@@ -293,6 +314,16 @@ def materialize_pending(
     for pitch, path in per_instrument_stems.items():
         if output_sink.existing_path(f"stem_{pitch}") is None and path.exists():
             output_sink.save_flac_from_wav(f"stem_{pitch}", path)
+    if output_sink.existing_path("residual") is None:
+        # Prefer the context's residual (a fresh stems_per just produced
+        # it); fall back to scavenging the debug folder for resumes that
+        # skipped stems_per.
+        if residual_stem is not None and residual_stem.exists():
+            output_sink.save_flac_from_wav("residual", residual_stem)
+        else:
+            scavenged = _scavenge_residual(scavenge_dir)
+            if scavenged is not None:
+                output_sink.save_flac_from_wav("residual", scavenged)
     if output_sink.existing_path("no_drums") is None:
         scavenged = _scavenge_no_drums(scavenge_dir)
         if scavenged is not None:

@@ -60,6 +60,28 @@ export const GM_PERCUSSION: Readonly<Record<number, GmEntry>> = {
 };
 
 /**
+ * Generic display name to use when multiple GM entries with different
+ * `modifiers` map to the same DSL pitch. Drumjot's instrument row holds
+ * every variant of a pitch together (notes carry `:o` / `:c` / `:f`
+ * modifiers per-hit), so a variant-specific name like "Closed Hi-Hat"
+ * reads wrong on a row that also contains open hits. `buildInstrumentMap`
+ * substitutes from this map when the source MIDI has more than one
+ * `GM_PERCUSSION` entry on the same pitch; single-variant rows keep the
+ * GM entry's specific name (a row with only MIDI 42 still reads "Closed
+ * Hi-Hat"; the generic is only for the mixed case).
+ */
+export const GENERIC_INSTRUMENT_NAME_BY_PITCH: Readonly<Record<string, string>> = {
+  k: 'Kick',
+  s: 'Snare',
+  f: 'Floor Tom',
+  h: 'Hi-Hat',
+  t: 'Tom',
+  c: 'Crash Cymbal',
+  d: 'Ride Cymbal',
+  b: 'Percussion',
+};
+
+/**
  * Pick a default MIDI note for a (pitch, modifiers) combination. Used when
  * writing a Drumjot Note to MIDI and neither the note's own
  * `metadata.midi.note` nor the instrument mapping's `midi.note` is set.

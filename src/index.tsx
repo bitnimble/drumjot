@@ -7,6 +7,12 @@ import { RenderedJot } from 'src/jot';
 import { JotViewStore, createJotView } from 'src/jot_view';
 import { parse } from 'src/parser';
 import { jotPlayer } from 'src/playback';
+// Side-effect import: instantiates the theme controller so the
+// `<html data-theme>` attribute is in sync with the user's saved choice
+// (or the live OS preference in `system` mode) before React mounts.
+// index.html runs a synchronous boot script that sets the attribute for
+// the very first paint; this import then takes over for live updates.
+import 'src/theme';
 
 class Drumjot {
   readonly store: JotViewStore;

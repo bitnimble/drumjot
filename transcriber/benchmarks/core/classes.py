@@ -8,14 +8,15 @@ predicted output.
 """
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 
-class DrumClass(str, Enum):
+class DrumClass(StrEnum):
     """The three drum classes scored by the benchmark.
 
-    Inheriting from `str` makes these JSON-serialisable and lets us use
-    them as dict keys without a custom encoder.
+    `StrEnum` (Python 3.11+) yields string instances directly, so these
+    are JSON-serialisable and usable as dict keys without a custom
+    encoder.
     """
 
     KD = "KD"

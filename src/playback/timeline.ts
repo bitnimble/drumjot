@@ -103,20 +103,23 @@ export function buildTimeline(rendered: RenderedJot): JotTimeline {
     durations[i] = bar.beats * (60 / currentBpm);
   }
 
-  // Anchor bar 1 (= the first drum bar = `voice.bars[leadBars]`) at jot
-  // time 0, so the audio scheduler's "media = jot + drumsT0Sec" identity
-  // lines up the synth drums with the recorded audio drums. Pre-drum
-  // bars (the lead-in, indices 0..leadBars-1) get negative `startSec`
-  // — playback's rAF loop already accepts negative jot times for the
-  // pre-roll scrub, and `timeToX` already maps them into the reserved
-  // lead-in pixel space, so nothing else has to change. A jot with no
-  // lead-in (`leadBars` absent or 0) keeps the prior behaviour: bar 1
-  // at jot 0, no negative bars.
-  const rawLeadBars = rendered.globalMetadata.leadBars;
-  const leadBars =
-    typeof rawLeadBars === 'number' && rawLeadBars > 0
-      ? Math.min(rawLeadBars, voice.bars.length)
-      : 0;
+  // Anchor bar 1 (= the first non-lead-in bar) at jot time 0, so the
+  // audio scheduler's "media = jot + drumsT0Sec" identity lines up the
+  // synth drums with the recorded audio drums. Pre-drum bars (the
+  // lead-in, identified by `bar.index < 0`) get negative `startSec`; // playback's rAF loop already accepts negative jot times for the
+  // pre-roll scrub, and `timeToX` resolves them via the per-bar loop.
+  // Lead-in count is read directly from the structure (counting the
+  // leading run of negative-indexed bars) rather than from
+  // `globalMetadata.leadBars`: `structureForVoice` materialises both
+  // the explicit-leadBars and the chrome-only (`drumsT0Sec` without
+  // `leadBars`) source shapes into the same negative-indexed-bar form,
+  // so reading the count from the bars themselves keeps the timeline
+  // path single-source-of-truth.
+  let leadBars = 0;
+  for (const b of voice.bars) {
+    if (b.index >= 0) break;
+    leadBars++;
+  }
   let leadOffsetSec = 0;
   for (let i = 0; i < leadBars; i++) leadOffsetSec += durations[i];
 
@@ -152,27 +155,21 @@ export function timeToX(timeline: JotTimeline, seconds: number): Pixels {
   // below adds `pad` so it lands on the note instead of a constant
   // `pad` px to its left.
   const pad = (voice?.notePadPx as number) ?? 0;
-  if (seconds <= 0) {
-    // Pre-drum: jot time runs from -drumsLeadInSec (start of the
-    // recording's drumless intro) up to 0 (bar 1 / first beat). Map it
-    // linearly across the reserved lead-in pixels so the playhead
-    // travels the pre-roll and meets bar 1 exactly when the drums enter
-    // — the same instant the audio-track waveform shows them. Without
-    // an offset both values are 0 and this collapses to "park at bar 1
-    // start".
-    const leadInPx = (voice?.leadInPx as number) ?? 0;
-    const drumsLeadInSec = voice?.drumsLeadInSec ?? 0;
-    if (drumsLeadInSec > 0 && leadInPx > 0) {
-      if (seconds <= -drumsLeadInSec) return px(pad);
-      return px(pad + (leadInPx * (seconds + drumsLeadInSec)) / drumsLeadInSec);
-    }
-    return px((renderedBars[0].x as number) + pad);
-  }
-
+  // Lead-in (when present) lives in `voice.bars` as negative-indexed
+  // bars with negative `startSec`, so the per-bar loop below resolves
+  // negative seek targets that fall inside them without a separate
+  // chrome branch.
+  const firstStartSec = bars[0]?.startSec ?? 0;
   const lastTiming = bars[bars.length - 1];
   const lastBar = renderedBars[renderedBars.length - 1];
   if (seconds >= lastTiming.startSec + lastTiming.durationSec) {
     return px((lastBar.x as number) + pad + (lastBar.width as number));
+  }
+  // Clamp `seconds` earlier than the first bar's start (the pre-pre-roll
+  // window) to that bar's left edge; keeps the playhead anchored
+  // somewhere visible if a seek lands before any bar's range.
+  if (seconds < firstStartSec) {
+    return px((renderedBars[0].x as number) + pad);
   }
 
   // Linear scan; jots are typically under ~64 bars so binary search adds
@@ -207,22 +204,9 @@ export function xToTime(timeline: JotTimeline, x: number): number {
   // `pad` px right of the bar boxes, so subtract it before mapping x
   // back to time.
   const pad = (voice?.notePadPx as number) ?? 0;
-
-  const first = renderedBars[0];
-  if (x <= (first.x as number) + pad) {
-    // Pre-drum region. The reserved pre-roll pixels [0, leadInPx] map
-    // back onto negative jot time [-drumsLeadInSec, 0] — the exact
-    // inverse of timeToX's lead-in branch — so click-to-seek can land
-    // inside the recording's drumless intro instead of snapping to bar
-    // 1. Without a lead-in, clamp to 0 as before.
-    const leadInPx = (voice?.leadInPx as number) ?? 0;
-    const drumsLeadInSec = voice?.drumsLeadInSec ?? 0;
-    if (drumsLeadInSec > 0 && leadInPx > 0) {
-      if (x <= pad) return -drumsLeadInSec;
-      return ((x - pad - leadInPx) / leadInPx) * drumsLeadInSec;
-    }
-    return 0;
-  }
+  // Lead-in (when present) lives in `voice.bars` as negative-indexed
+  // bars; the per-bar loop below maps clicks inside their pixel range
+  // back to their negative `startSec` jot times directly.
 
   const lastBar = renderedBars[renderedBars.length - 1];
   const lastTiming = bars[bars.length - 1];

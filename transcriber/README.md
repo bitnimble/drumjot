@@ -68,16 +68,20 @@ docker compose up --build
 ## Linting and tests
 
 ```bash
-cd transcriber
-pip install -e .[dev]   # or: uv sync (a uv.lock is checked in)
+scripts/check-py        # post-change: ruff --fix + pytest (uses transcriber/.venv)
+scripts/check-py tests/test_hihat_split.py    # scoped to one test file
+# Direct invocation (assumes activated transcriber/.venv):
 ruff check .            # lint (config in pyproject.toml [tool.ruff])
 pytest                  # pure-Python tests under tests/
 ```
 
-`ruff check .` should always exit clean before pushing; CI will treat any
-violation as a failure. The `pytest` suite intentionally only covers the
-modules that don't need madmom / audio-separator / a GPU — it's a sanity
-net for the parts of the pipeline that change most often.
+`scripts/check-py` is the canonical post-change verification path — it
+activates the venv, autofixes lint, then runs pytest, exiting on the
+first failure. `ruff check .` should always exit clean before pushing;
+CI will treat any violation as a failure. The `pytest` suite
+intentionally only covers the modules that don't need madmom /
+audio-separator / a GPU — it's a sanity net for the parts of the
+pipeline that change most often.
 
 Wait for `INFO: Uvicorn running on http://0.0.0.0:8001` then:
 

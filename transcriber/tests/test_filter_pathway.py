@@ -20,6 +20,7 @@ from app.pipeline.filter_llm import (
     _FILTER_TOOL,
     _extract_rejected,
     _index_in_range,
+    filter_onsets_all_instruments,
 )
 from app.pipeline.onsets_midi import onsets_to_midi_bytes
 from benchmarks.core.classes import DrumClass
@@ -56,7 +57,7 @@ def test_onsets_midi_roundtrip_to_3class_events() -> None:
         ]
     )
     assert len(got) == len(expected)
-    for (gt, gc), (et, ec) in zip(got, expected):
+    for (gt, gc), (et, ec) in zip(got, expected, strict=True):
         assert gc == ec
         # 480 PPQ @ 120 BPM => 1 tick ≈ 1.04 ms of integer-rounding error.
         assert math.isclose(gt, et, abs_tol=0.003)
@@ -98,7 +99,7 @@ def test_structure_path_writes_meta_and_roundtrips_times() -> None:
         (0.000, DrumClass.KD), (1.000, DrumClass.KD), (2.500, DrumClass.HH),
     ])
     assert len(got) == len(expected)  # bar=-1 snare dropped
-    for (gt, gc), (et, ec) in zip(got, expected):
+    for (gt, gc), (et, ec) in zip(got, expected, strict=True):
         assert gc == ec
         assert math.isclose(gt, et, abs_tol=0.005)
 
@@ -133,3 +134,24 @@ def test_extract_rejected_clamps_and_dedupes() -> None:
 def test_extract_rejected_no_tool_block_means_keep_all() -> None:
     empty = SimpleNamespace(content=[SimpleNamespace(type="text", text="hi")])
     assert _extract_rejected(empty, n=3) == set()
+
+
+def test_skip_pitches_short_circuits_when_all_pitches_skipped() -> None:
+    """`hihat_split` LLM-vets `h`/`H` upstream of the filter pass; if those
+    were the only instruments with onsets, the filter pool should not
+    even try to submit work (which would require an API key)."""
+    cands = {
+        "h": [_c(0.0, bar=0)],
+        "H": [_c(0.5, bar=0)],
+    }
+    structure = SimpleNamespace(
+        bars=[_bar(0, 0.0)],
+        initial_tempo=120.0,
+        initial_time_signature=(4, 4),
+    )
+    out = filter_onsets_all_instruments(
+        cands,
+        structure,  # type: ignore[arg-type]
+        skip_pitches={"h", "H"},
+    )
+    assert out == {}

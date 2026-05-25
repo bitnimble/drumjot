@@ -51,7 +51,9 @@ The toolbar gives you:
 ### Other useful commands
 
 ```bash
-bun test               # full test suite (65 tests, ~150 ms)
+scripts/check          # post-change: both sides (lint --fix + typecheck + tests)
+scripts/check-ts       # post-change: frontend only (stylelint + tsc + bun test)
+bun test               # full test suite
 bunx tsc --noEmit      # typecheck only
 bun run build          # production build (tsc + Vite)
 bun run preview        # serve the production build

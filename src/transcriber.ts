@@ -95,6 +95,7 @@ export type TranscribeStage =
   | 'stems_per'
   | 'beats'
   | 'onsets'
+  | 'filter'
   | 'transcribe';
 
 /** Audio fed into the beat tracker.

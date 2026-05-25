@@ -262,6 +262,12 @@ Debug folder layout (when DEBUG_DIR is set or debug=true on a request):
 │   └── bass/other/vocals # individual sibling stems (audit aid)
 ├── stems_per/            # stage `stems_per` output (MDX23C)
 │   ├── k.wav, s.wav, h.wav, d.wav, c.wav, t.wav
+│   └── residual.wav      # drum_stem − sum(per-instrument stems).
+│                         # Carries auxiliary percussion the 5-class
+│                         # model has no lane for (cowbell, tambourine,
+│                         # shaker, claps, woodblock) plus the model's
+│                         # own reconstruction error. Diagnostic-only —
+│                         # no downstream stage consumes it.
 ├── beats.json            # stage `beats` output (BeatStructure dump)
 ├── onsets.json           # stage `onsets` output (per-pitch candidates)
 ├── onsets_only.mid       # auto-emitted alongside onsets.json; one MIDI hit
@@ -289,10 +295,11 @@ A `/transcribe/resume` from `beats` (or later) skips `stems_all`/
 `stems_per` entirely, so `app.outputs.materialize_pending` runs once
 after the pipeline (both endpoints, before the temp work_dir is torn
 down) and backfills every missing deliverable from the hydrated context
-or — for `no_drums`, which no stage carries — by scavenging
-`<resume_dir>/stems_all/no_drums.<ext>`. No recomputation; already-present
-FLACs are left as the stage wrote them. `final.jot` is always (re)written
-so it tracks the latest refine result.
+or — for `no_drums` and `residual`, which no stage carries on the
+context — by scavenging `<resume_dir>/stems_all/no_drums.<ext>` and
+`<resume_dir>/stems_per/residual.<ext>` respectively. No recomputation;
+already-present FLACs are left as the stage wrote them. `final.jot` is
+always (re)written so it tracks the latest refine result.
 
 ```
 /outputs/<timestamp>_<id>_<slug>/   # same slug as the debug folder
@@ -307,6 +314,14 @@ so it tracks the latest refine result.
 ├── stem_<k|s|h|d|c|t>.flac  # `stems_per` (or resume backfill): one FLAC
 │                         # per recovered per-instrument stem (only the
 │                         # pitches the drum-piece separator found).
+├── residual.flac         # `stems_per` (or resume backfill, scavenged
+│                         # from `<resume_dir>/stems_per/residual.<ext>`):
+│                         # drum_stem − sum(per-instrument stems).
+│                         # Diagnostic-only — captures aux percussion
+│                         # the 5-class model has no lane for + the
+│                         # separator's own reconstruction residue.
+│                         # Not surfaced as a URL on the response; only
+│                         # included in the debug bundle's MP3 set.
 ├── prediction.mid        # `transcribe` output: the kept-onset MIDI
 │                         # (the score). Surfaced as
 │                         # TranscribeResponse.prediction_midi_url.
@@ -327,6 +342,25 @@ in dev → routes through the Vite proxy; absolute URL in prod). See
 
 ## 3. Build, test, run
 
+**After any code change, run one of `scripts/check*` instead of
+invoking ruff / pytest / tsc / stylelint / bun test directly.** The
+scripts get venv activation, working directory, and autofix flags right
+so agents don't have to re-derive them every turn:
+
+| Script | What it does |
+|---|---|
+| `scripts/check` | Both sides — runs `check-py` then `check-ts`. The default after any cross-cutting change. |
+| `scripts/check-py [pytest args]` | Python: `ruff check --fix` + `pytest`. Args pass through to pytest, so `scripts/check-py tests/test_hihat_split.py::test_label_for_priority` works. Requires `transcriber/.venv`. |
+| `scripts/check-ts [bun test args]` | Frontend: `stylelint --fix` + `tsc --noEmit` + `bun test`. Args pass through to `bun test`. |
+
+Scripts autofix where possible (ruff `--fix`, stylelint `--fix`) and
+exit non-zero on the first failure. They surface pre-existing lint debt
+the same way they surface new debt — fix or escalate, don't silently
+ignore.
+
+The rest of this section documents the direct commands the scripts
+wrap, for reference / human-driven workflows.
+
 Always use **bun**, not npm. From the repo root:
 
 | Command | What it does |
@@ -342,7 +376,7 @@ Always use **bun**, not npm. From the repo root:
 
 Similarly, never use npx, use bunx instead.
 
-For the transcriber (Python service):
+For the transcriber (Python service) container workflow:
 
 | Command | What it does |
 |---|---|
@@ -355,21 +389,22 @@ The frontend's Vite dev server proxies `/api/*` to
 `http://localhost:8001`, so the "Transcribe audio" toolbar button works
 end-to-end as long as the Docker service is up.
 
-**Agent environment constraint (read before touching `transcriber/`):**
-The dev box this repo is normally edited in does **not** have the
-Python runtime deps installed — `torch`, `madmom`, `audio-separator`,
-`pydantic`, `numpy`, etc. exist *only* inside the Docker image, which is
-not running during editing. Therefore, when working on the Python
-service:
+**Python env for agents (read before touching `transcriber/`):**
+The dev box has a local uv-managed venv at `transcriber/.venv` with the
+full dep set (torch cu128, madmom, audio-separator[gpu], adtof_pytorch),
+which is now the **primary dev loop** — Docker is only required for
+clean / reproducible builds. `scripts/check-py` activates it
+automatically. When working in the venv directly:
 
-- Always invoke Python as **`python3`** (bare `python` is not on PATH).
-- Do **not** attempt `pip install`, venv creation, or running the
-  Python test suite / app locally — it cannot succeed by design and
-  just wastes cycles.
-- Statically verify instead: `ruff check`, syntax/parse checks, and
-  careful reasoning. The **TS side still runs locally** (`bun test`,
-  `bunx tsc --noEmit`) and must be verified normally. The user runs
-  the Python tests in Docker afterwards.
+- Invoke Python as **`python3`** on the bare system (no `python`
+  symlink); inside an activated venv, plain `python` works.
+- **Do NOT install or upgrade deps unprompted.** The install graph is
+  ordering-sensitive (numpy/cython before madmom; torch from the cu128
+  index before everything else). If a change adds a runtime dep, flag
+  it and let the user run `uv pip install`. See the user's notes on
+  install ordering before proposing dependency changes.
+- `scripts/check-py` is the canonical way to lint + test. If you must
+  bypass it: `cd transcriber && source .venv/bin/activate` first.
 
 Current `bun test` count: **103 passing, 2 skipped** (the skipped
 tests are fixture suites — drop `.mid` files in
@@ -839,28 +874,38 @@ idempotent.
 ### 5.7 Named-stage pipeline runner
 
 Both endpoints dispatch through `pipeline/runner.run_pipeline()`. The
-five stages and their data dependencies:
+six stages and their data dependencies:
 
 ```
 stems_all  -> drum_stem               (consumed by stems_per)
 stems_per  -> per_instrument_stems    (consumed by onsets)
-beats      -> structure               (consumed by onsets, transcribe)
-onsets     -> onsets_by_pitch         (consumed by transcribe)
+beats      -> structure               (consumed by onsets, filter, transcribe)
+onsets     -> onsets_by_pitch         (consumed by filter, transcribe)
+filter     -> kept_by_pitch           (consumed by transcribe)
 transcribe -> predicted_midi          (kept-onsets MIDI deliverable)
 ```
 
-`transcribe` runs the per-instrument filter LLM
-(`filter_onsets_all_instruments`, one parallel call per drum pitch
-rejecting artifact onsets) and renders the kept onsets straight to
-`prediction.mid` with their original times. There is no refine stage:
-the legacy F1-gated multi-level refinement loop was removed in May
-2026 along with the DSL-output pathway it depended on. See
-`transcriber/docs/ai-midi-to-jot-notes.md` for the captured techniques.
+`filter` runs the per-instrument filter LLM
+(`filter_onsets_all_instruments`, one parallel Anthropic call per drum
+pitch) and persists the surviving onsets to `filter/kept_onsets.json`.
+`transcribe` is the deterministic render: `onsets_to_midi_bytes` +
+`build_note_provenance` against `kept_by_pitch`, writing
+`prediction.mid` and `note_provenance.json`. The split lets the
+operator iterate on the render / provenance code without re-paying
+for LLM calls; `resume_stage=transcribe` re-hydrates
+`kept_by_pitch` from `filter/kept_onsets.json` (with identity re-
+threaded against `onsets.json` so `build_note_provenance`'s `id(c)`
+kept-vs-rejected match still works) and re-runs only the render.
+
+There is no refine stage: the legacy F1-gated multi-level refinement
+loop was removed in May 2026 along with the DSL-output pathway it
+depended on. See `transcriber/docs/ai-midi-to-jot-notes.md` for the
+captured techniques.
 
 Each `_do_<stage>(...)` function reads its inputs from a shared
 `PipelineContext`, writes its output back, and persists artifacts via
 the debug sink. Stage failures wrap into `StageError(stage,
-original)`; the HTTP layer maps `StageError.stage == TRANSCRIBE` to
+original)`; the HTTP layer maps `StageError.stage == FILTER` to
 502 (LLM is external) and everything else to 500.
 
 The runner is the single place where the pipeline order lives.

@@ -61,6 +61,26 @@ class StemsAllResult:
     no_drums: Path | None
 
 
+@dataclass
+class StemsPerResult:
+    """Outputs of the `stems_per` separation stage.
+
+    `per_instrument` maps DSL pitch letter → isolated stem path (the five
+    classes the MDX23C model recognises: kick / snare / hi-hat / cymbals
+    / toms; cymbals later split into ride+crash downstream). `residual`
+    is `drum_stem − sum(per_instrument)` — whatever the 5-class model
+    couldn't account for: auxiliary percussion (cowbell, tambourine,
+    shaker, claps, woodblock) plus the model's own separation residue
+    (un-cancelled bleed, phase/reconstruction error on the supported
+    pieces). Diagnostic-only — no downstream stage consumes it, but it's
+    surfaced in the debug bundle so the operator can ear-check what fell
+    through the seam. `None` when no per-instrument stems were recovered.
+    """
+
+    per_instrument: dict[str, Path]
+    residual: Path | None
+
+
 # Pitch letter → display name. Used by the filter prompt and the split
 # helpers for human-readable labels in logs / prompts. `H` is a
 # synthetic open-hi-hat routing pitch introduced by
@@ -264,8 +284,17 @@ class Separator:
                 sink.copy_audio(f"stems_all/{path.stem}", path)
         return StemsAllResult(drum_stem=drum_stem, no_drums=no_drums_path)
 
-    def run_stems_per(self, drum_stem: Path, work_dir: Path) -> dict[str, Path]:
-        """Split the drum stem into per-instrument stems keyed by pitch."""
+    def run_stems_per(self, drum_stem: Path, work_dir: Path) -> StemsPerResult:
+        """Split the drum stem into per-instrument stems keyed by pitch.
+
+        Also computes a `residual` track: `drum_stem − sum(per_instrument)`.
+        MDX23C is approximately source-additive on the kit classes it was
+        trained on, so the residual captures (a) energy from instruments
+        the 5-class model has no lane for — cowbell, tambourine, shaker,
+        claps, woodblock — and (b) the model's own reconstruction error
+        on the supported kit pieces. Diagnostic-only; surfaced into the
+        debug bundle but not consumed by any downstream stage.
+        """
         self.load()
         assert self._stems_per is not None
 
@@ -289,11 +318,27 @@ class Separator:
 
         log.info("Recovered %d pitches: %s", len(per_instrument), sorted(per_instrument))
 
+        residual_path: Path | None = None
+        if per_instrument:
+            residual_path = out_dir / f"residual{drum_stem.suffix}"
+            try:
+                _residual_audio(
+                    drum_stem, list(per_instrument.values()), residual_path,
+                )
+            except Exception as exc:
+                log.warning(
+                    "Failed to build per-instrument residual track (%s); "
+                    "skipping.", exc,
+                )
+                residual_path = None
+
         sink = current_debug_sink()
         if sink is not None:
             for pitch, path in per_instrument.items():
                 sink.copy_audio(f"stems_per/{pitch}", path)
-        return per_instrument
+            if residual_path is not None:
+                sink.copy_audio("stems_per/residual", residual_path)
+        return StemsPerResult(per_instrument=per_instrument, residual=residual_path)
 
 
 def _resolve_outputs(raw_paths: list[str], out_dir: Path) -> list[Path]:
@@ -318,6 +363,44 @@ def _pitch_for_stem_name(stem_name: str) -> str | None:
         if needle in name:
             return pitch
     return None
+
+
+def _residual_audio(
+    drum_stem: Path, stems: list[Path], out_path: Path,
+) -> None:
+    """Write `drum_stem − sum(stems)` to `out_path`.
+
+    Channel/sample-rate parity with `drum_stem` is required (MDX23C
+    outputs inherit both from its input, so this holds in practice). The
+    write uses the drum stem's subtype so the residual sits at the same
+    fidelity as the per-instrument stems. Clipping is post-mix because
+    the subtracted sum is bounded by the same scale as the drum stem —
+    any out-of-range excursion is separator reconstruction error, not
+    musical content.
+    """
+    drum, sr = sf.read(str(drum_stem), always_2d=True, dtype="float32")
+    subtype_ref = sf.info(str(drum_stem)).subtype
+    summed: np.ndarray = np.zeros_like(drum)
+    min_len = drum.shape[0]
+    for p in stems:
+        data, stem_sr = sf.read(str(p), always_2d=True, dtype="float32")
+        if stem_sr != sr:
+            raise RuntimeError(
+                f"sample-rate mismatch building residual: {p} ({stem_sr}) "
+                f"vs drum_stem ({sr})"
+            )
+        if data.shape[1] != drum.shape[1]:
+            raise RuntimeError(
+                f"channel-count mismatch building residual: {p} "
+                f"({data.shape[1]}) vs drum_stem ({drum.shape[1]})"
+            )
+        n = min(data.shape[0], summed.shape[0])
+        summed[:n] += data[:n]
+        min_len = min(min_len, data.shape[0])
+    residual = drum[:min_len] - summed[:min_len]
+    np.clip(residual, -1.0, 1.0, out=residual)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(str(out_path), residual, sr, subtype=subtype_ref)
 
 
 def _sum_audio(inputs: list[Path], out_path: Path) -> None:

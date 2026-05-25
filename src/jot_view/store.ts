@@ -132,6 +132,23 @@ export function trackKeyEq(a: TrackKey, b: TrackKey): boolean {
  * wheel tick — pitch identity is a function of the source DSL, not the
  * pixel layout.
  */
+/**
+ * Map a transcriber-side provenance pitch tag onto the jot's pitch
+ * letter. The transcriber's hi-hat split (`transcriber/app/pipeline/
+ * hihat_split.py`) routes open-hi-hat onsets through synthetic pitch
+ * `H` so the filter LLM can see closed (`h`) and open (`H`) hits as
+ * separate lanes; from_midi.ts then folds those back into the standard
+ * `h:o` notation. Provenance lookups (debug-details popover, "show
+ * filtered" ghost overlays) have to canonicalise the same way so the
+ * jot's `note.pitch = 'h'` finds entries the provenance stored under
+ * `'H'`. Adding new synthetic-pitch routes (e.g. a future ride-bell
+ * split) means adding a case here.
+ */
+function canonicalProvenancePitch(transcriberPitch: string): string {
+  if (transcriberPitch === 'H') return 'h';
+  return transcriberPitch;
+}
+
 export function collectJotPitches(jot: RenderedJot | undefined): string[] {
   if (!jot) return [];
   const out: string[] = [];
@@ -627,15 +644,22 @@ export class JotViewStore {
    * label lookup. Keyed by `${pitch}:${tick}` so `NoteView` can attach
    * provenance to its note in O(1) instead of scanning the per-pitch
    * list on every render. Recomputed when `noteProvenance` changes.
+   *
+   * Pitch keys are canonicalised through {@link canonicalProvenancePitch}
+   * so the rendered jot's pitch letter (what `NoteView` builds the
+   * lookup key from) matches the provenance regardless of any synthetic
+   * routing pitches the transcriber pipeline used (today: `H` for open
+   * hi-hat, which `from_midi.ts` collapses back into `h:o`).
    */
   get noteProvenanceByTick(): Map<string, NoteProvenanceEntry> {
     const out = new Map<string, NoteProvenanceEntry>();
     const provenance = this.noteProvenance;
     if (!provenance) return out;
     for (const [pitch, entries] of Object.entries(provenance.per_pitch)) {
+      const jotPitch = canonicalProvenancePitch(pitch);
       for (const entry of entries) {
         if (entry.tick === null || !entry.kept) continue;
-        out.set(`${pitch}:${entry.tick}`, entry);
+        out.set(`${jotPitch}:${entry.tick}`, entry);
       }
     }
     return out;
@@ -656,7 +680,18 @@ export class JotViewStore {
       const rejected = entries.filter(
         (e) => !e.kept && !e.out_of_range,
       );
-      if (rejected.length > 0) out.set(pitch, rejected);
+      if (rejected.length === 0) continue;
+      // Canonicalise so the consuming pitch row (which keys by the
+      // jot's `note.pitch`) finds entries even when the transcriber
+      // routed them through a synthetic pitch like `H` for open hat; // merge into the existing bucket rather than overwriting so the
+      // closed (`h`) and open (`H` → `h`) rejected lists land together.
+      const jotPitch = canonicalProvenancePitch(pitch);
+      const existing = out.get(jotPitch);
+      if (existing) {
+        existing.push(...rejected);
+      } else {
+        out.set(jotPitch, rejected);
+      }
     }
     return out;
   }
@@ -1258,29 +1293,44 @@ export class JotViewStore {
       }
     }
 
-    // Decode every audio track in parallel — `decodeAudioData` runs on
+    // Decode every audio track in parallel, `decodeAudioData` runs on
     // browser-side codec threads, so concurrent calls overlap well and
     // turn what used to be a one-by-one wait into a single combined
     // wait. `Promise.all` preserves input order so the resolved array
     // still matches `bundle.audioTracks` (which is already in manifest
-    // order — `no_drums` first, then pitch letters), keeping the
-    // post-load pair-with-instrument-row logic stable.
+    // order; `no_drums` first, then pitch letters), keeping the
+    // post-load pair-with-instrument-row logic stable. The bundle
+    // loader dedupes by filename, so each `track` here represents one
+    // unique file; we bind every key in `track.keys` to the resulting
+    // `AudioTrackId` so a shared stem (e.g. `stem_c.mp3` serving both
+    // crash and ride after the cymbal split) is loaded once and looked
+    // up under either key.
     const resolved = await Promise.all(
-      bundle.audioTracks.map((track) =>
-        this.loadAudioTrack(
-          track.file,
-          track.key !== NO_DRUMS_KEY ? track.key : undefined,
-        ).then((id) => ({ key: track.key, id })),
-      ),
+      bundle.audioTracks.map(async (track) => {
+        // The audio-row's `pitch` (used by the mixer for waveform
+        // tinting) takes the first non-`no_drums` key; for a stem
+        // shared across pitches, this picks the first-mentioned pitch
+        // in the manifest, which is good enough since the tint is
+        // cosmetic and both siblings live in the same colour family.
+        const primaryKey = track.keys.find((k) => k !== NO_DRUMS_KEY);
+        const id = await this.loadAudioTrack(track.file, primaryKey);
+        return { keys: track.keys, id };
+      }),
     );
     const loadedByKey = new Map<string, AudioTrackId>();
     const toMute: AudioTrackId[] = [];
-    for (const { key, id } of resolved) {
+    for (const { keys, id } of resolved) {
       if (!id) continue;
-      loadedByKey.set(key, id);
-      // Mute the per-pitch stems by default so the (audible) drums come
-      // from the smplr score scheduler; the drumless backing stays unmuted.
-      if (key !== NO_DRUMS_KEY) toMute.push(id);
+      let muteThis = false;
+      for (const key of keys) {
+        loadedByKey.set(key, id);
+        // Mute the per-pitch stems by default so the (audible) drums
+        // come from the smplr score scheduler; the drumless backing
+        // stays unmuted. Multiple keys → still one mute, since they
+        // share the same `id`.
+        if (key !== NO_DRUMS_KEY) muteThis = true;
+      }
+      if (muteThis) toMute.push(id);
     }
 
     // Batch the mute updates and the reorder into a single observable
@@ -1324,28 +1374,81 @@ export class JotViewStore {
   ): void {
     const pitches = collectJotPitches(this.currentJot);
     const pitchesWithAudio = new Set(pitches.filter((p) => loadedByKey.has(p)));
+
+    // A single audio track can serve multiple pitches when the manifest
+    // maps several pitch keys onto one stem file; e.g. the cymbal
+    // split emits a `c` (crash) AND `d` (ride) onset stream against the
+    // single combined `stem_c.mp3` and the bundle's manifest declares
+    // both `c → stem_c.mp3` and `d → stem_c.mp3`. The bundle loader
+    // dedupes by filename so both keys resolve to the same
+    // `AudioTrackId`; the grouping here picks one pitch as the "primary"
+    // (the one whose key matches the audio row's `key`) and slots the
+    // others as sibling pitch rows immediately after the pair, sharing
+    // the same `groupId`. That way the mixer renders the shared audio
+    // + all its pitches as one contiguous cluster.
+    const pitchesByAudioId = new Map<AudioTrackId, string[]>();
+    for (const pitch of pitches) {
+      const id = loadedByKey.get(pitch);
+      if (id === undefined) continue;
+      const list = pitchesByAudioId.get(id) ?? [];
+      list.push(pitch);
+      pitchesByAudioId.set(id, list);
+    }
+    // Primary pitch = the one whose manifest key matches this audio
+    // track's load key (so the audio row's `key` field still points at
+    // a real pitch in the jot). For an audio loaded under multiple
+    // keys, this picks the first-mentioned pitch in the jot's order.
+    const primaryByAudioId = new Map<AudioTrackId, string>();
+    for (const [id, pitchList] of pitchesByAudioId) {
+      primaryByAudioId.set(id, pitchList[0]);
+    }
+    // Pitches that aren't the primary for their audio track get folded
+    // into the primary's pair; skip them in the main pitch loop.
+    const folded = new Set<string>();
+    for (const [id, pitchList] of pitchesByAudioId) {
+      const primary = primaryByAudioId.get(id);
+      for (const p of pitchList) {
+        if (p !== primary) folded.add(p);
+      }
+    }
+
     const next: TrackKey[] = [];
 
     // 1) Audio tracks that don't correspond to any pitch in the loaded
     //    jot (no_drums always; also any per-pitch stem the score didn't
     //    end up using) sit at the top, in the manifest's mapping order.
-    //    These stay ungrouped — they're standalone backing tracks, not
-    //    half of an audio↔instrument pair.
+    //    These stay ungrouped; they're standalone backing tracks, not
+    //    half of an audio↔instrument pair. Dedupe by `id` so a shared
+    //    audio doesn't appear twice when it's mapped under multiple
+    //    keys but the jot uses none of them.
+    const seenAudioIds = new Set<AudioTrackId>();
     for (const [key, id] of loadedByKey) {
-      if (!pitchesWithAudio.has(key)) {
-        next.push({ kind: 'audio', id });
-      }
+      if (seenAudioIds.has(id)) continue;
+      if (pitchesWithAudio.has(key)) continue;
+      next.push({ kind: 'audio', id });
+      seenAudioIds.add(id);
     }
 
     // 2) For each pitch in the jot, slot its audio (if any) directly
-    //    above the instrument row. Paired entries share a fresh
-    //    `groupId` so they render as a single visual cluster.
+    //    above the instrument row. Folded (non-primary) pitches are
+    //    skipped here and emitted inline alongside their primary; this
+    //    keeps the rows contiguous so the mixer's groupStart/end logic
+    //    doesn't split the cluster.
     for (const pitch of pitches) {
+      if (folded.has(pitch)) continue;
       const id = loadedByKey.get(pitch);
       if (id !== undefined) {
         const groupId = `pair:${pitch}`;
         next.push({ kind: 'audio', id, groupId });
         next.push({ kind: 'pitch', pitch, groupId });
+        // Any pitches that share this audio track (siblings via the
+        // manifest's many-keys-one-file mapping) ride here with the
+        // same `groupId`.
+        const sharing = pitchesByAudioId.get(id) ?? [];
+        for (const sibling of sharing) {
+          if (sibling === pitch) continue;
+          next.push({ kind: 'pitch', pitch: sibling, groupId });
+        }
       } else {
         next.push({ kind: 'pitch', pitch });
       }

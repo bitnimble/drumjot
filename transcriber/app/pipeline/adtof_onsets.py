@@ -36,10 +36,23 @@ Design notes / deliberate constraints:
   time, so this should never fire in production.
 
 * We take ADTOF's dense per-frame activations and run our OWN
-  deterministic peak-pick (threshold + min-distance) so the output is
-  reproducible run-to-run and tuned for the "high-recall, the LLM
-  prunes" contract. We deliberately do NOT use the package's own
-  `PeakPicker` / `transcribe_to_midi` for this reason.
+  deterministic peak-pick (height + min-distance + prominence) so the
+  output is reproducible run-to-run and tuned for the "high-recall,
+  the LLM prunes" contract. We deliberately do NOT use the package's
+  own `PeakPicker` / `transcribe_to_midi` for this reason.
+
+* After find_peaks gives us activation-domain peak frames, we refine
+  each peak's TIME against the audio's onset-strength envelope inside
+  a ±N ms window. The NN's activation peak doesn't necessarily sit on
+  the actual audio transient (OOD on isolated stems smears the rising
+  edge by tens to hundreds of ms; the BiGRU contributes its own
+  smearing). Refining against the audio's onset envelope inside a
+  tight window pins each onset to the actual transient regardless of
+  how messy the activation shape is. The earlier
+  `librosa.onset.onset_backtrack` approach was removed because on
+  smooth rising edges it would walk all the way back to the previous
+  trough (no strict local minima exist in a monotone rise), reporting
+  times 150-250 ms before the true transient.
 """
 from __future__ import annotations
 
@@ -52,7 +65,6 @@ from pathlib import Path
 import librosa
 import numpy as np
 import soundfile as sf
-from librosa.onset import onset_backtrack
 from scipy.signal import find_peaks
 
 from app.config import settings
@@ -84,10 +96,25 @@ _ADTOF_FPS = 100.0
 # Lanes whose activation is OOD-compressed and bleed-contaminated on an
 # isolated stem: hihat and the merged ride/crash cymbal lane. Only these
 # get RMS input normalization + an adaptive per-stem threshold. Kick (k)
-# / snare (s) / toms (t) lanes stay on the fixed high-recall threshold —
-# their transients are well-defined even on isolated stems, so the
+# / snare (s) / toms (t) lanes stay on the fixed high-recall threshold; # their transients are well-defined even on isolated stems, so the
 # "detect hot, LLM prunes" contract still holds there.
 _NOISY_LANE_PITCHES: frozenset[str] = frozenset({"h", "d", "c"})
+
+# Lanes whose ADTOF inference runs on the FULL drum mix
+# (`drum_stem_path`) rather than the isolated per-instrument stem.
+# ADTOF is in-distribution on a full kit mix and on the isolated hi-hat
+# stem the open-hat sizzle and decay tail trigger phantom hit-trains; # routing hi-hat through the drum mix fixes that without losing real
+# hits (snare bleed in the hat stem can't fool the network when it's
+# scoring a full mix).
+#
+# Cymbals (`c`) are deliberately NOT on this list: the drum-mix path
+# was tried for them too, and kick/snare bleed inside the drum mix
+# routinely activated the cymbal lane at frames where the cymbal
+# itself is silent (verified by checking `stem_c.mp3` plays nothing at
+# the detected time). The isolated cymbal stem is the cleaner signal
+# here even with the decay-tail noise; see the user-reported
+# "phantom crash at bar 5" case that motivated this routing change.
+_DRUM_STEM_INFERENCE_PITCHES: frozenset[str] = frozenset({"h"})
 
 
 def _resolve_device() -> str:
@@ -279,6 +306,72 @@ def _decay_reset_filter(
     return np.asarray(kept, dtype=int)
 
 
+def _refine_peak_times_audio(
+    audio_path: Path,
+    peak_times_sec: list[float],
+    window_sec: float,
+) -> list[float]:
+    """Snap each ADTOF peak time to the nearest local maximum of the
+    audio's onset-strength envelope within ±`window_sec`.
+
+    Replaces the previous `librosa.onset.onset_backtrack` step. Backtrack
+    chased activation-domain strict local minima; on a smooth rising
+    edge no such minima exist, so it would jump all the way back to the
+    previous onset's trough — reporting times 150-250 ms before the
+    actual transient. Refining against the AUDIO's onset envelope in a
+    tight window avoids that pathology: the audio's transient is where
+    it is, regardless of how the NN activation got there.
+
+    `audio_path` must be the same file ADTOF saw, so the envelope's
+    frame times share a coordinate frame with the activation's. A
+    librosa load / STFT failure falls back to returning the raw input
+    times unchanged, so a broken refinement degrades cleanly instead of
+    dropping onsets.
+    """
+    if not peak_times_sec or window_sec <= 0:
+        return [float(t) for t in peak_times_sec]
+    try:
+        y, sr = librosa.load(str(audio_path), sr=None, mono=True)
+    except Exception as exc:
+        log.warning(
+            "Audio-domain refine: librosa.load(%s) failed (%s); "
+            "using raw peak times.", audio_path.name, exc,
+        )
+        return [float(t) for t in peak_times_sec]
+    if y.size == 0:
+        return [float(t) for t in peak_times_sec]
+    # Hop short enough that the per-peak window resolves to ~1 ms slots.
+    # At sr=44100, hop=64 → ~1.45 ms/frame; tighter than the transient
+    # itself, so the local-max-in-window snap is sample-honest.
+    hop_length = 64
+    try:
+        onset_env = librosa.onset.onset_strength(
+            y=y, sr=sr, hop_length=hop_length,
+        )
+    except Exception as exc:
+        log.warning(
+            "Audio-domain refine: onset_strength(%s) failed (%s); "
+            "using raw peak times.", audio_path.name, exc,
+        )
+        return [float(t) for t in peak_times_sec]
+    if onset_env.size == 0:
+        return [float(t) for t in peak_times_sec]
+    env_fps = float(sr) / float(hop_length)
+    half_w = max(1, int(round(window_sec * env_fps)))
+    n_frames = int(onset_env.size)
+    refined: list[float] = []
+    for t in peak_times_sec:
+        center = int(round(float(t) * env_fps))
+        lo = max(0, center - half_w)
+        hi = min(n_frames, center + half_w + 1)
+        if lo >= hi:
+            refined.append(float(t))
+            continue
+        local_max_idx = lo + int(np.argmax(onset_env[lo:hi]))
+        refined.append(float(local_max_idx) / env_fps)
+    return refined
+
+
 def detect_onsets_adtof(
     audio_path: Path,
     pitch: str,
@@ -289,12 +382,15 @@ def detect_onsets_adtof(
     """ADTOF onsets for one stem, reading only the stem's class lane.
 
     `audio_path` is the isolated per-instrument stem (identity source).
-    For the noisy lanes (`_NOISY_LANE_PITCHES`) inference instead runs on
-    `drum_stem_path` when supplied and present — ADTOF is in-distribution
-    on a full drum mix, so the open-hat sizzle stops being read as a
-    phantom hit-train; kick/snare/toms always use their own stem. When
-    `drum_stem_path` is missing the noisy lanes fall back to the isolated
-    stem.
+    For the lanes in `_DRUM_STEM_INFERENCE_PITCHES` (today: hi-hat only)
+    inference instead runs on `drum_stem_path` when supplied and present. ADTOF is in-distribution on a full drum mix, so the open-hat
+    sizzle stops being read as a phantom hit-train. Kick / snare / toms
+    / cymbals always use their own stem: cymbals specifically were
+    pulled off the drum-mix path after the user-reported "phantom crash
+    at bar 5" case where kick / snare bleed inside the full mix
+    activated the cymbal lane at a moment the isolated cymbal stem was
+    silent. When `drum_stem_path` is missing the drum-mix lanes fall
+    back to the isolated stem.
 
     Returns `OnsetCandidate`s with the ADTOF sigmoid activation in
     [0, 1] as `strength` — a per-frame model-confidence proxy. It feeds
@@ -311,13 +407,19 @@ def detect_onsets_adtof(
         return []
 
     is_noisy = pitch in _NOISY_LANE_PITCHES
-    # Noisy lanes prefer the in-distribution drum stem; everything else
-    # (and the fallback when no drum stem is cached) uses the isolated
-    # stem. `source_path` is what ADTOF actually sees.
+    use_drum_stem = pitch in _DRUM_STEM_INFERENCE_PITCHES
+    # `_DRUM_STEM_INFERENCE_PITCHES` lanes prefer the in-distribution
+    # full drum mix; everything else (and the fallback when no drum
+    # stem is cached) uses the isolated stem. The set is narrower than
+    # `_NOISY_LANE_PITCHES`; cymbals share the noisy-lane post-
+    # processing (RMS norm, adaptive threshold, decay-reset filter) but
+    # NOT the drum-mix inference path, because mixed-stem bleed
+    # routinely activated their lane on phantom frames. `source_path`
+    # is what ADTOF actually sees.
     source_path = audio_path
     used_drum_stem = False
     if (
-        is_noisy
+        use_drum_stem
         and drum_stem_path is not None
         and drum_stem_path.exists()
     ):
@@ -345,15 +447,20 @@ def detect_onsets_adtof(
             else settings.adtof_peak_min_distance_s
         )
         min_distance_frames = max(1, round(min_dist_s * fps))
-        # Prominence only applies to the noisy lanes: it rejects plateau
-        # ripples (open-hihat / cymbal sustain) that clear `height` but
-        # don't rise above their local baseline. None = no prominence
-        # gate (kick/snare/toms keep pure height+distance picking).
-        prominence = (
+        # Prominence gate, now applied to ALL lanes (was previously
+        # noisy-only). Prominence rejects decay-tail wobbles that clear
+        # `height` but don't rise above their local baseline — the
+        # primary OOD failure mode on isolated kick/snare/tom stems
+        # where the activation stays elevated for 100-300 ms after a
+        # real hit. Noisy lanes keep the higher value tuned for plateau
+        # ripples; the universal floor catches the snare/kick/tom case.
+        # None = disabled (setting 0.0).
+        prominence_val = (
             settings.adtof_noisy_peak_prominence
-            if is_noisy and settings.adtof_noisy_peak_prominence > 0.0
-            else None
+            if is_noisy
+            else settings.adtof_peak_prominence
         )
+        prominence = prominence_val if prominence_val > 0.0 else None
         peaks, _props = find_peaks(
             activation,
             height=threshold,
@@ -373,31 +480,35 @@ def detect_onsets_adtof(
             )
             reset_removed = n_pre - int(peaks.size)
 
-        # Backtrack each peak to the nearest preceding local minimum of
-        # the activation, so the reported time sits at the transient's
-        # leading edge instead of the model's peak-activation frame. The
-        # librosa onset path applies the same correction (`backtrack=True`
-        # in `librosa.onset.onset_detect`); without it ADTOF onsets lag
-        # the true attack by tens of milliseconds, which is enough to
-        # scatter ~50% of straight kicks across non-quarter 16th slots
-        # after MIDI quantization. `strength` is still read at the peak
-        # because that's where the model's confidence actually is.
-        backtracked = (
-            onset_backtrack(peaks, activation) if peaks.size else peaks
+        # Refine each peak's reported time against the AUDIO's onset
+        # envelope inside a tight window. `strength` is still read at the
+        # model's peak frame because that's where the network's
+        # confidence lives, but `time` reflects where the actual audio
+        # transient sits. See `_refine_peak_times_audio` for why this
+        # replaced the older `onset_backtrack` step.
+        peak_frames = [int(p) for p in peaks]
+        peak_times_sec = [float(p) / fps for p in peak_frames]
+        refined_times = _refine_peak_times_audio(
+            source_path,
+            peak_times_sec,
+            window_sec=settings.adtof_audio_refine_window_s,
         )
 
         candidates = [
             OnsetCandidate(
-                time=float(bt_idx) / fps,
+                time=refined_time,
                 strength=float(activation[peak_idx]),
                 bar=-1,
                 beat_in_bar=-1.0,
             )
-            for peak_idx, bt_idx in zip(peaks, backtracked, strict=False)
+            for peak_idx, refined_time in zip(
+                peak_frames, refined_times, strict=False
+            )
         ]
         log.info(
             "ADTOF: %d onsets in %s (lane=%d, src=%s, thr=%.3f%s, prom=%s, "
-            "dist=%.0fms, reset=%s, rms_norm=%s, median strength=%.3f)",
+            "dist=%.0fms, reset=%s, rms_norm=%s, refine=%.0fms, "
+            "median strength=%.3f)",
             len(candidates),
             audio_path.name,
             lane,
@@ -412,6 +523,7 @@ def detect_onsets_adtof(
             if is_noisy and reset_frac > 0.0
             else "off",
             tmp_path is not None,
+            settings.adtof_audio_refine_window_s * 1000.0,
             float(np.median([c.strength for c in candidates]))
             if candidates
             else 0.0,
@@ -481,11 +593,12 @@ def detect_drum_onsets_for_alignment(
             else settings.adtof_peak_min_distance_s
         )
         min_distance_frames = max(1, round(min_dist_s * fps))
-        prominence = (
+        prominence_val = (
             settings.adtof_noisy_peak_prominence
-            if is_noisy and settings.adtof_noisy_peak_prominence > 0.0
-            else None
+            if is_noisy
+            else settings.adtof_peak_prominence
         )
+        prominence = prominence_val if prominence_val > 0.0 else None
         peaks, _props = find_peaks(
             activation,
             height=threshold,
@@ -502,12 +615,28 @@ def detect_drum_onsets_for_alignment(
             )
         if peaks.size == 0:
             continue
-        backtracked = onset_backtrack(peaks, activation)
-        for peak_idx, bt_idx in zip(peaks, backtracked, strict=False):
+        for peak_idx in peaks:
             pool.append((
-                float(bt_idx) / fps,
-                float(activation[peak_idx]),
+                float(peak_idx) / fps,
+                float(activation[int(peak_idx)]),
             ))
+
+    # Refine every pool entry against the drum stem audio in one pass.
+    # All lanes pooled here came from this same `audio_path`, so a single
+    # onset_strength envelope covers them. Run AFTER pooling rather than
+    # per-lane so we pay the librosa.load / onset_strength cost exactly
+    # once instead of five times.
+    if pool:
+        raw_times = [t for t, _ in pool]
+        refined = _refine_peak_times_audio(
+            audio_path,
+            raw_times,
+            window_sec=settings.adtof_audio_refine_window_s,
+        )
+        pool = [
+            (refined_t, strength)
+            for refined_t, (_, strength) in zip(refined, pool, strict=False)
+        ]
 
     pool.sort(key=lambda x: x[0])
     log.info(

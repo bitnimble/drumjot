@@ -132,3 +132,107 @@
     --shadow-playhead-label: 0 1px 3px rgba(0, 0, 0, 0.2);
     --shadow-accent-glow: 0 0 4px rgba(255, 92, 10, 0.5);
 }
+
+/* ─── Dark theme override ──────────────────────────────────────────
+ * Applied when `<html data-theme="dark">` is set (explicit user
+ * override, or `data-theme="system"` resolving to dark via the OS
+ * preference; see src/theme.ts). The radius tokens above are
+ * structural so they carry over; everything else is re-mapped to a
+ * warm-dark palette that keeps the original cream aesthetic recognisable
+ * by inverting only the lightness ramp, not the hue.
+ *
+ * Token names match the light block one-for-one so consuming module
+ * CSS stays unchanged; the lint-banned naked color literals never
+ * appear here either.
+ */
+:root[data-theme='dark'] {
+    /* ─── Surfaces / backgrounds ──────────────────────────────────── */
+    --color-bg-base: #1a1814;
+    --color-bg-neutral: #1f1d18;
+    --color-bg-cream: #25221b;
+    --color-bg-cream-strong: #2c2820;
+    --color-bg-cream-warm: #322e25;
+    --color-bg-hover: #3a352b;
+
+    --color-bg-overlay-soft: rgba(26, 24, 20, 0.5);
+    --color-bg-overlay: rgba(26, 24, 20, 0.65);
+    --color-bg-overlay-strong: rgba(26, 24, 20, 0.85);
+    --color-bg-cream-translucent: rgba(37, 34, 27, 0.6);
+
+    /* ─── Borders ─────────────────────────────────────────────────── */
+    --color-border: #4a4438;
+    --color-border-soft: #38332a;
+    --color-border-soft-alt: #38332a;
+    --color-border-subtle: #322e25;
+    --color-border-subtle-2: #3f3a30;
+    --color-border-subtle-3: #6b6354;
+    --color-border-strong: #7a6f5c;
+    --color-border-translucent: rgba(122, 111, 92, 0.55);
+    --color-border-translucent-faint: rgba(122, 111, 92, 0.18);
+
+    /* ─── Text ────────────────────────────────────────────────────── */
+    --color-text: #ece8de;
+    --color-text-strong: #f4f0e6;
+    --color-text-secondary: #d8d2c2;
+    --color-text-secondary-alt: #d8d2c2;
+    --color-text-muted: #b5ad9c;
+    --color-text-muted-alt: #9c9381;
+    --color-text-muted-warm: #a8a08e;
+    --color-text-faint: #8a8170;
+    --color-text-faint-alt: #807866;
+    --color-text-faint-strong: #6f6757;
+    --color-text-disabled: #5f5748;
+    --color-text-disabled-warm: #5a5345;
+    --color-text-disabled-strong: #4d473b;
+
+    /* ─── Accent (orange) ─────────────────────────────────────────── */
+    /* Slight tone shifts so the orange stays vibrant on the dark surface; `accent-strong` brightens (#ff5c0a reads dim on dark bg) and
+       `accent-on-text` lightens so text on a light-accent fill stays
+       legible. */
+    --color-accent: #ff8c55;
+    --color-accent-hover: #ff9866;
+    --color-accent-strong: #ff7a3a;
+    --color-accent-on-text: #ffd1a8;
+    --color-accent-on-text-alt: #ffc28e;
+    --color-accent-busy: #ffa066;
+
+    --color-accent-overlay-faint: rgba(255, 140, 85, 0.06);
+    --color-accent-overlay-light: rgba(255, 140, 85, 0.16);
+    --color-accent-overlay-medium: rgba(255, 140, 85, 0.22);
+    --color-accent-strong-glow: rgba(255, 122, 58, 0.55);
+    --color-accent-strong-ring: rgba(255, 122, 58, 0.45);
+
+    /* ─── Status ──────────────────────────────────────────────────── */
+    --color-error: #ff6b78;
+    --color-error-hover: #ff8590;
+    --color-error-alt: #ff7a6a;
+    --color-error-bg: #3a1c1f;
+    --color-error-border: #5a2d33;
+
+    --color-success: #7dd391;
+    --color-success-bg: #1c2e22;
+    --color-success-border: #2e4d36;
+
+    --color-busy-bg: #3a2e1d;
+    --color-busy-border: #5a4628;
+
+    /* ─── Toggle accent (solo button yellow) ──────────────────────── */
+    --color-toggle-active: #f2b300;
+    --color-toggle-active-border: #c9920a;
+    --color-toggle-active-hover-border: #ffd24d;
+    --color-toggle-active-text: #1a1814;
+
+    /* ─── Misc one-off colors ─────────────────────────────────────── */
+    --color-teal: #5dc4b8;
+    --color-blue-info: #88a9c4;
+
+    /* ─── Shadows ─────────────────────────────────────────────────── */
+    /* Dark surfaces need deeper alphas to read as elevation against the
+       low-luminance background. */
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.45);
+    --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.55);
+    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.65);
+    --shadow-note: 0 1px 2px rgba(0, 0, 0, 0.55);
+    --shadow-playhead-label: 0 1px 3px rgba(0, 0, 0, 0.6);
+    --shadow-accent-glow: 0 0 4px rgba(255, 122, 58, 0.55);
+}

@@ -288,7 +288,24 @@ def compute_bar_tick_grid(
     bar0_ticks = max(1, int(round(num0 * (4.0 / max(den0, 1)) * TICKS_PER_BEAT)))
     lead_in_secs = float(bars[0].start_time)
     raw_lead_ticks = max(0.0, lead_in_secs * TICKS_PER_BEAT * lead_tempo / 60.0)
-    lead_bars = int(round(raw_lead_ticks / bar0_ticks))
+    # Floor lead_bars at 1 whenever there's *any* pre-roll. With the
+    # old `round(...)` formula a `lead_in_secs` shorter than ~half a
+    # bar0 at the initial tempo would round to 0 lead bars; the MIDI
+    # then carries no lead-in, `from_midi.ts` reconstructs
+    # `drumsT0Sec = 0`, and every note in the song plays
+    # `lead_in_secs` earlier than the detector saw it (manifested as
+    # the "Bar anchor drift" stage in the per-onset timing
+    # visualization). One forced bar absorbs any pre-roll exactly via
+    # the back-solved `lead_tempo` below; the only side-effect is a
+    # potentially unusual lead-in BPM (e.g. ~480 BPM for a 0.5 s
+    # pre-roll in 4/4) confined to the lead-in itself, bar 0's own
+    # tempo immediately overrides it at the first drum bar's
+    # `set_tempo`.
+    lead_bars = (
+        max(1, int(round(raw_lead_ticks / bar0_ticks)))
+        if lead_in_secs > 0
+        else 0
+    )
     acc = lead_bars * bar0_ticks
     if acc > 0 and lead_in_secs > 0:
         lead_tempo = acc * 60.0 / (TICKS_PER_BEAT * lead_in_secs)

@@ -428,26 +428,6 @@
     width: calc(var(--voice-beats) * var(--px-per-beat) * 1px);
 }
 
-/* Empty pre-roll region before bar 1 (recording lead-in). Hatched so
-   it reads as non-musical space rather than a measure, and sized via
-   `--lead-in-beats × --px-per-beat` so the notes line up with the
-   music-stem waveform. */
-.leadIn {
-    position: relative;
-    flex: 0 0 auto;
-    box-sizing: border-box;
-    border-right: 1px dashed var(--color-border);
-    background: repeating-linear-gradient(
-        45deg,
-        var(--color-border-translucent-faint) 0 6px,
-        transparent 6px 12px
-    );
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: calc(var(--lead-in-beats) * var(--px-per-beat) * 1px);
-}
-
 .leadInLabel {
     font-size: 10px;
     letter-spacing: 0.08em;
@@ -455,4 +435,25 @@
     color: var(--color-text-disabled-warm);
     user-select: none;
     pointer-events: none;
+}
+
+/* "lead-in" label overlay floating across the negative-indexed bars
+   that carry the audio pre-roll. The bars themselves draw the hatched
+   background (`.barLeadIn` / `.barLeadInLast` in score.module.css);
+   this overlay just adds the centered "lead-in" caption without
+   blocking the bars' click-to-seek + waveform space.
+   Width is set via `--lead-in-bars-beats` (the cumulative quarter-note
+   span of all negative-indexed bars in `voice.bars`), the same
+   `--px-per-beat` zoom multiplier the bars themselves use. */
+.leadInOverlay {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: calc(var(--lead-in-bars-beats) * var(--px-per-beat) * 1px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    z-index: 1;
 }

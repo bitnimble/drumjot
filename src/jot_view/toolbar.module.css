@@ -135,11 +135,21 @@
     text-align: right;
 }
 
+/* Flexible spacer in the toolbar flow, eats all slack between the left
+   action group (Load / Transcribe / Zoom / …) and the right trailing
+   group (sample-progress / status pill / theme menu) so the trailing
+   block always hugs the right edge regardless of which trailing items
+   are conditionally rendered. */
+.toolbarSpacer {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
 /* One-time drum-sample download indicator, shown in the header's right
-   side only while the player is in the `loading` state. `margin-left: auto`
-   pushes it (and anything after) to the trailing edge of the toolbar;
-   `flex-shrink: 0` keeps the label fully visible no matter how crowded
-   the header gets. */
+   side only while the player is in the `loading` state. Right-edge
+   alignment is now driven by `.toolbarSpacer` upstream of it in the
+   toolbar's flex flow; this rule only needs to lock the indicator's
+   own width against crowding. */
 .sampleProgress {
     composes: bodySm from '../typography.module.css';
     display: inline-flex;
@@ -147,7 +157,6 @@
     gap: 6px;
     color: var(--color-text-muted-warm);
     white-space: nowrap;
-    margin-left: auto;
     flex-shrink: 0;
 }
 

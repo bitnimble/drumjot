@@ -439,10 +439,10 @@ const AudioTrackRow = observer(
     // on the score root. The waveform canvas reads the zoom-dependent
     // pixel width itself so only IT re-renders on zoom.
     const structureVoice = jot.structure.voices[0];
-    const leadInBeats = structureVoice
-      ? structureVoice.drumsLeadInSec * (structureVoice.leadInBpm / 60)
-      : 0;
-    let voiceBeats = leadInBeats;
+    // Total quarter-note span of the voice, lead-in lives in
+    // `voice.bars` as negative-indexed bars, so summing `bar.beats`
+    // covers both the pre-drum and the drum content with one pass.
+    let voiceBeats = 0;
     if (structureVoice) {
       for (const b of structureVoice.bars) voiceBeats += b.beats;
     }
@@ -633,12 +633,19 @@ const PitchRow = observer(
       }
       return { ...b, tracks: track ? { [pitch]: track } : {} };
     });
-    // Voice-level totals for the bars-row width (in beats — the row's
-    // pixel width is `voiceBeats × --px-per-beat` via CSS calc). Pre-drum
-    // contributes `drumsLeadInSec × bpm/60` quarter notes at the row's tempo.
-    const leadInBeats = voice0.drumsLeadInSec * (voice0.leadInBpm / 60);
-    let voiceBeats = leadInBeats;
+    // Voice-level totals for the bars-row width (in beats, the row's
+    // pixel width is `voiceBeats × --px-per-beat` via CSS calc).
+    // Lead-in lives in `voice.bars` as negative-indexed bars so a single
+    // sum over `bar.beats` covers both pre-drum and drum content.
+    let voiceBeats = 0;
     for (const b of voice0.bars) voiceBeats += b.beats;
+    // Cumulative quarter-note span of the leading negative-indexed bars
+    //; used to size the centered "lead-in" label overlay across them.
+    let leadInBarsBeats = 0;
+    for (const b of voice0.bars) {
+      if (b.index >= 0) break;
+      leadInBarsBeats += b.beats;
+    }
 
     // Filtered-onset ghost overlays (debug bundle + checkbox gated).
     // Resolve once per row so the per-entry render below is just a map.
@@ -653,7 +660,7 @@ const PitchRow = observer(
     // CSS-var positioning the kept notes use.
     const barBeatStart: number[] = [];
     {
-      let acc = leadInBeats;
+      let acc = 0;
       for (let i = 0; i < bars.length; i++) {
         barBeatStart.push(acc);
         acc += bars[i].beats;
@@ -754,21 +761,22 @@ const PitchRow = observer(
           }
           onClick={(e) => seekFromClick(e, onSeek)}
         >
-          {leadInBeats > 0 && (
+          {/* Lead-in label overlay floating across the negative-indexed
+              bars. The bars themselves carry the hatched background
+              (`.barLeadIn` / `.barLeadInLast`); this overlay just adds
+              the centered "lead-in" caption. Topmost-row only
+              (`showBrackets`) so the label doesn't repeat on every
+              pitch row. */}
+          {leadInBarsBeats > 0 && showBrackets && (
             <div
-              className={styles.leadIn}
+              className={styles.leadInOverlay}
               style={
                 {
-                  ['--lead-in-beats' as string]: leadInBeats,
+                  ['--lead-in-bars-beats' as string]: leadInBarsBeats,
                 } as React.CSSProperties
               }
-              title={`Lead-in: ${voice0.drumsLeadInSec.toFixed(
-                2,
-              )}s of pre-roll before the first beat — keeps the drum notation aligned with a loaded audio-track waveform.`}
             >
-              {showBrackets && (
-                <span className={styles.leadInLabel}>lead-in</span>
-              )}
+              <span className={styles.leadInLabel}>lead-in</span>
             </div>
           )}
           {bars.map((bar, i) => (
@@ -849,9 +857,11 @@ const AudioTrackWaveformCanvas = observer(
     // (see `.musicTrackWaveform` in the css module), which is a pure
     // GPU composite — no canvas redraw, no layout, no React work.
     const structureVoice = jot.structure.voices[0];
+    // Lead-in lives in `voice.bars` as negative-indexed bars (see
+    // `structureForVoice` in jot.ts), so a single sum over `bar.beats`
+    // covers both pre-drum and drum content.
     const voiceBeats = structureVoice
-      ? structureVoice.drumsLeadInSec * (structureVoice.leadInBpm / 60) +
-        structureVoice.bars.reduce((a, b) => a + b.beats, 0)
+      ? structureVoice.bars.reduce((a, b) => a + b.beats, 0)
       : 0;
     // Read pxPerBeat AFTER voiceBeats so the observer tracks both: a
     // wheel tick still re-runs the body (cheap — same JSX out), which

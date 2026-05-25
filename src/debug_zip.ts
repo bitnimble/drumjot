@@ -117,10 +117,19 @@ export type NoteProvenanceFile = {
 
 /** A single audio track extracted from the bundle, in the order the
  * caller should load them (drumless backing first if present, then the
- * per-pitch stems by pitch letter). */
+ * per-pitch stems by pitch letter).
+ *
+ * `keys` is plural because the manifest's `mapping` can point multiple
+ * pitch letters at the same stem file (e.g. when the cymbal split
+ * keeps both `c` crash and `d` ride against the single combined
+ * cymbals stem, the manifest emits both `c → stem_c.mp3` and
+ * `d → stem_c.mp3`). The bundle loader dedupes by filename and emits
+ * one track per unique file, so the consumer loads the file once and
+ * binds every key in `keys` to the same resulting `AudioTrackId`. */
 export type DebugBundleAudioTrack = {
-  /** Pitch letter or `no_drums`. */
-  key: string;
+  /** Pitch letters (or `no_drums`) that point at this file in the
+   * manifest's `mapping`, in first-mentioned order. Always non-empty. */
+  keys: string[];
   file: File;
 };
 
@@ -223,35 +232,42 @@ export async function loadDebugZip(file: File): Promise<DebugBundle> {
     }
   }
 
-  // Inflate every mapped entry in parallel — `DecompressionStream` is
-  // async (browser-side workers), so concurrent inflations overlap well
-  // and the user-perceived bundle-open time drops linearly with the
-  // number of tracks. Manifest order is restored afterwards so the
-  // audio-track gutter in the UI still lays them out the same way the
-  // transcriber emitted them (no_drums first if present, then drums in
-  // pitch-letter order).
-  const pending: Promise<DebugBundleAudioTrack | null>[] = [];
+  // Dedupe by filename first: when the manifest maps several pitch
+  // letters at the same stem file (e.g. crash `c` + ride `d` both at
+  // `stem_c.mp3` after the cymbal split), we only want to inflate and
+  // decode that file ONCE, the consumer will then bind every key in
+  // `keys` to the resulting `AudioTrackId`. We preserve first-mention
+  // order on `keys` so the audio row in the mixer ends up under the
+  // first-mentioned pitch (the natural "primary").
+  const keysByFilename = new Map<string, string[]>();
+  const filenameOrder: string[] = [];
   for (const [key, filename] of Object.entries(manifest.mapping)) {
-    if (typeof filename !== 'string') {
-      pending.push(Promise.resolve(null));
-      continue;
+    if (typeof filename !== 'string') continue;
+    const lower = filename.toLowerCase();
+    if (!byBasename.has(lower)) continue; // mapping out of sync; skip
+    if (!keysByFilename.has(filename)) {
+      keysByFilename.set(filename, []);
+      filenameOrder.push(filename);
     }
-    const entry = byBasename.get(filename.toLowerCase());
-    if (!entry) {
-      pending.push(Promise.resolve(null)); // mapping out of sync; skip
-      continue;
-    }
-    pending.push(
-      inflateEntry(bytes, entry).then((data) => ({
-        key,
-        file: new File([data as BlobPart], filename, { type: 'audio/mpeg' }),
-      })),
-    );
+    keysByFilename.get(filename)!.push(key);
   }
-  const audioTracks: DebugBundleAudioTrack[] = [];
-  for (const result of await Promise.all(pending)) {
-    if (result) audioTracks.push(result);
-  }
+
+  // Inflate the unique files in parallel; `DecompressionStream` is
+  // async (browser-side workers), so concurrent inflations overlap
+  // well and the user-perceived bundle-open time drops linearly with
+  // the number of tracks. Manifest order is restored afterwards so the
+  // audio-track gutter in the UI still lays them out the way the
+  // transcriber emitted them (no_drums first if present, then drums
+  // in pitch-letter order).
+  const pending = filenameOrder.map(async (filename) => {
+    const entry = byBasename.get(filename.toLowerCase())!;
+    const data = await inflateEntry(bytes, entry);
+    return {
+      keys: keysByFilename.get(filename)!,
+      file: new File([data as BlobPart], filename, { type: 'audio/mpeg' }),
+    } satisfies DebugBundleAudioTrack;
+  });
+  const audioTracks = await Promise.all(pending);
 
   return { predictionMidi, noteProvenance, audioTracks, manifest };
 }

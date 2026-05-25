@@ -167,6 +167,7 @@ def filter_onsets_all_instruments(
     max_workers: int | None = None,
     on_complete: Callable[[str, int, int], None] | None = None,
     cancel_event: threading.Event | None = None,
+    skip_pitches: set[str] | None = None,
 ) -> dict[str, list[OnsetCandidate]]:
     """Filter every instrument that has in-range onsets, in parallel.
 
@@ -184,10 +185,18 @@ def filter_onsets_all_instruments(
     new instruments — already-in-flight LLM calls run to completion
     (the anthropic SDK exposes no cross-thread cancel) but pending ones
     are cancelled and the function returns whatever it has so far.
+
+    `skip_pitches`, when provided, names pitches whose lanes have
+    already been LLM-vetted upstream (e.g. `h` / `H` after
+    `hihat_split`'s unified ternary classifier). Those pitches are not
+    submitted to the pool — re-filtering would duplicate work and risk
+    double-rejecting soft real hits. They are NOT re-attached to the
+    result here; the caller is responsible for merging them in.
     """
+    skip = skip_pitches or set()
     pitches = sorted(
         p for p, cands in candidates_by_pitch.items()
-        if any(c.bar >= 0 for c in cands)
+        if p not in skip and any(c.bar >= 0 for c in cands)
     )
     if not pitches:
         log.warning("filter: no instrument had any in-range onsets")

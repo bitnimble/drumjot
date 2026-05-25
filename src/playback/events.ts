@@ -65,20 +65,24 @@ export function jotToEvents(rendered: RenderedJot): PlaybackEvent[] {
   const globalBpm = resolveBpm(resolved.globalMetadata.bpm, 120);
   const events: PlaybackEvent[] = [];
 
-  // Bar 1 (= `voice.bars[leadBars]`) sits at jot time 0 by convention,
+  // Bar 1 (= first non-lead-in bar) sits at jot time 0 by convention,
   // matching `buildTimeline`'s anchor. Pre-drum bars get a negative
   // bar-offset so an empty lead-in produces no events but a lead-in bar
   // that DOES contain notes (rare; today only relevant if the upstream
-  // generator stamps drums into a pre-drum bar) would fire its events
-  // at negative jot time — at media `jot + drumsT0Sec >= 0` in audio
-  // time, which is still valid. Without a leadBars hint we default to
-  // bar 0 = jot 0 (unchanged from the pre-three-epoch behaviour).
-  const rawLeadBars = resolved.globalMetadata.leadBars;
+  // generator stamps drums into a pre-drum bar) fires its events at
+  // negative jot time; at media `jot + drumsT0Sec >= 0` in audio time,
+  // which is still valid. Lead-in count comes from the structure
+  // (counting leading negative-indexed bars); `structureForVoice`
+  // materialises both the explicit-leadBars and the chrome-only
+  // (`drumsT0Sec` without `leadBars`) source shapes into the same
+  // negative-indexed-bar form, so the scheduler reads only the
+  // structure.
   for (const voice of resolved.voices) {
-    const leadBars =
-      typeof rawLeadBars === 'number' && rawLeadBars > 0
-        ? Math.min(rawLeadBars, voice.bars.length)
-        : 0;
+    let leadBars = 0;
+    for (const b of voice.bars) {
+      if (b.index >= 0) break;
+      leadBars++;
+    }
     // Per-bar `{{ bpm }}` overrides are sticky; carry the effective
     // tempo across bars exactly as `buildTimeline` does so the playhead
     // and the scheduled audio stay on the same clock. Compute durations

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# scripts/check-py [pytest-args...]
+#
+# Python post-change checks: ruff (with --fix) + pytest. Any args are
+# passed through to pytest, so `scripts/check-py tests/test_foo.py::test_bar`
+# works for fast iteration on a single test.
+#
+# Requires transcriber/.venv (uv-managed). Does NOT install deps — see
+# transcriber/Dockerfile / the project's Python env notes for the install
+# recipe.
+
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO/transcriber"
+
+if [ ! -d .venv ]; then
+    echo "error: transcriber/.venv not found." >&2
+    echo "       create it with: cd transcriber && uv venv (then install deps per AGENTS.md §3)" >&2
+    exit 1
+fi
+
+echo "== ruff check --fix =="
+.venv/bin/ruff check --fix .
+
+echo
+echo "== pytest =="
+.venv/bin/pytest "$@"

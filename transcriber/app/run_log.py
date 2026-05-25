@@ -23,8 +23,8 @@ import logging
 import threading
 import time
 from contextvars import ContextVar, Token
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
 # The logger every per-request consumer attaches to. All transcriber
 # modules use `logging.getLogger(__name__)` with `__name__` starting at
@@ -174,7 +174,7 @@ class RunLog:
 def _iso_utc(epoch_seconds: float) -> str:
     """`time.time()` / `record.created` → ISO 8601 UTC string, ms precision."""
     return (
-        datetime.fromtimestamp(epoch_seconds, tz=timezone.utc)
+        datetime.fromtimestamp(epoch_seconds, tz=UTC)
         .isoformat(timespec="milliseconds")
         .replace("+00:00", "Z")
     )

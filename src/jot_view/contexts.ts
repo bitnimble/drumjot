@@ -1,5 +1,6 @@
 import React from 'react';
 import { NoteProvenanceEntry } from 'src/debug_zip';
+import { RenderedJot } from 'src/jot';
 import { BarTiming } from 'src/playback';
 import { SelectionStore } from 'src/selection';
 
@@ -85,3 +86,16 @@ export const NoteProvenanceContext =
 export const BarTimingsContext = React.createContext<
   ReadonlyMap<number, BarTiming> | null
 >(null);
+
+/**
+ * The active {@link RenderedJot} for the current view. Provided once at
+ * the JotView level so deep consumers (today: NoteProvenanceDetails'
+ * timing-drift visualization, which reads `effectiveDrumOffsetBeats` to
+ * account for the user-applied Beat-offset slider as a separate stage in
+ * the detected → final chain) don't have to thread the jot down through
+ * MixerView → PitchRow → BarView → NoteView.
+ *
+ * `null` outside the View; consumers should fall back to a sensible
+ * "no offset / nothing to show" default in that case.
+ */
+export const RenderedJotContext = React.createContext<RenderedJot | null>(null);

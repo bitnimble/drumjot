@@ -12,13 +12,16 @@ Layout:
     ├── note_provenance.json # per-note keep/reject info for the UI
     ├── no_drums.mp3         # backing audio (drumless mix)
     ├── stem_k.mp3 ...       # one per per-instrument stem
+    ├── residual.mp3         # drum_stem − sum(stems): aux percussion +
+    │                        # separator residue. Diagnostic-only.
     └── debug.json
         {
           "filename": ...,        # original upload filename
           "options": { ... },     # request form params
           "mapping": {            # pitch letter -> filename inside zip
             "no_drums": "no_drums.mp3",
-            "k": "stem_k.mp3", ...
+            "k": "stem_k.mp3", ...,
+            "residual": "residual.mp3"
           },
           "metadata": { ... },    # TranscribeMetadata-shaped
           "stage_timings": [ ... ],
@@ -44,6 +47,7 @@ import zipfile
 from pathlib import Path
 
 from app.outputs import OutputSink
+from app.pipeline.cymbal_split import STEM_PITCH_ALIASES as CYMBAL_STEM_ALIASES
 from app.run_log import RunLog
 
 log = logging.getLogger(__name__)
@@ -57,6 +61,11 @@ MANIFEST_FILENAME = "debug.json"
 # Distinct from the single-letter drum pitches so a future pitch named
 # `n` (none currently exist, but conceivable) can't collide.
 NO_DRUMS_KEY = "no_drums"
+
+# The synthetic key under `mapping` for the per-instrument residual track
+# (drum stem minus the sum of the 5 separated stems). Multi-letter for the
+# same reason as `NO_DRUMS_KEY` — pitch letters are single chars in the DSL.
+RESIDUAL_KEY = "residual"
 
 # Filename of the MIDI score inside the zip. The frontend converts it
 # to a Jot via `src/midi/from_midi.ts`.
@@ -110,6 +119,30 @@ def build_debug_zip(
             continue
         audio_entries.append((mp3.name, mp3))
         mapping[pitch] = mp3.name
+
+    # Stem aliases: post-separation splits (today only `cymbal_split`)
+    # produce multiple output pitches sharing one input stem file. The
+    # manifest declares the shared stem under each output pitch's key so
+    # the frontend can cluster all sharing pitches under that one audio
+    # row without recomputing the relationship; see
+    # `cymbal_split.STEM_PITCH_ALIASES`. Skip aliases whose target stem
+    # didn't make it into `mapping` (the stem was absent / encoding
+    # failed): the alias would dangle anyway.
+    for alias_pitch, source_pitch in CYMBAL_STEM_ALIASES.items():
+        if alias_pitch in mapping or source_pitch not in mapping:
+            continue
+        mapping[alias_pitch] = mapping[source_pitch]
+
+    # Residual = drum_stem − sum(per-instrument stems). Diagnostic-only; # carries auxiliary percussion (cowbell, tambourine, …) the 5-class
+    # MDX23C separator has no lane for, plus the separator's own
+    # reconstruction error. Bundled when present; absent on older runs
+    # (or runs where the residual write failed) is fine.
+    residual_flac = output_sink.existing_path(RESIDUAL_KEY)
+    if residual_flac is not None:
+        mp3 = output_sink.save_mp3_from_wav(RESIDUAL_KEY, residual_flac)
+        if mp3 is not None:
+            audio_entries.append((mp3.name, mp3))
+            mapping[RESIDUAL_KEY] = mp3.name
 
     manifest: dict[str, object] = {
         "filename": original_filename,

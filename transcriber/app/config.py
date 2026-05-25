@@ -56,6 +56,27 @@ class Settings(BaseSettings):
     # prunes.
     adtof_peak_threshold: float = 0.10
     adtof_peak_min_distance_s: float = 0.020
+    # Universal peak PROMINENCE gate, applied to ALL lanes (previously
+    # only the noisy lanes had prominence — see
+    # `adtof_noisy_peak_prominence` below). Prominence measures how far
+    # a peak rises above its surrounding baseline; far more robust than
+    # a fixed-height threshold for rejecting decay-tail wobbles, since
+    # those wobbles can clear `height` but never rise above their local
+    # baseline. Set to 0 to disable on non-noisy lanes (kick/snare/toms)
+    # and fall back to height-only.
+    adtof_peak_prominence: float = 0.10
+    # After find_peaks emits activation-domain peaks, refine each peak's
+    # time to the local maximum of the AUDIO's onset-strength envelope
+    # within ±this window. The NN's activation peak doesn't always sit
+    # on the audio transient (OOD on isolated stems smears the response;
+    # the BiGRU smears it too); snapping to where the actual audio's
+    # onset envelope peaks within a tight window pins onsets to
+    # sample-level accuracy regardless of how messy the activation
+    # shape is. Set to 0 to disable refinement and use raw activation-
+    # peak times. Replaces the older `librosa.onset.onset_backtrack`
+    # step, which could overshoot 200+ ms when the activation's rising
+    # edge had no local minima.
+    adtof_audio_refine_window_s: float = 0.030
     # The hihat + merged-cymbal ADTOF lanes are OOD-compressed and
     # bleed-heavy on isolated stems (see pipeline/adtof_onsets.py), so a
     # global fixed threshold over-triggers them. For those lanes only we

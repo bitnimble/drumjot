@@ -48,6 +48,7 @@ def build_note_provenance(
     kept_by_pitch: dict[str, list[OnsetCandidate]],
     structure: BeatStructure,
     beat_alignment_offset_sec: float = 0.0,
+    rejected_by_pitch: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Return the JSON-serialisable provenance payload for one filter run.
 
@@ -57,6 +58,12 @@ def build_note_provenance(
     the same `OnsetCandidate` instances through both maps (the filter
     pathway already does — `filter_onsets_for_instrument` keeps the
     candidates verbatim).
+
+    `rejected_by_pitch` overrides the `rejected_by` label per pitch.
+    Defaults to `"filter_llm"` for any pitch not in the map — the
+    historical behaviour. Hi-hat lanes (`h`, `H`) pass
+    `"hihat_split"` since their discards come from the unified ternary
+    classifier upstream of the filter LLM.
     """
     bar_start_tick, midi_tempos, lead_bars, _lead_tempo = compute_bar_tick_grid(
         structure, structure.initial_tempo
@@ -65,11 +72,13 @@ def build_note_provenance(
         pitch: {id(c) for c in cands}
         for pitch, cands in kept_by_pitch.items()
     }
+    rejected_source = rejected_by_pitch or {}
 
     per_pitch: dict[str, list[dict[str, Any]]] = {}
     for pitch, candidates in all_onsets_by_pitch.items():
         midi_note = PITCH_TO_MIDI.get(pitch)
         kept_set = kept_ids.get(pitch, set())
+        reject_label = rejected_source.get(pitch, "filter_llm")
         entries: list[dict[str, Any]] = []
         for c in candidates:
             bar = int(c.bar)
@@ -98,7 +107,7 @@ def build_note_provenance(
                 # as "padding noise" rather than "the LLM rejected it".
                 "out_of_range": not in_range,
                 "kept": kept,
-                "rejected_by": None if kept or not in_range else "filter_llm",
+                "rejected_by": None if kept or not in_range else reject_label,
             })
         # Score order makes the JSON readable; out-of-range entries
         # (bar=-1) sort to the front.

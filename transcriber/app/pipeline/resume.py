@@ -20,6 +20,7 @@ from pathlib import Path
 from app.models import OnsetCandidate, TranscriptionSummary
 from app.pipeline.beats import BarInfo, BeatStructure, BeatTick
 from app.pipeline.runner import STAGE_ORDER, PipelineContext, Stage, stage_index
+from app.pipeline.separate import PITCH_DISPLAY_NAMES
 
 log = logging.getLogger(__name__)
 
@@ -48,11 +49,32 @@ def find_drum_stem(folder: Path) -> Path | None:
 
 
 def find_per_instrument_stems(folder: Path) -> dict[str, Path]:
-    """Return cached per-instrument stems keyed by pitch letter."""
+    """Return cached per-instrument stems keyed by pitch letter.
+
+    Filenames whose stem is not a known DSL pitch letter (per
+    `PITCH_DISPLAY_NAMES`) are ignored — most importantly this excludes
+    `residual.<ext>`, which lives alongside the per-instrument stems
+    but is a diagnostic-only track, not an instrument.
+    """
     out_dir = folder / "stems_per"
     if not out_dir.is_dir():
         return {}
-    return {p.stem: p for p in out_dir.iterdir() if p.is_file()}
+    return {
+        p.stem: p
+        for p in out_dir.iterdir()
+        if p.is_file() and p.stem in PITCH_DISPLAY_NAMES
+    }
+
+
+def find_residual_stem(folder: Path) -> Path | None:
+    """Return the cached residual track from a previous `stems_per` run."""
+    out_dir = folder / "stems_per"
+    if not out_dir.is_dir():
+        return None
+    for child in out_dir.iterdir():
+        if child.is_file() and child.stem == "residual":
+            return child
+    return None
 
 
 def hydrate_context_from_resume(
@@ -97,6 +119,9 @@ def hydrate_context_from_resume(
                 "to regenerate them."
             )
         ctx.per_instrument_stems = per
+        # Residual is diagnostic-only; tolerated when missing (older
+        # debug folders predate it).
+        ctx.residual_stem = find_residual_stem(folder)
 
     if stage_index(Stage.BEATS) < start_idx:
         beats_path = folder / "beats.json"
@@ -119,6 +144,16 @@ def hydrate_context_from_resume(
                 "resume_stage=onsets to regenerate it."
             )
         ctx.onsets_by_pitch = _load_onsets(onsets_path)
+
+    if stage_index(Stage.FILTER) < start_idx:
+        kept_path = folder / "filter" / "kept_onsets.json"
+        if not kept_path.exists():
+            raise FileNotFoundError(
+                f"resume({start_stage.value}): expected {kept_path} from "
+                "the previous run, but it's missing. Re-run with "
+                "resume_stage=filter to regenerate it."
+            )
+        ctx.kept_by_pitch = _load_kept_onsets(kept_path, ctx.onsets_by_pitch)
 
 
 def load_original_filename(folder: Path) -> str | None:
@@ -187,9 +222,12 @@ def _resumable_stages(folder: Path) -> list[str]:
         out.append(Stage.BEATS.value)
     has_beats = (folder / "beats.json").is_file()
     has_onsets = (folder / "onsets.json").is_file()
+    has_filter = (folder / "filter" / "kept_onsets.json").is_file()
     if has_per and has_beats:
         out.append(Stage.ONSETS.value)
     if has_per and has_beats and has_onsets:
+        out.append(Stage.FILTER.value)
+    if has_per and has_beats and has_onsets and has_filter:
         out.append(Stage.TRANSCRIBE.value)
     # Preserve STAGE_ORDER so the UI can render the picker without
     # re-sorting (and so a future stage insertion lands where it
@@ -347,6 +385,71 @@ def _load_onsets(path: Path) -> dict[str, list[OnsetCandidate]]:
         pitch: [OnsetCandidate(**row) for row in rows]
         for pitch, rows in data.items()
     }
+
+
+def _load_kept_onsets(
+    path: Path,
+    onsets_by_pitch: dict[str, list[OnsetCandidate]],
+) -> dict[str, list[OnsetCandidate]]:
+    """Load `filter/kept_onsets.json` and re-thread identity against
+    `onsets_by_pitch` so `build_note_provenance`'s `id(c)` kept-vs-
+    rejected match still works after a resume.
+
+    `filter/kept_onsets.json` stores only the value fields (time / bar /
+    beat / strength), so a naive `OnsetCandidate(**row)` would mint new
+    objects whose `id()` doesn't match anything in `onsets_by_pitch`; every candidate would then appear as "rejected" in the provenance
+    even though it was kept. We look each row up by
+    `(time, bar, beat_in_bar)` against the matching pitch in
+    `onsets_by_pitch` and re-attach the same instance.
+
+    Falls back to constructing a fresh `OnsetCandidate` only when the
+    row can't be matched (e.g. `onsets.json` was regenerated more
+    recently than `filter/kept_onsets.json` and the candidate counts
+    drifted). The fallback candidate won't be present in
+    `all_onsets_by_pitch` so the provenance will mark it as "kept" but
+    won't surface a rejected ghost for it; acceptable degradation.
+    """
+    data = json.loads(path.read_text(encoding="utf-8"))
+    kept: dict[str, list[OnsetCandidate]] = {}
+    # Round float keys so a tiny serialization wobble (JSON's str(float)
+    # repr) doesn't break the lookup.
+    def _key(c_or_row: OnsetCandidate | dict) -> tuple[float, int, float]:
+        if isinstance(c_or_row, dict):
+            return (
+                round(float(c_or_row["time"]), 6),
+                int(c_or_row["bar"]),
+                round(float(c_or_row["beat_in_bar"]), 6),
+            )
+        return (
+            round(float(c_or_row.time), 6),
+            int(c_or_row.bar),
+            round(float(c_or_row.beat_in_bar), 6),
+        )
+
+    for pitch, rows in data.items():
+        source = onsets_by_pitch.get(pitch, [])
+        by_key: dict[tuple[float, int, float], OnsetCandidate] = {
+            _key(c): c for c in source
+        }
+        matched: list[OnsetCandidate] = []
+        unmatched = 0
+        for row in rows:
+            existing = by_key.get(_key(row))
+            if existing is not None:
+                matched.append(existing)
+            else:
+                unmatched += 1
+                matched.append(OnsetCandidate(**row))
+        if unmatched:
+            log.warning(
+                "resume filter/kept_onsets.json: %d/%d entries for pitch %r "
+                "did not match an onset in onsets.json (likely re-derived "
+                "after the filter ran); rejected-ghost rendering may be "
+                "incomplete for those candidates.",
+                unmatched, len(rows), pitch,
+            )
+        kept[pitch] = matched
+    return kept
 
 
 def _infer_duration(structure: BeatStructure) -> float:

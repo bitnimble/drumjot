@@ -22,11 +22,50 @@
           sans-serif;
         color: #2b2b2b;
       }
+      /* Pre-bundle dark-mode body chrome so the very first paint matches
+         the resolved theme. The OS preference applies automatically when
+         no explicit override is set; the inline boot script below sets
+         data-theme="light|dark" from localStorage so a user override
+         beats the media query. design_tokens.css then takes over once
+         the JS bundle has loaded the design system. */
+      @media (prefers-color-scheme: dark) {
+        html,
+        body {
+          background: #1a1814;
+          color: #ece8de;
+        }
+      }
+      html[data-theme='dark'],
+      html[data-theme='dark'] body {
+        background: #1a1814;
+        color: #ece8de;
+      }
+      html[data-theme='light'],
+      html[data-theme='light'] body {
+        background: #fff6e8;
+        color: #2b2b2b;
+      }
       #app {
         height: 100%;
         width: 100%;
       }
     </style>
+    <script>
+      // Synchronous theme bootstrap; runs before any other script /
+      // stylesheet so the resolved theme is in place for first paint.
+      // The full theme controller (src/theme.ts) reads the same
+      // localStorage key once the bundle loads and takes over from here.
+      (function () {
+        try {
+          var m = localStorage.getItem('drumjot.theme');
+          if (m === 'light' || m === 'dark') {
+            document.documentElement.setAttribute('data-theme', m);
+          }
+        } catch (e) {
+          // No-op: theme falls back to OS preference (prefers-color-scheme).
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>

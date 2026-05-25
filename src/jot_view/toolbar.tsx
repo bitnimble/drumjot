@@ -3,6 +3,7 @@ import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { ExampleJot } from 'src/fakes';
 import { jotPlayer, SampleLoadProgress } from 'src/playback';
+import { themeStore, ThemeMode } from 'src/theme';
 import {
   BeatInput,
   TranscribeStage,
@@ -19,6 +20,7 @@ const STAGE_ORDER: readonly TranscribeStage[] = [
   'stems_per',
   'beats',
   'onsets',
+  'filter',
   'transcribe',
 ];
 
@@ -195,8 +197,10 @@ function formatStageLabel(stage: TranscribeStage): string {
       return 'tracking beats';
     case 'onsets':
       return 'detecting onsets';
+    case 'filter':
+      return 'filtering artifact onsets';
     case 'transcribe':
-      return 'transcribing';
+      return 'rendering MIDI';
   }
 }
 
@@ -620,12 +624,67 @@ export const Toolbar = observer(
             Show filtered
           </label>
         )}
+        <div className={styles.toolbarSpacer} aria-hidden="true" />
         <DrumLoadingIndicator />
         <TranscribeStatusPill status={transcribeStatus} onClear={onClearTranscribeStatus} />
+        <ThemeMenu />
       </div>
     );
   }
 );
+
+const THEME_MODE_LABELS: Record<ThemeMode, string> = {
+  system: 'System',
+  light: 'Light',
+  dark: 'Dark',
+};
+
+const THEME_MODE_ORDER: readonly ThemeMode[] = ['system', 'light', 'dark'];
+
+/**
+ * Trailing toolbar dropdown for picking the color theme. `System`
+ * (default) defers to the OS `prefers-color-scheme` and tracks live
+ * changes; `Light`/`Dark` persist as an explicit override in
+ * localStorage so subsequent visits skip the OS check entirely.
+ *
+ * The actual data-theme attribute is owned by {@link themeStore}; this
+ * component is purely the picker.
+ */
+const ThemeMenu = observer(() => {
+  const mode = themeStore.mode;
+  return (
+    <DropdownButton
+      label={`Theme: ${THEME_MODE_LABELS[mode]}`}
+      title="Pick a color theme. `System` follows your OS appearance setting and switches live when it changes."
+    >
+      {(close) => (
+        <>
+          {THEME_MODE_ORDER.map((m) => (
+            <button
+              key={m}
+              type="button"
+              className={classNames(
+                styles.dropdownItem,
+                mode === m && styles.dropdownItemActive,
+              )}
+              onClick={() => {
+                themeStore.setMode(m);
+                close();
+              }}
+              title={
+                m === 'system'
+                  ? 'Follow the OS appearance setting (prefers-color-scheme).'
+                  : `Use the ${m} theme regardless of the OS setting.`
+              }
+            >
+              {THEME_MODE_LABELS[m]}
+            </button>
+          ))}
+        </>
+      )}
+    </DropdownButton>
+  );
+});
 
 function samplePct(p: SampleLoadProgress): number {
   return Math.min(100, Math.round((p.loaded / p.total) * 100));

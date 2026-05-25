@@ -182,25 +182,8 @@ export type ResolvedVoice = {
   pitches: string[];
   width: Pixels;
   /**
-   * Empty pixel space reserved before bar 1, representing the recording's
-   * pre-drum interval (`globalMetadata.drumsT0Sec` seconds of silence /
-   * non-drum intro before drums enter). Scaled at the same pixels-per-
-   * second as the bars so the drum notation lines up with a loaded audio-
-   * track waveform: audio second `drumsT0Sec` (where the drums actually
-   * enter) sits exactly at bar 1's left edge. `0` when drums start at
-   * audioT0.
-   */
-  leadInPx: Pixels;
-  /**
-   * Pre-drum interval in seconds (mirrors `globalMetadata.drumsT0Sec`).
-   * Named `drumsLeadInSec` to distinguish it from any future "signal
-   * lead-in" (silence before the first non-silent sample); current code
-   * only cares about the drum boundary.
-   */
-  drumsLeadInSec: number;
-  /**
    * Constant horizontal offset (px) the note grid is shifted right of
-   * each bar's left edge — `viewConfig.barNotePaddingLeft`, the
+   * each bar's left edge; `viewConfig.barNotePaddingLeft`, the
    * engraving inset applied to every note/pattern/tuplet position (see
    * {@link ViewConfig.barNotePaddingLeft}). Barlines are time-anchored
    * but notes are drawn `notePadPx` inside them, so the playback
@@ -418,14 +401,6 @@ export type StructuralVoice = {
   source: Voice;
   bars: StructuralBar[];
   pitches: string[];
-  /** Pre-drum interval in seconds, mirrors `globalMetadata.drumsT0Sec`. */
-  drumsLeadInSec: number;
-  /**
-   * Effective bpm for converting the pre-drum interval into pixels
-   * (chosen once at structure time from `globalMetadata.bpm`'s `start`
-   * value). Stored here so the pixel pass doesn't have to re-resolve it.
-   */
-  leadInBpm: number;
 };
 
 export type JotStructure = {
@@ -616,10 +591,10 @@ export class RenderedJot {
     const globalTime = jot.globalMetadata.time ?? DEFAULT_TIME;
     const instrumentMap = jot.globalMetadata.instrumentMapping ?? {};
     const rawOffset = jot.globalMetadata.drumsT0Sec;
-    const drumsLeadInSec =
+    const drumsT0Sec =
       typeof rawOffset === 'number' && rawOffset > 0 ? rawOffset : 0;
     const bpmField = jot.globalMetadata.bpm;
-    const leadInBpm =
+    const globalBpm =
       typeof bpmField === 'number' && bpmField > 0
         ? bpmField
         : typeof bpmField === 'object' &&
@@ -663,9 +638,14 @@ export class RenderedJot {
     // reserved for the anacrusis (which IS drum content, so doesn't fall
     // in the negative range). The skip from -1 → 1 when there's no
     // anacrusis matches musical convention (no "bar 0" in most scoring
-    // systems). `leadBars` on globalMetadata comes from `from_midi.ts`
-    // when it absorbs a transcribed drumless intro; hand-authored DSL
-    // typically omits it.
+    // systems). `leadBars` on globalMetadata is the source-side hint of
+    // how many leading `voice.bars` are pre-drum lead-in (set by
+    // `from_midi.ts` when it absorbs a transcribed drumless intro); the
+    // chrome-only path (`drumsT0Sec` set, `leadBars` absent; e.g. RLRR
+    // imports and hand-authored DSL with just a pre-roll offset) is
+    // handled by the synthetic-bar prepend below so the structure
+    // always carries lead-in as real negative-indexed bars and the
+    // renderer doesn't need a second code path.
     const rawLeadBars = jot.globalMetadata.leadBars;
     const leadBars =
       typeof rawLeadBars === 'number' && rawLeadBars > 0
@@ -697,6 +677,39 @@ export class RenderedJot {
       });
     }
 
+    // Chrome-only lead-in: `globalMetadata.drumsT0Sec` set without
+    // `leadBars`, so no negative-indexed bars came in. Synthesize one
+    // empty bar at `index = -1` covering the audio pre-roll so the
+    // rendering / playback / waveform code all see lead-in as just
+    // "the first negative-indexed bar(s)", with no separate chrome
+    // path to maintain. Beat count is back-computed against the global
+    // bpm (the bpm `buildTimeline` will carry into this synthetic bar,
+    // since it precedes any explicit override) so `bar.beats * 60 /
+    // currentBpm` equals `drumsT0Sec`; the time signature mirrors the
+    // global so the (decorative) beat dividers look reasonable. Skipped
+    // when leadBars already accounted for the pre-roll, when an
+    // anacrusis already sits at the front of `bars`, or when a real
+    // negative-indexed bar is already present (defence-in-depth; a
+    // future code path that emits lead-in differently won't get
+    // doubled up).
+    const hasLeadInAlready = bars.some((b) => b.index < 0);
+    if (drumsT0Sec > 0 && !hasLeadInAlready) {
+      const synthBeats = (drumsT0Sec * globalBpm) / 60;
+      const synthTime = bars.find((b) => b.index === 1)?.time ?? globalTime;
+      const syntheticBar: StructuralBar = {
+        source: { elements: [] },
+        time: synthTime,
+        beats: synthBeats,
+        tracks: {},
+        patternSpans: [],
+        tupletSpans: [],
+        index: -1,
+      };
+      // Slot it before any anacrusis (bar 0) too, visually the lead-in
+      // always precedes the score's first audible content.
+      bars.unshift(syntheticBar);
+    }
+
     // Voice lane order: mapped pitches first in declaration order, then
     // any unmapped pitches in first-seen order.
     const orderedPitches: string[] = [];
@@ -716,8 +729,6 @@ export class RenderedJot {
       source: voice,
       bars,
       pitches: orderedPitches,
-      drumsLeadInSec,
-      leadInBpm,
     };
   }
 
@@ -857,13 +868,14 @@ export class RenderedJot {
     pxPerBeat: number,
     padLeft: Pixels
   ): ResolvedVoice {
-    // pxPerSecond = pxPerBeat * (bpm/60) — matches the rate
-    // `buildTimeline` and the waveform mapping assume, which is what
-    // keeps drum notes lined up with the audio-track waveform.
-    const pxPerSecond = pxPerBeat * (sv.leadInBpm / 60);
-    const leadInPx = px(sv.drumsLeadInSec * pxPerSecond);
+    // Lead-in is materialised as negative-indexed bars in `sv.bars` by
+    // `structureForVoice` (either real ones from `globalMetadata.leadBars`
+    // or a single synthetic one back-computed from
+    // `globalMetadata.drumsT0Sec`), so the pixel pass just lays bars
+    // out left-to-right from x=0; no separate hatched-chrome offset
+    // to reserve.
     const bars: ResolvedBar[] = new Array(sv.bars.length);
-    let cursor: number = leadInPx;
+    let cursor = 0;
     for (let i = 0; i < sv.bars.length; i++) {
       const sb = sv.bars[i];
       const widthPx = px(sb.beats * pxPerBeat);
@@ -935,8 +947,6 @@ export class RenderedJot {
       bars,
       pitches: sv.pitches,
       width: px(cursor),
-      leadInPx,
-      drumsLeadInSec: sv.drumsLeadInSec,
       notePadPx: padLeft,
     };
   }

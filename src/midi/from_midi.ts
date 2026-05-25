@@ -70,7 +70,11 @@ import {
   TimeSignature,
 } from 'src/dsl';
 import { defaultKindForPitch } from 'src/instruments';
-import { GM_PERCUSSION, allocatePitchesForMidi } from './gm';
+import {
+  GENERIC_INSTRUMENT_NAME_BY_PITCH,
+  GM_PERCUSSION,
+  allocatePitchesForMidi,
+} from './gm';
 
 export type FromMidiOptions = {
   /** 1-based MIDI channel for drums. Defaults to GM convention (10). */
@@ -477,17 +481,32 @@ function buildInstrumentMap(
   pitchByMidi: ReadonlyMap<number, string>
 ): Record<string, Instrument> {
   const out: Record<string, Instrument> = {};
+  // Count how many distinct MIDI notes mapped to each pitch; when a
+  // pitch has more than one (e.g. 42 closed + 46 open hi-hat both →
+  // pitch `h`, with the variant carried per-note as `:c` / `:o`), the
+  // instrument-row label has to cover both, so we fall back to a
+  // generic display name from `GENERIC_INSTRUMENT_NAME_BY_PITCH`
+  // instead of whichever single GM entry happened to win the
+  // first-iteration race.
+  const midiCountByPitch = new Map<string, number>();
+  for (const pitch of pitchByMidi.values()) {
+    midiCountByPitch.set(pitch, (midiCountByPitch.get(pitch) ?? 0) + 1);
+  }
   // Iterate in sorted MIDI order so the resulting mapping is stable.
   const midis = Array.from(pitchByMidi.keys()).sort((a, b) => a - b);
   for (const midi of midis) {
     const pitch = pitchByMidi.get(midi);
     if (!pitch || out[pitch]) continue;
     const entry = GM_PERCUSSION[midi];
+    const hasMultipleVariants = (midiCountByPitch.get(pitch) ?? 0) > 1;
+    const name = hasMultipleVariants
+      ? GENERIC_INSTRUMENT_NAME_BY_PITCH[pitch] ?? entry?.name ?? `MIDI ${midi}`
+      : entry?.name ?? `MIDI ${midi}`;
     out[pitch] = {
       // GM entries carry an explicit kind; unknown MIDI notes get the
       // pitch-letter default (which falls back to `custom`).
       kind: entry?.kind ?? defaultKindForPitch(pitch),
-      name: entry?.name ?? `MIDI ${midi}`,
+      name,
       ...(entry?.limb ? { limb: entry.limb } : {}),
       midi: { note: midi },
     };

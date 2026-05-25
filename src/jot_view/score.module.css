@@ -125,6 +125,28 @@
     background: var(--color-accent-overlay-faint);
 }
 
+/* Negative-indexed bar (audio pre-roll absorbed into the score by
+   `structureForVoice`, either from `globalMetadata.leadBars` or
+   synthesised from a chrome-only `globalMetadata.drumsT0Sec`). Hatched
+   so the operator reads bars -N..-1 as "this is the recording's intro"
+   rather than "extra real bars they need to count from". Internal
+   bar-right borders are suppressed so consecutive lead-in bars merge
+   into one visual block; only the last (`.barLeadInLast`,
+   `bar.index === -1`) keeps a dashed boundary to separate the lead-in
+   from bar 1. */
+.barLeadIn {
+    border-right: none;
+    background: repeating-linear-gradient(
+        45deg,
+        var(--color-border-translucent-faint) 0 6px,
+        transparent 6px 12px
+    );
+}
+
+.barLeadInLast {
+    border-right: 1px dashed var(--color-border);
+}
+
 /* Subtle dashed beat divider inside a bar. Position is `padLeft +
    beatOffset × pxPerBeat`, the same x the renderer places that beat's
    note at — `--divider-beat` is the per-line beat offset (set inline
@@ -151,9 +173,24 @@
     border-bottom: none;
 }
 
-.laneDim {
+/* Dim is applied to the notes themselves, not the lane: `opacity` on
+   `.lane` would create a stacking context that traps `.noteLabel`'s
+   z-index inside the lane, hiding the selection popover behind any
+   later-painted sibling (other lanes in the bar, mixer rows below,
+   audio-track waveforms). Per-note opacity has the same visual effect
+   without the stacking-context side-effect. */
+.laneDim .note {
     opacity: 0.25;
     transition: opacity 120ms ease;
+}
+
+/* The selected / hovered note (and therefore its label popover) escapes
+   the dim so its debug details are fully legible. `opacity: 1` doesn't
+   create a stacking context, so the label's `z-index: 12` works
+   normally and floats above neighbouring rows. */
+.laneDim .note.noteShowingLabel,
+.laneDim .note.noteHovered {
+    opacity: 1;
 }
 
 /* The bracket is drawn per row in the mixer; a multi-row pattern stacks
@@ -448,6 +485,19 @@
     width: max-content;
 }
 
+/* Flip the label above the notehead instead of below. Applied by
+   NoteView when the default below-placement would extend past the
+   scroll viewport's bottom (which is flush with the playback bar's
+   top). The 16 px gap matches the default `margin-top` so the
+   notehead stays unobscured on either side; the horizontal centring
+   transform from `.noteLabel` is preserved. */
+.noteLabelAbove {
+    top: auto;
+    bottom: 100%;
+    margin-top: 0;
+    margin-bottom: 16px;
+}
+
 .noteLabelText {
     white-space: nowrap;
 }
@@ -661,6 +711,30 @@
     color: var(--color-bg-base);
 }
 
+.timingVizDiffBarAnchor {
+    background: var(--color-pattern-3);
+    color: var(--color-bg-base);
+}
+
+.timingVizDiffBarDrumOffset {
+    background: var(--color-pattern-4);
+    color: var(--color-bg-base);
+}
+
+/* "Unknown drift source" — the chain's residual. Visually distinct from
+   the named stages (hatched fill + muted neutral) so an operator scanning
+   the rows immediately reads it as "this is the gap we haven't attributed
+   to anything specific yet" rather than another labelled transformation. */
+.timingVizDiffBarUnknown {
+    background-color: var(--color-text-faint);
+    background-image: repeating-linear-gradient(
+        135deg,
+        var(--color-bg-cream-translucent) 0 4px,
+        transparent 4px 8px
+    );
+    color: var(--color-bg-base);
+}
+
 .timingVizDiffLabel {
     composes: metaCaption from '../typography.module.css';
     font-size: 9px;
@@ -737,4 +811,15 @@
     line-height: 1.2;
     /* Match `.noteLabel`: size to the widest non-wrapping row inside. */
     width: max-content;
+}
+
+/* Flip the filtered-onset popover above its ghost circle when the
+   default below-placement would extend past the scroll viewport. Same
+   8 px gap as the below default; preserves the breathing room around
+   the ghost itself. */
+.filteredOnsetLabelAbove {
+    top: auto;
+    bottom: 100%;
+    margin-top: 0;
+    margin-bottom: 8px;
 }

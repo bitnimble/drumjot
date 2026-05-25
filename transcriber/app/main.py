@@ -71,15 +71,17 @@ from app.run_log import RunLog, reset_current_run_log, set_current_run_log
 DEFAULT_DEBUG_DIR = Path("/debug")
 
 # Map stage -> HTTP status code surfaced when that stage fails. The
-# transcribe stage is the only external dependency (Anthropic), so it
-# gets 502 (bad gateway); everything else is local compute and surfaces
-# as 500.
+# `filter` stage is the only external dependency (Anthropic LLM calls),
+# so it gets 502 (bad gateway); everything else (including `transcribe`,
+# which is now a pure local render after the LLM bit was split out) is
+# local compute and surfaces as 500.
 _STAGE_HTTP_STATUS: dict[Stage, int] = {
     Stage.STEMS_ALL: 500,
     Stage.STEMS_PER: 500,
     Stage.BEATS: 500,
     Stage.ONSETS: 500,
-    Stage.TRANSCRIBE: 502,
+    Stage.FILTER: 502,
+    Stage.TRANSCRIBE: 500,
 }
 
 
@@ -310,6 +312,7 @@ async def transcribe(
             output_sink,
             drum_stem=ctx.drum_stem,
             per_instrument_stems=ctx.per_instrument_stems,
+            residual_stem=ctx.residual_stem,
             predicted_midi=ctx.predicted_midi,
             scavenge_dir=sink.dir if sink is not None else None,
         )
@@ -460,6 +463,7 @@ async def transcribe_resume(
             output_sink,
             drum_stem=ctx.drum_stem,
             per_instrument_stems=ctx.per_instrument_stems,
+            residual_stem=ctx.residual_stem,
             predicted_midi=ctx.predicted_midi,
             scavenge_dir=resume_dir,
         )

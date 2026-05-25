@@ -952,12 +952,25 @@ export class JotPlayer {
    * — the existing timer is cleared first so back-to-back speed changes
    * don't accumulate stale callbacks.
    */
-  private scheduleTailTimer(lastAudioTime: number): void {
+  private scheduleTailTimer(drumsLastAudioTime: number): void {
     if (this.endTimerId !== undefined) {
       window.clearTimeout(this.endTimerId);
       this.endTimerId = undefined;
     }
     if (!this.ctx) return;
+    // The drum scheduler's last note isn't the only thing keeping
+    // playback alive; loaded audio tracks play through `BufferSource`
+    // nodes that run independently to their buffer ends. If the user
+    // mutes / solos all drums (e.g. solos an audio track to ear-check
+    // a stem), `drumsLastAudioTime` collapses to the play anchor and
+    // we'd otherwise call `stop()` after `PLAYBACK_TAIL_SECONDS` while
+    // the audio tracks are still mid-stream. Take the max with the
+    // longest currently-playing audio track's end time so the tail
+    // timer outlives whichever side is still producing sound.
+    const lastAudioTime = Math.max(
+      drumsLastAudioTime,
+      this.computeAudioTracksEndTime(),
+    );
     this.tailAudioTime = lastAudioTime;
     const tailMs = Math.max(
       0,
@@ -966,6 +979,29 @@ export class JotPlayer {
     this.endTimerId = window.setTimeout(() => {
       this.stop();
     }, tailMs);
+  }
+
+  /** Audio-context time at which the longest currently-scheduled audio
+   * track will run out of buffer, computed from the most recent
+   * play / resume / `setPlaybackSpeed` anchor (`startContextTime` +
+   * `startJotTime`). Returns 0 when no audio tracks are loaded; the
+   * caller takes a `Math.max` with the drum scheduler's last note time,
+   * so 0 means "audio doesn't constrain the tail". */
+  private computeAudioTracksEndTime(): number {
+    if (!this.ctx || this.audioTracks.size === 0) return 0;
+    // Same `mediaOffset = max(0, jot + drumsT0Sec)` formula
+    // `AudioTrackPlaybackController.scheduleOne` uses, so the end time
+    // here matches when the underlying `BufferSource` actually stops.
+    const mediaOffset = Math.max(0, this.startJotTime + this.drumsT0Sec);
+    const speed = this.playbackSpeed;
+    let maxEnd = 0;
+    for (const track of this.audioTracks.values()) {
+      const remaining = track.durationSec - mediaOffset;
+      if (remaining <= 0) continue;
+      const end = this.startContextTime + remaining / speed;
+      if (end > maxEnd) maxEnd = end;
+    }
+    return maxEnd;
   }
 
   /**
@@ -989,10 +1025,22 @@ export class JotPlayer {
     let lastTime = audioStartTime;
     let scheduled = 0;
     let mutedFiltered = 0;
+    // Events whose `time` falls before the play cursor are silently
+    // skipped (they're already in the past for this play call). Track
+    // them separately so the "no audible notes scheduled" guard below
+    // doesn't conflate them with "audible notes the kit failed to
+    // schedule"; that wrong attribution turned a clean soloed-audio
+    // playback (where the cymbal lane has a couple of cued events
+    // sitting at the playhead's exact start time and skipping by ≤µs
+    // float drift) into a hard error abort.
+    let silentlySkipped = 0;
     const speed = this.playbackSpeed;
 
     for (const ev of this.events) {
-      if (ev.time < fromOffset) continue;
+      if (ev.time < fromOffset) {
+        silentlySkipped++;
+        continue;
+      }
       if (!isAudibleUnder(ev.pitch, this.currentFilter)) {
         mutedFiltered++;
         continue;
@@ -1020,17 +1068,24 @@ export class JotPlayer {
 
     console.log(
       `[jotPlayer] scheduled ${scheduled}/${this.events.length} events ` +
-        `(filtered by mute/solo: ${mutedFiltered})`
+        `(filtered by mute/solo: ${mutedFiltered}, ` +
+        `skipped pre-cursor: ${silentlySkipped})`
     );
 
-    if (scheduled === 0 && this.events.length - mutedFiltered > 0 && this.state !== 'playing') {
-      // Nothing scheduled but notes survived the mute/solo filter — a
-      // genuine, otherwise-invisible failure (e.g. the kit loaded with
-      // no usable zones). Notes dropped purely by an active mute/solo
-      // are instead a valid silent-start state, handled by the caller
-      // exactly like a live reschedule.
+    // "Audible" here = passed both the pre-cursor time check AND the
+    // mute/solo filter. Notes that were silently skipped for being
+    // before `fromOffset` aren't candidates this call ever tried to
+    // schedule, so they don't count toward "the kit failed us".
+    const audible = this.events.length - mutedFiltered - silentlySkipped;
+    if (scheduled === 0 && audible > 0 && this.state !== 'playing') {
+      // Nothing scheduled but notes survived BOTH the time check and
+      // the mute/solo filter; a genuine, otherwise-invisible failure
+      // (e.g. the kit loaded with no usable zones). Notes dropped
+      // purely by an active mute/solo (audible=0) are instead a valid
+      // silent-start state, handled by the caller exactly like a live
+      // reschedule.
       throw new Error(
-        `None of ${this.events.length - mutedFiltered} audible notes could be ` +
+        `None of ${audible} audible notes could be ` +
           `scheduled on the GeneralUser GS kit. See console for the breakdown.`
       );
     }
