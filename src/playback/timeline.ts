@@ -28,7 +28,7 @@
  * `ViewConfig.barWidth` change reflows the rendered bars reactively and
  * the playhead re-reads their new `x` / `width`).
  */
-import { BpmTransition } from 'src/dsl';
+import { BpmTransition, TimeSignature } from 'src/dsl';
 import { Pixels, RenderedJot, px } from 'src/jot';
 
 /**
@@ -48,6 +48,59 @@ export function resolveBpm(
     return typeof v === 'number' && v > 0 ? v : fallback;
   }
   return fallback;
+}
+
+/**
+ * Pick the BPM and time signature the song spends the largest proportion
+ * of its audio duration in, excluding pre-drum lead-in bars (negative
+ * `index`) whose bpm is artificially scaled to fit the audio pre-roll.
+ *
+ * Used by the subtitle formatter (cosmetic), and by `store.setDrumOffset`
+ * to convert a beat-shift delta to the audio-compensation seconds —
+ * `globalMetadata.bpm` is the *first* `setTempo` event, which for
+ * transcribed bundles is the back-solved lead-in tempo and can be very
+ * different from the song's actual tempo.
+ */
+export function pickDominantBpmAndTime(jot: RenderedJot): {
+  dominantBpm: number | undefined;
+  dominantTime: TimeSignature | undefined;
+} {
+  const voice = jot.structure.voices[0];
+  if (!voice || voice.bars.length === 0) {
+    return { dominantBpm: undefined, dominantTime: undefined };
+  }
+  let currentBpm = resolveBpm(jot.globalMetadata.bpm, 120);
+  const bpmDur = new Map<number, number>();
+  const timeDur = new Map<string, { time: TimeSignature; duration: number }>();
+  for (const bar of voice.bars) {
+    const override = bar.source.metadata?.bpm;
+    if (override !== undefined) currentBpm = resolveBpm(override, currentBpm);
+    if (bar.index < 0) continue;
+    const duration = bar.beats * (60 / currentBpm);
+    const bpmKey = Math.round(currentBpm);
+    bpmDur.set(bpmKey, (bpmDur.get(bpmKey) ?? 0) + duration);
+    const timeKey = `${bar.time.count}/${bar.time.unit}`;
+    const prev = timeDur.get(timeKey);
+    if (prev) prev.duration += duration;
+    else timeDur.set(timeKey, { time: bar.time, duration });
+  }
+  let dominantBpm: number | undefined;
+  let bestBpmDur = -Infinity;
+  for (const [bpm, dur] of bpmDur) {
+    if (dur > bestBpmDur) {
+      bestBpmDur = dur;
+      dominantBpm = bpm;
+    }
+  }
+  let dominantTime: TimeSignature | undefined;
+  let bestTimeDur = -Infinity;
+  for (const { time, duration } of timeDur.values()) {
+    if (duration > bestTimeDur) {
+      bestTimeDur = duration;
+      dominantTime = time;
+    }
+  }
+  return { dominantBpm, dominantTime };
 }
 
 export type BarTiming = {

@@ -27,8 +27,14 @@ dependencies = [
     # compatible build. The default PyPI wheel currently ships against
     # CUDA 13.0 and refuses to run on drivers older than ~580. cu128 is
     # the highest CUDA version most consumer drivers (570+) support.
-    "torch>=2.8,<2.12",
-    "torchaudio>=2.8,<2.12",
+    # Capped at <2.9: torchaudio 2.9 dropped the legacy backend API
+    # (`torchaudio.AudioMetaData`, `torchaudio.list_audio_backends`)
+    # that pyannote.audio 3.4.0; pulled in transitively by whisperx
+    #; still calls unconditionally during `import whisperx`. Bump
+    # this cap only after pyannote.audio ships a release that uses
+    # the new torio-backed dispatcher.
+    "torch>=2.8,<2.9",
+    "torchaudio>=2.8,<2.9",
     # ADTOF onset backend (the sole per-stem onset detector). This is
     # the PyTorch port (xavriley/ADTOF-pytorch), NOT the original
     # TensorFlow ADTOF — it's torch-only (deps:
@@ -50,6 +56,16 @@ dependencies = [
     "mido>=1.3",
     # LLM
     "anthropic>=0.40",
+    # Lyrics alignment.
+    # whisperx bundles faster-whisper (CTranslate2 backend) + a wav2vec2
+    # forced aligner for sub-word timestamps; used by `pipeline/
+    # lyrics_align.py` to produce time-aligned lyrics on demand. Pulls
+    # in faster-whisper, ctranslate2, pyannote-audio. The model itself
+    # is downloaded lazily on first /lyrics/align call into `models_dir`
+    # (size depends on WHISPER_MODEL; defaults to `medium` int8_float16,
+    # ~700 MB VRAM peak; fits comfortably alongside the separation
+    # models on a 6 GB GPU since separation has unloaded by then).
+    "whisperx>=3.1",
     # Misc
     "httpx>=0.27",
 ]

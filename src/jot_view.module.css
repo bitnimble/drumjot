@@ -2,7 +2,7 @@
    - App layout (appContainer / jotContainer / title / subtitle / legend)
    - Full-app modals + overlays (loading, marquee)
    - Form patterns shared by ≥2 component modules (toolbarCheckbox,
-     samplesSelect, offsetInput, statusPill*).
+     samplesSelect, statusPill*).
    Per-component chrome (toolbar buttons/pills, transport, mixer rows,
    note/bar styles) lives in the corresponding *.module.css under
    jot_view/. */
@@ -16,10 +16,170 @@
     box-sizing: border-box;
 }
 
-.empty {
-    font-size: 14px;
+/* First-load welcome screen shown when no jot is loaded. Centred card on
+   the same cream-paper neutral the rest of the app sits on; the toolbar
+   above remains the canonical surface for non-.jot formats. */
+.emptyState {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 48px 24px;
+    min-height: 0;
+    overflow: auto;
+}
+
+.emptyStateCard {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 14px;
+    max-width: 520px;
+    padding: 44px 40px;
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-md);
+}
+
+.emptyStateIcon {
+    color: var(--color-accent);
+    opacity: 0.9;
+    line-height: 0;
+}
+
+.emptyStateTitle {
+    composes: heading from './typography.module.css';
+    margin: 0;
+    color: var(--color-text);
+}
+
+.emptyStateBody {
+    composes: body from './typography.module.css';
+    color: var(--color-text-secondary);
+    margin: 0;
+    line-height: 1.5;
+    max-width: 42ch;
+}
+
+/* `composes:` can only target a single bare class selector (see the
+   docblock in typography.module.css), so the `mono` use case is inlined
+   here. Keep in sync with `.mono` if it changes. */
+.emptyStateBody code {
+    font-family: 'SF Mono', 'Menlo', monospace;
+    font-size: 0.92em;
+    padding: 1px 5px;
+    background: var(--color-bg-hover);
+    border-radius: var(--radius-sm);
+}
+
+.emptyStateActions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 6px;
+}
+
+.emptyStatePrimary {
+    composes: bodyEmphasis from './typography.module.css';
+    padding: 8px 20px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-accent);
+    color: var(--color-bg-base);
+    cursor: pointer;
+    font-family: inherit;
+}
+
+.emptyStatePrimary:hover {
+    background: var(--color-accent-hover);
+}
+
+.emptyStatePrimary:focus {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
+/* Sibling of `.emptyStatePrimary` that opens the recent-transcriptions
+   popover. Outlined / neutral so it reads as secondary next to the
+   accent-filled primary CTA, but matches its vertical metrics so the
+   action row stays on a clean baseline. */
+.emptyStateSecondary {
+    composes: bodyEmphasis from './typography.module.css';
+    padding: 8px 16px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-base);
+    color: var(--color-text);
+    cursor: pointer;
+    font-family: inherit;
+}
+
+.emptyStateSecondary:hover {
+    background: var(--color-bg-hover);
+    border-color: var(--color-border-strong);
+}
+
+.emptyStateSecondary:focus {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
+.emptyStateHint {
+    composes: bodySm from './typography.module.css';
     color: var(--color-text-faint-strong);
-    padding: 24px;
+    margin: 0;
+}
+
+.emptyStateExamples {
+    width: 100%;
+    margin-top: 6px;
+    padding-top: 20px;
+    border-top: 1px solid var(--color-border-soft);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+}
+
+.emptyStateExamplesLabel {
+    composes: metaLabel from './typography.module.css';
+    color: var(--color-text-faint-strong);
+}
+
+.emptyStateExampleRow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+}
+
+.emptyStateExampleButton {
+    composes: bodySm from './typography.module.css';
+    padding: 5px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-pill);
+    background: var(--color-bg-base);
+    color: var(--color-text);
+    cursor: pointer;
+    font-family: inherit;
+}
+
+.emptyStateExampleButton:hover {
+    background: var(--color-bg-hover);
+    border-color: var(--color-border-strong);
+}
+
+.emptyStateExampleButton:focus {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
+.emptyStateFileInput {
+    display: none;
 }
 
 .jotContainer {
@@ -27,58 +187,99 @@
     width: 100%;
     flex: 1 1 auto;
     min-height: 0;
-    /* No horizontal padding: the lane/stem gutters are `position: sticky;
-     left: 0`, and sticky offsets are measured from this scroller's
-     padding edge. Any left padding here would leave a strip where the
-     scrolled .barsRow notes show through to the left of the gutter
-     (the gutter would no longer be flush with the viewport edge).
-     Inset is reapplied per-block to the text content below instead. */
-    padding: 32px 0;
-    overflow: auto;
-    /* Keep the two-finger horizontal-swipe gesture contained to this
-     scroller instead of letting an overscroll past either edge trigger
-     the browser's back/forward history navigation. Scoped to this site
-     only; no system-level setting required. */
-    overscroll-behavior-x: contain;
+    /* Native scroll is disabled (overflow: hidden) so we can drive both
+       axes via a CSS `transform` on `.scrollViewport` below; that gets
+       subpixel-smooth horizontal motion during auto-follow (browsers
+       integer-snap `scrollLeft`, which made the playhead wobble 1px
+       against the bars). The horizontal Minimap below remains the
+       canonical scroll affordance; vertical scroll is middle-button pan.
+       Padding moves to the wrapper (so the inset translates away under
+       the scroll, matching how the old scrollbar would have shown
+       padding above-the-fold only on initial scroll position). */
+    overflow: hidden;
     box-sizing: border-box;
     user-select: none;
 }
 
-/* These blocks reapply the horizontal inset that used to come from
-   .jotContainer's padding so they stay aligned with each other.
-   `position: sticky; left: 0` pins them to the scroll viewport's left
-   edge during horizontal timeline scroll — they still scroll
-   vertically with the rest of the content. `width: fit-content` keeps
-   the pinned box narrow so it doesn't span the full scroll width and
-   create stray hit areas / overlap downstream sticky chrome. */
+/* Single scroll-translated wrapper inside `.jotContainer`. Sized to its
+   content via `width: max-content`; its `offsetHeight` is the natural
+   stack of all children. Per-frame motion is a `transform:
+   translate3d(...)` driven by two CSS variables that `ScrollVar` (in
+   jot_view.tsx) writes from `store.scrollX` / `store.scrollY`. Promoted
+   to its own compositor layer via `will-change: transform` so updating
+   either var is a compose-only paint; no re-rasterisation of the
+   bars/notes below. Padding here used to live on `.jotContainer`; moved
+   so it translates with the content (and the scroll-content extent for
+   the clamp math comes out right). */
+.scrollViewport {
+    position: relative;
+    /* `max-content` so the wrapper's `offsetWidth` reflects the natural
+       content extent (the analogue of `scrollWidth` in the old
+       native-overflow model). JotView's ResizeObserver feeds it to
+       `store.setContentSize` for scroll clamping. */
+    width: max-content;
+    /* Mirror the original `.jotContainer` vertical padding so the score
+       has the same top inset on initial paint. No horizontal padding;
+       the per-block inset (`padding: 0 24px` on title/subtitle/legend)
+       keeps the text content indented while leaving gutters flush with
+       the viewport's left edge, matching the previous layout. */
+    padding: 32px 0;
+    box-sizing: border-box;
+    transform: translate3d(
+        calc(var(--scroll-x, 0) * -1px),
+        calc(var(--scroll-y, 0) * -1px),
+        0
+    );
+    will-change: transform;
+}
+
+/* Counter-transform for the elements that used to be
+   `position: sticky; left: 0` against the native scroller. The wrapper
+   above translates everything by `-scrollX`; this transform adds
+   `+scrollX` back, so the element's visual screen-x stays where it
+   would have sat without horizontal scroll (effectively pinned at the
+   viewport's left edge for any element whose layout puts it at
+   content-x = 0, matching the previous sticky behaviour). Vertical
+   motion is left to the wrapper transform (sticky was only horizontal
+   before). The consumers set their own z-index since `transform`
+   creates a new stacking context. */
+.scrollStickyHorizontal {
+    position: relative;
+    transform: translate3d(calc(var(--scroll-x, 0) * 1px), 0, 0);
+    will-change: transform;
+}
+
+/* Compose the counter-transform above so these blocks stay pinned at
+   the viewport's left edge as the wrapper scrolls horizontally;
+   matches the previous `position: sticky; left: 0` semantics.
+   `width: fit-content` keeps the pinned box narrow so it doesn't span
+   the full scroll width and create stray hit areas / overlap
+   downstream sticky chrome. */
 .title {
     composes: heading from './typography.module.css';
+    composes: scrollStickyHorizontal;
     margin: 0 0 4px 0;
     padding: 0 24px;
-    position: sticky;
-    left: 0;
     width: fit-content;
 }
 
 .subtitle {
     composes: body from './typography.module.css';
+    composes: scrollStickyHorizontal;
     color: var(--color-text-muted-alt);
     margin: 0 0 20px 0;
     padding: 0 24px;
-    position: sticky;
-    left: 0;
     width: fit-content;
 }
 
 .legend {
     composes: body from './typography.module.css';
+    composes: scrollStickyHorizontal;
     display: flex;
     gap: 12px;
     flex-wrap: wrap;
     margin-bottom: 16px;
     padding: 0 24px;
-    position: sticky;
-    left: 0;
     width: fit-content;
 }
 
@@ -250,17 +451,6 @@
     background: var(--color-bg-base);
     color: var(--color-text);
     cursor: pointer;
-}
-
-.offsetInput {
-    composes: body from './typography.module.css';
-    width: 56px;
-    padding: 2px 4px;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    background: var(--color-bg-base);
-    color: var(--color-text);
-    font-variant-numeric: tabular-nums;
 }
 
 .statusPill {

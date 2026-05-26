@@ -3,24 +3,32 @@ import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { Point } from 'src/geom';
 import { RenderedJot } from 'src/jot';
+import { lyricsStore } from 'src/lyrics';
 import { BarTiming, buildTimeline, jotPlayer, timeToX } from 'src/playback';
 import { SelectionStore } from 'src/selection';
 import styles from './jot_view.module.css';
+import { LyricsSearchModal } from './jot_view/lyrics_search_modal';
+import { LyricsTextLoadModal } from './jot_view/lyrics_text_modal';
 import {
   BarTimingsContext,
+  FollowPlayheadContext,
+  GridLineSettingsContext,
   NoteProvenanceContext,
   NoteProvenanceContextValue,
   RenderedJotContext,
   SelectionContext,
+  UniformWaveformsContext,
 } from './jot_view/contexts';
 import {
   AudioTrackControls,
   MixerView,
   VoiceControls,
 } from './jot_view/mixer';
+import { Minimap } from './jot_view/minimap';
 import { PlaybackBar } from './jot_view/playback';
-import { Legend, TimelineHeader, formatSubtitle } from './jot_view/score';
-import { JotViewStore, TrackKey } from './jot_view/store';
+import { Legend, TimelineHeader, extractArtist, formatDisplayTitle, formatSubtitle } from './jot_view/score';
+import { GridLineSettings, JotViewStore, TrackKey } from './jot_view/store';
+import { RecentTranscriptionsPicker } from './jot_view/recent_transcriptions';
 import { DebugPanel, Toolbar } from './jot_view/toolbar';
 import { ExampleJot } from 'src/fakes';
 
@@ -41,18 +49,22 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   if (options.examples) store.setExamples(options.examples);
   const selection = new SelectionStore(store);
 
-  // The marquee div is `position: absolute` inside `.jotContainer`
-  // (the scroll surface, `position: relative`), so its `top`/`left`
-  // need to be in that container's content coordinate space — viewport
-  // `clientX`/`Y` would offset the rectangle by everything between the
-  // viewport edge and the container's content origin (toolbar + the
-  // Audio/Drums master rows + whatever's scrolled out of view above).
+  // Translate a click on `.jotContainer` into the marquee's coordinate
+  // space (the inner `.scrollViewport` wrapper, which is where the
+  // marquee div lives and where its `top` / `left` are interpreted).
+  // The container's `getBoundingClientRect` reflects its visual rect
+  // (unaffected by our virtual scroll, since the transform is on the
+  // inner wrapper, not the container itself), so adding `store.scrollX`
+  // / `store.scrollY` re-derives the wrapper-local position the marquee
+  // needs. Reading the observables outside any observer/render path is
+  // intentional: this fires only on pointer events, not per-frame, so
+  // we don't want to subscribe createJotView to scroll motion.
   const containerPoint = (e: React.MouseEvent<HTMLDivElement>): Point => {
     const el = e.currentTarget;
     const rect = el.getBoundingClientRect();
     return new Point(
-      e.clientX - rect.left + el.scrollLeft,
-      e.clientY - rect.top + el.scrollTop,
+      e.clientX - rect.left + store.scrollX,
+      e.clientY - rect.top + store.scrollY,
     );
   };
   const onMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -129,9 +141,30 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
         }
       : null;
 
+    // Lyrics search modal: open/close + seeded fields are local React
+    // state rather than store-observable. The modal pre-fills title /
+    // artist from the current jot on open; subsequent edits stay in the
+    // modal's own local state.
+    const [lyricsSearchOpen, setLyricsSearchOpen] = React.useState(false);
+    const [lyricsTextOpen, setLyricsTextOpen] = React.useState(false);
+    const lyricsInitialTitle = jot?.title.trim() ?? '';
+    const lyricsInitialArtist = jot ? (extractArtist(jot) ?? '') : '';
+
+    const followPlayheadContextValue = React.useMemo(
+      () => ({
+        follow: store.followPlayhead,
+        toggle: () => store.toggleFollowPlayhead(),
+      }),
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- observable read; observer wrapper rebuilds the memo when followPlayhead flips.
+      [store.followPlayhead],
+    );
+
     return (
       <SelectionContext.Provider value={selection}>
       <NoteProvenanceContext.Provider value={provenanceContextValue}>
+      <GridLineSettingsContext.Provider value={store.gridLines}>
+      <UniformWaveformsContext.Provider value={store.uniformWaveforms}>
+      <FollowPlayheadContext.Provider value={followPlayheadContextValue}>
       <div className={styles.appContainer}>
         <Toolbar
           examples={store.examples}
@@ -148,15 +181,31 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
           onLoadParadb={(file) => store.loadParadbMap(file)}
           onLoadDebugBundle={(file) => store.loadDebugBundleFile(file)}
           onLoadAudioTrack={(file) => store.loadAudioTrack(file)}
+          onLoadLyricsFile={(file) => store.loadLyricsFile(file)}
+          onOpenLyricsTextLoad={() => setLyricsTextOpen(true)}
+          onOpenLyricsSearch={() => setLyricsSearchOpen(true)}
+          onClearLyrics={() => store.clearLyrics()}
+          hasLyrics={lyricsStore.hasLyrics}
           onCancelTranscribe={() => store.cancelTranscribe()}
           onClearTranscribeStatus={() => store.clearTranscribeStatus()}
+          lyricsNotice={store.lyricsNotice}
+          onClearLyricsNotice={() => store.clearLyricsNotice()}
+          lyricsAlignStatus={store.lyricsAlignStatus}
+          onClearLyricsAlignStatus={() => store.clearLyricsAlignStatus()}
           onSetBeatInput={(b) => store.setBeatInput(b)}
+          onSetLlmModel={(m) => store.setLlmModel(m)}
           zoom={store.zoom}
           onSetZoom={(z) => store.setZoom(z)}
           hasNoteProvenance={store.noteProvenance !== undefined}
           showFilteredOnsets={store.showFilteredOnsets}
           onSetShowFilteredOnsets={(v) => store.setShowFilteredOnsets(v)}
+          gridLines={store.gridLines}
+          onToggleGridLine={(k) => store.toggleGridLine(k)}
+          uniformWaveforms={store.uniformWaveforms}
+          onSetUniformWaveforms={(v) => store.setUniformWaveforms(v)}
           recentTranscriptions={store.recentTranscriptions}
+          recentTranscriptionsLoaded={store.recentTranscriptionsLoaded}
+          recentTranscriptionsLoading={store.recentTranscriptionsLoading}
           selectedResumeFolder={store.selectedResumeFolder}
           selectedResumeStage={store.selectedResumeStage}
           onSetSelectedResumeFolder={(f) => store.setSelectedResumeFolder(f)}
@@ -164,9 +213,15 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
           onRefreshRecentTranscriptions={() =>
             store.refreshRecentTranscriptions()
           }
+          onLoadRecentTranscription={(folder) =>
+            store.loadRecentTranscription(folder)
+          }
+          transcribeMode={store.transcribeMode}
+          onSetTranscribeMode={(m) => store.setTranscribeMode(m)}
         />
         {jot ? (
           <JotView
+            store={store}
             jot={jot}
             highlightedPattern={selection.selectedPattern}
             onPatternClick={(name) => selection.togglePattern(name)}
@@ -185,6 +240,11 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
               onSetVolume: (pitch, v) => store.setPitchVolume(pitch, v),
               onToggleMute: (pitch) => store.toggleMute(pitch),
               onToggleSolo: (pitch) => store.toggleSolo(pitch),
+              masterMuted: store.drumMasterMuted,
+              masterSoloed: store.drumMasterSoloed,
+              masterAudible: store.isDrumSectionAudible,
+              onToggleMasterMute: () => store.toggleDrumMasterMute(),
+              onToggleMasterSolo: () => store.toggleDrumMasterSolo(),
             }}
             audioTrackControls={{
               mutedAudioTracks: store.mutedAudioTracks,
@@ -195,17 +255,40 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
               onToggleMute: (id) => store.toggleAudioTrackMute(id),
               onToggleSolo: (id) => store.toggleAudioTrackSolo(id),
               onClear: (id) => store.clearAudioTrack(id),
+              onSplitFromMix: (id) => store.splitAudioTrackFromMix(id),
+              onSplitDrumPieces: (id) => store.splitAudioTrackDrumPieces(id),
+              masterMuted: store.audioMasterMuted,
+              masterSoloed: store.audioMasterSoloed,
+              masterAudible: store.isAudioSectionAudible,
+              onToggleMasterMute: () => store.toggleAudioMasterMute(),
+              onToggleMasterSolo: () => store.toggleAudioMasterSolo(),
             }}
             getGutterWidth={() => store.gutterWidth}
             onSetGutterWidth={(px) => store.setGutterWidth(px)}
           />
         ) : (
-          <div className={styles.empty}>No jot loaded</div>
+          <EmptyState store={store} />
         )}
+        <Minimap store={store} />
         <PlaybackBar store={store} />
         <DebugPanel store={store} />
+        <LyricsSearchModal
+          open={lyricsSearchOpen}
+          initialTitle={lyricsInitialTitle}
+          initialArtist={lyricsInitialArtist}
+          onClose={() => setLyricsSearchOpen(false)}
+          store={store}
+        />
+        <LyricsTextLoadModal
+          open={lyricsTextOpen}
+          onClose={() => setLyricsTextOpen(false)}
+          store={store}
+        />
         <LoadingOverlay store={store} />
       </div>
+      </FollowPlayheadContext.Provider>
+      </UniformWaveformsContext.Provider>
+      </GridLineSettingsContext.Provider>
       </NoteProvenanceContext.Provider>
       </SelectionContext.Provider>
     );
@@ -215,6 +298,16 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
 }
 
 type JotViewProps = {
+  /**
+   * View-state store. Threaded down because the scroll viewport's
+   * native `overflow: auto` has been replaced by a CSS `transform` on
+   * `.scrollViewport`, and `store.scrollX` / `store.scrollY` are the
+   * canonical source of scroll position. JotView's ResizeObservers feed
+   * `store.setViewportSize` / `setContentSize`; auto-follow / zoom-
+   * anchor / middle-click pan / Stop reset all drive `store.setScrollX`
+   * / `setScrollY` / `setScrollBy` / `resetScroll`.
+   */
+  store: JotViewStore;
   jot: RenderedJot;
   highlightedPattern: string | undefined;
   onPatternClick: (name: string) => void;
@@ -241,7 +334,7 @@ type JotViewProps = {
   audioTrackControls: AudioTrackControls;
   /** Read the current sticky-gutter width (px). A getter (not a value)
    * so the parent View doesn't reactively re-render on every resize
-   * tick — the value flows into the DOM via `GutterWidthVar` as a
+   * tick, the value flows into the DOM via `GutterWidthVar` as a
    * side-effect-only CSS-var update, and is also read once at drag
    * start to snapshot the starting width. */
   getGutterWidth: () => number;
@@ -252,6 +345,7 @@ type JotViewProps = {
 
 const JotView = observer((props: JotViewProps) => {
   const {
+    store,
     jot,
     highlightedPattern,
     onPatternClick,
@@ -276,31 +370,128 @@ const JotView = observer((props: JotViewProps) => {
   // new scale to every descendant via calc()).
   const config = jot.config;
   const containerRef = React.useRef<HTMLDivElement>(null);
+  // Cached container `clientWidth`, refreshed only on container resize.
+  // Read by `PlayheadPosVar` every animation frame to compute the
+  // auto-scroll target without forcing a synchronous style+layout
+  // flush. The flush is otherwise ~30 ms on a long-song DOM because
+  // setting `--playhead-x` immediately before invalidates style on the
+  // whole container subtree (CSS custom-property cascade), and
+  // `clientWidth` requires up-to-date layout to return.
+  const containerWidthRef = React.useRef(0);
+  // Ref to the inner `.scrollViewport` wrapper. Its `offsetWidth` /
+  // `offsetHeight` is the scroll-content's natural size (the analogue
+  // of `scrollWidth` / `scrollHeight` in the previous native-overflow
+  // model); fed into `store.setContentSize` so `setScrollX` /
+  // `setScrollY` clamp to `[0, content - viewport]`.
+  const viewportRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    const container = containerRef.current;
+    const viewport = viewportRef.current;
+    if (!container || !viewport) return;
+    const updateContainer = () => {
+      containerWidthRef.current = container.clientWidth;
+      store.setViewportSize(container.clientWidth, container.clientHeight);
+    };
+    const updateViewport = () => {
+      store.setContentSize(viewport.offsetWidth, viewport.offsetHeight);
+    };
+    updateContainer();
+    updateViewport();
+    const containerRo = new ResizeObserver(updateContainer);
+    const viewportRo = new ResizeObserver(updateViewport);
+    containerRo.observe(container);
+    viewportRo.observe(viewport);
+    return () => {
+      containerRo.disconnect();
+      viewportRo.disconnect();
+    };
+  }, [store]);
 
-  // Wheel zooms the score (mirrors the Zoom slider) — no modifier
+  // Wheel zooms the score (mirrors the Zoom slider), no modifier
   // required, and Ctrl/Cmd + wheel still works (also covers the macOS
   // trackpad pinch gesture, which Chrome/Safari deliver as a synthetic
   // Ctrl + wheel). The listener is registered natively with
   // `{ passive: false }` because React's synthetic `onWheel` is passive
-  // — `preventDefault` there is a no-op, and we must cancel both the
+  //; `preventDefault` there is a no-op, and we must cancel both the
   // native page scroll and the browser's own page zoom on Ctrl/Cmd +
   // wheel. Wheel events are coalesced per animation frame: a 120 Hz
   // trackpad fires ~8 events per frame, but only the final composite
   // zoom is visible, so summing deltas and applying once skips ~7×
   // wasted layout/render passes per frame.
+  //
+  // Zoom anchors at the playhead so scaling in/out keeps the currently-
+  // playing position pinned to its screen X (musician's eyes don't have
+  // to chase the playhead). When no playhead is rendered (idle, no cue)
+  // we fall back to the viewport's horizontal centre.
   const onZoomByRef = React.useRef(onZoomBy);
   onZoomByRef.current = onZoomBy;
+  const jotRef = React.useRef(jot);
+  jotRef.current = jot;
   React.useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     let pendingDelta = 0;
+    // Latest pointer x (viewport coords) captured from wheel events;
+    // used as the zoom anchor. Coalesced wheel events take the most
+    // recent position as a natural follow-the-cursor behaviour. When no
+    // wheel event has fired yet (cleared after flush), we fall back to
+    // the viewport centre so the first paint doesn't snap.
+    let pendingClientX: number | undefined;
     let rafId = 0;
     const flush = () => {
       rafId = 0;
       const delta = pendingDelta;
+      const clientX = pendingClientX;
       pendingDelta = 0;
+      pendingClientX = undefined;
       if (delta === 0) return;
-      onZoomByRef.current(Math.exp(-delta * 0.0015));
+      const factor = Math.exp(-delta * 0.0015);
+
+      // Bars-row coords of the anchor point (cursor position when the
+      // wheel event fired; viewport centre as fallback). `bar.x` /
+      // `bar.width` are linear in `pxPerBeat`, so the new x of the same
+      // musical point is `padLeft + (anchorX - padLeft) * actualFactor`;
+      // adjusting scrollLeft by the delta keeps the on-screen position
+      // pinned without waiting for layout.
+      const currentJot = jotRef.current;
+      const pxPerBeatBefore = currentJot.pxPerBeat;
+      // `padLeft` scales with `pxPerBeat` (see ViewConfig.barNotePaddingBeats);
+      // anchor math reads the live pre-zoom value so the on-screen
+      // musical point stays pinned across the zoom step.
+      const padLeft = currentJot.config.barNotePaddingBeats * pxPerBeatBefore;
+      const barsRow = el.querySelector<HTMLElement>('[data-bars-row]');
+
+      let anchorBarsRowX: number | undefined;
+      if (barsRow) {
+        const barsRowRect = barsRow.getBoundingClientRect();
+        if (clientX !== undefined) {
+          // Cursor-anchored zoom; clamp at the bars-row's left edge so a
+          // wheel event with the cursor over the sticky gutter still
+          // anchors at the leftmost visible musical content rather than
+          // off-content negative x.
+          anchorBarsRowX = Math.max(0, clientX - barsRowRect.left);
+        } else {
+          const containerRect = el.getBoundingClientRect();
+          anchorBarsRowX =
+            containerRect.left + containerRect.width / 2 - barsRowRect.left;
+        }
+      }
+
+      onZoomByRef.current(factor);
+
+      if (anchorBarsRowX !== undefined && pxPerBeatBefore > 0) {
+        const actualFactor = currentJot.pxPerBeat / pxPerBeatBefore;
+        if (actualFactor !== 1) {
+          const delta = (anchorBarsRowX - padLeft) * (actualFactor - 1);
+          // Virtual scroll: write through the store instead of native
+          // `el.scrollLeft +=`. The store's clamp uses the pre-zoom
+          // content width (the ResizeObserver on `.scrollViewport` is
+          // async); for zoom-in this is conservative-safe (smaller
+          // max), for zoom-out the next observer tick re-clamps within
+          // a frame, so a one-frame overshoot is the worst case.
+          store.setScrollBy(delta, 0);
+        }
+      }
     };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
@@ -309,6 +500,7 @@ const JotView = observer((props: JotViewProps) => {
       // pixel-mode trackpad swipe. Scrolling up (deltaY < 0) zooms in.
       const unit = e.deltaMode === 1 ? 16 : 1;
       pendingDelta += e.deltaY * unit;
+      pendingClientX = e.clientX;
       if (rafId === 0) rafId = requestAnimationFrame(flush);
     };
     el.addEventListener('wheel', onWheel, { passive: false });
@@ -316,7 +508,9 @@ const JotView = observer((props: JotViewProps) => {
       el.removeEventListener('wheel', onWheel);
       if (rafId !== 0) cancelAnimationFrame(rafId);
     };
-  }, []);
+    // `store` is a stable singleton from `createJotView`; included for
+    // exhaustive-deps correctness even though it never changes in practice.
+  }, [store]);
 
   // Middle-mouse + drag pans the scroller in both axes. The mousedown
   // listener is on the container so preventDefault can suppress the
@@ -345,8 +539,11 @@ const JotView = observer((props: JotViewProps) => {
       const dy = e.clientY - lastY;
       lastX = e.clientX;
       lastY = e.clientY;
-      el.scrollLeft -= dx;
-      el.scrollTop -= dy;
+      // Virtual scroll: drag-pan writes the inverse cursor delta into
+      // both axes of the store. Replaces the previous native
+      // `el.scrollLeft -= dx` / `el.scrollTop -= dy` since the
+      // container is now `overflow: hidden`.
+      store.setScrollBy(-dx, -dy);
     };
     const stop = () => {
       if (!panning) return;
@@ -363,20 +560,26 @@ const JotView = observer((props: JotViewProps) => {
       window.removeEventListener('mouseup', stop);
       window.removeEventListener('blur', stop);
     };
-  }, []);
+  }, [store]);
 
   // `--note-pad-px` is the engraving inset every note's CSS `left`
-  // calc() reads; it never changes at runtime. `--px-per-beat` and
-  // `--gutter-width` are the two values that get mutated at runtime —
-  // both live on the same root so every descendant calc() chain reads
-  // from a single ancestor. The pad var goes in inline style (set
-  // once). `--px-per-beat` and `--gutter-width` are updated by
-  // `ScoreZoomVar` / `GutterWidthVar`, side-effect-only observers
-  // that write via `setProperty` on `containerRef.current` so the
-  // tick doesn't re-render JotView — only mutates one DOM attribute.
-  // With many tracks loaded a JotView re-render is expensive enough
-  // to make a 120 Hz resize drag visibly laggy, so we keep both reads
-  // off the render path.
+  // calc() reads. Its value is derived from `--note-pad-beats` (the
+  // zoom-invariant fraction-of-a-beat config) and `--px-per-beat`
+  // (zoom-driven), so the inset scales with the bar width; without
+  // this, zooming out leaves the inset fixed at 14px while a beat
+  // shrinks, and notes at the end of a bar overshoot into the next
+  // bar's space. `--note-pad-beats` is set inline once; `--px-per-beat`
+  // is updated at runtime by `ScoreZoomVar`. Because `--note-pad-px`
+  // is itself a calc reading `--px-per-beat`, every consumer reads the
+  // live scaled value without us touching the var on each zoom tick.
+  // `--gutter-width` is mutated at runtime too; both live on the same
+  // root so every descendant calc() chain reads from a single ancestor.
+  // `ScoreZoomVar` / `GutterWidthVar` are side-effect-only observers
+  // that write via `setProperty` on `containerRef.current` so the tick
+  // doesn't re-render JotView; only mutates one DOM attribute. With
+  // many tracks loaded a JotView re-render is expensive enough to make
+  // a 120 Hz resize drag visibly laggy, so we keep both reads off the
+  // render path.
   //
   // We do, however, seed the *initial* `--gutter-width` value inline
   // so the very first paint has the right value — otherwise the var
@@ -393,7 +596,8 @@ const JotView = observer((props: JotViewProps) => {
     [],
   );
   const containerStyle = {
-    ['--note-pad-px' as string]: `${config.barNotePaddingLeft}px`,
+    ['--note-pad-beats' as string]: String(config.barNotePaddingBeats),
+    ['--note-pad-px' as string]: 'calc(var(--note-pad-beats) * var(--px-per-beat) * 1px)',
     ['--gutter-width' as string]: `${initialGutterPx}px`,
   } as React.CSSProperties;
   // Eager bar-timings table for `BarTimingsContext`. Built once per jot
@@ -455,24 +659,40 @@ const JotView = observer((props: JotViewProps) => {
       >
         <ScoreZoomVar jot={jot} containerRef={containerRef} />
         <GutterWidthVar getGutterWidth={getGutterWidth} containerRef={containerRef} />
-        <h2 className={styles.title}>{jot.title || 'Untitled jot'}</h2>
-        <p className={styles.subtitle}>{formatSubtitle(jot)}</p>
-        <Legend jot={jot} />
-        <TimelineHeader jot={jot} onSeek={onSeek} onResizeGutterStart={onResizeGutterStart} />
-        <MixerView
-          jot={jot}
-          config={config}
-          trackOrder={trackOrder}
-          highlightedPattern={highlightedPattern}
-          onPatternClick={onPatternClick}
-          onSeek={onSeek}
-          onMoveTrack={onMoveTrack}
-          voiceControls={voiceControls}
-          audioTrackControls={audioTrackControls}
-          onResizeGutterStart={onResizeGutterStart}
+        <GridLineVars containerRef={containerRef} />
+        <ScrollVar containerRef={containerRef} store={store} />
+        <PlayheadPosVar
+          containerRef={containerRef}
+          containerWidthRef={containerWidthRef}
+          getGutterWidth={getGutterWidth}
+          store={store}
         />
-        <PlayheadAutoScroller containerRef={containerRef} />
-        <MarqueeOverlay />
+        <div
+          ref={viewportRef}
+          className={styles.scrollViewport}
+          // Stable hook used by JotView's content ResizeObserver and by
+          // the minimap (offsetWidth is the scroll-content's `scrollWidth`
+          // analogue in this no-native-scroll model).
+          data-jot-scroll-content
+        >
+          <h2 className={styles.title}>{formatDisplayTitle(jot) || 'Untitled jot'}</h2>
+          <p className={styles.subtitle}>{formatSubtitle(jot)}</p>
+          <Legend jot={jot} />
+          <TimelineHeader jot={jot} onSeek={onSeek} onResizeGutterStart={onResizeGutterStart} />
+          <MixerView
+            jot={jot}
+            config={config}
+            trackOrder={trackOrder}
+            highlightedPattern={highlightedPattern}
+            onPatternClick={onPatternClick}
+            onSeek={onSeek}
+            onMoveTrack={onMoveTrack}
+            voiceControls={voiceControls}
+            audioTrackControls={audioTrackControls}
+            onResizeGutterStart={onResizeGutterStart}
+          />
+          <MarqueeOverlay />
+        </div>
       </div>
     </BarTimingsContext.Provider>
     </RenderedJotContext.Provider>
@@ -539,6 +759,204 @@ const GutterWidthVar = observer(
 );
 
 /**
+ * Beat-grid visibility CSS vars. Each grid family (main beat / 16ths /
+ * triplets / 48ths) has a permanently-mounted overlay div per bar (see
+ * `.gridLayer*` in score.module.css) whose `display` is read from a
+ * matching `--grid-display-*` custom property; `block` when the
+ * toggle is on, falling back to `none` (the var-fallback) when off.
+ * Toggling a grid is therefore a single `setProperty` (or
+ * `removeProperty`) on the score root, with zero per-bar React work
+ * and zero per-bar DOM mutations; the cascade flips visibility for
+ * every overlay at once.
+ *
+ * Replaces the previous per-divider `<div>` chrome (up to ~44 dotted
+ * divs per bar when 48ths were on, which on a long score scaled to
+ * thousands of nodes per row and turned per-frame playhead repaints
+ * into a paint storm).
+ */
+const GRID_LINE_DISPLAY_VARS: Record<keyof GridLineSettings, string> = {
+  mainBeat: '--grid-display-main',
+  subBeat16: '--grid-display-16',
+  subBeatQuarterTriplet: '--grid-display-quarter-triplet',
+  subBeatTriplet: '--grid-display-triplet',
+  subBeat48: '--grid-display-48',
+};
+
+const GridLineVars = observer(
+  ({ containerRef }: { containerRef: React.RefObject<HTMLDivElement> }) => {
+    const gridLines = React.useContext(GridLineSettingsContext);
+    React.useEffect(() => {
+      const el = containerRef.current;
+      if (!el) return;
+      for (const key of Object.keys(GRID_LINE_DISPLAY_VARS) as (keyof GridLineSettings)[]) {
+        const cssVar = GRID_LINE_DISPLAY_VARS[key];
+        if (gridLines[key]) el.style.setProperty(cssVar, 'block');
+        else el.style.removeProperty(cssVar);
+      }
+    }, [gridLines, containerRef]);
+    return null;
+  }
+);
+
+/**
+ * Side-effect-only observer that writes `--scroll-x` / `--scroll-y` onto
+ * the score container whenever the store's virtual scroll offsets
+ * change. Mirrors the `ScoreZoomVar` / `GutterWidthVar` pattern: read
+ * the observable, write the var, no React re-render in the subtree.
+ *
+ * The wrapper `.scrollViewport` reads these vars via
+ * `transform: translate3d(calc(var(--scroll-x) * -1px), ...)`, and the
+ * `.scrollStickyHorizontal` class reads the same `--scroll-x` to
+ * counter-transform formerly `position: sticky; left: 0` elements
+ * (gutters, title/subtitle/legend). Driving both off one var keeps
+ * them subpixel-locked frame to frame.
+ */
+const ScrollVar = observer(
+  ({
+    containerRef,
+    store,
+  }: {
+    containerRef: React.RefObject<HTMLDivElement>;
+    store: JotViewStore;
+  }) => {
+    const x = store.scrollX;
+    const y = store.scrollY;
+    React.useLayoutEffect(() => {
+      const el = containerRef.current;
+      if (!el) return;
+      // Unitless so the `calc(var(...) * -1px)` form in CSS multiplies a
+      // number by `1px` to get a length, mirroring `--px-per-beat`'s
+      // unitless storage.
+      el.style.setProperty('--scroll-x', String(x));
+      el.style.setProperty('--scroll-y', String(y));
+    }, [x, y, containerRef]);
+    return null;
+  },
+);
+
+/**
+ * Side-effect-only observer that writes `--playhead-x` (in px) onto the
+ * score container on every player tick AND, when playback follow is
+ * engaged, pins the score's virtual scrollX to keep the playhead at
+ * the viewport's horizontal centre. Both writes happen in the same
+ * `useLayoutEffect` (pre-paint) so the playhead position and the
+ * score's scroll update in the same frame.
+ *
+ * Per-frame cost: one `timeToX` walk, one CSS-var write, and (during
+ * playback follow) one `store.setScrollX` call. The target scrollX is
+ * computed algebraically from the gutter width and the container's
+ * `clientWidth` rather than via `getBoundingClientRect()` /
+ * `querySelector()` every frame; both of those force a style-layout
+ * flush. The math: the bars-row's content starts at content-x = gutter
+ * width (sticky-left gutter occupies the leading `gutter-width` px of
+ * the scroll content), so the playhead's content-x is `gw +
+ * timeToX(t)`. Centring it in the viewport gives `scrollX = gw +
+ * timeToX(t) - clientWidth/2`. `setScrollX` clamps to `[0, content -
+ * viewport]`, so the first / last screenful degrades gracefully to the
+ * playhead riding toward that edge instead of snapping.
+ *
+ * Subpixel: unlike the native `scrollLeft` setter (browser snaps to
+ * integer px), `setScrollX` writes a fractional value that the inner
+ * `.scrollViewport` then applies via CSS `transform`; transforms on
+ * composited layers render at subpixel precision. The previous code
+ * had to round `scrollLeft` and back-derive `--playhead-x` to keep the
+ * playhead from wobbling ±0.5px against the integer-snapped scroll;
+ * with virtual scroll, `rawX` is written directly into `--playhead-x`
+ * and the two stay locked because they share the same fractional
+ * coordinate system.
+ */
+const PlayheadPosVar = observer(
+  ({
+    containerRef,
+    containerWidthRef,
+    getGutterWidth,
+    store,
+  }: {
+    containerRef: React.RefObject<HTMLDivElement>;
+    containerWidthRef: React.MutableRefObject<number>;
+    getGutterWidth: () => number;
+    store: JotViewStore;
+  }) => {
+    const t = jotPlayer.currentTime;
+    const state = jotPlayer.state;
+    const cued = jotPlayer.cued;
+    const timeline = jotPlayer.timeline;
+    const follow = React.useContext(FollowPlayheadContext).follow;
+    // Read `pxPerBeat` so this observer re-runs whenever zoom changes; // `timeToX` reads `bar.x` / `bar.width` (zoom-dependent), but the
+    // effect deps wouldn't otherwise know to re-fire when the user
+    // zooms while paused or cued, leaving `--playhead-x` stale until
+    // the next `currentTime` tick. During playback `t` updates every
+    // frame so this read is a no-op; while paused/idle/cued it's the
+    // signal that keeps the playhead pinned to the right bar.
+    const pxPerBeat = timeline.rendered?.pxPerBeat ?? 0;
+    const prevStateRef = React.useRef(state);
+    React.useLayoutEffect(() => {
+      const el = containerRef.current;
+      if (!el) return;
+      const wasActive =
+        prevStateRef.current === 'playing' || prevStateRef.current === 'paused';
+      prevStateRef.current = state;
+
+      // Stop (active → idle): snap the score back to its start so the
+      // reset playhead position is visible. Bypasses the follow flag;
+      // Stop is a reset, not a follow. Pause stays at 'paused' and
+      // keeps its scroll; initial mount is idle→idle so this is a
+      // no-op until the first play has happened.
+      if (wasActive && state === 'idle') {
+        store.resetScrollX();
+        el.style.removeProperty('--playhead-x');
+        return;
+      }
+
+      const active = state === 'playing' || state === 'paused' || cued;
+      if (!active || timeline.bars.length === 0) {
+        el.style.removeProperty('--playhead-x');
+        return;
+      }
+
+      const x = timeToX(timeline, t);
+
+      // Auto-scroll only while playing AND when follow is engaged. A
+      // paused or cued playhead still updates `--playhead-x` below (so
+      // the parked playhead reflects its bar) but doesn't pull the
+      // score under the user; manual scrolls during playback with
+      // follow off are no longer fought either.
+      //
+      // After `store.setScrollX(...)` the canonical `--scroll-x` write
+      // still goes through `ScrollVar` (an observer of the store), but
+      // we also write the CSS var directly here so the wrapper's
+      // transform is updated in the SAME useLayoutEffect as
+      // `--playhead-x`. Without that, ScrollVar's update could land in
+      // a later commit (mobx-react-lite schedules via React's setState;
+      // useLayoutEffects flush before paint but a re-render triggered
+      // from inside one isn't guaranteed to). Setting both vars here
+      // eliminates a possible one-frame lag of the score behind the
+      // playhead during auto-follow.
+      if (follow && state === 'playing') {
+        const clientWidth = containerWidthRef.current;
+        if (clientWidth > 0) {
+          store.setScrollX(getGutterWidth() + x - clientWidth / 2);
+          el.style.setProperty('--scroll-x', String(store.scrollX));
+        }
+      }
+      el.style.setProperty('--playhead-x', `${x}px`);
+    }, [
+      t,
+      state,
+      cued,
+      timeline,
+      pxPerBeat,
+      follow,
+      containerRef,
+      containerWidthRef,
+      getGutterWidth,
+      store,
+    ]);
+    return null;
+  }
+);
+
+/**
  * Isolated observer for the in-flight marquee rectangle so a mousemove
  * (which fires many times per second and mutates `selection.marquee`)
  * only re-renders this 4-style div instead of the whole JotView tree —
@@ -563,55 +981,104 @@ const MarqueeOverlay = observer(() => {
 });
 
 /**
- * Side-effect-only component: keeps the playhead pinned to the
- * horizontal centre of the viewport during playback by tracking
- * `scrollLeft` to it every frame. `scrollLeft` is auto-clamped by the
- * browser, so near the start / end of the score — where there isn't
- * enough content on one side to centre — the playhead simply rides
- * toward that edge instead of snapping. Renders nothing.
- *
- * Wrapped with `observer` so MobX reactivity drives re-renders on every
- * rAF-driven `currentTime` update; the body just reads observables and
- * runs the side effect.
+ * First-load welcome screen rendered when no jot is loaded. Surfaces the
+ * primary "open a .jot file" path directly and lists the built-in example
+ * jots as one-click shortcuts; other formats (MIDI, ParaDB, debug bundle,
+ * audio tracks, transcribe) stay in the toolbar's Load / Transcribe menus
+ * to avoid duplicating that whole surface here.
  */
-const PlayheadAutoScroller = observer(
-  ({ containerRef }: { containerRef: React.RefObject<HTMLDivElement> }) => {
-    const t = jotPlayer.currentTime;
-    const state = jotPlayer.state;
-    const timeline = jotPlayer.timeline;
-
-    React.useEffect(() => {
-      if (state !== 'playing' || timeline.bars.length === 0) return;
-      const container = containerRef.current;
-      if (!container) return;
-      // Anchor x via any bars-row inside the container — they all share
-      // the same left edge because rows stack vertically. The
-      // `data-bars-row` attribute is stamped by mixer rows specifically
-      // for this query so the shell doesn't depend on a CSS-module
-      // class name from another file.
-      const barsRow = container.querySelector<HTMLDivElement>('[data-bars-row]');
-      if (!barsRow) return;
-
-      const containerRect = container.getBoundingClientRect();
-      const barsRect = barsRow.getBoundingClientRect();
-      const playheadViewportX = barsRect.left + timeToX(timeline, t);
-      // Pin the playhead to the viewport's horizontal centre. Assigning
-      // an out-of-range scrollLeft is clamped by the browser, so the
-      // first/last screenful (not enough content to centre) degrades
-      // gracefully — the playhead rides toward that edge instead.
-      const viewportCenter = containerRect.left + containerRect.width / 2;
-      container.scrollLeft += playheadViewportX - viewportCenter;
-    }, [t, state, timeline, containerRef]);
-
-    return null;
-  }
-);
+const EmptyState = observer(({ store }: { store: JotViewStore }) => {
+  const jotInputRef = React.useRef<HTMLInputElement>(null);
+  const handleJotFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) store.loadJotFile(file);
+    e.target.value = '';
+  };
+  return (
+    <div className={styles.emptyState}>
+      <div className={styles.emptyStateCard}>
+        <div className={styles.emptyStateIcon} aria-hidden="true">
+          <svg
+            width="56"
+            height="56"
+            viewBox="0 0 56 56"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          >
+            <line x1="8" y1="22" x2="48" y2="22" />
+            <line x1="8" y1="30" x2="48" y2="30" />
+            <line x1="8" y1="38" x2="48" y2="38" />
+            <circle cx="16" cy="22" r="3" fill="currentColor" />
+            <circle cx="28" cy="30" r="3" fill="currentColor" />
+            <circle cx="40" cy="22" r="3" fill="currentColor" />
+          </svg>
+        </div>
+        <h2 className={styles.emptyStateTitle}>Open a file to get started</h2>
+        <p className={styles.emptyStateBody}>
+          Load a Drumjot <code>.jot</code>, MIDI file, ParaDB map, or
+          transcriber debug bundle, or try one of the examples below.
+        </p>
+        <div className={styles.emptyStateActions}>
+          <button
+            type="button"
+            className={styles.emptyStatePrimary}
+            onClick={() => jotInputRef.current?.click()}
+          >
+            Open .jot file
+          </button>
+          <RecentTranscriptionsPicker
+            variant="cta"
+            triggerLabel="Open recent"
+            triggerTitle="Open a previously transcribed audio file from the server's recent runs."
+            items={store.recentTranscriptions}
+            loaded={store.recentTranscriptionsLoaded}
+            loading={store.recentTranscriptionsLoading}
+            onRefresh={() => store.refreshRecentTranscriptions()}
+            onPick={(folder) => store.loadRecentTranscription(folder)}
+          />
+        </div>
+        <p className={styles.emptyStateHint}>
+          For other formats, use the <b>Load</b> or <b>Transcribe</b> menus in
+          the toolbar above.
+        </p>
+        {store.examples.length > 0 && (
+          <div className={styles.emptyStateExamples}>
+            <span className={styles.emptyStateExamplesLabel}>
+              Or try an example
+            </span>
+            <div className={styles.emptyStateExampleRow}>
+              {store.examples.map((ex) => (
+                <button
+                  key={ex.id}
+                  type="button"
+                  className={styles.emptyStateExampleButton}
+                  onClick={() => store.loadExample(ex.id)}
+                >
+                  {ex.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <input
+          ref={jotInputRef}
+          type="file"
+          accept=".jot,.txt,text/plain"
+          className={styles.emptyStateFileInput}
+          onChange={handleJotFileChange}
+        />
+      </div>
+    </div>
+  );
+});
 
 /**
  * Full-app modal overlay shown while a file is loading (jot, midi, paradb
  * map, debug bundle, audio track). Lightly transparent so the user can
  * still see the underlying UI freeze in place, and `pointer-events: auto`
- * blocks all clicks underneath until the load resolves — protects against
+ * blocks all clicks underneath until the load resolves; protects against
  * double-clicks racing a long debug-bundle import. Driven by the store's
  * `withLoading` counter, so nested loads (debug bundle → many audio
  * tracks) read as one continuous spinner.

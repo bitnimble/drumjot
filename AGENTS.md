@@ -22,8 +22,14 @@ MIDI → Jot work. Prior session was the frontend design-system pass
 `src/typography.module.css` (composed via CSS-modules `composes:`),
 shared mixer-button primitives under `src/jot_view/components/`, and
 a stylelint design-token lint (configured in `.stylelintrc.json`,
-chained into `bun run build`). **Read §5.8 before touching any module CSS** —
-hardcoded colors will fail the lint.
+chained into `bun run build`). **Read §5.8 before touching any module CSS**; hardcoded colors will fail the lint.
+
+**Workflow override (superpowers plugin):** the `superpowers:writing-plans`
+skill is **off by default for this project**. Once `superpowers:brainstorming`
+converges on requirements, go straight to implementation; no separate spec /
+plan doc. Reach for `writing-plans` only when the work genuinely needs review
+checkpoints (multi-day, multi-agent, or risky cross-cutting changes); ask the
+user first if unsure.
 
 ---
 
@@ -278,7 +284,14 @@ Debug folder layout (when DEBUG_DIR is set or debug=true on a request):
 ├── prediction.mid        # stage `transcribe` output: kept-onset MIDI (the score)
 ├── note_provenance.json  # per-note debug sidecar (kept + rejected onsets)
 ├── filter/kept_onsets.json  # per-pitch list of onsets the filter kept
-├── llm/NN_<purpose>.txt  # full hydrated prompts for every LLM call
+├── llm/NN_<purpose>.txt              # full hydrated prompt for one LLM call
+├── llm/NN_<purpose>.response.json    # parsed Anthropic response paired with
+│                                     # the prompt above (same NN): content
+│                                     # blocks incl. tool_use.input,
+│                                     # stop_reason, usage. Essential for
+│                                     # diagnosing forced-tool truncation:
+│                                     # `stop_reason=="max_tokens"` plus an
+│                                     # empty `input` is the signature.
 └── request.json          # filename + options + timings summary
 ```
 
@@ -351,12 +364,43 @@ so agents don't have to re-derive them every turn:
 |---|---|
 | `scripts/check` | Both sides — runs `check-py` then `check-ts`. The default after any cross-cutting change. |
 | `scripts/check-py [pytest args]` | Python: `ruff check --fix` + `pytest`. Args pass through to pytest, so `scripts/check-py tests/test_hihat_split.py::test_label_for_priority` works. Requires `transcriber/.venv`. |
+| `scripts/test-py [pytest args]` | Python tests ONLY, pytest without the ruff step. Same passthrough as `check-py`, so `scripts/test-py tests/test_hihat_split.py::test_label_for_priority` runs a single test. Use this when iterating on a failing test or after a change you know is lint-clean; reach for `check-py` when you actually want the full post-change loop. Requires `transcriber/.venv`. |
 | `scripts/check-ts [bun test args]` | Frontend: `stylelint --fix` + `tsc --noEmit` + `bun test`. Args pass through to `bun test`. |
 
 Scripts autofix where possible (ruff `--fix`, stylelint `--fix`) and
 exit non-zero on the first failure. They surface pre-existing lint debt
-the same way they surface new debt — fix or escalate, don't silently
+the same way they surface new debt; fix or escalate, don't silently
 ignore.
+
+**Direct pytest invocations are denied by the Claude permission config**
+(`pytest`, `python3 -m pytest`, `.venv/bin/pytest`, `uv run pytest`, etc.; see `.claude/settings.local.json`). Go through `scripts/test-py` or
+`scripts/check-py`; the scripts' own internal pytest call isn't
+intercepted because the permission check only fires on the top-level
+Bash invocation.
+
+**Direct TS test / build / typecheck invocations are denied the same
+way** (`bun test`, `bunx tsc`, `bunx vite …`, `bunx stylelint …`,
+`bunx playwright …`, `bun run test|e2e|lint:design`; see
+`.claude/settings.local.json`). Go through `scripts/check-ts`; it
+chains `stylelint --fix` + `tsc --noEmit` + `bun test` in the right
+cwd with the right flags, and any args pass through to `bun test` so
+single-file iteration still works. Same nesting trick as the pytest
+denies: the script's own internal `bun test` / `bunx tsc` calls aren't
+intercepted because the permission check only fires on the top-level
+Bash invocation. `bun run build` stays allowed as a separate top-level
+shortcut for the full production build chain (`lint:design` + tsc +
+Vite). Without these denies, agents reach for a bare `bunx tsc --noEmit`
+or `bun test` to "quickly verify" a change and skip the stylelint pass, that lets design-token lint failures (see §5.8) into commits.
+
+**`bun run dev` is for humans, not agents; don't run it.** It's a
+long-running interactive Vite watch process; agents can't keep it
+alive between turns, and the dev server isn't needed to verify a
+change compiles. When you want a "does this build?" smoke test on
+top of `scripts/check-ts`, run **`bun run build`** instead; it
+chains `lint:design` + `tsc --noEmit` + the production Vite build
+and exits with a clear pass/fail. Leave `bun run dev` to the user;
+if you genuinely need browser verification, ask the user to start
+the dev server themselves.
 
 The rest of this section documents the direct commands the scripts
 wrap, for reference / human-driven workflows.
@@ -366,8 +410,8 @@ Always use **bun**, not npm. From the repo root:
 | Command | What it does |
 |---|---|
 | `bun install` | Install npm deps + project. |
-| `bun run dev` | Start Vite dev server on http://localhost:5173. |
-| `bun run build` | Run `lint:design` + `tsc --noEmit` then Vite production build. |
+| `bun run dev` | Start Vite dev server on http://localhost:5173. **Human-only, agents must not run this** (long-running watch process); use `bun run build` for a "does this compile?" check. |
+| `bun run build` | Run `lint:design` + `tsc --noEmit` then Vite production build. Agent-friendly smoke test on top of `scripts/check-ts`. |
 | `bun test` | Run all tests via Bun's test runner. |
 | `bunx tsc --noEmit` | Typecheck only (fast iteration). |
 | `bun run lint:design` | Design-token lint: fails on hex / rgba literals in any `src/**/*.css` outside `src/design_tokens.css`. See §5.8. |
@@ -585,7 +629,7 @@ phase produced concrete files you can find in the layout above.
     change between nearly every bar). A uniform shift removes the
     systematic lag while leaving inter-beat gaps — hence per-bar
     tempo and any genuine accelerando the DBN tracked — untouched.
-    The shift is gated by `MIN_ALIGN_COVERAGE` (0.30): if fewer than
+    The shift is gated by `MIN_ALIGN_COVERAGE` (.30): if fewer than
     30 % of beats had a nearby onset the grid is left as the tracker
     produced it. `_rebuild_bar_fields` then refreshes per-bar
     `start_time` / `end_time` / `tempo_bpm` and the global initial
@@ -666,7 +710,7 @@ phase produced concrete files you can find in the layout above.
       vs frozen clock). `xToTime` inverse of `timeToX`. Bars row +
       stem waveforms get a click handler; notes / pattern label
       carry `data-noseek`. `cued` makes the playhead show before
-      play; `clearCue()` on jot replace.
+      play; `JotPlayer.stop()` on jot replace.
     - **Lead-in pre-bars**. A jot with `globalMetadata.drumsT0Sec`
       reserves `leadInPx` of hatched pre-roll before bar 1, scaled
       at the bars' exact px/s so a loaded music-stem waveform lines

@@ -39,7 +39,10 @@ from app.pipeline.onsets_midi import (
 
 # File format version. Bump on any schema change so the frontend can
 # guard against loading older bundles with newer code (or vice versa).
-FORMAT_VERSION = 1
+#   v1: original kept/rejected entries.
+#   v2: adds `reason_code` / `reason_text` from the filter LLM on
+#       rejected entries (null on kept/upstream-vetted entries).
+FORMAT_VERSION = 2
 
 
 def build_note_provenance(
@@ -49,21 +52,27 @@ def build_note_provenance(
     structure: BeatStructure,
     beat_alignment_offset_sec: float = 0.0,
     rejected_by_pitch: dict[str, str] | None = None,
+    reasons_by_pitch: dict[str, dict[int, dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """Return the JSON-serialisable provenance payload for one filter run.
 
     `all_onsets_by_pitch` is the post-split candidates (what the filter LLM
-    saw); `kept_by_pitch` is whatever survived. Identity is by object —
-    we check `id(c)` membership in the kept set, so the caller MUST pass
+    saw); `kept_by_pitch` is whatever survived. Identity is by object; we check `id(c)` membership in the kept set, so the caller MUST pass
     the same `OnsetCandidate` instances through both maps (the filter
-    pathway already does — `filter_onsets_for_instrument` keeps the
+    pathway already does; `filter_onsets_for_instrument` keeps the
     candidates verbatim).
 
     `rejected_by_pitch` overrides the `rejected_by` label per pitch.
-    Defaults to `"filter_llm"` for any pitch not in the map — the
+    Defaults to `"filter_llm"` for any pitch not in the map; the
     historical behaviour. Hi-hat lanes (`h`, `H`) pass
     `"hihat_split"` since their discards come from the unified ternary
-    classifier upstream of the filter LLM.
+    classifiers upstream of the filter LLM.
+
+    `reasons_by_pitch`, when provided, supplies the filter LLM's
+    `{reason, reason_text}` for each rejected onset, keyed by `id(c)` of
+    the rejected candidate. Pitches with no entry (or the upstream-vetted
+    `h`/`H`/`c`/`d` lanes whose rejections don't go through the filter
+    LLM) get `reason_code = null` on their rejected entries.
     """
     bar_start_tick, midi_tempos, lead_bars, _lead_tempo = compute_bar_tick_grid(
         structure, structure.initial_tempo
@@ -73,12 +82,14 @@ def build_note_provenance(
         for pitch, cands in kept_by_pitch.items()
     }
     rejected_source = rejected_by_pitch or {}
+    reasons_source = reasons_by_pitch or {}
 
     per_pitch: dict[str, list[dict[str, Any]]] = {}
     for pitch, candidates in all_onsets_by_pitch.items():
         midi_note = PITCH_TO_MIDI.get(pitch)
         kept_set = kept_ids.get(pitch, set())
         reject_label = rejected_source.get(pitch, "filter_llm")
+        reason_map = reasons_source.get(pitch, {})
         entries: list[dict[str, Any]] = []
         for c in candidates:
             bar = int(c.bar)
@@ -98,6 +109,11 @@ def build_note_provenance(
                 tick = bar_start_tick[bar] + int(round(
                     local * TICKS_PER_BEAT * midi_tempos[bar] / 60.0
                 ))
+            reason_info = (
+                reason_map.get(id(c))
+                if not kept and in_range
+                else None
+            )
             entries.append({
                 "pitch": pitch,
                 "midi_note": midi_note,
@@ -124,6 +140,18 @@ def build_note_provenance(
                 "out_of_range": not in_range,
                 "kept": kept,
                 "rejected_by": None if kept or not in_range else reject_label,
+                # Filter-LLM rejection reason. `reason_code` is one of
+                # the short codes in `filter_llm.REASON_CODES`
+                # (`bleed`/`double_trigger`/`noise`/`custom`); `null`
+                # when the rejection didn't come from the filter LLM
+                # (upstream-vetted lanes, out-of-range, or kept onsets)
+                # or the bundle predates this field. `reason_text` is
+                # free-text detail; always populated for `custom`,
+                # optional otherwise.
+                "reason_code": reason_info["reason"] if reason_info else None,
+                "reason_text": (
+                    reason_info.get("reason_text") if reason_info else None
+                ),
             })
         # Score order makes the JSON readable; out-of-range entries
         # (bar=-1) sort to the front.

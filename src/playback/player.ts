@@ -45,8 +45,10 @@ import {
   AudioTrackId,
   AudioTrackPlaybackController,
   AudioTrack,
+  AudioTrackRole,
 } from './audio_tracks';
 import { buildTimeline, EMPTY_TIMELINE, JotTimeline } from './timeline';
+import { waveformWorker } from './waveform_worker_client';
 
 export type PlayerState = 'idle' | 'loading' | 'playing' | 'paused';
 
@@ -66,6 +68,21 @@ export type PlayerFilter = {
    * only place that sees both the pitch and audio-track solo sets.
    */
   soloActive: boolean;
+  /**
+   * True when this section's master mute is engaged. Silences every row
+   * in the section regardless of per-row mute/solo state; mirrors the
+   * bus-gain pin to 0, so the scheduler skips events that would not have
+   * sounded anyway and the UI can dim the rows uniformly.
+   */
+  sectionMasterMuted: boolean;
+  /**
+   * True when this section's master solo is engaged. Acts as if every
+   * row in the section were soloed (only for the purpose of the solo
+   * exclusion rule); without this, soloing Drums master would set
+   * `soloActive` but leave `soloedPitches` empty, silencing every drum
+   * row.
+   */
+  sectionMasterSoloed: boolean;
   /** Per-pitch volume multiplier in [0, 1]; missing = full (1). */
   volumes: ReadonlyMap<string, number>;
 };
@@ -74,12 +91,21 @@ export const PASSTHROUGH_FILTER: PlayerFilter = {
   mutedPitches: new Set(),
   soloedPitches: new Set(),
   soloActive: false,
+  sectionMasterMuted: false,
+  sectionMasterSoloed: false,
   volumes: new Map(),
 };
 
 export function isAudibleUnder(pitch: string, filter: PlayerFilter): boolean {
+  if (filter.sectionMasterMuted) return false;
   if (filter.mutedPitches.has(pitch)) return false;
-  if (filter.soloActive && !filter.soloedPitches.has(pitch)) return false;
+  if (
+    filter.soloActive &&
+    !filter.sectionMasterSoloed &&
+    !filter.soloedPitches.has(pitch)
+  ) {
+    return false;
+  }
   if ((filter.volumes.get(pitch) ?? 1) <= 0) return false;
   return true;
 }
@@ -130,6 +156,24 @@ const DEFAULT_PITCH_GAIN: Record<string, number> = {
   h: 0.6,
   k: 1.5,
 };
+// Playback velocity floor. smplr's per-note gain is quadratic in velocity
+// (`vel² / 16129`; see `midiVelToGain`); so a notated `p` ghost at MIDI
+// velocity 33 plays at gain ~0.068 (-23 dB) and on hats — which the
+// DEFAULT_PITCH_GAIN trim scales down further — drops to ~-32 dB. That's
+// fine in isolation but inaudible against a backing track; which is exactly
+// when the user is practising and most wants to hear every hit. Floor the
+// velocity passed to the kit so even the quietest written dynamic is
+// reliably audible; smplr gain at velocity 50 is ~0.155 (-16 dB); still
+// clearly below an unaccented mf (vel 64) hit so accent/ghost contrast
+// survives. Floor applies *before* the per-row volume slider so manual
+// attenuation still scales the row down to silent.
+const MIN_PLAYBACK_VELOCITY = 50;
+// Minimum effective per-row volume for any non-zero slider position. The
+// raw fader [0, 1] is remapped to {0} ∪ [MIDI_VOLUME_FLOOR, 1] so the
+// smallest audible setting still sits at a useful level against a
+// backing track, below this, GM voices vanish into the mix. 0 still
+// silences the row.
+const MIDI_VOLUME_FLOOR = 0.4;
 // Small lead time so the first hit doesn't race the audio thread.
 const SCHEDULE_LEAD_SECONDS = 0.05;
 // Buffer added to the last event's time before flipping back to `idle`, so
@@ -230,6 +274,17 @@ export class JotPlayer {
   audioTrackMasterVolume: number = DEFAULT_VOLUME;
 
   /**
+   * Whether each section's bus is currently audible. Driven by the store
+   *; it folds master mute, master solo, and per-row solo into a single
+   * boolean per section (see `JotViewStore.isAudioSectionAudible` /
+   * `.isDrumSectionAudible`). When false the corresponding bus gain is
+   * pinned at 0 regardless of the master fader; when true the fader
+   * value takes over again.
+   */
+  private drumMasterAudible: boolean = true;
+  private audioMasterAudible: boolean = true;
+
+  /**
    * Audio tracks loaded by the user — any number (a ParaDB pack's
    * song + drum tracks, a transcriber's `no_drums`/`drum_stem`, ad-hoc
    * backing tracks, …). Each gets a fresh unique id from {@link
@@ -250,6 +305,14 @@ export class JotPlayer {
 
   private ctx: AudioContext | undefined;
   private drums: Drums | undefined;
+  /**
+   * In-flight soundfont load, set while `ensureLoaded` is downloading +
+   * parsing the .sf2 and cleared once `drums` is populated. Lets a
+   * background `preloadDrums()` and a foreground `play()` share the same
+   * load (and the same `sampleLoadProgress` ticks) instead of racing two
+   * parallel 30 MB cache reads / parses.
+   */
+  private loadingPromise: Promise<{ drums: Drums; ctx: AudioContext }> | undefined;
   /**
    * Master gain the drum kit is routed through (see
    * {@link DRUM_MASTER_GAIN}). Created once alongside `drums` and lives
@@ -420,7 +483,7 @@ export class JotPlayer {
     runInAction(() => {
       this.drumMasterVolume = clamped;
     });
-    if (this.drumGain) this.drumGain.gain.value = DRUM_MASTER_GAIN * clamped;
+    this.applyDrumBusGain();
   }
 
   /** Move the all-audio-tracks master fader. Same instant/persistent semantics. */
@@ -429,7 +492,36 @@ export class JotPlayer {
     runInAction(() => {
       this.audioTrackMasterVolume = clamped;
     });
-    if (this.audioBusGain) this.audioBusGain.gain.value = clamped;
+    this.applyAudioBusGain();
+  }
+
+  /**
+   * Toggle the drum section's bus audibility. False pins `drumGain` at 0
+   * regardless of the fader (so master mute / cross-domain solo silences
+   * every drum row at once at the bus, not by editing the per-pitch
+   * mute/solo state). True restores the fader value.
+   */
+  setDrumMasterAudible(audible: boolean): void {
+    this.drumMasterAudible = audible;
+    this.applyDrumBusGain();
+  }
+
+  /** Mirror of {@link setDrumMasterAudible} for the audio-track bus. */
+  setAudioMasterAudible(audible: boolean): void {
+    this.audioMasterAudible = audible;
+    this.applyAudioBusGain();
+  }
+
+  private applyDrumBusGain(): void {
+    if (!this.drumGain) return;
+    this.drumGain.gain.value = this.drumMasterAudible
+      ? DRUM_MASTER_GAIN * this.drumMasterVolume
+      : 0;
+  }
+
+  private applyAudioBusGain(): void {
+    if (!this.audioBusGain) return;
+    this.audioBusGain.gain.value = this.audioMasterAudible ? this.audioTrackMasterVolume : 0;
   }
 
   /** Fresh, never-reused audio-track id. Load order ⇒ ascending ids. */
@@ -447,15 +539,23 @@ export class JotPlayer {
    * call must happen inside a user gesture on some browsers (the click
    * that triggered the file picker inherits the gesture grant).
    */
-  async loadAudioTrack(file: File, pitch?: string): Promise<AudioTrackId> {
+  async loadAudioTrack(
+    file: File,
+    pitch?: string,
+    role?: AudioTrackRole,
+  ): Promise<AudioTrackId> {
     runInAction(() => {
       this.audioTrackError = undefined;
     });
     try {
       const ctx = this.ensureAudioContext();
+      // Start the soundfont download in the background now; it overlaps
+      // with the file decode below and leaves the kit warm for the user's
+      // next `play()`. See `preloadDrums()`.
+      this.preloadDrums();
       const { buffer, objectUrl } = await decodeAudioTrackFile(ctx, file);
       const id = this.allocateAudioTrackId();
-      this.installAudioTrack(id, file.name, buffer, objectUrl, pitch);
+      this.installAudioTrack(id, file.name, buffer, objectUrl, pitch, role);
       return id;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -467,15 +567,23 @@ export class JotPlayer {
   }
 
   /** Same as {@link loadAudioTrack} but fetches from a URL (transcriber output). */
-  async loadAudioTrackFromUrl(url: string, filename: string): Promise<AudioTrackId> {
+  async loadAudioTrackFromUrl(
+    url: string,
+    filename: string,
+    pitch?: string,
+    role?: AudioTrackRole,
+  ): Promise<AudioTrackId> {
     runInAction(() => {
       this.audioTrackError = undefined;
     });
     try {
       const ctx = this.ensureAudioContext();
+      // See `loadAudioTrack`; overlap soundfont download with the
+      // network fetch + decode of this audio track.
+      this.preloadDrums();
       const { buffer, objectUrl } = await decodeAudioTrackUrl(ctx, url);
       const id = this.allocateAudioTrackId();
-      this.installAudioTrack(id, filename, buffer, objectUrl);
+      this.installAudioTrack(id, filename, buffer, objectUrl, pitch, role);
       return id;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -499,6 +607,10 @@ export class JotPlayer {
     // (each owns its own element, so no reschedule is needed).
     this.audioTrackController?.dropAudioTrack(id);
     URL.revokeObjectURL(prev.objectUrl);
+    // Free the worker-side PCM copy too; otherwise the worker would
+    // accumulate dead tracks across the session (the PCM there is a
+    // separate copy from the AudioBuffer the player owns).
+    waveformWorker.dropTrack(id);
   }
 
   private installAudioTrack(
@@ -506,7 +618,8 @@ export class JotPlayer {
     filename: string,
     buffer: AudioBuffer,
     objectUrl: string,
-    pitch?: string
+    pitch?: string,
+    role?: AudioTrackRole,
   ): void {
     const prev = this.audioTracks.get(id);
     const track: AudioTrack = {
@@ -516,10 +629,18 @@ export class JotPlayer {
       objectUrl,
       durationSec: buffer.duration,
       pitch,
+      role,
     };
     runInAction(() => {
       this.audioTracks.set(id, track);
     });
+    // Hand a copy of the decoded PCM to the waveform worker so future
+    // peak recomputes (zoom, offset change, per-onset timing viz)
+    // don't run on the main thread. Done immediately so the worker
+    // has it before the first React effect fires a peak request; the
+    // worker's message queue is FIFO, so a `register` posted here is
+    // always processed before a later `peaks` for the same id.
+    waveformWorker.registerTrack(id, buffer);
     // If playback is in flight, start the new track in sync with the
     // existing schedule so the user hears it appear at the current
     // playhead without having to stop+restart.
@@ -626,7 +747,17 @@ export class JotPlayer {
     this.startContextTime = now;
     this.startJotTime = jotOffset;
     const lastTime = this.scheduleEvents(jotOffset, now);
-    this.audioTrackController?.setPlaybackRate(clamped);
+    // `setPlaybackRate` may need a full reschedule under the hybrid
+    // BufferSource (1.0×) / MediaElement (non-1.0×) split; pass the
+    // anchor state so it can reschedule from `(now, jotOffset)` when
+    // the path crosses the 1.0× boundary.
+    this.audioTrackController?.setPlaybackRate(
+      clamped,
+      now,
+      jotOffset,
+      this.drumsT0Sec,
+      (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter),
+    );
     this.scheduleTailTimer(lastTime);
   }
 
@@ -778,22 +909,6 @@ export class JotPlayer {
     }
     runInAction(() => {
       this.currentTime = target;
-    });
-  }
-
-  /**
-   * Drop an idle click-to-seek cue (playhead parked before pressing
-   * Play). No-op while playing / paused, so loading a new score
-   * mid-playback doesn't disturb the transport. Called when the
-   * current jot is replaced so a stale cued playhead doesn't linger.
-   */
-  clearCue(): void {
-    if (this.state !== 'idle' || !this.cued) return;
-    this.pendingStartSec = undefined;
-    runInAction(() => {
-      this.cued = false;
-      this.timeline = EMPTY_TIMELINE;
-      this.currentTime = 0;
     });
   }
 
@@ -994,10 +1109,7 @@ export class JotPlayer {
     // the audio tracks are still mid-stream. Take the max with the
     // longest currently-playing audio track's end time so the tail
     // timer outlives whichever side is still producing sound.
-    const lastAudioTime = Math.max(
-      drumsLastAudioTime,
-      this.computeAudioTracksEndTime(),
-    );
+    const lastAudioTime = Math.max(drumsLastAudioTime, this.computeAudioTracksEndTime());
     this.tailAudioTime = lastAudioTime;
     const tailMs = Math.max(
       0,
@@ -1083,9 +1195,11 @@ export class JotPlayer {
       // relative dynamics. isAudibleUnder already rejected vol <= 0.
       // The DEFAULT_PITCH_GAIN trim stacks on top so hats/kick sit
       // right out of the box even before the user touches a fader.
-      const vol = this.currentFilter.volumes.get(ev.pitch) ?? 1;
+      const rawVol = this.currentFilter.volumes.get(ev.pitch) ?? 1;
+      const vol = rawVol <= 0 ? 0 : MIDI_VOLUME_FLOOR + rawVol * (1 - MIDI_VOLUME_FLOOR);
       const defaultGain = DEFAULT_PITCH_GAIN[ev.pitch] ?? 1;
-      const velocity = Math.max(1, Math.min(127, Math.round(ev.velocity * vol * defaultGain)));
+      const floored = Math.max(MIN_PLAYBACK_VELOCITY, Math.round(ev.velocity * defaultGain));
+      const velocity = Math.max(1, Math.min(127, Math.round(floored * vol)));
       const t = audioStartTime + (ev.time - fromOffset) / speed;
       const stopFn = drums.start({ note: ev.midiNote, time: t, velocity });
       this.scheduledStops.push(stopFn);
@@ -1140,13 +1254,17 @@ export class JotPlayer {
       }
       const now = this.ctx.currentTime;
       const jotTime = this.currentJotTime(now);
-      // Re-lock the audio tracks to the AudioContext clock (the clock the
-      // drums are scheduled on) so a media element's independent clock can't
-      // slew the backing track away from the score over a long take.
-      // `expectedMediaSec` mirrors audio_tracks.ts's mediaOffset = max(0,
-      // jot + drumsT0Sec) so the target matches where the track started.
+      // Re-lock the audio tracks to the AudioContext clock (the clock
+      // the drums are scheduled on) so a media element's independent
+      // clock can't slew the backing track away from the score over a
+      // long take. Only needed on the MediaElement (non-1.0×) path; // the BufferSource (1.0×) path already runs on the AudioContext
+      // clock and can't drift, so skip the work entirely there. The
+      // controller's `correctDrift` is also a no-op for BufferSource
+      // slots, but short-circuiting here saves the iteration cost
+      // every rAF when nothing could ever move.
       if (
         this.audioTrackController &&
+        this.playbackSpeed !== 1 &&
         now - this.lastDriftCheckTime >= DRIFT_CHECK_INTERVAL_SECONDS
       ) {
         this.lastDriftCheckTime = now;
@@ -1187,32 +1305,69 @@ export class JotPlayer {
     if (!Ctx) {
       throw new Error('Web Audio is not available in this browser.');
     }
-    this.ctx = new Ctx();
+    // `latencyHint: 'playback'` asks the browser for a larger output
+    // buffer than the default 'interactive' mode — the audio thread can
+    // ride through longer main-thread stalls (heavy relayout on zoom; a
+    // GC pause) without buffer underruns / glitches. Drum practice
+    // doesn't involve live-input feedback; so the few-tens-of-ms extra
+    // scheduling latency is inaudible. All `currentTime` / scheduled
+    // event times remain in the same time frame so no scheduler math
+    // needs to change.
+    this.ctx = new Ctx({ latencyHint: 'playback' });
     // Build the master bus now (not in ensureLoaded) so audio tracks
     // loaded before the first play() route through the same faders.
     const pageGain = this.ctx.createGain();
     pageGain.gain.value = this.masterVolume;
     pageGain.connect(this.ctx.destination);
     const audioBusGain = this.ctx.createGain();
-    audioBusGain.gain.value = this.audioTrackMasterVolume;
+    audioBusGain.gain.value = this.audioMasterAudible ? this.audioTrackMasterVolume : 0;
     audioBusGain.connect(pageGain);
     this.pageGain = pageGain;
     this.audioBusGain = audioBusGain;
     return this.ctx;
   }
 
+  /**
+   * Kick off the soundfont load in the background without blocking the
+   * caller and without surfacing the visible loading indicator (which is
+   * gated on `state === 'loading'`). Called from the audio-track loaders
+   * so the ~30 MB cache read + SF2 parse can overlap with the user's
+   * file-decoding wait; by the time they hit Play, `ensureLoaded`
+   * short-circuits and playback starts immediately. No-op if drums are
+   * already loaded or already loading; errors are swallowed (a real
+   * `play()` will re-attempt and surface them through `errorMessage`).
+   */
+  preloadDrums(): void {
+    if (this.drums || this.loadingPromise) return;
+    this.ensureLoaded().catch((err) => {
+      console.warn('[jotPlayer] drum preload failed (will retry on play):', err);
+    });
+  }
+
   private async ensureLoaded(): Promise<{ drums: Drums; ctx: AudioContext }> {
     if (this.drums && this.ctx) return { drums: this.drums, ctx: this.ctx };
+    if (this.loadingPromise) return this.loadingPromise;
+    this.loadingPromise = this.doLoad();
+    try {
+      return await this.loadingPromise;
+    } finally {
+      this.loadingPromise = undefined;
+    }
+  }
 
+  private async doLoad(): Promise<{ drums: Drums; ctx: AudioContext }> {
     const ctx = this.ensureAudioContext();
     const drumGain = ctx.createGain();
-    drumGain.gain.value = DRUM_MASTER_GAIN * this.drumMasterVolume;
+    drumGain.gain.value = this.drumMasterAudible ? DRUM_MASTER_GAIN * this.drumMasterVolume : 0;
     // Into the page master (built by ensureAudioContext above), not
     // straight to destination, so the page fader scales drums too.
     drumGain.connect(this.pageGain ?? ctx.destination);
     this.drumGain = drumGain;
-    // Phase before the first byte arrives — the toolbar shows "waiting
-    // for server…" until the storage layer reports progress.
+    // Phase before the cache layer reports its first tick. On a cache
+    // hit `ProgressCacheStorage` fires `fromCache: true` as soon as
+    // `cache.match` resolves (well before `arrayBuffer()` finishes), so
+    // this state is brief; on a cold load it lingers until the first
+    // network byte arrives.
     runInAction(() => {
       this.sampleLoadPhase = 'connecting';
     });

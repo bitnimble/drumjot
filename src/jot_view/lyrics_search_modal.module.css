@@ -1,0 +1,274 @@
+/* LRCLIB search modal. Centered fixed overlay with a dimmed backdrop;
+   clicking the backdrop closes. Panel chrome mirrors the existing
+   debug-panel / dropdown styling so the modal feels native to the rest
+   of the app. */
+
+.modalBackdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    background: var(--color-bg-overlay);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+
+.modalPanel {
+    width: min(560px, 100%);
+    max-height: calc(100vh - 48px);
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+}
+
+.modalHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-bg-cream);
+}
+
+.modalTitle {
+    composes: heading from '../typography.module.css';
+    color: var(--color-text-strong);
+    margin: 0;
+    font-size: 14px;
+}
+
+.modalClose {
+    appearance: none;
+    background: transparent;
+    border: none;
+    color: var(--color-text-muted-alt);
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0 6px;
+    line-height: 1;
+}
+
+.modalClose:hover {
+    color: var(--color-text-strong);
+}
+
+.modalForm {
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    gap: 8px;
+    padding: 14px 16px;
+}
+
+.field {
+    flex: 1 1 0;
+    min-width: 0;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 6px 8px;
+    font-size: 13px;
+    font-family: inherit;
+    background: var(--color-bg-base);
+    color: var(--color-text-strong);
+}
+
+.field:focus {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+    border-color: transparent;
+}
+
+.searchButton {
+    appearance: none;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--color-accent);
+    color: var(--color-bg-base);
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 0 10px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.searchButton:hover:not(:disabled) {
+    background: var(--color-accent-hover);
+}
+
+.searchButton:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* Self-contained spinner for the search button. Not composed from
+   `statusPillSpinner` because that class is tuned for the toolbar's
+   inline-with-text use (inline-block + margin-right + vertical-align)
+   and those defaults push the glyph visibly off-center when dropped
+   into a clean flex-centered icon button. `box-sizing: border-box`
+   keeps the outer dimensions equal to the 16x16 lucide Search icon
+   this swap replaces, so the button height doesn't twitch on toggle. */
+.searchButtonSpinner {
+    box-sizing: border-box;
+    width: 16px;
+    height: 16px;
+    border: 1.5px solid color-mix(in srgb, currentColor 35%, transparent);
+    border-top-color: currentColor;
+    border-radius: var(--radius-circle);
+    animation: searchButtonSpinnerRotate 0.8s linear infinite;
+}
+
+@keyframes searchButtonSpinnerRotate {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.phaseMessage {
+    margin: 0 16px 14px 16px;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.phaseMessageMuted {
+    background: var(--color-bg-cream);
+    color: var(--color-text-muted-alt);
+    border: 1px solid var(--color-border);
+}
+
+.phaseMessageError {
+    background: var(--color-error-bg);
+    color: var(--color-error);
+    border: 1px solid var(--color-error);
+}
+
+.results {
+    border-top: 1px solid var(--color-border);
+    max-height: 320px;
+    overflow-y: auto;
+    background: var(--color-bg-base);
+}
+
+.resultsList {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.resultItem {
+    appearance: none;
+    width: 100%;
+    background: transparent;
+    border: none;
+    border-left: 3px solid transparent;
+    border-bottom: 1px solid var(--color-border);
+    text-align: left;
+    padding: 10px 16px 10px 13px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    color: var(--color-text-strong);
+    font-family: inherit;
+}
+
+.resultItem:hover {
+    background: var(--color-bg-cream);
+}
+
+.resultItemSelected,
+.resultItemSelected:hover {
+    background: var(--color-bg-cream);
+    border-left-color: var(--color-accent);
+}
+
+.resultPrimary {
+    font-size: 13px;
+}
+
+.resultSecondary {
+    composes: subtle from '../typography.module.css';
+    color: var(--color-text-muted-alt);
+    font-size: 11px;
+}
+
+.loadFooter {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    border-top: 1px solid var(--color-border);
+    background: var(--color-bg-cream);
+}
+
+.infoIcon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-text-muted-alt);
+    cursor: help;
+    flex: 0 0 auto;
+}
+
+.infoIcon:hover {
+    color: var(--color-text-strong);
+}
+
+.wordLevelLabel {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--color-text-strong);
+    cursor: pointer;
+    flex: 1 1 auto;
+}
+
+.wordLevelLabel input[type='checkbox'] {
+    cursor: pointer;
+    margin: 0;
+}
+
+.wordLevelLabelDisabled {
+    color: var(--color-text-muted-alt);
+    cursor: not-allowed;
+}
+
+.wordLevelLabelDisabled input[type='checkbox'] {
+    cursor: not-allowed;
+}
+
+.loadButton {
+    appearance: none;
+    flex: 0 0 auto;
+    background: var(--color-accent);
+    color: var(--color-bg-base);
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.loadButton:hover:not(:disabled) {
+    background: var(--color-accent-hover);
+}
+
+.loadButton:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}

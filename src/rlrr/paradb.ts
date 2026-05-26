@@ -48,6 +48,14 @@ export type ParadbTrack = {
    * referenced by both arrays counts as a song track (not muted).
    */
   defaultMuted: boolean;
+  /**
+   * Track role for the per-row overflow menu. ParaDB's `audioFileData`
+   * doesn't formally distinguish drumless backing from full-mix backing,
+   * so `songTracks` entries are always tagged `'full-mix'` (lets the
+   * user re-run drum isolation on packs whose stem separation was poor)
+   * and `drumTracks` entries are tagged `'drums'`.
+   */
+  role: 'full-mix' | 'drums';
 };
 
 export type ParadbMap = {
@@ -133,6 +141,7 @@ export async function loadParadbZip(
     audioTracks.push({
       file: await inflateToFile(bytes, entry),
       defaultMuted: isDrums,
+      role: isDrums ? 'drums' : 'full-mix',
     });
   }
 

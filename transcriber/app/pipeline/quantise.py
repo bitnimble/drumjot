@@ -71,9 +71,27 @@ _MAX_LLM_SHIFT = 2
 # pattern-matching; same tier as the filter stage.
 _LLM_MODEL = "claude-haiku-4-5-20251001"
 
-# Conservative per-call token budget. The response is one int per onset
-# (+ JSON scaffolding), so even a 1000-onset chart fits easily.
-_LLM_MAX_TOKENS = 4096
+# Per-call token budget. The prompt asks the model to return entries
+# ONLY for non-zero shifts (mirror of `filter_llm`'s "rejected_onsets"
+# pattern), so the natural response size is proportional to the number
+# of jitter corrections needed; not the total onset count. We still
+# size the cap from `n_onsets` as defence-in-depth: a model that
+# ignores the prompt and emits one entry per onset measured at
+# ~13 tokens/entry in the wild (Haiku 4.5: `{"id":1234,"shift":-2},`
+# tokenises to ~10–13 tokens depending on id width and field ordering),
+# so the per-onset multiplier is set to 16 for headroom. Haiku 4.5
+# supports 64K output tokens so the cap stays generous.
+_LLM_MAX_TOKENS_PER_ONSET = 16
+_LLM_MAX_TOKENS_FLOOR = 8192
+_LLM_MAX_TOKENS_OVERHEAD = 1024
+
+
+def _max_tokens_for(n_onsets: int) -> int:
+    """Headroom-aware token budget for the forced-tool quantise response."""
+    return max(
+        _LLM_MAX_TOKENS_FLOOR,
+        n_onsets * _LLM_MAX_TOKENS_PER_ONSET + _LLM_MAX_TOKENS_OVERHEAD,
+    )
 
 # Beat-hierarchy weights for `_slot_weight`. Higher = "stronger" slot,
 # i.e. the snap target a cluster prefers. Tie-breaking goes downbeat >
@@ -90,10 +108,13 @@ _SLOT_48TH_WEIGHT = 10
 _QUANTISE_TOOL: dict[str, Any] = {
     "name": "shift_onsets",
     "description": (
-        "For each onset shown, return an integer 1/48-slot shift "
-        "(negative = earlier, positive = later, 0 = leave it). Use "
-        "surrounding musical context across instruments to decide. "
-        "Bounded |shift| <= 2; anything larger will be clamped."
+        "Return ONLY the onsets that need to move; omit any onset that "
+        "should stay where it is. Each entry is a signed integer "
+        "1/48-slot shift (negative = earlier; positive = later). Use "
+        "surrounding musical context across instruments to decide which "
+        "onsets to shift. Bounded |shift| <= 2; anything larger will be "
+        "clamped. An empty `shifts` array is the correct answer when "
+        "every onset is already correctly placed."
     ),
     "input_schema": {
         "type": "object",
@@ -114,9 +135,11 @@ _QUANTISE_TOOL: dict[str, Any] = {
                     "additionalProperties": False,
                 },
                 "description": (
-                    "One entry per onset id shown in the prompt. Unknown / "
-                    "missing ids are ignored; the server clamps shift to "
-                    "the allowed range."
+                    "Onsets to shift; identified by the `#N` id shown in "
+                    "the prompt. Include ONLY onsets that need to move — "
+                    "omit any onset that should stay where it is. Empty "
+                    "array means nothing needs shifting. Unknown ids are "
+                    "ignored; the server clamps shift to the allowed range."
                 ),
             },
         },
@@ -323,16 +346,17 @@ def _llm_residual_pass(
         .replace("{BARS}", bar_blocks)
     )
 
+    max_tokens = _max_tokens_for(len(indexed))
     log.info(
-        "Calling quantise LLM model=%s prompt_chars=%d onsets=%d",
-        _LLM_MODEL, len(prompt), len(indexed),
+        "Calling quantise LLM model=%s prompt_chars=%d onsets=%d max_tokens=%d",
+        _LLM_MODEL, len(prompt), len(indexed), max_tokens,
     )
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
     response = call_messages_with_refusal_retry(
         client,
         {
             "model": _LLM_MODEL,
-            "max_tokens": _LLM_MAX_TOKENS,
+            "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": prompt}],
             "tools": [_QUANTISE_TOOL],
             "tool_choice": {"type": "tool", "name": _QUANTISE_TOOL["name"]},
@@ -341,6 +365,18 @@ def _llm_residual_pass(
         purpose="quantise",
     )
 
+    stop_reason = getattr(response, "stop_reason", None)
+    if stop_reason == "max_tokens":
+        # A forced tool call that hits max_tokens emits unparseable JSON;
+        # `block.input` will be empty / partial and we'd silently report
+        # "0 shifts" with no other signal. Flag it explicitly so the
+        # next time this happens it's obvious from the log.
+        log.warning(
+            "quantise LLM hit max_tokens (%d) for %d onsets; response will "
+            "be truncated and most shifts will be lost. Bump "
+            "_LLM_MAX_TOKENS_PER_ONSET in quantise.py.",
+            max_tokens, len(indexed),
+        )
     raw_shifts = _extract_shifts(response, len(indexed))
     shifts: dict[tuple[str, int], int] = {}
     for llm_id, shift in raw_shifts.items():

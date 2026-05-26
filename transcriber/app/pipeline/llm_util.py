@@ -81,10 +81,12 @@ def call_messages_with_refusal_retry(
 
     When a `purpose` is supplied AND a request-scoped DebugSink is
     active, the full hydrated prompt is dumped to the debug folder
-    before the call (and again for the retry, with a `__refusal_retry`
-    suffix). Skip the dump by passing `purpose=None`.
+    before the call and the parsed response (content blocks +
+    stop_reason + usage) is dumped after the call returns (with a
+    matching NN prefix). Retries get the `__refusal_retry` suffix.
+    Skip both dumps by passing `purpose=None`.
     """
-    _dump_prompt(purpose, create_kwargs, base_prompt)
+    seq = _dump_prompt(purpose, create_kwargs, base_prompt)
     try:
         response = client.messages.create(**create_kwargs)
     except anthropic.BadRequestError as exc:
@@ -97,6 +99,7 @@ def call_messages_with_refusal_retry(
         )
         return _retry_with_directive(client, create_kwargs, base_prompt, purpose)
 
+    _dump_response(seq, purpose, response)
     if getattr(response, "stop_reason", None) == "refusal":
         log.warning(
             "LLM call returned stop_reason='refusal'; retrying with hardened "
@@ -120,37 +123,54 @@ def _retry_with_directive(
         {"role": "user", "content": retry_prompt}
     ]
     retry_purpose = f"{purpose}__refusal_retry" if purpose else None
-    _dump_prompt(retry_purpose, retry_kwargs, retry_prompt)
-    return client.messages.create(**retry_kwargs)
+    seq = _dump_prompt(retry_purpose, retry_kwargs, retry_prompt)
+    response = client.messages.create(**retry_kwargs)
+    _dump_response(seq, retry_purpose, response)
+    return response
 
 
 def _dump_prompt(
     purpose: str | None,
     create_kwargs: dict,
     prompt: str,
-) -> None:
+) -> int | None:
     """Best-effort dump of the hydrated prompt to the active DebugSink.
 
-    No-op when `purpose` is None (caller opted out) or when no sink is
+    Returns the seq number used by the sink so the caller can pass it to
+    `_dump_response` for a matching NN-prefixed response file. Returns
+    None when `purpose` is None (caller opted out) or no sink is
     installed (debug persistence disabled). Failures inside the sink
-    are already swallowed by `write_text`, so this can't take down the
-    LLM call.
+    are swallowed by `write_text`, so this can't take down the LLM call.
     """
     if not purpose:
-        return
+        return None
     sink = current_debug_sink()
     if sink is None:
-        return
+        return None
     extra = {
         "max_tokens": create_kwargs.get("max_tokens"),
         "temperature": create_kwargs.get("temperature"),
     }
-    sink.write_llm_prompt(
+    return sink.write_llm_prompt(
         purpose=purpose,
         model=str(create_kwargs.get("model", "?")),
         prompt=prompt,
         extra=extra,
     )
+
+
+def _dump_response(
+    seq: int | None,
+    purpose: str | None,
+    response: anthropic.types.Message,
+) -> None:
+    """Best-effort dump of the parsed response, paired with its prompt seq."""
+    if seq is None or not purpose:
+        return
+    sink = current_debug_sink()
+    if sink is None:
+        return
+    sink.write_llm_response(seq=seq, purpose=purpose, response=response)
 
 
 def _looks_like_refusal(message: str) -> bool:

@@ -63,9 +63,9 @@ Bar 0 [4/4, 120.0 BPM, feel=straight16]:
 `(s)` / `(h)` etc are the drum pitches.
 
 In the example above, the snare `#3` at slot 11 likely belongs on slot
-12 (beat 2) with the hi-hat; a one-slot earlier snap from jitter. You
-would return `{"id": 3, "shift": 1}` (move snare +1 slot later, onto
-beat 2) and `{"id": N, "shift": 0}` for everything else.
+12 (beat 2) with the hi-hat; a one-slot earlier snap from jitter. The
+correct response is `{"shifts": [{"id": 3; "shift": 1}]}` — just the
+one snare entry; nothing for the other onsets.
 
 ## Onset data
 
@@ -73,7 +73,12 @@ beat 2) and `{"id": N, "shift": 0}` for everything else.
 
 ## Output
 
-Call `shift_onsets` with one `{id, shift}` entry **per onset shown**.
-You may omit entries with shift 0 if convenient, but you may not
-invent ids that weren't shown. The server will ignore unknown ids and
-clamp `|shift|` to {MAX_SHIFT}.
+Call `shift_onsets` with entries **only for onsets you want to move**.
+Omit any onset that should stay where it is — the default for every
+onset is "no shift". When every onset is already correctly placed,
+return `{"shifts": []}`. You may not invent ids that weren't shown;
+the server ignores unknown ids and clamps `|shift|` to {MAX_SHIFT}.
+
+Do NOT emit an entry for every onset. The response should be small —
+typically a handful of corrections; often zero. A response with one
+entry per input onset is wrong and will be truncated.

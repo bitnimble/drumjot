@@ -1,0 +1,102 @@
+/* Bottom horizontal-scroll minimap. Sits between the score scroller and
+   the playback transport, replacing the visual role of the native
+   scrollbar (hidden via `data-jot-scroller`'s `scrollbar-width: none`).
+   Three layers stack inside `.minimap`: the canvas paints the audio
+   waveform (bottom band) and the note ticks (top band) in one bitmap;
+   `.viewportBox` is the draggable visible-range rectangle; `.playhead`
+   is the thin live playback marker. All three siblings are absolutely
+   positioned and share the same `.minimap`-local coordinate frame so
+   they line up against the canvas without any cross-component math. */
+
+.minimap {
+    position: relative;
+    flex: 0 0 auto;
+    box-sizing: border-box;
+    /* `align-items: stretch` on the column-flex parent should give us
+       the full viewport width, but every direct child of `.minimap` is
+       absolutely positioned, so there's no in-flow content to stretch
+       against; the flex item collapses to zero cross-axis size in that
+       case. An explicit `width: 100%` pins it to the parent's cross
+       size unconditionally. */
+    width: 100%;
+    /* 52 px canvas + 1 px top border == 53 px outer. No vertical
+       padding: absolute positioning of children gets messy when the
+       padding box and border box disagree. */
+    height: 53px;
+    background: var(--color-bg-overlay);
+    border-top: 1px solid var(--color-border-soft);
+    user-select: none;
+    cursor: pointer;
+}
+
+.minimapEmpty {
+    cursor: default;
+}
+
+/* The canvas fills the entire `.minimap` content area (sub-border).
+   Bitmap dimensions are set imperatively in JS to `width × dpr` /
+   `52 × dpr` for crisp HiDPI; CSS pins the displayed box to the
+   container's own dimensions so the bitmap stretches 1:1 against the
+   minimap's pixel grid. */
+.canvas {
+    display: block;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 52px;
+    pointer-events: none;
+}
+
+/* Translucent rectangle showing the score viewport's current visible
+   range. Sits above the canvas; receives no pointer events itself
+   because the minimap root owns the drag/click gesture for the whole
+   strip (the box's own hit testing inside that handler decides whether
+   to start a drag or center-on-click). The fade overlays below
+   (`.dimLeft` / `.dimRight`) cover everything outside this box so the
+   in-viewport range reads as the visually prominent slice. */
+.viewportBox {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border: 1px solid var(--color-accent);
+    border-radius: var(--radius-xs);
+    pointer-events: none;
+    box-sizing: border-box;
+    left: 0;
+    width: 0;
+}
+
+/* Fade overlays for the off-viewport regions. Two strips, one to the
+   left of the viewport box and one to the right, painted over the
+   waveform / note ticks so the canvas content there reads as
+   de-emphasised. Position / width are written imperatively in lockstep
+   with `.viewportBox`. */
+.dimLeft,
+.dimRight {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: var(--color-bg-overlay-soft);
+    pointer-events: none;
+    left: 0;
+    width: 0;
+}
+
+/* Playback playhead line. Same accent treatment as the score's
+   `.playhead` for visual continuity. Tracks playback live but is NOT
+   click-to-seek; the minimap click only scrolls the score viewport. */
+.playhead {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    margin-left: -1px;
+    background: var(--color-accent-strong);
+    box-shadow: var(--shadow-accent-glow);
+    pointer-events: none;
+    /* `display: none` initially so the playhead doesn't paint at the
+       default `left: 0` between mount and the first effect tick that
+       sets a real position. */
+    display: none;
+}

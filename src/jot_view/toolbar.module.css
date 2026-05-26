@@ -50,6 +50,12 @@
     font-family: inherit;
 }
 
+/* Resume-tab field rows share a fixed-width label column so both
+   selects' left edges line up and "Previous run" doesn't wrap. */
+.resumeField > span:first-child {
+    min-width: 80px;
+}
+
 .transcribeButton:hover:not(:disabled) {
     background: var(--color-accent-hover);
 }
@@ -177,97 +183,8 @@
     transition: width 0.15s linear;
 }
 
-.dropdown {
-    position: relative;
-    display: inline-flex;
-}
-
-.dropdownPanel {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    z-index: 30;
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 8px;
-    min-width: 180px;
-    padding: 10px;
-    background: var(--color-bg-base);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-lg);
-}
-
-.dropdownPanelWide {
-    min-width: 230px;
-}
-
-.dropdownItem {
-    composes: bodyMd from '../typography.module.css';
-    font-family: inherit;
-    text-align: left;
-    padding: 7px 10px;
-    border: none;
-    border-radius: var(--radius-md);
-    background: transparent;
-    color: var(--color-text);
-    cursor: pointer;
-}
-
-.dropdownItem:hover {
-    background: var(--color-bg-hover);
-}
-
-.dropdownItem:focus {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 1px;
-}
-
-.dropdownItemActive {
-    background: var(--color-bg-hover);
-    color: var(--color-accent);
-}
-
-.submenu {
-    position: relative;
-    display: flex;
-}
-
-.submenuTrigger {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    width: 100%;
-}
-
-.submenuArrow {
-    color: var(--color-text-muted-alt);
-}
-
-.submenuPanel {
-    position: absolute;
-    top: 0;
-    left: calc(100% + 6px);
-    z-index: 40;
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 4px;
-    min-width: 200px;
-    padding: 10px;
-    background: var(--color-bg-base);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-lg);
-}
-
-.dropdownDivider {
-    height: 1px;
-    background: var(--color-border-soft);
-    margin: 2px 0;
-}
+/* Dropdown primitives moved to `./components/dropdown.module.css` so the
+   mixer's overflow menu can reuse them. */
 
 /* Inline spinner shown next to the "Transcribing …" status pill while a
    /transcribe stream is in flight. Matches the look of the full-screen

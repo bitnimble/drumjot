@@ -50,27 +50,68 @@ log = logging.getLogger(__name__)
 
 PROMPT_DIR = Path(__file__).resolve().parent.parent.parent / "prompts"
 
+# Short reason codes the filter LLM picks from. Kept tight on purpose:
+# a small vocabulary keeps output tokens bounded (one short string per
+# rejection instead of a free-form sentence) and lets the frontend group
+# / colour rejections by reason later. `custom` is the escape hatch for
+# the long tail; it REQUIRES `reason_text` so an opaque "custom" alone
+# never makes it out.
+REASON_CODES: frozenset[str] = frozenset({
+    "bleed", "double_trigger", "noise", "custom",
+})
+
 _FILTER_TOOL: dict[str, Any] = {
     "name": "report_artifact_onsets",
     "description": (
-        "Return the indices of the detected onsets that are NOT real "
-        "musical hits — separation bleed, detector double-triggers, or "
-        "noise. Keep the list empty if every onset is a genuine hit. "
-        "Never include an index that wasn't shown to you."
+        "Return the onsets that are NOT real musical hits; separation "
+        "bleed, detector double-triggers, or noise; each paired with a "
+        "short reason code so the operator can see WHY it was flagged. "
+        "Keep the list empty if every onset is a genuine hit. Never "
+        "include an index that wasn't shown to you."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "rejected_indices": {
+            "rejected_onsets": {
                 "type": "array",
-                "items": {"type": "integer", "minimum": 0},
                 "description": (
-                    "The `#N` indices of onsets to drop. These should be "
-                    "the minority — only clear artifacts."
+                    "Onsets to drop. Should be the minority; only clear "
+                    "artifacts."
                 ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "index": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "The `#N` index of the onset to drop.",
+                        },
+                        "reason": {
+                            "type": "string",
+                            "enum": sorted(REASON_CODES),
+                            "description": (
+                                "Short reason code. Use `custom` only "
+                                "when none of the standard codes fit; in "
+                                "that case `reason_text` is required."
+                            ),
+                        },
+                        "reason_text": {
+                            "type": "string",
+                            "maxLength": 200,
+                            "description": (
+                                "Required when `reason` is `custom`. "
+                                "Optional brief extra detail for the "
+                                "standard reasons (e.g. which pitch you "
+                                "think the bleed is from). Keep short."
+                            ),
+                        },
+                    },
+                    "required": ["index", "reason"],
+                    "additionalProperties": False,
+                },
             },
         },
-        "required": ["rejected_indices"],
+        "required": ["rejected_onsets"],
         "additionalProperties": False,
     },
 }
@@ -83,9 +124,16 @@ def filter_onsets_for_instrument(
     structure: BeatStructure,
     others_by_pitch: dict[str, list[OnsetCandidate]],
     debug_purpose: str | None = None,
-) -> list[OnsetCandidate]:
-    """One LLM call. Returns the kept (non-rejected, in-range) onsets for
-    `pitch`, original times preserved.
+    llm_model: str | None = None,
+) -> tuple[list[OnsetCandidate], dict[int, dict[str, Any]]]:
+    """One LLM call. Returns `(kept, rejection_info)`:
+
+    - `kept`, the non-rejected, in-range onsets for `pitch`, original
+      times preserved.
+    - `rejection_info`; `{id(c): {"reason": str, "reason_text": str | None}}`
+      for every onset the LLM rejected, keyed by Python object identity
+      so the caller can match it against `id(c)` membership in the
+      pre-filter candidate list. Empty when the LLM kept everything.
 
     Anthropic-call failures propagate so the runner can map them to
     HTTP 502 (per CLEANROOM_SPEC §11.14: no silent fallback to "keep
@@ -99,7 +147,7 @@ def filter_onsets_for_instrument(
 
     indexed = _index_in_range(candidates_for_pitch)
     if not indexed:
-        return []
+        return [], {}
     ordered = [c for _, c in indexed]
 
     bar_blocks = _format_indexed_bars(indexed, pitch, structure, others_by_pitch)
@@ -116,15 +164,16 @@ def filter_onsets_for_instrument(
     )
 
     purpose = debug_purpose or f"filter_{pitch}"
+    model = llm_model or settings.llm_model
     log.info(
         "Calling filter LLM (instrument=%s) model=%s prompt_chars=%d onsets=%d",
-        pitch, settings.llm_model, len(prompt), len(ordered),
+        pitch, model, len(prompt), len(ordered),
     )
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
     response = call_messages_with_refusal_retry(
         client,
         {
-            "model": settings.llm_model,
+            "model": model,
             "max_tokens": settings.llm_max_tokens,
             "messages": [{"role": "user", "content": prompt}],
             "tools": [_FILTER_TOOL],
@@ -136,6 +185,9 @@ def filter_onsets_for_instrument(
 
     rejected = _extract_rejected(response, len(ordered))
     kept = [c for i, c in enumerate(ordered) if i not in rejected]
+    rejection_info: dict[int, dict[str, Any]] = {
+        id(ordered[i]): info for i, info in rejected.items()
+    }
     log.info(
         "filter %s: rejected %d / %d onsets, kept %d",
         pitch, len(rejected), len(ordered), len(kept),
@@ -148,11 +200,13 @@ def filter_onsets_for_instrument(
             {
                 "pitch": pitch,
                 "n_input": len(ordered),
-                "rejected_indices": sorted(rejected),
+                "rejected": [
+                    {"index": i, **info} for i, info in sorted(rejected.items())
+                ],
                 "n_kept": len(kept),
             },
         )
-    return kept
+    return kept, rejection_info
 
 
 def filter_onsets_all_instruments(
@@ -162,8 +216,14 @@ def filter_onsets_all_instruments(
     on_complete: Callable[[str, int, int], None] | None = None,
     cancel_event: threading.Event | None = None,
     skip_pitches: set[str] | None = None,
-) -> dict[str, list[OnsetCandidate]]:
+    llm_model: str | None = None,
+) -> tuple[dict[str, list[OnsetCandidate]], dict[str, dict[int, dict[str. Any]]]]:
     """Filter every instrument that has in-range onsets, in parallel.
+
+    Returns `(kept_by_pitch, reasons_by_pitch)` where `reasons_by_pitch`
+    is `{pitch: {id(c): {"reason": ..., "reason_text": ...}}}` for every
+    rejected onset across every instrument. Skipped pitches contribute
+    nothing to either map.
 
     Mirrors `llm.transcribe_all_instruments`' threading + debug-sink
     ContextVar propagation. Instruments with no in-range candidates are
@@ -194,31 +254,35 @@ def filter_onsets_all_instruments(
     )
     if not pitches:
         log.warning("filter: no instrument had any in-range onsets")
-        return {}
+        return {}, {}
 
     workers = max(1, max_workers or settings.instrument_concurrency)
     sink = current_debug_sink()
 
-    def work(pitch: str) -> tuple[str, list[OnsetCandidate]]:
+    def work(
+        pitch: str,
+    ) -> tuple[str, list[OnsetCandidate], dict[int, dict[str, Any]]]:
         token = set_current_debug_sink(sink)
         try:
             name = PITCH_DISPLAY_NAMES.get(pitch, pitch)
             others = {
                 p: c for p, c in candidates_by_pitch.items() if p != pitch
             }
-            kept = filter_onsets_for_instrument(
+            kept, reasons = filter_onsets_for_instrument(
                 pitch,
                 name,
                 candidates_by_pitch.get(pitch, []),
                 structure,
                 others,
                 debug_purpose=f"filter_{pitch}",
+                llm_model=llm_model,
             )
-            return pitch, kept
+            return pitch, kept, reasons
         finally:
             reset_current_debug_sink(token)
 
     kept_by_pitch: dict[str, list[OnsetCandidate]] = {}
+    reasons_by_pitch: dict[str, dict[int, dict[str, Any]]] = {}
     total = len(pitches)
     done = 0
     cancelled = False
@@ -229,9 +293,11 @@ def filter_onsets_all_instruments(
                 if cancel_event is not None and cancel_event.is_set():
                     cancelled = True
                     break
-                p, kept = fut.result()
+                p, kept, reasons = fut.result()
                 if kept:
                     kept_by_pitch[p] = kept
+                if reasons:
+                    reasons_by_pitch[p] = reasons
                 done += 1
                 if on_complete is not None:
                     try:
@@ -251,7 +317,7 @@ def filter_onsets_all_instruments(
                     done, total,
                 )
 
-    return kept_by_pitch
+    return kept_by_pitch, reasons_by_pitch
 
 
 def _index_in_range(
@@ -323,38 +389,69 @@ def _format_indexed_bars(
 
 def _extract_rejected(
     response: anthropic.types.Message, n: int
-) -> set[int]:
-    """Pull `rejected_indices` from the forced tool call.
+) -> dict[int, dict[str, Any]]:
+    """Pull `rejected_onsets` from the forced tool call.
 
-    Raises on malformed responses (non-list, non-int items, out-of-range
-    indices) so the runner can surface the model bug as HTTP 502 rather
-    than silently delivering a degraded filter pass.
+    Returns `{index: {"reason": str, "reason_text": str | None}}` for
+    every rejected onset. Duplicate indices keep the LAST entry the
+    model emitted (it shouldn't emit duplicates, but if it does we
+    accept the most recent reason).
+
+    Raises on malformed responses (non-list, non-dict items, missing /
+    invalid `index` or `reason`, out-of-range indices, `custom` reason
+    without `reason_text`) so the runner can surface the model bug as
+    HTTP 502 rather than silently delivering a degraded filter pass.
     """
     for block in response.content:
         if getattr(block, "type", None) != "tool_use":
             continue
         if getattr(block, "name", None) != _FILTER_TOOL["name"]:
             continue
-        raw = block.input.get("rejected_indices", [])
+        raw = block.input.get("rejected_onsets", [])
         if not isinstance(raw, list):
             raise RuntimeError(
-                f"filter: tool returned non-list rejected_indices "
+                f"filter: tool returned non-list rejected_onsets "
                 f"({type(raw).__name__}); model violated schema"
             )
-        out: set[int] = set()
+        out: dict[int, dict[str, Any]] = {}
         for v in raw:
-            try:
-                i = int(v)
-            except (TypeError, ValueError) as exc:
+            if not isinstance(v, dict):
                 raise RuntimeError(
-                    f"filter: rejected_indices item not an integer ({v!r})"
+                    f"filter: rejected_onsets item not an object ({v!r})"
+                )
+            try:
+                i = int(v["index"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    f"filter: rejected_onsets item missing/invalid `index` ({v!r})"
                 ) from exc
             if not 0 <= i < n:
                 raise RuntimeError(
-                    f"filter: rejected_indices contains out-of-range index "
+                    f"filter: rejected_onsets contains out-of-range index "
                     f"{i} (valid range: [0, {n}))"
                 )
-            out.add(i)
+            reason = v.get("reason")
+            if not isinstance(reason, str) or reason not in REASON_CODES:
+                raise RuntimeError(
+                    f"filter: rejected_onsets item has missing/invalid "
+                    f"`reason` ({reason!r}); expected one of "
+                    f"{sorted(REASON_CODES)}"
+                )
+            reason_text_raw = v.get("reason_text")
+            if reason_text_raw is not None and not isinstance(reason_text_raw, str):
+                raise RuntimeError(
+                    f"filter: rejected_onsets item `reason_text` must be a "
+                    f"string when present (got {type(reason_text_raw).__name__})"
+                )
+            reason_text: str | None = (
+                reason_text_raw.strip() if isinstance(reason_text_raw, str) else None
+            ) or None
+            if reason == "custom" and not reason_text:
+                raise RuntimeError(
+                    f"filter: rejected_onsets item with reason='custom' "
+                    f"must include a non-empty `reason_text` (index {i})"
+                )
+            out[i] = {"reason": reason, "reason_text": reason_text}
         return out
     raise RuntimeError(
         "filter: no tool_use block in response; tool call was not made"

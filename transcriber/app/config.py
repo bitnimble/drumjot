@@ -46,6 +46,17 @@ class Settings(BaseSettings):
     # DrumSep (kick/snare/toms/hh/cymbals; ride+crash merged).
     demucs_model: str = "model_bs_roformer_sw.ckpt"
     drum_pieces_model: str = "drumsep_5stems_mdx23c_jarredou.ckpt"
+    # Used ONLY by /lyrics/align when given a full mix. A fast 2-stem
+    # (vocals / instrumental) MDX-Net, ~8× faster than running the drum
+    # pipeline's BS-Roformer SW just to throw away five of its six stems.
+    # Vocal SDR doesn't need to be pristine for whisperx. Whisper is
+    # robust to bleed; the downstream wav2vec2 forced aligner cares more
+    # about *lead vocal preservation* than separation purity, so we pick
+    # the throughput-leaning MDX-Net variant rather than Kim_Vocal_2: in
+    # practice ~2× faster on GPU with no observable hit to word-level
+    # alignment quality on our inputs. Loaded lazily on first
+    # /lyrics/align mix call, not at container startup.
+    vocals_model: str = "UVR-MDX-NET-Voc_FT.onnx"
 
     # --- ADTOF onset detector tuning ---
     # ADTOF (xavriley/ADTOF-pytorch Frame_RNN) is a fixed pretrained
@@ -77,17 +88,23 @@ class Settings(BaseSettings):
     # step, which could overshoot 200+ ms when the activation's rising
     # edge had no local minima.
     adtof_audio_refine_window_s: float = 0.030
-    # The hihat + merged-cymbal ADTOF lanes are OOD-compressed and
-    # bleed-heavy on isolated stems (see pipeline/adtof_onsets.py), so a
-    # global fixed threshold over-triggers them. For those lanes only we
-    # (a) RMS-normalize the stem before inference — deterministic and
-    # robust to bleed peaks, unlike the package's internal peak-norm
-    # whose default we can't rely on — and (b) use a per-stem ADAPTIVE
-    # peak threshold. Kick/snare/toms keep the fixed `adtof_peak_threshold`
-    # since their lanes aren't OOD-compressed the same way. Set the bools
-    # False to fall back to the old global fixed behaviour.
-    adtof_rms_normalize: bool = True
-    adtof_rms_target_dbfs: float = -20.0
+    # Median-of-non-silent amplitude normalization applied to EVERY stem
+    # before ADTOF inference. Mirrors the frontend waveform's per-track
+    # scaling (`src/playback/waveform_compute.ts::computeTrackAmpScale`):
+    # take the median of |sample| above `silence_floor`, scale so that
+    # median lands at `target`. Robust to bleed spikes (the median ignores
+    # the tail) and to separator output-gain variance, so the fixed
+    # `adtof_peak_threshold` stays meaningful across stems. Set
+    # `adtof_median_normalize` False to feed ADTOF the raw stem.
+    adtof_median_normalize: bool = True
+    adtof_median_target: float = 0.3
+    adtof_median_silence_floor: float = 0.05
+    # The hihat + merged-cymbal ADTOF lanes are OOD-compressed on isolated
+    # stems (see pipeline/adtof_onsets.py), so a global fixed threshold
+    # over-triggers them. For those lanes only we use a per-stem ADAPTIVE
+    # peak threshold; kick/snare/toms keep the fixed `adtof_peak_threshold`
+    # since their lanes aren't OOD-compressed the same way. Set False to
+    # fall back to the old global fixed behaviour.
     adtof_adaptive_threshold: bool = True
     # threshold = max(floor, k * percentile(lane_activation, pct)).
     # floor/k raised from 0.15/0.35 after open-hihat over-triggering.
@@ -145,6 +162,15 @@ class Settings(BaseSettings):
     # /transcribe response so the caller can play them back in a browser.
     outputs_dir: Path = Path("/outputs")
 
+    # Content-addressed cache for the /lyrics/align pipeline. The
+    # `vocals/` subdir holds opus-encoded separated vocals keyed by
+    # SHA-256 of the input mix + the vocals-separator model id, so a
+    # repeat alignment of the same mix skips the separator. Bounded by
+    # `cache_vocals_cap_bytes` with LRU-by-last-access eviction; safe to
+    # nuke at any time, entries refill on demand. See `app/cache.py`.
+    cache_dir: Path = Path("/cache")
+    cache_vocals_cap_bytes: int = 5 * 1024 * 1024 * 1024  # 5 GB
+
     # --- Debug artifact persistence ---
     # If set, every /transcribe request persists its intermediate files
     # (input audio, drum stem, per-instrument stems, beats.json,
@@ -179,6 +205,27 @@ class Settings(BaseSettings):
     # --- GPU ---
     # `auto` = detect CUDA / MPS / CPU; `cuda`, `cpu`, `mps` for explicit.
     device: str = "auto"
+
+    # --- Lyrics alignment (whisperx) ---
+    # Model size for the lyrics-alignment endpoint. `medium` +
+    # `int8_float16` (the default below) uses ~700 MB VRAM peak and gives
+    # near-large word alignment accuracy; comfortable on a 6 GB GPU even
+    # alongside the separator's eager load. `large-v3` uses ~1.5 GB int8
+    # for higher accuracy on noisy/accented vocals; `small` / `tiny` exist
+    # for CPU-only fallback boxes. Loaded lazily on the first
+    # `/lyrics/align` call; the weights cache lives under
+    # `<models_dir>/whisperx/` and survives container restarts via the
+    # standard models-volume mount.
+    whisper_model: str = "medium"
+    # CTranslate2 compute type. `int8_float16` is the standard
+    # low-VRAM-with-CUDA setting; `float16` is fp16 (less accuracy loss,
+    # ~2x VRAM); `int8` for CPU-only boxes. The aligner forces float32 on
+    # CPU regardless because CT2 can't run int8 on CPU.
+    whisper_compute_type: str = "int8_float16"
+    # ISO-639-1 language hint for transcription. Empty string =
+    # auto-detect on the first 30 s of audio (whisperx default); set
+    # explicitly for higher accuracy on short / noisy clips.
+    whisper_language: str = ""
 
 
 settings = Settings()

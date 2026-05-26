@@ -139,11 +139,23 @@
     position: absolute;
     top: 0;
     bottom: 0;
+    /* Anchor at 0 and move via `transform: translateX(...)` reading the
+       inherited `--playhead-x` variable that `PlayheadPosVar` writes on
+       the score root once per frame. Combined with `will-change:
+       transform` this promotes the playhead to its own compositor layer
+       so per-frame motion is a compose-only op; moving it does NOT
+       repaint the bar-grid lines (or any other content) underneath.
+       Sharing one CSS variable across every mounted playhead also means
+       a debug bundle with N tracks costs one `setProperty` per frame
+       instead of N (vs the old `style.left =` per playhead). */
+    left: 0;
     width: 2px;
     background: var(--color-accent-strong);
     z-index: 5;
     box-shadow: var(--shadow-accent-glow);
     cursor: ew-resize;
+    transform: translateX(var(--playhead-x, 0px));
+    will-change: transform;
 }
 
 /* Widen the playhead's drag hit area without changing its visual width.
@@ -178,6 +190,45 @@
     box-shadow: var(--shadow-playhead-label);
     cursor: ew-resize;
     text-align: center;
+}
+
+/* Square toggle living in transportAux. Flat-orange filled when follow
+   is on, outlined when off; sized to sit between the 52px transport
+   buttons and the inline label controls without dominating. */
+.followToggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--color-accent-strong);
+    border-radius: var(--radius-sm);
+    background: var(--color-accent-strong);
+    color: var(--color-bg-base);
+    cursor: pointer;
+    font-family: inherit;
+}
+
+.followToggle:hover {
+    background: var(--color-accent-hover);
+    border-color: var(--color-accent-hover);
+}
+
+.followToggle:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+}
+
+.followToggleOff {
+    background: var(--color-bg-base);
+    color: var(--color-accent-strong);
+}
+
+.followToggleOff:hover {
+    background: var(--color-accent-overlay-light);
+    border-color: var(--color-accent-hover);
+    color: var(--color-accent-hover);
 }
 
 /* Second line of the playhead label: bar number + beat-in-bar, sized

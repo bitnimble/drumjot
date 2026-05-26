@@ -34,16 +34,22 @@ export class ViewConfig {
   /** Note dot diameter. */
   noteDiameter = px(14);
   /**
-   * Constant horizontal offset applied to every note from its bar's left
-   * edge, so the first note sits inside the bar line rather than centred on
-   * it (mimicking conventional engraved notation). It is a pure offset, not
-   * a subtraction from the note area: one beat is always `barWidth / beats`
-   * px wide, so the gap across a bar boundary stays exactly one note step
-   * (the trailing space before the next bar line works out to
-   * `oneStep - barNotePaddingLeft`, and the next bar's first note is itself
-   * `barNotePaddingLeft` in, summing back to one full step).
+   * Horizontal offset applied to every note from its bar's left edge,
+   * expressed as a fraction of a quarter-note beat (so it scales with
+   * zoom). The first note sits inside the bar line rather than centred
+   * on it (mimicking conventional engraved notation). It is a pure
+   * offset, not a subtraction from the note area: the gap across a bar
+   * boundary stays exactly one note step (the trailing space before
+   * the next bar line works out to `oneStep - padPx`, and the next
+   * bar's first note is itself `padPx` in, summing back to one full
+   * step); and because both `padPx` and `oneStep` are derived from
+   * `pxPerBeat`, that invariant survives zoom.
+   *
+   * Default `1/8` matches the previous fixed 14px inset at the default
+   * `pxPerBeat = 112` (= `barWidth/4 * densityFactor` with `barWidth =
+   * 448`, `densityFactor = 1`).
    */
-  barNotePaddingLeft = px(14);
+  barNotePaddingBeats = 1 / 8;
   /** Palette used when a pitch has no explicit colour. */
   palette: string[] = [
     '#FF8C55',
@@ -182,16 +188,18 @@ export type ResolvedVoice = {
   pitches: string[];
   width: Pixels;
   /**
-   * Constant horizontal offset (px) the note grid is shifted right of
-   * each bar's left edge; `viewConfig.barNotePaddingLeft`, the
-   * engraving inset applied to every note/pattern/tuplet position (see
-   * {@link ViewConfig.barNotePaddingLeft}). Barlines are time-anchored
-   * but notes are drawn `notePadPx` inside them, so the playback
-   * playhead, the audio-track waveform and click-to-seek must apply the
-   * SAME offset or the score reads a constant `notePadPx` px ahead of
-   * where its onsets actually sound. Surfaced here so the playback
-   * layer (which only sees the `RenderedJot`, not the `ViewConfig`) can
-   * stay in the note grid's coordinate frame.
+   * Horizontal offset (px) the note grid is shifted right of each
+   * bar's left edge: the engraving inset applied to every
+   * note/pattern/tuplet position (see {@link
+   * ViewConfig.barNotePaddingBeats}). Scales with zoom because the
+   * source config is in beats; the value here is materialised in pixels
+   * at the current `pxPerBeat`. Barlines are time-anchored but notes
+   * are drawn `notePadPx` inside them, so the playback playhead, the
+   * audio-track waveform and click-to-seek must apply the SAME offset
+   * or the score reads a constant `notePadPx` px ahead of where its
+   * onsets actually sound. Surfaced here so the playback layer (which
+   * only sees the `RenderedJot`, not the `ViewConfig`) can stay in the
+   * note grid's coordinate frame.
    */
   notePadPx: Pixels;
 };
@@ -546,8 +554,8 @@ export class RenderedJot {
   private layoutJot(jot: Jot): ResolvedJot {
     const structure = this.structureForJot(jot);
     const barWidth = this.viewConfig.barWidth as number;
-    const padLeft = this.viewConfig.barNotePaddingLeft;
     const pxPerBeat = (barWidth * structure.densityFactor) / 4;
+    const padLeft = px(this.viewConfig.barNotePaddingBeats * pxPerBeat);
     const voices = structure.voices.map((sv) =>
       this.pixelVoice(sv, pxPerBeat, padLeft)
     );

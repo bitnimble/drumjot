@@ -16,10 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
+import re
 import shutil
+import subprocess
 import tempfile
+import threading
 import time
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
@@ -31,6 +35,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.cache import BlobCache
 from app.config import settings
 from app.debug import (
     DebugSink,
@@ -48,6 +53,7 @@ from app.models import (
 )
 from app.outputs import OutputSink, make_output_sink, materialize_pending
 from app.pipeline.beats import summarize_bar_for_prompt
+from app.pipeline.lyrics_align import InputLine, get_aligner, lines_to_json
 from app.pipeline.resume import (
     find_input_audio,
     hydrate_context_from_resume,
@@ -247,6 +253,7 @@ async def transcribe(
     include_candidates: bool = Form(default=False),
     beat_input: BeatInput = Form(default=settings.beat_input_default),
     quantise: bool = Form(default=True),
+    llm_model: str = Form(default=""),
     debug: bool = Form(default=False),
 ) -> StreamingResponse:
     """Streaming NDJSON response: one event per pipeline stage bookend
@@ -266,8 +273,9 @@ async def transcribe(
     """
     _require_pipeline_role()
     log.info(
-        "Transcribe request: %s (%s bytes) beat_input=%s quantise=%s debug=%s",
-        file.filename, file.size, beat_input, quantise, debug,
+        "Transcribe request: %s (%s bytes) beat_input=%s quantise=%s llm_model=%s debug=%s",
+        file.filename, file.size, beat_input, quantise,
+        llm_model or settings.llm_model, debug,
     )
 
     if file.size is not None and file.size > 200_000_000:
@@ -291,6 +299,7 @@ async def transcribe(
         "beat_input": beat_input,
         "include_candidates": include_candidates,
         "quantise": quantise,
+        "llm_model": llm_model or settings.llm_model,
         "debug": debug,
     }
 
@@ -306,7 +315,11 @@ async def transcribe(
         sink.copy_audio("input", in_path)
 
     ctx = PipelineContext(audio_path=in_path, work_dir=work_dir)
-    options = PipelineOptions(beat_input=beat_input, quantise=quantise)
+    options = PipelineOptions(
+        beat_input=beat_input,
+        quantise=quantise,
+        llm_model=llm_model or settings.llm_model,
+    )
     separator: Separator = request.app.state.separator
 
     async def post_run() -> None:
@@ -410,6 +423,7 @@ async def transcribe_resume(
     include_candidates: bool = Form(default=False),
     beat_input: BeatInput = Form(default=settings.beat_input_default),
     quantise: bool = Form(default=True),
+    llm_model: str = Form(default=""),
 ) -> StreamingResponse:
     """Re-run the pipeline from `resume_stage` onward, hydrating any
     artifacts produced by earlier stages from `resume_folder`.
@@ -431,21 +445,25 @@ async def transcribe_resume(
     """
     _require_pipeline_role()
     resume_dir = _resolve_resume_dir(resume_folder)
+    resolved_model = llm_model or settings.llm_model
     log.info(
-        "Resume request from %s (resume_stage=%s beat_input=%s quantise=%s)",
-        resume_dir, resume_stage.value, beat_input, quantise,
+        "Resume request from %s (resume_stage=%s beat_input=%s quantise=%s llm_model=%s)",
+        resume_dir, resume_stage.value, beat_input, quantise, resolved_model,
     )
 
     audio_path = find_input_audio(resume_dir) or (resume_dir / "input")
     sink = DebugSink(resume_dir)
     output_sink = make_output_sink(resume_dir.name, settings.outputs_dir)
-    options = PipelineOptions(beat_input=beat_input, quantise=quantise)
+    options = PipelineOptions(
+        beat_input=beat_input, quantise=quantise, llm_model=resolved_model,
+    )
     separator: Separator = request.app.state.separator
     run_log = RunLog()
     request_options = {
         "beat_input": beat_input,
         "include_candidates": include_candidates,
         "quantise": quantise,
+        "llm_model": resolved_model,
         "resume_folder": str(resume_dir),
         "resume_stage": resume_stage.value,
     }
@@ -517,6 +535,269 @@ async def transcribe_resume(
         ),
         media_type="application/x-ndjson",
     )
+
+
+@app.post("/lyrics/align")
+async def lyrics_align(
+    request: Request,
+    vocals: UploadFile | None = File(default=None),
+    mix: UploadFile | None = File(default=None),
+    lyrics: str = Form(default=""),
+    language: str = Form(default=""),
+) -> dict[str, Any]:
+    """Word-level lyrics alignment via whisperx forced alignment.
+
+    Exactly one audio source must be supplied:
+
+      - `vocals`: an already-isolated vocals stem (e.g. a paradb map
+        that ships its own vocals track). The aligner runs straight on
+        it.
+      - `mix`: a full mix. The dedicated 2-stem vocals separator
+        (see `Separator.run_vocals`) runs first to extract a vocals
+        stem, then the aligner.
+
+    `lyrics` is **required**: a JSON array of `{startSec, text}` lines
+    (typically the parsed LRCLIB result). The endpoint is forced-
+    alignment only; it never transcribes from audio. wav2vec2 aligns
+    the caller's text against the audio to produce per-word timings.
+
+    `language` is an optional ISO-639-1 hint that forces a specific
+    wav2vec2 aligner. Empty string falls back to text-based heuristic
+    detection and then to a 30 s audio-based detector.
+
+    Returns `{lines: [{startSec, text, words: [{startSec, text}]?}]}`.
+    """
+    _require_pipeline_role()
+    aligner = get_aligner()
+
+    sources_set = sum(1 for s in (vocals, mix) if s)
+    if sources_set != 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Exactly one of vocals / mix must be supplied.",
+        )
+    if not lyrics:
+        raise HTTPException(
+            status_code=400,
+            detail="`lyrics` is required (JSON array of {startSec, text}).",
+        )
+    input_lines = _parse_lyrics_input(lyrics)
+
+    cleanup_dir: Path | None = None
+    try:
+        if vocals is not None:
+            cleanup_dir = Path(tempfile.mkdtemp(prefix="drumjot_lyrics_"))
+            vocals_path = cleanup_dir / (vocals.filename or "vocals.wav")
+            vocals_bytes = await vocals.read()
+            vocals_path.write_bytes(vocals_bytes)
+        else:
+            assert mix is not None
+            cleanup_dir = Path(tempfile.mkdtemp(prefix="drumjot_lyrics_"))
+            mix_path = cleanup_dir / (mix.filename or "input.wav")
+            mix_bytes = await mix.read()
+            mix_path.write_bytes(mix_bytes)
+            audio_hash = _hash_bytes(mix_bytes)
+
+            # Vocals-cache check: hit means we skip the separator and feed
+            # the already-isolated opus straight to whisperx (which loads
+            # it via its own ffmpeg pipeline, so no manual decode here).
+            vocals_key = _vocals_cache_key(audio_hash)
+            cached_vocals = _vocals_cache_instance().get(vocals_key)
+            if cached_vocals is not None:
+                log.info("lyrics_align: vocals cache HIT (%s)", vocals_key)
+                vocals_path = cached_vocals
+            else:
+                separator: Separator = request.app.state.separator
+                if separator is None:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Separator is not loaded on this worker.",
+                    )
+                raw_vocals = await asyncio.to_thread(
+                    _extract_vocals_with_separator,
+                    separator, mix_path, cleanup_dir,
+                )
+                if raw_vocals is None:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Separator ran but produced no vocals stem.",
+                    )
+                # Opus-encode into the cache. Whisperx reads opus through
+                # ffmpeg natively, so the cached file IS the file we feed
+                # to alignment; no double-encoding, no decode step.
+                opus_tmp = cleanup_dir / "vocals.opus"
+                try:
+                    await asyncio.to_thread(
+                        _encode_vocals_to_opus, raw_vocals, opus_tmp,
+                    )
+                    vocals_path = _vocals_cache_instance().put_path(
+                        vocals_key, opus_tmp,
+                    )
+                    log.info(
+                        "lyrics_align: vocals cache MISS, populated (%s)",
+                        vocals_key,
+                    )
+                except (subprocess.CalledProcessError, OSError, RuntimeError) as exc:
+                    # Cache-write failure must not break alignment. Fall
+                    # back to the raw separator output for this request;
+                    # the cache will retry on the next call.
+                    log.warning(
+                        "lyrics_align: vocals cache write failed (%s); "
+                        "falling back to raw separator output",
+                        exc,
+                    )
+                    vocals_path = raw_vocals
+
+        lines = await asyncio.to_thread(
+            aligner.realign_text,
+            vocals_path,
+            input_lines,
+            language or None,
+        )
+        return {"lines": lines_to_json(lines)}
+    except HTTPException:
+        raise
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        log.exception("lyrics_align failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        if cleanup_dir is not None:
+            shutil.rmtree(cleanup_dir, ignore_errors=True)
+
+
+def _parse_lyrics_input(raw: str) -> list[InputLine]:
+    """Decode the `lyrics` form field into {@link InputLine}s.
+
+    The frontend sends a JSON array of `{startSec, text}` matching its
+    in-memory `LyricLine` shape (minus `words`, which we recompute).
+    Validates shape eagerly so the caller gets a 400 with a specific
+    message instead of a 500 from inside the worker thread later.
+    """
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"`lyrics` is not valid JSON: {exc}",
+        ) from exc
+    if not isinstance(parsed, list):
+        raise HTTPException(
+            status_code=400,
+            detail="`lyrics` must be a JSON array of {startSec, text} objects.",
+        )
+    out: list[InputLine] = []
+    for i, entry in enumerate(parsed):
+        if not isinstance(entry, dict):
+            raise HTTPException(
+                status_code=400,
+                detail=f"`lyrics[{i}]` must be an object with startSec + text.",
+            )
+        start = entry.get("startSec")
+        text = entry.get("text")
+        if not isinstance(start, (int, float)) or not isinstance(text, str):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"`lyrics[{i}]` requires numeric startSec and string text."
+                ),
+            )
+        out.append(InputLine(start_sec=float(start), text=text))
+    return out
+
+
+def _extract_vocals_with_separator(
+    separator: Separator, mix_path: Path, work_dir: Path,
+) -> Path | None:
+    """Run the dedicated vocals separator (fast 2-stem MDX-Net) on
+    `mix_path` and return the vocals stem path for whisperx alignment.
+    Avoids the drum pipeline's 6-stem BS-Roformer SW pass; whisperx
+    doesn't need that quality and the throughput cost was untenable.
+
+    Returns None when the separator finished but no vocals-named output
+    landed (model swap that no longer emits a `(Vocals)` token).
+    """
+    return separator.run_vocals(mix_path, work_dir)
+
+
+# ---------------------------------------------------------------------------
+# /lyrics/align vocals cache
+# ---------------------------------------------------------------------------
+#
+# `settings.cache_dir/vocals/<sha256>__sep-<vocals_model_id>.opus`, # only the `mix` flow populates / reads it. Caching the separated
+# vocals stem lets repeat alignments against the same mix skip the
+# 5-10 s separation pass. The alignment result itself is not cached
+# since each call's output depends on caller-provided text + language.
+
+_KEY_SAFE_CHARS = re.compile(r"[^A-Za-z0-9._-]")
+
+_vocals_cache: BlobCache | None = None
+_cache_init_lock = threading.Lock()
+
+
+def _vocals_cache_instance() -> BlobCache:
+    """Lazy singleton for the vocals stem cache. Each worker process
+    (pipeline + api) instantiates its own BlobCache against the shared
+    on-disk directory."""
+    global _vocals_cache
+    if _vocals_cache is not None:
+        return _vocals_cache
+    with _cache_init_lock:
+        if _vocals_cache is None:
+            _vocals_cache = BlobCache(
+                settings.cache_dir / "vocals",
+                cap_bytes=settings.cache_vocals_cap_bytes,
+            )
+        return _vocals_cache
+
+
+def _sanitize_id(s: str) -> str:
+    """Strip filename-unsafe characters from a model id so it can ride
+    in a cache filename. Anything outside `[A-Za-z0-9._-]` becomes `_`."""
+    return _KEY_SAFE_CHARS.sub("_", s)
+
+
+def _vocals_model_id() -> str:
+    """Identifier for the vocals separator output. Burnt into the cache
+    key so a model swap (e.g. switching `vocals_model`) auto-invalidates
+    every cached vocals stem."""
+    return _sanitize_id(settings.vocals_model)
+
+
+def _vocals_cache_key(audio_hash: str) -> str:
+    return f"{audio_hash}__sep-{_vocals_model_id()}.opus"
+
+
+def _hash_bytes(data: bytes) -> str:
+    """SHA-256 hex of `data`, matching `hashlib.sha256(bytes).hexdigest()`."""
+    return hashlib.sha256(data).hexdigest()
+
+
+def _encode_vocals_to_opus(src: Path, dest: Path) -> None:
+    """ffmpeg-encode `src` to 16 kHz mono Opus at 24 kbps into `dest`.
+
+    16 kHz mono matches what whisperx.load_audio resamples to anyway,
+    so doing the downmix + downsample at cache-write time shrinks the
+    on-disk artifact ~50x vs FLAC with zero impact on alignment quality.
+    `-application voip` biases libopus toward speech intelligibility at
+    low bitrate. Raises CalledProcessError on encoder failure so the
+    caller can decide whether to fall back to running uncached."""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise RuntimeError(
+            "ffmpeg not found on PATH; required to populate the vocals cache."
+        )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        ffmpeg, "-y", "-loglevel", "error", "-nostdin",
+        "-i", str(src),
+        "-ac", "1", "-ar", "16000",
+        "-c:a", "libopus", "-b:a", "24k",
+        "-application", "voip",
+        str(dest),
+    ]
+    subprocess.run(cmd, check=True)
 
 
 async def _stream_pipeline(

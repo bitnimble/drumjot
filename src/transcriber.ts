@@ -96,11 +96,44 @@ export type TranscribeStage =
   | 'beats'
   | 'onsets'
   | 'filter'
+  | 'quantise'
   | 'transcribe';
 
 /** Audio fed into the beat tracker.
  *  See `transcriber/app/pipeline/runner.py::BeatInput`. */
 export type BeatInput = 'full_mix' | 'drum_stem';
+
+/**
+ * Anthropic model used by the three classification stages
+ * (`filter`; `hihat_split`; `cymbal_split`). The `quantise` stage's
+ * Haiku is hard-coded server-side and ignored here.
+ *
+ * The wire value is sent verbatim as the `llm_model` form field; the
+ * Python side passes it through to the Anthropic SDK, so any model id
+ * the SDK accepts works in principle. The three exposed here are the
+ * ones surfaced in the Transcribe dropdown — keep them in lockstep
+ * with the UI's options.
+ */
+export type LlmModel =
+  | 'claude-opus-4-7'
+  | 'claude-sonnet-4-6'
+  | 'claude-haiku-4-5-20251001';
+
+/** Human-readable label for each {@link LlmModel} value. Used by the
+ *  Transcribe-menu selector; kept here so the wire-format ↔ label
+ *  mapping stays single-sourced. */
+export const LLM_MODEL_LABELS: Record<LlmModel, string> = {
+  'claude-opus-4-7': 'Opus 4.7',
+  'claude-sonnet-4-6': 'Sonnet 4.6',
+  'claude-haiku-4-5-20251001': 'Haiku 4.5',
+};
+
+/** Selector order, most-capable first. */
+export const LLM_MODEL_ORDER: readonly LlmModel[] = [
+  'claude-opus-4-7',
+  'claude-sonnet-4-6',
+  'claude-haiku-4-5-20251001',
+];
 
 /**
  * One entry in `GET /transcribe/list`. Mirrors the server-side
@@ -159,6 +192,12 @@ export type TranscribeOptions = {
    */
   beatInput?: BeatInput;
   /**
+   * Anthropic model for the three classification stages (filter,
+   * hihat_split, cymbal_split). Omitted = server falls back to
+   * `Settings.llm_model`.
+   */
+  llmModel?: LlmModel;
+  /**
    * Persist all intermediate audio + JSON artifacts to the transcriber's
    * debug directory. Required for the run to be resumable later (the
    * resume endpoint reads from `/debug/<folder>/`). See
@@ -189,6 +228,8 @@ export type ResumeOptions = {
   resumeStage: TranscribeStage;
   includeCandidates?: boolean;
   beatInput?: BeatInput;
+  /** Same semantics as {@link TranscribeOptions.llmModel}. */
+  llmModel?: LlmModel;
   onProgress?: (event: TranscribeProgress) => void;
   signal?: AbortSignal;
 };
@@ -401,6 +442,9 @@ export class TranscriberClient {
     }
     if (options.beatInput !== undefined) {
       form.append('beat_input', options.beatInput);
+    }
+    if (options.llmModel !== undefined) {
+      form.append('llm_model', options.llmModel);
     }
   }
 }

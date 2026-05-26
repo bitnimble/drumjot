@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# scripts/test-py [pytest-args...]
+#
+# Python test-only runner: pytest. NO ruff. Any args are passed through
+# to pytest, so `scripts/test-py tests/test_hihat_split.py::test_label_for_priority`
+# works for fast iteration on a single test.
+#
+# Use this when you only want to (re)run tests; e.g. iterating on a single
+# failing test, or after a change you know is lint-clean. For the full
+# Python post-change loop (ruff --fix + pytest), use `scripts/check-py`.
+#
+# Requires transcriber/.venv (uv-managed). Does NOT install deps, see
+# transcriber/Dockerfile / the project's Python env notes for the install
+# recipe.
+
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO/transcriber"
+
+if [ ! -d .venv ]; then
+    echo "error: transcriber/.venv not found." >&2
+    echo "       create it with: cd transcriber && uv venv (then install deps per AGENTS.md §3)" >&2
+    exit 1
+fi
+
+.venv/bin/pytest "$@"

@@ -58,6 +58,10 @@ services:
       # from /debug so the operator can prune debug freely without
       # invalidating live response URLs the frontend is still using.
       - /codebox-workspace/drumjot/outputs:/outputs
+      # Cache for /lyrics/align (separated vocals + whisperx alignment
+      # results). Content-addressed, LRU-bounded. Safe to nuke; entries
+      # refill on demand. See `app/cache.py`.
+      - /codebox-workspace/drumjot/cache:/cache
       # Benchmark fixture + output volumes. Pasting dataset files into
       # transcriber/benchmarks/datasets/<dataset>/ on the host makes
       # them visible inside the container; benchmark results land in

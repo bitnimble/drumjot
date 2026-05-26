@@ -1,14 +1,10 @@
 import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
-import {
-  JotTimeline,
-  jotPlayer,
-  KitInfo,
-  PlayerState,
-  timeToX,
-} from 'src/playback';
+import { JotTimeline, jotPlayer, KitInfo, PlayerState } from 'src/playback';
 import sharedStyles from '../jot_view.module.css';
+import { NumberStepper } from './components/number_stepper';
+import { FollowPlayheadContext } from './contexts';
 import styles from './playback.module.css';
 import { Select } from './toolbar';
 import { JotViewStore, VOLUME_STEP } from './store';
@@ -20,16 +16,12 @@ function truncate(s: string, n: number): string {
 }
 
 /**
- * Numeric up/down for a playback offset. Editing commits live — every
- * keystroke and spinner click pushes the new value through `onChange`,
- * which the caller applies immediately (including mid-playback). A local
- * text buffer lets the user clear/retype the field freely; it re-syncs to
- * the incoming value whenever the input isn't focused (e.g. when loading a
- * new jot reseeds the offset).
- *
+ * Numeric up/down for a playback offset, wrapped with a label and unit.
  * Used for two distinct offsets: the audio-track offset (seconds, the
- * recording's lead-in) and the drum beat-grid offset (beats, realigning a
- * mis-detected groove).
+ * recording's lead-in) and the drum beat-grid offset (beats, realigning
+ * a mis-detected groove). The stepper itself owns the buffered-text
+ * editing semantics so the value commits live (every keystroke and +/−
+ * click) without snapping mid-keystroke.
  */
 const OffsetControl = ({
   label,
@@ -37,6 +29,7 @@ const OffsetControl = ({
   value,
   step,
   min,
+  precision = 2,
   title,
   ariaLabel,
   onChange,
@@ -46,43 +39,24 @@ const OffsetControl = ({
   value: number;
   step: number;
   min?: number;
+  precision?: number;
   title: string;
   ariaLabel: string;
   onChange: (v: number) => void;
-}) => {
-  const [text, setText] = React.useState(value.toFixed(2));
-  const [editing, setEditing] = React.useState(false);
-  React.useEffect(() => {
-    if (!editing) setText(value.toFixed(2));
-  }, [value, editing]);
-  const commit = (raw: string) => {
-    const n = parseFloat(raw);
-    if (Number.isFinite(n)) onChange(n);
-  };
-  return (
-    <label className={sharedStyles.toolbarCheckbox} title={title}>
-      <span>{label}</span>
-      <input
-        type="number"
-        className={sharedStyles.offsetInput}
-        min={min}
-        step={step}
-        value={text}
-        onFocus={() => setEditing(true)}
-        onBlur={(e) => {
-          setEditing(false);
-          commit(e.target.value);
-        }}
-        onChange={(e) => {
-          setText(e.target.value);
-          commit(e.target.value);
-        }}
-        aria-label={ariaLabel}
-      />
-      <span>{unit}</span>
-    </label>
-  );
-};
+}) => (
+  <label className={sharedStyles.toolbarCheckbox} title={title}>
+    <span>{label}</span>
+    <NumberStepper
+      value={value}
+      onChange={onChange}
+      step={step}
+      min={min}
+      precision={precision}
+      ariaLabel={ariaLabel}
+    />
+    <span>{unit}</span>
+  </label>
+);
 
 const PlaybackControls = observer(
   ({
@@ -182,6 +156,7 @@ const PlaybackControls = observer(
           </button>
         </div>
         <div className={styles.transportAux}>
+          <FollowToggle />
           <MasterVolumes />
           {drumKits.length > 0 && (
             <label
@@ -222,12 +197,13 @@ const PlaybackControls = observer(
           {hasJot && (
             <OffsetControl
               label="Beat"
-              unit="beats"
-              value={drumOffsetBeats}
-              step={0.25}
-              title="Slide every drum note across the bars by this many beats to realign a consistently mis-detected groove (e.g. a kick transcribed 1.5 beats late in every bar). Positive = later, negative = earlier. Reflows the score and reschedules playback live. Notes pushed off either end of the score are dropped."
-              ariaLabel="Drum beat offset in beats"
-              onChange={onSetDrumOffset}
+              unit="/48"
+              value={drumOffsetBeats * 12}
+              step={1}
+              precision={0}
+              title="Slide every drum note across the bars by this many 1/48-note units to realign a consistently mis-detected groove (12 = one quarter-note beat; 16 = a triplet 8th; 6 = a 16th). Positive = later, negative = earlier. Reflows the score and reschedules playback live. Notes pushed off either end of the score are dropped."
+              ariaLabel="Drum beat offset in 1/48 units"
+              onChange={(units) => onSetDrumOffset(units / 12)}
             />
           )}
           {hasAudioTracks && (
@@ -285,6 +261,26 @@ export const PlaybackBar = observer(({ store }: { store: JotViewStore }) => (
   </div>
 ));
 
+/**
+ * Travelling playback marker. Rendered in three places (timeline header,
+ * each audio-track row, each drum-pitch row) so the playhead line is
+ * visible across the whole vertical stack.
+ *
+ * Position is NOT driven from this component; it's read from the
+ * `--playhead-x` CSS custom property that `PlayheadPosVar` writes once
+ * per frame on the score root (see jot_view.tsx). Every `.playhead`
+ * inherits the variable, so per-frame motion is a single DOM
+ * `setProperty` (regardless of how many playheads are mounted) and ZERO
+ * React reconciliations on this component. The shell only re-renders
+ * when `state` / `cued` / `timeline` change (i.e. transport events,
+ * not per-frame playback) so a debug bundle with many tracks doesn't
+ * pay N × (reconciliation + new style object + new closure) every
+ * frame the way it used to.
+ *
+ * Drag-to-scrub still works because the mousedown handler measures
+ * against the parent bars-row's bounding rect, which is unaffected by
+ * this element's own transform.
+ */
 export const Playhead = observer(
   ({
     showLabel = false,
@@ -298,14 +294,10 @@ export const Playhead = observer(
       jotPlayer.state === 'playing' ||
       jotPlayer.state === 'paused' ||
       // Idle but the user clicked to position the playhead before
-      // pressing Play — show it parked at the cued spot.
+      // pressing Play; show it parked at the cued spot.
       jotPlayer.cued;
     if (!active || timeline.bars.length === 0) return null;
-    const x = timeToX(timeline, jotPlayer.currentTime);
 
-    // Drag-to-scrub on the line itself or its label. stopPropagation
-    // blocks the page-level marquee start; data-noseek prevents the
-    // bars-row onClick from firing on mouseup of the drag.
     const onMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
       if (e.button !== 0) return;
       e.stopPropagation();
@@ -326,27 +318,74 @@ export const Playhead = observer(
     };
 
     return (
-      <div
-        className={styles.playhead}
-        style={{ left: x }}
-        onMouseDown={onMouseDown}
-        data-noseek
-      >
-        {showLabel && (
-          <div className={styles.playheadLabel}>
-            <div>{formatPlayheadTime(jotPlayer.currentTime)}</div>
-            {(() => {
-              const pos = playheadBarBeat(timeline, jotPlayer.currentTime);
-              return pos ? (
-                <div className={styles.playheadLabelBarBeat}>{pos}</div>
-              ) : null;
-            })()}
-          </div>
-        )}
+      <div className={styles.playhead} onMouseDown={onMouseDown} data-noseek>
+        {showLabel && <PlayheadLabel timeline={timeline} />}
       </div>
     );
   }
 );
+
+/**
+ * Time / bar-beat readout shown on top of the timeline-header playhead.
+ * Only ONE instance ever mounts (the per-row playheads pass
+ * `showLabel={false}`), so reading `jotPlayer.currentTime` here gives
+ * us a per-frame re-render of a tiny tree (two text nodes) and nothing
+ * else, no shell rerenders, no per-row label rerenders.
+ */
+const PlayheadLabel = observer(({ timeline }: { timeline: JotTimeline }) => {
+  const t = jotPlayer.currentTime;
+  const pos = playheadBarBeat(timeline, t);
+  return (
+    <div className={styles.playheadLabel}>
+      <div>{formatPlayheadTime(t)}</div>
+      {pos && <div className={styles.playheadLabelBarBeat}>{pos}</div>}
+    </div>
+  );
+});
+
+/**
+ * Bottom-bar toggle that flips `FollowPlayheadContext.follow`. On (the
+ * default) keeps the score scrolled to the centred playhead during
+ * playback; off lets the user pan to other sections while playing.
+ * Flat-orange filled when on so its identity matches the playhead
+ * marker it controls; outlined when off so the bar's neutral chrome
+ * makes the disengaged state read at a glance.
+ */
+const FollowToggle = () => {
+  const { follow, toggle } = React.useContext(FollowPlayheadContext);
+  return (
+    <button
+      type="button"
+      className={classNames(styles.followToggle, !follow && styles.followToggleOff)}
+      onClick={toggle}
+      aria-pressed={follow}
+      aria-label={follow ? 'Disable playhead follow' : 'Enable playhead follow'}
+      title={
+        follow
+          ? 'Follow is on: the score auto-scrolls to keep the playhead centred during playback. Click to turn off and pan freely while playing.'
+          : 'Follow is off: the score stays put during playback. Click to re-engage auto-scroll.'
+      }
+    >
+      <svg
+        width="14"
+        height="14"
+        viewBox="0 0 12 12"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        {/* Arrow shaft + head pointing right at a vertical bar (the
+            playhead). Reads as "follow this line". */}
+        <line x1="1.5" y1="6" x2="8" y2="6" />
+        <polyline points="5.5 3.5 8 6 5.5 8.5" />
+        <line x1="10" y1="2.5" x2="10" y2="9.5" />
+      </svg>
+    </button>
+  );
+};
 
 function formatPlayheadTime(seconds: number): string {
   const negative = seconds < 0;
@@ -375,14 +414,17 @@ function playheadBarBeat(timeline: JotTimeline, jotTime: number): string | null 
       const rb = renderedBars[i];
       if (!rb || t.durationSec <= 0) return null;
       const beatInBar = 1 + ((jotTime - t.startSec) / t.durationSec) * rb.time.count;
-      return `Bar ${rb.index}, ${beatInBar.toFixed(2)}b`;
+      // Truncate (not round) so the tail of a bar never rounds up to the
+      // next bar's downbeat, e.g. 4/4 must go 4.99 → 1.00, never 5.00.
+      const beatDisplay = (Math.floor(beatInBar * 100) / 100).toFixed(2);
+      return `Bar ${rb.index}, ${beatDisplay}b`;
     }
   }
-  // Past the end of the last bar — pin to its final beat so the label
+  // Past the end of the last bar; pin to its final beat so the label
   // doesn't blank out when scrubbing slightly past the score's tail.
   const last = renderedBars[renderedBars.length - 1];
   if (!last) return null;
-  return `Bar ${last.index}, ${(last.time.count + 1).toFixed(2)}b`;
+  return `Bar ${last.index}, ${(last.time.count + 0.99).toFixed(2)}b`;
 }
 
 /**

@@ -61,13 +61,20 @@ globals.Drumjot = Drumjot;
 globals.jotPlayer = jotPlayer;
 export default Drumjot;
 
-// Auto-bootstrap when loaded as the Vite entry. Load the first registered
-// example so the picker reflects what is on screen.
+// Auto-bootstrap when loaded as the Vite entry. The store starts with no
+// jot loaded; the View renders an empty-state welcome screen with file-load
+// and example-picker shortcuts until the user picks something.
 const mount = document.getElementById('app');
 if (mount) {
   const app = new Drumjot(mount);
   globals.drumjot = app;
-  if (EXAMPLE_JOTS.length > 0) {
-    app.loadExample(EXAMPLE_JOTS[0].id);
-  }
+  // Guard tab close / reload / external navigation while a transcribe is
+  // in flight. Browsers no longer honour custom messages here; setting
+  // returnValue just triggers the native "Leave site?" confirm.
+  window.addEventListener('beforeunload', (event) => {
+    if (app.store.transcribeStatus.phase === 'uploading') {
+      event.preventDefault();
+      event.returnValue = '';
+    }
+  });
 }

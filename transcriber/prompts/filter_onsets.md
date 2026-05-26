@@ -65,6 +65,25 @@ false positives are the minority. Reject only clear artifacts.
 
 ## Output
 
-Call `report_artifact_onsets` with `rejected_indices`: the `#N` indices
-to drop. Empty list if every onset is a real hit. Never invent an index
-that wasn't shown.
+Call `report_artifact_onsets` with `rejected_onsets`: a list of objects,
+one per onset to drop. Each object has:
+
+- `index`; the `#N` index of the onset to drop.
+- `reason`; one of the short codes below describing **why** you flagged
+  it. Use these whenever they fit; reach for `custom` only when none of
+  the standard codes describe the case.
+  - `bleed`; onset is bleed from a louder instrument (lines up with a
+    hit on another pitch in `others:` and doesn't fit this instrument's
+    pattern).
+  - `double_trigger`; detector fired twice for one strike (a weak hit
+    immediately after a strong one, implausibly close).
+  - `noise`; isolated weak onset that fits neither this instrument's
+    groove nor any other instrument's hit.
+  - `custom`; none of the above applies; you MUST also set
+    `reason_text` with a short free-text explanation (≤120 chars).
+- `reason_text`; required only when `reason` is `custom`. Optional for
+  the other reasons if you want to add brief extra detail (e.g. which
+  pitch you think the bleed is from); keep it short.
+
+Empty list if every onset is a real hit. Never invent an index that
+wasn't shown.

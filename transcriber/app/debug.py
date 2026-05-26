@@ -185,18 +185,22 @@ class DebugSink:
         prompt: str,
         *,
         extra: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> int:
         """Persist the full hydrated prompt for one LLM call.
 
         Files land at `<dir>/llm/NN_<purpose>.txt` where NN is a
         zero-padded per-request sequence number. Each file opens with a
         small header (model, char count, optional extra kwargs) followed
-        by the raw prompt text — we deliberately avoid wrapping the
+        by the raw prompt text; we deliberately avoid wrapping the
         prompt in a markdown fence because the prompt itself can contain
         triple backticks.
+
+        Returns the integer seq number assigned to this call so the
+        caller can pair the response dump (see `write_llm_response`).
         """
         self._llm_call_seq += 1
-        seq = f"{self._llm_call_seq:02d}"
+        seq_num = self._llm_call_seq
+        seq = f"{seq_num:02d}"
         safe_purpose = _slugify(purpose) or "llm"
         header_lines: list[str] = [
             f"# LLM call {seq}: {purpose}",
@@ -212,6 +216,37 @@ class DebugSink:
         if not body.endswith("\n"):
             body += "\n"
         self.write_text(f"llm/{seq}_{safe_purpose}.txt", body)
+        return seq_num
+
+    def write_llm_response(
+        self,
+        seq: int,
+        purpose: str,
+        response: Any,
+    ) -> None:
+        """Persist the parsed Anthropic response paired with its prompt.
+
+        Lands at `<dir>/llm/NN_<purpose>.response.json` using the same
+        NN as the matching `write_llm_prompt` call. The full response is
+        serialised via Pydantic's `model_dump` when available (the SDK's
+        `Message` is a Pydantic model), so every content block; including
+        the parsed `tool_use.input`; is on disk verbatim. Critical for
+        diagnosing tool-call issues: a forced tool call truncated by
+        `max_tokens` looks identical to a successful empty call at the
+        Python level (both yield `input.get("shifts", []) == []`); the
+        only way to tell them apart is to see `stop_reason` and the raw
+        content.
+        """
+        safe_purpose = _slugify(purpose) or "llm"
+        seq_str = f"{seq:02d}"
+        try:
+            if hasattr(response, "model_dump") and callable(response.model_dump):
+                payload = response.model_dump(mode="json")
+            else:
+                payload = {"repr": repr(response)}
+        except Exception as exc:  # pragma: no cover - defensive
+            payload = {"error": f"failed to serialise response: {exc}"}
+        self.write_json(f"llm/{seq_str}_{safe_purpose}.response.json", payload)
 
     def finalize(self, summary: dict[str, Any]) -> None:
         """Write the request summary (timings, options, scores) last."""

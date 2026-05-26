@@ -166,10 +166,19 @@ class PipelineOptions:
     beat_input: BeatInput = "full_mix"
     # Whether to run the optional `quantise` stage. Enabled by default;
     # set False to skip both the deterministic joint-snap pass and the
-    # LLM residual pass, leaving `kept_by_pitch` as the filter stage
+    # LLM residual pass; leaving `kept_by_pitch` as the filter stage
     # produced it (raw seconds; frontend's 1/48 snap in
     # `src/midi/from_midi.ts` handles quantisation).
     quantise: bool = True
+    # Anthropic model used by the three Opus-by-default classification
+    # stages (`filter`; `hihat_split`; `cymbal_split`). Empty string
+    # falls back to `settings.llm_model` inside each call site so callers
+    # constructing PipelineOptions without an explicit model — tests; the
+    # default constructor — keep working. The HTTP layer always populates
+    # this from its `llm_model` form param (which itself defaults to
+    # `settings.llm_model`). The `quantise` stage is deliberately NOT
+    # controlled here — it pins Haiku 4.5 in `pipeline/quantise.py`.
+    llm_model: str = ""
 
 
 @dataclass
@@ -221,6 +230,15 @@ class PipelineContext:
     # resume); `{}` is a legitimate "no drums detected" result that
     # should produce an empty MIDI, not an error.
     kept_by_pitch: dict[str, list[OnsetCandidate]] | None = None
+    # Per-rejected-onset reason metadata from the filter LLM:
+    # `{pitch: {id(c): {"reason": str, "reason_text": str | None}}}`.
+    # Keyed by `id(c)` so it can be matched directly against the rejected
+    # branch of `build_note_provenance`. Pre-vetted lanes (`h`/`H`/`c`/`d`,
+    # which skip the filter LLM) contribute nothing here; their rejections
+    # are tagged by `rejected_by` (`hihat_split` / `cymbal_split`) instead.
+    # Persisted to `filter/rejections.json` so a resume from `transcribe`
+    # can replay the reasons without re-running the LLM.
+    filter_reasons: dict[str, dict[int, dict[str, Any]]] = field(default_factory=dict)
     # The rendered MIDI of the LLM-kept onsets. Materialised to
     # `prediction.mid` (debug + output sink) and surfaced as
     # `prediction_midi_url` on the response.
@@ -308,9 +326,9 @@ def _run_stage(
     elif stage is Stage.BEATS:
         _do_beats(ctx, options, sink)
     elif stage is Stage.ONSETS:
-        _do_onsets(ctx, sink)
+        _do_onsets(ctx, options, sink)
     elif stage is Stage.FILTER:
-        _do_filter(ctx, sink, progress)
+        _do_filter(ctx, options, sink, progress)
     elif stage is Stage.QUANTISE:
         _do_quantise(ctx, options, sink)
     elif stage is Stage.TRANSCRIBE:
@@ -414,7 +432,7 @@ def _do_beats(
 
 
 def _do_onsets(
-    ctx: PipelineContext, sink: DebugSink | None,
+    ctx: PipelineContext, options: PipelineOptions, sink: DebugSink | None,
 ) -> None:
     if not ctx.per_instrument_stems:
         raise RuntimeError(
@@ -449,6 +467,7 @@ def _do_onsets(
     # below for the same reason as the hi-hat lanes.
     ctx.onsets_by_pitch, ctx.cymbal_discarded = split_cymbal_onsets(
         ctx.onsets_by_pitch, ctx.per_instrument_stems, ctx.structure,
+        llm_model=options.llm_model,
     )
     # The hi-hat stem mixes closed and open hi-hat hits; classify each
     # onset and split into closed (`h`) and synthetic open (`H`) lanes
@@ -460,6 +479,7 @@ def _do_onsets(
     # `_do_transcribe` below.
     ctx.onsets_by_pitch, ctx.hihat_discarded = split_hihat_onsets(
         ctx.onsets_by_pitch, ctx.per_instrument_stems, ctx.structure,
+        llm_model=options.llm_model,
     )
     flat_times = [c.time for cs in ctx.onsets_by_pitch.values() for c in cs]
     detect_feel_for_bars(ctx.structure, flat_times)
@@ -518,6 +538,7 @@ def _attach_beat_positions(
 
 def _do_filter(
     ctx: PipelineContext,
+    options: PipelineOptions,
     sink: DebugSink | None,
     progress: ProgressCallback | None = None,
 ) -> None:
@@ -561,12 +582,13 @@ def _do_filter(
     # the per-instrument filter LLM here would duplicate work and risk
     # double-rejecting soft real hits, so we skip those pitches in the
     # pool and re-attach the pre-vetted lanes verbatim afterwards.
-    kept_by_pitch = filter_onsets_all_instruments(
+    kept_by_pitch, reasons_by_pitch = filter_onsets_all_instruments(
         ctx.onsets_by_pitch,
         ctx.structure,
         on_complete=on_instrument_done,
         cancel_event=ctx.cancel_event,
         skip_pitches={"h", "H", "c", "d"},
+        llm_model=options.llm_model,
     )
     if ctx.cancel_event.is_set():
         # The pool exited early because the client disconnected. Surface
@@ -588,6 +610,7 @@ def _do_filter(
         log.warning("filter: kept no onsets for any instrument; emitting empty MIDI")
 
     ctx.kept_by_pitch = kept_by_pitch
+    ctx.filter_reasons = reasons_by_pitch
 
     if sink is not None:
         sink.write_json(
@@ -605,6 +628,31 @@ def _do_filter(
                 for pitch, cands in kept_by_pitch.items()
             },
         )
+        # Sidecar of rejection reasons keyed by `(time, bar, beat_in_bar)`
+        # so resume can re-attach them to the pre-filter candidate
+        # identities the same way `_load_kept_onsets` does for kept rows.
+        rejections_dump: dict[str, list[dict[str, Any]]] = {}
+        for pitch, by_id in reasons_by_pitch.items():
+            rows: list[dict[str, Any]] = []
+            # Rebuild (id -> candidate) from `onsets_by_pitch` so we can
+            # look up the candidate's value fields by `id(c)`.
+            id_to_cand = {id(c): c for c in ctx.onsets_by_pitch.get(pitch, [])}
+            for cand_id, info in by_id.items():
+                c = id_to_cand.get(cand_id)
+                if c is None:
+                    # Shouldn't happen; every rejected onset came from
+                    # `onsets_by_pitch`, but skip rather than crash.
+                    continue
+                rows.append({
+                    "time": c.time,
+                    "bar": c.bar,
+                    "beat_in_bar": c.beat_in_bar,
+                    "reason": info["reason"],
+                    "reason_text": info.get("reason_text"),
+                })
+            if rows:
+                rejections_dump[pitch] = rows
+        sink.write_json("filter/rejections.json", rejections_dump)
 
 
 def _do_quantise(
@@ -723,6 +771,7 @@ def _do_transcribe(
             "c": "cymbal_split",
             "d": "cymbal_split",
         },
+        reasons_by_pitch=ctx.filter_reasons,
     )
 
     if sink is not None:

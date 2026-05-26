@@ -2,15 +2,14 @@ import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { RenderedJot, StructuralBar, ViewConfig } from 'src/jot';
-import {
-  AudioTrack,
-  AudioTrackId,
-  computeWaveformPeaksForJot,
-  jotPlayer,
-} from 'src/playback';
+import { AudioTrack, AudioTrackId, AudioTrackRole, jotPlayer } from 'src/playback';
+import { waveformWorker, BarSlice } from 'src/playback/waveform_worker_client';
+import { BarBeat, ChunkLayout, SECONDS_PER_CHUNK, WaveformChunk, buildChunkLayout } from './waveform_chunks';
 import { GutterResizeHandle } from './components/gutter_resize_handle';
 import { ClearButton, MuteButton, SoloButton } from './components/icon_button';
-import { NoteProvenanceContext } from './contexts';
+import { DropdownButton, dropdownStyles } from './components/dropdown';
+import { NoteProvenanceContext, RenderedJotContext, UniformWaveformsContext } from './contexts';
+import { LyricsRow } from './lyrics_row';
 import styles from './mixer.module.css';
 import { Playhead } from './playback';
 import { BarView, FilteredOnsetView, seekFromClick } from './score';
@@ -26,6 +25,14 @@ export type VoiceControls = {
   onSetVolume: (pitch: string, v: number) => void;
   onToggleMute: (pitch: string) => void;
   onToggleSolo: (pitch: string) => void;
+  /** Drum section master M/S. The master acts at the bus, not by editing
+   * the per-row M/S sets; `masterAudible` reflects the resolved state
+   * (master mute + cross-domain solo) so the master row can dim itself. */
+  masterMuted: boolean;
+  masterSoloed: boolean;
+  masterAudible: boolean;
+  onToggleMasterMute: () => void;
+  onToggleMasterSolo: () => void;
 };
 
 export type AudioTrackControls = {
@@ -38,6 +45,18 @@ export type AudioTrackControls = {
   onToggleSolo: (id: AudioTrackId) => void;
   /** Drop a loaded audio track (button in the gutter clears the slot). */
   onClear: (id: AudioTrackId) => void;
+  /** Overflow menu: run stage 1 (`stems_all`) on this track,
+   *  isolating drums + drumless backing from a full-mix recording. */
+  onSplitFromMix: (id: AudioTrackId) => void;
+  /** Overflow menu: run stage 2 (`stems_per`) on this track,
+   *  splitting a drum-only recording into per-instrument pieces. */
+  onSplitDrumPieces: (id: AudioTrackId) => void;
+  /** Audio section master M/S; same semantics as on {@link VoiceControls}. */
+  masterMuted: boolean;
+  masterSoloed: boolean;
+  masterAudible: boolean;
+  onToggleMasterMute: () => void;
+  onToggleMasterSolo: () => void;
 };
 
 /**
@@ -47,13 +66,19 @@ export type AudioTrackControls = {
  */
 const MIXER_DRAG_MIME = 'application/x-drumjot-mixer-row';
 
-const AUDIO_TRACK_HEIGHT = 56;
+/** Fixed row height shared by the gutter (label + filename + button
+ *  cluster) and the bars-row waveform on the right. Sized to fit the
+ *  worst-case gutter content: a 2-line clamped name (~32px) + the
+ *  filename row (~14px) + the M/S/X button cluster (~22px) + the
+ *  gutter's 8px vertical padding. Bumping this also bumps the
+ *  waveform height, which is a desirable side effect, taller peaks
+ *  read more clearly. */
+const AUDIO_TRACK_HEIGHT = 76;
 
 /** Audio-track display name: filename with its extension stripped. */
 function audioTrackLabel(filename: string): string {
   return filename.replace(/\.[^./\\]+$/, '') || filename;
 }
-
 
 /** Common drag/drop props passed to every mixer row. */
 type MixerRowDragProps = {
@@ -146,26 +171,35 @@ export const MixerView = observer(
     // given span so the bracket reads as one continuous outline across
     // rows (with non-participating rows in between visually skipped).
     const pitchOrder = React.useMemo(
-      () =>
-        trackOrder.flatMap((k) => (k.kind === 'pitch' ? [k.pitch] : [])),
-      [trackOrder],
+      () => trackOrder.flatMap((k) => (k.kind === 'pitch' ? [k.pitch] : [])),
+      [trackOrder]
     );
 
     return (
       <div className={styles.mixer}>
         <GutterMasterRow
-          label="Audio"
+          label="Audio master"
           title="Master volume for all loaded audio (backing) tracks together. Multiplies on top of each track's own fader; takes effect instantly, including mid-playback."
           value={jotPlayer.audioTrackMasterVolume}
           onChange={(v) => jotPlayer.setAudioTrackMasterVolume(v)}
+          muted={audioTrackControls.masterMuted}
+          soloed={audioTrackControls.masterSoloed}
+          audible={audioTrackControls.masterAudible}
+          onToggleMute={audioTrackControls.onToggleMasterMute}
+          onToggleSolo={audioTrackControls.onToggleMasterSolo}
           testId="audio-track-master"
           onResizeGutterStart={onResizeGutterStart}
         />
         <GutterMasterRow
-          label="Drums"
+          label="Drums master"
           title="Master volume for all drum/instrument rows together. Multiplies on top of each row's own fader; takes effect instantly, including mid-playback."
           value={jotPlayer.drumMasterVolume}
           onChange={(v) => jotPlayer.setDrumMasterVolume(v)}
+          muted={voiceControls.masterMuted}
+          soloed={voiceControls.masterSoloed}
+          audible={voiceControls.masterAudible}
+          onToggleMute={voiceControls.onToggleMasterMute}
+          onToggleSolo={voiceControls.onToggleMasterSolo}
           testId="drum-master"
           onResizeGutterStart={onResizeGutterStart}
         />
@@ -173,14 +207,18 @@ export const MixerView = observer(
           // Reuse a stable React key per row so dragging doesn't tear
           // down + remount expensive children (the AudioTrackWaveformCanvas
           // would otherwise re-decode peaks on every reorder).
-          const reactKey = key.kind === 'audio' ? `audio:${key.id}` : `pitch:${key.pitch}`;
+          const reactKey =
+            key.kind === 'audio'
+              ? `audio:${key.id}`
+              : key.kind === 'pitch'
+                ? `pitch:${key.pitch}`
+                : 'lyrics';
           // A row begins a new "group" — and so renders with a small
           // top gap — whenever its `groupId` differs from the previous
           // row's. Solo (groupId undefined) rows are each their own
           // group. The first row never gets a gap (nothing above it).
           const prevGroupId = idx > 0 ? trackOrder[idx - 1].groupId : undefined;
-          const nextGroupId =
-            idx < trackOrder.length - 1 ? trackOrder[idx + 1].groupId : undefined;
+          const nextGroupId = idx < trackOrder.length - 1 ? trackOrder[idx + 1].groupId : undefined;
           const groupStart = idx > 0 && key.groupId !== prevGroupId;
           // groupEnd / inGroup only fire on rows that are actually part
           // of a `groupId` cluster (paired audio↔pitch today). Solo rows
@@ -218,6 +256,11 @@ export const MixerView = observer(
                 onSeek={onSeek}
                 {...rowProps}
               />
+            );
+          }
+          if (key.kind === 'lyrics') {
+            return (
+              <LyricsRow key={reactKey} jot={jot} onSeek={onSeek} {...rowProps} />
             );
           }
           return (
@@ -407,6 +450,132 @@ const MixerDragHandle = ({
   );
 };
 
+/** Per-menu-item availability for the {@link AudioTrackOverflowMenu}.
+ *  `enabled` drives the disabled prop; `reason` is the tooltip shown
+ *  on the disabled item so the user sees why the action is blocked. */
+type AudioTrackMenuItemState = {
+  enabled: boolean;
+  reason: string;
+};
+
+/** Compute whether the "Split into drums + backing" item is actionable
+ *  for an audio track of the given role. Stage 1 (`stems_all`) only
+ *  makes sense on a recording that may contain non-drum content; running
+ *  it on an already-isolated drum stem, a drumless backing, or a single
+ *  drum piece all produce garbage or noop. `unknown` defaults to enabled
+ *  (ad-hoc loads where we couldn't classify; let the user try). */
+export function splitFromMixState(role: AudioTrackRole | undefined): AudioTrackMenuItemState {
+  switch (role ?? 'unknown') {
+    case 'full-mix':
+      return { enabled: true, reason: 'Isolate drums and a drumless backing from this recording.' };
+    case 'unknown':
+      return { enabled: true, reason: 'Try isolating drums and a drumless backing from this recording.' };
+    case 'drums':
+      return { enabled: false, reason: 'Already drums-only.' };
+    case 'no-drums':
+      return { enabled: false, reason: 'No drums to split.' };
+    case 'drum-piece':
+      return { enabled: false, reason: 'Already a single drum piece.' };
+  }
+}
+
+/** Compute whether the "Split into kick / snare / hi-hat / cymbals" item
+ *  is actionable for the given role. Stage 2 (`stems_per`) requires an
+ *  already-isolated drum stem; the model was trained on isolated drums
+ *  only and produces garbage when fed a full mix. */
+export function splitDrumPiecesState(role: AudioTrackRole | undefined): AudioTrackMenuItemState {
+  switch (role ?? 'unknown') {
+    case 'drums':
+      return { enabled: true, reason: 'Split this drum recording into per-instrument pieces.' };
+    case 'unknown':
+      return { enabled: true, reason: 'Try splitting this recording into per-instrument drum pieces.' };
+    case 'full-mix':
+      return { enabled: false, reason: 'Isolate drums first.' };
+    case 'no-drums':
+      return { enabled: false, reason: 'No drums to split.' };
+    case 'drum-piece':
+      return { enabled: false, reason: 'Already a single drum piece.' };
+  }
+}
+
+/** Per-row overflow menu on audio tracks. Hosts the two separation
+ *  operations (stage 1, stage 2) with enable state derived from the
+ *  track's {@link AudioTrackRole}. When both items would be disabled
+ *  the trigger button isn't rendered at all; those rows have nothing
+ *  actionable and a dead button would just be visual clutter. */
+const AudioTrackOverflowMenu = ({
+  id,
+  role,
+  trackLabel,
+  onSplitFromMix,
+  onSplitDrumPieces,
+}: {
+  id: AudioTrackId;
+  role: AudioTrackRole | undefined;
+  trackLabel: string;
+  onSplitFromMix: (id: AudioTrackId) => void;
+  onSplitDrumPieces: (id: AudioTrackId) => void;
+}) => {
+  const mixState = splitFromMixState(role);
+  const piecesState = splitDrumPiecesState(role);
+  if (!mixState.enabled && !piecesState.enabled) return null;
+  return (
+    <DropdownButton
+      label="⋯"
+      className={styles.overflowTrigger}
+      panelClassName={styles.overflowPanel}
+      title={`More actions for ${trackLabel}`}
+    >
+      {(close) => (
+        <>
+          <AudioTrackMenuItem
+            label="Split into drums + backing"
+            state={mixState}
+            onClick={() => {
+              onSplitFromMix(id);
+              close();
+            }}
+            testId={`audio-track-split-mix-${id}`}
+          />
+          <AudioTrackMenuItem
+            label="Split into kick / snare / hi-hat / cymbals"
+            state={piecesState}
+            onClick={() => {
+              onSplitDrumPieces(id);
+              close();
+            }}
+            testId={`audio-track-split-pieces-${id}`}
+          />
+        </>
+      )}
+    </DropdownButton>
+  );
+};
+
+const AudioTrackMenuItem = ({
+  label,
+  state,
+  onClick,
+  testId,
+}: {
+  label: string;
+  state: AudioTrackMenuItemState;
+  onClick: () => void;
+  testId?: string;
+}) => (
+  <button
+    type="button"
+    className={dropdownStyles.dropdownItem}
+    role="menuitem"
+    disabled={!state.enabled}
+    title={state.reason}
+    onClick={onClick}
+    data-testid={testId}
+  >
+    {label}
+  </button>
+);
+
 const AudioTrackRow = observer(
   ({
     id,
@@ -469,7 +638,7 @@ const AudioTrackRow = observer(
           inGroup && styles.mixerRowInGroup,
           isDragging && styles.mixerRowDragging,
           drop.isDropIndicatorAbove && styles.mixerDropIndicatorAbove,
-          drop.isDropIndicatorBelow && styles.mixerDropIndicatorBelow,
+          drop.isDropIndicatorBelow && styles.mixerDropIndicatorBelow
         )}
         data-testid={`audio-track-row-${id}`}
         onDragOver={drop.onDragOver}
@@ -485,11 +654,27 @@ const AudioTrackRow = observer(
           />
           <GutterResizeHandle onResizeStart={onResizeGutterStart} />
           <div className={styles.musicTrackContent}>
-            <div className={classNames(styles.musicTrackLabel, !audible && styles.musicTrackLabelDim)}>
-              <span className={styles.musicTrackName}>{label}</span>
-              <span className={styles.musicTrackFile} title={track.filename}>
-                {track.filename}
-              </span>
+            <div className={styles.musicTrackHeader}>
+              <div
+                className={classNames(
+                  styles.musicTrackLabel,
+                  !audible && styles.musicTrackLabelDim,
+                )}
+              >
+                <span className={styles.musicTrackName} title={label}>
+                  {label}
+                </span>
+                <span className={styles.musicTrackFile} title={track.filename}>
+                  {track.filename}
+                </span>
+              </div>
+              <AudioTrackOverflowMenu
+                id={id}
+                role={track.role}
+                trackLabel={label}
+                onSplitFromMix={controls.onSplitFromMix}
+                onSplitDrumPieces={controls.onSplitDrumPieces}
+              />
             </div>
             <div className={styles.musicTrackButtons}>
               <RowVolumeSlider
@@ -497,9 +682,10 @@ const AudioTrackRow = observer(
                 onChange={(v) => controls.onSetVolume(id, v)}
                 label={`${label} audio track`}
               />
-              {/* Clear sits first so Mute/Solo stay flush with the gutter's
-                  right edge — lining up with the M/S column on the
-                  instrument rows below (both gutters share a width). */}
+              {/* Clear sits before Mute/Solo so the M/S pair stays flush
+                  with the gutter's right edge, aligned with the M/S
+                  column on the instrument rows below (both gutters share
+                  a width). */}
               <ClearButton
                 onClear={() => controls.onClear(id)}
                 label={`Remove the ${lc} audio track`}
@@ -651,9 +837,7 @@ const PitchRow = observer(
     // Resolve once per row so the per-entry render below is just a map.
     const provenance = React.useContext(NoteProvenanceContext);
     const showFiltered = provenance?.showFiltered ?? false;
-    const rejectedForPitch = showFiltered
-      ? provenance!.rejectedByPitch.get(pitch) ?? []
-      : [];
+    const rejectedForPitch = showFiltered ? (provenance!.rejectedByPitch.get(pitch) ?? []) : [];
     // Cumulative beat offsets so each rejected entry can be positioned
     // absolutely in the bars row without walking back through bar
     // widths on every render. Same scale (quarter-note beats) as the
@@ -700,7 +884,7 @@ const PitchRow = observer(
           inGroup && styles.mixerRowInGroup,
           isDragging && styles.mixerRowDragging,
           drop.isDropIndicatorAbove && styles.mixerDropIndicatorAbove,
-          drop.isDropIndicatorBelow && styles.mixerDropIndicatorBelow,
+          drop.isDropIndicatorBelow && styles.mixerDropIndicatorBelow
         )}
         data-testid={`pitch-row-${pitch}`}
         onDragOver={drop.onDragOver}
@@ -824,11 +1008,25 @@ const PitchRow = observer(
 );
 
 /**
- * Canvas-rendered waveform for one audio track, aligned to the score's
- * bar timeline. Peaks are recomputed in a `useEffect` whenever the
- * (zoom-dependent) total bar width changes or the underlying track
- * swaps — same cadence the score uses to re-flow under
- * `viewConfig.barWidth`.
+ * Tiled waveform row for one audio track, aligned to the score's bar
+ * timeline. The row is split into `SECONDS_PER_CHUNK`-jot-time
+ * windows; each window renders as its own absolutely-positioned
+ * canvas tile (see {@link AudioTrackWaveformChunk}). Tiling unlocks
+ * three wins over the legacy single-canvas approach:
+ *
+ *  1. **Unbounded effective resolution.** Each tile picks its own
+ *     backing-store size, so the cross-browser 16 384 px per-axis
+ *     canvas cap no longer rolls a long or zoomed track off into
+ *     lower-resolution rendering.
+ *  2. **Lazy draw via IntersectionObserver.** Off-screen tiles never
+ *     hit the worker; the cost of rendering a 10-minute track scales
+ *     with what's visible, not with track length.
+ *  3. **Pure-CSS live zoom.** Each tile's `left` / `width` read the
+ *     root `--px-per-beat`, so a wheel tick reflows every tile at the
+ *     browser layer with no React or canvas work.
+ *
+ * Chunk layout is computed once per structural change and memoised so
+ * a zoom-driven re-render of this parent doesn't rebuild it.
  */
 const AudioTrackWaveformCanvas = observer(
   ({
@@ -844,36 +1042,10 @@ const AudioTrackWaveformCanvas = observer(
     dim: boolean;
     testId?: string;
   }) => {
-    const canvasRef = React.useRef<HTMLCanvasElement>(null);
-    // The live drum↔audio offset (Offset control). Reading it here under
-    // `observer` re-renders the waveform when the user nudges the offset
-    // so it stays aligned with where the audio actually plays.
-    const drumsT0Sec = jotPlayer.drumsT0Sec;
-    // Structural voice-beats (zoom-invariant) drives the canvas's
-    // rendered CSS width — we always draw the canvas at the px-per-beat
-    // that was in effect on the most recent settle, NOT the live
-    // zoom-driven value. Visual scaling for in-between zoom states is
-    // done with `transform: scaleX(--px-per-beat / --rendered-px-per-beat)`
-    // (see `.musicTrackWaveform` in the css module), which is a pure
-    // GPU composite — no canvas redraw, no layout, no React work.
-    const structureVoice = jot.structure.voices[0];
-    // Lead-in lives in `voice.bars` as negative-indexed bars (see
-    // `structureForVoice` in jot.ts), so a single sum over `bar.beats`
-    // covers both pre-drum and drum content.
-    const voiceBeats = structureVoice
-      ? structureVoice.bars.reduce((a, b) => a + b.beats, 0)
-      : 0;
-    // Read pxPerBeat AFTER voiceBeats so the observer tracks both: a
-    // wheel tick still re-runs the body (cheap — same JSX out), which
-    // lets the debounced redraw effect re-arm. The component's actual
-    // visual scaling is decoupled from this — it's driven by the root
-    // `--px-per-beat` flowing into the canvas's CSS transform calc.
-    const pxPerBeat = jot.pxPerBeat;
-    // If the audio track is the isolated stem for a known DSL pitch
-    // (debug bundles set this from the bundle's `mapping`), tint the
-    // waveform with that pitch's lane color so it visually pairs with
-    // its instrument row. Best-effort lookup across all voices' bars —
-    // a pitch the loaded jot doesn't contain falls back to the default.
+    const uniformWaveforms = React.useContext(UniformWaveformsContext);
+    // Per-track stem-colour resolution: same logic the legacy single
+    // canvas used; hoisted to the parent so every chunk reuses the
+    // result instead of re-walking the structure on each mount.
     let pitchColor: string | undefined;
     if (track.pitch) {
       outer: for (const v of jot.structure.voices) {
@@ -886,106 +1058,350 @@ const AudioTrackWaveformCanvas = observer(
         }
       }
     }
-    // `renderedPxPerBeat` is the scale the bitmap was last drawn at.
-    // Persisted as state (not derived from pxPerBeat) so a zoom-driven
-    // re-render of this component DOES NOT update the inline
-    // `--rendered-px-per-beat` until the bitmap is actually
-    // re-rasterised — otherwise scale would collapse to 1 and the
-    // bitmap would visually snap to its old CSS width during the gap.
-    // `null` until the first paint completes.
-    const [renderedPxPerBeat, setRenderedPxPerBeat] =
-      React.useState<number | null>(null);
+    // Chunk layout depends on `jot.structure` (zoom-invariant) plus a
+    // discrete `zoomBucket` derived from the live `pxPerBeat`. At
+    // higher zoom the chunks need to be SHORTER in jot-time so each
+    // chunk's bitmap stays under the cross-browser 16 384 px canvas
+    // cap; otherwise the browser silently down-samples the oversized
+    // bitmap into a blurry tile.
+    //
+    // Bucket transitions are quantised to powers of two (1×, 2×, 4×,
+    // 8×) so a typical wheel zoom only crosses a boundary occasionally;
+    // crossing rebuilds every chunk for the affected row, which is
+    // expensive (new keys → new components → fresh bitmaps), so we
+    // deliberately accept slight blur within a bucket rather than
+    // rebuild on every tick.
+    //
+    // Cap at 8× so chunks don't shrink below ~3.75 s of jot time;
+    // beyond that the per-chunk overhead (IntersectionObserver,
+    // canvas element, React reconciliation) outweighs the resolution
+    // win, since the user has to scroll proportionally to see content
+    // at that zoom anyway.
+    const livePxPerBeat = useLiveJotPxPerBeat();
+    const REFERENCE_PX_PER_BEAT = 112; // pxPerBeat at zoom=1, default density
+    const zoomRatio = Math.max(1, livePxPerBeat / REFERENCE_PX_PER_BEAT);
+    const zoomBucket = Math.max(
+      1,
+      Math.min(8, Math.pow(2, Math.ceil(Math.log2(zoomRatio)))),
+    );
+    const layout = React.useMemo(
+      () => buildChunkLayout(jot, SECONDS_PER_CHUNK / zoomBucket),
+      [jot, zoomBucket],
+    );
 
+    // Bucket-transition holdover. When the layout reference changes
+    // (bucket boundary crossed), the previous layout is kept in the
+    // DOM for a short window so its already-rasterised canvases stay
+    // visible while the new (blank-on-mount) chunks ask the worker
+    // for their peaks. Old chunks live BEHIND new chunks via DOM
+    // order; the new ones cover them as soon as they rasterise.
+    //
+    // The chunk key uses the chunk's `jotStart..jotEnd` time range
+    // (not the old monotonic `chunk.key` counter), so React only reuses
+    // a canvas DOM element when its content actually represents the
+    // same audio range. Without this, the old key=0 canvas got reused
+    // for the new key=0 chunk (different time range), the bitmap
+    // stayed at the OLD content but the CSS position shifted to the
+    // new chunk's start beat, and the waveform visibly jumped a few
+    // hundred pixels for one frame before the worker re-rasterised.
+    //
+    // CRITICAL: the holdover is tracked via REFS and computed during
+    // render, not via `useState` + `useEffect`. A state-based
+    // implementation creates a one-render gap where layout=B has been
+    // applied but `holdover` is still null; during that render React
+    // unmounts the previous (A) chunks because they're absent from the
+    // JSX, destroying their canvas bitmaps. The subsequent render
+    // re-mounts A as the holdover but with FRESH (blank) canvases.
+    // Computing the holdover during render keeps A's chunks
+    // continuously in the JSX from the moment B arrives, so React
+    // preserves their canvas content through the transition.
+    const lastLayoutRef = React.useRef<ChunkLayout>(layout);
+    const holdoverRef = React.useRef<{ layout: ChunkLayout; expiry: number } | null>(null);
+    const [, forceUpdate] = React.useReducer((x: number) => x + 1, 0);
+    const HOLDOVER_MS = 1500;
+    const now = performance.now();
+    if (lastLayoutRef.current !== layout && layout.chunks.length > 0) {
+      // New layout: stash the previously-rendered one as holdover.
+      // Mutating refs during render is valid React when used to
+      // capture cross-render state like this.
+      if (lastLayoutRef.current.chunks.length > 0) {
+        holdoverRef.current = {
+          layout: lastLayoutRef.current,
+          expiry: now + HOLDOVER_MS,
+        };
+      }
+      lastLayoutRef.current = layout;
+    }
+    if (holdoverRef.current && holdoverRef.current.expiry <= now) {
+      holdoverRef.current = null;
+    }
+    const holdover = holdoverRef.current?.layout ?? null;
+
+    // Schedule a re-render when the holdover expires so the dead
+    // chunks actually get unmounted (otherwise they linger forever
+    // because no other state change triggers a render).
+    const expiryAt = holdoverRef.current?.expiry ?? 0;
+    React.useEffect(() => {
+      if (!expiryAt) return;
+      const remaining = expiryAt - performance.now();
+      if (remaining <= 0) {
+        forceUpdate();
+        return;
+      }
+      const id = window.setTimeout(forceUpdate, remaining);
+      return () => window.clearTimeout(id);
+    }, [expiryAt]);
+
+    if (layout.chunks.length === 0 && !holdover) return null;
+    // Per-track amplitude scale for uniform mode (resolved once at
+    // track registration, identical for every chunk of this track; // so neighbouring chunks render at the same vertical scale and no
+    // amplitude seam shows at the chunk boundary).
+    const ampScale = uniformWaveforms ? waveformWorker.getAmpScale(track.id) : 1;
+
+    // Merge holdover + current chunks into a single deduped list keyed
+    // by time range. Holdover added first (rendered first → behind in
+    // DOM order); current overrides on key collision. A chunk that
+    // appears in BOTH (same boundaries before and after the bucket
+    // transition, possible at zoom-out from a higher bucket) keeps the
+    // SAME React identity, so its canvas is preserved across the swap
+    // with no rasterisation needed.
+    const renderChunks = new Map<string, { chunk: WaveformChunk; bars: BarBeat[] }>();
+    if (holdover) {
+      for (const c of holdover.chunks) {
+        renderChunks.set(`${c.jotStart}-${c.jotEnd}`, { chunk: c, bars: holdover.bars });
+      }
+    }
+    for (const c of layout.chunks) {
+      renderChunks.set(`${c.jotStart}-${c.jotEnd}`, { chunk: c, bars: layout.bars });
+    }
+
+    let firstCurrentKey: string | undefined;
+    for (const c of layout.chunks) {
+      firstCurrentKey = `${c.jotStart}-${c.jotEnd}`;
+      break;
+    }
+
+    return (
+      <>
+        {Array.from(renderChunks.entries()).map(([key, { chunk, bars }]) => (
+          <AudioTrackWaveformChunk
+            key={key}
+            track={track}
+            chunk={chunk}
+            bars={bars}
+            height={height}
+            dim={dim}
+            pitchColor={pitchColor}
+            ampScale={ampScale}
+            testId={key === firstCurrentKey ? testId : undefined}
+          />
+        ))}
+      </>
+    );
+  }
+);
+
+/**
+ * Per-chunk lookahead for IntersectionObserver; chunks within this
+ * many CSS pixels of the visible viewport edge start drawing in
+ * advance, so a moderate horizontal scroll never shows a blank tile.
+ * Generous enough to cover one full chunk at typical zoom (~30 s
+ * × ~120 px/s ≈ 3600 px), so the next chunk is always already drawn
+ * by the time it crosses the visible edge.
+ */
+const CHUNK_PREFETCH_MARGIN_PX = 1200;
+
+/**
+ * One tile in the tiled waveform row. Owns:
+ *
+ *  - The `<canvas>` and its rasterised bitmap (sized to the chunk's
+ *    beats × the `renderedPxPerBeat` at last draw time).
+ *  - An `IntersectionObserver` against the score's scroll container
+ *    (`[data-jot-scroller]`) with a lookahead margin. The draw effect
+ *    is gated on intersection so we never call the worker for a
+ *    chunk that isn't (or won't soon be) visible.
+ *  - `renderedPxPerBeat` state, set after each successful draw so the
+ *    chunk's container width tracks the bitmap's intrinsic size
+ *    between settles.
+ *
+ * The CSS in `.musicTrackWaveformChunk` reads `--chunk-start-beat`
+ * and `--chunk-beats` (set here, structural so they never change with
+ * zoom) plus the root `--px-per-beat` (zoom-driven) to position and
+ * size the chunk reactively without any React work.
+ */
+const AudioTrackWaveformChunk = observer(
+  ({
+    track,
+    chunk,
+    bars,
+    height,
+    dim,
+    pitchColor,
+    ampScale,
+    testId,
+  }: {
+    track: AudioTrack;
+    chunk: WaveformChunk;
+    bars: BarBeat[];
+    height: number;
+    dim: boolean;
+    pitchColor: string | undefined;
+    ampScale: number;
+    testId?: string;
+  }) => {
+    const canvasRef = React.useRef<HTMLCanvasElement>(null);
+    // Live drum↔audio offset; chunks re-render (and so re-rasterise
+    // on the next settle) when the user nudges the Offset control.
+    const drumsT0Sec = jotPlayer.drumsT0Sec;
+    // Live zoom: the chunk's CSS calc reads `--px-per-beat`
+    // independently, so this read only matters for triggering a redraw
+    // on settle. Persisted-state `renderedPxPerBeat` decouples the
+    // bitmap rasterisation from the chunk's responsive sizing.
+    const livePxPerBeat = useLiveJotPxPerBeat();
+    const [renderedPxPerBeat, setRenderedPxPerBeat] = React.useState<number | null>(null);
+    const [isVisible, setIsVisible] = React.useState(false);
+
+    // Hook up IntersectionObserver on mount; tear down on unmount.
+    // Root is the score's scroll container (marked with
+    // `data-jot-scroller`), found via `closest()` at mount so we
+    // don't need to thread a ref / context through.
     React.useEffect(() => {
       const canvas = canvasRef.current;
-      if (!canvas || voiceBeats <= 0) return;
-      const draw = () => {
-        const widthPx = voiceBeats * pxPerBeat;
+      if (!canvas) return;
+      const root = canvas.closest<HTMLElement>('[data-jot-scroller]') ?? null;
+      const io = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) setIsVisible(entry.isIntersecting);
+        },
+        { root, rootMargin: `0px ${CHUNK_PREFETCH_MARGIN_PX}px` }
+      );
+      io.observe(canvas);
+      return () => io.disconnect();
+    }, []);
+
+    // Draw effect. Gated on visibility so off-screen chunks never hit
+    // the worker; gated on `chunk.totalBeats > 0` so a degenerate
+    // tail-clipped chunk doesn't request a zero-width bitmap.
+    React.useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      if (!isVisible) return;
+      if (chunk.totalBeats <= 0) return;
+      let cancelled = false;
+      const draw = async () => {
+        const renderedScale = livePxPerBeat;
+        if (renderedScale <= 0) return;
+        const widthPx = chunk.totalBeats * renderedScale;
         if (widthPx <= 0) return;
+        // Bar slices in chunk-local pixel coordinates: bars to the
+        // left of the chunk get a negative `x`, bars to the right
+        // get `x >= widthPx`; the worker's clamp drops both groups
+        // without an explicit filter on our side.
+        const barSlices: BarSlice[] = bars.map((b) => ({
+          x: (b.startBeat - chunk.startBeat) * renderedScale,
+          width: b.beats * renderedScale,
+          startSec: b.startSec,
+          durationSec: b.durationSec,
+        }));
+        let peaks: Float32Array;
+        try {
+          peaks = await waveformWorker.computePeaks(track.id, barSlices, widthPx, drumsT0Sec);
+        } catch (err) {
+          if (!cancelled) console.warn('[mixer] waveform chunk peaks failed:', err);
+          return;
+        }
+        if (cancelled) return;
+        const c = canvasRef.current;
+        if (!c) return;
         const dpr = window.devicePixelRatio || 1;
-        // Browsers cap a canvas's backing-store dimensions (and total
-        // area). A long score at high zoom × dpr easily blows past that
-        // and throws "Canvas exceeds max size". Clamp the backing store;
-        // the element stays CSS-sized to `widthPx`, so past the cap it
-        // just renders at reduced horizontal resolution instead of
-        // crashing. 16384 is the safe cross-browser per-axis limit
-        // (Safari/iOS is the tightest; Chrome/Firefox allow more).
+        // The 16 384 px backing-store clamp still applies per chunk;
+        // at the SECONDS_PER_CHUNK / typical zoom point this is
+        // never hit (a 30 s chunk at 100 px/s × 2 dpr = 6 000 px),
+        // so chunks are now effectively unbounded in resolution.
         const MAX_CANVAS_DIM = 16384;
         const backingW = Math.min(Math.max(1, Math.floor(widthPx * dpr)), MAX_CANVAS_DIM);
         const backingH = Math.min(Math.max(1, Math.floor(height * dpr)), MAX_CANVAS_DIM);
-        canvas.width = backingW;
-        canvas.height = backingH;
-        const ctx = canvas.getContext('2d');
+        c.width = backingW;
+        c.height = backingH;
+        const ctx = c.getContext('2d');
         if (!ctx) return;
-        // Map CSS-pixel drawing coords (0..widthPx, 0..height) onto the
-        // possibly-clamped backing store. Reduces to ctx.scale(dpr, dpr)
-        // when nothing was clamped.
         ctx.setTransform(backingW / widthPx, 0, 0, backingH / height, 0, 0);
-
-        const { peaks } = computeWaveformPeaksForJot(
-          jot,
-          track.buffer,
-          drumsT0Sec,
-        );
-
         ctx.clearRect(0, 0, widthPx, height);
-        const mid = height / 2;
-        // Always rasterise at full pitch color; the muted-track look is
-        // a CSS `filter` on the canvas element (see `musicTrackWaveformDim`
-        // in the module CSS), so mute/solo toggles don't trigger a redraw.
         ctx.fillStyle = pitchColor ?? '#5BA8E8';
-        // Each pixel column is a vertical line from min*scale to
-        // max*scale. A single fillRect per column is faster than
-        // building a Path2D for thousands of segments and lets us keep
-        // the colour-by-column option open if we ever want to tint
-        // clipped peaks differently.
-        const scale = mid * 0.95;
+        const mid = height / 2;
+        const yScale = mid * 0.95 * ampScale;
+        // No skip-zero shortcut: silent columns still paint a 1 px
+        // centerline (mn=mx=0 collapses to fillRect(p, mid, 1, 1)) so
+        // the baseline reads as a continuous line across the chunk
+        // instead of breaking into dashes wherever the audio is
+        // quiet. The shortcut was previously safe at zoom 1 where
+        // each pixel column covers enough audio to almost always have
+        // some signal, but at higher zoom each column covers less
+        // audio, silent columns become common, and the missing
+        // baseline reads as a broken/stippled waveform.
         for (let p = 0; p < widthPx; p++) {
           const mn = peaks[p * 2];
           const mx = peaks[p * 2 + 1];
-          if (mn === 0 && mx === 0) continue;
-          const y0 = mid - mx * scale;
-          const y1 = mid - mn * scale;
+          const y0 = Math.max(0, mid - mx * yScale);
+          const y1 = Math.min(height, mid - mn * yScale);
           ctx.fillRect(p, y0, 1, Math.max(1, y1 - y0));
         }
-        // Publish the scale we just rasterised at so the CSS transform
-        // collapses to scaleX(1) (crisp) until the next zoom interaction.
-        setRenderedPxPerBeat(pxPerBeat);
+        setRenderedPxPerBeat(renderedScale);
       };
+      // First entry into the viewport: draw immediately so the chunk
+      // doesn't show empty during the catch-up.
       if (renderedPxPerBeat === null) {
-        // First paint: draw immediately so the waveform appears on load.
-        draw();
-        return;
+        void draw();
+        return () => {
+          cancelled = true;
+        };
       }
-      // Subsequent changes (zoom, dim, offset, track): debounce. During
-      // an interactive zoom the bitmap is visually rescaled by the GPU
-      // via `transform: scaleX` (no JS, no layout, no redraw) — we only
-      // commit a crisp re-rasterisation 150ms after the user settles
-      // so a 500ms wheel gesture triggers ONE redraw instead of 30+.
-      const id = window.setTimeout(draw, 150);
-      return () => window.clearTimeout(id);
-    }, [jot, track, height, drumsT0Sec, pxPerBeat, voiceBeats, renderedPxPerBeat, pitchColor]);
+      // Subsequent redraws (after zoom changes) coalesce on rAF: each
+      // livePxPerBeat tick re-runs this effect and queues a fresh
+      // animation-frame callback, the previous one (via the cleanup
+      // below) is cancelled. So a sustained wheel-zoom gesture
+      // triggers at most one worker call per displayed frame and the
+      // bitmap rasterisation tracks the zoom in near-real-time. The
+      // older 300 ms debounce kept the bitmap at the pre-zoom scale
+      // until the gesture settled, which is what made the waveform
+      // visibly blur during the zoom.
+      const id = requestAnimationFrame(() => {
+        void draw();
+      });
+      return () => {
+        cancelled = true;
+        cancelAnimationFrame(id);
+      };
+    }, [
+      isVisible,
+      chunk,
+      bars,
+      height,
+      drumsT0Sec,
+      livePxPerBeat,
+      renderedPxPerBeat,
+      pitchColor,
+      ampScale,
+      track,
+    ]);
 
-    if (voiceBeats <= 0) return null;
-    // The canvas's CSS width is the `renderedWidth` it was last drawn
-    // at — fixed across zoom interactions. The visual stretch to the
-    // current zoom happens via the CSS `transform: scaleX(...)` rule,
-    // which reads `--px-per-beat` (root, zoom-driven) and
-    // `--rendered-px-per-beat` (set inline here, draw-driven).
-    const renderScale = renderedPxPerBeat ?? pxPerBeat;
-    const renderedWidth = voiceBeats * renderScale;
+    // The canvas's CSS width comes from `--chunk-beats × --px-per-beat`
+    // (see `.musicTrackWaveformChunk`). During the gap between a
+    // zoom event and the next rasterisation, the chunk's container
+    // width grows with `--px-per-beat` while the bitmap's intrinsic
+    // size is still at `renderedPxPerBeat × chunk.totalBeats`; the
+    // canvas element scales its bitmap to its CSS width naturally,
+    // which gives the same visual stretch the legacy `scaleX` rule
+    // produced; no explicit transform needed here.
     return (
       <canvas
         ref={canvasRef}
-        className={classNames(
-          styles.musicTrackWaveform,
-          dim && styles.musicTrackWaveformDim,
-        )}
+        className={classNames(styles.musicTrackWaveformChunk, dim && styles.musicTrackWaveformDim)}
         style={
           {
-            width: renderedWidth,
             height,
-            ['--rendered-px-per-beat' as string]: renderScale,
+            ['--chunk-start-beat' as string]: chunk.startBeat,
+            ['--chunk-beats' as string]: chunk.totalBeats,
           } as React.CSSProperties
         }
         data-testid={testId}
@@ -993,6 +1409,22 @@ const AudioTrackWaveformCanvas = observer(
     );
   }
 );
+
+/**
+ * Read the live `pxPerBeat` off the active jot via the MobX scope
+ * already used by surrounding `observer`s. Used by chunk draws to
+ * sample the current zoom at rasterisation time without forcing the
+ * chunk's render path to take a `jot` prop (the bars/structure don't
+ * change with zoom; passing the whole jot just to read this one
+ * field would dirty the chunks on every wheel tick).
+ */
+function useLiveJotPxPerBeat(): number {
+  // `RenderedJotContext` is provided at the JotView root; null only
+  // outside the View (tests). In that case fall back to 1, which is
+  // safe (chunks just don't render).
+  const jot = React.useContext(RenderedJotContext);
+  return jot?.pxPerBeat ?? 1;
+}
 
 /**
  * A per-section master fader that sits in the sticky lane gutter,
@@ -1010,6 +1442,11 @@ const GutterMasterRow = observer(
     title,
     value,
     onChange,
+    muted,
+    soloed,
+    audible,
+    onToggleMute,
+    onToggleSolo,
     testId,
     onResizeGutterStart,
   }: {
@@ -1017,6 +1454,14 @@ const GutterMasterRow = observer(
     title: string;
     value: number;
     onChange: (v: number) => void;
+    muted: boolean;
+    soloed: boolean;
+    /** True when the section's bus would currently make sound (master
+     * mute / cross-domain solo can drop it). Dims the row to match the
+     * per-row label-dim treatment when the section is silent. */
+    audible: boolean;
+    onToggleMute: () => void;
+    onToggleSolo: () => void;
     testId?: string;
     onResizeGutterStart: (e: React.PointerEvent<HTMLDivElement>) => void;
   }) => {
@@ -1025,23 +1470,46 @@ const GutterMasterRow = observer(
     return (
       <div className={styles.gutterMasterRow}>
         <div className={styles.gutterMasterGutter} title={title} data-testid={testId}>
-          <span className={styles.gutterMasterLabel}>{label}</span>
-          <input
-            type="range"
-            className={styles.gutterMasterSlider}
-            min={0}
-            max={1}
-            step={VOLUME_STEP}
-            value={value}
-            onChange={(e) => onChange(parseFloat(e.target.value))}
-            onClick={stop}
-            onMouseDown={stop}
-            onMouseUp={stop}
-            aria-label={`${label} master volume`}
-            title={`${label} master volume: ${pct}%`}
-            style={{ ['--value' as string]: value } as React.CSSProperties}
-          />
-          <span className={styles.gutterMasterValue}>{pct}%</span>
+          <span
+            className={classNames(
+              styles.gutterMasterLabel,
+              !audible && styles.musicTrackLabelDim
+            )}
+          >
+            {label}
+          </span>
+          <div className={styles.gutterMasterControls}>
+            <input
+              type="range"
+              className={styles.gutterMasterSlider}
+              min={0}
+              max={1}
+              step={VOLUME_STEP}
+              value={value}
+              onChange={(e) => onChange(parseFloat(e.target.value))}
+              onClick={stop}
+              onMouseDown={stop}
+              onMouseUp={stop}
+              aria-label={`${label} volume`}
+              title={`${label} volume: ${pct}%`}
+              style={{ ['--value' as string]: value } as React.CSSProperties}
+            />
+            <span className={styles.gutterMasterValue}>{pct}%</span>
+            <MuteButton
+              active={muted}
+              onToggle={onToggleMute}
+              offTitle={`Mute ${label}`}
+              onTitle={`Unmute ${label}`}
+              testId={testId ? `${testId}-mute` : undefined}
+            />
+            <SoloButton
+              active={soloed}
+              onToggle={onToggleSolo}
+              offTitle={`Solo ${label}`}
+              onTitle={`Unsolo ${label}`}
+              testId={testId ? `${testId}-solo` : undefined}
+            />
+          </div>
           <GutterResizeHandle onResizeStart={onResizeGutterStart} />
         </div>
       </div>

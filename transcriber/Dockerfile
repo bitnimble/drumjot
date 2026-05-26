@@ -58,25 +58,38 @@ RUN groupadd -g ${APP_GID} app \
 
 WORKDIR /app
 
-# Python deps first (cached layer) then app/TS code.
-COPY transcriber/pyproject.toml ./
-# Install PyTorch from the cu128 wheel index BEFORE the editable install
-# so audio-separator's `torch` dep is satisfied by this CUDA-12.8 build
-# rather than the default PyPI wheel (which now ships against CUDA 13.0
-# and refuses to run on drivers older than ~580). The torch pin in
-# pyproject.toml (>=2.8,<2.12) matches what cu128 carries, so the
-# subsequent `pip install -e .` won't try to upgrade torch out of range.
-# Use --extra-index-url on the editable install too, so any transitive
-# torchaudio resolution also looks at cu128 wheels. The ADTOF onset
-# backend (xavriley/ADTOF-pytorch) is a core dep installed by this same
-# `pip install -e .` — it's torch-only and bundles its own weights, so
-# the default image carries it with no extra build arg.
+# Python deps in three independently-cacheable layers so a pyproject.toml
+# edit only re-runs the editable install at the bottom, not the ~3 GB
+# torch/torchaudio fetch above it.
+
+# Layer 1: pip/setuptools + numpy/cython. Invalidated only when this
+# RUN string itself changes, which is essentially never; serves as the
+# bedrock for both the torch layer and the editable install below.
 RUN python3.11 -m pip install --upgrade pip setuptools wheel \
-    && python3.11 -m pip install --no-cache-dir 'numpy>=1.26' cython \
-    && python3.11 -m pip install --no-cache-dir \
+    && python3.11 -m pip install --no-cache-dir 'numpy>=1.26' cython
+
+# Layer 2: torch + torchaudio from the cu128 wheel index. Installed
+# BEFORE the editable install so audio-separator's `torch` dep is
+# satisfied by this CUDA-12.8 build rather than the default PyPI wheel
+# (which now ships against CUDA 13.0 and refuses to run on drivers
+# older than ~580). The torch pin matches what cu128 carries so the
+# subsequent `pip install -e .` won't try to upgrade torch out of range.
+# Pinned versions live in this RUN string, not pyproject.toml, so an
+# unrelated dep bump on the editable install doesn't blow away the
+# multi-GB torch wheel cache.
+RUN python3.11 -m pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cu128 \
-        torch torchaudio \
-    && python3.11 -m pip install --no-cache-dir \
+        'torch>=2.8,<2.9' 'torchaudio>=2.8,<2.9'
+
+# Layer 3: editable install of the transcriber package. This is the
+# only layer that re-runs when pyproject.toml changes; torch/torchaudio
+# above stay cached. `--extra-index-url` on this install too so any
+# transitive torchaudio resolution also looks at cu128 wheels. The
+# ADTOF onset backend (xavriley/ADTOF-pytorch) is a core dep installed
+# by this same step, it's torch-only and bundles its own weights, so
+# the default image carries it with no extra build arg.
+COPY transcriber/pyproject.toml ./
+RUN python3.11 -m pip install --no-cache-dir \
         --extra-index-url https://download.pytorch.org/whl/cu128 \
         -e .
 
@@ -85,6 +98,31 @@ RUN python3.11 -m pip install --upgrade pip setuptools wheel \
 # with the editable install above. `_load_model()` still fails loud
 # (then the request falls back to librosa) if the package or its
 # bundled weights are somehow unavailable.
+
+# whisperx ships a Lightning v1.5.4-era checkpoint
+# (`whisperx/assets/pytorch_model.bin`). Lightning 2.x migrates it
+# in-memory on every load and prints a noisy "automatically upgraded"
+# warning. Persist the migrated format inside the image so the runtime
+# loader has nothing to do. Path is resolved from the package itself so
+# the step doesn't bake in a hard-coded site-packages location that
+# could drift across Python versions / install layouts.
+#
+# We bypass Lightning's `upgrade_checkpoint` CLI and call its migration
+# function directly for two reasons the CLI can't handle:
+#
+#   1. CUDA-device tensors: the bundled checkpoint was saved on CUDA;
+#      we force `map_location='cpu'` because `docker build` has no GPU.
+#   2. PyTorch 2.6 flipped `torch.load`'s default to `weights_only=True`,
+#      and the checkpoint contains an `omegaconf.ListConfig` instance
+#      that isn't in the safe-globals allowlist. The CLI calls
+#      `torch.load(...)` without `weights_only=`, so it hits the new
+#      restrictive default with no override knob. The whisperx asset
+#      is a trusted bundled file (shipped via pip in the layer above),
+#      so disabling weights_only here is exactly the intended escape
+#      hatch; not a security regression.
+RUN WHISPERX_DIR=$(python3.11 -c "import whisperx, os; print(os.path.dirname(whisperx.__file__))") \
+    && python3.11 -c "import sys, torch; from lightning.pytorch.utilities.migration import migrate_checkpoint; p = sys.argv[1]; ckpt = torch.load(p, map_location='cpu', weights_only=False); ckpt, _ = migrate_checkpoint(ckpt); torch.save(ckpt, p); print(f'upgraded {p}')" \
+        "$WHISPERX_DIR/assets/pytorch_model.bin"
 
 # Python app + prompts.
 COPY transcriber/app/ ./app/

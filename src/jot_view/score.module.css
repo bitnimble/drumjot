@@ -16,8 +16,7 @@
 }
 
 .timelineHeaderGutter {
-    position: sticky;
-    left: 0;
+    composes: scrollStickyHorizontal from '../jot_view.module.css';
     z-index: 6;
     flex: 0 0 auto;
     width: var(--gutter-width);
@@ -53,6 +52,10 @@
        `--px-per-beat` (set on the JotView container). Zooming mutates
        only `--px-per-beat`, so this header doesn't re-render. */
     width: calc(var(--voice-beats) * var(--px-per-beat) * 1px);
+    /* Soft GPU hint so horizontal scroll composites the ruler instead
+       of repainting every tick / time label every frame on a long
+       song; mirrors `.barsRow` / `.musicTrackBarsRow` in mixer.css. */
+    will-change: transform;
 }
 
 /* One tick per bar boundary; sits on the same x as the score's barline
@@ -75,11 +78,34 @@
     user-select: none;
 }
 
+.timelineHeaderTopRow {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
 .timelineHeaderBar {
     composes: readout from '../typography.module.css';
     font-weight: 700;
     color: var(--color-text-secondary);
     line-height: 1;
+}
+
+.timelineHeaderTimeSig {
+    font-size: 9px;
+    font-weight: 700;
+    color: var(--color-text-secondary);
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    padding: 1px 4px;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.timelineHeaderBpm {
+    composes: timelineHeaderTimeSig;
 }
 
 .timelineHeaderTime {
@@ -91,13 +117,13 @@
 
 .bar {
     position: relative;
-    /* border-box so the 1px barline draws INSIDE the bar's width. With
-     the default content-box the border added 1px to every bar's flow
-     footprint, accumulating ~1px/bar against the border-free model
-     `timeToX` / the waveform use — noteheads drifted progressively
+    /* border-box so the barline draws INSIDE the bar's width. With
+     the default content-box the border added its width to every bar's
+     flow footprint, accumulating per-bar against the border-free model
+     `timeToX` / the waveform use; noteheads drifted progressively
      right of the playhead and audio. */
     box-sizing: border-box;
-    border-right: 1px solid var(--color-border);
+    border-right: 2px solid var(--color-border-strong);
     flex: 0 0 auto;
     /* Stretch to the full barsRow height (the pitch gutter is taller
        than one lane), so the right-edge barline reads as one continuous
@@ -114,15 +140,259 @@
     /* `--bar-beats` is set inline per BarView (zoom-invariant);
        `--px-per-beat` lives on the score root. */
     width: calc(var(--bar-beats) * var(--px-per-beat) * 1px);
-}
-
-.bar:first-child {
-    border-left: 1px solid var(--color-border);
+    /* Browser-level virtualization for long songs: off-screen bars
+       skip layout / paint of their children (notes, grid layers,
+       brackets), so a 5-minute song with thousands of notes only
+       pays the rendering cost for what's actually visible. The bar's
+       own width comes from the explicit `width: calc(...)` above
+       (independent of descendants), so the row's pixel geometry
+       stays intact across the whole song regardless of which bars
+       have their content skipped. Pattern brackets fit entirely
+       within a single bar by construction (see structureForBarContents
+       in jot.ts), so there's no cross-bar visual that would get
+       clipped when an originating bar goes off-screen.
+       `contain-intrinsic-size: 0` keeps off-screen bars from
+       contributing any minimum HEIGHT to the row; the row's height
+       comes from the gutter (label + controls) like it did before
+       content-visibility was introduced. The explicit
+       `width: calc(...)` above takes precedence over the 0 width
+       fallback, so the row's pixel geometry stays correct. */
+    content-visibility: auto;
+    contain-intrinsic-size: 0;
+    /* `content-visibility: auto` forces `contain: paint`, which clips
+       descendants to the bar's border box. A note centred near the
+       bar's right edge (beat ≈ bar.beats) overflows by up to
+       `--note-pad-px + noteRadius`, and a drag-grace on the first
+       beat overflows the left edge similarly. Without this margin the
+       overflowing half gets clipped and reads as the next bar covering
+       the notehead. Scales with `--note-pad-px` because the pad itself
+       is a fraction of `--px-per-beat` (see ViewConfig.barNotePaddingBeats);
+       the +12px covers the note radius (7px) plus shadow slack. */
+    overflow-clip-margin: calc(var(--note-pad-px) + 12px);
 }
 
 .barAnacrusis {
     border-right: 1px dashed var(--color-border);
     background: var(--color-accent-overlay-faint);
+}
+
+/* Beat-grid line layers. One absolutely-positioned overlay per family,
+   always rendered as a child of `.bar` (except lead-in bars). The
+   dashed/dotted appearance is recreated by intersecting two mask
+   layers: a vertical-column mask (1px solid every grid period) and a
+   horizontal dash mask (alternating opaque/transparent bands).
+   `mask-composite: intersect` shows the `background-color` only where
+   both masks pass, producing real dashed/dotted vertical lines with
+   zero per-divider DOM. Visibility per family is gated by
+   `display: var(--grid-display-<family>, none)` written on the score
+   root by `GridLineVars`; an unset variable falls back to `none` so
+   the overlay is skipped from layout and paint entirely. */
+.gridLayerMain,
+.gridLayerSubBeat16,
+.gridLayerSubBeatQuarterTriplet,
+.gridLayerSubBeatTriplet,
+.gridLayerSubBeat48 {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    /* `-webkit-mask-composite: source-in` is Safari's equivalent of the
+       standard `mask-composite: intersect`; both required for broad
+       browser coverage (Safari < 18 only understands the prefixed
+       variant). */
+    -webkit-mask-composite: source-in;
+    mask-composite: intersect;
+    -webkit-mask-repeat: repeat;
+    mask-repeat: repeat;
+    /* First mask layer (vertical columns) shifts by `--note-pad-px` so
+       lines align with the first notehead column; second mask layer
+       (dash pattern) starts at the bar top so dashes are continuous
+       across stacked grids. */
+    -webkit-mask-position: var(--note-pad-px) 0, 0 0;
+    mask-position: var(--note-pad-px) 0, 0 0;
+}
+
+.gridLayerMain {
+    display: var(--grid-display-main, none);
+    background-color: var(--color-border-subtle-3);
+    /* Main beat: dashed line every `--px-per-beat`; 4px on / 4px off. */
+    -webkit-mask-image:
+        repeating-linear-gradient(
+            to right,
+            black 0,
+            black 1px,
+            transparent 1px,
+            transparent calc(var(--px-per-beat) * 1px)
+        ),
+        repeating-linear-gradient(
+            to bottom,
+            black 0,
+            black 4px,
+            transparent 4px,
+            transparent 8px
+        );
+    mask-image:
+        repeating-linear-gradient(
+            to right,
+            black 0,
+            black 1px,
+            transparent 1px,
+            transparent calc(var(--px-per-beat) * 1px)
+        ),
+        repeating-linear-gradient(
+            to bottom,
+            black 0,
+            black 4px,
+            transparent 4px,
+            transparent 8px
+        );
+}
+
+.gridLayerSubBeat16 {
+    display: var(--grid-display-16, none);
+    background-color: var(--color-grid-subbeat);
+    /* 16ths: dotted line every quarter-beat; 1px on / 2px off. */
+    -webkit-mask-image:
+        repeating-linear-gradient(
+            to right,
+            black 0,
+            black 1px,
+            transparent 1px,
+            transparent calc(var(--px-per-beat) / 4 * 1px)
+        ),
+        repeating-linear-gradient(
+            to bottom,
+            black 0,
+            black 1px,
+            transparent 1px,
+            transparent 3px
+        );
+    mask-image:
+        repeating-linear-gradient(
+            to right,
+            black 0,
+            black 1px,
+            transparent 1px,
+            transparent calc(var(--px-per-beat) / 4 * 1px)
+        ),
+        repeating-linear-gradient(
+            to bottom,
+            black 0,
+            black 1px,
+            transparent 1px,
+            transparent 3px
+        );
+}
+
+.gridLayerSubBeatQuarterTriplet {
+    display: var(--grid-display-quarter-triplet, none);
+    background-color: var(--color-grid-quarter-triplet);
+    /* Quarter-note triplets: 3 lines per 2 beats, so the column spacing
+       is 2/3 of a beat. Coarser than the 8th-triplet grid, drawn in a
+       slightly stronger violet so the two read distinctly when both
+       are on (every other 12ths line coincides with a 6ths line).
+       1px on / 2px off, matching the other sub-beat layers. */
+    -webkit-mask-image:
+        repeating-linear-gradient(
+            to right,
+            black 0,
+            black 1px,
+            transparent 1px,
+            transparent calc(var(--px-per-beat) * 2 / 3 * 1px)
+        ),
+        repeating-linear-gradient(
+            to bottom,
+            black 0,
+            black 1px,
+            transparent 1px,
+            transparent 3px
+        );
+    mask-image:
+        repeating-linear-gradient(
+            to right,
+            black 0,
+            black 1px,
+            transparent 1px,
+            transparent calc(var(--px-per-beat) * 2 / 3 * 1px)
+        ),
+        repeating-linear-gradient(
+            to bottom,
+            black 0,
+            black 1px,
+            transparent 1px,
+            transparent 3px
+        );
+}
+
+.gridLayerSubBeatTriplet {
+    display: var(--grid-display-triplet, none);
+    background-color: var(--color-grid-triplet);
+    /* Triplets: dotted line every third-beat; 1px on / 2px off. */
+    -webkit-mask-image:
+        repeating-linear-gradient(
+            to right,
+            black 0,
+            black 1px,
+            transparent 1px,
+            transparent calc(var(--px-per-beat) / 3 * 1px)
+        ),
+        repeating-linear-gradient(
+            to bottom,
+            black 0,
+            black 1px,
+            transparent 1px,
+            transparent 3px
+        );
+    mask-image:
+        repeating-linear-gradient(
+            to right,
+            black 0,
+            black 1px,
+            transparent 1px,
+            transparent calc(var(--px-per-beat) / 3 * 1px)
+        ),
+        repeating-linear-gradient(
+            to bottom,
+            black 0,
+            black 1px,
+            transparent 1px,
+            transparent 3px
+        );
+}
+
+.gridLayerSubBeat48 {
+    display: var(--grid-display-48, none);
+    background-color: var(--color-grid-subbeat-48);
+    /* 48ths: dotted line every twelfth-beat; 1px on / 2px off. */
+    -webkit-mask-image:
+        repeating-linear-gradient(
+            to right,
+            black 0,
+            black 1px,
+            transparent 1px,
+            transparent calc(var(--px-per-beat) / 12 * 1px)
+        ),
+        repeating-linear-gradient(
+            to bottom,
+            black 0,
+            black 1px,
+            transparent 1px,
+            transparent 3px
+        );
+    mask-image:
+        repeating-linear-gradient(
+            to right,
+            black 0,
+            black 1px,
+            transparent 1px,
+            transparent calc(var(--px-per-beat) / 12 * 1px)
+        ),
+        repeating-linear-gradient(
+            to bottom,
+            black 0,
+            black 1px,
+            transparent 1px,
+            transparent 3px
+        );
 }
 
 /* Negative-indexed bar (audio pre-roll absorbed into the score by
@@ -144,24 +414,7 @@
 }
 
 .barLeadInLast {
-    border-right: 1px dashed var(--color-border);
-}
-
-/* Subtle dashed beat divider inside a bar. Position is `padLeft +
-   beatOffset × pxPerBeat`, the same x the renderer places that beat's
-   note at — `--divider-beat` is the per-line beat offset (set inline
-   per divider, stable per render) and the CSS computes the final pixel
-   left from the zoom-driven `--px-per-beat`. Behind the notes (no
-   z-index, rendered before the lane children) and pointer-events:
-   none so it's purely decorative. */
-.beatDivider {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    width: 0;
-    left: calc(var(--note-pad-px) + var(--divider-beat) * var(--px-per-beat) * 1px);
-    border-left: 1px dashed var(--color-border-subtle-3);
-    pointer-events: none;
+    border-right: 2px dashed var(--color-border-strong);
 }
 
 .lane {
@@ -392,11 +645,13 @@
 
 .modifierBadge {
     position: absolute;
-    top: -8px;
+    bottom: 100%;
     left: 50%;
     transform: translateX(-50%);
+    margin-bottom: 2px;
     font-size: 9px;
     font-weight: 700;
+    line-height: 1;
     color: var(--color-text-muted);
     pointer-events: none;
     letter-spacing: 0.04em;
@@ -574,9 +829,21 @@
 .debugDetailsList dd {
     margin: 0;
     color: var(--color-text);
-    /* Values may include parenthetical units (e.g. "1.234 (+8 ms snap)")
-       — the parent label widens to fit them rather than wrapping. */
+    /* Values may include parenthetical units (e.g. "1.234 (+8 ms snap)"); the parent label widens to fit them rather than wrapping. */
     white-space: nowrap;
+}
+
+/* Filter-LLM rejection reason. The short code reads as a small uppercase
+   pill, with the optional free-text detail following as muted prose so
+   `custom` rationales remain readable when long. */
+.reasonCode {
+    color: var(--color-text);
+    font-weight: 600;
+}
+
+.reasonText {
+    color: var(--color-text-muted-alt);
+    white-space: normal;
 }
 
 /* Per-onset timing diagram, drawn above the textual debug grid.
@@ -699,6 +966,11 @@
        reads as the line being centered inside narrow bars instead of
        at one edge. */
     box-sizing: border-box;
+}
+
+.timingVizDiffBarBackendQuant {
+    background: var(--color-pattern-7);
+    color: var(--color-bg-base);
 }
 
 .timingVizDiffBarQuant {

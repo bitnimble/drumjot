@@ -1,0 +1,55 @@
+/* Tab strip used today by the Transcribe dropdown to switch between
+   "New" and "Resume previous" flows while keeping the shared options
+   (Beat input, Model) above the strip. Two-tab default but the
+   component is generic so any DropdownButton panel can adopt it. */
+
+.tabs {
+    display: flex;
+    width: 100%;
+    border-bottom: 1px solid var(--color-border);
+    gap: 0;
+}
+
+.tab {
+    composes: bodyMd from '../../typography.module.css';
+    flex: 1 1 0;
+    padding: 6px 12px;
+    border: none;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    font-family: inherit;
+    /* Underline accent on the active tab; on inactive tabs the bar is
+       transparent but still claims the space so toggling active doesn't
+       reflow the row by 2px. */
+    border-bottom: 2px solid transparent;
+    /* Pull the underline down so it sits flush with the strip's
+       1px border instead of leaving a gap above it. */
+    margin-bottom: -1px;
+    text-align: center;
+}
+
+.tab:hover:not(:disabled) {
+    color: var(--color-text);
+}
+
+.tab:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -2px;
+    border-radius: var(--radius-sm);
+}
+
+.tab:disabled {
+    color: var(--color-text-disabled);
+    cursor: not-allowed;
+}
+
+.tabActive {
+    color: var(--color-text);
+    border-bottom-color: var(--color-accent);
+    font-weight: 600;
+}
+
+.tabActive:hover {
+    color: var(--color-text);
+}

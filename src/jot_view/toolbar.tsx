@@ -6,12 +6,34 @@ import { jotPlayer, SampleLoadProgress } from 'src/playback';
 import { themeStore, ThemeMode } from 'src/theme';
 import {
   BeatInput,
+  LLM_MODEL_LABELS,
+  LLM_MODEL_ORDER,
+  LlmModel,
   TranscribeStage,
   TranscriptionSummary,
 } from 'src/transcriber';
 import sharedStyles from '../jot_view.module.css';
+import {
+  DropdownButton,
+  DropdownSection,
+  dropdownStyles,
+  SubmenuItem,
+  ToggleMenuItem,
+} from './components/dropdown';
+import { Tabs } from './components/tabs';
+import {
+  formatTranscriptionSummary,
+  RecentTranscriptionsPicker,
+} from './recent_transcriptions';
 import styles from './toolbar.module.css';
-import { JotViewStore, TranscribeOptions, TranscribeStatus } from './store';
+import {
+  GridLineSettings,
+  JotViewStore,
+  LyricsAlignStatus,
+  LyricsNotice,
+  TranscribeOptions,
+  TranscribeStatus,
+} from './store';
 
 /** Stage labels in pipeline order — shown verbatim in the resume stage
  *  picker. Mirrors `Stage` in `transcriber/app/pipeline/runner.py`. */
@@ -21,6 +43,7 @@ const STAGE_ORDER: readonly TranscribeStage[] = [
   'beats',
   'onsets',
   'filter',
+  'quantise',
   'transcribe',
 ];
 
@@ -35,10 +58,7 @@ const STAGE_ORDER: readonly TranscribeStage[] = [
  * correct behaviour the default — new dropdowns can't reintroduce the
  * regression. All native `<select>` props pass straight through.
  */
-export const Select = ({
-  onChange,
-  ...rest
-}: React.ComponentPropsWithoutRef<'select'>) => (
+export const Select = ({ onChange, ...rest }: React.ComponentPropsWithoutRef<'select'>) => (
   <select
     {...rest}
     onChange={(e) => {
@@ -49,139 +69,16 @@ export const Select = ({
 );
 
 /**
- * A toolbar button that toggles a floating panel of related controls,
- * used to collapse the formerly-flat header into grouped menus ("Load",
- * "Transcribe"). Closes on outside click or Escape. `children` is a
- * render prop receiving a `close` callback so menu items that complete
- * an action (open a file picker, fire a request) can dismiss the panel,
- * while sticky controls (option checkboxes) can leave it open.
- *
- * Wrapped in `observer` so observable reads inside the children
- * render-prop (e.g. `transcribeOptions.onsetBackend`) are tracked
- * against THIS component's reactive context. Without that, the parent
- * Toolbar's `observer` only sees the closure being created — it never
- * dereferences the observable properties itself — so MobX has no
- * subscriber when those properties change. The store mutation lands but
- * the controlled `<select>`'s `value` prop stays stale until some
- * unrelated re-render (zoom, playback, …) rebuilds the closure.
+ * Toolbar dropdown trigger label with a trailing caret indicator. The
+ * shared {@link DropdownButton} no longer renders the caret itself
+ * (overflow-icon callers like the mixer don't want one); toolbar
+ * triggers compose it via this helper instead.
  */
-const DropdownButton = observer(({
-  label,
-  title,
-  className,
-  panelClassName,
-  onOpen,
-  children,
-}: {
-  label: React.ReactNode;
-  title?: string;
-  className?: string;
-  panelClassName?: string;
-  /** Called once each time the panel transitions from closed to open.
-   *  Used by the Transcribe dropdown to refresh its recent-runs list
-   *  without forcing a page reload. */
-  onOpen?: () => void;
-  children: (close: () => void) => React.ReactNode;
-}) => {
-  const [open, setOpen] = React.useState(false);
-  const ref = React.useRef<HTMLDivElement>(null);
-  const onOpenRef = React.useRef(onOpen);
-  onOpenRef.current = onOpen;
-
-  React.useEffect(() => {
-    if (!open) return;
-    onOpenRef.current?.();
-    const onPointerDown = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
-
-  return (
-    <div className={styles.dropdown} ref={ref}>
-      <button
-        type="button"
-        className={className ?? styles.playButton}
-        title={title}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-      >
-        {label} <span aria-hidden="true">▾</span>
-      </button>
-      {open && (
-        <div className={classNames(styles.dropdownPanel, panelClassName)} role="menu">
-          {children(() => setOpen(false))}
-        </div>
-      )}
-    </div>
-  );
-});
-
-/**
- * A nested menu item inside a {@link DropdownButton} panel. Renders as a
- * regular dropdown row with a trailing ▸; clicking toggles a fly-out
- * panel anchored to its right edge. Outside-click + Escape are already
- * handled by the enclosing DropdownButton (which will tear down this
- * whole subtree), so we only need local open/close state.
- */
-const SubmenuItem = ({
-  label,
-  children,
-}: {
-  label: React.ReactNode;
-  children: (close: () => void) => React.ReactNode;
-}) => {
-  const [open, setOpen] = React.useState(false);
-  return (
-    <div className={styles.submenu}>
-      <button
-        type="button"
-        className={classNames(styles.dropdownItem, styles.submenuTrigger)}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-      >
-        <span>{label}</span>
-        <span aria-hidden="true" className={styles.submenuArrow}>▸</span>
-      </button>
-      {open && (
-        <div className={styles.submenuPanel} role="menu">
-          {children(() => setOpen(false))}
-        </div>
-      )}
-    </div>
-  );
-};
-
-/** Format one row of the resume picker. The label needs to compress
- *  three things into the cramped space of a native `<option>`: the
- *  original upload filename, when the run was originally requested, and
- *  when its artifacts were most-recently regenerated (with the resume
- *  stage tagged on if the most-recent run was a resume). All three are
- *  diagnostic — picker rows that match by filename + recent-run time
- *  are the operator's hook back to a specific working state. */
-function formatTranscriptionSummary(s: TranscriptionSummary): string {
-  const filename = s.original_filename ?? s.folder;
-  const requested = formatTimestamp(s.requested_at);
-  const lastRun = s.last_run_at ? formatTimestamp(s.last_run_at) : null;
-  let detail = `requested ${requested}`;
-  if (lastRun && lastRun !== requested) {
-    detail += `, last run ${lastRun}`;
-    if (s.last_resume_stage) {
-      detail += ` (from ${s.last_resume_stage})`;
-    }
-  }
-  return `${filename} — ${detail}`;
-}
+const ToolbarDropdownLabel = ({ children }: { children: React.ReactNode }) => (
+  <>
+    {children} <span aria-hidden="true">▾</span>
+  </>
+);
 
 /** Human-readable label for one pipeline stage, used in the status
  *  pill. Mirrors the StrEnum values one-for-one but with friendlier
@@ -199,21 +96,11 @@ function formatStageLabel(stage: TranscribeStage): string {
       return 'detecting onsets';
     case 'filter':
       return 'filtering artifact onsets';
+    case 'quantise':
+      return 'quantising onsets';
     case 'transcribe':
       return 'rendering MIDI';
   }
-}
-
-function formatTimestamp(iso: string): string {
-  // The backend stamps timestamps as UTC ISO (Z-suffixed) — see
-  // `mint_request_folder_name` + `_parse_folder_timestamp` in
-  // transcriber/app/pipeline/resume.py. Parse with `Date` and emit the
-  // user's local wall clock so the picker doesn't surprise operators in
-  // non-UTC timezones.
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 export const Toolbar = observer(
@@ -230,20 +117,39 @@ export const Toolbar = observer(
     onLoadParadb,
     onLoadDebugBundle,
     onLoadAudioTrack,
+    onLoadLyricsFile,
+    onOpenLyricsTextLoad,
+    onOpenLyricsSearch,
+    onClearLyrics,
+    hasLyrics,
     onCancelTranscribe,
     onClearTranscribeStatus,
+    lyricsNotice,
+    onClearLyricsNotice,
+    lyricsAlignStatus,
+    onClearLyricsAlignStatus,
     onSetBeatInput,
+    onSetLlmModel,
     zoom,
     onSetZoom,
     hasNoteProvenance,
     showFilteredOnsets,
     onSetShowFilteredOnsets,
+    gridLines,
+    onToggleGridLine,
+    uniformWaveforms,
+    onSetUniformWaveforms,
     recentTranscriptions,
+    recentTranscriptionsLoaded,
+    recentTranscriptionsLoading,
     selectedResumeFolder,
     selectedResumeStage,
     onSetSelectedResumeFolder,
     onSetSelectedResumeStage,
     onRefreshRecentTranscriptions,
+    onLoadRecentTranscription,
+    transcribeMode,
+    onSetTranscribeMode,
   }: {
     examples: readonly ExampleJot[];
     currentId: string | undefined;
@@ -257,9 +163,37 @@ export const Toolbar = observer(
     onLoadParadb: (file: File) => void;
     onLoadDebugBundle: (file: File) => void;
     onLoadAudioTrack: (file: File) => void;
+    /** Load a synced-lyrics file (.lrc or .txt in LRC format) from disk.
+     *  Pushes the parsed lines straight into the session lyrics store. */
+    onLoadLyricsFile: (file: File) => void;
+    /** Open the plain-text lyrics loader modal. The modal owns its own
+     *  textarea + file picker; the toolbar's only job is to open it. */
+    onOpenLyricsTextLoad: () => void;
+    /** Open the LRCLIB search modal. The modal pre-fills + auto-fires
+     *  against the current jot's title/artist; the toolbar's only job
+     *  is to surface the entry point. */
+    onOpenLyricsSearch: () => void;
+    /** Drop the session lyrics store. The gutter Clear button on the
+     *  row has its own affordance; this is the alternate menu path. */
+    onClearLyrics: () => void;
+    /** True when the session lyrics store has lines loaded; used to
+     *  enable a "Clear lyrics" menu item inside the Lyrics dropdown. */
+    hasLyrics: boolean;
     onCancelTranscribe: () => void;
     onClearTranscribeStatus: () => void;
+    /** Latest lyrics-load notice; rendered as a toolbar pill mirroring
+     *  the transcribe pill so the LRCLIB search modal can close as soon
+     *  as it commits a result. */
+    lyricsNotice: LyricsNotice;
+    onClearLyricsNotice: () => void;
+    /** Status of the in-flight Whisper lyric-alignment request. Rendered
+     *  as a busy/error pill in the toolbar so the user sees that the
+     *  backend is extracting vocals + running whisperx after they pick
+     *  "Align with Whisper" from the Lyrics menu. */
+    lyricsAlignStatus: LyricsAlignStatus;
+    onClearLyricsAlignStatus: () => void;
     onSetBeatInput: (input: BeatInput) => void;
+    onSetLlmModel: (model: LlmModel) => void;
     zoom: number;
     onSetZoom: (z: number) => void;
     /** True iff a filter-mode debug bundle is loaded — gates the
@@ -268,12 +202,29 @@ export const Toolbar = observer(
     hasNoteProvenance: boolean;
     showFilteredOnsets: boolean;
     onSetShowFilteredOnsets: (show: boolean) => void;
+    gridLines: GridLineSettings;
+    onToggleGridLine: (key: keyof GridLineSettings) => void;
+    uniformWaveforms: boolean;
+    onSetUniformWaveforms: (on: boolean) => void;
     recentTranscriptions: readonly TranscriptionSummary[];
+    /** Whether {@link onRefreshRecentTranscriptions} has resolved at
+     *  least once (success or empty). The Recent submenu uses this to
+     *  decide whether to issue an initial fetch on first open. */
+    recentTranscriptionsLoaded: boolean;
+    /** Whether a refresh is in flight; drives the Recent submenu spinner. */
+    recentTranscriptionsLoading: boolean;
     selectedResumeFolder: string | undefined;
     selectedResumeStage: TranscribeStage | undefined;
     onSetSelectedResumeFolder: (folder: string | undefined) => void;
     onSetSelectedResumeStage: (stage: TranscribeStage | undefined) => void;
     onRefreshRecentTranscriptions: () => void;
+    /** Load a previous transcription's already-produced debug bundle
+     *  (no pipeline re-run). Used by the Load → Recent submenu. */
+    onLoadRecentTranscription: (folder: string) => void;
+    /** Active flow inside the Transcribe dropdown; `new` for a fresh
+     *  upload, `resume` for re-running from a previous debug folder. */
+    transcribeMode: 'new' | 'resume';
+    onSetTranscribeMode: (mode: 'new' | 'resume') => void;
   }) => {
     const fileInputRef = React.useRef<HTMLInputElement>(null);
     const jotInputRef = React.useRef<HTMLInputElement>(null);
@@ -281,6 +232,7 @@ export const Toolbar = observer(
     const paradbInputRef = React.useRef<HTMLInputElement>(null);
     const debugBundleInputRef = React.useRef<HTMLInputElement>(null);
     const audioTrackInputRef = React.useRef<HTMLInputElement>(null);
+    const lyricsInputRef = React.useRef<HTMLInputElement>(null);
     const uploading = transcribeStatus.phase === 'uploading';
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -320,11 +272,31 @@ export const Toolbar = observer(
       e.target.value = '';
     };
 
+    const handleLyricsFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (file) onLoadLyricsFile(file);
+      e.target.value = '';
+    };
+
     return (
       <div className={styles.toolbar}>
-        <DropdownButton label="Load" title="Load a score or audio tracks from disk">
+        <DropdownButton
+          label={<ToolbarDropdownLabel>Load</ToolbarDropdownLabel>}
+          className={styles.playButton}
+          title="Load a score or audio tracks from disk"
+        >
           {(close) => (
             <>
+              <RecentTranscriptionsPicker
+                variant="menu"
+                triggerLabel="Recent"
+                items={recentTranscriptions}
+                loaded={recentTranscriptionsLoaded}
+                loading={recentTranscriptionsLoading}
+                onRefresh={onRefreshRecentTranscriptions}
+                onPick={onLoadRecentTranscription}
+                onAfterPick={close}
+              />
               {examples.length > 0 && (
                 <>
                   <SubmenuItem label="Examples">
@@ -334,8 +306,8 @@ export const Toolbar = observer(
                           key={ex.id}
                           type="button"
                           className={classNames(
-                            styles.dropdownItem,
-                            ex.id === currentId && styles.dropdownItemActive,
+                            dropdownStyles.dropdownItem,
+                            ex.id === currentId && dropdownStyles.dropdownItemActive
                           )}
                           onClick={() => {
                             onSelect(ex.id);
@@ -349,12 +321,12 @@ export const Toolbar = observer(
                       ))
                     }
                   </SubmenuItem>
-                  <span className={styles.dropdownDivider} aria-hidden="true" />
+                  <span className={dropdownStyles.dropdownDivider} aria-hidden="true" />
                 </>
               )}
               <button
                 type="button"
-                className={styles.dropdownItem}
+                className={dropdownStyles.dropdownItem}
                 onClick={() => {
                   jotInputRef.current?.click();
                   close();
@@ -365,7 +337,7 @@ export const Toolbar = observer(
               </button>
               <button
                 type="button"
-                className={styles.dropdownItem}
+                className={dropdownStyles.dropdownItem}
                 onClick={() => {
                   midiInputRef.current?.click();
                   close();
@@ -376,7 +348,7 @@ export const Toolbar = observer(
               </button>
               <button
                 type="button"
-                className={styles.dropdownItem}
+                className={dropdownStyles.dropdownItem}
                 onClick={() => {
                   paradbInputRef.current?.click();
                   close();
@@ -387,18 +359,18 @@ export const Toolbar = observer(
               </button>
               <button
                 type="button"
-                className={styles.dropdownItem}
+                className={dropdownStyles.dropdownItem}
                 onClick={() => {
                   debugBundleInputRef.current?.click();
                   close();
                 }}
-                title="Load a transcriber debug bundle (`.zip`) — the same artifact `Transcribe audio` produces server-side. Restores the score, every per-stem audio track (MP3), and surfaces the captured logs + per-stage timings in the debug panel for inspection. Runs entirely client-side."
+                title="Load a transcriber debug bundle (`.zip`), the same artifact `Transcribe audio` produces server-side. Restores the score, every per-stem audio track (MP3), and surfaces the captured logs + per-stage timings in the debug panel for inspection. Runs entirely client-side."
               >
                 Load debug bundle (.zip)
               </button>
               <button
                 type="button"
-                className={styles.dropdownItem}
+                className={dropdownStyles.dropdownItem}
                 onClick={() => {
                   audioTrackInputRef.current?.click();
                   close();
@@ -411,26 +383,97 @@ export const Toolbar = observer(
           )}
         </DropdownButton>
         <DropdownButton
-          label={uploading ? 'Transcribing…' : 'Transcribe'}
+          label={<ToolbarDropdownLabel>Lyrics</ToolbarDropdownLabel>}
+          className={styles.playButton}
+          title="Load time-aligned lyrics that scroll along the score timeline. Lyrics are session-only and clear when a new song is loaded."
+        >
+          {(close) => (
+            <>
+              <button
+                type="button"
+                className={dropdownStyles.dropdownItem}
+                onClick={() => {
+                  onOpenLyricsSearch();
+                  close();
+                }}
+                title="Search LRCLIB (free public DB of synced lyrics) for the current song's title and artist. If exactly one match exists it loads automatically; otherwise pick one from a list."
+                data-testid="lyrics-menu-search"
+              >
+                Search LRCLIB…
+              </button>
+              <button
+                type="button"
+                className={dropdownStyles.dropdownItem}
+                onClick={() => {
+                  lyricsInputRef.current?.click();
+                  close();
+                }}
+                title="Load a synced-lyrics file (.lrc) from disk."
+                data-testid="lyrics-menu-load-file"
+              >
+                Load from file…
+              </button>
+              <button
+                type="button"
+                className={dropdownStyles.dropdownItem}
+                onClick={() => {
+                  onOpenLyricsTextLoad();
+                  close();
+                }}
+                title="Paste or type plain-text lyrics. Re-time them against an audio track afterward."
+                data-testid="lyrics-menu-load-plaintext"
+              >
+                Load from plain text…
+              </button>
+              {hasLyrics && (
+                <>
+                  <span className={dropdownStyles.dropdownDivider} aria-hidden="true" />
+                  <button
+                    type="button"
+                    className={dropdownStyles.dropdownItem}
+                    onClick={() => {
+                      onClearLyrics();
+                      close();
+                    }}
+                    title="Drop the currently-loaded lyrics."
+                    data-testid="lyrics-menu-clear"
+                  >
+                    Clear lyrics
+                  </button>
+                </>
+              )}
+            </>
+          )}
+        </DropdownButton>
+        <DropdownButton
+          label={<ToolbarDropdownLabel>{uploading ? 'Transcribing…' : 'Transcribe'}</ToolbarDropdownLabel>}
           className={styles.transcribeButton}
-          panelClassName={styles.dropdownPanelWide}
+          panelClassName={dropdownStyles.dropdownPanelWide}
           title="Transcribe an audio file using the filter pathway (MIDI). The debug bundle loads automatically when the run completes."
           onOpen={onRefreshRecentTranscriptions}
         >
           {(close) => {
             const selectedSummary = recentTranscriptions.find(
-              (s) => s.folder === selectedResumeFolder,
+              (s) => s.folder === selectedResumeFolder
             );
             const resumableSet = new Set(selectedSummary?.resumable_stages ?? []);
             const canResume =
               selectedResumeFolder !== undefined &&
               selectedResumeStage !== undefined &&
               resumableSet.has(selectedResumeStage);
+            const noRecentRuns = recentTranscriptions.length === 0;
+            // Force the visible flow back to `new` whenever there's
+            // nothing resumable; otherwise a stale `resume` selection
+            // would render an empty form on first open of the dropdown.
+            const effectiveMode = noRecentRuns ? 'new' : transcribeMode;
             return (
               <>
+                {/* Shared options sit ABOVE the tab strip so they read
+                    as "applies to both modes" rather than belonging to
+                    the active tab's body. */}
                 <label
                   className={sharedStyles.toolbarCheckbox}
-                  title="Which audio feeds the beat tracker. `full_mix` (default) is madmom's training distribution; `drum_stem` can help on tracks with heavy non-drum syncopation."
+                  title="Which audio feeds the beat tracker. `full_mix` (default) is madmom's training distribution; `drum_stem` can help on tracks with heavy non-drum syncopation. Applies to both New and Resume."
                 >
                   <span>Beat input</span>
                   <Select
@@ -443,88 +486,126 @@ export const Toolbar = observer(
                     <option value="drum_stem">drum stem</option>
                   </Select>
                 </label>
-                <span className={styles.dropdownDivider} aria-hidden="true" />
-                <button
-                  type="button"
-                  className={styles.transcribeButton}
-                  onClick={() => {
-                    fileInputRef.current?.click();
-                    close();
-                  }}
-                  disabled={uploading}
-                  title="Pick an audio file to transcribe via the filter pathway. The debug bundle is loaded automatically when the run finishes."
+                <label
+                  className={sharedStyles.toolbarCheckbox}
+                  title="Anthropic model used by the three classification stages (filter; hihat_split; cymbal_split). Quantise stays on Haiku regardless. Opus is the highest-quality default; Haiku is ~15× cheaper for what is mostly pattern-matching. Applies to both New and Resume."
                 >
-                  {uploading ? 'Transcribing…' : 'Select file'}
-                </button>
-                <span className={styles.dropdownDivider} aria-hidden="true" />
-                <span className={styles.toolbarLabel}>Resume previous</span>
-                <Select
-                  className={sharedStyles.samplesSelect}
-                  value={selectedResumeFolder ?? ''}
-                  disabled={uploading || recentTranscriptions.length === 0}
-                  onChange={(e) =>
-                    onSetSelectedResumeFolder(e.target.value || undefined)
-                  }
-                  title="Pick a previous /transcribe run by its original filename + request time. The picker reads /transcribe/list off the server; recent runs land first."
-                >
-                  <option value="">
-                    {recentTranscriptions.length === 0
-                      ? 'No previous runs available'
-                      : 'Select a previous run...'}
-                  </option>
-                  {recentTranscriptions.map((s) => (
-                    <option key={s.folder} value={s.folder}>
-                      {formatTranscriptionSummary(s)}
-                    </option>
-                  ))}
-                </Select>
-                <Select
-                  className={sharedStyles.samplesSelect}
-                  value={selectedResumeStage ?? ''}
-                  disabled={uploading || selectedResumeFolder === undefined}
-                  onChange={(e) =>
-                    onSetSelectedResumeStage(
-                      (e.target.value || undefined) as
-                        | TranscribeStage
-                        | undefined,
-                    )
-                  }
-                  title="Pick the stage to resume from. Stages whose prerequisites are missing on disk for the selected run are disabled."
-                >
-                  <option value="">Select stage...</option>
-                  {STAGE_ORDER.map((stage) => (
-                    <option
-                      key={stage}
-                      value={stage}
-                      disabled={
-                        selectedResumeFolder !== undefined &&
-                        !resumableSet.has(stage)
-                      }
-                    >
-                      {stage}
-                    </option>
-                  ))}
-                </Select>
-                <button
-                  type="button"
-                  className={styles.transcribeButton}
-                  onClick={() => {
-                    if (
-                      selectedResumeFolder !== undefined &&
-                      selectedResumeStage !== undefined
-                    ) {
-                      onResumeTranscribe(
-                        selectedResumeFolder,
-                        selectedResumeStage,
-                      );
+                  <span>Model</span>
+                  <Select
+                    className={sharedStyles.samplesSelect}
+                    value={transcribeOptions.llmModel}
+                    disabled={uploading}
+                    onChange={(e) => onSetLlmModel(e.target.value as LlmModel)}
+                  >
+                    {LLM_MODEL_ORDER.map((m) => (
+                      <option key={m} value={m}>
+                        {LLM_MODEL_LABELS[m]}
+                      </option>
+                    ))}
+                  </Select>
+                </label>
+                <Tabs
+                  ariaLabel="Transcribe mode"
+                  value={effectiveMode}
+                  onChange={onSetTranscribeMode}
+                  options={[
+                    { value: 'new', label: 'New', testId: 'transcribe-tab-new' },
+                    {
+                      value: 'resume',
+                      label: 'Resume',
+                      disabled: noRecentRuns,
+                      title: noRecentRuns
+                        ? 'No previous runs available to resume.'
+                        : 'Resume a previous run from a chosen pipeline stage.',
+                      testId: 'transcribe-tab-resume',
+                    },
+                  ]}
+                />
+                {effectiveMode === 'new' ? (
+                  <button
+                    type="button"
+                    className={styles.transcribeButton}
+                    onClick={() => {
+                      fileInputRef.current?.click();
                       close();
-                    }
-                  }}
-                  disabled={uploading || !canResume}
-                  title="Re-run the pipeline from the chosen stage against the selected debug folder."
-                >
-                  Resume
-                </button>
+                    }}
+                    disabled={uploading}
+                    title="Pick an audio file to transcribe via the filter pathway. The debug bundle is loaded automatically when the run finishes."
+                  >
+                    {uploading ? 'Transcribing…' : 'Select file'}
+                  </button>
+                ) : (
+                  <>
+                    <label
+                      className={classNames(sharedStyles.toolbarCheckbox, styles.resumeField)}
+                      title="Pick a previous /transcribe run by its original filename + request time. The picker reads /transcribe/list off the server; recent runs land first."
+                    >
+                      <span>Previous run</span>
+                      <Select
+                        className={sharedStyles.samplesSelect}
+                        value={selectedResumeFolder ?? ''}
+                        disabled={uploading}
+                        onChange={(e) =>
+                          onSetSelectedResumeFolder(e.target.value || undefined)
+                        }
+                      >
+                        <option value="">Select a previous run...</option>
+                        {recentTranscriptions.map((s) => (
+                          <option key={s.folder} value={s.folder}>
+                            {formatTranscriptionSummary(s)}
+                          </option>
+                        ))}
+                      </Select>
+                    </label>
+                    <label
+                      className={classNames(sharedStyles.toolbarCheckbox, styles.resumeField)}
+                      title="Pick the stage to resume from. Stages whose prerequisites are missing on disk for the selected run are disabled."
+                    >
+                      <span>From stage</span>
+                      <Select
+                        className={sharedStyles.samplesSelect}
+                        value={selectedResumeStage ?? ''}
+                        disabled={uploading || selectedResumeFolder === undefined}
+                        onChange={(e) =>
+                          onSetSelectedResumeStage(
+                            (e.target.value || undefined) as TranscribeStage | undefined
+                          )
+                        }
+                      >
+                        <option value="">Select stage...</option>
+                        {STAGE_ORDER.map((stage) => (
+                          <option
+                            key={stage}
+                            value={stage}
+                            disabled={
+                              selectedResumeFolder !== undefined &&
+                              !resumableSet.has(stage)
+                            }
+                          >
+                            {stage}
+                          </option>
+                        ))}
+                      </Select>
+                    </label>
+                    <button
+                      type="button"
+                      className={styles.transcribeButton}
+                      onClick={() => {
+                        if (
+                          selectedResumeFolder !== undefined &&
+                          selectedResumeStage !== undefined
+                        ) {
+                          onResumeTranscribe(selectedResumeFolder, selectedResumeStage);
+                          close();
+                        }
+                      }}
+                      disabled={uploading || !canResume}
+                      title="Re-run the pipeline from the chosen stage against the selected debug folder."
+                    >
+                      Resume
+                    </button>
+                  </>
+                )}
                 {uploading && (
                   <button
                     type="button"
@@ -581,6 +662,13 @@ export const Toolbar = observer(
           onChange={handleAudioTrackChange}
         />
         <input
+          ref={lyricsInputRef}
+          type="file"
+          accept=".lrc,.txt,text/plain"
+          className={styles.hiddenInput}
+          onChange={handleLyricsFileChange}
+        />
+        <input
           ref={fileInputRef}
           type="file"
           // The Python backend decodes audio via librosa + soundfile +
@@ -594,6 +682,70 @@ export const Toolbar = observer(
           onChange={handleFileChange}
         />
         <span className={styles.toolbarDivider} aria-hidden="true" />
+        <DropdownButton
+          label={<ToolbarDropdownLabel>View</ToolbarDropdownLabel>}
+          className={styles.playButton}
+          title="Toggle on-screen reference grids, overlays, and the color theme."
+        >
+          {() => (
+            <>
+              <DropdownSection label="Overlays">
+                <ToggleMenuItem
+                  label="Show filtered"
+                  active={showFilteredOnsets}
+                  onToggle={() => onSetShowFilteredOnsets(!showFilteredOnsets)}
+                  disabled={!hasNoteProvenance}
+                  title={
+                    hasNoteProvenance
+                      ? 'Render the onsets the filter LLM rejected as dashed ghost overlays at their detected (bar, beat) position. Click one to see why it was filtered out.'
+                      : 'Load a filter-mode debug bundle to enable filtered-onset overlays.'
+                  }
+                />
+              </DropdownSection>
+              <DropdownSection label="Waveforms">
+                <ToggleMenuItem
+                  label="Uniform amplitude"
+                  active={uniformWaveforms}
+                  onToggle={() => onSetUniformWaveforms(!uniformWaveforms)}
+                  title="Normalise each audio track's waveform so the median non-silent peak fills most of the row, regardless of the source recording's amplitude. Silence still renders as silence. Off = accurate, on = uniform (easier to see quiet recordings)."
+                />
+              </DropdownSection>
+              <DropdownSection label="Grid lines">
+                <ToggleMenuItem
+                  label="Main beat"
+                  active={gridLines.mainBeat}
+                  onToggle={() => onToggleGridLine('mainBeat')}
+                  title="Dashed line under each notehead on the main beat (1, 2, 3, 4 in 4/4)."
+                />
+                <ToggleMenuItem
+                  label="Sub-beat (16ths)"
+                  active={gridLines.subBeat16}
+                  onToggle={() => onToggleGridLine('subBeat16')}
+                  title="Dotted reference lines at every 16th-note position within each beat."
+                />
+                <ToggleMenuItem
+                  label="Sub-beat (6ths / quarter triplets)"
+                  active={gridLines.subBeatQuarterTriplet}
+                  onToggle={() => onToggleGridLine('subBeatQuarterTriplet')}
+                  title="Dotted violet reference lines at every quarter-note triplet position (3 lines per 2 beats; 6 per bar in 4/4). Use to read quarter-note triplet phrases that 8th-triplet lines fragment too finely."
+                />
+                <ToggleMenuItem
+                  label="Sub-beat (12ths / triplets)"
+                  active={gridLines.subBeatTriplet}
+                  onToggle={() => onToggleGridLine('subBeatTriplet')}
+                  title="Dotted violet reference lines at every triplet (1/3 of a beat) position."
+                />
+                <ToggleMenuItem
+                  label="Sub-beat (48ths)"
+                  active={gridLines.subBeat48}
+                  onToggle={() => onToggleGridLine('subBeat48')}
+                  title="Very faint dotted lines at every 1/48 grid position (12 per beat). Covers both the 16th and triplet positions in one grid; useful for ultra-precise timing reference."
+                />
+              </DropdownSection>
+              <ThemeSection />
+            </>
+          )}
+        </DropdownButton>
         <label
           className={sharedStyles.toolbarCheckbox}
           title="Compress or expand the score horizontally. Has no effect on audio playback, only on how the notation is laid out."
@@ -601,33 +753,24 @@ export const Toolbar = observer(
           <span>Zoom</span>
           <input
             type="range"
-            min={0.3}
-            max={3.0}
+            min={0.1}
+            max={4.0}
             step={0.05}
             value={zoom}
             onChange={(e) => onSetZoom(Number(e.target.value))}
             className={styles.zoomSlider}
-            style={{ ['--value' as string]: (zoom - 0.3) / 2.7 } as React.CSSProperties}
+            style={{ ['--value' as string]: (zoom - 0.1) / 3.9 } as React.CSSProperties}
           />
           <span className={styles.zoomValue}>{Math.round(zoom * 100)}%</span>
         </label>
-        {hasNoteProvenance && (
-          <label
-            className={sharedStyles.toolbarCheckbox}
-            title="Render the onsets the filter LLM rejected as dashed ghost overlays at their detected (bar, beat) position. Click one to see why it was filtered out. Only available when a filter-mode debug bundle is loaded."
-          >
-            <input
-              type="checkbox"
-              checked={showFilteredOnsets}
-              onChange={(e) => onSetShowFilteredOnsets(e.target.checked)}
-            />
-            Show filtered
-          </label>
-        )}
         <div className={styles.toolbarSpacer} aria-hidden="true" />
         <DrumLoadingIndicator />
+        <LyricsAlignStatusPill
+          status={lyricsAlignStatus}
+          onClear={onClearLyricsAlignStatus}
+        />
+        <LyricsStatusPill notice={lyricsNotice} onClear={onClearLyricsNotice} />
         <TranscribeStatusPill status={transcribeStatus} onClear={onClearTranscribeStatus} />
-        <ThemeMenu />
       </div>
     );
   }
@@ -642,47 +785,34 @@ const THEME_MODE_LABELS: Record<ThemeMode, string> = {
 const THEME_MODE_ORDER: readonly ThemeMode[] = ['system', 'light', 'dark'];
 
 /**
- * Trailing toolbar dropdown for picking the color theme. `System`
+ * Theme picker section rendered inside the View dropdown. `System`
  * (default) defers to the OS `prefers-color-scheme` and tracks live
  * changes; `Light`/`Dark` persist as an explicit override in
  * localStorage so subsequent visits skip the OS check entirely.
  *
- * The actual data-theme attribute is owned by {@link themeStore}; this
- * component is purely the picker.
+ * Rendered as radio-style menu items (only one tick at a time); clicks
+ * leave the View panel open so the user can switch and immediately
+ * compare with other view toggles. The data-theme attribute is owned by
+ * {@link themeStore}; this component is purely the picker.
  */
-const ThemeMenu = observer(() => {
+const ThemeSection = observer(() => {
   const mode = themeStore.mode;
   return (
-    <DropdownButton
-      label={`Theme: ${THEME_MODE_LABELS[mode]}`}
-      title="Pick a color theme. `System` follows your OS appearance setting and switches live when it changes."
-    >
-      {(close) => (
-        <>
-          {THEME_MODE_ORDER.map((m) => (
-            <button
-              key={m}
-              type="button"
-              className={classNames(
-                styles.dropdownItem,
-                mode === m && styles.dropdownItemActive,
-              )}
-              onClick={() => {
-                themeStore.setMode(m);
-                close();
-              }}
-              title={
-                m === 'system'
-                  ? 'Follow the OS appearance setting (prefers-color-scheme).'
-                  : `Use the ${m} theme regardless of the OS setting.`
-              }
-            >
-              {THEME_MODE_LABELS[m]}
-            </button>
-          ))}
-        </>
-      )}
-    </DropdownButton>
+    <DropdownSection label="Theme">
+      {THEME_MODE_ORDER.map((m) => (
+        <ToggleMenuItem
+          key={m}
+          label={THEME_MODE_LABELS[m]}
+          active={mode === m}
+          onToggle={() => themeStore.setMode(m)}
+          title={
+            m === 'system'
+              ? 'Follow the OS appearance setting (prefers-color-scheme).'
+              : `Use the ${m} theme regardless of the OS setting.`
+          }
+        />
+      ))}
+    </DropdownSection>
   );
 });
 
@@ -701,7 +831,7 @@ type SampleLoadPhase = 'connecting' | 'downloading' | 'decoding';
  * fallbacks use a fixed sliver that reads as "working" rather than empty. */
 function sampleProgressWidth(
   phase: SampleLoadPhase | undefined,
-  p: SampleLoadProgress | undefined,
+  p: SampleLoadProgress | undefined
 ): string {
   if (phase === 'decoding') return '100%';
   if (phase === 'connecting' || !p) return '8%';
@@ -711,7 +841,7 @@ function sampleProgressWidth(
 
 function sampleProgressLabel(
   phase: SampleLoadPhase | undefined,
-  p: SampleLoadProgress | undefined,
+  p: SampleLoadProgress | undefined
 ): string {
   if (phase === 'connecting' || !p) return 'Drums · waiting for server…';
   if (phase === 'decoding') return 'Drums · decoding samples…';
@@ -745,6 +875,60 @@ const DrumLoadingIndicator = observer(() => {
   );
 });
 
+const LyricsStatusPill = observer(
+  ({ notice, onClear }: { notice: LyricsNotice; onClear: () => void }) => {
+    if (notice.phase === 'idle') return null;
+    return (
+      <span
+        className={classNames(sharedStyles.statusPill, sharedStyles.statusPillSuccess)}
+        onClick={onClear}
+        role="button"
+        title={`Loaded "${notice.trackName}" by ${notice.artistName} from LRCLIB (click to dismiss)`}
+        data-testid="lyrics-search-loaded"
+      >
+        Loaded {notice.trackName} by {notice.artistName} from LRCLIB (click to dismiss)
+      </span>
+    );
+  },
+);
+
+/**
+ * Pill that mirrors {@link TranscribeStatusPill} for the Whisper
+ * lyric-alignment flow. While the backend is extracting vocals
+ * (BS-Roformer) + running whisperx, surfaces a busy pill with a
+ * spinner; on failure, an error pill that dismisses on click. Success
+ * is signalled by the gutter row appearing + the
+ * {@link LyricsStatusPill}'s "loaded" notice, not by this pill.
+ */
+const LyricsAlignStatusPill = observer(
+  ({ status, onClear }: { status: LyricsAlignStatus; onClear: () => void }) => {
+    if (status.phase === 'idle') return null;
+    if (status.phase === 'aligning') {
+      return (
+        <span
+          className={classNames(sharedStyles.statusPill, sharedStyles.statusPillBusy)}
+          title={`Extracting vocals + running whisperx on ${status.detail}…`}
+          data-testid="lyrics-align-busy"
+        >
+          <span className={styles.statusPillSpinner} aria-hidden="true" />
+          Aligning lyrics: {status.detail}…
+        </span>
+      );
+    }
+    return (
+      <span
+        className={classNames(sharedStyles.statusPill, sharedStyles.statusPillError)}
+        onClick={onClear}
+        role="button"
+        title={status.message}
+        data-testid="lyrics-align-error"
+      >
+        Lyrics align failed: {truncate(status.message, 60)} (click to dismiss)
+      </span>
+    );
+  },
+);
+
 const TranscribeStatusPill = observer(
   ({ status, onClear }: { status: TranscribeStatus; onClear: () => void }) => {
     if (status.phase === 'idle') return null;
@@ -763,7 +947,8 @@ const TranscribeStatusPill = observer(
           title={status.substage ?? status.stage ?? 'starting'}
         >
           <span className={styles.statusPillSpinner} aria-hidden="true" />
-          Transcribing {status.filename}{stagePart}…
+          Transcribing {status.filename}
+          {stagePart}…
         </span>
       );
     }
@@ -788,7 +973,7 @@ const TranscribeStatusPill = observer(
     const titleLines: string[] = [];
     if (status.debugDir) {
       titleLines.push(
-        `Debug artifacts saved to ${status.debugDir} (under ./debug/ on the host with the default docker-compose mount).`,
+        `Debug artifacts saved to ${status.debugDir} (under ./debug/ on the host with the default docker-compose mount).`
       );
     }
     return (
@@ -880,15 +1065,12 @@ export const DebugPanel = observer(({ store }: { store: JotViewStore }) => {
         onPointerDown={onResizePointerDown}
         title="Drag to resize the debug panel."
       />
-      <div
-        className={styles.debugPanelHeader}
-        onClick={() => store.toggleDebugPanel()}
-      >
+      <div className={styles.debugPanelHeader} onClick={() => store.toggleDebugPanel()}>
         <span className={styles.debugPanelTitle}>Debug bundle</span>
         <span className={styles.debugPanelStats}>
           {bundle.filename ? `${bundle.filename} · ` : ''}
-          {stages.length} stage{stages.length === 1 ? '' : 's'} · {logs.length} log
-          line{logs.length === 1 ? '' : 's'}
+          {stages.length} stage{stages.length === 1 ? '' : 's'} · {logs.length} log line
+          {logs.length === 1 ? '' : 's'}
           {typeof totalElapsed === 'number' ? ` · ${totalElapsed.toFixed(2)}s total` : ''}
           {startedAt ? ` · ${startedAt}` : ''}
         </span>
@@ -903,9 +1085,7 @@ export const DebugPanel = observer(({ store }: { store: JotViewStore }) => {
               {stages.map((s, i) => (
                 <li key={i} className={styles.debugStageRow}>
                   <span className={styles.debugStageName}>{s.stage}</span>
-                  <span className={styles.debugStageElapsed}>
-                    {s.elapsed_seconds.toFixed(2)}s
-                  </span>
+                  <span className={styles.debugStageElapsed}>{s.elapsed_seconds.toFixed(2)}s</span>
                 </li>
               ))}
             </ul>

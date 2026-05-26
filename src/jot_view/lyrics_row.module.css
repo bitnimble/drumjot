@@ -1,0 +1,226 @@
+/* Time-aligned lyrics row in the unified mixer. Geometry mirrors
+   `mixer.module.css::musicTrack` (sticky gutter, bars-row width driven
+   by --voice-beats × --px-per-beat) so the row aligns flush with audio
+   tracks and pitch rows above/below. */
+
+.lyricsRow {
+    position: relative;
+    display: flex;
+    min-width: max-content;
+    border-top: 1px solid var(--color-border);
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-bg-cream);
+}
+
+.lyricsGutter {
+    composes: scrollStickyHorizontal from '../jot_view.module.css';
+    z-index: 6;
+    flex: 0 0 auto;
+    width: var(--gutter-width);
+    box-sizing: border-box;
+    border-right: 1px solid var(--color-border);
+    background: var(--color-bg-cream);
+    padding: 4px 6px;
+    display: flex;
+    align-items: stretch;
+    gap: 4px;
+}
+
+.dragHandle {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 100%;
+    color: var(--color-text-disabled-warm);
+    font-size: 10px;
+    letter-spacing: -1px;
+    cursor: grab;
+    user-select: none;
+    font-family: inherit;
+    line-height: 1;
+}
+
+.dragHandle:hover {
+    color: var(--color-text-secondary);
+}
+
+.dragHandle:active {
+    cursor: grabbing;
+}
+
+.lyricsContent {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+
+.lyricsLabel {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    overflow: hidden;
+}
+
+.lyricsTitle {
+    composes: label from '../typography.module.css';
+    color: var(--color-text-muted-alt);
+}
+
+.lyricsSource {
+    composes: subtle from '../typography.module.css';
+    color: var(--color-text-disabled);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.lyricsControls {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+}
+
+.offsetUnit {
+    composes: readoutSm from '../typography.module.css';
+    flex: 0 0 auto;
+    color: var(--color-text-muted-alt);
+}
+
+.lyricsBarsRow {
+    position: relative;
+    flex: 0 0 auto;
+    width: calc(var(--voice-beats) * var(--px-per-beat) * 1px);
+    will-change: transform;
+}
+
+/* One lyric line, absolutely positioned at its beat offset. Reads the
+   same --px-per-beat root variable every other beat-anchored element
+   uses, so zoom is purely CSS. The max-width is calc'd from the next
+   line's start beat (--lyric-end-beat) so adjacent lines don't visually
+   collide at low zoom; long text ellipsises with a tooltip carrying the
+   full string (set via the React `title` attr). */
+.lyricLine {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    left: calc(var(--lyric-start-beat) * var(--px-per-beat) * 1px + var(--note-pad-px));
+    max-width: calc(
+        (var(--lyric-end-beat) - var(--lyric-start-beat)) * var(--px-per-beat) * 1px - 4px
+    );
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-cream-strong);
+    color: var(--color-text-secondary);
+    font-size: 18px;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    user-select: text;
+    transition:
+        background-color 120ms ease,
+        color 120ms ease;
+    pointer-events: auto;
+    /* Marker above the lyric chip on the bars-row so the user can see
+       exactly which beat the line starts on. */
+    border-left: 2px solid var(--color-text-faint-strong);
+}
+
+/* Variant for word-aligned lines: the chip stretches from the first
+   word's beat to the last word's beat (driven by --lyric-end-beat).
+   Words inside are absolutely positioned at their own beats, so the
+   chip acts as a positioning context; `overflow: visible` lets the
+   final word's text extend past the right edge when its display width
+   outruns the gap to the next line. The container's own text rules
+   (white-space, ellipsis) are irrelevant in this mode since the children
+   carry the text. */
+.lyricLineWordAligned {
+    overflow: visible;
+    max-width: none;
+    padding: 0;
+}
+
+.lyricLineActive {
+    background: var(--color-accent-overlay-medium);
+    color: var(--color-text-strong);
+    border-left-color: var(--color-accent-strong);
+}
+
+/* Empty-text stamps (LRC instrumental gaps). Render as a small placeholder
+   so the marker is still visible without the full label width. */
+.lyricLineGap {
+    color: var(--color-text-disabled);
+    font-style: italic;
+}
+
+/* Word-level spans inside a word-aligned line. Each word is absolutely
+   positioned at its own beat, expressed as a per-word CSS var
+   (--lyric-word-beat-offset) measured in beats from the line's first
+   word. The line container provides the positioning context; the row's
+   --px-per-beat root var scales this with zoom. `--lyric-word-shift` is
+   a JS-applied per-word px offset that pushes words rightward when
+   their natural beat position would put their glyphs on top of (or
+   uncomfortably close to) the previous word's; see the layout effect
+   in lyrics_row.tsx. Defaults to 0px so non-colliding words stay at
+   their exact beat. */
+.lyricWord {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    left: calc(
+        var(--lyric-word-beat-offset) * var(--px-per-beat) * 1px + var(--lyric-word-shift, 0px)
+    );
+    color: var(--color-text-strong);
+    border-radius: var(--radius-xs);
+    padding: 0 2px;
+    transition:
+        background-color 80ms ease,
+        color 80ms ease;
+    white-space: nowrap;
+    /* Higher than .lyricWordActive so the active chip's padded
+       background sits behind adjacent words' glyphs (preventing the
+       active rectangle from visually swallowing close neighbors like
+       a Japanese sokuon). */
+    z-index: 1;
+}
+
+.lyricWordActive {
+    color: var(--color-accent);
+    background: var(--color-bg-base);
+    padding: 8px;
+    transform: translate(-8px, -50%);
+    font-weight: 600;
+    z-index: 0;
+}
+
+/* Group/drag/drop affordances; same visual language as mixer.module.css
+   so the lyrics row participates in the same drag-and-drop UX. */
+.mixerRowGroupStart {
+    margin-top: 12px;
+}
+
+.mixerRowInGroup.mixerRowGroupStart {
+    border-top-width: 2px;
+}
+
+.mixerRowInGroup.mixerRowGroupEnd {
+    border-bottom-width: 2px;
+}
+
+.mixerRowDragging {
+    opacity: 0.4;
+}
+
+.mixerDropIndicatorAbove {
+    box-shadow: inset 0 2px 0 0 var(--color-accent-strong);
+}
+
+.mixerDropIndicatorBelow {
+    box-shadow: inset 0 -2px 0 0 var(--color-accent-strong);
+}

@@ -7,11 +7,14 @@ export type { PlaybackEvent } from './events';
 export { buildTimeline, timeToX, xToTime, EMPTY_TIMELINE } from './timeline';
 export type { BarTiming, JotTimeline } from './timeline';
 export {
-  computeWaveformPeaks,
-  computeWaveformPeaksForJot,
-  computeWindowPeaks,
   isAudioTrackAudibleUnder,
   audioTrackGainUnder,
   PASSTHROUGH_AUDIO_TRACK_FILTER,
 } from './audio_tracks';
-export type { AudioTrackFilter, AudioTrackId, AudioTrack } from './audio_tracks';
+export type {
+  AudioTrack,
+  AudioTrackFilter,
+  AudioTrackId,
+  AudioTrackRole,
+} from './audio_tracks';
+export { waveformWorker } from './waveform_worker_client';

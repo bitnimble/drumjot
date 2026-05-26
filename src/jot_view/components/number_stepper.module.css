@@ -1,0 +1,93 @@
+/* Compact numeric up/down used by the playback offset controls and the
+   lyrics offset. Three children: [−] [input] [+] sitting inside one
+   pill-shaped outer border so the group reads as a single control. */
+
+.stepper {
+    display: inline-flex;
+    align-items: stretch;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-base);
+    overflow: hidden;
+}
+
+.stepper:focus-within {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+.stepper[data-disabled='true'] {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.stepperButton {
+    flex: 0 0 auto;
+    width: 18px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--color-text-faint-strong);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.stepperButton:hover:not(:disabled) {
+    background: var(--color-bg-hover);
+    color: var(--color-text-secondary-alt);
+}
+
+.stepperButton:focus {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -2px;
+}
+
+.stepperButton:disabled {
+    color: var(--color-text-disabled);
+    cursor: not-allowed;
+}
+
+.stepperButtonMinus {
+    border-right: 1px solid var(--color-border-soft);
+}
+
+.stepperButtonPlus {
+    border-left: 1px solid var(--color-border-soft);
+}
+
+.stepperInput {
+    composes: body from '../../typography.module.css';
+    flex: 1 1 auto;
+    min-width: 0;
+    width: 48px;
+    padding: 2px 4px;
+    border: none;
+    background: transparent;
+    color: var(--color-text);
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+}
+
+.stepperInput:focus {
+    outline: none;
+}
+
+/* Hide the browser's built-in spinner, we draw our own. Chromium /
+   Safari expose the inner-spin pseudo; Firefox uses `appearance:
+   textfield` to suppress them entirely. */
+.stepperInput::-webkit-outer-spin-button,
+.stepperInput::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.stepperInput[type='number'] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+}

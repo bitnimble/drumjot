@@ -119,17 +119,82 @@ def test_index_in_range_orders_and_drops_out_of_range() -> None:
 
 
 def _resp(rejected):
+    """Build a tool-use response with `rejected_onsets` items.
+
+    Accepts either bare ints (auto-wrapped with reason=`noise`) for tests
+    that only care about the index, or pre-shaped dicts for tests that
+    exercise the reason path.
+    """
+    items = [
+        {"index": r, "reason": "noise"} if isinstance(r, int) else r
+        for r in rejected
+    ]
     block = SimpleNamespace(
         type="tool_use", name=_FILTER_TOOL["name"],
-        input={"rejected_indices": rejected},
+        input={"rejected_onsets": items},
     )
     return SimpleNamespace(content=[block])
 
 
 def test_extract_rejected_dedupes_valid_indices() -> None:
-    # 5 onsets; the duplicate `2` collapses, but every index is in range.
+    # 5 onsets; the duplicate `2` collapses (last-wins by dict key), but
+    # every index is in range. Now returns a dict of {index: info}.
     out = _extract_rejected(_resp([0, 2, 2, 4]), n=5)
-    assert out == {0, 2, 4}
+    assert set(out.keys()) == {0, 2, 4}
+    assert all(info["reason"] == "noise" for info in out.values())
+
+
+def test_extract_rejected_returns_reason_codes() -> None:
+    out = _extract_rejected(
+        _resp([
+            {"index": 0, "reason": "bleed"},
+            {"index": 1, "reason": "double_trigger"},
+            {"index": 2, "reason": "noise"},
+            {
+                "index": 3,
+                "reason": "custom",
+                "reason_text": "looks like a stick click on the rim",
+            },
+        ]),
+        n=4,
+    )
+    assert out[0] == {"reason": "bleed", "reason_text": None}
+    assert out[1] == {"reason": "double_trigger", "reason_text": None}
+    assert out[2] == {"reason": "noise", "reason_text": None}
+    assert out[3] == {
+        "reason": "custom",
+        "reason_text": "looks like a stick click on the rim",
+    }
+
+
+def test_extract_rejected_optional_text_for_standard_reason() -> None:
+    out = _extract_rejected(
+        _resp([{"index": 0, "reason": "bleed", "reason_text": "from snare"}]),
+        n=2,
+    )
+    assert out[0] == {"reason": "bleed", "reason_text": "from snare"}
+
+
+def test_extract_rejected_raises_on_unknown_reason() -> None:
+    with pytest.raises(RuntimeError, match="invalid.*reason"):
+        _extract_rejected(
+            _resp([{"index": 0, "reason": "weird"}]), n=3,
+        )
+
+
+def test_extract_rejected_raises_when_custom_missing_text() -> None:
+    with pytest.raises(RuntimeError, match="custom.*reason_text"):
+        _extract_rejected(
+            _resp([{"index": 0, "reason": "custom"}]), n=3,
+        )
+
+
+def test_extract_rejected_raises_when_custom_text_is_blank() -> None:
+    with pytest.raises(RuntimeError, match="custom.*reason_text"):
+        _extract_rejected(
+            _resp([{"index": 0, "reason": "custom", "reason_text": "   "}]),
+            n=3,
+        )
 
 
 def test_extract_rejected_raises_on_out_of_range() -> None:
@@ -147,8 +212,10 @@ def test_extract_rejected_raises_on_negative_index() -> None:
 
 
 def test_extract_rejected_raises_on_non_integer_item() -> None:
-    with pytest.raises(RuntimeError, match="not an integer"):
-        _extract_rejected(_resp([0, "x"]), n=5)
+    with pytest.raises(RuntimeError, match="invalid `index`"):
+        _extract_rejected(
+            _resp([{"index": "x", "reason": "noise"}]), n=5,
+        )
 
 
 def test_extract_rejected_raises_when_no_tool_block() -> None:
@@ -173,9 +240,10 @@ def test_skip_pitches_short_circuits_when_all_pitches_skipped() -> None:
         initial_tempo=120.0,
         initial_time_signature=(4, 4),
     )
-    out = filter_onsets_all_instruments(
+    kept, reasons = filter_onsets_all_instruments(
         cands,
         structure,  # type: ignore[arg-type]
         skip_pitches={"h", "H"},
     )
-    assert out == {}
+    assert kept == {}
+    assert reasons == {}

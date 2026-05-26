@@ -154,6 +154,15 @@ def hydrate_context_from_resume(
                 "resume_stage=filter to regenerate it."
             )
         ctx.kept_by_pitch = _load_kept_onsets(kept_path, ctx.onsets_by_pitch)
+        # Re-attach filter LLM reasons so the rebuilt provenance shows
+        # WHY each onset was rejected. Older debug folders have no
+        # `filter/rejections.json`; tolerated; entries fall back to a
+        # null `reason_code` exactly as if the LLM had run pre-feature.
+        rejections_path = folder / "filter" / "rejections.json"
+        if rejections_path.exists():
+            ctx.filter_reasons = _load_filter_reasons(
+                rejections_path, ctx.onsets_by_pitch
+            )
 
     if stage_index(Stage.QUANTISE) < start_idx:
         # quantise is optional; a prior run may have skipped it. If
@@ -464,6 +473,79 @@ def _load_kept_onsets(
             )
         kept[pitch] = matched
     return kept
+
+
+def _load_filter_reasons(
+    path: Path,
+    onsets_by_pitch: dict[str, list[OnsetCandidate]],
+) -> dict[str, dict[int, dict[str, object]]]:
+    """Load `filter/rejections.json` and re-thread identity against
+    `onsets_by_pitch` so `build_note_provenance` can attach the reason
+    to each rejected onset.
+
+    Same key strategy as `_load_kept_onsets`: match by `(time, bar,
+    beat_in_bar)` to recover the original `OnsetCandidate` and key the
+    returned map by `id(c)` of that instance. Rows that don't match are
+    skipped (rather than minting fresh candidates) because a reason
+    keyed off a fresh instance can never be reached by the provenance
+    builder's `id(c)` lookup.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        log.warning(
+            "resume: could not read %s (%s); rejection reasons will be missing",
+            path, exc,
+        )
+        return {}
+    out: dict[str, dict[int, dict[str, object]]] = {}
+
+    def _key(row: dict) -> tuple[float, int, float]:
+        return (
+            round(float(row["time"]), 6),
+            int(row["bar"]),
+            round(float(row["beat_in_bar"]), 6),
+        )
+
+    for pitch, rows in data.items():
+        if not isinstance(rows, list):
+            continue
+        source = onsets_by_pitch.get(pitch, [])
+        by_key: dict[tuple[float, int, float], OnsetCandidate] = {
+            (
+                round(float(c.time), 6),
+                int(c.bar),
+                round(float(c.beat_in_bar), 6),
+            ): c
+            for c in source
+        }
+        per_id: dict[int, dict[str, object]] = {}
+        unmatched = 0
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                key = _key(row)
+            except (KeyError, TypeError, ValueError):
+                continue
+            cand = by_key.get(key)
+            if cand is None:
+                unmatched += 1
+                continue
+            per_id[id(cand)] = {
+                "reason": row.get("reason"),
+                "reason_text": row.get("reason_text"),
+            }
+        if unmatched:
+            log.warning(
+                "resume filter/rejections.json: %d/%d entries for pitch %r "
+                "did not match an onset in onsets.json; their reasons will "
+                "not be surfaced in the provenance.",
+                unmatched, len(rows), pitch,
+            )
+        if per_id:
+            out[pitch] = per_id
+    return out
 
 
 def _apply_quantise_shifts(

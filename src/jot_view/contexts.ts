@@ -3,6 +3,7 @@ import { NoteProvenanceEntry } from 'src/debug_zip';
 import { RenderedJot } from 'src/jot';
 import { BarTiming } from 'src/playback';
 import { SelectionStore } from 'src/selection';
+import { GridLineSettings } from './store';
 
 /**
  * Routes the active {@link SelectionStore} to deep score chrome (today:
@@ -99,3 +100,49 @@ export const BarTimingsContext = React.createContext<
  * "no offset / nothing to show" default in that case.
  */
 export const RenderedJotContext = React.createContext<RenderedJot | null>(null);
+
+/**
+ * Grid-line toggles surfaced through the View dropdown. Threaded as
+ * context so the deep `BarView` can read each setting without every
+ * intermediate ({MixerView} → {PitchRow} → {BarView}) carrying a prop.
+ * Defaults match the store's initial state so a BarView rendered outside
+ * the View (e.g. unit tests, future embedded usage) still has the
+ * classic look.
+ */
+export const GridLineSettingsContext = React.createContext<GridLineSettings>({
+  mainBeat: true,
+  subBeat16: false,
+  subBeatQuarterTriplet: false,
+  subBeatTriplet: false,
+  subBeat48: false,
+});
+
+/**
+ * Toolbar toggle: render audio-track waveforms with per-track
+ * normalisation so the median non-silent peak fills most of the row,
+ * regardless of source amplitude. Defaults to `false` so a canvas
+ * rendered outside the View still shows the accurate signal level.
+ * Read by `AudioTrackWaveformCanvas`.
+ */
+export const UniformWaveformsContext = React.createContext<boolean>(false);
+
+/**
+ * Whether the score auto-scrolls to keep the playhead centred during
+ * playback, and the toggle that flips it. Read by two distant
+ * consumers: `PlayheadAutoScroller` (skips the per-frame `scrollLeft`
+ * write when `follow` is false) and the `FollowToggle` button stacked
+ * above the playhead label. Threading through `JotView →
+ * TimelineHeader → Playhead → PlayheadLabel` for one boolean + one
+ * handler is more noise than it's worth, hence the context. Defaults
+ * to `{ follow: true, toggle: noop }` so a Playhead rendered outside
+ * the View still behaves like today's always-follow build.
+ */
+export type FollowPlayheadContextValue = {
+  follow: boolean;
+  toggle: () => void;
+};
+
+export const FollowPlayheadContext = React.createContext<FollowPlayheadContextValue>({
+  follow: true,
+  toggle: () => {},
+});

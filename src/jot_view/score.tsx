@@ -1,8 +1,9 @@
 import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
+import { NotePosition } from 'src/note_position';
 import { NoteProvenanceEntry } from 'src/debug_zip';
-import { Instrument, Modifier, Sticking } from 'src/dsl';
+import { Instrument, Modifier, Sticking, TimeSignature } from 'src/dsl';
 import {
   RenderedJot,
   StructuralBar,
@@ -12,7 +13,9 @@ import {
   ViewConfig,
 } from 'src/jot';
 import { TICKS_PER_BEAT } from 'src/midi';
-import { buildTimeline, computeWindowPeaks, jotPlayer } from 'src/playback';
+import { buildTimeline, jotPlayer } from 'src/playback';
+import { waveformWorker } from 'src/playback/waveform_worker_client';
+import { pickDominantBpmAndTime, resolveBpm } from 'src/playback/timeline';
 import sharedStyles from '../jot_view.module.css';
 import { GutterResizeHandle } from './components/gutter_resize_handle';
 import {
@@ -100,11 +103,51 @@ function coveredByTuplet(bar: StructuralBar, beat: number): boolean {
   );
 }
 
+/**
+ * Read the artist string from wherever a loader plausibly stashed it.
+ * Today only the RLRR (Paradiddle map) loader surfaces an artist, on
+ * `globalMetadata.rlrr.recordingMetadata.artist`; a top-level
+ * `globalMetadata.artist` is accepted too so hand-authored DSL or a
+ * future loader can populate it directly. Anything non-string or empty
+ * returns `undefined`, which makes the call site fall back to the
+ * title alone.
+ */
+export function extractArtist(jot: RenderedJot): string | undefined {
+  const meta = jot.globalMetadata as Record<string, unknown>;
+  const direct = meta.artist;
+  if (typeof direct === 'string' && direct.trim() !== '') return direct.trim();
+  const rlrr = meta.rlrr as { recordingMetadata?: { artist?: unknown } } | undefined;
+  const rlrrArtist = rlrr?.recordingMetadata?.artist;
+  if (typeof rlrrArtist === 'string' && rlrrArtist.trim() !== '') return rlrrArtist.trim();
+  return undefined;
+}
+
+/**
+ * Display string for the score's `<h2>`. Appends ` - <artist>` when the
+ * artist is known (RLRR-loaded charts today), so the header reads
+ * "Song Name - Artist Name". When no artist is known the title stands
+ * alone. Empty when the jot has neither title nor artist; the caller
+ * shows the "Untitled jot" placeholder in that case.
+ */
+export function formatDisplayTitle(jot: RenderedJot): string {
+  const title = jot.title.trim();
+  const artist = extractArtist(jot);
+  if (title && artist) return `${title} - ${artist}`;
+  if (title) return title;
+  if (artist) return artist;
+  return '';
+}
+
 export function formatSubtitle(jot: RenderedJot): string {
   const parts: string[] = [];
-  const { bpm, time, vol } = jot.globalMetadata;
-  if (typeof bpm === 'number') parts.push(`${bpm} bpm`);
-  else if (bpm) parts.push(`${bpm.start ?? '?'}-${bpm.end} bpm`);
+  const { bpm: globalBpm, time: globalTime, vol } = jot.globalMetadata;
+  const { dominantBpm, dominantTime } = pickDominantBpmAndTime(jot);
+
+  if (dominantBpm !== undefined) parts.push(`${dominantBpm} bpm`);
+  else if (typeof globalBpm === 'number') parts.push(`${globalBpm} bpm`);
+  else if (globalBpm) parts.push(`${globalBpm.start ?? '?'}-${globalBpm.end} bpm`);
+
+  const time = dominantTime ?? globalTime;
   if (time) parts.push(`${time.count}/${time.unit}`);
   if (typeof vol === 'string') parts.push(vol);
   else if (vol) parts.push(`${vol.start ?? '?'} -> ${vol.end}`);
@@ -187,6 +230,16 @@ export const TimelineHeader = observer(
     for (const b of voice.bars) voiceBeats += b.beats;
 
     let cumBeats = 0;
+    // Pills render on the first visible bar (anchor) and on any bar
+    // whose time signature or resolved BPM differs from the previous
+    // bar's, so meter and tempo changes are visible in the ruler
+    // without scanning the score. BPM resolution mirrors
+    // `pickDominantBpmAndTime` / `events.ts` (per-bar `{{ bpm }}`
+    // overrides accumulate on top of `globalMetadata.bpm`), so the
+    // numbers shown here match what the scheduler is playing.
+    let prevTime: { count: number; unit: number } | undefined;
+    let currentBpm = resolveBpm(jot.globalMetadata.bpm, 120);
+    let prevBpm: number | undefined;
     return (
       <div className={styles.timelineHeader}>
         <div className={styles.timelineHeaderGutter}>
@@ -205,6 +258,19 @@ export const TimelineHeader = observer(
             const timeSec = timing?.startSec ?? 0;
             const startBeat = cumBeats;
             cumBeats += bar.beats;
+            const showTimeSig =
+              !prevTime ||
+              bar.time.count !== prevTime.count ||
+              bar.time.unit !== prevTime.unit;
+            prevTime = bar.time;
+            const bpmOverride = bar.source.metadata?.bpm;
+            if (bpmOverride !== undefined) currentBpm = resolveBpm(bpmOverride, currentBpm);
+            // Round before comparing so floating-point jitter on
+            // transcribed bundles (e.g. 119.97 vs 120.03) doesn't paint
+            // a "change" pill on every bar.
+            const displayBpm = Math.round(currentBpm);
+            const showBpm = prevBpm === undefined || displayBpm !== prevBpm;
+            prevBpm = displayBpm;
             return (
               <div
                 key={i}
@@ -215,7 +281,17 @@ export const TimelineHeader = observer(
                   } as React.CSSProperties
                 }
               >
-                <span className={styles.timelineHeaderBar}>{bar.index}</span>
+                <div className={styles.timelineHeaderTopRow}>
+                  <span className={styles.timelineHeaderBar}>{bar.index}</span>
+                  {showTimeSig && (
+                    <span className={styles.timelineHeaderTimeSig}>
+                      {bar.time.count}/{bar.time.unit}
+                    </span>
+                  )}
+                  {showBpm && (
+                    <span className={styles.timelineHeaderBpm}>{displayBpm} bpm</span>
+                  )}
+                </div>
                 <span className={styles.timelineHeaderTime}>{formatTime(timeSec)}</span>
               </div>
             );
@@ -279,11 +355,6 @@ export const BarView = observer(
      */
     pitchOrder?: readonly string[];
   }) => {
-    const beatCount = bar.time.count;
-    // Beat spacing inside the bar, in quarter notes. Each beat divider
-    // is `i × beatSpacingBeats` quarter-notes into the bar, scaled to
-    // pixels by the score-root's `--px-per-beat`. Stable per bar.
-    const beatSpacingBeats = bar.beats / beatCount;
     // Inline style carries only zoom-invariant data so React's prop
     // diff sees no change on a zoom tick: `--bar-beats` is the bar's
     // length in quarter notes. `minHeight` is config-derived; the bar
@@ -313,16 +384,28 @@ export const BarView = observer(
         )}
         style={barStyle}
       >
-        {/* One dashed line directly under each beat's notehead — the
-            same x the renderer places that beat's note at, computed
-            in CSS from `--divider-beat × --px-per-beat`. */}
-        {Array.from({ length: beatCount }, (_, i) => (
-          <div
-            key={`beat-${i + 1}`}
-            className={styles.beatDivider}
-            style={{ ['--divider-beat' as string]: i * beatSpacingBeats } as React.CSSProperties}
-          />
-        ))}
+        {/* Four grid-line overlay layers (main beat / 16th / triplet /
+            48th). Always present in the DOM so toggling a grid is a
+            single `setProperty` on the score root with zero per-bar
+            React work; visibility flows in through
+            `display: var(--grid-display-<family>, none)`, which
+            `GridLineVars` writes when the corresponding toggle is on
+            and removes when it's off. Each layer paints a single
+            `background-color` clipped to a dashed/dotted vertical-line
+            pattern via two intersecting masks (see `.gridLayer*` in the
+            CSS), so we keep the original dashed/dotted look without
+            the per-divider DOM spam that made playback laggy at 48ths.
+            Skipped on lead-in bars (the hatched intro chrome reads
+            cleaner without a grid on top). */}
+        {!isLeadIn && (
+          <>
+            <div className={styles.gridLayerMain} aria-hidden="true" />
+            <div className={styles.gridLayerSubBeat16} aria-hidden="true" />
+            <div className={styles.gridLayerSubBeatQuarterTriplet} aria-hidden="true" />
+            <div className={styles.gridLayerSubBeatTriplet} aria-hidden="true" />
+            <div className={styles.gridLayerSubBeat48} aria-hidden="true" />
+          </>
+        )}
         {pitches.map((pitch) => {
           const track = bar.tracks[pitch];
           const dim = !isPitchAudible(pitch);
@@ -725,7 +808,22 @@ function renderedBeatInBar(note: StructuralNote, bar: StructuralBar): number {
  * (see `store.ts`), so the default is the only grid we need to handle. */
 const MIDI_GRID_TICKS = (TICKS_PER_BEAT * 4) / 48;
 
-/** Total pixel width of the timing-visualization panel — wide enough to
+/**
+ * Render a delta in 1/48-of-whole-note slots with a sign and a `/48`
+ * denominator (matching {@link NotePosition.formatBarBeat48ths}'s
+ * absolute-position format). Integer-rounded when the slot count is
+ * effectively whole (within 0.05) so jitter-class deltas read as
+ * `+1/48` rather than `+0.97/48`; fractional otherwise so a
+ * sub-slot snap delta (e.g. `+0.3/48`) still surfaces its magnitude.
+ */
+function formatSignedSlots(slots: number): string {
+  const sign = slots >= 0 ? '+' : '';
+  const rounded = Math.round(slots);
+  if (Math.abs(slots - rounded) < 0.05) return `${sign}${rounded}/48`;
+  return `${sign}${slots.toFixed(1)}/48`;
+}
+
+/** Total pixel width of the timing-visualization panel, wide enough to
  * resolve a ±150 ms window without crowding the labels in the diff
  * rows, narrow enough that the parent label popover doesn't run off
  * the score for selections near the right edge. */
@@ -760,6 +858,9 @@ const TIMING_VIZ_MIN_HALF_WINDOW_SEC = 0.3;
 const OnsetTimingVisualization = observer(({
   entry,
   rendered,
+  backendQuantSec,
+  backendQuantBeats,
+  backendQuantSlots,
   snapSec,
   snapBeats,
   alignmentBeats,
@@ -774,6 +875,16 @@ const OnsetTimingVisualization = observer(({
 }: {
   entry: NoteProvenanceEntry;
   rendered: RenderedNoteContext;
+  /** Backend `quantise` stage's shift in audio seconds
+   * (`quantised_time_sec - detected_time_sec`). `undefined` when the
+   * stage didn't run or didn't move this onset. */
+  backendQuantSec: number | undefined;
+  /** Same shift expressed in ts-beats of the original bar. `undefined`
+   * mirrors `backendQuantSec`. */
+  backendQuantBeats: number | undefined;
+  /** Same shift as an exact integer count of 1/48 slots (the stage's
+   * native unit). `undefined` when no shift was applied. */
+  backendQuantSlots: number | undefined;
   /** Snap delta in audio-time seconds (post-quantization minus
    * detected). `undefined` when the bar's audio duration can't be
    * resolved. */
@@ -815,14 +926,17 @@ const OnsetTimingVisualization = observer(({
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
 
   const detectedSec = entry.detected_time_sec;
+  const postBackendQuantSec =
+    backendQuantSec !== undefined ? detectedSec + backendQuantSec : detectedSec;
   const quantizedSec =
-    snapSec !== undefined ? detectedSec + snapSec : undefined;
+    snapSec !== undefined ? postBackendQuantSec + snapSec : undefined;
   const alignmentSec = rendered.provenance.beatAlignmentOffsetSec;
 
   // Window: span the detected, quantized, and final positions plus a
   // small symmetric pad, clamped to a minimum half-window so a zero-
   // delta onset still gets visible waveform context.
   const stagePositions: number[] = [detectedSec];
+  if (backendQuantSec !== undefined) stagePositions.push(postBackendQuantSec);
   if (quantizedSec !== undefined) stagePositions.push(quantizedSec);
   if (finalSec !== undefined) stagePositions.push(finalSec);
   const minPos = Math.min(...stagePositions);
@@ -883,39 +997,57 @@ const OnsetTimingVisualization = observer(({
   React.useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !audioTrack) return;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.max(1, Math.floor(TIMING_VIZ_WIDTH * dpr));
-    canvas.height = Math.max(1, Math.floor(TIMING_VIZ_WAVE_HEIGHT * dpr));
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, TIMING_VIZ_WIDTH, TIMING_VIZ_WAVE_HEIGHT);
-    const peaks = computeWindowPeaks(
-      audioTrack.buffer,
-      windowStart,
-      windowDur,
-      TIMING_VIZ_WIDTH,
-    );
-    const mid = TIMING_VIZ_WAVE_HEIGHT / 2;
-    const scale = mid * 0.9;
-    // Canvas doesn't resolve CSS vars in fillStyle strings; read the
-    // waveform's blue off the element's computed style so the snippet
-    // matches the main mixer waveform's colour.
-    const computed = window.getComputedStyle(canvas);
-    const wave = computed.getPropertyValue('--color-pattern-2').trim();
-    ctx.fillStyle = wave || '#5BA8E8';
-    // Always paint at least a 1 px centerline per column (no skip-zero
-    // shortcut) so silent ranges render as a continuous ground line
-    // instead of empty gaps — in the long mixer waveform the skip is
-    // fine because silent regions fade into the chrome around them,
-    // but in the snippet it reads as broken rendering.
-    for (let p = 0; p < TIMING_VIZ_WIDTH; p++) {
-      const mn = peaks[p * 2];
-      const mx = peaks[p * 2 + 1];
-      const y0 = mid - mx * scale;
-      const y1 = mid - mn * scale;
-      ctx.fillRect(p, y0, 1, Math.max(1, y1 - y0));
-    }
+    let cancelled = false;
+    (async () => {
+      // Off-main-thread peak compute (the worker holds a copy of the
+      // track's PCM; this call only ships the window + width). Canvas
+      // keeps its previous paint during the worker round-trip.
+      let peaks: Float32Array;
+      try {
+        peaks = await waveformWorker.computeWindow(
+          audioTrack.id,
+          windowStart,
+          windowDur,
+          TIMING_VIZ_WIDTH,
+        );
+      } catch (err) {
+        if (!cancelled) console.warn('[score] timing-viz peaks failed:', err);
+        return;
+      }
+      if (cancelled) return;
+      const c = canvasRef.current;
+      if (!c) return;
+      const dpr = window.devicePixelRatio || 1;
+      c.width = Math.max(1, Math.floor(TIMING_VIZ_WIDTH * dpr));
+      c.height = Math.max(1, Math.floor(TIMING_VIZ_WAVE_HEIGHT * dpr));
+      const ctx = c.getContext('2d');
+      if (!ctx) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, TIMING_VIZ_WIDTH, TIMING_VIZ_WAVE_HEIGHT);
+      const mid = TIMING_VIZ_WAVE_HEIGHT / 2;
+      const scale = mid * 0.9;
+      // Canvas doesn't resolve CSS vars in fillStyle strings; read the
+      // waveform's blue off the element's computed style so the snippet
+      // matches the main mixer waveform's colour.
+      const computed = window.getComputedStyle(c);
+      const wave = computed.getPropertyValue('--color-pattern-2').trim();
+      ctx.fillStyle = wave || '#5BA8E8';
+      // Always paint at least a 1 px centerline per column (no skip-zero
+      // shortcut) so silent ranges render as a continuous ground line
+      // instead of empty gaps; in the long mixer waveform the skip is
+      // fine because silent regions fade into the chrome around them,
+      // but in the snippet it reads as broken rendering.
+      for (let p = 0; p < TIMING_VIZ_WIDTH; p++) {
+        const mn = peaks[p * 2];
+        const mx = peaks[p * 2 + 1];
+        const y0 = mid - mx * scale;
+        const y1 = mid - mn * scale;
+        ctx.fillRect(p, y0, 1, Math.max(1, y1 - y0));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [audioTrack, windowStart, windowDur]);
 
   // Bar boundaries visible inside the window. Walk the timeline once;
@@ -985,20 +1117,51 @@ const OnsetTimingVisualization = observer(({
     key: string;
     label: string;
     deltaBeats: number | undefined;
+    /** Same delta expressed as a count of 1/48 slots. `undefined` when
+     * the bar's tempo can't be resolved (so beats can't be either). */
+    deltaSlots: number | undefined;
     deltaSec: number;
     anchorX: number;
     endX: number;
     className: string;
   };
+  // Convert audio seconds to a count of 1/48-of-whole-note slots using
+  // the original bar's tempo. 1 slot = 1/12 of a quarter note, so
+  // `seconds / sec_per_qn × 12` lands in slots. Independent of time
+  // signature; the slot is a whole-note subdivision.
+  const secToSlots = (s: number): number | undefined =>
+    unknownDriftSecPerQuarterNote !== undefined &&
+    unknownDriftSecPerQuarterNote > 0
+      ? (s / unknownDriftSecPerQuarterNote) * 12
+      : undefined;
   const diffRows: DiffRow[] = [];
   let cursorSec = detectedSec;
   let cursorX = detectedX;
+  if (backendQuantSec !== undefined && Math.abs(backendQuantSec) > 1e-9) {
+    const nextSec = cursorSec + backendQuantSec;
+    diffRows.push({
+      key: 'backend-quant',
+      label: 'Backend quantise+shift',
+      deltaBeats: backendQuantBeats,
+      // Prefer the exact integer slot count the stage reported; fall
+      // back to the seconds-derived value if the stage's shift wasn't
+      // surfaced (legacy bundle).
+      deltaSlots: backendQuantSlots ?? secToSlots(backendQuantSec),
+      deltaSec: backendQuantSec,
+      anchorX: cursorX,
+      endX: timeToX(nextSec),
+      className: styles.timingVizDiffBarBackendQuant,
+    });
+    cursorSec = nextSec;
+    cursorX = timeToX(nextSec);
+  }
   if (snapSec !== undefined && Math.abs(snapSec) > 1e-9) {
     const nextSec = cursorSec + snapSec;
     diffRows.push({
       key: 'quant',
       label: 'Quantization',
       deltaBeats: snapBeats,
+      deltaSlots: secToSlots(snapSec),
       deltaSec: snapSec,
       anchorX: cursorX,
       endX: timeToX(nextSec),
@@ -1013,6 +1176,7 @@ const OnsetTimingVisualization = observer(({
       key: 'align',
       label: 'Beat alignment',
       deltaBeats: alignmentBeats,
+      deltaSlots: secToSlots(alignmentSec),
       deltaSec: alignmentSec,
       anchorX: cursorX,
       endX: timeToX(nextSec),
@@ -1027,6 +1191,7 @@ const OnsetTimingVisualization = observer(({
       key: 'anchor',
       label: 'Bar anchor drift',
       deltaBeats: anchorDriftBeats,
+      deltaSlots: secToSlots(anchorDriftSec),
       deltaSec: anchorDriftSec,
       anchorX: cursorX,
       endX: timeToX(nextSec),
@@ -1041,6 +1206,10 @@ const OnsetTimingVisualization = observer(({
       key: 'drum-offset',
       label: 'Drum offset',
       deltaBeats: drumOffsetBeats,
+      // `drumOffsetBeats` is in quarter notes by convention, so slots is
+      // simply ×12; no time-signature-aware conversion needed.
+      deltaSlots:
+        drumOffsetBeats !== undefined ? drumOffsetBeats * 12 : undefined,
       deltaSec: drumOffsetSec,
       anchorX: cursorX,
       endX: timeToX(nextSec),
@@ -1063,6 +1232,7 @@ const OnsetTimingVisualization = observer(({
         key: 'unknown',
         label: 'Unknown drift source',
         deltaBeats: unknownBeats,
+        deltaSlots: secToSlots(unknownSec),
         deltaSec: unknownSec,
         anchorX: cursorX,
         endX: finalX!,
@@ -1073,6 +1243,7 @@ const OnsetTimingVisualization = observer(({
 
   const renderSignedBeats = (b: number) =>
     `${b >= 0 ? '+' : ''}${b.toFixed(3)} beats`;
+  const renderSignedSlots = formatSignedSlots;
   const renderSignedMs = (ms: number) =>
     `${ms >= 0 ? '+' : ''}${ms.toFixed(1)} ms`;
 
@@ -1143,7 +1314,11 @@ const OnsetTimingVisualization = observer(({
           row.deltaBeats !== undefined
             ? `· ${renderSignedBeats(row.deltaBeats)} `
             : '';
-        const fullText = `${row.label} ${beatsPart}· ${renderSignedMs(row.deltaSec * 1000)}`;
+        const slotsPart =
+          row.deltaSlots !== undefined
+            ? `· ${renderSignedSlots(row.deltaSlots)} `
+            : '';
+        const fullText = `${row.label} ${beatsPart}${slotsPart}· ${renderSignedMs(row.deltaSec * 1000)}`;
         return (
           <div
             key={row.key}
@@ -1236,6 +1411,7 @@ const NoteProvenanceDetails = observer(({
   let originalSecPerQuarterNote: number | undefined;
   let originalQuantizedBeat: number | undefined;
   let originalQuantizedSec: number | undefined;
+  let originalQuantizedTick: number | undefined;
   let snapBeats: number | undefined;
   let snapSec: number | undefined;
   let snapMs: number | undefined;
@@ -1245,6 +1421,15 @@ const NoteProvenanceDetails = observer(({
   let drumOffsetSec: number | undefined;
   let anchorDriftSec: number | undefined;
   let anchorDriftBeats: number | undefined;
+  // Backend `quantise` stage shift; surfaced when
+  // `quantised_time_sec`/`quantised_shift_slots` are present on the
+  // provenance entry (the stage actually moved this onset). Slot count
+  // is the stage's native unit (integer 1/48s); seconds and ts-beats are
+  // derived from it via the original bar's tempo for display alongside
+  // the other rows.
+  let backendQuantSec: number | undefined;
+  let backendQuantBeats: number | undefined;
+  let backendQuantSlots: number | undefined;
   if (rendered) {
     currentQuantizedBeat = renderedBeatInBar(rendered.note, rendered.bar);
     displayedBarIndex = rendered.bar.index;
@@ -1284,6 +1469,31 @@ const NoteProvenanceDetails = observer(({
       originalSecPerQuarterNote = originalBarTiming.durationSec / originalBar.beats;
     }
 
+    // Backend `quantise` stage shift (transcriber: `quantise.py`'s
+    // deterministic joint-snap + LLM residual pass). Surfaced when the
+    // provenance entry carries a `quantised_time_sec`; that field is
+    // null when the stage didn't run or didn't move this onset.
+    // `quantised_shift_slots` is the stage's native unit (signed int
+    // 1/48 slots); seconds is preferred when present since it's the
+    // exact audio-time displacement, with slots as the integer count.
+    if (
+      entry.quantised_time_sec !== null &&
+      entry.quantised_time_sec !== undefined
+    ) {
+      backendQuantSec = entry.quantised_time_sec - entry.detected_time_sec;
+      if (
+        entry.quantised_shift_slots !== null &&
+        entry.quantised_shift_slots !== undefined
+      ) {
+        backendQuantSlots = entry.quantised_shift_slots;
+      }
+      if (originalBar && originalSecPerQuarterNote !== undefined) {
+        // qn → ts-beats: 1 ts-beat = 4/unit qn, so 1 qn = unit/4 ts-beats.
+        const deltaQn = backendQuantSec / originalSecPerQuarterNote;
+        backendQuantBeats = deltaQn * (originalBar.time.unit / 4);
+      }
+    }
+
     // Snap delta is the audio-time displacement from the detected onset
     // to where the 1/48 MIDI grid landed — both expressed in the
     // ORIGINAL bar's tempo frame. Derived from `entry.tick`
@@ -1310,6 +1520,7 @@ const NoteProvenanceDetails = observer(({
       // position by construction.
       originalQuantizedBeat = entry.beat_in_bar + snapBeats;
       originalQuantizedSec = entry.detected_time_sec + snapSec;
+      originalQuantizedTick = postSnapTick;
     }
 
     // Final position uses the CURRENT bar's timing; where the note
@@ -1399,6 +1610,7 @@ const NoteProvenanceDetails = observer(({
   let unknownDriftMs: number | undefined;
   if (finalSec !== undefined && rendered) {
     let accountedSec = entry.detected_time_sec;
+    if (backendQuantSec !== undefined) accountedSec += backendQuantSec;
     if (snapSec !== undefined) accountedSec += snapSec;
     if (rendered.provenance.beatAlignmentOffsetSec !== null) {
       accountedSec += rendered.provenance.beatAlignmentOffsetSec;
@@ -1426,6 +1638,14 @@ const NoteProvenanceDetails = observer(({
     `${b >= 0 ? '+' : ''}${b.toFixed(3)}`;
   const renderSignedSec = (s: number) =>
     `${s >= 0 ? '+' : ''}${s.toFixed(3)}s`;
+  // Convert a delta expressed in ts-beats of the original bar into the
+  // matching 1/48 slot count, using `48 / unit` slots-per-ts-beat.
+  // Returns `undefined` when the bar (and hence its `time.unit`) didn't
+  // resolve; the call site should then omit the 48ths annotation.
+  const origBeatsToSlots = (beats: number | undefined): number | undefined =>
+    beats !== undefined && originalBar !== undefined
+      ? (beats * 48) / originalBar.time.unit
+      : undefined;
 
   return (
     <div className={styles.debugDetails} onMouseDown={stop}>
@@ -1445,6 +1665,9 @@ const NoteProvenanceDetails = observer(({
         <OnsetTimingVisualization
           entry={entry}
           rendered={rendered}
+          backendQuantSec={backendQuantSec}
+          backendQuantBeats={backendQuantBeats}
+          backendQuantSlots={backendQuantSlots}
           snapSec={snapSec}
           snapBeats={snapBeats}
           alignmentBeats={alignmentBeats}
@@ -1471,24 +1694,52 @@ const NoteProvenanceDetails = observer(({
                 mapping no longer always equals the displayed bar. Falls
                 back to `entry.bar + 1` when the lookup couldn't resolve
                 (no rendered jot context). */}
-            bar {originalBarIndex ?? entry.bar + 1} ·{' '}
-            {entry.beat_in_bar.toFixed(3)} ·{' '}
-            {entry.detected_time_sec.toFixed(3)}s
+            {new NotePosition({
+              barIndex: originalBarIndex ?? entry.bar + 1,
+              beatInBar: entry.beat_in_bar,
+              timeSig: originalBar?.time,
+              audioSec: entry.detected_time_sec,
+              midiTick: entry.tick ?? undefined,
+            }).toString()}
           </dd>
           <dt>Strength</dt>
           <dd>{entry.strength.toFixed(3)}</dd>
+          {backendQuantSec !== undefined && (
+            <>
+              <dt>Backend quantise+shift</dt>
+              <dd>
+                {backendQuantBeats !== undefined &&
+                  `${renderSignedBeats(backendQuantBeats)} beats `}
+                {/* Prefer the stage's exact integer slot count when
+                    surfaced; fall back to the seconds-derived count for
+                    legacy bundles. */}
+                {(backendQuantSlots !== undefined
+                  ? `· ${formatSignedSlots(backendQuantSlots)} `
+                  : origBeatsToSlots(backendQuantBeats) !== undefined
+                  ? `· ${formatSignedSlots(origBeatsToSlots(backendQuantBeats)!)} `
+                  : '')}
+                ({renderSignedMs(backendQuantSec * 1000)})
+              </dd>
+            </>
+          )}
           {originalQuantizedBeat !== undefined && originalBarIndex !== undefined && (
             <>
               <dt>Quantized to</dt>
               <dd>
-                bar {originalBarIndex} · {originalQuantizedBeat.toFixed(3)}
-                {originalQuantizedSec !== undefined &&
-                  ` · ${originalQuantizedSec.toFixed(3)}s`}
+                {new NotePosition({
+                  barIndex: originalBarIndex,
+                  beatInBar: originalQuantizedBeat,
+                  timeSig: originalBar?.time,
+                  audioSec: originalQuantizedSec,
+                  midiTick: originalQuantizedTick,
+                }).toString()}
               </dd>
               <dt>Snap delta</dt>
               <dd>
-                {snapBeats !== undefined && `${renderSignedBeats(snapBeats)} beats`}
-                {snapMs !== undefined && ` (${renderSignedMs(snapMs)})`}
+                {snapBeats !== undefined && `${renderSignedBeats(snapBeats)} beats `}
+                {origBeatsToSlots(snapBeats) !== undefined &&
+                  `· ${formatSignedSlots(origBeatsToSlots(snapBeats)!)} `}
+                {snapMs !== undefined && `(${renderSignedMs(snapMs)})`}
               </dd>
             </>
           )}
@@ -1498,6 +1749,8 @@ const NoteProvenanceDetails = observer(({
               <dd>
                 {alignmentBeats !== undefined &&
                   `${renderSignedBeats(alignmentBeats)} beats `}
+                {origBeatsToSlots(alignmentBeats) !== undefined &&
+                  `· ${formatSignedSlots(origBeatsToSlots(alignmentBeats)!)} `}
                 ({renderSignedSec(
                   rendered.provenance.beatAlignmentOffsetSec ?? 0,
                 )})
@@ -1510,6 +1763,8 @@ const NoteProvenanceDetails = observer(({
               <dd>
                 {anchorDriftBeats !== undefined &&
                   `${renderSignedBeats(anchorDriftBeats)} beats `}
+                {origBeatsToSlots(anchorDriftBeats) !== undefined &&
+                  `· ${formatSignedSlots(origBeatsToSlots(anchorDriftBeats)!)} `}
                 ({renderSignedMs(anchorDriftSec * 1000)})
               </dd>
             </>
@@ -1519,6 +1774,11 @@ const NoteProvenanceDetails = observer(({
               <dt>Drum offset</dt>
               <dd>
                 {renderSignedBeats(drumOffsetBeats)} beats
+                {' '}
+                {/* `drumOffsetBeats` is in quarter notes (see compute
+                    block above); 1 qn = 12 slots, independent of the
+                    bar's time signature. */}
+                · {formatSignedSlots(drumOffsetBeats * 12)}
                 {drumOffsetSec !== undefined &&
                   ` (${renderSignedMs(drumOffsetSec * 1000)})`}
               </dd>
@@ -1530,29 +1790,31 @@ const NoteProvenanceDetails = observer(({
               <dd>
                 {unknownDriftBeats !== undefined &&
                   `${renderSignedBeats(unknownDriftBeats)} beats `}
+                {origBeatsToSlots(unknownDriftBeats) !== undefined &&
+                  `· ${formatSignedSlots(origBeatsToSlots(unknownDriftBeats)!)} `}
                 ({renderSignedMs(unknownDriftMs!)})
               </dd>
             </>
           )}
-          {finalSec !== undefined && currentQuantizedBeat !== undefined && (
-            <>
-              <dt>Final position</dt>
-              <dd>
-                bar {displayedBarIndex} · {currentQuantizedBeat.toFixed(3)} ·{' '}
-                {finalSec.toFixed(3)}s
-              </dd>
-            </>
-          )}
+          {finalSec !== undefined &&
+            currentQuantizedBeat !== undefined &&
+            displayedBarIndex !== undefined && (
+              <>
+                <dt>Final position</dt>
+                <dd>
+                  {new NotePosition({
+                    barIndex: displayedBarIndex,
+                    beatInBar: currentQuantizedBeat,
+                    timeSig: rendered?.bar.time,
+                    audioSec: finalSec,
+                  }).toString()}
+                </dd>
+              </>
+            )}
           {entry.midi_note !== null && (
             <>
               <dt>MIDI note</dt>
               <dd>{entry.midi_note}</dd>
-            </>
-          )}
-          {entry.tick !== null && (
-            <>
-              <dt>MIDI tick</dt>
-              <dd>{entry.tick}</dd>
             </>
           )}
           {(() => {
@@ -1578,13 +1840,50 @@ const NoteProvenanceDetails = observer(({
           <dd>
             {entry.kept
               ? 'kept'
-              : entry.rejected_by ?? (entry.out_of_range ? 'out of range' : 'rejected')}
+              : (() => {
+                  const source =
+                    entry.rejected_by ??
+                    (entry.out_of_range ? 'out of range' : 'rejected');
+                  const reasonLabel = entry.reason_code
+                    ? FILTER_REASON_LABELS[entry.reason_code] ?? entry.reason_code
+                    : null;
+                  return reasonLabel ? (
+                    <>
+                      {source} ·{' '}
+                      <span className={styles.reasonCode}>{reasonLabel}</span>
+                    </>
+                  ) : (
+                    source
+                  );
+                })()}
           </dd>
+          {!entry.kept && !entry.out_of_range && entry.reason_text && (
+            <>
+              <dt>Reason</dt>
+              <dd>
+                <span className={styles.reasonText}>{entry.reason_text}</span>
+              </dd>
+            </>
+          )}
         </dl>
       )}
     </div>
   );
 });
+
+/**
+ * Display labels for the filter LLM's short reason codes. Keep in
+ * lockstep with `REASON_CODES` in
+ * `transcriber/app/pipeline/filter_llm.py`; unknown codes fall through
+ * to the raw value so a new backend code still renders something
+ * meaningful before the frontend catches up.
+ */
+const FILTER_REASON_LABELS: Record<string, string> = {
+  bleed: 'Bleed from louder instrument',
+  double_trigger: 'Detector double-trigger',
+  noise: 'Isolated noise',
+  custom: 'Custom',
+};
 
 /**
  * Renders one rejected onset as a dashed ghost circle at its detected
@@ -1622,6 +1921,28 @@ export const FilteredOnsetView = ({
   const anchorRef = React.useRef<HTMLDivElement>(null);
   const labelRef = React.useRef<HTMLDivElement>(null);
   const flipAbove = usePopoverFlipAbove(anchorRef, labelRef, show);
+  // Click-outside to dismiss the stuck-open popover. Without this the
+  // only way to close it is clicking the (small, easy-to-miss) dashed
+  // ring again. We treat clicks anywhere outside the anchor OR its
+  // label as "outside" so users can interact with the popover itself
+  // (e.g. expand Debug details) without dismissing it.
+  //
+  // Registered in capture phase so the listener runs before React's
+  // root-level click delegation; calling stopPropagation prevents the
+  // dismissing click from also moving the playhead via the bars-row
+  // seek handler (or any other bubbling onClick further up the tree).
+  React.useEffect(() => {
+    if (!clicked) return;
+    const onClickCapture = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (anchorRef.current?.contains(target)) return;
+      if (labelRef.current?.contains(target)) return;
+      e.stopPropagation();
+      setClicked(false);
+    };
+    document.addEventListener('click', onClickCapture, true);
+    return () => document.removeEventListener('click', onClickCapture, true);
+  }, [clicked]);
   return (
     <div
       ref={anchorRef}

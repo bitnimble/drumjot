@@ -20,6 +20,7 @@ separator can't find a kick, we just won't emit candidates for the kick lane
 and the LLM has to infer the kick pattern from context (in practice it can't,
 so this is mostly a "log and let the user retry" path).
 """
+
 from __future__ import annotations
 
 import logging
@@ -138,6 +139,7 @@ class Separator:
     def __init__(self) -> None:
         self._stems_all = None
         self._stems_per = None
+        self._vocals = None
 
     def load(self) -> None:
         """Idempotently load both separator models.
@@ -155,16 +157,24 @@ class Separator:
         provision_custom_models()
 
         # Local import: pulls in heavy ML deps; only needed in worker processes.
+        import torch
         from audio_separator.separator import Separator as AS
+
+        # cuDNN benchmark: every chunk in a separation pass is windowed to
+        # exactly chunk_size (see mdxc_separator.py: the tail chunk is
+        # re-anchored to `mix[:; -chunk_size:]`); so input shape is fixed
+        # across the hot loop — autotune is a free win and has nothing to
+        # re-benchmark mid-pass.
+        torch.backends.cudnn.benchmark = True
 
         common = dict(
             output_dir=None,  # set per-call
             model_file_dir=str(settings.models_dir),
-            # fp16 autocast: known regression in Demucs's CUDA kernels on
-            # newer driver/torch combos where inference silently produces
-            # all-zeros output (correct shape, zero values). Disable to
-            # force fp32 — slower but produces correct results. Toggle
-            # back to True once Demucs / torch resolve the upstream issue.
+            # fp16 autocast: kept off. Re-enabling on BS-Roformer SW
+            # produced output that audio-separator logged as written but
+            # never landed on disk for the drum stem (sibling stems wrote
+            # fine), surfacing as the "reported … but it is not on disk"
+            # error downstream. fp32 is slower but correct.
             use_autocast=False,
         )
 
@@ -172,6 +182,7 @@ class Separator:
         log.info("Loading stems_all separator (%s) ...", settings.demucs_model)
         self._stems_all = AS(**common)
         self._stems_all.load_model(model_filename=settings.demucs_model)
+        _maybe_compile_model(self._stems_all)
         log.info(
             "stems_all ready in %.2fs (%s)",
             time.perf_counter() - t0,
@@ -182,6 +193,7 @@ class Separator:
         log.info("Loading stems_per separator (%s) ...", settings.drum_pieces_model)
         self._stems_per = AS(**common)
         self._stems_per.load_model(model_filename=settings.drum_pieces_model)
+        _maybe_compile_model(self._stems_per)
         log.info(
             "stems_per ready in %.2fs (%s)",
             time.perf_counter() - t1,
@@ -222,7 +234,8 @@ class Separator:
             # wrapper setter above is then the only lever.
             log.warning(
                 "audio-separator has no model_instance yet; relying on "
-                "wrapper output_dir alone for %s", out,
+                "wrapper output_dir alone for %s",
+                out,
             )
 
     def run_stems_all(self, audio_path: Path, work_dir: Path) -> StemsAllResult:
@@ -247,8 +260,7 @@ class Separator:
         drum_candidates = [p for p in stems_paths if "drum" in p.stem.lower()]
         if not drum_candidates:
             raise RuntimeError(
-                f"stems_all produced no drum stem. "
-                f"Got: {[p.name for p in stems_paths]}"
+                f"stems_all produced no drum stem. Got: {[p.name for p in stems_paths]}"
             )
         drum_stem = drum_candidates[0]
         if not drum_stem.exists():
@@ -323,12 +335,14 @@ class Separator:
             residual_path = out_dir / f"residual{drum_stem.suffix}"
             try:
                 _residual_audio(
-                    drum_stem, list(per_instrument.values()), residual_path,
+                    drum_stem,
+                    list(per_instrument.values()),
+                    residual_path,
                 )
             except Exception as exc:
                 log.warning(
-                    "Failed to build per-instrument residual track (%s); "
-                    "skipping.", exc,
+                    "Failed to build per-instrument residual track (%s); skipping.",
+                    exc,
                 )
                 residual_path = None
 
@@ -339,6 +353,104 @@ class Separator:
             if residual_path is not None:
                 sink.copy_audio("stems_per/residual", residual_path)
         return StemsPerResult(per_instrument=per_instrument, residual=residual_path)
+
+    def _load_vocals(self) -> None:
+        """Lazily load the vocals-only separator used by /lyrics/align.
+
+        Kept out of eager `load()` because the drum pipeline never touches
+        this model; only callers hitting /lyrics/align with `mode=mix` pay
+        the load cost, on first use. Idempotent.
+        """
+        if self._vocals is not None:
+            return
+        from audio_separator.separator import Separator as AS
+
+        common = dict(
+            output_dir=None,
+            model_file_dir=str(settings.models_dir),
+            use_autocast=False,
+        )
+        t0 = time.perf_counter()
+        log.info("Loading vocals separator (%s) ...", settings.vocals_model)
+        self._vocals = AS(**common)
+        self._vocals.load_model(model_filename=settings.vocals_model)
+        log.info(
+            "vocals separator ready in %.2fs (%s)",
+            time.perf_counter() - t0,
+            settings.vocals_model,
+        )
+
+    def run_vocals(self, audio_path: Path, work_dir: Path) -> Path | None:
+        """Extract a vocals stem from a full mix for whisperx alignment.
+
+        Uses the dedicated 2-stem `vocals_model` (not the drum pipeline's
+        6-stem BS-Roformer SW) so latency is dominated by what whisperx
+        actually needs. Returns the absolute path to the vocals output,
+        or None when the model ran but no vocals-named output landed
+        (would indicate a model swap that no longer emits a `(Vocals)`
+        filename token).
+        """
+        self._load_vocals()
+        assert self._vocals is not None
+
+        out_dir = work_dir / "vocals"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        self._point_at(self._vocals, out_dir)
+
+        log.info("vocals: extracting vocals stem from %s", audio_path.name)
+        t0 = time.perf_counter()
+        raw = self._vocals.separate(str(audio_path))
+        stems_paths = _resolve_outputs(raw, out_dir)
+        vocals_candidates = [p for p in stems_paths if "vocals" in p.stem.lower()]
+        if not vocals_candidates:
+            log.info(
+                "vocals: separation finished in %.2fs but no vocals stem in output (%s)",
+                time.perf_counter() - t0,
+                settings.vocals_model,
+            )
+            return None
+        vocals_stem = vocals_candidates[0]
+        if not vocals_stem.exists():
+            raise RuntimeError(
+                f"vocals: separator reported {vocals_stem} but it is not on "
+                f"disk (separate() returned {list(raw)!r})."
+            )
+        log.info(
+            "vocals: extracted in %.2fs (%s)",
+            time.perf_counter() - t0,
+            settings.vocals_model,
+        )
+        return vocals_stem
+
+
+def _maybe_compile_model(separator: object) -> None:
+    """Wrap the inner inference module in `torch.compile` when on CUDA.
+
+    Both stages call `model_instance.model_run(part)` in a tight loop with
+    a fixed input shape — exactly the pattern Inductor optimises best.
+    Guarded on CUDA because compile cost on CPU often outweighs the win,
+    and skipped silently on any compile failure so a torch/version mismatch
+    can't break the pipeline.
+    """
+    import torch
+
+    model_instance = getattr(separator, "model_instance", None)
+    if model_instance is None:
+        return
+    inner = getattr(model_instance, "model_run", None)
+    if inner is None:
+        return
+    try:
+        device = next(inner.parameters()).device
+    except StopIteration:
+        return
+    if device.type != "cuda":
+        return
+    log.info("Compiling %s.model_run with torch.compile", type(model_instance).__name__)
+    try:
+        model_instance.model_run = torch.compile(inner, dynamic=False)
+    except Exception as exc:
+        log.warning("torch.compile failed (%s); continuing in eager mode.", exc)
 
 
 def _resolve_outputs(raw_paths: list[str], out_dir: Path) -> list[Path]:
@@ -366,7 +478,9 @@ def _pitch_for_stem_name(stem_name: str) -> str | None:
 
 
 def _residual_audio(
-    drum_stem: Path, stems: list[Path], out_path: Path,
+    drum_stem: Path,
+    stems: list[Path],
+    out_path: Path,
 ) -> None:
     """Write `drum_stem − sum(stems)` to `out_path`.
 
@@ -386,8 +500,7 @@ def _residual_audio(
         data, stem_sr = sf.read(str(p), always_2d=True, dtype="float32")
         if stem_sr != sr:
             raise RuntimeError(
-                f"sample-rate mismatch building residual: {p} ({stem_sr}) "
-                f"vs drum_stem ({sr})"
+                f"sample-rate mismatch building residual: {p} ({stem_sr}) vs drum_stem ({sr})"
             )
         if data.shape[1] != drum.shape[1]:
             raise RuntimeError(

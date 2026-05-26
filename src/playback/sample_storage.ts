@@ -43,6 +43,13 @@ export class ProgressCacheStorage implements Storage {
     if (cache) {
       const hit = await cache.match(url);
       if (hit) {
+        // Signal "cache hit" BEFORE reading the body. `arrayBuffer()` on
+        // a ~30 MB Cache API entry isn't instant (disk read + copy into
+        // an ArrayBuffer can take hundreds of ms to seconds), and during
+        // that window the UI would otherwise still say "waiting for
+        // server…"; wrong on a cache hit and surprising to the user.
+        // The final tick below carries the real byte count.
+        this.onProgress({ loaded: 0, total: 0, fromCache: true });
         const buf = await hit.arrayBuffer();
         this.onProgress({ loaded: buf.byteLength, total: buf.byteLength, fromCache: true });
         return bufferResponse(buf, 200);

@@ -28,18 +28,21 @@
     /* Same width + sticky behaviour as .laneGutter / .musicTrackGutter so
      this header lines up with the per-row controls below it. Width is
      driven by `--gutter-width` (set on the JotView root, mutated by the
-     gutter resize handle) so every gutter resizes together. */
+     gutter resize handle) so every gutter resizes together. Stacked
+     vertically (label on top, slider + value + M/S on a second row) so
+     the controls breathe inside the default gutter width instead of
+     fighting the label for horizontal space. */
     composes: bodySm from '../typography.module.css';
-    position: sticky;
-    left: 0;
+    composes: scrollStickyHorizontal from '../jot_view.module.css';
     z-index: 6;
     flex: 0 0 auto;
     width: var(--gutter-width);
     box-sizing: border-box;
     display: flex;
-    align-items: center;
-    gap: 5px;
-    padding: 3px 6px;
+    flex-direction: column;
+    justify-content: center;
+    gap: 3px;
+    padding: 4px 6px;
     font-weight: 600;
     color: var(--color-text-faint);
     background: var(--color-bg-cream);
@@ -48,6 +51,16 @@
 
 .gutterMasterLabel {
     flex: 0 0 auto;
+}
+
+/* Second row inside the master gutter: slider grows, value + M + S sit
+   flush to the right. Same gap as the per-row gutters so the controls
+   read as part of the same column. */
+.gutterMasterControls {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 5px;
 }
 
 .gutterMasterSlider {
@@ -126,8 +139,7 @@
 }
 
 .pitchRowGutter {
-    position: sticky;
-    left: 0;
+    composes: scrollStickyHorizontal from '../jot_view.module.css';
     z-index: 6;
     flex: 0 0 auto;
     width: var(--gutter-width);
@@ -280,14 +292,14 @@
 }
 
 .musicTrackGutter {
-    /* Same width and sticky behaviour as the score's laneGutter, so the
-     stem labels stay pinned during horizontal scroll exactly like the
-     pitch labels do below. Top-level row layout puts the drag handle on
-     the left and a stacked label/buttons column on the right (the
-     `.musicTrackContent` child) — kept in row layout so the handle can
-     `align-self: stretch` to the row's full height for a tall hit area. */
-    position: sticky;
-    left: 0;
+    /* Same width and pinned-at-viewport-left behaviour as the score's
+     laneGutter, so the stem labels stay pinned during horizontal scroll
+     exactly like the pitch labels do below. Top-level row layout puts
+     the drag handle on the left and a stacked label/buttons column on
+     the right (the `.musicTrackContent` child); kept in row layout so
+     the handle can `align-self: stretch` to the row's full height for
+     a tall hit area. */
+    composes: scrollStickyHorizontal from '../jot_view.module.css';
     z-index: 6;
     flex: 0 0 auto;
     width: var(--gutter-width);
@@ -308,10 +320,24 @@
     justify-content: space-between;
 }
 
+/* Top row of the audio-track gutter: label on the left (takes the
+   remaining width), overflow-menu trigger on the right. The trigger
+   lives here rather than in the button cluster below so it stays
+   visually separate from the M/S/X group and sits above them. */
+.musicTrackHeader {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 6px;
+    min-width: 0;
+}
+
 .musicTrackLabel {
     display: flex;
     flex-direction: column;
     gap: 1px;
+    min-width: 0;
+    flex: 1 1 auto;
     transition: opacity 120ms ease;
     overflow: hidden;
 }
@@ -323,6 +349,20 @@
 .musicTrackName {
     composes: label from '../typography.module.css';
     color: var(--color-text-muted-alt);
+    /* Cap at two lines with an ellipsis; long stem names (e.g.
+       `SONG-VOCALS-C-MINOR-131BPM-440HZ`) would otherwise wrap onto
+       four or five rows and push the gutter way past its 56px target
+       height. The full name is exposed via a `title` tooltip on the
+       same span. `overflow-wrap: anywhere` lets the break happen inside
+       a long unbroken token so the ellipsis renders even when there
+       are no spaces to break at. */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .musicTrackFile {
@@ -340,35 +380,88 @@
     justify-content: flex-end;
 }
 
+/* Audio-track overflow-menu trigger. Sized to match the 18x18 icon
+   button cluster (Clear / Mute / Solo) it sits next to so the row
+   reads as one even-height control strip. */
+.overflowTrigger {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-base);
+    color: var(--color-text-faint-strong);
+    cursor: pointer;
+    font-family: inherit;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.overflowTrigger:hover {
+    border-color: var(--color-text-faint-strong);
+    color: var(--color-text-secondary-alt);
+}
+
+.overflowTrigger:focus {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
+/* The shared dropdown panel is left-anchored to its trigger. The mixer
+   row sits at the right edge of the gutter, so the default placement
+   would push the panel off the side; pull it back so its right edge
+   aligns with the trigger's right edge instead. */
+.overflowPanel {
+    left: auto;
+    right: 0;
+}
+
 .musicTrackBarsRow {
     position: relative;
     flex: 0 0 auto;
+    /* Soft GPU hint: a bars-row is many viewport widths wide on a long
+       song, so promoting it to its own compositor layer lets horizontal
+       scroll translate the layer instead of repainting the row's
+       content (waveform tiles + playhead) every frame. Avoids `contain:
+       paint` because that would clip the absolutely-positioned note
+       label popovers, which extend below the row's natural height. */
+    will-change: transform;
 }
 
-.musicTrackWaveform {
+/* One tile in the per-track waveform row. The full waveform is now a
+   row of these canvases (see `AudioTrackWaveformChunk` in
+   `mixer.tsx`), each owning a fixed jot-time slice
+   (`SECONDS_PER_CHUNK` in `waveform_chunks.ts`).
+
+   Live zoom is pure CSS: the chunk's `left` and `width` both read the
+   root `--px-per-beat` so a wheel tick mutates one property and every
+   chunk repositions and resizes at the browser layer; no React work
+   no canvas redraw.
+
+   The bitmap inside each canvas is rasterised at the chunk's own
+   `--rendered-px-per-beat` (set inline when it last drew). When the
+   live `--px-per-beat` diverges from that (mid-gesture), the chunk's
+   container width still tracks `--px-per-beat`, so the canvas's
+   intrinsic pixels stretch to fill; equivalent to the legacy
+   `scaleX` composite. On settle, only visible chunks redraw at the
+   new scale and their `--rendered-px-per-beat` updates so width and
+   bitmap snap back to crisp. Off-screen chunks keep their old scale
+   until they next enter the viewport.
+
+   `--note-pad-px` is the score's engraving inset (notes sit that many
+   pixels right of their bar's left edge). We add it to every chunk's
+   `left` so transients land directly under their notes. */
+.musicTrackWaveformChunk {
     display: block;
     position: absolute;
     top: 0;
-    /* `notePadPx` is the score's engraving inset — notes sit that many
-       pixels right of their bar's left edge. The bitmap deliberately
-       does NOT bake this offset in (see `computeWaveformPeaks`); we
-       apply it here so a transient still sits directly under its
-       note. Keeping it out of the bitmap is what makes the live
-       `scaleX` zoom and the settled redraw line up exactly — a
-       constant-pixel prefix would scale with `scaleX` (visually
-       shifting the waveform right by `pad × scale`) and then snap
-       back to a fixed `pad` shift on redraw. */
-    left: var(--note-pad-px);
-    /* Visual zoom is a pure GPU composite: the bitmap was drawn at
-       `--rendered-px-per-beat` (set inline when the canvas last
-       re-rasterised) and is scaled to the live root `--px-per-beat`
-       via `scaleX`. No canvas redraw, no React work, no layout — only
-       composite. A settle-debounced effect re-rasterises at the new
-       scale so the bitmap snaps back to crisp shortly after the
-       gesture ends. */
-    transform-origin: top left;
-    transform: scaleX(calc(var(--px-per-beat) / var(--rendered-px-per-beat)));
-    will-change: transform;
+    left: calc(var(--chunk-start-beat) * var(--px-per-beat) * 1px + var(--note-pad-px));
+    width: calc(var(--chunk-beats) * var(--px-per-beat) * 1px);
     /* `transition` keeps the dim/undim flip smooth when M/S toggles. */
     transition: filter 120ms ease;
 }
@@ -411,11 +504,11 @@
     display: flex;
     flex: 0 0 auto;
     /* The pitch gutter is taller than a single trackHeight lane (two-line
-       layout — label + slider/M/S), so the bars row stretches to match
+       layout; label + slider/M/S), so the bars row stretches to match
        the gutter's height via the parent flex's default
        `align-items: stretch`. Children (.bar, .leadIn) also stretch
-       (align-items: stretch here) so their right barlines — and the
-       playhead, which is top:0/bottom:0 of this row — extend all the
+       (align-items: stretch here) so their right barlines; and the
+       playhead, which is top:0/bottom:0 of this row; extend all the
        way to the row's bottom border. Lane content stays vertically
        centred inside .bar via its own flex column. */
     align-items: stretch;
@@ -423,16 +516,33 @@
        (set on the score container, the one variable that the zoom
        slider changes). Reading `--px-per-beat` purely from CSS means
        a zoom tick mutates a single property on the root and reflows
-       every descendant width/left at the browser layer — no React
+       every descendant width/left at the browser layer; no React
        re-render, no style-prop diff. */
     width: calc(var(--voice-beats) * var(--px-per-beat) * 1px);
+    /* Soft GPU hint; see `.musicTrackBarsRow` above. Lets horizontal
+       scroll composite the row instead of repainting thousands of
+       notes / brackets every frame on a long song. */
+    will-change: transform;
+    /* Lift pitch-row bars above the audio-track bars row (which is
+       also a stacking context via its own `will-change: transform`).
+       Without this, a note-label popover extending vertically into a
+       neighbouring audio row gets painted UNDER the waveform there:
+       the popover's z-index is trapped inside `.barsRow`'s stacking
+       context, and the two sibling stacking contexts compose at the
+       compositor level where Chrome doesn't reliably honour DOM tree
+       order. z-index: 1 (vs the audio bars row's auto) forces the
+       pitch row's bars to paint above any audio bars row. Safe across
+       interleaved orders: only the row carrying a popover needs to
+       win, and only popovers cross row boundaries. */
+    z-index: 1;
 }
 
 .leadInLabel {
     font-size: 10px;
+    font-weight: 600;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: var(--color-text-disabled-warm);
+    color: var(--color-lead-in-label);
     user-select: none;
     pointer-events: none;
 }

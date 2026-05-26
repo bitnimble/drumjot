@@ -5,8 +5,9 @@
 #
 #   POST /transcribe        \
 #   POST /transcribe/resume  } -> 127.0.0.1:8002   (pipeline worker)
-#                              eager-loads separation models, hosts the
-#                              long-running NDJSON streaming pipeline.
+#   POST /lyrics/align      /    eager-loads separation models, hosts the
+#                                long-running NDJSON streaming pipeline,
+#                                and lazy-loads whisperx for alignment.
 #
 #   everything else         -> 127.0.0.1:8003     (api worker)
 #                              no model load, ~0 VRAM. Serves /health,
@@ -37,7 +38,7 @@
 	# GET /transcribe/list still falls through to the api worker below.
 	@pipeline {
 		method POST
-		path /transcribe /transcribe/resume
+		path /transcribe /transcribe/resume /lyrics/align
 	}
 	reverse_proxy @pipeline 127.0.0.1:8002 {
 		# NDJSON: flush every write through to the frontend so stage

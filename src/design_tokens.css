@@ -115,6 +115,24 @@
     --color-teal: #2aa198;              /* score: special role indicator */
     --color-blue-info: #5a7d9a;         /* toolbar: informational accent */
 
+    /* ─── Grid lines ──────────────────────────────────────────────── */
+    /* Sub-beat practice grids drawn behind the notes when toggled from
+       the View menu. Tuned so the visual hierarchy reads main beat
+       (most prominent, dashed) > 16ths > 48ths (most subtle); triplets
+       use a distinct violet hue so they don't blur into the warm-gray
+       16th/48th lines when both are on. The triplet color is sized to
+       sit between 16ths and 48ths in visual weight. */
+    --color-grid-subbeat: #cfc3a6;      /* 16ths: warm gray, lighter than the main beat */
+    --color-grid-subbeat-48: #d7c9ab;   /* 48ths: faint warm gray, just below 16ths */
+    --color-grid-quarter-triplet: #8554b8; /* 6ths: deeper violet so it reads as the "parent" of 12ths */
+    --color-grid-triplet: #a374cf;      /* triplets: subtle violet, distinct hue */
+
+    /* "LEAD-IN" caption floating over the hatched lead-in stripe.
+       Subtle warm gray on the cream paper background so it doesn't
+       compete with the bars; the dark-theme override below brightens
+       it so contrast against the dark surface stays readable. */
+    --color-lead-in-label: #8a7e6b;
+
     /* ─── Radii ───────────────────────────────────────────────────── */
     --radius-xs: 2px;
     --radius-sm: 3px;
@@ -225,6 +243,18 @@
     /* ─── Misc one-off colors ─────────────────────────────────────── */
     --color-teal: #5dc4b8;
     --color-blue-info: #88a9c4;
+
+    /* ─── Grid lines ──────────────────────────────────────────────── */
+    /* Mirrors the light-theme intent: less contrast against the dark
+       bg = more subtle. 16ths read just dim enough to clearly defer
+       to the main-beat dashed line; 48ths sit close to the bg
+       luminance; triplets keep a violet hue that still reads on dark. */
+    --color-grid-subbeat: #574f41;      /* 16ths: dim warm gray */
+    --color-grid-subbeat-48: #4a4232;   /* 48ths: faint warm gray, just below 16ths */
+    --color-grid-quarter-triplet: #b393d8; /* 6ths: brighter violet so it reads as the "parent" of 12ths on the dark bg */
+    --color-grid-triplet: #9676b8;      /* triplets: muted violet, distinct hue */
+
+    --color-lead-in-label: #b5ac98;     /* bright enough to read against dark bg */
 
     /* ─── Shadows ─────────────────────────────────────────────────── */
     /* Dark surfaces need deeper alphas to read as elevation against the

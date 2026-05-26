@@ -1,0 +1,137 @@
+/* Shared dropdown primitives. Originally lived in toolbar.module.css;
+   extracted so the mixer's per-row overflow menu can reuse the same
+   look + behaviour without copying styles. */
+
+.dropdown {
+    position: relative;
+    display: inline-flex;
+}
+
+.dropdownPanel {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    min-width: 180px;
+    padding: 10px;
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+}
+
+.dropdownPanelWide {
+    min-width: 230px;
+}
+
+.dropdownItem {
+    composes: bodyMd from '../../typography.module.css';
+    font-family: inherit;
+    text-align: left;
+    padding: 7px 10px;
+    border: none;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--color-text);
+    cursor: pointer;
+}
+
+.dropdownItem:hover {
+    background: var(--color-bg-hover);
+}
+
+.dropdownItem:focus {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
+.dropdownItem:disabled {
+    color: var(--color-text-disabled);
+    background: transparent;
+    cursor: not-allowed;
+}
+
+.dropdownItemActive {
+    background: var(--color-bg-hover);
+    color: var(--color-accent);
+}
+
+.submenu {
+    position: relative;
+    display: flex;
+}
+
+.submenuTrigger {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+}
+
+.submenuArrow {
+    color: var(--color-text-muted-alt);
+}
+
+.submenuPanel {
+    position: absolute;
+    top: 0;
+    left: calc(100% + 6px);
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+    min-width: 200px;
+    padding: 10px;
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+}
+
+.dropdownDivider {
+    height: 1px;
+    background: var(--color-border-soft);
+    margin: 2px 0;
+}
+
+/* DropdownSection unconditionally emits a trailing divider so it composes
+   cleanly with whatever section comes next; on the LAST section the
+   divider has nothing to separate and would otherwise hang as a stray
+   line above the panel's bottom padding. Suppress it there. */
+.dropdownPanel > .dropdownDivider:last-child {
+    display: none;
+}
+
+/* Subtle uppercase heading that introduces a logical section of menu
+   items inside a DropdownButton panel. Inset to the same left padding
+   as the item rows so the heading aligns over the labels. */
+.dropdownSectionHeading {
+    composes: metaLabel from '../../typography.module.css';
+    color: var(--color-text-faint-strong);
+    padding: 4px 10px 2px;
+}
+
+/* Toggleable menu row: a fixed-width tick gutter on the left, the label
+   on the right. The row stays an inert checkbox-style control; the
+   parent panel deliberately doesn't close on click so the user can flip
+   several toggles in one trip through the menu. */
+.toggleMenuItem {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.toggleMenuTick {
+    composes: bodyEmphasis from '../../typography.module.css';
+    display: inline-block;
+    width: 12px;
+    color: var(--color-accent);
+    text-align: center;
+    line-height: 1;
+}

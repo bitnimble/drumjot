@@ -88,6 +88,16 @@ export type NoteProvenanceEntry = {
    */
   tick: number | null;
   detected_time_sec: number;
+  /** Absolute audio time after the backend `quantise` stage's
+   * joint-snap + LLM residual shift. `null` when that stage didn't run
+   * or didn't move this onset; in that case the rendered MIDI tick falls
+   * back to `detected_time_sec`. Mirrors
+   * `OnsetCandidate.quantised_time` in `transcriber/app/models.py`. */
+  quantised_time_sec?: number | null;
+  /** Total signed integer 1/48-slot shift the backend `quantise` stage
+   * applied to this onset (deterministic pass + LLM residual). `null`
+   * when no shift was applied. */
+  quantised_shift_slots?: number | null;
   strength: number;
   /** 0-indexed bar in the transcriber's BeatStructure (NOT the rendered
    * jot's bar index — see {@link NoteProvenanceFile.lead_bars}). */
@@ -96,6 +106,15 @@ export type NoteProvenanceEntry = {
   out_of_range: boolean;
   kept: boolean;
   rejected_by: string | null;
+  /** Filter-LLM reason code for the rejection: `bleed`,
+   * `double_trigger`, `noise`, or `custom`. `null` when the rejection
+   * didn't come from the filter LLM (upstream-vetted `h`/`H`/`c`/`d`
+   * lanes, out-of-range padding, or kept onsets) or the bundle predates
+   * the field (provenance `format` < 2). */
+  reason_code?: string | null;
+  /** Free-text detail accompanying `reason_code`. Always populated when
+   * `reason_code === 'custom'`; optional otherwise. */
+  reason_text?: string | null;
 };
 
 export type NoteProvenanceFile = {

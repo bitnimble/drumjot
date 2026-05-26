@@ -149,6 +149,8 @@ def split_cymbal_onsets(
     onsets_by_pitch: dict[str, list[OnsetCandidate]],
     per_instrument_stems: dict[str, Path],
     structure: BeatStructure,
+    *,
+    llm_model: str | None = None,
 ) -> tuple[dict[str, list[OnsetCandidate]], list[OnsetCandidate]]:
     """Return `(onsets_by_pitch_with_split, discarded_onsets)`.
 
@@ -178,7 +180,7 @@ def split_cymbal_onsets(
 
     feats = _measure(stem_path, in_range)
 
-    llm_result = _classify_llm(in_range, feats, structure, onsets_by_pitch)
+    llm_result = _classify_llm(in_range, feats, structure, onsets_by_pitch, llm_model=llm_model)
     if llm_result is None:
         crash_idx, discard_idx = _classify_fallback(in_range, feats)
         source = "fallback"
@@ -317,6 +319,8 @@ def _classify_llm(
     feats: list[_Feat],
     structure: BeatStructure,
     onsets_by_pitch: dict[str, list[OnsetCandidate]],
+    *,
+    llm_model: str | None = None,
 ) -> tuple[set[int], set[int]] | None:
     """Ask the LLM to classify each onset crash / ride / discard.
 
@@ -345,11 +349,12 @@ def _classify_llm(
     )
 
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    model = llm_model or settings.llm_model
     try:
         response = call_messages_with_refusal_retry(
             client,
             {
-                "model": settings.llm_model,
+                "model": model,
                 "max_tokens": settings.llm_max_tokens,
                 "messages": [{"role": "user", "content": prompt}],
                 "tools": [_SPLIT_TOOL],
