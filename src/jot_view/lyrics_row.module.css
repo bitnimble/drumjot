@@ -97,6 +97,26 @@
     flex: 0 0 auto;
     width: calc(var(--voice-beats) * var(--px-per-beat) * 1px);
     will-change: transform;
+    /* Tighten glyph tracking as zoom drops so lyric text packs into the
+       narrower per-beat budget. Ramps from 0 at px-per-beat ≥ 80 to
+       -0.6px around px-per-beat ≈ 20. Inherits down to both `.lyricLine`
+       (LRC mode) and `.lyricWordText` (word-aligned mode). */
+    letter-spacing: clamp(
+        -0.6px,
+        calc((var(--px-per-beat) - 80) / 100 * 1px),
+        0px
+    );
+    /* Pair the tracking ramp with Bricolage Grotesque's variable axes:
+       at px-per-beat ≥ 80 use the normal 100-width / 400-weight, ramping
+       linearly down to 75-width / 300-weight around px-per-beat ≈ 20.
+       Exposed as CSS vars so `.lyricWordActive .lyricWordText` can
+       override just the wght axis below; `font-variation-settings`
+       inherits its computed value (vars already substituted), so the
+       active rule has to re-declare the whole property for its
+       `--lyric-wght` override to take effect. */
+    --lyric-wdth: clamp(75, calc(75 + (var(--px-per-beat) - 20) * 25 / 60), 100);
+    --lyric-wght: clamp(300, calc(300 + (var(--px-per-beat) - 20) * 100 / 60), 400);
+    font-variation-settings: 'wdth' var(--lyric-wdth), 'wght' var(--lyric-wght);
 }
 
 /* One lyric line, absolutely positioned at its beat offset. Reads the
@@ -152,13 +172,6 @@
     border-left-color: var(--color-accent-strong);
 }
 
-/* Empty-text stamps (LRC instrumental gaps). Render as a small placeholder
-   so the marker is still visible without the full label width. */
-.lyricLineGap {
-    color: var(--color-text-disabled);
-    font-style: italic;
-}
-
 /* Word-level cell inside a word-aligned line. Each word occupies a
    fixed-width box anchored to its forced-alignment timing: the left
    edge sits at the word's start beat, the right edge at its end beat.
@@ -189,30 +202,42 @@
         0px,
         calc(var(--lyric-word-beat-width) * var(--px-per-beat) * 1px - var(--lyric-word-shift, 0px))
     );
+    /* At low zoom the beat-derived width can fall below the text's
+       natural width and the active-state background no longer bounds
+       the glyphs. Growing the cell to at least the text's intrinsic
+       width keeps the highlight wrapping the word. The trailing rule
+       (`::after`, `flex: 1 1 0; min-width: 0`) collapses to invisible
+       when there is no slack, so high-zoom behavior is unchanged. */
+    min-width: max-content;
     display: flex;
     align-items: center;
     white-space: nowrap;
-    /* Higher than .lyricWordActive (which clears z-index) so the active
-       chip's padded background sits behind adjacent words' glyphs
-       (preventing the active rectangle from visually swallowing close
-       neighbors like a Japanese sokuon). */
+    color: var(--color-text-strong);
+    border-radius: var(--radius-xs);
+    transition:
+        background-color 80ms ease,
+        color 80ms ease;
+    /* Higher than .lyricWordActive (which clears z-index) so adjacent
+       inactive words' glyphs paint over an overflowing active chip
+       rather than the other way around (preventing the active chip
+       from visually swallowing close neighbors like a Japanese sokuon). */
     z-index: 1;
 }
 
 /* Text glyphs of the word. Natural-width flex child so the
-   `::after` rule can claim the leftover space. `padding-right` is the
+   `::after` rule can claim the leftover space. The vertical padding
+   sizes the active chip's box; horizontal padding matches between
+   states so the text's left edge is stable across the active toggle
+   (no x-shift when a word lights up). `padding-right` is the
    threshold for the trailing rule: the `::after`'s `min-width: 0`
    collapses it to invisible whenever the cell width is consumed by
    text + this padding, so quick syllables get no rule and sustained
    words get one once there's >12px of slack. */
 .lyricWordText {
     flex: 0 0 auto;
-    color: var(--color-text-strong);
-    border-radius: var(--radius-xs);
-    padding: 0 12px 0 2px;
-    transition:
-        background-color 80ms ease,
-        color 80ms ease;
+    color: inherit;
+    padding: 6px 12px 6px 2px;
+    transition: color 80ms ease;
 }
 
 /* Trailing rule that fills the cell's slack space. `flex: 1 1 0` plus
@@ -233,22 +258,26 @@
     margin-right: 4px;
 }
 
-/* Active-word state. Padding + accent background sit on the inner
-   text span (not the wrapper) so the trailing rule doesn't get
-   absorbed into a giant pill, and so the wrapper's flex width stays
-   fixed when the active state toggles. The wrapper drops below
-   neighbors in z-order so the active chip's background can extend
-   beyond its cell (via `overflow: visible` on the line container)
-   without painting over adjacent words. */
-.lyricWordActive .lyricWordText {
-    color: var(--color-accent);
+/* Active-word state. The background + accent color sit on the outer
+   wrapper so the trailing dash is enclosed by the chip (the rule
+   visually extends the active highlight across the word's sustain).
+   `color` cascades to both `.lyricWordText` and the `::after`'s
+   `currentColor`, so text and dash light up together. The wrapper
+   drops below neighbors in z-order so adjacent words' glyphs paint
+   over an overflowing active chip rather than the other way around. */
+.lyricWordActive {
     background: var(--color-bg-base);
-    padding: 6px 12px 6px 6px;
-    font-weight: 600;
+    color: var(--color-accent);
+    z-index: 0;
 }
 
-.lyricWordActive {
-    z-index: 0;
+.lyricWordActive .lyricWordText {
+    /* Override just the wght axis; re-declare font-variation-settings
+       so the cascade picks up this rule's --lyric-wght. Reads the same
+       --lyric-wdth that the row sets so the active word stays in step
+       with the zoom-driven width ramp. */
+    --lyric-wght: 600;
+    font-variation-settings: 'wdth' var(--lyric-wdth), 'wght' var(--lyric-wght);
 }
 
 /* Group/drag/drop affordances; same visual language as mixer.module.css

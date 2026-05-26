@@ -25,6 +25,7 @@ import {
   VoiceControls,
 } from './jot_view/mixer';
 import { Minimap } from './jot_view/minimap';
+import { VerticalScrollbar } from './jot_view/vertical_scrollbar';
 import { PlaybackBar } from './jot_view/playback';
 import { Legend, TimelineHeader, extractArtist, formatDisplayTitle, formatSubtitle } from './jot_view/score';
 import { GridLineSettings, JotViewStore, TrackKey } from './jot_view/store';
@@ -74,6 +75,35 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   };
   const onMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     selection.moveSelection(containerPoint(e));
+  };
+
+  /**
+   * Zoom-slider handler. Mirrors the cursor-anchored math the wheel
+   * zoom uses (see the `flush` closure in JotView), but anchors at the
+   * viewport's horizontal centre so dragging the slider keeps the
+   * musical content under the centre of the score pinned. The wheel
+   * path still anchors at the cursor; this is only for the slider /
+   * any other absolute-zoom caller that lacks a pointer origin.
+   */
+  const setZoomCentered = (z: number) => {
+    const scroller = document.querySelector<HTMLElement>('[data-jot-scroller]');
+    const barsRow = scroller?.querySelector<HTMLElement>('[data-bars-row]');
+    const j = store.currentJot;
+    if (!scroller || !barsRow || !j) {
+      store.setZoom(z);
+      return;
+    }
+    const pxPerBeatBefore = j.pxPerBeat;
+    const padLeft = j.config.barNotePaddingBeats * pxPerBeatBefore;
+    const scrollerRect = scroller.getBoundingClientRect();
+    const barsRowRect = barsRow.getBoundingClientRect();
+    const anchorBarsRowX =
+      scrollerRect.left + scrollerRect.width / 2 - barsRowRect.left;
+    store.setZoom(z);
+    if (pxPerBeatBefore <= 0) return;
+    const factor = j.pxPerBeat / pxPerBeatBefore;
+    if (factor === 1) return;
+    store.setScrollBy((anchorBarsRowX - padLeft) * (factor - 1), 0);
   };
 
   const View: React.FC = observer(() => {
@@ -195,7 +225,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
           onSetBeatInput={(b) => store.setBeatInput(b)}
           onSetLlmModel={(m) => store.setLlmModel(m)}
           zoom={store.zoom}
-          onSetZoom={(z) => store.setZoom(z)}
+          onSetZoom={setZoomCentered}
           hasNoteProvenance={store.noteProvenance !== undefined}
           showFilteredOnsets={store.showFilteredOnsets}
           onSetShowFilteredOnsets={(v) => store.setShowFilteredOnsets(v)}
@@ -431,6 +461,7 @@ const JotView = observer((props: JotViewProps) => {
     const el = containerRef.current;
     if (!el) return;
     let pendingDelta = 0;
+    let pendingScrollX = 0;
     // Latest pointer x (viewport coords) captured from wheel events;
     // used as the zoom anchor. Coalesced wheel events take the most
     // recent position as a natural follow-the-cursor behaviour. When no
@@ -441,9 +472,12 @@ const JotView = observer((props: JotViewProps) => {
     const flush = () => {
       rafId = 0;
       const delta = pendingDelta;
+      const scrollDx = pendingScrollX;
       const clientX = pendingClientX;
       pendingDelta = 0;
+      pendingScrollX = 0;
       pendingClientX = undefined;
+      if (scrollDx !== 0) store.setScrollBy(scrollDx, 0);
       if (delta === 0) return;
       const factor = Math.exp(-delta * 0.0015);
 
@@ -499,8 +533,24 @@ const JotView = observer((props: JotViewProps) => {
       // it up so a single notch zooms a comparable amount to a
       // pixel-mode trackpad swipe. Scrolling up (deltaY < 0) zooms in.
       const unit = e.deltaMode === 1 ? 16 : 1;
-      pendingDelta += e.deltaY * unit;
-      pendingClientX = e.clientX;
+      // On touchpads (deltaMode 0) a horizontal two-finger swipe often
+      // carries 1-3 px of incidental deltaY per event, which would
+      // otherwise accumulate into a visible zoom drift. Dead-zone tiny
+      // deltaY on pixel-mode events only; mouse wheels (deltaMode 1)
+      // deliver large discrete steps and bypass this.
+      const effectiveDeltaY =
+        e.deltaMode === 0 && Math.abs(e.deltaY) < 4 ? 0 : e.deltaY;
+      // Horizontal-dominant events (two-finger horizontal swipe on a
+      // touchpad, shift + wheel on a mouse) pan the timeline instead of
+      // zooming. Pinch (delivered as ctrlKey + deltaY by Chrome/Safari)
+      // always falls through to zoom regardless of deltaX, so a
+      // diagonal pinch still scales.
+      if (!e.ctrlKey && !e.metaKey && Math.abs(e.deltaX) > Math.abs(effectiveDeltaY)) {
+        pendingScrollX += e.deltaX * unit;
+      } else {
+        pendingDelta += effectiveDeltaY * unit;
+        pendingClientX = e.clientX;
+      }
       if (rafId === 0) rafId = requestAnimationFrame(flush);
     };
     el.addEventListener('wheel', onWheel, { passive: false });
@@ -693,6 +743,11 @@ const JotView = observer((props: JotViewProps) => {
           />
           <MarqueeOverlay />
         </div>
+        <VerticalScrollbar
+          store={store}
+          containerRef={containerRef}
+          viewportRef={viewportRef}
+        />
       </div>
     </BarTimingsContext.Provider>
     </RenderedJotContext.Provider>

@@ -6,6 +6,7 @@ import {
   LYRICS_OFFSET_MAX_SEC,
   LYRICS_OFFSET_MIN_SEC,
   LYRICS_OFFSET_STEP_SEC,
+  LyricWord,
   audioSecToBeat,
   lyricsStore,
 } from 'src/lyrics';
@@ -19,6 +20,61 @@ import { seekFromClick } from './score';
 
 /** Same fixed height as the audio-track row so adjacent rows align flush. */
 const LYRICS_ROW_HEIGHT = 56;
+
+/** Treat sub-millisecond gaps between rendered and raw model times as
+ *  noise (floating-point round-trip through JSON, tiny rounding inside
+ *  the aligner). Keeps the tooltip from screaming "Δ +0ms" on words
+ *  where the model and our render agree. */
+const TIMING_NOISE_FLOOR_SEC = 1e-4;
+
+/** Build the per-word hover tooltip showing the model's raw output
+ *  alongside the rendered cell timings. Surfaces:
+ *
+ *    - The line of text (in quotes; some words are punctuation-heavy
+ *      and the quotes help disambiguate edge whitespace).
+ *    - Rendered start/end and duration as a sanity baseline.
+ *    - The model's raw start/end when present, plus the per-edge delta
+ *      vs the rendered value (so the user can see whether drift came
+ *      from the model itself or from our fallback chain).
+ *    - The fallback marker (`endFallback`) when the rendered `endSec`
+ *      came from substitution rather than from wav2vec2. Distinct from
+ *      "model says X but we render Y" - this is "the model said
+ *      nothing usable, and we filled in via rule Z".
+ *
+ *  Returns a `\n`-joined string. The browser's native `title` tooltip
+ *  preserves newlines in modern engines; we accept the styling
+ *  limitations of that surface in exchange for zero extra DOM. */
+function buildWordDebugTitle(w: LyricWord): string {
+  const fmtSec = (s: number) => `${s.toFixed(3)}s`;
+  const fmtMs = (sec: number) => {
+    const ms = Math.round(sec * 1000);
+    const sign = ms > 0 ? '+' : '';
+    return `${sign}${ms}ms`;
+  };
+  const lines: string[] = [];
+  lines.push(`"${w.text}"`);
+  lines.push(
+    `rendered: ${fmtSec(w.startSec)} – ${fmtSec(w.endSec)}  (${fmtSec(w.endSec - w.startSec)})`,
+  );
+  if (w.rawStartSec !== undefined) {
+    const d = w.startSec - w.rawStartSec;
+    const note = Math.abs(d) > TIMING_NOISE_FLOOR_SEC ? `  Δ ${fmtMs(d)}` : '';
+    lines.push(`model start: ${fmtSec(w.rawStartSec)}${note}`);
+  } else {
+    lines.push('model start: (substituted from segment)');
+  }
+  if (w.rawEndSec !== undefined) {
+    const d = w.endSec - w.rawEndSec;
+    const note = Math.abs(d) > TIMING_NOISE_FLOOR_SEC ? `  Δ ${fmtMs(d)}` : '';
+    lines.push(`model end:   ${fmtSec(w.rawEndSec)}${note}`);
+  } else {
+    lines.push('model end:   (substituted)');
+  }
+  if (w.endFallback !== undefined) {
+    lines.push(`end fallback: ${w.endFallback}`);
+  }
+  return lines.join('\n');
+}
 
 /** Common drag/drop props passed to every mixer row. Subset of MixerRowDragProps
  *  from mixer.tsx; we re-declare here to avoid a circular import.
@@ -152,6 +208,10 @@ export const LyricsRow = observer(
        *  beat-width` var; combined with `--lyric-word-shift` the cell's
        *  right edge stays anchored to the word's `endSec`. */
       beatWidth: number;
+      /** Original word entry from the lyrics store, kept by reference
+       *  so the JSX can build the debug tooltip (model raw times,
+       *  fallback marker) without re-indexing into `line.words`. */
+      source: LyricWord;
     };
     type Positioned = {
       i: number;
@@ -174,6 +234,12 @@ export const LyricsRow = observer(
     const positioned: Positioned[] = [];
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
+      // Blank lines (LRC instrumental gap stamps with no text or words)
+      // produce no visible chip - rendering an empty span just leaves a
+      // bare start-beat tick floating above the audio waveform.
+      if (line.text.trim() === '' && (!line.words || line.words.length === 0)) {
+        continue;
+      }
       const lineSec = line.startSec + offsetSec;
 
       let startBeat: number | undefined;
@@ -191,7 +257,7 @@ export const LyricsRow = observer(
         // source array) when edge words are dropped.
         const inRange: {
           sourceIdx: number;
-          text: string;
+          source: LyricWord;
           startBeat: number;
           endBeat: number;
         }[] = [];
@@ -212,16 +278,17 @@ export const LyricsRow = observer(
           );
           const we =
             weRaw !== undefined && weRaw > ws ? weRaw : ws + MIN_BEAT_WIDTH;
-          inRange.push({ sourceIdx: wi, text: w.text, startBeat: ws, endBeat: we });
+          inRange.push({ sourceIdx: wi, source: w, startBeat: ws, endBeat: we });
         }
         if (inRange.length > 0) {
           startBeat = inRange[0].startBeat;
           endBeat = inRange[inRange.length - 1].endBeat;
           wordPositions = inRange.map((w) => ({
             sourceIdx: w.sourceIdx,
-            text: w.text,
+            text: w.source.text,
             beatOffset: w.startBeat - startBeat!,
             beatWidth: w.endBeat - w.startBeat,
+            source: w.source,
           }));
         }
       } else {
@@ -420,7 +487,6 @@ export const LyricsRow = observer(
                   styles.lyricLine,
                   wordAligned && styles.lyricLineWordAligned,
                   isActive && styles.lyricLineActive,
-                  p.text.length === 0 && styles.lyricLineGap,
                 )}
                 style={
                   {
@@ -432,32 +498,31 @@ export const LyricsRow = observer(
                 data-testid={`lyrics-line-${p.i}`}
                 data-lyric-word-line={wordAligned ? '1' : undefined}
               >
-                {wordAligned ? (
-                  p.wordPositions!.map((w) => (
-                    <span
-                      key={w.sourceIdx}
-                      className={classNames(
-                        styles.lyricWord,
-                        isActive && w.sourceIdx === activeWordIdx && styles.lyricWordActive,
-                      )}
-                      style={
-                        {
-                          ['--lyric-word-beat-offset' as string]: w.beatOffset,
-                          ['--lyric-word-beat-width' as string]: w.beatWidth,
-                        } as React.CSSProperties
-                      }
-                      data-testid={`lyrics-word-${p.i}-${w.sourceIdx}`}
-                      data-lyric-word="1"
-                      data-beat-offset={w.beatOffset}
-                    >
-                      <span className={styles.lyricWordText} data-lyric-word-text="1">
-                        {w.text}
+                {wordAligned
+                  ? p.wordPositions!.map((w) => (
+                      <span
+                        key={w.sourceIdx}
+                        className={classNames(
+                          styles.lyricWord,
+                          isActive && w.sourceIdx === activeWordIdx && styles.lyricWordActive,
+                        )}
+                        style={
+                          {
+                            ['--lyric-word-beat-offset' as string]: w.beatOffset,
+                            ['--lyric-word-beat-width' as string]: w.beatWidth,
+                          } as React.CSSProperties
+                        }
+                        title={buildWordDebugTitle(w.source)}
+                        data-testid={`lyrics-word-${p.i}-${w.sourceIdx}`}
+                        data-lyric-word="1"
+                        data-beat-offset={w.beatOffset}
+                      >
+                        <span className={styles.lyricWordText} data-lyric-word-text="1">
+                          {w.text}
+                        </span>
                       </span>
-                    </span>
-                  ))
-                ) : (
-                  p.text || '♪'
-                )}
+                    ))
+                  : p.text}
               </span>
             );
           })}

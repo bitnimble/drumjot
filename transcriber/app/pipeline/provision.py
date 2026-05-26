@@ -212,11 +212,18 @@ def _ensure_registry(models_dir: Path) -> None:
 # `settings.vocals_model` matches the default filename; if an operator
 # overrides it via env, the lazy audio-separator path handles the new
 # choice. Stable TRvlvr release URL.
-_VOCALS_DEFAULT_FILENAME = "UVR-MDX-NET-Voc_FT.onnx"
+_VOCALS_FP32_FILENAME = "UVR-MDX-NET-Voc_FT.onnx"
 _VOCALS_DEFAULT_URL = (
     "https://github.com/TRvlvr/model_repo/releases/download/"
     "all_public_uvr_models/UVR-MDX-NET-Voc_FT.onnx"
 )
+# Derived fp16 sibling produced at container startup by graph-level
+# conversion of the fp32 source above. The runtime default
+# (`settings.vocals_model`) points here so onnxruntime loads the
+# already-converted model directly; we keep the fp32 file around
+# alongside as a fallback / A-B reference, not as a runtime path. See
+# `_ensure_vocals_fp16` for the conversion details.
+_VOCALS_FP16_FILENAME = "UVR-MDX-NET-Voc_FT_fp16.onnx"
 
 # whisperx's English aligner is torchaudio's WAV2VEC2_ASR_BASE_960H
 # bundle, which torch.hub fetches into `$TORCH_HOME/hub/checkpoints/`.
@@ -228,6 +235,72 @@ _WAV2VEC2_EN_URL = (
     "wav2vec2_fairseq_base_ls960_asr_ls960.pth"
 )
 _WAV2VEC2_EN_FILENAME = "wav2vec2_fairseq_base_ls960_asr_ls960.pth"
+
+
+def _ensure_vocals_fp16(fp32_path: Path, fp16_path: Path) -> None:
+    """Derive an fp16-internal ONNX sibling of the fp32 vocals model.
+
+    Idempotent: skips when `fp16_path` already exists at non-zero size,
+    so re-running provision on warm containers is free. Fails-soft: on
+    any conversion error, warns and leaves the runtime to fall back to
+    the fp32 model (audio-separator will try to load whatever filename
+    `settings.vocals_model` points at; the operator can manually flip
+    that to the fp32 filename if the fp16 path keeps failing).
+
+    `keep_io_types=True` retains fp32 graph inputs and outputs so
+    upstream (audio-separator's STFT path) and downstream (ISTFT,
+    spec_utils) code can keep handing us fp32 tensors without an
+    explicit cast at the call boundary. Internal weights and most
+    activations move to fp16, which is where the throughput win on
+    TensorCore-equipped GPUs actually comes from. Risk surface for
+    MDX-Net specifically: STFT magnitude / phase reconstruction can be
+    sensitive to fp16 underflow on quiet sections, producing muffled or
+    NaN-tainted vocals; if a song reproducibly comes out garbled, set
+    `VOCALS_MODEL=UVR-MDX-NET-Voc_FT.onnx` to switch back to fp32.
+    """
+    if fp16_path.exists() and fp16_path.stat().st_size > 0:
+        log.info(
+            "provision: %s already present, skipping fp16 conversion",
+            fp16_path.name,
+        )
+        return
+    try:
+        # Lazy imports: onnxconverter_common pulls onnx graph machinery
+        # we don't need on workers that never hit /lyrics/align.
+        import onnx  # type: ignore[import-not-found]
+        from onnxconverter_common.float16 import (  # type: ignore[import-not-found]
+            convert_float_to_float16,
+        )
+    except Exception as exc:
+        log.warning(
+            "provision: onnxconverter_common unavailable (%s); leaving "
+            "fp32 vocals model in place. Set VOCALS_MODEL to %s to use it.",
+            exc, _VOCALS_FP32_FILENAME,
+        )
+        return
+
+    log.info(
+        "provision: converting %s -> %s (graph-level fp16, keep_io_types=True)",
+        fp32_path.name, fp16_path.name,
+    )
+    tmp = fp16_path.with_name(fp16_path.name + ".part")
+    try:
+        model = onnx.load(str(fp32_path))
+        model_fp16 = convert_float_to_float16(model, keep_io_types=True)
+        onnx.save(model_fp16, str(tmp))
+        tmp.replace(fp16_path)
+    except Exception as exc:
+        tmp.unlink(missing_ok=True)
+        log.warning(
+            "provision: fp16 conversion failed (%s); leaving fp32 vocals "
+            "model in place. Set VOCALS_MODEL to %s to use it.",
+            exc, _VOCALS_FP32_FILENAME,
+        )
+        return
+    log.info(
+        "provision: wrote %s (%d bytes)",
+        fp16_path.name, fp16_path.stat().st_size,
+    )
 
 
 def _provision_lyrics_assets(models_dir: Path) -> None:
@@ -252,20 +325,33 @@ def _provision_lyrics_assets(models_dir: Path) -> None:
          -> HF repo mapping and the HuggingFace cache layout match
          exactly what whisperx expects at load time.
     """
-    if settings.vocals_model == _VOCALS_DEFAULT_FILENAME:
+    # Pre-stage the fp32 source whenever the configured vocals model is
+    # one of OUR variants of UVR-MDX-NET-Voc_FT (either the fp32 file
+    # itself or our derived fp16 sibling); arbitrary overrides defer to
+    # audio-separator's lazy download path on first use. The fp16
+    # derivation is skipped (not just the conversion - we can't do it
+    # without the source) when the fp32 download fails; the other
+    # lyrics assets below still get pre-fetched on their own try blocks.
+    configured = settings.vocals_model
+    if configured in {_VOCALS_FP32_FILENAME, _VOCALS_FP16_FILENAME}:
+        fp32_path = models_dir / _VOCALS_FP32_FILENAME
+        fp32_ok = False
         try:
-            _download(_VOCALS_DEFAULT_URL, models_dir / settings.vocals_model)
+            _download(_VOCALS_DEFAULT_URL, fp32_path)
+            fp32_ok = True
         except Exception as exc:
             log.warning(
                 "provision: vocals model pre-fetch failed (%s); "
                 "audio-separator will retry on first /lyrics/align call.",
                 exc,
             )
+        if fp32_ok and configured == _VOCALS_FP16_FILENAME:
+            _ensure_vocals_fp16(fp32_path, models_dir / _VOCALS_FP16_FILENAME)
     else:
         log.info(
-            "provision: vocals_model=%s differs from default; skipping "
+            "provision: vocals_model=%s differs from defaults; skipping "
             "pre-fetch (audio-separator will resolve on first use).",
-            settings.vocals_model,
+            configured,
         )
 
     try:

@@ -93,6 +93,25 @@ RUN python3.11 -m pip install --no-cache-dir \
         --extra-index-url https://download.pytorch.org/whl/cu128 \
         -e .
 
+# `faster-whisper` (transitive dep of `whisperx`, which we use for the
+# /lyrics/align language-detect fallback) declares plain `onnxruntime`
+# as a hard install_requires for its Silero VAD; that lands alongside
+# the `onnxruntime-gpu` brought in by `audio-separator[gpu]`. Both
+# wheels install into the same `onnxruntime/` package directory and
+# share `onnxruntime_pybind11_state.so`; whichever was installed last
+# wins, and in our resolution order the CPU build ends up shadowing
+# the GPU one. `get_available_providers()` then returns just CPU +
+# Azure and the vocal separator silently runs on CPU at 100% util
+# with multi-GB RSS growth. There is no env var or import-time
+# mechanism to force the GPU build (microsoft/onnxruntime#7313,
+# qdrant/fastembed#608). Uninstall both wheels (they share files -
+# removing only one corrupts the directory) and reinstall just the
+# GPU wheel, which exposes the same `onnxruntime` import name and
+# provides BOTH CUDA and CPU ExecutionProviders, so consumers that
+# only know the plain name (faster-whisper's VAD path) still work.
+RUN python3.11 -m pip uninstall -y onnxruntime onnxruntime-gpu \
+    && python3.11 -m pip install --no-cache-dir onnxruntime-gpu
+
 # ADTOF pretrained weights are NOT provisioned separately: the
 # adtof_pytorch wheel bundles its Frame_RNN weights, so they come in
 # with the editable install above. `_load_model()` still fails loud

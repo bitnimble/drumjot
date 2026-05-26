@@ -13,6 +13,7 @@ import { RenderedJot, ViewConfig, px } from 'src/jot';
 import {
   AlignLyricsRequest,
   LyricLine,
+  LyricsSource,
   alignLyricsWhisper,
   lyricsStore,
   nameLooksLikeVocals,
@@ -2171,7 +2172,10 @@ export class JotViewStore {
         },
       },
       label,
-      { keepLrclibSource: match },
+      {
+        source: 'lrclib',
+        sourceLabel: `LRCLIB · ${match.trackName} - ${match.artistName}`,
+      },
     );
   }
 
@@ -2210,8 +2214,16 @@ export class JotViewStore {
 
   /**
    * Push pasted / typed plain-text lyrics into the session lyrics store.
-   * The text has no timestamps, so every line lands at `startSec: 0`; * the natural follow-up is "Re-time loaded lyrics from vocals…" which
-   * runs forced alignment against an audio track.
+   *
+   * Plain text has no timestamps, so we synthesise them by spreading
+   * the lines evenly across the song's known duration (longest loaded
+   * audio track > rendered jot's timeline > 60 s fallback). The spread
+   * serves two ends: lines are immediately visible across the row
+   * (otherwise they'd all stack at beat 0 and collapse to an invisible
+   * point), and `opts.wordLevel`'s re-time path gets non-degenerate
+   * starting estimates for wav2vec2 (whose search window for each line
+   * is `[startSec, nextLine.startSec]` - all-zero starts collapse every
+   * segment to the same audio window).
    *
    * Strips section markers like `[Chorus]` / `[Verse 1]` (any line whose
    * trimmed content is wrapped in a single pair of brackets) because
@@ -2221,23 +2233,94 @@ export class JotViewStore {
    * interlude markers like `♪ ♪ ♪` drop out. Returns the number of
    * lines actually loaded so the caller can surface a "nothing usable
    * in this paste" error.
+   *
+   * When `opts.wordLevel` is true and an audio track is loaded, fires
+   * the same background whisperx forced-alignment used by the LRCLIB
+   * word-level path: the spread lines land immediately, then word-
+   * timed versions replace them on success.
    */
-  applyPlainTextLyrics(text: string): number {
-    const lines: LyricLine[] = [];
+  applyPlainTextLyrics(
+    text: string,
+    opts: { wordLevel?: boolean } = {},
+  ): number {
+    const cleaned: string[] = [];
     for (const raw of text.split(/\r?\n/)) {
       const trimmed = raw.trim();
       if (trimmed.length === 0) continue;
       if (/^\[[^\]]*\]$/.test(trimmed)) continue;
-      const cleaned = stripLyricNoise(trimmed);
-      if (cleaned.length === 0) continue;
-      lines.push({ startSec: 0, text: cleaned });
+      const stripped = stripLyricNoise(trimmed);
+      if (stripped.length === 0) continue;
+      cleaned.push(stripped);
     }
-    if (lines.length === 0) return 0;
+    if (cleaned.length === 0) return 0;
+    const spreadSec = this.computeLyricsSpreadSec();
+    // Linear `i / N` spread (not `i / (N-1)`) leaves the final 1/N of
+    // the song as buffer past the last line, which is closer to how
+    // real lyrics sit relative to a recording's tail (intro & outro
+    // are often instrumental). First line lands at 0.
+    const lines: LyricLine[] = cleaned.map((t, i) => ({
+      startSec: (spreadSec * i) / cleaned.length,
+      text: t,
+    }));
     lyricsStore.load(lines, {
       source: 'plaintext',
       sourceLabel: 'Plain text',
     });
+    if (opts.wordLevel) {
+      void this.runWordLevelAlignmentForPlainText(lines);
+    }
     return lines.length;
+  }
+
+  /** Best-effort duration in seconds across which to spread untimed
+   *  lyric lines. Prefers loaded audio (matches the realign domain),
+   *  then the rendered jot's timeline, then a small default. */
+  private computeLyricsSpreadSec(): number {
+    let longestAudio = 0;
+    for (const t of jotPlayer.audioTracks.values()) {
+      if (t.durationSec > longestAudio) longestAudio = t.durationSec;
+    }
+    if (longestAudio > 0) return longestAudio;
+    if (this.currentJot) {
+      const tl = buildTimeline(this.currentJot);
+      if (tl.totalDurationSec > 0) return tl.totalDurationSec;
+    }
+    return 60;
+  }
+
+  /** Mirror of {@link runWordLevelAlignmentForLrclib} for the plain-
+   *  text source. Picks an audio track and runs whisperx forced
+   *  alignment using the spread lines as authoritative text; on success
+   *  the lines are replaced with word-timed versions while the source
+   *  label stays "Plain text". */
+  private async runWordLevelAlignmentForPlainText(
+    lines: readonly LyricLine[],
+  ): Promise<void> {
+    const pick = this.pickAudioTrackForAlignment();
+    if (!pick) {
+      runInAction(() => {
+        this.lyricsAlignStatus = {
+          phase: 'error',
+          message: 'Word-level alignment needs an audio track; load one first.',
+        };
+      });
+      return;
+    }
+    const track = jotPlayer.audioTracks.get(pick.id);
+    if (!track) return;
+    const blob = await (await fetch(track.objectUrl)).blob();
+    const file = new File([blob], track.filename, { type: blob.type });
+    await this.alignLyricsWhisper(
+      {
+        kind: pick.kind,
+        file,
+        realign: {
+          lines: lines.map((l) => ({ startSec: l.startSec, text: l.text })),
+        },
+      },
+      'Plain text',
+      { source: 'plaintext', sourceLabel: 'Plain text' },
+    );
   }
 
   clearLyricsNotice() {
@@ -2272,16 +2355,18 @@ export class JotViewStore {
    * the resulting word-timed lines into the lyrics store on success,
    * and surface progress / errors via {@link lyricsAlignStatus}.
    *
-   * Today this is only invoked by the LRCLIB word-level path, so the
-   * source label always stays `LRCLIB · <track> - <artist>` on success
-   * (the word-timing upgrade is an implementation detail).
+   * Invoked by both the LRCLIB word-level path and the plain-text
+   * word-level path. The caller supplies the {@link LyricsSource} and
+   * source label to re-apply on success, so the row's gutter label
+   * doesn't get rewritten to a hardcoded LRCLIB string when the
+   * plain-text flow runs through here.
    *
    * Concurrent calls cancel any previously in-flight request.
    */
   private async alignLyricsWhisper(
     req: AlignLyricsRequest,
     label: string,
-    opts: { keepLrclibSource: { trackName: string; artistName: string } },
+    opts: { source: LyricsSource; sourceLabel: string },
   ): Promise<void> {
     if (this.lyricsAlignController) {
       this.lyricsAlignController.abort();
@@ -2321,10 +2406,9 @@ export class JotViewStore {
       return;
     }
     runInAction(() => {
-      const match = opts.keepLrclibSource;
       lyricsStore.load(lines, {
-        source: 'lrclib',
-        sourceLabel: `LRCLIB · ${match.trackName} - ${match.artistName}`,
+        source: opts.source,
+        sourceLabel: opts.sourceLabel,
       });
       this.lyricsAlignStatus = { phase: 'idle' };
     });

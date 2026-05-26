@@ -13,11 +13,13 @@ from __future__ import annotations
 
 from app.pipeline.lyrics_align import (
     InputLine,
-    _detect_language_from_text,
-    _extract_words,
-    lines_to_json,
     LyricLine,
     LyricWord,
+    _detect_language_from_text,
+    _iso1_to_iso3,
+    _partition_words_by_line,
+    _stitch_lines,
+    lines_to_json,
 )
 
 
@@ -111,112 +113,161 @@ def test_detect_language_kana_wins_over_chinese_marker():
     assert _detect_language_from_text(_lines("時に 时")) == "ja"
 
 
-# ---------- _extract_words end-time fallback chain --------------------
+# ---------- _iso1_to_iso3 -----------------------------------------------
 
 
-def _seg(words: list[dict[str, object]], *, end: float | None = 1.0) -> dict[str, object]:
-    """Synthesise a whisperx-shaped segment dict for the extractor."""
-    seg: dict[str, object] = {"words": words}
-    if end is not None:
-        seg["end"] = end
-    return seg
+def test_iso1_to_iso3_maps_text_detector_outputs():
+    """Every code that `_detect_language_from_text` can emit must round-
+    trip to a real ISO-639-3 value, otherwise `preprocess_text` would
+    raise on the alignment path. This pins the contract so a future
+    text-detector addition doesn't silently degrade to `eng`.
+
+    Note: `zh -> chi` (not `cmn`) is load-bearing. The aligner's
+    `preprocess_text` checks `language in ["jpn", "chi"]` to switch
+    to char-level tokenisation; routing Chinese through `cmn` would
+    fall through to word-split and shatter against the no-space input.
+    """
+    assert _iso1_to_iso3("en") == "eng"
+    assert _iso1_to_iso3("ja") == "jpn"
+    assert _iso1_to_iso3("ko") == "kor"
+    assert _iso1_to_iso3("zh") == "chi"
+    assert _iso1_to_iso3("th") == "tha"
 
 
-def test_extract_words_passes_explicit_end_through():
-    seg = _seg(
-        [
-            {"word": "hello", "start": 0.0, "end": 0.4},
-            {"word": "world", "start": 0.5, "end": 0.9},
-        ]
-    )
-    out = _extract_words(seg, segment_start=0.0)
-    assert [(w.start_sec, w.end_sec, w.text) for w in out] == [
-        (0.0, 0.4, "hello"),
+def test_iso1_to_iso3_falls_back_for_unknown_codes():
+    """Unknown / typo'd codes degrade to `eng` rather than raising;
+    MMS-300m still aligns Latin-script text reasonably under English
+    romanization, so a misdetected language stays recoverable."""
+    assert _iso1_to_iso3("xx") == "eng"
+    assert _iso1_to_iso3("") == "eng"
+
+
+def test_iso1_to_iso3_is_case_insensitive():
+    """Whisper's language head sometimes emits uppercase codes."""
+    assert _iso1_to_iso3("EN") == "eng"
+    assert _iso1_to_iso3("Ja") == "jpn"
+
+
+# ---------- _partition_words_by_line ------------------------------------
+
+
+def _word(text: str, start: float, end: float) -> dict[str, object]:
+    """Synthesise a ctc-forced-aligner-shaped word dict."""
+    return {"text": text, "start": start, "end": end, "score": 1.0}
+
+
+def test_partition_words_by_line_splits_by_counts():
+    words = [
+        _word("a", 0.0, 0.1),
+        _word("b", 0.1, 0.2),
+        _word("c", 0.2, 0.3),
+        _word("d", 0.3, 0.4),
+    ]
+    out = _partition_words_by_line(words, [2, 1, 1])
+    assert out is not None
+    assert [len(group) for group in out] == [2, 1, 1]
+    assert [w["text"] for w in out[0]] == ["a", "b"]
+    assert [w["text"] for w in out[1]] == ["c"]
+    assert [w["text"] for w in out[2]] == ["d"]
+
+
+def test_partition_words_by_line_returns_none_on_count_mismatch():
+    """A mismatch means our `text.split()` view of the input diverges
+    from the aligner's tokenisation (typically a non-Latin script where
+    romanisation reshapes word boundaries). We return None rather than
+    guess at boundaries; the caller degrades to line-level output."""
+    words = [_word("a", 0.0, 0.1), _word("b", 0.1, 0.2)]
+    assert _partition_words_by_line(words, [3]) is None
+    assert _partition_words_by_line(words, [1]) is None
+
+
+def test_partition_words_by_line_handles_zero_word_lines():
+    """An entry with count=0 produces an empty group at its slot; the
+    sum of counts still has to equal the total word count for the
+    partition to succeed. Defensive - `_build_concat_text` filters
+    these out so the realign path won't actually pass zero-count
+    entries today, but the helper stays robust if a caller does."""
+    words = [_word("a", 0.0, 0.1)]
+    out = _partition_words_by_line(words, [0, 1, 0])
+    assert out is not None
+    assert out[0] == []
+    assert [w["text"] for w in out[1]] == ["a"]
+    assert out[2] == []
+
+
+# ---------- _stitch_lines -----------------------------------------------
+
+
+def test_stitch_lines_preserves_empty_text_lines():
+    """Empty-text input lines pass through with `words=None` even when
+    surrounded by aligned lines, so the response mirrors the original
+    line count + ordering 1:1."""
+    input_lines = [
+        InputLine(start_sec=0.0, text="hello world"),
+        InputLine(start_sec=5.0, text=""),
+        InputLine(start_sec=10.0, text="goodbye"),
+    ]
+    non_empty_indices = [0, 2]
+    partitioned = [
+        [_word("hello", 0.1, 0.4), _word("world", 0.5, 0.9)],
+        [_word("goodbye", 10.2, 10.8)],
+    ]
+    out = _stitch_lines(input_lines, non_empty_indices, partitioned)
+    assert len(out) == 3
+    assert out[0].text == "hello world"
+    assert out[0].words is not None
+    assert [(w.start_sec, w.end_sec, w.text) for w in out[0].words] == [
+        (0.1, 0.4, "hello"),
         (0.5, 0.9, "world"),
     ]
+    assert out[1].text == ""
+    assert out[1].words is None
+    assert out[1].start_sec == 5.0
+    assert out[2].words is not None
+    assert out[2].words[0].text == "goodbye"
 
 
-def test_extract_words_fills_missing_end_from_next_words_start():
-    """Step 1 of the fallback: a missing `end` borrows the next
-    surviving word's `start`. The aligner sometimes omits `end` on
-    short tokens; rather than collapse the cell, the frontend should
-    see a duration that reaches the next aligned word."""
-    seg = _seg(
-        [
-            {"word": "hi", "start": 0.0},  # missing end
-            {"word": "there", "start": 0.3, "end": 0.6},
-        ]
-    )
-    out = _extract_words(seg, segment_start=0.0)
-    assert out[0].end_sec == 0.3
-    assert out[1].end_sec == 0.6
+def test_stitch_lines_refines_line_start_from_first_word():
+    """A non-empty line's `start_sec` is overwritten with the first
+    aligned word's start - that's the whole point of running the
+    aligner; the caller's input timestamp was a rough estimate."""
+    input_lines = [InputLine(start_sec=0.0, text="hi")]
+    out = _stitch_lines(input_lines, [0], [[_word("hi", 7.3, 7.5)]])
+    assert out[0].start_sec == 7.3
 
 
-def test_extract_words_falls_back_to_segment_end_for_last_word():
-    """Step 2: when the missing-end word is also the last word, the
-    next-word fallback can't fire, so the segment's `end` is used."""
-    seg = _seg(
-        [
-            {"word": "final", "start": 0.5},  # missing end, no neighbor
-        ],
-        end=1.2,
-    )
-    out = _extract_words(seg, segment_start=0.0)
-    assert out[0].end_sec == 1.2
+def test_stitch_lines_clamps_inverted_word():
+    """Defensive clamp for the rare case CTC alignment emits end<=start
+    (a held vowel that wav2vec2 absorbed into a neighbour, etc.). The
+    end gets bumped by an epsilon and the fallback marker is set so the
+    UI debug tooltip can flag it - same vocabulary the previous
+    whisperx path used so the frontend doesn't have to know which
+    aligner produced the data."""
+    input_lines = [InputLine(start_sec=0.0, text="weird")]
+    out = _stitch_lines(input_lines, [0], [[_word("weird", 1.0, 0.8)]])
+    assert out[0].words is not None
+    w = out[0].words[0]
+    assert w.start_sec == 1.0
+    assert w.end_sec == 1.05
+    assert w.end_fallback == "inverted-clamp"
 
 
-def test_extract_words_falls_back_to_start_plus_epsilon_as_last_resort():
-    """Step 3: when neither a next word nor a segment `end` is
-    available, the cell still gets a non-zero width via a small
-    epsilon. Guards the frontend's `width = max(0, ...)` math from
-    ever computing a collapsed cell."""
-    seg = _seg(
-        [
-            {"word": "alone", "start": 0.5},  # missing end
-        ],
-        end=None,
-    )
-    out = _extract_words(seg, segment_start=0.0)
-    assert out[0].end_sec > out[0].start_sec
-    assert out[0].end_sec == 0.5 + 0.05
-
-
-def test_extract_words_clamps_inverted_end():
-    """Pathological case: whisperx emits an `end` <= `start`. The
-    extractor must clamp so downstream cell-width math (right edge =
-    start + width) never wraps negative."""
-    seg = _seg(
-        [
-            {"word": "weird", "start": 1.0, "end": 0.8},
-        ]
-    )
-    out = _extract_words(seg, segment_start=0.0)
-    assert out[0].end_sec == 1.0 + 0.05
-
-
-def test_extract_words_skips_empty_tokens_in_neighbor_fallback():
-    """Empty-text entries are filtered out before the fallback walks
-    for a neighbor's `start`, so a missing-end word looks past blanks
-    to the next real word for its end-time."""
-    seg = _seg(
-        [
-            {"word": "first", "start": 0.0},  # missing end
-            {"word": "  ", "start": 0.2, "end": 0.3},  # filtered out
-            {"word": "third", "start": 0.4, "end": 0.6},
-        ]
-    )
-    out = _extract_words(seg, segment_start=0.0)
-    # The neighbor fallback skips the empty middle entry and lands on
-    # `third`'s start at 0.4 - if it had picked the empty entry, the
-    # extractor would have crashed on the missing text anyway.
-    assert len(out) == 2
-    assert out[0].end_sec == 0.4
+def test_stitch_lines_drops_empty_aligned_text():
+    """If the aligner somehow emits a word entry with empty text (the
+    `<star>` filter in postprocess_results is occasionally leaky), we
+    skip it rather than emit a zero-width invisible cell."""
+    input_lines = [InputLine(start_sec=0.0, text="hi there")]
+    partitioned = [[_word("hi", 0.1, 0.2), _word("", 0.3, 0.4)]]
+    out = _stitch_lines(input_lines, [0], partitioned)
+    assert out[0].words is not None
+    assert [w.text for w in out[0].words] == ["hi"]
 
 
 def test_lines_to_json_emits_end_sec_per_word():
     """The wire format includes both start + end per word so the
     frontend can size each word's cell. `end_sec` rides alongside
-    `start_sec` in camelCase."""
+    `start_sec` in camelCase. Debug fields are omitted when None so
+    the common-case payload stays tight."""
     lines = [
         LyricLine(
             start_sec=0.0,
@@ -238,6 +289,54 @@ def test_lines_to_json_emits_end_sec_per_word():
             ],
         },
     ]
+
+
+def test_lines_to_json_emits_debug_fields_when_present():
+    """Raw model values + fallback marker ride along on the wire when
+    the extractor set them, so the UI tooltip can show "model said X,
+    we render Y". The frontend reads them as optional fields."""
+    lines = [
+        LyricLine(
+            start_sec=0.0,
+            text="hi there",
+            words=[
+                LyricWord(
+                    start_sec=0.0,
+                    end_sec=0.3,
+                    text="hi",
+                    raw_start_sec=0.0,
+                    raw_end_sec=None,
+                    end_fallback="next-start",
+                ),
+                LyricWord(
+                    start_sec=0.3,
+                    end_sec=0.6,
+                    text="there",
+                    raw_start_sec=0.3,
+                    raw_end_sec=0.6,
+                    end_fallback=None,
+                ),
+            ],
+        ),
+    ]
+    out = lines_to_json(lines)
+    words = out[0]["words"]
+    # Substituted-end word: rawEndSec omitted, endFallback present.
+    assert words[0] == {
+        "startSec": 0.0,
+        "endSec": 0.3,
+        "text": "hi",
+        "rawStartSec": 0.0,
+        "endFallback": "next-start",
+    }
+    # Model-clean word: raw values mirror the final, no endFallback.
+    assert words[1] == {
+        "startSec": 0.3,
+        "endSec": 0.6,
+        "text": "there",
+        "rawStartSec": 0.3,
+        "rawEndSec": 0.6,
+    }
 
 
 def test_lines_to_json_omits_words_when_alignment_failed():

@@ -57,15 +57,58 @@ dependencies = [
     # LLM
     "anthropic>=0.40",
     # Lyrics alignment.
-    # whisperx bundles faster-whisper (CTranslate2 backend) + a wav2vec2
-    # forced aligner for sub-word timestamps; used by `pipeline/
-    # lyrics_align.py` to produce time-aligned lyrics on demand. Pulls
-    # in faster-whisper, ctranslate2, pyannote-audio. The model itself
-    # is downloaded lazily on first /lyrics/align call into `models_dir`
-    # (size depends on WHISPER_MODEL; defaults to `medium` int8_float16,
-    # ~700 MB VRAM peak; fits comfortably alongside the separation
-    # models on a 6 GB GPU since separation has unloaded by then).
+    # whisperx is kept around purely for the language-detection
+    # fallback (faster-whisper inference over the first 30 s of audio
+    # when our script-based text detector can't decide). The actual
+    # forced-alignment step has moved to `ctc-forced-aligner` below;
+    # whisperx's per-segment wav2vec2 aligner was clipping words to
+    # caller-provided [start, next_start] windows, which broke down
+    # for plain-text inputs (where the windows are synthesized) and
+    # for LRCLIB matches against different cuts.
     "whisperx>=3.1",
+    # Long-form CTC forced aligner. MahmoudAshraf97's pure-PyTorch
+    # package (the original; not the deskpai PyPI port that currently
+    # owns the `ctc-forced-aligner` PyPI name). Pinned by commit SHA so
+    # the build is reproducible. Bump deliberately.
+    #
+    # Why this package over the PyPI `ctc-forced-aligner`: the deskpai
+    # port unconditionally declares `onnxruntime` (the CPU wheel) as a
+    # hard install_requires AND imports it at module load, which
+    # silently shadows the `onnxruntime-gpu` brought in by
+    # `audio-separator[gpu]` above (both wheels install into the same
+    # `onnxruntime/` directory and share `onnxruntime_pybind11_state.so`).
+    # The result was every ONNX model; vocal separator AND the CTC
+    # aligner; running on CPU at 100% utilisation with multi-GB RSS
+    # growth. There is no import-time switch to prefer one wheel over
+    # the other (microsoft/onnxruntime#7313, qdrant/fastembed#608) and
+    # the deskpai `[torch]` extra doesn't help: it adds torch on top
+    # but still drags in `onnxruntime` and still exposes the function-
+    # level API only for the ONNX path. MahmoudAshraf's package runs
+    # natively through PyTorch + HF transformers, with the same
+    # function-level API (`load_alignment_model`, `generate_emissions`,
+    # `get_alignments`, `get_spans`, `postprocess_results`,
+    # `preprocess_text`), so the only call-site change is using a torch
+    # model object in place of an ONNX `InferenceSession`. Device
+    # control flows through `torch.cuda.is_available()`; the same
+    # path the separator/whisperx already follow.
+    #
+    # Other things worth knowing (carried over from the previous note):
+    #   - MMS-300m forced aligner under the hood; internal chunking +
+    #     posterior stitching so a full song aligns in one call with no
+    #     per-line `[start, end]` windows.
+    #   - For `jpn` / `chi` `preprocess_text` switches to char-level
+    #     tokenization; word-count partition still works because we
+    #     preprocess each line independently and count tokens before
+    #     concatenating (see `realign_text`).
+    "ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git@264e7a1f81bff9ff5e787a5537020c2ad0b0df02",
+    # ONNX graph-level fp16 conversion. Used by `pipeline/provision.py`
+    # on container startup to prebake an fp16 sibling of the vocals
+    # separator (UVR-MDX-NET-Voc_FT) once, so the runtime loads the
+    # already-converted file instead of paying the conversion cost per
+    # request. `onnx` itself is already pulled in transitively by
+    # `onnxruntime-gpu`; `onnxconverter_common` adds the float16
+    # transformer on top.
+    "onnxconverter_common>=1.16",
     # Misc
     "httpx>=0.27",
 ]

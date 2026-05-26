@@ -4,6 +4,7 @@ import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { ciTrimEq, LrclibMatch, parseLrc, searchLrclib } from 'src/lyrics';
 import { jotPlayer } from 'src/playback';
+import { Checkbox } from './components/checkbox';
 import styles from './lyrics_search_modal.module.css';
 import { JotViewStore } from './store';
 
@@ -73,44 +74,45 @@ export const LyricsSearchModal = observer(
       requestIdRef.current += 1;
     }, [open, initialTitle, initialArtist]);
 
-    const runSearch = React.useCallback(
-      async (searchTitle: string, searchArtist: string) => {
-        const requestId = ++requestIdRef.current;
-        setPhase({ kind: 'searching' });
-        setSelectedId(undefined);
-        let matches: LrclibMatch[];
-        try {
-          matches = await searchLrclib({
-            trackName: searchTitle,
-            artistName: searchArtist,
-          });
-        } catch (err) {
-          if (requestIdRef.current !== requestId) return;
-          const message = err instanceof Error ? err.message : String(err);
-          setPhase({ kind: 'error', message });
-          return;
-        }
+    const runSearch = React.useCallback(async (searchTitle: string, searchArtist: string) => {
+      const requestId = ++requestIdRef.current;
+      setPhase({ kind: 'searching' });
+      setSelectedId(undefined);
+      let matches: LrclibMatch[];
+      try {
+        matches = await searchLrclib({
+          trackName: searchTitle,
+          artistName: searchArtist,
+        });
+      } catch (err) {
         if (requestIdRef.current !== requestId) return;
+        const message = err instanceof Error ? err.message : String(err);
+        setPhase({ kind: 'error', message });
+        return;
+      }
+      if (requestIdRef.current !== requestId) return;
 
-        if (matches.length === 0) {
-          setPhase({ kind: 'no-results' });
-          return;
-        }
-        // Pre-select the best match (exact title+artist if available;
-        // else the single result; else nothing) so the footer pops open
-        // immediately and the user can just hit Load. Multi-result with
-        // no exact match leaves the user to pick deliberately.
-        const exact = matches.filter(
-          (m) => ciTrimEq(m.trackName, searchTitle) && ciTrimEq(m.artistName, searchArtist),
-        );
-        let preselect: LrclibMatch | undefined;
-        if (matches.length === 1) preselect = matches[0];
-        else if (exact.length === 1) preselect = exact[0];
-        setSelectedId(preselect ? matchKey(preselect) : undefined);
-        setPhase({ kind: 'results', matches });
-      },
-      [],
-    );
+      if (matches.length === 0) {
+        setPhase({ kind: 'no-results' });
+        return;
+      }
+      // Pre-select the best match (exact title+artist if available;
+      // else the single result; else nothing) so the footer pops open
+      // immediately and the user can just hit Load. Multi-result with
+      // no exact match leaves the user to pick deliberately.
+      const exact = matches.filter(
+        (m) => ciTrimEq(m.trackName, searchTitle) && ciTrimEq(m.artistName, searchArtist)
+      );
+      let preselect: LrclibMatch | undefined;
+      if (matches.length === 1) preselect = matches[0];
+      else if (exact.length === 1) preselect = exact[0];
+      setSelectedId(preselect ? matchKey(preselect) : undefined);
+      // Selecting a result implies the user is about to load it, so
+      // default the alignment toggle on. (Re-checked manually below
+      // in onPickResult for the explicit-click path.)
+      if (preselect) setWordLevel(true);
+      setPhase({ kind: 'results', matches });
+    }, []);
 
     // Auto-fire on open when title is set; honour the latest field
     // values rather than the initial props in case the user reopens the
@@ -142,6 +144,7 @@ export const LyricsSearchModal = observer(
 
     const onPickResult = (match: LrclibMatch) => {
       setSelectedId(matchKey(match));
+      setWordLevel(true);
     };
 
     const onLoad = () => {
@@ -157,7 +160,7 @@ export const LyricsSearchModal = observer(
       store.applyLrclibResult(
         lines,
         { trackName: selectedMatch.trackName, artistName: selectedMatch.artistName },
-        { wordLevel: effectiveWordLevel },
+        { wordLevel: effectiveWordLevel }
       );
       onClose();
     };
@@ -233,7 +236,7 @@ export const LyricsSearchModal = observer(
         </div>
       </div>
     );
-  },
+  }
 );
 
 /** Stable key for a match. LRCLIB returns numeric IDs but defensively
@@ -279,19 +282,16 @@ const PhaseView = ({
             <li key={key}>
               <button
                 type="button"
-                className={classNames(
-                  styles.resultItem,
-                  selected && styles.resultItemSelected,
-                )}
+                className={classNames(styles.resultItem, selected && styles.resultItemSelected)}
                 aria-pressed={selected}
                 onClick={() => onPickResult(m)}
                 data-testid={`lyrics-search-result-${m.id || m.trackName}`}
               >
                 <span className={styles.resultPrimary}>
-                  <strong>{m.trackName}</strong>; {m.artistName}
+                  <strong>{m.trackName}</strong> by {m.artistName}
                 </span>
                 <span className={styles.resultSecondary}>
-                  {m.albumName ?? 'Unknown album'}
+                  {`Album: ${m.albumName ?? 'Unknown album'}`}
                   {typeof m.duration === 'number' ? ` · ${formatDuration(m.duration)}` : ''}
                 </span>
               </button>
@@ -329,12 +329,11 @@ const LoadFooter = ({
       <label
         className={classNames(
           styles.wordLevelLabel,
-          checkboxDisabled && styles.wordLevelLabelDisabled,
+          checkboxDisabled && styles.wordLevelLabelDisabled
         )}
         title={checkboxTitle}
       >
-        <input
-          type="checkbox"
+        <Checkbox
           checked={wordLevel && !checkboxDisabled}
           disabled={checkboxDisabled}
           onChange={(e) => onSetWordLevel(e.target.checked)}

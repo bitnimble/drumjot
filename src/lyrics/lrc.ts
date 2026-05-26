@@ -23,6 +23,28 @@ export type LyricWord = {
    *  word-less sources (the `words` array itself is optional). */
   endSec: number;
   text: string;
+  /** Pre-substitution model output for `startSec`. Present whenever
+   *  the aligner emitted a start time; absent when our fallback chain
+   *  substituted (i.e. `startSec` is `segment_start`, not a model
+   *  claim). Used by the debug tooltip in the lyrics row so the user
+   *  can see what wav2vec2 actually said vs what we render. */
+  rawStartSec?: number;
+  /** Same idea for `endSec`; absent when our fallback chain produced
+   *  the end-time. Compare with `endFallback` to know WHICH fallback
+   *  fired. */
+  rawEndSec?: number;
+  /** Marker for when our code adjusted `endSec` away from the model's
+   *  output. Absent when the rendered value matches the raw value.
+   *  With the current ctc-forced-aligner pipeline only `inverted-clamp`
+   *  fires; the other values are reserved for the legacy whisperx
+   *  per-segment aligner so the wire vocabulary stays stable across
+   *  backend changes:
+   *    - `"inverted-clamp"` model emitted `end <= start`; bumped to
+   *                         `start + 0.05s`
+   *    - `"next-start"`     (legacy) end borrowed from next word's start
+   *    - `"segment-end"`    (legacy) end clamped to segment boundary
+   *    - `"epsilon"`        (legacy) last-ditch `start + 0.05s` */
+  endFallback?: 'next-start' | 'segment-end' | 'epsilon' | 'inverted-clamp';
 };
 
 export type LyricLine = {

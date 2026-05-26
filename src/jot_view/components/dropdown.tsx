@@ -19,6 +19,14 @@ export { styles as dropdownStyles };
 const openDropdownCloseCallbacks = new Set<() => void>();
 
 /**
+ * Sibling registry for `SubmenuItem` fly-outs. Two submenus inside the
+ * same parent panel could otherwise be open simultaneously (clicking
+ * one's trigger doesn't close the others), which reads as a glitch.
+ * Opening any submenu closes every currently-open one.
+ */
+const openSubmenuCloseCallbacks = new Set<() => void>();
+
+/**
  * A button that toggles a floating panel of related controls. Used by
  * the toolbar's grouped menus ("Load", "Transcribe") and the per-row
  * overflow menus on audio tracks. Closes on outside click or Escape.
@@ -153,13 +161,30 @@ export const DropdownButton = observer(
 export const SubmenuItem = ({
   label,
   title,
+  disabled,
   children,
 }: {
   label: React.ReactNode;
   title?: string;
+  disabled?: boolean;
   children: (close: () => void) => React.ReactNode;
 }) => {
   const [open, setOpen] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const myClose = () => setOpen(false);
+    // Snapshot before closing so the close() callbacks (which schedule
+    // state updates whose cleanup mutates the set) don't fight us.
+    const others = Array.from(openSubmenuCloseCallbacks);
+    openSubmenuCloseCallbacks.clear();
+    others.forEach((close) => close());
+    openSubmenuCloseCallbacks.add(myClose);
+    return () => {
+      openSubmenuCloseCallbacks.delete(myClose);
+    };
+  }, [open]);
+
   return (
     <div className={styles.submenu}>
       <button
@@ -168,6 +193,7 @@ export const SubmenuItem = ({
         aria-haspopup="menu"
         aria-expanded={open}
         title={title}
+        disabled={disabled}
         onClick={() => setOpen((o) => !o)}
       >
         <span>{label}</span>
@@ -175,7 +201,7 @@ export const SubmenuItem = ({
           ▸
         </span>
       </button>
-      {open && (
+      {open && !disabled && (
         <div className={styles.submenuPanel} role="menu">
           {children(() => setOpen(false))}
         </div>

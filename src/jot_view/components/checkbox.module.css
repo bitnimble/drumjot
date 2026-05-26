@@ -1,0 +1,54 @@
+/* Design-system styled checkbox. `appearance: none` strips the native
+   widget; the check glyph is drawn as a rotated-border ::before inside
+   the box, centered via inline-grid. Sizing (14px) is tuned to sit
+   visually alongside 13px label text without dominating it. */
+
+.checkbox {
+    appearance: none;
+    -webkit-appearance: none;
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    padding: 0;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xs);
+    background: var(--color-bg-base);
+    cursor: pointer;
+    display: inline-grid;
+    place-content: center;
+    transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+
+.checkbox::before {
+    content: '';
+    width: 4px;
+    height: 8px;
+    border: solid var(--color-bg-base);
+    border-width: 0 1.5px 1.5px 0;
+    transform: rotate(45deg) translate(-0.5px, -1px);
+    opacity: 0;
+}
+
+.checkbox:hover:not(:disabled) {
+    border-color: var(--color-border-strong);
+}
+
+.checkbox:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
+.checkbox:checked {
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+}
+
+.checkbox:checked::before {
+    opacity: 1;
+}
+
+.checkbox:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}

@@ -840,17 +840,23 @@ const ThemeSection = observer(() => {
 /**
  * Drum-kit picker inside the toolbar's Playback menu. Reads
  * `jotPlayer.drumKits` + `drumPreset` directly so re-renders are scoped
- * to this submenu, not the whole toolbar. Hidden until the SoundFont is
- * loaded and reports its kit list, mirroring the old bottom-bar gate.
+ * to this submenu, not the whole toolbar. Renders disabled until the
+ * SoundFont is loaded and reports its kit list, so the menu's shape
+ * stays stable across the load.
  */
 const PlaybackKitSubmenu = observer(() => {
   const kits = jotPlayer.drumKits;
   const current = jotPlayer.drumPreset;
-  if (kits.length === 0) return null;
+  const noKits = kits.length === 0;
   return (
     <SubmenuItem
-      label="Kit"
-      title="Drum kit (a preset of the GeneralUser GS SoundFont). Switching is instant, the SoundFont is already downloaded; only the active samples change. Takes effect immediately, including mid-playback."
+      label="Drum kit"
+      disabled={noKits}
+      title={
+        noKits
+          ? 'Drum kit picker. Available once the GeneralUser GS SoundFont has finished loading; press Play to trigger the one-time download.'
+          : 'Drum kit (a preset of the GeneralUser GS SoundFont). Switching is instant, the SoundFont is already downloaded; only the active samples change. Takes effect immediately, including mid-playback.'
+      }
     >
       {() =>
         kits.map((k) => (

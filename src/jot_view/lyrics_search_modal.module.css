@@ -237,17 +237,8 @@
     flex: 1 1 auto;
 }
 
-.wordLevelLabel input[type='checkbox'] {
-    cursor: pointer;
-    margin: 0;
-}
-
 .wordLevelLabelDisabled {
     color: var(--color-text-muted-alt);
-    cursor: not-allowed;
-}
-
-.wordLevelLabelDisabled input[type='checkbox'] {
     cursor: not-allowed;
 }
 
