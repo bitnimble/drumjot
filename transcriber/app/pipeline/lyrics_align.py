@@ -32,9 +32,15 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class LyricWord:
-    """One word within a {@link LyricLine}'s `words` array."""
+    """One word within a {@link LyricLine}'s `words` array.
+
+    `end_sec` is wav2vec2's phoneme-release time for the word - the
+    moment after which the next aligned word can begin. Frontend uses
+    `start_sec`..`end_sec` as the word's visual cell on the bars row so
+    sustained notes read as held."""
 
     start_sec: float
+    end_sec: float
     text: str
 
 
@@ -463,18 +469,58 @@ def _build_align_segments(
 
 def _extract_words(segment: Any, *, segment_start: float) -> list[LyricWord]:
     """Pull the per-word entries out of a whisperx segment dict,
-    stripping empty tokens and falling back to `segment_start` for
-    words whisperx couldn't align (rare, very short tokens)."""
+    stripping empty tokens and filling in missing timings.
+
+    `start` falls back to `segment_start` when whisperx couldn't align a
+    token (rare, very short tokens). `end` walks a fallback chain so the
+    frontend always sees a numeric width:
+
+        word's own `end` -> next surviving word's `start`
+                         -> segment's declared `end`
+                         -> `start + 0.05` (last-ditch epsilon).
+
+    The two-pass shape (collect first, backfill ends second) is needed
+    because the "next word's start" fallback can only be resolved once
+    we know which raw entries survived the empty-token filter."""
     raw_words = segment.get("words") or []
-    out: list[LyricWord] = []
+    seg_end_raw = segment.get("end")
+    seg_end = float(seg_end_raw) if seg_end_raw is not None else None
+
+    # Pass 1: collect surviving (start, end_or_none, text) triples,
+    # carrying `end` through as-is so the backfill in pass 2 can see
+    # which entries actually need filling.
+    raw: list[tuple[float, float | None, str]] = []
     for w in raw_words:
         word_text = (w.get("word") or "").strip()
         if not word_text:
             continue
         word_start = w.get("start")
-        if word_start is None:
-            word_start = segment_start
-        out.append(LyricWord(start_sec=float(word_start), text=word_text))
+        start_sec = float(word_start) if word_start is not None else segment_start
+        word_end = w.get("end")
+        end_sec = float(word_end) if word_end is not None else None
+        raw.append((start_sec, end_sec, word_text))
+
+    # Pass 2: backfill missing ends in left-to-right order so each gap
+    # can borrow the next surviving entry's start. The last entry's
+    # fallback walks past the next-word step into segment-end / epsilon.
+    out: list[LyricWord] = []
+    for i, (start_sec, end_sec, text) in enumerate(raw):
+        if end_sec is None:
+            next_start: float | None = None
+            for j in range(i + 1, len(raw)):
+                next_start = raw[j][0]
+                break
+            if next_start is not None:
+                end_sec = next_start
+            elif seg_end is not None:
+                end_sec = seg_end
+            else:
+                end_sec = start_sec + 0.05
+        # Guard pathological cases (next word starts before current, or
+        # equal): clamp so the frontend's cell width stays non-negative.
+        if end_sec <= start_sec:
+            end_sec = start_sec + 0.05
+        out.append(LyricWord(start_sec=start_sec, end_sec=end_sec, text=text))
     return out
 
 
@@ -508,7 +554,8 @@ def lines_to_json(lines: list[LyricLine]) -> list[dict[str, Any]]:
         entry: dict[str, Any] = {"startSec": line.start_sec, "text": line.text}
         if line.words is not None:
             entry["words"] = [
-                {"startSec": w.start_sec, "text": w.text} for w in line.words
+                {"startSec": w.start_sec, "endSec": w.end_sec, "text": w.text}
+                for w in line.words
             ]
         out.append(entry)
     return out

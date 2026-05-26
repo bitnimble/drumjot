@@ -35,7 +35,12 @@ import {
   TranscribeStatus,
 } from './store';
 
-/** Stage labels in pipeline order — shown verbatim in the resume stage
+/** Playback-speed multipliers offered in the toolbar's Playback menu.
+ *  1.0 is the natural tempo; below 1.0 spaces drum hits and
+ *  time-stretches audio tracks (pitch preserved). */
+const PLAYBACK_SPEEDS: readonly number[] = [0.25, 0.5, 0.75, 1.0, 1.25];
+
+/** Stage labels in pipeline order, shown verbatim in the resume stage
  *  picker. Mirrors `Stage` in `transcriber/app/pipeline/runner.py`. */
 const STAGE_ORDER: readonly TranscribeStage[] = [
   'stems_all',
@@ -379,69 +384,73 @@ export const Toolbar = observer(
               >
                 Load audio track(s)
               </button>
-            </>
-          )}
-        </DropdownButton>
-        <DropdownButton
-          label={<ToolbarDropdownLabel>Lyrics</ToolbarDropdownLabel>}
-          className={styles.playButton}
-          title="Load time-aligned lyrics that scroll along the score timeline. Lyrics are session-only and clear when a new song is loaded."
-        >
-          {(close) => (
-            <>
-              <button
-                type="button"
-                className={dropdownStyles.dropdownItem}
-                onClick={() => {
-                  onOpenLyricsSearch();
-                  close();
-                }}
-                title="Search LRCLIB (free public DB of synced lyrics) for the current song's title and artist. If exactly one match exists it loads automatically; otherwise pick one from a list."
-                data-testid="lyrics-menu-search"
+              <span className={dropdownStyles.dropdownDivider} aria-hidden="true" />
+              <SubmenuItem
+                label="Lyrics"
+                title="Load time-aligned lyrics that scroll along the score timeline. Lyrics are session-only and clear when a new song is loaded."
               >
-                Search LRCLIB…
-              </button>
-              <button
-                type="button"
-                className={dropdownStyles.dropdownItem}
-                onClick={() => {
-                  lyricsInputRef.current?.click();
-                  close();
-                }}
-                title="Load a synced-lyrics file (.lrc) from disk."
-                data-testid="lyrics-menu-load-file"
-              >
-                Load from file…
-              </button>
-              <button
-                type="button"
-                className={dropdownStyles.dropdownItem}
-                onClick={() => {
-                  onOpenLyricsTextLoad();
-                  close();
-                }}
-                title="Paste or type plain-text lyrics. Re-time them against an audio track afterward."
-                data-testid="lyrics-menu-load-plaintext"
-              >
-                Load from plain text…
-              </button>
-              {hasLyrics && (
-                <>
-                  <span className={dropdownStyles.dropdownDivider} aria-hidden="true" />
-                  <button
-                    type="button"
-                    className={dropdownStyles.dropdownItem}
-                    onClick={() => {
-                      onClearLyrics();
-                      close();
-                    }}
-                    title="Drop the currently-loaded lyrics."
-                    data-testid="lyrics-menu-clear"
-                  >
-                    Clear lyrics
-                  </button>
-                </>
-              )}
+                {(closeSub) => (
+                  <>
+                    <button
+                      type="button"
+                      className={dropdownStyles.dropdownItem}
+                      onClick={() => {
+                        onOpenLyricsSearch();
+                        closeSub();
+                        close();
+                      }}
+                      title="Search LRCLIB (free public DB of synced lyrics) for the current song's title and artist. If exactly one match exists it loads automatically; otherwise pick one from a list."
+                      data-testid="lyrics-menu-search"
+                    >
+                      Search LRCLIB…
+                    </button>
+                    <button
+                      type="button"
+                      className={dropdownStyles.dropdownItem}
+                      onClick={() => {
+                        lyricsInputRef.current?.click();
+                        closeSub();
+                        close();
+                      }}
+                      title="Load a synced-lyrics file (.lrc) from disk."
+                      data-testid="lyrics-menu-load-file"
+                    >
+                      Load from file…
+                    </button>
+                    <button
+                      type="button"
+                      className={dropdownStyles.dropdownItem}
+                      onClick={() => {
+                        onOpenLyricsTextLoad();
+                        closeSub();
+                        close();
+                      }}
+                      title="Paste or type plain-text lyrics. Re-time them against an audio track afterward."
+                      data-testid="lyrics-menu-load-plaintext"
+                    >
+                      Load from plain text…
+                    </button>
+                    {hasLyrics && (
+                      <>
+                        <span className={dropdownStyles.dropdownDivider} aria-hidden="true" />
+                        <button
+                          type="button"
+                          className={dropdownStyles.dropdownItem}
+                          onClick={() => {
+                            onClearLyrics();
+                            closeSub();
+                            close();
+                          }}
+                          title="Drop the currently-loaded lyrics."
+                          data-testid="lyrics-menu-clear"
+                        >
+                          Clear lyrics
+                        </button>
+                      </>
+                    )}
+                  </>
+                )}
+              </SubmenuItem>
             </>
           )}
         </DropdownButton>
@@ -746,6 +755,18 @@ export const Toolbar = observer(
             </>
           )}
         </DropdownButton>
+        <DropdownButton
+          label={<ToolbarDropdownLabel>Playback</ToolbarDropdownLabel>}
+          className={styles.playButton}
+          title="Drum kit (sample set) and playback speed."
+        >
+          {() => (
+            <>
+              <PlaybackKitSubmenu />
+              <PlaybackSpeedSubmenu />
+            </>
+          )}
+        </DropdownButton>
         <label
           className={sharedStyles.toolbarCheckbox}
           title="Compress or expand the score horizontally. Has no effect on audio playback, only on how the notation is laid out."
@@ -813,6 +834,61 @@ const ThemeSection = observer(() => {
         />
       ))}
     </DropdownSection>
+  );
+});
+
+/**
+ * Drum-kit picker inside the toolbar's Playback menu. Reads
+ * `jotPlayer.drumKits` + `drumPreset` directly so re-renders are scoped
+ * to this submenu, not the whole toolbar. Hidden until the SoundFont is
+ * loaded and reports its kit list, mirroring the old bottom-bar gate.
+ */
+const PlaybackKitSubmenu = observer(() => {
+  const kits = jotPlayer.drumKits;
+  const current = jotPlayer.drumPreset;
+  if (kits.length === 0) return null;
+  return (
+    <SubmenuItem
+      label="Kit"
+      title="Drum kit (a preset of the GeneralUser GS SoundFont). Switching is instant, the SoundFont is already downloaded; only the active samples change. Takes effect immediately, including mid-playback."
+    >
+      {() =>
+        kits.map((k) => (
+          <ToggleMenuItem
+            key={k.preset}
+            label={k.name}
+            active={k.preset === current}
+            onToggle={() => jotPlayer.setDrumPreset(k.preset)}
+          />
+        ))
+      }
+    </SubmenuItem>
+  );
+});
+
+/**
+ * Playback-speed picker inside the toolbar's Playback menu. Reads
+ * `jotPlayer.playbackSpeed` directly so speed changes don't trigger a
+ * full toolbar re-render.
+ */
+const PlaybackSpeedSubmenu = observer(() => {
+  const current = jotPlayer.playbackSpeed;
+  return (
+    <SubmenuItem
+      label="Speed"
+      title="Tempo multiplier applied to playback. Slowing down spaces the drum hits further apart and time-stretches the audio tracks, pitch is preserved for both, so a half-speed practice pass stays in tune."
+    >
+      {() =>
+        PLAYBACK_SPEEDS.map((s) => (
+          <ToggleMenuItem
+            key={s}
+            label={`${s.toFixed(2)}×`}
+            active={s === current}
+            onToggle={() => jotPlayer.setPlaybackSpeed(s)}
+          />
+        ))
+      }
+    </SubmenuItem>
   );
 });
 

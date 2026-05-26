@@ -11,7 +11,14 @@ whisperx / torch.
 
 from __future__ import annotations
 
-from app.pipeline.lyrics_align import InputLine, _detect_language_from_text
+from app.pipeline.lyrics_align import (
+    InputLine,
+    _detect_language_from_text,
+    _extract_words,
+    lines_to_json,
+    LyricLine,
+    LyricWord,
+)
 
 
 def _lines(*texts: str) -> list[InputLine]:
@@ -102,3 +109,141 @@ def test_detect_language_kana_wins_over_chinese_marker():
     # 时 is in the simplified-Chinese marker set, but the kana に here
     # is conclusive evidence the text is Japanese (not Chinese).
     assert _detect_language_from_text(_lines("時に 时")) == "ja"
+
+
+# ---------- _extract_words end-time fallback chain --------------------
+
+
+def _seg(words: list[dict[str, object]], *, end: float | None = 1.0) -> dict[str, object]:
+    """Synthesise a whisperx-shaped segment dict for the extractor."""
+    seg: dict[str, object] = {"words": words}
+    if end is not None:
+        seg["end"] = end
+    return seg
+
+
+def test_extract_words_passes_explicit_end_through():
+    seg = _seg(
+        [
+            {"word": "hello", "start": 0.0, "end": 0.4},
+            {"word": "world", "start": 0.5, "end": 0.9},
+        ]
+    )
+    out = _extract_words(seg, segment_start=0.0)
+    assert [(w.start_sec, w.end_sec, w.text) for w in out] == [
+        (0.0, 0.4, "hello"),
+        (0.5, 0.9, "world"),
+    ]
+
+
+def test_extract_words_fills_missing_end_from_next_words_start():
+    """Step 1 of the fallback: a missing `end` borrows the next
+    surviving word's `start`. The aligner sometimes omits `end` on
+    short tokens; rather than collapse the cell, the frontend should
+    see a duration that reaches the next aligned word."""
+    seg = _seg(
+        [
+            {"word": "hi", "start": 0.0},  # missing end
+            {"word": "there", "start": 0.3, "end": 0.6},
+        ]
+    )
+    out = _extract_words(seg, segment_start=0.0)
+    assert out[0].end_sec == 0.3
+    assert out[1].end_sec == 0.6
+
+
+def test_extract_words_falls_back_to_segment_end_for_last_word():
+    """Step 2: when the missing-end word is also the last word, the
+    next-word fallback can't fire, so the segment's `end` is used."""
+    seg = _seg(
+        [
+            {"word": "final", "start": 0.5},  # missing end, no neighbor
+        ],
+        end=1.2,
+    )
+    out = _extract_words(seg, segment_start=0.0)
+    assert out[0].end_sec == 1.2
+
+
+def test_extract_words_falls_back_to_start_plus_epsilon_as_last_resort():
+    """Step 3: when neither a next word nor a segment `end` is
+    available, the cell still gets a non-zero width via a small
+    epsilon. Guards the frontend's `width = max(0, ...)` math from
+    ever computing a collapsed cell."""
+    seg = _seg(
+        [
+            {"word": "alone", "start": 0.5},  # missing end
+        ],
+        end=None,
+    )
+    out = _extract_words(seg, segment_start=0.0)
+    assert out[0].end_sec > out[0].start_sec
+    assert out[0].end_sec == 0.5 + 0.05
+
+
+def test_extract_words_clamps_inverted_end():
+    """Pathological case: whisperx emits an `end` <= `start`. The
+    extractor must clamp so downstream cell-width math (right edge =
+    start + width) never wraps negative."""
+    seg = _seg(
+        [
+            {"word": "weird", "start": 1.0, "end": 0.8},
+        ]
+    )
+    out = _extract_words(seg, segment_start=0.0)
+    assert out[0].end_sec == 1.0 + 0.05
+
+
+def test_extract_words_skips_empty_tokens_in_neighbor_fallback():
+    """Empty-text entries are filtered out before the fallback walks
+    for a neighbor's `start`, so a missing-end word looks past blanks
+    to the next real word for its end-time."""
+    seg = _seg(
+        [
+            {"word": "first", "start": 0.0},  # missing end
+            {"word": "  ", "start": 0.2, "end": 0.3},  # filtered out
+            {"word": "third", "start": 0.4, "end": 0.6},
+        ]
+    )
+    out = _extract_words(seg, segment_start=0.0)
+    # The neighbor fallback skips the empty middle entry and lands on
+    # `third`'s start at 0.4 - if it had picked the empty entry, the
+    # extractor would have crashed on the missing text anyway.
+    assert len(out) == 2
+    assert out[0].end_sec == 0.4
+
+
+def test_lines_to_json_emits_end_sec_per_word():
+    """The wire format includes both start + end per word so the
+    frontend can size each word's cell. `end_sec` rides alongside
+    `start_sec` in camelCase."""
+    lines = [
+        LyricLine(
+            start_sec=0.0,
+            text="hello world",
+            words=[
+                LyricWord(start_sec=0.0, end_sec=0.4, text="hello"),
+                LyricWord(start_sec=0.5, end_sec=0.9, text="world"),
+            ],
+        ),
+    ]
+    out = lines_to_json(lines)
+    assert out == [
+        {
+            "startSec": 0.0,
+            "text": "hello world",
+            "words": [
+                {"startSec": 0.0, "endSec": 0.4, "text": "hello"},
+                {"startSec": 0.5, "endSec": 0.9, "text": "world"},
+            ],
+        },
+    ]
+
+
+def test_lines_to_json_omits_words_when_alignment_failed():
+    """Whisper alignment can degrade to "transcription-only" when the
+    detected language has no aligner; in that case `words` is None on
+    the dataclass and the JSON drops the key entirely (not `null`)."""
+    lines = [LyricLine(start_sec=1.0, text="just text", words=None)]
+    out = lines_to_json(lines)
+    assert out == [{"startSec": 1.0, "text": "just text"}]

@@ -159,16 +159,25 @@
     font-style: italic;
 }
 
-/* Word-level spans inside a word-aligned line. Each word is absolutely
-   positioned at its own beat, expressed as a per-word CSS var
-   (--lyric-word-beat-offset) measured in beats from the line's first
-   word. The line container provides the positioning context; the row's
-   --px-per-beat root var scales this with zoom. `--lyric-word-shift` is
-   a JS-applied per-word px offset that pushes words rightward when
-   their natural beat position would put their glyphs on top of (or
-   uncomfortably close to) the previous word's; see the layout effect
-   in lyrics_row.tsx. Defaults to 0px so non-colliding words stay at
-   their exact beat. */
+/* Word-level cell inside a word-aligned line. Each word occupies a
+   fixed-width box anchored to its forced-alignment timing: the left
+   edge sits at the word's start beat, the right edge at its end beat.
+   The cell is a flex container with two children: the inner
+   `.lyricWordText` span (natural width, left-aligned) and a `::after`
+   pseudo that fills any remaining space with a thin trailing rule, so
+   sustained words read as held bars while quick consecutive syllables
+   (where text + padding consumes the entire cell) show no rule.
+
+   `--lyric-word-beat-offset` and `--lyric-word-beat-width` come from
+   React; the row's --px-per-beat root var scales them with zoom.
+   `--lyric-word-shift` is a JS-applied per-word px offset (see the
+   layout effect in lyrics_row.tsx) that handles glyph-level collisions
+   when two start times are close enough that the previous word's text
+   would overlap. The shift is added to `left` AND subtracted from
+   `width`, so the right edge stays anchored to the word's end time -
+   shifted cells shrink rather than slide. `max(0px, ...)` clamps so a
+   heavy shift (text wider than the duration cell) can't yield a
+   negative width. */
 .lyricWord {
     position: absolute;
     top: 50%;
@@ -176,26 +185,69 @@
     left: calc(
         var(--lyric-word-beat-offset) * var(--px-per-beat) * 1px + var(--lyric-word-shift, 0px)
     );
-    color: var(--color-text-strong);
-    border-radius: var(--radius-xs);
-    padding: 0 2px;
-    transition:
-        background-color 80ms ease,
-        color 80ms ease;
+    width: max(
+        0px,
+        calc(var(--lyric-word-beat-width) * var(--px-per-beat) * 1px - var(--lyric-word-shift, 0px))
+    );
+    display: flex;
+    align-items: center;
     white-space: nowrap;
-    /* Higher than .lyricWordActive so the active chip's padded
-       background sits behind adjacent words' glyphs (preventing the
-       active rectangle from visually swallowing close neighbors like
-       a Japanese sokuon). */
+    /* Higher than .lyricWordActive (which clears z-index) so the active
+       chip's padded background sits behind adjacent words' glyphs
+       (preventing the active rectangle from visually swallowing close
+       neighbors like a Japanese sokuon). */
     z-index: 1;
 }
 
-.lyricWordActive {
+/* Text glyphs of the word. Natural-width flex child so the
+   `::after` rule can claim the leftover space. `padding-right` is the
+   threshold for the trailing rule: the `::after`'s `min-width: 0`
+   collapses it to invisible whenever the cell width is consumed by
+   text + this padding, so quick syllables get no rule and sustained
+   words get one once there's >12px of slack. */
+.lyricWordText {
+    flex: 0 0 auto;
+    color: var(--color-text-strong);
+    border-radius: var(--radius-xs);
+    padding: 0 12px 0 2px;
+    transition:
+        background-color 80ms ease,
+        color 80ms ease;
+}
+
+/* Trailing rule that fills the cell's slack space. `flex: 1 1 0` plus
+   `min-width: 0` lets it shrink to nothing when the text consumes the
+   cell, and grow to fill arbitrary slack on sustained words. The
+   `margin-right: 4px` leaves breathing room so a long-held final word
+   doesn't visually kiss the next line's first word. `currentColor` so
+   the rule picks up the active-state accent automatically when the
+   word lights up. */
+.lyricWord::after {
+    content: "";
+    flex: 1 1 0;
+    min-width: 0;
+    height: 1.5px;
+    background: currentColor;
+    opacity: 0.35;
+    border-radius: 1px;
+    margin-right: 4px;
+}
+
+/* Active-word state. Padding + accent background sit on the inner
+   text span (not the wrapper) so the trailing rule doesn't get
+   absorbed into a giant pill, and so the wrapper's flex width stays
+   fixed when the active state toggles. The wrapper drops below
+   neighbors in z-order so the active chip's background can extend
+   beyond its cell (via `overflow: visible` on the line container)
+   without painting over adjacent words. */
+.lyricWordActive .lyricWordText {
     color: var(--color-accent);
     background: var(--color-bg-base);
-    padding: 8px;
-    transform: translate(-8px, -50%);
+    padding: 6px 12px 6px 6px;
     font-weight: 600;
+}
+
+.lyricWordActive {
     z-index: 0;
 }
 

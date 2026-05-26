@@ -1,15 +1,12 @@
 import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
-import { JotTimeline, jotPlayer, KitInfo, PlayerState } from 'src/playback';
+import { JotTimeline, jotPlayer, PlayerState } from 'src/playback';
 import sharedStyles from '../jot_view.module.css';
 import { NumberStepper } from './components/number_stepper';
 import { FollowPlayheadContext } from './contexts';
 import styles from './playback.module.css';
-import { Select } from './toolbar';
 import { JotViewStore, VOLUME_STEP } from './store';
-
-const PLAYBACK_SPEEDS: readonly number[] = [0.25, 0.5, 0.75, 1.0, 1.25];
 
 function truncate(s: string, n: number): string {
   return s.length <= n ? s : `${s.slice(0, n - 1)}…`;
@@ -63,32 +60,22 @@ const PlaybackControls = observer(
     hasJot,
     playerState,
     playerError,
-    playbackSpeed,
-    drumKits,
-    drumPreset,
     hasAudioTracks,
     audioOffsetSec,
     drumOffsetBeats,
     onTogglePlayPause,
     onStop,
-    onSetPlaybackSpeed,
-    onSetDrumPreset,
     onSetAudioOffset,
     onSetDrumOffset,
   }: {
     hasJot: boolean;
     playerState: PlayerState;
     playerError: string | undefined;
-    playbackSpeed: number;
-    drumKits: KitInfo[];
-    drumPreset: number;
     hasAudioTracks: boolean;
     audioOffsetSec: number;
     drumOffsetBeats: number;
     onTogglePlayPause: () => void;
     onStop: () => void;
-    onSetPlaybackSpeed: (speed: number) => void;
-    onSetDrumPreset: (preset: number) => void;
     onSetAudioOffset: (sec: number) => void;
     onSetDrumOffset: (beats: number) => void;
   }) => {
@@ -115,6 +102,7 @@ const PlaybackControls = observer(
             transport group stays optically centred in the bar. */}
         <div className={styles.transportSpacer} aria-hidden="true" />
         <div className={styles.transportCenter}>
+          <FollowToggle />
           <button
             type="button"
             className={classNames(
@@ -156,44 +144,7 @@ const PlaybackControls = observer(
           </button>
         </div>
         <div className={styles.transportAux}>
-          <FollowToggle />
           <MasterVolumes />
-          {drumKits.length > 0 && (
-            <label
-              className={sharedStyles.toolbarCheckbox}
-              title="Drum kit (a preset of the GeneralUser GS SoundFont). Switching is instant — the SoundFont is already downloaded; only the active samples change. Takes effect immediately, including mid-playback."
-            >
-              <span>Kit</span>
-              <Select
-                className={sharedStyles.samplesSelect}
-                value={String(drumPreset)}
-                onChange={(e) => onSetDrumPreset(Number(e.target.value))}
-              >
-                {drumKits.map((k) => (
-                  <option key={k.preset} value={String(k.preset)}>
-                    {k.name}
-                  </option>
-                ))}
-              </Select>
-            </label>
-          )}
-          <label
-            className={sharedStyles.toolbarCheckbox}
-            title="Tempo multiplier applied to playback. Slowing down spaces the drum hits further apart and time-stretches the audio tracks — pitch is preserved for both, so a half-speed practice pass stays in tune."
-          >
-            <span>Speed</span>
-            <Select
-              className={sharedStyles.samplesSelect}
-              value={String(playbackSpeed)}
-              onChange={(e) => onSetPlaybackSpeed(Number(e.target.value))}
-            >
-              {PLAYBACK_SPEEDS.map((s) => (
-                <option key={s} value={String(s)}>
-                  {s.toFixed(2)}×
-                </option>
-              ))}
-            </Select>
-          </label>
           {hasJot && (
             <OffsetControl
               label="Beat"
@@ -234,7 +185,7 @@ const PlaybackControls = observer(
 
 /**
  * Bottom transport bar. Pinned below the score so the (formerly
- * header-crowding) play / pause / stop / speed controls have their own
+ * header-crowding) play / pause / stop controls have their own
  * dedicated strip. `observer` + reading `jotPlayer` here keeps player
  * state re-renders scoped to this bar instead of bubbling up through
  * `View` and re-rendering the score on every transport change.
@@ -245,16 +196,11 @@ export const PlaybackBar = observer(({ store }: { store: JotViewStore }) => (
       hasJot={!!store.currentJot}
       playerState={jotPlayer.state}
       playerError={jotPlayer.errorMessage}
-      playbackSpeed={jotPlayer.playbackSpeed}
-      drumKits={jotPlayer.drumKits}
-      drumPreset={jotPlayer.drumPreset}
       hasAudioTracks={jotPlayer.audioTracks.size > 0}
       audioOffsetSec={jotPlayer.drumsT0Sec}
       drumOffsetBeats={store.drumOffsetBeats}
       onTogglePlayPause={() => store.togglePlayPause()}
       onStop={() => store.stopPlayback()}
-      onSetPlaybackSpeed={(s) => jotPlayer.setPlaybackSpeed(s)}
-      onSetDrumPreset={(p) => jotPlayer.setDrumPreset(p)}
       onSetAudioOffset={(sec) => jotPlayer.setDrumsT0Sec(sec)}
       onSetDrumOffset={(beats) => store.setDrumOffset(beats)}
     />

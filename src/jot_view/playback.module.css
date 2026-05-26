@@ -30,14 +30,14 @@
 }
 
 .transportCenter {
-    /* Only the play/pause button is in flow, so the centred `auto` grid
-     track is exactly its width and the button stays optically centred
-     in the bar whether or not Stop is shown. Stop is positioned
-     absolutely to its right so it never shifts the play button. */
+    /* Follow toggle + play/pause are in flow; Stop is positioned
+     absolutely to the right of play so it never shifts the group.
+     The `auto` centre grid track sizes to the in-flow content. */
     position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
+    gap: 12px;
 }
 
 .transportStop {

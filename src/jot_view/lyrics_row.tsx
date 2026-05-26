@@ -134,11 +134,12 @@ export const LyricsRow = observer(
         : undefined;
 
     // Pre-compute each line's beat positions. For lines with `words`,
-    // each word resolves to its own beat; the chip stretches from the
-    // first word's beat to the last word's beat. For word-less lines
-    // (LRCLIB / plain LRC) we fall back to the legacy single-stamp
-    // chip width: bound by the next line's start so text doesn't run
-    // into the following line at low zoom.
+    // each word resolves to its own [startBeat, endBeat] cell; the
+    // line's bounding box stretches from the first word's start to the
+    // last word's end (true line duration). For word-less lines (LRCLIB
+    // / plain LRC) we fall back to the legacy single-stamp chip width:
+    // bound by the next line's start so text doesn't run into the
+    // following line at low zoom.
     type PositionedWord = {
       /** Index back into the source `line.words` array, so the JSX can
        *  compare against `activeWordIndexAt`'s return value even when
@@ -146,6 +147,11 @@ export const LyricsRow = observer(
       sourceIdx: number;
       text: string;
       beatOffset: number;
+      /** Width of this word's cell in beats: `endBeat - startBeat`.
+       *  Drives the trailing-rule render in CSS via the `--lyric-word-
+       *  beat-width` var; combined with `--lyric-word-shift` the cell's
+       *  right edge stays anchored to the word's `endSec`. */
+      beatWidth: number;
     };
     type Positioned = {
       i: number;
@@ -158,6 +164,13 @@ export const LyricsRow = observer(
        *  inline text (LRCLIB-style). */
       wordPositions: PositionedWord[] | undefined;
     };
+    /** Floor for a word's cell width in beats when the aligner emits an
+     *  end-time we can't resolve against the timeline (out-of-range, or
+     *  collapsed by upstream clamping). Matches the Python aligner's
+     *  0.05 s last-ditch epsilon scaled to "noticeable but not silly":
+     *  a quarter of a beat is small enough to read as a point on the
+     *  bars row at any reasonable zoom. */
+    const MIN_BEAT_WIDTH = 0.05;
     const positioned: Positioned[] = [];
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -168,29 +181,47 @@ export const LyricsRow = observer(
       let wordPositions: PositionedWord[] | undefined;
 
       if (line.words && line.words.length > 0) {
-        // Walk the words once, dropping any whose beat falls outside the
-        // timeline (rare; usually the whole line is in-range or out).
+        // Walk the words once, dropping any whose start beat falls
+        // outside the timeline (rare; usually the whole line is in-
+        // range or out). End-beats are resolved against the timeline
+        // too; an out-of-range end falls back to `startBeat +
+        // MIN_BEAT_WIDTH` so the cell has a defined, visible width.
         // The sourceIdx is preserved so word-level highlighting still
         // matches `activeWordIndexAt` (indexed against the unfiltered
         // source array) when edge words are dropped.
-        const inRange: { sourceIdx: number; text: string; beat: number }[] = [];
+        const inRange: {
+          sourceIdx: number;
+          text: string;
+          startBeat: number;
+          endBeat: number;
+        }[] = [];
         for (let wi = 0; wi < line.words.length; wi++) {
           const w = line.words[wi];
-          const beat = audioSecToBeat(
+          const ws = audioSecToBeat(
             w.startSec + offsetSec,
             timeline,
             drumsT0Sec,
             structuralBeats,
           );
-          if (beat !== undefined) inRange.push({ sourceIdx: wi, text: w.text, beat });
+          if (ws === undefined) continue;
+          const weRaw = audioSecToBeat(
+            w.endSec + offsetSec,
+            timeline,
+            drumsT0Sec,
+            structuralBeats,
+          );
+          const we =
+            weRaw !== undefined && weRaw > ws ? weRaw : ws + MIN_BEAT_WIDTH;
+          inRange.push({ sourceIdx: wi, text: w.text, startBeat: ws, endBeat: we });
         }
         if (inRange.length > 0) {
-          startBeat = inRange[0].beat;
-          endBeat = inRange[inRange.length - 1].beat;
+          startBeat = inRange[0].startBeat;
+          endBeat = inRange[inRange.length - 1].endBeat;
           wordPositions = inRange.map((w) => ({
             sourceIdx: w.sourceIdx,
             text: w.text,
-            beatOffset: w.beat - startBeat!,
+            beatOffset: w.startBeat - startBeat!,
+            beatWidth: w.endBeat - w.startBeat,
           }));
         }
       } else {
@@ -234,11 +265,14 @@ export const LyricsRow = observer(
     // identical beats (e.g. a Japanese sokuon `ッ` immediately before
     // its host syllable), their glyphs render on top of each other.
     // We post-process the DOM: walk each word-aligned line left-to-
-    // right, measure each glyph's true text width via a Range (so the
-    // active word's larger padding doesn't perturb the measurement),
-    // and write a per-word `--lyric-word-shift` px offset that pushes
-    // colliding words just enough to keep a minimum gap. Anything that
-    // already fits stays at its exact beat; only collisions move.
+    // right, measure each glyph's true text width via a Range on the
+    // inner `.lyricWordText` span (so the trailing rule and active-
+    // state padding don't perturb the measurement), and write a per-
+    // word `--lyric-word-shift` px offset that pushes colliding words
+    // just enough to keep a minimum gap. The CSS calc that consumes
+    // `--lyric-word-shift` also subtracts it from the cell width, so
+    // the shifted cell's right edge stays anchored to the word's
+    // `endSec` (the cell shrinks rather than slides).
     const barsRowRef = React.useRef<HTMLDivElement>(null);
     const adjustWordSpacing = React.useCallback(() => {
       const row = barsRowRef.current;
@@ -256,7 +290,9 @@ export const LyricsRow = observer(
         for (const w of words) {
           const beatOffset = parseFloat(w.dataset.beatOffset ?? '0');
           const natural = beatOffset * pxPerBeat;
-          range.selectNodeContents(w);
+          const textNode =
+            w.querySelector<HTMLElement>('[data-lyric-word-text="1"]') ?? w;
+          range.selectNodeContents(textNode);
           const textWidth = range.getBoundingClientRect().width;
           const required = Math.max(natural, prevRight + MIN_GAP_PX);
           const shift = required - natural;
@@ -407,13 +443,16 @@ export const LyricsRow = observer(
                       style={
                         {
                           ['--lyric-word-beat-offset' as string]: w.beatOffset,
+                          ['--lyric-word-beat-width' as string]: w.beatWidth,
                         } as React.CSSProperties
                       }
                       data-testid={`lyrics-word-${p.i}-${w.sourceIdx}`}
                       data-lyric-word="1"
                       data-beat-offset={w.beatOffset}
                     >
-                      {w.text}
+                      <span className={styles.lyricWordText} data-lyric-word-text="1">
+                        {w.text}
+                      </span>
                     </span>
                   ))
                 ) : (

@@ -16,6 +16,12 @@
 
 export type LyricWord = {
   startSec: number;
+  /** Audio-time the word's last phoneme releases (wav2vec2 forced-
+   *  alignment end-time). Used by the lyrics row to size each word's
+   *  visual cell so sustained notes render as a held bar rather than a
+   *  point. Always present from the `/lyrics/align` backend; absent on
+   *  word-less sources (the `words` array itself is optional). */
+  endSec: number;
   text: string;
 };
 

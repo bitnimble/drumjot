@@ -152,9 +152,11 @@ export const DropdownButton = observer(
  */
 export const SubmenuItem = ({
   label,
+  title,
   children,
 }: {
   label: React.ReactNode;
+  title?: string;
   children: (close: () => void) => React.ReactNode;
 }) => {
   const [open, setOpen] = React.useState(false);
@@ -165,6 +167,7 @@ export const SubmenuItem = ({
         className={classNames(styles.dropdownItem, styles.submenuTrigger)}
         aria-haspopup="menu"
         aria-expanded={open}
+        title={title}
         onClick={() => setOpen((o) => !o)}
       >
         <span>{label}</span>

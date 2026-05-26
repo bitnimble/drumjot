@@ -41,7 +41,13 @@ function makeFile(content: string, name = 'audio.mp3'): File {
 describe('alignLyricsWhisper', () => {
   test('mix mode uploads the file + lyrics payload', async () => {
     const file = makeFile('mix-content');
-    const aligned = [{ startSec: 0, text: 'hello', words: [{ startSec: 0, text: 'hello' }] }];
+    const aligned = [
+      {
+        startSec: 0,
+        text: 'hello',
+        words: [{ startSec: 0, endSec: 0.4, text: 'hello' }],
+      },
+    ];
     fetchHandler = (call) => {
       expect(call.url.endsWith('/lyrics/align')).toBe(true);
       expect(call.method).toBe('POST');
