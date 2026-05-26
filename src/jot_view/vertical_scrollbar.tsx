@@ -29,7 +29,14 @@ export const VerticalScrollbar = observer(
     const [containerHeight, setContainerHeight] = React.useState(0);
     const [contentHeight, setContentHeight] = React.useState(0);
 
-    React.useLayoutEffect(() => {
+    // `useEffect`, not `useLayoutEffect`: VerticalScrollbar is a child of
+    // the div carrying `containerRef`, and React attaches host refs in
+    // post-order; so the parent's ref is still `null` when a child's
+    // `useLayoutEffect` fires. Falling back to `useEffect` defers the
+    // initial measurement by one paint (imperceptible; the bar is
+    // absolutely positioned and doesn't shift surrounding layout) and
+    // guarantees both refs are populated.
+    React.useEffect(() => {
       const container = containerRef.current;
       const viewport = viewportRef.current;
       if (!container || !viewport) return;

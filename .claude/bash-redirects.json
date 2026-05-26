@@ -3,28 +3,8 @@
   "redirects": [
     {
       "commands": [
-        "Bash(npm *)",
-        "Bash(npx *)",
-        "Bash(node *)",
-        "Bash(sed *)",
-        "Bash(grep *)",
-        "Bash(find *)",
-        "Bash(rg *)",
-        "Bash(awk *)",
-        "Bash(gh api *)",
-        "Bash(bun run dev *)",
-        "Bash(source *)",
-        "Bash(pytest *)",
-        "Bash(python -m pytest *)",
-        "Bash(python3 -m pytest *)",
-        "Bash(uv run pytest *)",
-        "Bash(uvx pytest *)",
-        "Bash(.venv/bin/pytest *)",
-        "Bash(transcriber/.venv/bin/pytest *)",
-        "Bash(./.venv/bin/pytest *)",
         "Bash(bunx vite *)",
         "Bash(bunx stylelint *)",
-        "Bash(bunx playwright *)",
         "Bash(bunx tsc *)",
         "Bash(bun tsc *)",
         "Bash(tsc *)",
@@ -34,6 +14,36 @@
         "Bash(bunx --bun vite *)"
       ],
       "reason": "Use `scripts/check-ts` instead of invoking tsc / bun test / stylelint directly. It chains stylelint --fix + tsc --noEmit + bun test in the right cwd; trailing args pass through to `bun test` so single-file iteration still works (`scripts/check-ts src/jot_view/store.test.ts`). See AGENTS.md §3."
+    },
+    {
+      "commands": ["Bash(gh api *)"],
+      "reason": "Use the GitHub API via WebFetch() instead of invoking gh api directly"
+    },
+    {
+      "commands": ["Bash(sed *)", "Bash(grep *)", "Bash(find *)", "Bash(rg *)", "Bash(awk *)"],
+      "reason": "Use the Read(), Write(), Edit() and Find() tools instead of invoking sed, grep, find, rg or awk directly"
+    },
+    {
+      "commands": ["Bash(bun run dev *)", "Bash(bunx playwright *)"],
+      "reason": "Do not start the dev server as the user probably has their own dev server running, and it will fail to bind to the same port. If you need to test something in a browser, use `bun run e2e` to run E2E tests in Playwright instead."
+    },
+    {
+      "commands": ["Bash(npm *)", "Bash(npx *)", "Bash(node *)"],
+      "reason": "Use bun instead of node, npm, npx"
+    },
+    {
+      "commands": [
+        "Bash(source *)",
+        "Bash(pytest *)",
+        "Bash(python -m pytest *)",
+        "Bash(python3 -m pytest *)",
+        "Bash(uv run pytest *)",
+        "Bash(uvx pytest *)",
+        "Bash(.venv/bin/pytest *)",
+        "Bash(transcriber/.venv/bin/pytest *)",
+        "Bash(./.venv/bin/pytest *)"
+      ],
+      "reason": "Use scripts in the scripts/ folder instead of running pytest or python compile directly"
     }
   ]
 }
