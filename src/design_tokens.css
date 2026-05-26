@@ -266,3 +266,27 @@
     --shadow-playhead-label: 0 1px 3px rgba(0, 0, 0, 0.6);
     --shadow-accent-glow: 0 0 4px rgba(255, 122, 58, 0.55);
 }
+
+/* Per-frame animation vars used by playback. Registered with
+   `inherits: false` so the per-frame `setProperty` writes only invalidate
+   the elements they're written on; without this, an inherited custom
+   property change on `.jotContainer` invalidates style on every
+   descendant in the score subtree (~22ms recalc on a long song). The
+   consumer CSS rules already pair these with `will-change: transform`,
+   so paint stays composite-only. Writers live in jot_view.tsx:
+   `setPlayheadVar`, `setScrollVars`. */
+@property --playhead-x {
+    syntax: '<length>';
+    inherits: false;
+    initial-value: 0px;
+}
+@property --scroll-x {
+    syntax: '<number>';
+    inherits: false;
+    initial-value: 0;
+}
+@property --scroll-y {
+    syntax: '<number>';
+    inherits: false;
+    initial-value: 0;
+}

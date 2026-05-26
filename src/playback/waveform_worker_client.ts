@@ -19,6 +19,7 @@
  * compute functions on the main thread. The async API stays the same
  * so callers don't branch.
  */
+import { makeAutoObservable, runInAction } from 'mobx';
 import { AudioTrackId } from './audio_tracks';
 import {
   BarSlice,
@@ -45,16 +46,21 @@ class WaveformWorkerClient {
    * Per-track uniform-waveform amplitude scale. Computed once on
    * {@link registerTrack} (cheap subsampled scan, ~1 ms) so every
    * chunk normalises against the same value; no amplitude seams
-   * between neighbouring chunks of the same track. Reads via {@link
-   * getAmpScale} are synchronous; consumers don't need to thread a
-   * Promise through their layout.
+   * between neighbouring chunks of the same track. Observable so a
+   * canvas / waveform consumer re-renders the moment registration
+   * publishes the real scale (before registration, {@link getAmpScale}
+   * returns 1 as a passthrough).
    */
-  private ampScales: Map<AudioTrackId, number> = new Map();
+  ampScales: Map<AudioTrackId, number> = new Map();
   private nextReqId = 1;
   private pending: Map<
     number,
     { resolve: (peaks: Float32Array) => void; reject: (err: Error) => void }
   > = new Map();
+
+  constructor() {
+    makeAutoObservable(this);
+  }
 
   /**
    * Lazily construct (or return) the Worker. We don't build it at
@@ -98,7 +104,10 @@ class WaveformWorkerClient {
     // (potentially) transferred to the worker so we still have local
     // access to the Float32Arrays. ~1 ms even on long tracks (the
     // function strides through ~10 k samples).
-    this.ampScales.set(id, computeTrackAmpScale(data));
+    const scale = computeTrackAmpScale(data);
+    runInAction(() => {
+      this.ampScales.set(id, scale);
+    });
     const worker = this.ensureWorker();
     if (!worker) {
       this.fallback.set(id, data);
@@ -132,7 +141,9 @@ class WaveformWorkerClient {
    * session.
    */
   dropTrack(id: AudioTrackId): void {
-    this.ampScales.delete(id);
+    runInAction(() => {
+      this.ampScales.delete(id);
+    });
     if (this.fallback.delete(id)) return;
     const worker = this.ensureWorker();
     if (!worker) return;

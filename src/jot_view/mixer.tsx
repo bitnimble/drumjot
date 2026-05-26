@@ -4,7 +4,13 @@ import React from 'react';
 import { RenderedJot, StructuralBar, ViewConfig } from 'src/jot';
 import { AudioTrack, AudioTrackId, AudioTrackRole, jotPlayer } from 'src/playback';
 import { waveformWorker, BarSlice } from 'src/playback/waveform_worker_client';
-import { BarBeat, ChunkLayout, SECONDS_PER_CHUNK, WaveformChunk, buildChunkLayout } from './waveform_chunks';
+import {
+  BarBeat,
+  ChunkLayout,
+  SECONDS_PER_CHUNK,
+  WaveformChunk,
+  buildChunkLayout,
+} from './waveform_chunks';
 import { GutterResizeHandle } from './components/gutter_resize_handle';
 import { ClearButton, MuteButton, SoloButton } from './components/icon_button';
 import { DropdownButton, dropdownStyles } from './components/dropdown';
@@ -259,9 +265,7 @@ export const MixerView = observer(
             );
           }
           if (key.kind === 'lyrics') {
-            return (
-              <LyricsRow key={reactKey} jot={jot} onSeek={onSeek} {...rowProps} />
-            );
+            return <LyricsRow key={reactKey} jot={jot} onSeek={onSeek} {...rowProps} />;
           }
           return (
             <PitchRow
@@ -469,7 +473,10 @@ export function splitFromMixState(role: AudioTrackRole | undefined): AudioTrackM
     case 'full-mix':
       return { enabled: true, reason: 'Isolate drums and a drumless backing from this recording.' };
     case 'unknown':
-      return { enabled: true, reason: 'Try isolating drums and a drumless backing from this recording.' };
+      return {
+        enabled: true,
+        reason: 'Try isolating drums and a drumless backing from this recording.',
+      };
     case 'drums':
       return { enabled: false, reason: 'Already drums-only.' };
     case 'no-drums':
@@ -488,7 +495,10 @@ export function splitDrumPiecesState(role: AudioTrackRole | undefined): AudioTra
     case 'drums':
       return { enabled: true, reason: 'Split this drum recording into per-instrument pieces.' };
     case 'unknown':
-      return { enabled: true, reason: 'Try splitting this recording into per-instrument drum pieces.' };
+      return {
+        enabled: true,
+        reason: 'Try splitting this recording into per-instrument drum pieces.',
+      };
     case 'full-mix':
       return { enabled: false, reason: 'Isolate drums first.' };
     case 'no-drums':
@@ -658,7 +668,7 @@ const AudioTrackRow = observer(
               <div
                 className={classNames(
                   styles.musicTrackLabel,
-                  !audible && styles.musicTrackLabelDim,
+                  !audible && styles.musicTrackLabelDim
                 )}
               >
                 <span className={styles.musicTrackName} title={label}>
@@ -963,21 +973,33 @@ const PitchRow = observer(
               <span className={styles.leadInLabel}>lead-in</span>
             </div>
           )}
-          {bars.map((bar, i) => (
-            <BarView
-              key={i}
-              bar={bar}
-              pitches={[pitch]}
-              config={config}
-              isAnacrusis={bar.index === 0}
-              highlightedPattern={highlightedPattern}
-              onPatternClick={onPatternClick}
-              isPitchAudible={voiceControls.isPitchAudible}
-              showBrackets={showBrackets}
-              rowPitch={pitch}
-              pitchOrder={pitchOrder}
-            />
-          ))}
+          {(() => {
+            // Cumulative quarter-note position of each bar's left edge
+            // within the voice. Drives the bar's absolute left via
+            // `--bar-start-beat`; see `.bar` in score.module.css.
+            const startBeats = new Array<number>(bars.length);
+            let cursor = 0;
+            for (let i = 0; i < bars.length; i++) {
+              startBeats[i] = cursor;
+              cursor += bars[i].beats;
+            }
+            return bars.map((bar, i) => (
+              <BarView
+                key={i}
+                bar={bar}
+                barStartBeat={startBeats[i]}
+                pitches={[pitch]}
+                config={config}
+                isAnacrusis={bar.index === 0}
+                highlightedPattern={highlightedPattern}
+                onPatternClick={onPatternClick}
+                isPitchAudible={voiceControls.isPitchAudible}
+                showBrackets={showBrackets}
+                rowPitch={pitch}
+                pitchOrder={pitchOrder}
+              />
+            ));
+          })()}
           {rejectedForPitch.map((entry, i) => {
             // The MIDI lays `leadBars` empty bar-0-sized blocks before
             // struct bar 0, so the struct bar index maps to the
@@ -1080,13 +1102,10 @@ const AudioTrackWaveformCanvas = observer(
     const livePxPerBeat = useLiveJotPxPerBeat();
     const REFERENCE_PX_PER_BEAT = 112; // pxPerBeat at zoom=1, default density
     const zoomRatio = Math.max(1, livePxPerBeat / REFERENCE_PX_PER_BEAT);
-    const zoomBucket = Math.max(
-      1,
-      Math.min(8, Math.pow(2, Math.ceil(Math.log2(zoomRatio)))),
-    );
+    const zoomBucket = Math.max(1, Math.min(8, Math.pow(2, Math.ceil(Math.log2(zoomRatio)))));
     const layout = React.useMemo(
       () => buildChunkLayout(jot, SECONDS_PER_CHUNK / zoomBucket),
-      [jot, zoomBucket],
+      [jot, zoomBucket]
     );
 
     // Bucket-transition holdover. When the layout reference changes
@@ -1258,8 +1277,32 @@ const AudioTrackWaveformChunk = observer(
     // on settle. Persisted-state `renderedPxPerBeat` decouples the
     // bitmap rasterisation from the chunk's responsive sizing.
     const livePxPerBeat = useLiveJotPxPerBeat();
+    const padBeats = React.useContext(RenderedJotContext)?.config.barNotePaddingBeats ?? 0.125;
     const [renderedPxPerBeat, setRenderedPxPerBeat] = React.useState<number | null>(null);
     const [isVisible, setIsVisible] = React.useState(false);
+
+    // Snap the chunk's CSS left / width to integer CSS pixels in JS so
+    // the canvas's backing-store width (= cssWidth × dpr) and the peak
+    // buffer length (= 2 × cssWidth) are both whole integers - and so
+    // adjacent chunks share an *exactly* aligned boundary (chunk N+1's
+    // left = chunk N's right by construction, no asymmetric rounding
+    // gap or overlap). Without this, each chunk's CSS width came from
+    // `round(right_edge) - round(left_edge)` in CSS, and the two edges
+    // would round in different directions for adjacent chunks (one to
+    // -0.5, one to +0.5) - leaving each chunk's canvas bitmap stretched
+    // by a slightly different ratio, which renders as a visible
+    // brightness / density step at the chunk boundary. Same snapped
+    // width feeds the canvas backing-store, the inline CSS width, and
+    // the peak buffer length so all three agree to the pixel.
+    const chunkLayout = React.useMemo(() => {
+      const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+      const padPx = Math.round(padBeats * livePxPerBeat * dpr) / dpr;
+      const leftRaw = chunk.startBeat * livePxPerBeat + padPx;
+      const rightRaw = leftRaw + chunk.totalBeats * livePxPerBeat;
+      const left = Math.round(leftRaw);
+      const right = Math.round(rightRaw);
+      return { left, width: Math.max(0, right - left) };
+    }, [chunk.startBeat, chunk.totalBeats, livePxPerBeat, padBeats]);
 
     // Hook up IntersectionObserver on mount; tear down on unmount.
     // Root is the score's scroll container (marked with
@@ -1279,20 +1322,42 @@ const AudioTrackWaveformChunk = observer(
       return () => io.disconnect();
     }, []);
 
+    // Track whether this chunk was visible on the previous effect run.
+    // Used below to detect "just entered viewport" vs "already visible
+    // and livePxPerBeat changed", which need different scheduling.
+    const prevIsVisibleRef = React.useRef(false);
+
     // Draw effect. Gated on visibility so off-screen chunks never hit
     // the worker; gated on `chunk.totalBeats > 0` so a degenerate
     // tail-clipped chunk doesn't request a zero-width bitmap.
     React.useEffect(() => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-      if (!isVisible) return;
+      if (!isVisible) {
+        prevIsVisibleRef.current = false;
+        return;
+      }
+      const justEnteredView = !prevIsVisibleRef.current;
+      prevIsVisibleRef.current = true;
       if (chunk.totalBeats <= 0) return;
       let cancelled = false;
       const draw = async () => {
-        const renderedScale = livePxPerBeat;
-        if (renderedScale <= 0) return;
-        const widthPx = chunk.totalBeats * renderedScale;
+        if (livePxPerBeat <= 0) return;
+        // Use the snapped CSS width (integer CSS px) for the peak
+        // buffer / canvas backing too, so the bitmap matches the canvas
+        // box exactly with no implicit stretch from the browser. The
+        // peak loop reads `peaks[p * 2 + 1]` for `p < widthPx`, so an
+        // integer keeps every read in bounds.
+        const widthPx = chunkLayout.width;
         if (widthPx <= 0) return;
+        // Effective per-beat scale for this bitmap. Differs from
+        // `livePxPerBeat` by at most ~0.5 CSS px / chunk.totalBeats
+        // (because `widthPx` is rounded to integer above); using the
+        // bitmap's actual per-beat ratio for the bar slice mapping
+        // keeps each column's audio time aligned to the chunk's CSS
+        // box, so a transient at beat B in the source audio lands
+        // exactly under beat B in the snapped chunk geometry.
+        const renderedScale = widthPx / chunk.totalBeats;
         // Bar slices in chunk-local pixel coordinates: bars to the
         // left of the chunk get a negative `x`, bars to the right
         // get `x >= widthPx`; the worker's clamp drops both groups
@@ -1319,12 +1384,18 @@ const AudioTrackWaveformChunk = observer(
         // never hit (a 30 s chunk at 100 px/s × 2 dpr = 6 000 px),
         // so chunks are now effectively unbounded in resolution.
         const MAX_CANVAS_DIM = 16384;
-        const backingW = Math.min(Math.max(1, Math.floor(widthPx * dpr)), MAX_CANVAS_DIM);
+        // `widthPx` is integer (from `chunkLayout.width`) so
+        // `widthPx * dpr` is also integer - no `Math.floor` needed,
+        // and the backing-store width is exactly `cssWidth × dpr`,
+        // so `image-rendering: pixelated` displays the bitmap 1:1
+        // with no stretch.
+        const backingW = Math.min(Math.max(1, widthPx * dpr), MAX_CANVAS_DIM);
         const backingH = Math.min(Math.max(1, Math.floor(height * dpr)), MAX_CANVAS_DIM);
         c.width = backingW;
         c.height = backingH;
         const ctx = c.getContext('2d');
         if (!ctx) return;
+        ctx.imageSmoothingEnabled = false;
         ctx.setTransform(backingW / widthPx, 0, 0, backingH / height, 0, 0);
         ctx.clearRect(0, 0, widthPx, height);
         ctx.fillStyle = pitchColor ?? '#5BA8E8';
@@ -1346,25 +1417,37 @@ const AudioTrackWaveformChunk = observer(
           const y1 = Math.min(height, mid - mn * yScale);
           ctx.fillRect(p, y0, 1, Math.max(1, y1 - y0));
         }
-        setRenderedPxPerBeat(renderedScale);
+        // Track the live zoom (not `renderedScale`, which is the
+        // chunk's effective per-beat ratio after integer rounding) for
+        // staleness detection - we want a redraw when the user zooms,
+        // not when an integer-rounded width happens to shift.
+        setRenderedPxPerBeat(livePxPerBeat);
       };
-      // First entry into the viewport: draw immediately so the chunk
-      // doesn't show empty during the catch-up.
-      if (renderedPxPerBeat === null) {
+      // First-time draw OR entering the viewport with a bitmap rendered
+      // at a different scale than the live zoom: draw immediately. The
+      // stretched-bitmap fallback (rendering the old bitmap at the new
+      // CSS width) survives an rAF, but the bilinear interpolation
+      // changes line density / perceived brightness, so neighbouring
+      // chunks at different rendered scales read as a brightness step
+      // at the chunk boundary. Drawing on the same tick the chunk
+      // enters view eliminates that flash. Doesn't pile up worker
+      // calls during sustained scroll because each chunk only enters
+      // view once per pass.
+      const staleOnEntry =
+        justEnteredView && renderedPxPerBeat !== null && renderedPxPerBeat !== livePxPerBeat;
+      if (renderedPxPerBeat === null || staleOnEntry) {
         void draw();
         return () => {
           cancelled = true;
         };
       }
-      // Subsequent redraws (after zoom changes) coalesce on rAF: each
-      // livePxPerBeat tick re-runs this effect and queues a fresh
-      // animation-frame callback, the previous one (via the cleanup
-      // below) is cancelled. So a sustained wheel-zoom gesture
-      // triggers at most one worker call per displayed frame and the
-      // bitmap rasterisation tracks the zoom in near-real-time. The
-      // older 300 ms debounce kept the bitmap at the pre-zoom scale
-      // until the gesture settled, which is what made the waveform
-      // visibly blur during the zoom.
+      // Subsequent redraws on an already-visible chunk (e.g. mid-zoom
+      // wheel gesture) coalesce on rAF: each livePxPerBeat tick re-runs
+      // this effect and queues a fresh animation-frame callback, the
+      // previous one (via the cleanup below) is cancelled. So a
+      // sustained wheel-zoom gesture triggers at most one worker call
+      // per displayed frame and the bitmap rasterisation tracks the
+      // zoom in near-real-time.
       const id = requestAnimationFrame(() => {
         void draw();
       });
@@ -1383,16 +1466,21 @@ const AudioTrackWaveformChunk = observer(
       pitchColor,
       ampScale,
       track,
+      chunkLayout,
     ]);
 
-    // The canvas's CSS width comes from `--chunk-beats × --px-per-beat`
-    // (see `.musicTrackWaveformChunk`). During the gap between a
-    // zoom event and the next rasterisation, the chunk's container
-    // width grows with `--px-per-beat` while the bitmap's intrinsic
-    // size is still at `renderedPxPerBeat × chunk.totalBeats`; the
-    // canvas element scales its bitmap to its CSS width naturally,
-    // which gives the same visual stretch the legacy `scaleX` rule
-    // produced; no explicit transform needed here.
+    // Canvas `left` / `width` come from `chunkLayout` (JS-snapped to
+    // integer CSS px), not from the CSS calc on
+    // `.musicTrackWaveformChunk` - inline styles override CSS, and we
+    // need the canvas's CSS box to match the bitmap's pixel count
+    // (`widthPx * dpr` backing) exactly so adjacent chunks share a
+    // pixel-perfect boundary and `image-rendering: pixelated`
+    // displays the bitmap 1:1. During the gap between a zoom event
+    // and the next rasterisation, the chunk's container width grows
+    // with `livePxPerBeat` while the bitmap's intrinsic size is
+    // still at the last rendered scale; the canvas element scales
+    // the bitmap nearest-neighbour (via image-rendering: pixelated)
+    // until the rAF redraw catches up.
     return (
       <canvas
         ref={canvasRef}
@@ -1400,8 +1488,8 @@ const AudioTrackWaveformChunk = observer(
         style={
           {
             height,
-            ['--chunk-start-beat' as string]: chunk.startBeat,
-            ['--chunk-beats' as string]: chunk.totalBeats,
+            left: `${chunkLayout.left}px`,
+            width: `${chunkLayout.width}px`,
           } as React.CSSProperties
         }
         data-testid={testId}
@@ -1471,10 +1559,7 @@ const GutterMasterRow = observer(
       <div className={styles.gutterMasterRow}>
         <div className={styles.gutterMasterGutter} title={title} data-testid={testId}>
           <span
-            className={classNames(
-              styles.gutterMasterLabel,
-              !audible && styles.musicTrackLabelDim
-            )}
+            className={classNames(styles.gutterMasterLabel, !audible && styles.musicTrackLabelDim)}
           >
             {label}
           </span>

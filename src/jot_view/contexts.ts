@@ -3,7 +3,7 @@ import { NoteProvenanceEntry } from 'src/debug_zip';
 import { RenderedJot } from 'src/jot';
 import { BarTiming } from 'src/playback';
 import { SelectionStore } from 'src/selection';
-import { GridLineSettings } from './store';
+import { GridLineSettings, JotViewStore } from './store';
 
 /**
  * Routes the active {@link SelectionStore} to deep score chrome (today:
@@ -12,6 +12,14 @@ import { GridLineSettings } from './store';
  * in isolation just no-ops the click-to-select interaction.
  */
 export const SelectionContext = React.createContext<SelectionStore | null>(null);
+
+/**
+ * Routes the active {@link JotViewStore} to deep consumers that need to
+ * read or drive view-level state (today: `FilteredOnsetView`'s pinned-
+ * popover identity). `null` outside the view; consumers should no-op or
+ * fall back to local state.
+ */
+export const JotViewStoreContext = React.createContext<JotViewStore | null>(null);
 
 /**
  * Routes the loaded debug bundle's per-note provenance to two deep

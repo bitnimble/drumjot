@@ -249,6 +249,46 @@
     will-change: transform;
 }
 
+/* Shared geometry for every beat-anchored bars-row in the score
+   (timeline header, pitch rows, audio-track waveform, lyrics). All
+   four are flex siblings of a sticky gutter inside `.scrollViewport`,
+   so they need:
+     - `position: relative` so absolutely-positioned children (bars,
+       waveform tiles, lyric words, ticks, the playhead) anchor inside.
+     - `flex: 0 0 auto` so the row keeps its natural calc-derived width
+       inside the parent flex (no shrinking when the gutter is wide).
+     - Explicit `width: --voice-beats × --px-per-beat × 1px` so the row
+       has a defined bounding box across the full song.
+   `--voice-beats` is set inline per row at render time;
+   `--px-per-beat` lives on the score root and is the one variable
+   zoom mutates.
+
+   No `will-change: transform` or `transform: translateZ(0)` here.
+   `.scrollViewport` (the single ancestor that owns the scroll
+   transform) already promotes itself to a compositor layer with an
+   explicit `transform: translate3d(...)`; everything below it - bars,
+   waveform tiles, ticks, lyric words, the playheads - paints into
+   that one bitmap and translates with it as a unit. Adding a
+   per-row layer here was the previous design, but it makes each row
+   its own nested compositor layer, and Chrome integer-snaps each
+   nested layer's position independently while the parent translates
+   sub-pixel. That surfaces as the audio waveform tiles and barlines
+   wobbling ~1px back-and-forth against each other during auto-follow
+   scroll. Letting the rows paint into the parent layer locks them
+   together: the scrollViewport's single sub-pixel translate moves the
+   whole bitmap, and nothing inside can shift independently.
+   Scroll perf is unchanged - scrollViewport's compositor translate is
+   still GPU-only (no repaint); we just don't fragment that one
+   translate across N child layers.
+
+   Consumers `composes:` this and add row-specific chrome (background,
+   borders, z-index, font tracking). */
+.barsRowBase {
+    position: relative;
+    flex: 0 0 auto;
+    width: calc(var(--voice-beats) * var(--px-per-beat) * 1px);
+}
+
 /* Compose the counter-transform above so these blocks stay pinned at
    the viewport's left edge as the wrapper scrolls horizontally;
    matches the previous `position: sticky; left: 0` semantics.

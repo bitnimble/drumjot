@@ -279,10 +279,11 @@ export class JotPlayer {
    * boolean per section (see `JotViewStore.isAudioSectionAudible` /
    * `.isDrumSectionAudible`). When false the corresponding bus gain is
    * pinned at 0 regardless of the master fader; when true the fader
-   * value takes over again.
+   * value takes over again. Public + observable so a non-React renderer
+   * can show muted-bus state without going back through the store.
    */
-  private drumMasterAudible: boolean = true;
-  private audioMasterAudible: boolean = true;
+  drumMasterAudible: boolean = true;
+  audioMasterAudible: boolean = true;
 
   /**
    * Audio tracks loaded by the user — any number (a ParaDB pack's
@@ -337,7 +338,10 @@ export class JotPlayer {
   private pageGain: GainNode | undefined;
   private audioBusGain: GainNode | undefined;
   private audioTrackController: AudioTrackPlaybackController | undefined;
-  private currentAudioTrackFilter: AudioTrackFilter = PASSTHROUGH_AUDIO_TRACK_FILTER;
+  /** Last mute/solo/volume filter pushed by the store. Observable so an
+   * alt renderer can read what filter the audio is actually running under
+   * without having to re-derive it. */
+  currentAudioTrackFilter: AudioTrackFilter = PASSTHROUGH_AUDIO_TRACK_FILTER;
   /**
    * Drum-track ↔ audio-track offset, in seconds — the recording's
    * lead-in. It's the audio-time that lines up with jot-time 0: each
@@ -399,7 +403,9 @@ export class JotPlayer {
    * toggle without having to re-walk the layout.
    */
   private events: PlaybackEvent[] = [];
-  private currentFilter: PlayerFilter = PASSTHROUGH_FILTER;
+  /** Last pitch-side mute/solo/volume filter pushed by the store.
+   * Same alt-renderer rationale as {@link currentAudioTrackFilter}. */
+  currentFilter: PlayerFilter = PASSTHROUGH_FILTER;
   /**
    * Jot-time (seconds) the next `play()` should start from, set by a
    * click-to-seek while idle. `undefined` means "start from the

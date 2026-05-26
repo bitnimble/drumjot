@@ -13,6 +13,7 @@ import {
   BarTimingsContext,
   FollowPlayheadContext,
   GridLineSettingsContext,
+  JotViewStoreContext,
   NoteProvenanceContext,
   NoteProvenanceContextValue,
   RenderedJotContext,
@@ -28,7 +29,7 @@ import { Minimap } from './jot_view/minimap';
 import { VerticalScrollbar } from './jot_view/vertical_scrollbar';
 import { PlaybackBar } from './jot_view/playback';
 import { Legend, TimelineHeader, extractArtist, formatDisplayTitle, formatSubtitle } from './jot_view/score';
-import { GridLineSettings, JotViewStore, TrackKey } from './jot_view/store';
+import { GridLineSettings, JotViewStore, TrackKey, snapToDevicePx } from './jot_view/store';
 import { RecentTranscriptionsPicker } from './jot_view/recent_transcriptions';
 import { DebugPanel, Toolbar } from './jot_view/toolbar';
 import { ExampleJot } from 'src/fakes';
@@ -171,12 +172,9 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
         }
       : null;
 
-    // Lyrics search modal: open/close + seeded fields are local React
-    // state rather than store-observable. The modal pre-fills title /
-    // artist from the current jot on open; subsequent edits stay in the
-    // modal's own local state.
-    const [lyricsSearchOpen, setLyricsSearchOpen] = React.useState(false);
-    const [lyricsTextOpen, setLyricsTextOpen] = React.useState(false);
+    // Lyrics modal visibility lives on the store so any TS consumer can
+    // observe / drive it; the seeded title/artist fields are still local
+    // (re-derived from the current jot on open).
     const lyricsInitialTitle = jot?.title.trim() ?? '';
     const lyricsInitialArtist = jot ? (extractArtist(jot) ?? '') : '';
 
@@ -190,6 +188,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     );
 
     return (
+      <JotViewStoreContext.Provider value={store}>
       <SelectionContext.Provider value={selection}>
       <NoteProvenanceContext.Provider value={provenanceContextValue}>
       <GridLineSettingsContext.Provider value={store.gridLines}>
@@ -212,8 +211,8 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
           onLoadDebugBundle={(file) => store.loadDebugBundleFile(file)}
           onLoadAudioTrack={(file) => store.loadAudioTrack(file)}
           onLoadLyricsFile={(file) => store.loadLyricsFile(file)}
-          onOpenLyricsTextLoad={() => setLyricsTextOpen(true)}
-          onOpenLyricsSearch={() => setLyricsSearchOpen(true)}
+          onOpenLyricsTextLoad={() => store.setLyricsTextOpen(true)}
+          onOpenLyricsSearch={() => store.setLyricsSearchOpen(true)}
           onClearLyrics={() => store.clearLyrics()}
           hasLyrics={lyricsStore.hasLyrics}
           onCancelTranscribe={() => store.cancelTranscribe()}
@@ -303,15 +302,15 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
         <PlaybackBar store={store} />
         <DebugPanel store={store} />
         <LyricsSearchModal
-          open={lyricsSearchOpen}
+          open={store.lyricsSearchOpen}
           initialTitle={lyricsInitialTitle}
           initialArtist={lyricsInitialArtist}
-          onClose={() => setLyricsSearchOpen(false)}
+          onClose={() => store.setLyricsSearchOpen(false)}
           store={store}
         />
         <LyricsTextLoadModal
-          open={lyricsTextOpen}
-          onClose={() => setLyricsTextOpen(false)}
+          open={store.lyricsTextOpen}
+          onClose={() => store.setLyricsTextOpen(false)}
           store={store}
         />
         <LoadingOverlay store={store} />
@@ -321,6 +320,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
       </GridLineSettingsContext.Provider>
       </NoteProvenanceContext.Provider>
       </SelectionContext.Provider>
+      </JotViewStoreContext.Provider>
     );
   });
 
@@ -400,14 +400,6 @@ const JotView = observer((props: JotViewProps) => {
   // new scale to every descendant via calc()).
   const config = jot.config;
   const containerRef = React.useRef<HTMLDivElement>(null);
-  // Cached container `clientWidth`, refreshed only on container resize.
-  // Read by `PlayheadPosVar` every animation frame to compute the
-  // auto-scroll target without forcing a synchronous style+layout
-  // flush. The flush is otherwise ~30 ms on a long-song DOM because
-  // setting `--playhead-x` immediately before invalidates style on the
-  // whole container subtree (CSS custom-property cascade), and
-  // `clientWidth` requires up-to-date layout to return.
-  const containerWidthRef = React.useRef(0);
   // Ref to the inner `.scrollViewport` wrapper. Its `offsetWidth` /
   // `offsetHeight` is the scroll-content's natural size (the analogue
   // of `scrollWidth` / `scrollHeight` in the previous native-overflow
@@ -419,7 +411,6 @@ const JotView = observer((props: JotViewProps) => {
     const viewport = viewportRef.current;
     if (!container || !viewport) return;
     const updateContainer = () => {
-      containerWidthRef.current = container.clientWidth;
       store.setViewportSize(container.clientWidth, container.clientHeight);
     };
     const updateViewport = () => {
@@ -713,7 +704,6 @@ const JotView = observer((props: JotViewProps) => {
         <ScrollVar containerRef={containerRef} store={store} />
         <PlayheadPosVar
           containerRef={containerRef}
-          containerWidthRef={containerWidthRef}
           getGutterWidth={getGutterWidth}
           store={store}
         />
@@ -743,11 +733,7 @@ const JotView = observer((props: JotViewProps) => {
           />
           <MarqueeOverlay />
         </div>
-        <VerticalScrollbar
-          store={store}
-          containerRef={containerRef}
-          viewportRef={viewportRef}
-        />
+        <VerticalScrollbar store={store} />
       </div>
     </BarTimingsContext.Provider>
     </RenderedJotContext.Provider>
@@ -854,17 +840,26 @@ const GridLineVars = observer(
 );
 
 /**
- * Side-effect-only observer that writes `--scroll-x` / `--scroll-y` onto
- * the score container whenever the store's virtual scroll offsets
- * change. Mirrors the `ScoreZoomVar` / `GutterWidthVar` pattern: read
- * the observable, write the var, no React re-render in the subtree.
+ * Side-effect-only observer that writes `--scroll-x` / `--scroll-y` on
+ * each consumer (the inner `.scrollViewport` plus every
+ * `.scrollStickyHorizontal` element) whenever the store's virtual
+ * scroll offsets change. Mirrors the `ScoreZoomVar` / `GutterWidthVar`
+ * pattern: read the observable, write the var, no React re-render in
+ * the subtree.
  *
  * The wrapper `.scrollViewport` reads these vars via
  * `transform: translate3d(calc(var(--scroll-x) * -1px), ...)`, and the
  * `.scrollStickyHorizontal` class reads the same `--scroll-x` to
  * counter-transform formerly `position: sticky; left: 0` elements
- * (gutters, title/subtitle/legend). Driving both off one var keeps
- * them subpixel-locked frame to frame.
+ * (gutters, title/subtitle/legend); both consumers stay subpixel-locked
+ * because the writes happen in the same effect tick.
+ *
+ * Per-consumer write rather than a cascading write on `.jotContainer`:
+ * the vars are registered `inherits: false` so a single container-level
+ * setProperty would no longer reach any consumer; targeting each one
+ * directly also keeps the per-frame style invalidation scoped to a few
+ * dozen elements instead of the entire score subtree. See
+ * `setScrollX` / `setScrollY` for the targeting helpers.
  */
 const ScrollVar = observer(
   ({
@@ -881,21 +876,64 @@ const ScrollVar = observer(
       if (!el) return;
       // Unitless so the `calc(var(...) * -1px)` form in CSS multiplies a
       // number by `1px` to get a length, mirroring `--px-per-beat`'s
-      // unitless storage.
-      el.style.setProperty('--scroll-x', String(x));
-      el.style.setProperty('--scroll-y', String(y));
+      // unitless storage. Written per-consumer to avoid the inherited-
+      // cascade subtree invalidation; see `setScrollX` / `setScrollY`.
+      setScrollX(el, x);
+      setScrollY(el, y);
     }, [x, y, containerRef]);
     return null;
   },
 );
 
 /**
- * Side-effect-only observer that writes `--playhead-x` (in px) onto the
- * score container on every player tick AND, when playback follow is
- * engaged, pins the score's virtual scrollX to keep the playhead at
- * the viewport's horizontal centre. Both writes happen in the same
- * `useLayoutEffect` (pre-paint) so the playhead position and the
- * score's scroll update in the same frame.
+ * Per-frame animation vars (`--playhead-x`, `--scroll-x`, `--scroll-y`)
+ * are written on each consumer element rather than on `.jotContainer`.
+ * The vars are registered `inherits: false` (see design_tokens.css), so
+ * writing them on `.jotContainer` would no longer cascade to consumers;
+ * instead, we target each consumer directly. Without this, the default
+ * inheritance forces a style recalc across the entire score subtree
+ * (~22ms on a long song) every frame.
+ *
+ * `--playhead-x` consumers: `.playhead` (tagged `data-playhead="1"`).
+ * `--scroll-x` consumers: `.scrollViewport` (tagged `data-jot-scroll-
+ * content`) AND every `.scrollStickyHorizontal` element (composed into
+ * title / subtitle / legend / row gutters / drag handles).
+ * `--scroll-y` consumers: `.scrollViewport` only.
+ */
+function setPlayheadVar(root: HTMLElement, x: number): void {
+  const px = `${x}px`;
+  const playheads = root.querySelectorAll<HTMLElement>('[data-playhead="1"]');
+  for (const ph of playheads) ph.style.setProperty('--playhead-x', px);
+}
+
+function clearPlayheadVar(root: HTMLElement): void {
+  const playheads = root.querySelectorAll<HTMLElement>('[data-playhead="1"]');
+  for (const ph of playheads) ph.style.removeProperty('--playhead-x');
+}
+
+function setScrollX(root: HTMLElement, x: number): void {
+  const xStr = String(x);
+  const viewport = root.querySelector<HTMLElement>('[data-jot-scroll-content]');
+  if (viewport) viewport.style.setProperty('--scroll-x', xStr);
+  const sticky = root.querySelectorAll<HTMLElement>(
+    '.' + styles.scrollStickyHorizontal,
+  );
+  for (const el of sticky) el.style.setProperty('--scroll-x', xStr);
+}
+
+function setScrollY(root: HTMLElement, y: number): void {
+  const viewport = root.querySelector<HTMLElement>('[data-jot-scroll-content]');
+  if (viewport) viewport.style.setProperty('--scroll-y', String(y));
+}
+
+/**
+ * Side-effect-only observer that writes `--playhead-x` (in px) onto
+ * every `[data-playhead="1"]` element on every player tick AND, when
+ * playback follow is engaged, pins the score's virtual scrollX to keep
+ * the playhead at the viewport's horizontal centre. Both writes happen
+ * in the same `useLayoutEffect` (pre-paint) so the playhead position
+ * and the score's scroll update in the same frame. See `setPlayheadVar`
+ * for why the var is written per-element instead of on the container.
  *
  * Per-frame cost: one `timeToX` walk, one CSS-var write, and (during
  * playback follow) one `store.setScrollX` call. The target scrollX is
@@ -923,12 +961,10 @@ const ScrollVar = observer(
 const PlayheadPosVar = observer(
   ({
     containerRef,
-    containerWidthRef,
     getGutterWidth,
     store,
   }: {
     containerRef: React.RefObject<HTMLDivElement>;
-    containerWidthRef: React.MutableRefObject<number>;
     getGutterWidth: () => number;
     store: JotViewStore;
   }) => {
@@ -959,17 +995,27 @@ const PlayheadPosVar = observer(
       // no-op until the first play has happened.
       if (wasActive && state === 'idle') {
         store.resetScrollX();
-        el.style.removeProperty('--playhead-x');
+        clearPlayheadVar(el);
         return;
       }
 
       const active = state === 'playing' || state === 'paused' || cued;
       if (!active || timeline.bars.length === 0) {
-        el.style.removeProperty('--playhead-x');
+        clearPlayheadVar(el);
         return;
       }
 
-      const x = timeToX(timeline, t);
+      // Snap the playhead's pixel position to the device-pixel grid
+      // BEFORE deriving the auto-follow scrollX target so both CSS
+      // vars share the same snapped value. `setScrollX` also snaps
+      // inside the store, so if we passed the unsnapped `x` here AND
+      // again to `setPlayheadVar` below, the two would round
+      // independently; the difference (always < 1/dpr CSS px) would
+      // drift between frames as the targets cross snap boundaries,
+      // leaving the centred playhead visibly wobbling sub-pixel
+      // against the scrolling bars. Using one snapped `x` for both
+      // keeps the relationship exact.
+      const x = snapToDevicePx(timeToX(timeline, t));
 
       // Auto-scroll only while playing AND when follow is engaged. A
       // paused or cued playhead still updates `--playhead-x` below (so
@@ -988,13 +1034,13 @@ const PlayheadPosVar = observer(
       // eliminates a possible one-frame lag of the score behind the
       // playhead during auto-follow.
       if (follow && state === 'playing') {
-        const clientWidth = containerWidthRef.current;
+        const clientWidth = store._viewportWidth;
         if (clientWidth > 0) {
           store.setScrollX(getGutterWidth() + x - clientWidth / 2);
-          el.style.setProperty('--scroll-x', String(store.scrollX));
+          setScrollX(el, store.scrollX);
         }
       }
-      el.style.setProperty('--playhead-x', `${x}px`);
+      setPlayheadVar(el, x);
     }, [
       t,
       state,
@@ -1003,7 +1049,6 @@ const PlayheadPosVar = observer(
       pxPerBeat,
       follow,
       containerRef,
-      containerWidthRef,
       getGutterWidth,
       store,
     ]);

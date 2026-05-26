@@ -35,12 +35,11 @@
 }
 
 .timelineHeaderBarsRow {
-    position: relative;
-    flex: 0 0 auto;
+    composes: barsRowBase from '../jot_view.module.css';
     height: 28px;
     background: var(--color-bg-cream);
     /* `border-box` so the right border draws INSIDE the row's width,
-     matching the `box-sizing: border-box` `.bar` cells below — their
+     matching the `box-sizing: border-box` `.bar` cells below; their
      accumulated widths include each bar's right barline, so the closing
      right border here lands exactly on the final barline below. */
     box-sizing: border-box;
@@ -48,14 +47,6 @@
     border-bottom: 1px solid var(--color-border);
     border-right: 1px solid var(--color-border);
     cursor: pointer;
-    /* Width derived from the row's total beats × score-root
-       `--px-per-beat` (set on the JotView container). Zooming mutates
-       only `--px-per-beat`, so this header doesn't re-render. */
-    width: calc(var(--voice-beats) * var(--px-per-beat) * 1px);
-    /* Soft GPU hint so horizontal scroll composites the ruler instead
-       of repainting every tick / time label every frame on a long
-       song; mirrors `.barsRow` / `.musicTrackBarsRow` in mixer.css. */
-    will-change: transform;
 }
 
 /* One tick per bar boundary; sits on the same x as the score's barline
@@ -116,7 +107,21 @@
 }
 
 .bar {
-    position: relative;
+    /* Absolutely positioned within `.barsRow` rather than a flex item.
+       Flex accumulation would compute each bar's left edge as the sum
+       of preceding fractional widths and then pixel-snap the per-item
+       position for layout, which left the right-edge barline visibly
+       stepping during sub-pixel scroll. Reading `--bar-start-beat`
+       directly via calc gives each bar a precise sub-pixel left and
+       matches the pattern used by `.timelineHeaderTick`,
+       `.musicTrackWaveformChunk`, `.lyricWord`, etc. top:0/bottom:0
+       stretches the bar to the bars row's full height (the pitch
+       gutter is taller than a single lane) so the right-edge barline
+       reads as one continuous line down to the row separator. */
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: calc(var(--bar-start-beat) * var(--px-per-beat) * 1px);
     /* border-box so the barline draws INSIDE the bar's width. With
      the default content-box the border added its width to every bar's
      flow footprint, accumulating per-bar against the border-free model
@@ -124,21 +129,15 @@
      right of the playhead and audio. */
     box-sizing: border-box;
     border-right: 2px solid var(--color-border-strong);
-    flex: 0 0 auto;
-    /* Stretch to the full barsRow height (the pitch gutter is taller
-       than one lane), so the right-edge barline reads as one continuous
-       line down the entire row instead of stopping at the lane's bottom
-       a few pixels above the row separator. Lanes have explicit
-       `height: trackHeight` and are kept vertically centred inside the
-       now-taller bar via this flex-column layout. Pattern brackets and
-       tuplet brackets remain absolute-positioned children of `.bar`
-       (their `top` offsets sit slightly outside the bar's top edge). */
-    align-self: stretch;
     display: flex;
     flex-direction: column;
     justify-content: center;
     /* `--bar-beats` is set inline per BarView (zoom-invariant);
-       `--px-per-beat` lives on the score root. */
+       `--px-per-beat` lives on the score root. Lanes have explicit
+       `height: trackHeight` and stay vertically centred via the
+       flex-column above. Pattern brackets and tuplet brackets remain
+       absolute-positioned children of `.bar` (their `top` offsets sit
+       slightly outside the bar's top edge). */
     width: calc(var(--bar-beats) * var(--px-per-beat) * 1px);
     /* Browser-level virtualization for long songs: off-screen bars
        skip layout / paint of their children (notes, grid layers,
@@ -411,6 +410,16 @@
         var(--color-border-translucent-faint) 0 6px,
         transparent 6px 12px
     );
+    /* `--leadin-y` is each bar's document-relative top, written by
+       BarView's layout effect. For 45° NW-SE stripes a vertical step
+       of Y is visually identical to a horizontal step of Y, so we
+       compensate each row's y-offset with a horizontal background
+       shift; folded mod the pattern's diagonal period (12px × √2 ≈
+       17px) it stays a sub-period tweak. Result: every lead-in's hatch
+       reads as a slice of one global gradient, so the diagonals run
+       seamlessly across variable inter-row gaps (1px row borders,
+       gutter-driven row heights, group separators). */
+    background-position: mod(var(--leadin-y, 0px), 12px * sqrt(2)) 0;
 }
 
 .barLeadInLast {

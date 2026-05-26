@@ -52,11 +52,6 @@ type NoteMark = {
   color: string;
 };
 
-/** Stable cross-component handle to the JotView's scroll container. */
-function findScroller(): HTMLDivElement | null {
-  return document.querySelector<HTMLDivElement>('[data-jot-scroller]');
-}
-
 /**
  * Pick the audio track to render as the minimap's waveform. Priority:
  * a backing track (no `pitch`; typically `no_drums` or an ad-hoc music
@@ -229,74 +224,35 @@ export const Minimap = observer(({ store }: { store: JotViewStore }) => {
   // The dim overlays sit flush against either side of the viewport box,
   // covering everything outside it with a subtle fade so the in-view
   // range reads as the prominent slice (IDE-minimap convention).
-  //
-  // Three triggers feed the same `update()`:
-  //   1. `store.scrollX` changes (read below in render so MobX re-renders
-  //      this component; the layout effect with `scrollX` in deps then
-  //      calls update via `updateBoxRef`).
-  //   2. ResizeObserver on the scroller (clientWidth changes).
-  //   3. ResizeObserver on the `.scrollViewport` content (offsetWidth
-  //      changes from zoom). The scroller's own ResizeObserver doesn't
-  //      cover this; zooming the score mutates the content, not the
-  //      scroller. Without this observer, zooming out while parked at
-  //      scrollX=0 would leave the box stuck at its pre-zoom width.
-  //
-  // The previous implementation listened to the native `scroll` event
-  // on the scroller; with virtual scroll (`.jotContainer` is
-  // `overflow: hidden`), no `scroll` event fires, so we react to the
-  // store's observable directly.
+  // Inputs (`scrollX`, `_viewportWidth`, `_contentWidth`) are MobX
+  // observables on the store; the component re-renders whenever any of
+  // them changes and a useLayoutEffect writes the derived px values to
+  // the imperative refs to avoid touching JSX for a high-frequency style.
   const scrollX = store.scrollX;
-  const updateBoxRef = React.useRef<() => void>(() => {});
-  React.useEffect(() => {
+  const sw = store._contentWidth;
+  const cw = store._viewportWidth;
+  React.useLayoutEffect(() => {
     if (!hasContent || width <= 0) return;
-    const scroller = findScroller();
-    const content = scroller?.querySelector<HTMLElement>(
-      '[data-jot-scroll-content]',
-    );
     const box = viewportBoxRef.current;
     const dimLeft = dimLeftRef.current;
     const dimRight = dimRightRef.current;
-    if (!scroller || !content || !box || !dimLeft || !dimRight) return;
-    const update = () => {
-      const sw = content.offsetWidth;
-      const cw = scroller.clientWidth;
-      const sl = store.scrollX;
-      if (sw <= 0) {
-        box.style.width = '0px';
-        dimLeft.style.width = '0px';
-        dimRight.style.width = '0px';
-        return;
-      }
-      const boxLeft = (sl / sw) * width;
-      const boxWidth = Math.max(2, (cw / sw) * width);
-      box.style.left = `${boxLeft}px`;
-      box.style.width = `${boxWidth}px`;
-      dimLeft.style.left = '0px';
-      dimLeft.style.width = `${Math.max(0, boxLeft)}px`;
-      const rightStart = boxLeft + boxWidth;
-      dimRight.style.left = `${rightStart}px`;
-      dimRight.style.width = `${Math.max(0, width - rightStart)}px`;
-    };
-    updateBoxRef.current = update;
-    update();
-    const scrollerRo = new ResizeObserver(update);
-    const contentRo = new ResizeObserver(update);
-    scrollerRo.observe(scroller);
-    contentRo.observe(content);
-    return () => {
-      scrollerRo.disconnect();
-      contentRo.disconnect();
-      updateBoxRef.current = () => {};
-    };
-  }, [width, jot, hasContent, store]);
-  // Scroll-position sync: fires whenever `store.scrollX` changes (the
-  // read above tracks it, so MobX re-renders this observer, and this
-  // layout effect's `scrollX` dep changes). Reuses the `update` closure
-  // captured in the size/setup effect above so we don't duplicate the
-  // sw/cw/sl math.
-  React.useLayoutEffect(() => {
-    updateBoxRef.current();
-  }, [scrollX]);
+    if (!box || !dimLeft || !dimRight) return;
+    if (sw <= 0) {
+      box.style.width = '0px';
+      dimLeft.style.width = '0px';
+      dimRight.style.width = '0px';
+      return;
+    }
+    const boxLeft = (scrollX / sw) * width;
+    const boxWidth = Math.max(2, (cw / sw) * width);
+    box.style.left = `${boxLeft}px`;
+    box.style.width = `${boxWidth}px`;
+    dimLeft.style.left = '0px';
+    dimLeft.style.width = `${Math.max(0, boxLeft)}px`;
+    const rightStart = boxLeft + boxWidth;
+    dimRight.style.left = `${rightStart}px`;
+    dimRight.style.width = `${Math.max(0, width - rightStart)}px`;
+  }, [scrollX, sw, cw, width, hasContent]);
 
   // ─── Pointer interaction: click-to-jump + drag-to-scroll ───────────
   // rAF-coalesced: pointermove can fire 120+ Hz on modern trackpads;
@@ -306,13 +262,6 @@ export const Minimap = observer(({ store }: { store: JotViewStore }) => {
   // the display refresh rate, which is the maximum useful rate anyway.
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 || !hasContent) return;
-    const scroller = findScroller();
-    const content = scroller?.querySelector<HTMLElement>(
-      '[data-jot-scroll-content]',
-    );
-    if (!scroller || !content) return;
-    const sw = content.offsetWidth;
-    const cw = scroller.clientWidth;
     if (sw <= 0 || width <= 0) return;
     e.preventDefault();
     const rect = e.currentTarget.getBoundingClientRect();

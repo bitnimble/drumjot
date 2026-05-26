@@ -422,15 +422,7 @@
 }
 
 .musicTrackBarsRow {
-    position: relative;
-    flex: 0 0 auto;
-    /* Soft GPU hint: a bars-row is many viewport widths wide on a long
-       song, so promoting it to its own compositor layer lets horizontal
-       scroll translate the layer instead of repainting the row's
-       content (waveform tiles + playhead) every frame. Avoids `contain:
-       paint` because that would clip the absolutely-positioned note
-       label popovers, which extend below the row's natural height. */
-    will-change: transform;
+    composes: barsRowBase from '../jot_view.module.css';
 }
 
 /* One tile in the per-track waveform row. The full waveform is now a
@@ -460,8 +452,25 @@
     display: block;
     position: absolute;
     top: 0;
-    left: calc(var(--chunk-start-beat) * var(--px-per-beat) * 1px + var(--note-pad-px));
-    width: calc(var(--chunk-beats) * var(--px-per-beat) * 1px);
+    /* `left` and `width` are set inline from JS (see
+       `AudioTrackWaveformChunk` in mixer.tsx) so they're snapped to
+       integer CSS pixels in lockstep with `canvas.width`. This is
+       what keeps adjacent chunks at a pixel-perfect shared boundary
+       and the bitmap displayed 1:1 with `image-rendering: pixelated`
+       below - without it, CSS calc + DPR rounding produced different
+       per-chunk stretch ratios and the chunk boundary read as a
+       brightness step. */
+    /* Nearest-neighbour scaling when the canvas's CSS width diverges
+       from its bitmap's intrinsic width (mid-zoom, before the chunk's
+       re-rasterisation catches up). The default `image-rendering: auto`
+       uses bilinear interpolation, which averages adjacent waveform
+       columns and visibly changes the perceived brightness compared to
+       the post-re-render native rendering - so the swap from stretched
+       bitmap to fresh bitmap reads as a sudden brightness step.
+       Nearest-neighbour replicates each bitmap column verbatim, so the
+       stretched view matches the native view's per-column intensity
+       and the re-render is visually invisible. */
+    image-rendering: pixelated;
     /* `transition` keeps the dim/undim flip smooth when M/S toggles. */
     transition: filter 120ms ease;
 }
@@ -500,40 +509,14 @@
 }
 
 .barsRow {
-    position: relative;
-    display: flex;
-    flex: 0 0 auto;
-    /* The pitch gutter is taller than a single trackHeight lane (two-line
-       layout; label + slider/M/S), so the bars row stretches to match
-       the gutter's height via the parent flex's default
-       `align-items: stretch`. Children (.bar, .leadIn) also stretch
-       (align-items: stretch here) so their right barlines; and the
-       playhead, which is top:0/bottom:0 of this row; extend all the
-       way to the row's bottom border. Lane content stays vertically
-       centred inside .bar via its own flex column. */
-    align-items: stretch;
-    /* Width driven by `--voice-beats` (set per row) × `--px-per-beat`
-       (set on the score container, the one variable that the zoom
-       slider changes). Reading `--px-per-beat` purely from CSS means
-       a zoom tick mutates a single property on the root and reflows
-       every descendant width/left at the browser layer; no React
-       re-render, no style-prop diff. */
-    width: calc(var(--voice-beats) * var(--px-per-beat) * 1px);
-    /* Soft GPU hint; see `.musicTrackBarsRow` above. Lets horizontal
-       scroll composite the row instead of repainting thousands of
-       notes / brackets every frame on a long song. */
-    will-change: transform;
-    /* Lift pitch-row bars above the audio-track bars row (which is
-       also a stacking context via its own `will-change: transform`).
-       Without this, a note-label popover extending vertically into a
-       neighbouring audio row gets painted UNDER the waveform there:
-       the popover's z-index is trapped inside `.barsRow`'s stacking
-       context, and the two sibling stacking contexts compose at the
-       compositor level where Chrome doesn't reliably honour DOM tree
-       order. z-index: 1 (vs the audio bars row's auto) forces the
-       pitch row's bars to paint above any audio bars row. Safe across
-       interleaved orders: only the row carrying a popover needs to
-       win, and only popovers cross row boundaries. */
+    composes: barsRowBase from '../jot_view.module.css';
+    /* Lift pitch-row bars above any neighbouring audio bars row so a
+       note-label popover extending vertically into the row below isn't
+       painted under that row's waveform. `barsRowBase` gives both rows
+       `position: relative`, so this z-index forms a stacking context
+       above siblings whose z-index is auto. Safe across interleaved
+       orders: only the row carrying a popover needs to win, and only
+       popovers cross row boundaries. */
     z-index: 1;
 }
 

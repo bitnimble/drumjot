@@ -5,9 +5,9 @@
  * vertically, leaving track lists that overflow the viewport unreachable
  * without middle-click pan; this strip drags `store.scrollY` directly.
  *
- * Only renders when there is actual vertical overflow. Same pattern as
- * `Minimap`: ResizeObservers on both the container and the scroll-content
- * keep the thumb in sync as zoom / mixer changes resize either side.
+ * Only renders when there is actual vertical overflow. Container + content
+ * heights are read from the store's `_viewportHeight` / `_contentHeight`
+ * observables, which JotView's ResizeObservers feed.
  */
 import { observer } from 'mobx-react-lite';
 import React from 'react';
@@ -17,43 +17,9 @@ import type { JotViewStore } from './store';
 const MIN_THUMB_HEIGHT = 24;
 
 export const VerticalScrollbar = observer(
-  ({
-    store,
-    containerRef,
-    viewportRef,
-  }: {
-    store: JotViewStore;
-    containerRef: React.RefObject<HTMLDivElement>;
-    viewportRef: React.RefObject<HTMLDivElement>;
-  }) => {
-    const [containerHeight, setContainerHeight] = React.useState(0);
-    const [contentHeight, setContentHeight] = React.useState(0);
-
-    // `useEffect`, not `useLayoutEffect`: VerticalScrollbar is a child of
-    // the div carrying `containerRef`, and React attaches host refs in
-    // post-order; so the parent's ref is still `null` when a child's
-    // `useLayoutEffect` fires. Falling back to `useEffect` defers the
-    // initial measurement by one paint (imperceptible; the bar is
-    // absolutely positioned and doesn't shift surrounding layout) and
-    // guarantees both refs are populated.
-    React.useEffect(() => {
-      const container = containerRef.current;
-      const viewport = viewportRef.current;
-      if (!container || !viewport) return;
-      const measure = () => {
-        setContainerHeight(container.clientHeight);
-        setContentHeight(viewport.offsetHeight);
-      };
-      measure();
-      const containerRo = new ResizeObserver(measure);
-      const viewportRo = new ResizeObserver(measure);
-      containerRo.observe(container);
-      viewportRo.observe(viewport);
-      return () => {
-        containerRo.disconnect();
-        viewportRo.disconnect();
-      };
-    }, [containerRef, viewportRef]);
+  ({ store }: { store: JotViewStore }) => {
+    const containerHeight = store._viewportHeight;
+    const contentHeight = store._contentHeight;
 
     const overflow = contentHeight - containerHeight;
     const scrollY = store.scrollY;

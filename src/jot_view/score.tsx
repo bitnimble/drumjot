@@ -20,6 +20,7 @@ import sharedStyles from '../jot_view.module.css';
 import { GutterResizeHandle } from './components/gutter_resize_handle';
 import {
   BarTimingsContext,
+  JotViewStoreContext,
   NoteProvenanceContext,
   NoteProvenanceContextValue,
   RenderedJotContext,
@@ -64,7 +65,7 @@ export function seekFromClick(
 function usePopoverFlipAbove(
   anchorRef: React.RefObject<HTMLElement>,
   labelRef: React.RefObject<HTMLElement>,
-  enabled: boolean,
+  enabled: boolean
 ): boolean {
   const [flip, setFlip] = React.useState(false);
   React.useLayoutEffect(() => {
@@ -98,9 +99,7 @@ function usePopoverFlipAbove(
  */
 function coveredByTuplet(bar: StructuralBar, beat: number): boolean {
   const eps = 1e-6;
-  return bar.tupletSpans.some(
-    (s) => beat >= s.startBeat - eps && beat <= s.endBeat + eps
-  );
+  return bar.tupletSpans.some((s) => beat >= s.startBeat - eps && beat <= s.endBeat + eps);
 }
 
 /**
@@ -248,9 +247,7 @@ export const TimelineHeader = observer(
         </div>
         <div
           className={styles.timelineHeaderBarsRow}
-          style={
-            { ['--voice-beats' as string]: voiceBeats } as React.CSSProperties
-          }
+          style={{ ['--voice-beats' as string]: voiceBeats } as React.CSSProperties}
           onClick={(e) => seekFromClick(e, onSeek)}
         >
           {voice.bars.map((bar, i) => {
@@ -259,9 +256,7 @@ export const TimelineHeader = observer(
             const startBeat = cumBeats;
             cumBeats += bar.beats;
             const showTimeSig =
-              !prevTime ||
-              bar.time.count !== prevTime.count ||
-              bar.time.unit !== prevTime.unit;
+              !prevTime || bar.time.count !== prevTime.count || bar.time.unit !== prevTime.unit;
             prevTime = bar.time;
             const bpmOverride = bar.source.metadata?.bpm;
             if (bpmOverride !== undefined) currentBpm = resolveBpm(bpmOverride, currentBpm);
@@ -288,9 +283,7 @@ export const TimelineHeader = observer(
                       {bar.time.count}/{bar.time.unit}
                     </span>
                   )}
-                  {showBpm && (
-                    <span className={styles.timelineHeaderBpm}>{displayBpm} bpm</span>
-                  )}
+                  {showBpm && <span className={styles.timelineHeaderBpm}>{displayBpm} bpm</span>}
                 </div>
                 <span className={styles.timelineHeaderTime}>{formatTime(timeSec)}</span>
               </div>
@@ -313,6 +306,7 @@ function formatTime(seconds: number): string {
 export const BarView = observer(
   ({
     bar,
+    barStartBeat,
     pitches,
     config,
     isAnacrusis,
@@ -324,6 +318,10 @@ export const BarView = observer(
     pitchOrder,
   }: {
     bar: StructuralBar;
+    /** Cumulative quarter-note position of this bar's left edge within
+     *  the voice (sum of `beats` for every bar before this one). Drives
+     *  the bar's absolute CSS left; see `.bar` in score.module.css. */
+    barStartBeat: number;
     pitches: string[];
     config: ViewConfig;
     isAnacrusis: boolean;
@@ -356,15 +354,18 @@ export const BarView = observer(
     pitchOrder?: readonly string[];
   }) => {
     // Inline style carries only zoom-invariant data so React's prop
-    // diff sees no change on a zoom tick: `--bar-beats` is the bar's
-    // length in quarter notes. `minHeight` is config-derived; the bar
-    // also `align-self: stretch`es to the barsRow's full height so the
-    // right-edge barline doesn't stop short of the row separator (the
-    // pitch gutter is taller than a single lane). When stretched, the
-    // flex-column on `.bar` keeps the lanes vertically centred; when
-    // not stretched, the `minHeight` preserves the natural lane-stack
-    // size.
+    // diff sees no change on a zoom tick: `--bar-start-beat` /
+    // `--bar-beats` are the bar's cumulative left edge and length in
+    // quarter notes. The bar is absolutely positioned within the bars
+    // row (see `.bar` in score.module.css) rather than relying on flex
+    // accumulation; that gives each barline a sub-pixel-precise left
+    // edge driven directly by `--px-per-beat`, matching the timeline
+    // ticks, waveform chunks, and lyric words. `minHeight` is
+    // config-derived; the bar stretches top:0/bottom:0 to the bars
+    // row's full height so the right-edge barline reaches the row
+    // separator (the pitch gutter is taller than a single lane).
     const barStyle = {
+      ['--bar-start-beat' as string]: barStartBeat,
       ['--bar-beats' as string]: bar.beats,
       minHeight: pitches.length * (config.trackHeight as number),
     } as React.CSSProperties;
@@ -374,13 +375,35 @@ export const BarView = observer(
     // dashed lead-in→music boundary; the rest of the lead-in bars have
     // border-right suppressed so they merge into one visual block.
     const isLastLeadIn = bar.index === -1;
+    // Each lead-in bar paints a 45° hatch as its own background, so the
+    // pattern's phase resets at every row boundary; and the rows don't
+    // stack at a fixed multiple of the pattern period (1px row borders,
+    // gutter-driven row heights). Walk `offsetParent` up to the document
+    // and expose the bar's accumulated top as `--leadin-y`; the CSS
+    // shifts `background-position-y` by it so every lead-in's hatch
+    // reads as a slice of one global gradient anchored at the document
+    // origin, and diagonals run seamlessly through the row separators.
+    const barRef = React.useRef<HTMLDivElement>(null);
+    React.useLayoutEffect(() => {
+      if (!isLeadIn) return;
+      const el = barRef.current;
+      if (!el) return;
+      let y = 0;
+      let node: HTMLElement | null = el;
+      while (node) {
+        y += node.offsetTop;
+        node = node.offsetParent as HTMLElement | null;
+      }
+      el.style.setProperty('--leadin-y', `${y}px`);
+    });
     return (
       <div
+        ref={isLeadIn ? barRef : undefined}
         className={classNames(
           styles.bar,
           isAnacrusis && styles.barAnacrusis,
           isLeadIn && styles.barLeadIn,
-          isLastLeadIn && styles.barLeadInLast,
+          isLastLeadIn && styles.barLeadInLast
         )}
         style={barStyle}
       >
@@ -446,8 +469,7 @@ export const BarView = observer(
             />
           );
         })}
-        {showBrackets &&
-          bar.tupletSpans.map((span, i) => <TupletBracket key={i} span={span} />)}
+        {showBrackets && bar.tupletSpans.map((span, i) => <TupletBracket key={i} span={span} />)}
       </div>
     );
   }
@@ -469,7 +491,7 @@ type BracketPosition = 'single' | 'top' | 'middle' | 'bottom' | 'hidden';
 function bracketPositionForRow(
   span: StructuralPatternSpan,
   rowPitch: string | undefined,
-  pitchOrder: readonly string[] | undefined,
+  pitchOrder: readonly string[] | undefined
 ): BracketPosition {
   // No row context (non-mixer caller) → render as a self-contained box,
   // same as the pre-mixer behaviour.
@@ -530,8 +552,7 @@ const PatternBracket = observer(
     onClick: (name: string) => void;
     position: Exclude<BracketPosition, 'hidden'>;
   }) => {
-    const color =
-      PATTERN_COLOR_VARS[span.colorIndex % PATTERN_COLOR_VARS.length];
+    const color = PATTERN_COLOR_VARS[span.colorIndex % PATTERN_COLOR_VARS.length];
     return (
       <div
         className={classNames(
@@ -555,10 +576,7 @@ const PatternBracket = observer(
           <button
             type="button"
             data-noseek="true"
-            className={classNames(
-              styles.patternLabel,
-              highlighted && styles.patternLabelHighlight
-            )}
+            className={classNames(styles.patternLabel, highlighted && styles.patternLabelHighlight)}
             onClick={(e) => {
               e.stopPropagation();
               onClick(span.name);
@@ -637,9 +655,7 @@ const NoteView = observer(
     // when no bundle is loaded — the `Debug details` section is hidden
     // in those cases.
     const provenance = React.useContext(NoteProvenanceContext);
-    const sourceMeta = note.source.metadata as
-      | { midi?: { tick?: number } }
-      | undefined;
+    const sourceMeta = note.source.metadata as { midi?: { tick?: number } } | undefined;
     const tick = sourceMeta?.midi?.tick;
     const provenanceEntry =
       provenance && typeof tick === 'number'
@@ -699,14 +715,13 @@ const NoteView = observer(
         {isFlam && <FlamGrace color={color} config={config} />}
         {isDrag && <DragGrace color={color} config={config} />}
         {badge && <span className={styles.modifierBadge}>{badge}</span>}
-        {note.sticking && <span className={styles.stickingBadge}>{note.sticking.toUpperCase()}</span>}
+        {note.sticking && (
+          <span className={styles.stickingBadge}>{note.sticking.toUpperCase()}</span>
+        )}
         {showLabel && (
           <div
             ref={labelRef}
-            className={classNames(
-              styles.noteLabel,
-              flipAbove && styles.noteLabelAbove,
-            )}
+            className={classNames(styles.noteLabel, flipAbove && styles.noteLabelAbove)}
           >
             <div className={styles.noteLabelText}>{description}</div>
             {provenanceEntry && (
@@ -855,489 +870,464 @@ const TIMING_VIZ_MIN_HALF_WINDOW_SEC = 0.3;
  * conveys the deltas; if no rendering context (filtered onsets) is
  * provided the parent suppresses this component entirely.
  */
-const OnsetTimingVisualization = observer(({
-  entry,
-  rendered,
-  backendQuantSec,
-  backendQuantBeats,
-  backendQuantSlots,
-  snapSec,
-  snapBeats,
-  alignmentBeats,
-  anchorDriftSec,
-  anchorDriftBeats,
-  drumOffsetSec,
-  drumOffsetBeats,
-  finalSec,
-  unknownDriftSecPerQuarterNote,
-  unknownDriftTimeUnit,
-  displayedBarIndex,
-}: {
-  entry: NoteProvenanceEntry;
-  rendered: RenderedNoteContext;
-  /** Backend `quantise` stage's shift in audio seconds
-   * (`quantised_time_sec - detected_time_sec`). `undefined` when the
-   * stage didn't run or didn't move this onset. */
-  backendQuantSec: number | undefined;
-  /** Same shift expressed in ts-beats of the original bar. `undefined`
-   * mirrors `backendQuantSec`. */
-  backendQuantBeats: number | undefined;
-  /** Same shift as an exact integer count of 1/48 slots (the stage's
-   * native unit). `undefined` when no shift was applied. */
-  backendQuantSlots: number | undefined;
-  /** Snap delta in audio-time seconds (post-quantization minus
-   * detected). `undefined` when the bar's audio duration can't be
-   * resolved. */
-  snapSec: number | undefined;
-  snapBeats: number | undefined;
-  alignmentBeats: number | undefined;
-  /** Bar-anchor drift in audio-time seconds; the gap between where the
-   * detector implies the note's original bar starts (from
-   * `detected_time_sec` + `beat_in_bar`) and where the jot anchors it
-   * (from `drumsT0Sec` + the bar's `startSec`). Usually attributable to
-   * `compute_bar_tick_grid` rounding the lead-in to zero bars when the
-   * pre-roll is shorter than ~half a bar. `undefined` / `0` is
-   * suppressed by the parent. */
-  anchorDriftSec: number | undefined;
-  anchorDriftBeats: number | undefined;
-  /** Audio-time displacement of the user-applied Beat-offset slider,
-   * derived from `RenderedJot.effectiveDrumOffsetBeats` at the current
-   * bar's tempo. `undefined` when sec-per-quarter-note can't be resolved;
-   * `0` is suppressed by the parent so the row doesn't render. */
-  drumOffsetSec: number | undefined;
-  /** Effective Beat-offset slider value in quarter notes, for the
-   * inline label of the drum-offset row. `undefined` when unavailable. */
-  drumOffsetBeats: number | undefined;
-  /** Final-position audio time (post-quantization, post-alignment).
-   * `undefined` when the playback timeline can't resolve the bar's
-   * start. */
-  finalSec: number | undefined;
-  /** Audio seconds per quarter note in the ORIGINAL bar (entry.bar + 1).
-   * Used to convert the unknown-drift residual from seconds back to
-   * beats, matching the snap/alignment rows which also report in the
-   * original bar's frame. `undefined` mirrors the parent's BPM-
-   * resolution fallback. */
-  unknownDriftSecPerQuarterNote: number | undefined;
-  /** Time-signature `unit` of the ORIGINAL bar, used together with
-   * `unknownDriftSecPerQuarterNote` for the qn → ts-beats conversion. */
-  unknownDriftTimeUnit: number | undefined;
-  displayedBarIndex: number | undefined;
-}) => {
-  const canvasRef = React.useRef<HTMLCanvasElement>(null);
+const OnsetTimingVisualization = observer(
+  ({
+    entry,
+    rendered,
+    backendQuantSec,
+    backendQuantBeats,
+    backendQuantSlots,
+    snapSec,
+    snapBeats,
+    alignmentBeats,
+    anchorDriftSec,
+    anchorDriftBeats,
+    drumOffsetSec,
+    drumOffsetBeats,
+    finalSec,
+    unknownDriftSecPerQuarterNote,
+    unknownDriftTimeUnit,
+    displayedBarIndex,
+  }: {
+    entry: NoteProvenanceEntry;
+    rendered: RenderedNoteContext;
+    /** Backend `quantise` stage's shift in audio seconds
+     * (`quantised_time_sec - detected_time_sec`). `undefined` when the
+     * stage didn't run or didn't move this onset. */
+    backendQuantSec: number | undefined;
+    /** Same shift expressed in ts-beats of the original bar. `undefined`
+     * mirrors `backendQuantSec`. */
+    backendQuantBeats: number | undefined;
+    /** Same shift as an exact integer count of 1/48 slots (the stage's
+     * native unit). `undefined` when no shift was applied. */
+    backendQuantSlots: number | undefined;
+    /** Snap delta in audio-time seconds (post-quantization minus
+     * detected). `undefined` when the bar's audio duration can't be
+     * resolved. */
+    snapSec: number | undefined;
+    snapBeats: number | undefined;
+    alignmentBeats: number | undefined;
+    /** Bar-anchor drift in audio-time seconds; the gap between where the
+     * detector implies the note's original bar starts (from
+     * `detected_time_sec` + `beat_in_bar`) and where the jot anchors it
+     * (from `drumsT0Sec` + the bar's `startSec`). Usually attributable to
+     * `compute_bar_tick_grid` rounding the lead-in to zero bars when the
+     * pre-roll is shorter than ~half a bar. `undefined` / `0` is
+     * suppressed by the parent. */
+    anchorDriftSec: number | undefined;
+    anchorDriftBeats: number | undefined;
+    /** Audio-time displacement of the user-applied Beat-offset slider,
+     * derived from `RenderedJot.effectiveDrumOffsetBeats` at the current
+     * bar's tempo. `undefined` when sec-per-quarter-note can't be resolved;
+     * `0` is suppressed by the parent so the row doesn't render. */
+    drumOffsetSec: number | undefined;
+    /** Effective Beat-offset slider value in quarter notes, for the
+     * inline label of the drum-offset row. `undefined` when unavailable. */
+    drumOffsetBeats: number | undefined;
+    /** Final-position audio time (post-quantization, post-alignment).
+     * `undefined` when the playback timeline can't resolve the bar's
+     * start. */
+    finalSec: number | undefined;
+    /** Audio seconds per quarter note in the ORIGINAL bar (entry.bar + 1).
+     * Used to convert the unknown-drift residual from seconds back to
+     * beats, matching the snap/alignment rows which also report in the
+     * original bar's frame. `undefined` mirrors the parent's BPM-
+     * resolution fallback. */
+    unknownDriftSecPerQuarterNote: number | undefined;
+    /** Time-signature `unit` of the ORIGINAL bar, used together with
+     * `unknownDriftSecPerQuarterNote` for the qn → ts-beats conversion. */
+    unknownDriftTimeUnit: number | undefined;
+    displayedBarIndex: number | undefined;
+  }) => {
+    const canvasRef = React.useRef<HTMLCanvasElement>(null);
 
-  const detectedSec = entry.detected_time_sec;
-  const postBackendQuantSec =
-    backendQuantSec !== undefined ? detectedSec + backendQuantSec : detectedSec;
-  const quantizedSec =
-    snapSec !== undefined ? postBackendQuantSec + snapSec : undefined;
-  const alignmentSec = rendered.provenance.beatAlignmentOffsetSec;
+    const detectedSec = entry.detected_time_sec;
+    const postBackendQuantSec =
+      backendQuantSec !== undefined ? detectedSec + backendQuantSec : detectedSec;
+    const quantizedSec = snapSec !== undefined ? postBackendQuantSec + snapSec : undefined;
+    const alignmentSec = rendered.provenance.beatAlignmentOffsetSec;
 
-  // Window: span the detected, quantized, and final positions plus a
-  // small symmetric pad, clamped to a minimum half-window so a zero-
-  // delta onset still gets visible waveform context.
-  const stagePositions: number[] = [detectedSec];
-  if (backendQuantSec !== undefined) stagePositions.push(postBackendQuantSec);
-  if (quantizedSec !== undefined) stagePositions.push(quantizedSec);
-  if (finalSec !== undefined) stagePositions.push(finalSec);
-  const minPos = Math.min(...stagePositions);
-  const maxPos = Math.max(...stagePositions);
-  const span = maxPos - minPos;
-  const halfWindow = Math.max(TIMING_VIZ_MIN_HALF_WINDOW_SEC, span * 1.2);
-  const center = (minPos + maxPos) / 2;
-  const windowStart = center - halfWindow;
-  const windowEnd = center + halfWindow;
-  const windowDur = windowEnd - windowStart;
+    // Window: span the detected, quantized, and final positions plus a
+    // small symmetric pad, clamped to a minimum half-window so a zero-
+    // delta onset still gets visible waveform context.
+    const stagePositions: number[] = [detectedSec];
+    if (backendQuantSec !== undefined) stagePositions.push(postBackendQuantSec);
+    if (quantizedSec !== undefined) stagePositions.push(quantizedSec);
+    if (finalSec !== undefined) stagePositions.push(finalSec);
+    const minPos = Math.min(...stagePositions);
+    const maxPos = Math.max(...stagePositions);
+    const span = maxPos - minPos;
+    const halfWindow = Math.max(TIMING_VIZ_MIN_HALF_WINDOW_SEC, span * 1.2);
+    const center = (minPos + maxPos) / 2;
+    const windowStart = center - halfWindow;
+    const windowEnd = center + halfWindow;
+    const windowDur = windowEnd - windowStart;
 
-  const timeToX = (t: number): number =>
-    ((t - windowStart) / windowDur) * TIMING_VIZ_WIDTH;
+    const timeToX = (t: number): number => ((t - windowStart) / windowDur) * TIMING_VIZ_WIDTH;
 
-  // Pick the audio track most likely to expose this onset clearly.
-  // The debug bundle's manifest carries an authoritative pitch →
-  // audio-filename map (set up server-side in
-  // `transcriber/app/debug_bundle.py`); the isolated stem for the
-  // note's pitch is the right source — it isolates the drum we're
-  // inspecting from the rest of the kit. Fallback chain when the
-  // mapping doesn't resolve (legacy bundle, manual file load, etc.):
-  //   1. Any other mapped stem — still a per-pitch isolated source.
-  //   2. Any loaded track other than `no_drums.mp3` — `no_drums` by
-  //      definition has the drum content removed and shows nothing.
-  //   3. Whatever's loaded.
-  // `undefined` when no audio is loaded; the row collapses to a
-  // "(no audio loaded)" placeholder in that case.
-  const audioTrack = (() => {
-    const tracks = Array.from(jotPlayer.audioTracks.values());
-    if (tracks.length === 0) return undefined;
-    const mapping = rendered.provenance.audioFilenameByPitch;
-    const wantedFilename = mapping.get(entry.pitch);
-    if (wantedFilename) {
-      const exact = tracks.find(
-        (t) => t.filename.toLowerCase() === wantedFilename.toLowerCase(),
+    // Pick the audio track most likely to expose this onset clearly.
+    // The debug bundle's manifest carries an authoritative pitch →
+    // audio-filename map (set up server-side in
+    // `transcriber/app/debug_bundle.py`); the isolated stem for the
+    // note's pitch is the right source — it isolates the drum we're
+    // inspecting from the rest of the kit. Fallback chain when the
+    // mapping doesn't resolve (legacy bundle, manual file load, etc.):
+    //   1. Any other mapped stem — still a per-pitch isolated source.
+    //   2. Any loaded track other than `no_drums.mp3` — `no_drums` by
+    //      definition has the drum content removed and shows nothing.
+    //   3. Whatever's loaded.
+    // `undefined` when no audio is loaded; the row collapses to a
+    // "(no audio loaded)" placeholder in that case.
+    const audioTrack = (() => {
+      const tracks = Array.from(jotPlayer.audioTracks.values());
+      if (tracks.length === 0) return undefined;
+      const mapping = rendered.provenance.audioFilenameByPitch;
+      const wantedFilename = mapping.get(entry.pitch);
+      if (wantedFilename) {
+        const exact = tracks.find((t) => t.filename.toLowerCase() === wantedFilename.toLowerCase());
+        if (exact) return exact;
+      }
+      // Any other mapped per-pitch stem — skip `no_drums`, which is the
+      // backing track and won't show drum hits.
+      const mappedStemFilenames = new Set(
+        Array.from(mapping.entries())
+          .filter(([key]) => key !== 'no_drums')
+          .map(([, filename]) => filename.toLowerCase())
       );
-      if (exact) return exact;
-    }
-    // Any other mapped per-pitch stem — skip `no_drums`, which is the
-    // backing track and won't show drum hits.
-    const mappedStemFilenames = new Set(
-      Array.from(mapping.entries())
-        .filter(([key]) => key !== 'no_drums')
-        .map(([, filename]) => filename.toLowerCase()),
-    );
-    const anyMappedStem = tracks.find((t) =>
-      mappedStemFilenames.has(t.filename.toLowerCase()),
-    );
-    if (anyMappedStem) return anyMappedStem;
-    const noDrumsName = mapping.get('no_drums')?.toLowerCase();
-    const nonNoDrums = tracks.find(
-      (t) => t.filename.toLowerCase() !== noDrumsName,
-    );
-    if (nonNoDrums) return nonNoDrums;
-    return tracks[0];
-  })();
-
-  React.useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !audioTrack) return;
-    let cancelled = false;
-    (async () => {
-      // Off-main-thread peak compute (the worker holds a copy of the
-      // track's PCM; this call only ships the window + width). Canvas
-      // keeps its previous paint during the worker round-trip.
-      let peaks: Float32Array;
-      try {
-        peaks = await waveformWorker.computeWindow(
-          audioTrack.id,
-          windowStart,
-          windowDur,
-          TIMING_VIZ_WIDTH,
-        );
-      } catch (err) {
-        if (!cancelled) console.warn('[score] timing-viz peaks failed:', err);
-        return;
-      }
-      if (cancelled) return;
-      const c = canvasRef.current;
-      if (!c) return;
-      const dpr = window.devicePixelRatio || 1;
-      c.width = Math.max(1, Math.floor(TIMING_VIZ_WIDTH * dpr));
-      c.height = Math.max(1, Math.floor(TIMING_VIZ_WAVE_HEIGHT * dpr));
-      const ctx = c.getContext('2d');
-      if (!ctx) return;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, TIMING_VIZ_WIDTH, TIMING_VIZ_WAVE_HEIGHT);
-      const mid = TIMING_VIZ_WAVE_HEIGHT / 2;
-      const scale = mid * 0.9;
-      // Canvas doesn't resolve CSS vars in fillStyle strings; read the
-      // waveform's blue off the element's computed style so the snippet
-      // matches the main mixer waveform's colour.
-      const computed = window.getComputedStyle(c);
-      const wave = computed.getPropertyValue('--color-pattern-2').trim();
-      ctx.fillStyle = wave || '#5BA8E8';
-      // Always paint at least a 1 px centerline per column (no skip-zero
-      // shortcut) so silent ranges render as a continuous ground line
-      // instead of empty gaps; in the long mixer waveform the skip is
-      // fine because silent regions fade into the chrome around them,
-      // but in the snippet it reads as broken rendering.
-      for (let p = 0; p < TIMING_VIZ_WIDTH; p++) {
-        const mn = peaks[p * 2];
-        const mx = peaks[p * 2 + 1];
-        const y0 = mid - mx * scale;
-        const y1 = mid - mn * scale;
-        ctx.fillRect(p, y0, 1, Math.max(1, y1 - y0));
-      }
+      const anyMappedStem = tracks.find((t) => mappedStemFilenames.has(t.filename.toLowerCase()));
+      if (anyMappedStem) return anyMappedStem;
+      const noDrumsName = mapping.get('no_drums')?.toLowerCase();
+      const nonNoDrums = tracks.find((t) => t.filename.toLowerCase() !== noDrumsName);
+      if (nonNoDrums) return nonNoDrums;
+      return tracks[0];
     })();
-    return () => {
-      cancelled = true;
-    };
-  }, [audioTrack, windowStart, windowDur]);
 
-  // Bar boundaries visible inside the window. Walk the timeline once;
-  // boundaries sit at each bar's audio-time start. We label each one
-  // with its rendered bar index so the operator can orient on the
-  // snippet without consulting the score above.
-  const timeline = jotPlayer.timeline;
-  const drumsT0Sec = jotPlayer.drumsT0Sec;
-  const barBoundaries: { x: number; label: number | null }[] = [];
-  if (timeline.rendered) {
-    const renderedBars = timeline.rendered.structure.voices[0]?.bars ?? [];
-    for (let i = 0; i < timeline.bars.length; i++) {
-      const t = timeline.bars[i]!.startSec + drumsT0Sec;
-      if (t >= windowStart && t <= windowEnd) {
-        barBoundaries.push({ x: timeToX(t), label: renderedBars[i]?.index ?? null });
+    React.useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas || !audioTrack) return;
+      let cancelled = false;
+      (async () => {
+        // Off-main-thread peak compute (the worker holds a copy of the
+        // track's PCM; this call only ships the window + width). Canvas
+        // keeps its previous paint during the worker round-trip.
+        let peaks: Float32Array;
+        try {
+          peaks = await waveformWorker.computeWindow(
+            audioTrack.id,
+            windowStart,
+            windowDur,
+            TIMING_VIZ_WIDTH
+          );
+        } catch (err) {
+          if (!cancelled) console.warn('[score] timing-viz peaks failed:', err);
+          return;
+        }
+        if (cancelled) return;
+        const c = canvasRef.current;
+        if (!c) return;
+        const dpr = window.devicePixelRatio || 1;
+        c.width = Math.max(1, Math.floor(TIMING_VIZ_WIDTH * dpr));
+        c.height = Math.max(1, Math.floor(TIMING_VIZ_WAVE_HEIGHT * dpr));
+        const ctx = c.getContext('2d');
+        if (!ctx) return;
+        ctx.imageSmoothingEnabled = false;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, TIMING_VIZ_WIDTH, TIMING_VIZ_WAVE_HEIGHT);
+        const mid = TIMING_VIZ_WAVE_HEIGHT / 2;
+        const scale = mid * 0.9;
+        // Canvas doesn't resolve CSS vars in fillStyle strings; read the
+        // waveform's blue off the element's computed style so the snippet
+        // matches the main mixer waveform's colour.
+        const computed = window.getComputedStyle(c);
+        const wave = computed.getPropertyValue('--color-pattern-2').trim();
+        ctx.fillStyle = wave || '#5BA8E8';
+        // Always paint at least a 1 px centerline per column (no skip-zero
+        // shortcut) so silent ranges render as a continuous ground line
+        // instead of empty gaps; in the long mixer waveform the skip is
+        // fine because silent regions fade into the chrome around them,
+        // but in the snippet it reads as broken rendering.
+        for (let p = 0; p < TIMING_VIZ_WIDTH; p++) {
+          const mn = peaks[p * 2];
+          const mx = peaks[p * 2 + 1];
+          const y0 = mid - mx * scale;
+          const y1 = mid - mn * scale;
+          ctx.fillRect(p, y0, 1, Math.max(1, y1 - y0));
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [audioTrack, windowStart, windowDur]);
+
+    // Bar boundaries visible inside the window. Walk the timeline once;
+    // boundaries sit at each bar's audio-time start. We label each one
+    // with its rendered bar index so the operator can orient on the
+    // snippet without consulting the score above.
+    const timeline = jotPlayer.timeline;
+    const drumsT0Sec = jotPlayer.drumsT0Sec;
+    const barBoundaries: { x: number; label: number | null }[] = [];
+    if (timeline.rendered) {
+      const renderedBars = timeline.rendered.structure.voices[0]?.bars ?? [];
+      for (let i = 0; i < timeline.bars.length; i++) {
+        const t = timeline.bars[i]!.startSec + drumsT0Sec;
+        if (t >= windowStart && t <= windowEnd) {
+          barBoundaries.push({ x: timeToX(t), label: renderedBars[i]?.index ?? null });
+        }
       }
     }
-  }
 
-  const detectedX = timeToX(detectedSec);
-  const finalX = finalSec !== undefined ? timeToX(finalSec) : undefined;
+    const detectedX = timeToX(detectedSec);
+    const finalX = finalSec !== undefined ? timeToX(finalSec) : undefined;
 
-  // Each diff row: a coloured bar from `anchorX` to `endX` (always
-  // drawn left-to-right via min/abs), with an inline label. The anchor
-  // chains stage-by-stage from the detected line down to the final
-  // landing — every named stage uses its own stated displacement (NOT
-  // the gap to the next stage), so an inconsistency between the sum of
-  // named deltas and the actual `finalSec` surfaces as the "Unknown
-  // drift source" residual at the end of the chain instead of being
-  // silently absorbed by whichever stage happens to be drawn last.
-  //
-  // Stages, in the order they conceptually apply to the detected onset
-  // on its way to where the score plays it:
-  //
-  //   1. Quantization — snap to the 1/48 MIDI grid (`snapSec`).
-  //   2. Beat-grid alignment — the global audio-time shift the downbeat
-  //      detector applied to the beat structure (`alignmentSec`). NOTE:
-  //      this alignment is already baked into the transcriber's bar
-  //      start times and therefore *shouldn't* manifest as an extra
-  //      audio-time displacement between detected and final; we still
-  //      surface it as its stated value so the operator sees what was
-  //      applied. Any residual that this introduces (because the
-  //      alignment doesn't actually shift the rendered position) shows
-  //      up in the Unknown-drift row, which is the point — it makes the
-  //      mismatch visible rather than hidden.
-  //   3. Bar anchor drift, the gap between where the detector implies
-  //      the original bar starts in audio time (back-derived from
-  //      `detected_time_sec` + `beat_in_bar`) and where the jot puts
-  //      that bar (`drumsT0Sec` + `barTiming.startSec`). Dominated in
-  //      practice by `compute_bar_tick_grid` rounding the pre-roll to
-  //      zero lead bars when `lead_in_secs * initial_tempo` is less
-  //      than half a bar0_ticks; the MIDI then carries no lead-in
-  //      and `from_midi.ts` reconstructs `drumsT0Sec = 0`, anchoring
-  //      every bar `lead_in_secs` earlier than it should be.
-  //   4. Manual drum offset; the user-controlled Beat-offset slider
-  //      (`RenderedJot.effectiveDrumOffsetBeats`). Approximate when the
-  //      shift moved a note across a bar boundary into a bar with a
-  //      different BPM, since the conversion to seconds here uses the
-  //      displayed bar's tempo only.
-  //   5. Unknown drift; `finalSec` minus the sum of the above; absorbs
-  //      every drift source we haven't enumerated yet (per-bar BPM
-  //      attribution mismatches between the transcriber and from_midi,
-  //      cross-bar drum-offset re-bucketing under varying tempo, etc.).
-  //      As more sources get individual rows this residual should
-  //      shrink toward zero.
-  type DiffRow = {
-    key: string;
-    label: string;
-    deltaBeats: number | undefined;
-    /** Same delta expressed as a count of 1/48 slots. `undefined` when
-     * the bar's tempo can't be resolved (so beats can't be either). */
-    deltaSlots: number | undefined;
-    deltaSec: number;
-    anchorX: number;
-    endX: number;
-    className: string;
-  };
-  // Convert audio seconds to a count of 1/48-of-whole-note slots using
-  // the original bar's tempo. 1 slot = 1/12 of a quarter note, so
-  // `seconds / sec_per_qn × 12` lands in slots. Independent of time
-  // signature; the slot is a whole-note subdivision.
-  const secToSlots = (s: number): number | undefined =>
-    unknownDriftSecPerQuarterNote !== undefined &&
-    unknownDriftSecPerQuarterNote > 0
-      ? (s / unknownDriftSecPerQuarterNote) * 12
-      : undefined;
-  const diffRows: DiffRow[] = [];
-  let cursorSec = detectedSec;
-  let cursorX = detectedX;
-  if (backendQuantSec !== undefined && Math.abs(backendQuantSec) > 1e-9) {
-    const nextSec = cursorSec + backendQuantSec;
-    diffRows.push({
-      key: 'backend-quant',
-      label: 'Backend quantise+shift',
-      deltaBeats: backendQuantBeats,
-      // Prefer the exact integer slot count the stage reported; fall
-      // back to the seconds-derived value if the stage's shift wasn't
-      // surfaced (legacy bundle).
-      deltaSlots: backendQuantSlots ?? secToSlots(backendQuantSec),
-      deltaSec: backendQuantSec,
-      anchorX: cursorX,
-      endX: timeToX(nextSec),
-      className: styles.timingVizDiffBarBackendQuant,
-    });
-    cursorSec = nextSec;
-    cursorX = timeToX(nextSec);
-  }
-  if (snapSec !== undefined && Math.abs(snapSec) > 1e-9) {
-    const nextSec = cursorSec + snapSec;
-    diffRows.push({
-      key: 'quant',
-      label: 'Quantization',
-      deltaBeats: snapBeats,
-      deltaSlots: secToSlots(snapSec),
-      deltaSec: snapSec,
-      anchorX: cursorX,
-      endX: timeToX(nextSec),
-      className: styles.timingVizDiffBarQuant,
-    });
-    cursorSec = nextSec;
-    cursorX = timeToX(nextSec);
-  }
-  if (alignmentSec !== null && Math.abs(alignmentSec) > 1e-9) {
-    const nextSec = cursorSec + alignmentSec;
-    diffRows.push({
-      key: 'align',
-      label: 'Beat alignment',
-      deltaBeats: alignmentBeats,
-      deltaSlots: secToSlots(alignmentSec),
-      deltaSec: alignmentSec,
-      anchorX: cursorX,
-      endX: timeToX(nextSec),
-      className: styles.timingVizDiffBarAlign,
-    });
-    cursorSec = nextSec;
-    cursorX = timeToX(nextSec);
-  }
-  if (anchorDriftSec !== undefined && Math.abs(anchorDriftSec) > 1e-9) {
-    const nextSec = cursorSec + anchorDriftSec;
-    diffRows.push({
-      key: 'anchor',
-      label: 'Bar anchor drift',
-      deltaBeats: anchorDriftBeats,
-      deltaSlots: secToSlots(anchorDriftSec),
-      deltaSec: anchorDriftSec,
-      anchorX: cursorX,
-      endX: timeToX(nextSec),
-      className: styles.timingVizDiffBarAnchor,
-    });
-    cursorSec = nextSec;
-    cursorX = timeToX(nextSec);
-  }
-  if (drumOffsetSec !== undefined && Math.abs(drumOffsetSec) > 1e-9) {
-    const nextSec = cursorSec + drumOffsetSec;
-    diffRows.push({
-      key: 'drum-offset',
-      label: 'Drum offset',
-      deltaBeats: drumOffsetBeats,
-      // `drumOffsetBeats` is in quarter notes by convention, so slots is
-      // simply ×12; no time-signature-aware conversion needed.
-      deltaSlots:
-        drumOffsetBeats !== undefined ? drumOffsetBeats * 12 : undefined,
-      deltaSec: drumOffsetSec,
-      anchorX: cursorX,
-      endX: timeToX(nextSec),
-      className: styles.timingVizDiffBarDrumOffset,
-    });
-    cursorSec = nextSec;
-    cursorX = timeToX(nextSec);
-  }
-  if (finalSec !== undefined) {
-    const unknownSec = finalSec - cursorSec;
-    if (Math.abs(unknownSec) > 1e-6) {
-      const unknownBeats =
-        unknownDriftSecPerQuarterNote !== undefined &&
-        unknownDriftSecPerQuarterNote > 0 &&
-        unknownDriftTimeUnit !== undefined
-          ? (unknownSec / unknownDriftSecPerQuarterNote) *
-            (unknownDriftTimeUnit / 4)
-          : undefined;
+    // Each diff row: a coloured bar from `anchorX` to `endX` (always
+    // drawn left-to-right via min/abs), with an inline label. The anchor
+    // chains stage-by-stage from the detected line down to the final
+    // landing — every named stage uses its own stated displacement (NOT
+    // the gap to the next stage), so an inconsistency between the sum of
+    // named deltas and the actual `finalSec` surfaces as the "Unknown
+    // drift source" residual at the end of the chain instead of being
+    // silently absorbed by whichever stage happens to be drawn last.
+    //
+    // Stages, in the order they conceptually apply to the detected onset
+    // on its way to where the score plays it:
+    //
+    //   1. Quantization — snap to the 1/48 MIDI grid (`snapSec`).
+    //   2. Beat-grid alignment — the global audio-time shift the downbeat
+    //      detector applied to the beat structure (`alignmentSec`). NOTE:
+    //      this alignment is already baked into the transcriber's bar
+    //      start times and therefore *shouldn't* manifest as an extra
+    //      audio-time displacement between detected and final; we still
+    //      surface it as its stated value so the operator sees what was
+    //      applied. Any residual that this introduces (because the
+    //      alignment doesn't actually shift the rendered position) shows
+    //      up in the Unknown-drift row, which is the point — it makes the
+    //      mismatch visible rather than hidden.
+    //   3. Bar anchor drift, the gap between where the detector implies
+    //      the original bar starts in audio time (back-derived from
+    //      `detected_time_sec` + `beat_in_bar`) and where the jot puts
+    //      that bar (`drumsT0Sec` + `barTiming.startSec`). Dominated in
+    //      practice by `compute_bar_tick_grid` rounding the pre-roll to
+    //      zero lead bars when `lead_in_secs * initial_tempo` is less
+    //      than half a bar0_ticks; the MIDI then carries no lead-in
+    //      and `from_midi.ts` reconstructs `drumsT0Sec = 0`, anchoring
+    //      every bar `lead_in_secs` earlier than it should be.
+    //   4. Manual drum offset; the user-controlled Beat-offset slider
+    //      (`RenderedJot.effectiveDrumOffsetBeats`). Approximate when the
+    //      shift moved a note across a bar boundary into a bar with a
+    //      different BPM, since the conversion to seconds here uses the
+    //      displayed bar's tempo only.
+    //   5. Unknown drift; `finalSec` minus the sum of the above; absorbs
+    //      every drift source we haven't enumerated yet (per-bar BPM
+    //      attribution mismatches between the transcriber and from_midi,
+    //      cross-bar drum-offset re-bucketing under varying tempo, etc.).
+    //      As more sources get individual rows this residual should
+    //      shrink toward zero.
+    type DiffRow = {
+      key: string;
+      label: string;
+      deltaBeats: number | undefined;
+      /** Same delta expressed as a count of 1/48 slots. `undefined` when
+       * the bar's tempo can't be resolved (so beats can't be either). */
+      deltaSlots: number | undefined;
+      deltaSec: number;
+      anchorX: number;
+      endX: number;
+      className: string;
+    };
+    // Convert audio seconds to a count of 1/48-of-whole-note slots using
+    // the original bar's tempo. 1 slot = 1/12 of a quarter note, so
+    // `seconds / sec_per_qn × 12` lands in slots. Independent of time
+    // signature; the slot is a whole-note subdivision.
+    const secToSlots = (s: number): number | undefined =>
+      unknownDriftSecPerQuarterNote !== undefined && unknownDriftSecPerQuarterNote > 0
+        ? (s / unknownDriftSecPerQuarterNote) * 12
+        : undefined;
+    const diffRows: DiffRow[] = [];
+    let cursorSec = detectedSec;
+    let cursorX = detectedX;
+    if (backendQuantSec !== undefined && Math.abs(backendQuantSec) > 1e-9) {
+      const nextSec = cursorSec + backendQuantSec;
       diffRows.push({
-        key: 'unknown',
-        label: 'Unknown drift source',
-        deltaBeats: unknownBeats,
-        deltaSlots: secToSlots(unknownSec),
-        deltaSec: unknownSec,
+        key: 'backend-quant',
+        label: 'Backend quantise+shift',
+        deltaBeats: backendQuantBeats,
+        // Prefer the exact integer slot count the stage reported; fall
+        // back to the seconds-derived value if the stage's shift wasn't
+        // surfaced (legacy bundle).
+        deltaSlots: backendQuantSlots ?? secToSlots(backendQuantSec),
+        deltaSec: backendQuantSec,
         anchorX: cursorX,
-        endX: finalX!,
-        className: styles.timingVizDiffBarUnknown,
+        endX: timeToX(nextSec),
+        className: styles.timingVizDiffBarBackendQuant,
       });
+      cursorSec = nextSec;
+      cursorX = timeToX(nextSec);
     }
-  }
+    if (snapSec !== undefined && Math.abs(snapSec) > 1e-9) {
+      const nextSec = cursorSec + snapSec;
+      diffRows.push({
+        key: 'quant',
+        label: 'Quantization',
+        deltaBeats: snapBeats,
+        deltaSlots: secToSlots(snapSec),
+        deltaSec: snapSec,
+        anchorX: cursorX,
+        endX: timeToX(nextSec),
+        className: styles.timingVizDiffBarQuant,
+      });
+      cursorSec = nextSec;
+      cursorX = timeToX(nextSec);
+    }
+    if (alignmentSec !== null && Math.abs(alignmentSec) > 1e-9) {
+      const nextSec = cursorSec + alignmentSec;
+      diffRows.push({
+        key: 'align',
+        label: 'Beat alignment',
+        deltaBeats: alignmentBeats,
+        deltaSlots: secToSlots(alignmentSec),
+        deltaSec: alignmentSec,
+        anchorX: cursorX,
+        endX: timeToX(nextSec),
+        className: styles.timingVizDiffBarAlign,
+      });
+      cursorSec = nextSec;
+      cursorX = timeToX(nextSec);
+    }
+    if (anchorDriftSec !== undefined && Math.abs(anchorDriftSec) > 1e-9) {
+      const nextSec = cursorSec + anchorDriftSec;
+      diffRows.push({
+        key: 'anchor',
+        label: 'Bar anchor drift',
+        deltaBeats: anchorDriftBeats,
+        deltaSlots: secToSlots(anchorDriftSec),
+        deltaSec: anchorDriftSec,
+        anchorX: cursorX,
+        endX: timeToX(nextSec),
+        className: styles.timingVizDiffBarAnchor,
+      });
+      cursorSec = nextSec;
+      cursorX = timeToX(nextSec);
+    }
+    if (drumOffsetSec !== undefined && Math.abs(drumOffsetSec) > 1e-9) {
+      const nextSec = cursorSec + drumOffsetSec;
+      diffRows.push({
+        key: 'drum-offset',
+        label: 'Drum offset',
+        deltaBeats: drumOffsetBeats,
+        // `drumOffsetBeats` is in quarter notes by convention, so slots is
+        // simply ×12; no time-signature-aware conversion needed.
+        deltaSlots: drumOffsetBeats !== undefined ? drumOffsetBeats * 12 : undefined,
+        deltaSec: drumOffsetSec,
+        anchorX: cursorX,
+        endX: timeToX(nextSec),
+        className: styles.timingVizDiffBarDrumOffset,
+      });
+      cursorSec = nextSec;
+      cursorX = timeToX(nextSec);
+    }
+    if (finalSec !== undefined) {
+      const unknownSec = finalSec - cursorSec;
+      if (Math.abs(unknownSec) > 1e-6) {
+        const unknownBeats =
+          unknownDriftSecPerQuarterNote !== undefined &&
+          unknownDriftSecPerQuarterNote > 0 &&
+          unknownDriftTimeUnit !== undefined
+            ? (unknownSec / unknownDriftSecPerQuarterNote) * (unknownDriftTimeUnit / 4)
+            : undefined;
+        diffRows.push({
+          key: 'unknown',
+          label: 'Unknown drift source',
+          deltaBeats: unknownBeats,
+          deltaSlots: secToSlots(unknownSec),
+          deltaSec: unknownSec,
+          anchorX: cursorX,
+          endX: finalX!,
+          className: styles.timingVizDiffBarUnknown,
+        });
+      }
+    }
 
-  const renderSignedBeats = (b: number) =>
-    `${b >= 0 ? '+' : ''}${b.toFixed(3)} beats`;
-  const renderSignedSlots = formatSignedSlots;
-  const renderSignedMs = (ms: number) =>
-    `${ms >= 0 ? '+' : ''}${ms.toFixed(1)} ms`;
+    const renderSignedBeats = (b: number) => `${b >= 0 ? '+' : ''}${b.toFixed(3)} beats`;
+    const renderSignedSlots = formatSignedSlots;
+    const renderSignedMs = (ms: number) => `${ms >= 0 ? '+' : ''}${ms.toFixed(1)} ms`;
 
-  return (
-    <div
-      className={styles.timingViz}
-      style={{ width: TIMING_VIZ_WIDTH } as React.CSSProperties}
-    >
-      <div className={styles.timingVizHeader}>
-        {displayedBarIndex !== undefined && (
-          <span className={styles.timingVizHeaderBar}>
-            bar {displayedBarIndex}
+    return (
+      <div className={styles.timingViz} style={{ width: TIMING_VIZ_WIDTH } as React.CSSProperties}>
+        <div className={styles.timingVizHeader}>
+          {displayedBarIndex !== undefined && (
+            <span className={styles.timingVizHeaderBar}>bar {displayedBarIndex}</span>
+          )}
+          <span className={styles.timingVizHeaderRange}>
+            {windowStart.toFixed(3)}s ─ {windowEnd.toFixed(3)}s
           </span>
-        )}
-        <span className={styles.timingVizHeaderRange}>
-          {windowStart.toFixed(3)}s ─ {windowEnd.toFixed(3)}s
-        </span>
-      </div>
-      <div
-        className={styles.timingVizWaveformRow}
-        style={{ height: TIMING_VIZ_WAVE_HEIGHT } as React.CSSProperties}
-      >
-        {audioTrack ? (
-          <canvas
-            ref={canvasRef}
-            className={styles.timingVizCanvas}
-            style={{
-              width: TIMING_VIZ_WIDTH,
-              height: TIMING_VIZ_WAVE_HEIGHT,
-            }}
-          />
-        ) : (
-          <div className={styles.timingVizNoAudio}>(no audio loaded)</div>
-        )}
-        {barBoundaries.map((b, i) => (
-          <React.Fragment key={`bar-${i}`}>
-            <div
-              className={styles.timingVizBarLine}
-              style={{ left: b.x }}
-            />
-            {b.label !== null && (
-              <div
-                className={styles.timingVizBarLabel}
-                style={{ left: b.x }}
-              >
-                {b.label}
-              </div>
-            )}
-          </React.Fragment>
-        ))}
+        </div>
         <div
-          className={styles.timingVizDetectedLine}
-          style={{ left: detectedX }}
-          title={`Detected · ${detectedSec.toFixed(3)}s`}
-        />
-        {finalX !== undefined && (
+          className={styles.timingVizWaveformRow}
+          style={{ height: TIMING_VIZ_WAVE_HEIGHT } as React.CSSProperties}
+        >
+          {audioTrack ? (
+            <canvas
+              ref={canvasRef}
+              className={styles.timingVizCanvas}
+              style={{
+                width: TIMING_VIZ_WIDTH,
+                height: TIMING_VIZ_WAVE_HEIGHT,
+              }}
+            />
+          ) : (
+            <div className={styles.timingVizNoAudio}>(no audio loaded)</div>
+          )}
+          {barBoundaries.map((b, i) => (
+            <React.Fragment key={`bar-${i}`}>
+              <div className={styles.timingVizBarLine} style={{ left: b.x }} />
+              {b.label !== null && (
+                <div className={styles.timingVizBarLabel} style={{ left: b.x }}>
+                  {b.label}
+                </div>
+              )}
+            </React.Fragment>
+          ))}
           <div
-            className={styles.timingVizFinalLine}
-            style={{ left: finalX }}
-            title={`Final · ${finalSec!.toFixed(3)}s`}
+            className={styles.timingVizDetectedLine}
+            style={{ left: detectedX }}
+            title={`Detected · ${detectedSec.toFixed(3)}s`}
           />
-        )}
-      </div>
-      {diffRows.map((row) => {
-        const left = Math.min(row.anchorX, row.endX);
-        const width = Math.abs(row.endX - row.anchorX);
-        const beatsPart =
-          row.deltaBeats !== undefined
-            ? `· ${renderSignedBeats(row.deltaBeats)} `
-            : '';
-        const slotsPart =
-          row.deltaSlots !== undefined
-            ? `· ${renderSignedSlots(row.deltaSlots)} `
-            : '';
-        const fullText = `${row.label} ${beatsPart}${slotsPart}· ${renderSignedMs(row.deltaSec * 1000)}`;
-        return (
-          <div
-            key={row.key}
-            className={styles.timingVizDiffRow}
-            style={{ height: TIMING_VIZ_ROW_HEIGHT } as React.CSSProperties}
-          >
+          {finalX !== undefined && (
             <div
-              className={`${styles.timingVizDiffBar} ${row.className}`}
-              style={{ left, width }}
-              title={fullText}
+              className={styles.timingVizFinalLine}
+              style={{ left: finalX }}
+              title={`Final · ${finalSec!.toFixed(3)}s`}
+            />
+          )}
+        </div>
+        {diffRows.map((row) => {
+          const left = Math.min(row.anchorX, row.endX);
+          const width = Math.abs(row.endX - row.anchorX);
+          const beatsPart =
+            row.deltaBeats !== undefined ? `· ${renderSignedBeats(row.deltaBeats)} ` : '';
+          const slotsPart =
+            row.deltaSlots !== undefined ? `· ${renderSignedSlots(row.deltaSlots)} ` : '';
+          const fullText = `${row.label} ${beatsPart}${slotsPart}· ${renderSignedMs(row.deltaSec * 1000)}`;
+          return (
+            <div
+              key={row.key}
+              className={styles.timingVizDiffRow}
+              style={{ height: TIMING_VIZ_ROW_HEIGHT } as React.CSSProperties}
             >
-              <span className={styles.timingVizDiffLabel}>{fullText}</span>
+              <div
+                className={`${styles.timingVizDiffBar} ${row.className}`}
+                style={{ left, width }}
+                title={fullText}
+              >
+                <span className={styles.timingVizDiffLabel}>{fullText}</span>
+              </div>
             </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-});
+          );
+        })}
+      </div>
+    );
+  }
+);
 
 /**
  * Collapsible "Debug details" block that surfaces a single onset's full
@@ -1354,338 +1344,317 @@ const OnsetTimingVisualization = observer(({
  * note) collapses the details again next time — acceptable for v1
  * since the block is short.
  */
-const NoteProvenanceDetails = observer(({
-  entry,
-  rendered,
-  startOpen = false,
-}: {
-  entry: NoteProvenanceEntry;
-  /** Present when hosted by a kept note; absent for filtered ghosts. */
-  rendered?: RenderedNoteContext;
-  /** Open by default (used by FilteredOnsetView so the user immediately
-   * sees why the onset was rejected — for kept notes the toggle is
-   * collapsed by default so it doesn't crowd the basic description). */
-  startOpen?: boolean;
-}) => {
-  const [open, setOpen] = React.useState(startOpen);
-  // Stop the container's mousedown handler so clicks on the toggle don't
-  // begin a marquee selection (which would clear the surrounding note's
-  // selection and immediately unmount this component).
-  const stop = (e: React.MouseEvent) => e.stopPropagation();
+const NoteProvenanceDetails = observer(
+  ({
+    entry,
+    rendered,
+    startOpen = false,
+  }: {
+    entry: NoteProvenanceEntry;
+    /** Present when hosted by a kept note; absent for filtered ghosts. */
+    rendered?: RenderedNoteContext;
+    /** Open by default (used by FilteredOnsetView so the user immediately
+     * sees why the onset was rejected — for kept notes the toggle is
+     * collapsed by default so it doesn't crowd the basic description). */
+    startOpen?: boolean;
+  }) => {
+    const [open, setOpen] = React.useState(startOpen);
+    // Stop the container's mousedown handler so clicks on the toggle don't
+    // begin a marquee selection (which would clear the surrounding note's
+    // selection and immediately unmount this component).
+    const stop = (e: React.MouseEvent) => e.stopPropagation();
 
-  // Eager per-bar timings table provided once at JotView. Lets the
-  // "Final position" row resolve a bar's absolute jot-time start without
-  // waiting for the player's timeline to be built — pre-Play the
-  // player's timeline is `EMPTY_TIMELINE`, but the math doesn't actually
-  // need any playback state.
-  const barTimings = React.useContext(BarTimingsContext);
-  // The current rendered jot — used to read `effectiveDrumOffsetBeats`,
-  // the user-applied Beat-offset slider value, as a labelled stage in
-  // the detected → final timing-drift chain.
-  const renderedJot = React.useContext(RenderedJotContext);
+    // Eager per-bar timings table provided once at JotView. Lets the
+    // "Final position" row resolve a bar's absolute jot-time start without
+    // waiting for the player's timeline to be built — pre-Play the
+    // player's timeline is `EMPTY_TIMELINE`, but the math doesn't actually
+    // need any playback state.
+    const barTimings = React.useContext(BarTimingsContext);
+    // The current rendered jot — used to read `effectiveDrumOffsetBeats`,
+    // the user-applied Beat-offset slider value, as a labelled stage in
+    // the detected → final timing-drift chain.
+    const renderedJot = React.useContext(RenderedJotContext);
 
-  // Two coordinate frames are tracked here:
-  //
-  //   1. ORIGINAL — the bar the detector placed the onset in
-  //      (`entry.bar + 1` in jot's 1-indexed convention) and the
-  //      post-MIDI-snap beat position inside it. Immutable for a given
-  //      note: derived purely from `entry.tick` (the unsnapped MIDI
-  //      tick preserved through `from_midi.ts`) and the 1/48 grid
-  //      snap, neither of which depend on the Beat-offset slider.
-  //   2. CURRENT — `rendered.bar` and the note's current quantized
-  //      position inside it, after `applyDrumOffsetStructure` has
-  //      re-bucketed the note under the user's slider value. This is
-  //      what the score is drawing right now and what the playback
-  //      scheduler will fire.
-  //
-  // The Snap-delta row reads ORIGINAL (so dragging the Beat slider
-  // doesn't change it — it's a property of the MIDI quantization, not
-  // the user's view); the Final-position row reads CURRENT (so the
-  // operator sees where the note actually plays after the slider);
-  // the Drum-offset row is the transition between them.
-  let displayedBarIndex: number | undefined;
-  let currentQuantizedBeat: number | undefined;
-  let currentSecPerQuarterNote: number | undefined;
-  let originalBar: StructuralBar | undefined;
-  let originalBarIndex: number | undefined;
-  let originalSecPerQuarterNote: number | undefined;
-  let originalQuantizedBeat: number | undefined;
-  let originalQuantizedSec: number | undefined;
-  let originalQuantizedTick: number | undefined;
-  let snapBeats: number | undefined;
-  let snapSec: number | undefined;
-  let snapMs: number | undefined;
-  let alignmentBeats: number | undefined;
-  let finalSec: number | undefined;
-  let drumOffsetBeats: number | undefined;
-  let drumOffsetSec: number | undefined;
-  let anchorDriftSec: number | undefined;
-  let anchorDriftBeats: number | undefined;
-  // Backend `quantise` stage shift; surfaced when
-  // `quantised_time_sec`/`quantised_shift_slots` are present on the
-  // provenance entry (the stage actually moved this onset). Slot count
-  // is the stage's native unit (integer 1/48s); seconds and ts-beats are
-  // derived from it via the original bar's tempo for display alongside
-  // the other rows.
-  let backendQuantSec: number | undefined;
-  let backendQuantBeats: number | undefined;
-  let backendQuantSlots: number | undefined;
-  if (rendered) {
-    currentQuantizedBeat = renderedBeatInBar(rendered.note, rendered.bar);
-    displayedBarIndex = rendered.bar.index;
+    // Two coordinate frames are tracked here:
+    //
+    //   1. ORIGINAL — the bar the detector placed the onset in
+    //      (`entry.bar + 1` in jot's 1-indexed convention) and the
+    //      post-MIDI-snap beat position inside it. Immutable for a given
+    //      note: derived purely from `entry.tick` (the unsnapped MIDI
+    //      tick preserved through `from_midi.ts`) and the 1/48 grid
+    //      snap, neither of which depend on the Beat-offset slider.
+    //   2. CURRENT — `rendered.bar` and the note's current quantized
+    //      position inside it, after `applyDrumOffsetStructure` has
+    //      re-bucketed the note under the user's slider value. This is
+    //      what the score is drawing right now and what the playback
+    //      scheduler will fire.
+    //
+    // The Snap-delta row reads ORIGINAL (so dragging the Beat slider
+    // doesn't change it — it's a property of the MIDI quantization, not
+    // the user's view); the Final-position row reads CURRENT (so the
+    // operator sees where the note actually plays after the slider);
+    // the Drum-offset row is the transition between them.
+    let displayedBarIndex: number | undefined;
+    let currentQuantizedBeat: number | undefined;
+    let currentSecPerQuarterNote: number | undefined;
+    let originalBar: StructuralBar | undefined;
+    let originalBarIndex: number | undefined;
+    let originalSecPerQuarterNote: number | undefined;
+    let originalQuantizedBeat: number | undefined;
+    let originalQuantizedSec: number | undefined;
+    let originalQuantizedTick: number | undefined;
+    let snapBeats: number | undefined;
+    let snapSec: number | undefined;
+    let snapMs: number | undefined;
+    let alignmentBeats: number | undefined;
+    let finalSec: number | undefined;
+    let drumOffsetBeats: number | undefined;
+    let drumOffsetSec: number | undefined;
+    let anchorDriftSec: number | undefined;
+    let anchorDriftBeats: number | undefined;
+    // Backend `quantise` stage shift; surfaced when
+    // `quantised_time_sec`/`quantised_shift_slots` are present on the
+    // provenance entry (the stage actually moved this onset). Slot count
+    // is the stage's native unit (integer 1/48s); seconds and ts-beats are
+    // derived from it via the original bar's tempo for display alongside
+    // the other rows.
+    let backendQuantSec: number | undefined;
+    let backendQuantBeats: number | undefined;
+    let backendQuantSlots: number | undefined;
+    if (rendered) {
+      currentQuantizedBeat = renderedBeatInBar(rendered.note, rendered.bar);
+      displayedBarIndex = rendered.bar.index;
 
-    const currentBarTiming = barTimings?.get(rendered.bar.index);
-    if (currentBarTiming && rendered.bar.beats > 0) {
-      currentSecPerQuarterNote = currentBarTiming.durationSec / rendered.bar.beats;
-    }
-
-    // The ORIGINAL bar lives in the rendered jot's structure at array
-    // position `provenance.leadBars + entry.bar` (see the docstring on
-    // `NoteProvenanceContextValue.leadBars` and `note_provenance.py`:
-    // the MIDI lays `lead_bars` empty bar-0-sized blocks before
-    // transcriber bar 0). We look it up by *array position*, NOT by
-    // `bar.index === entry.bar + 1`, because the naïve index mapping
-    // breaks whenever `from_midi.ts` counts more leading all-rest bars
-    // than the transcriber's `lead_bars` did; e.g. when the filter
-    // LLM kept no onsets in transcriber bars 0..N-1, those bars come
-    // through the MIDI as all-rest and `from_midi`'s leading-rest walk
-    // folds them into the lead-in, inflating `jot.globalMetadata.leadBars`
-    // past `provenance.leadBars` and shifting every drum bar's
-    // `bar.index` left by the difference. Array position survives that:
-    // bar 0 of the transcriber's structure is always at array index
-    // `provenance.leadBars`, with or without the inflation. `applyDrumOffsetStructure`
-    // shallow-clones bars and preserves both array order and `index`,
-    // so this lookup is also drum-offset-invariant.
-    const structBars = renderedJot?.structure.voices[0]?.bars;
-    const originalBarArrayPos = rendered.provenance.leadBars + entry.bar;
-    originalBar =
-      structBars && originalBarArrayPos >= 0 && originalBarArrayPos < structBars.length
-        ? structBars[originalBarArrayPos]
-        : undefined;
-    originalBarIndex = originalBar?.index;
-    const originalBarTiming =
-      originalBarIndex !== undefined ? barTimings?.get(originalBarIndex) : undefined;
-    if (originalBar && originalBarTiming && originalBar.beats > 0) {
-      originalSecPerQuarterNote = originalBarTiming.durationSec / originalBar.beats;
-    }
-
-    // Backend `quantise` stage shift (transcriber: `quantise.py`'s
-    // deterministic joint-snap + LLM residual pass). Surfaced when the
-    // provenance entry carries a `quantised_time_sec`; that field is
-    // null when the stage didn't run or didn't move this onset.
-    // `quantised_shift_slots` is the stage's native unit (signed int
-    // 1/48 slots); seconds is preferred when present since it's the
-    // exact audio-time displacement, with slots as the integer count.
-    if (
-      entry.quantised_time_sec !== null &&
-      entry.quantised_time_sec !== undefined
-    ) {
-      backendQuantSec = entry.quantised_time_sec - entry.detected_time_sec;
-      if (
-        entry.quantised_shift_slots !== null &&
-        entry.quantised_shift_slots !== undefined
-      ) {
-        backendQuantSlots = entry.quantised_shift_slots;
+      const currentBarTiming = barTimings?.get(rendered.bar.index);
+      if (currentBarTiming && rendered.bar.beats > 0) {
+        currentSecPerQuarterNote = currentBarTiming.durationSec / rendered.bar.beats;
       }
-      if (originalBar && originalSecPerQuarterNote !== undefined) {
+
+      // The ORIGINAL bar lives in the rendered jot's structure at array
+      // position `provenance.leadBars + entry.bar` (see the docstring on
+      // `NoteProvenanceContextValue.leadBars` and `note_provenance.py`:
+      // the MIDI lays `lead_bars` empty bar-0-sized blocks before
+      // transcriber bar 0). We look it up by *array position*, NOT by
+      // `bar.index === entry.bar + 1`, because the naïve index mapping
+      // breaks whenever `from_midi.ts` counts more leading all-rest bars
+      // than the transcriber's `lead_bars` did; e.g. when the filter
+      // LLM kept no onsets in transcriber bars 0..N-1, those bars come
+      // through the MIDI as all-rest and `from_midi`'s leading-rest walk
+      // folds them into the lead-in, inflating `jot.globalMetadata.leadBars`
+      // past `provenance.leadBars` and shifting every drum bar's
+      // `bar.index` left by the difference. Array position survives that:
+      // bar 0 of the transcriber's structure is always at array index
+      // `provenance.leadBars`, with or without the inflation. `applyDrumOffsetStructure`
+      // shallow-clones bars and preserves both array order and `index`,
+      // so this lookup is also drum-offset-invariant.
+      const structBars = renderedJot?.structure.voices[0]?.bars;
+      const originalBarArrayPos = rendered.provenance.leadBars + entry.bar;
+      originalBar =
+        structBars && originalBarArrayPos >= 0 && originalBarArrayPos < structBars.length
+          ? structBars[originalBarArrayPos]
+          : undefined;
+      originalBarIndex = originalBar?.index;
+      const originalBarTiming =
+        originalBarIndex !== undefined ? barTimings?.get(originalBarIndex) : undefined;
+      if (originalBar && originalBarTiming && originalBar.beats > 0) {
+        originalSecPerQuarterNote = originalBarTiming.durationSec / originalBar.beats;
+      }
+
+      // Backend `quantise` stage shift (transcriber: `quantise.py`'s
+      // deterministic joint-snap + LLM residual pass). Surfaced when the
+      // provenance entry carries a `quantised_time_sec`; that field is
+      // null when the stage didn't run or didn't move this onset.
+      // `quantised_shift_slots` is the stage's native unit (signed int
+      // 1/48 slots); seconds is preferred when present since it's the
+      // exact audio-time displacement, with slots as the integer count.
+      if (entry.quantised_time_sec !== null && entry.quantised_time_sec !== undefined) {
+        backendQuantSec = entry.quantised_time_sec - entry.detected_time_sec;
+        if (entry.quantised_shift_slots !== null && entry.quantised_shift_slots !== undefined) {
+          backendQuantSlots = entry.quantised_shift_slots;
+        }
+        if (originalBar && originalSecPerQuarterNote !== undefined) {
+          // qn → ts-beats: 1 ts-beat = 4/unit qn, so 1 qn = unit/4 ts-beats.
+          const deltaQn = backendQuantSec / originalSecPerQuarterNote;
+          backendQuantBeats = deltaQn * (originalBar.time.unit / 4);
+        }
+      }
+
+      // Snap delta is the audio-time displacement from the detected onset
+      // to where the 1/48 MIDI grid landed — both expressed in the
+      // ORIGINAL bar's tempo frame. Derived from `entry.tick`
+      // (post-`onsets_midi.py` rounding to integer ticks, pre-`from_midi`
+      // grid snap), so the value is a fixed property of the MIDI and
+      // doesn't move when the Beat-offset slider re-buckets the rendered
+      // note into a different bar.
+      if (originalBar && originalSecPerQuarterNote !== undefined && entry.tick !== null) {
+        const postSnapTick = Math.round(entry.tick / MIDI_GRID_TICKS) * MIDI_GRID_TICKS;
+        const snapDeltaQn = (postSnapTick - entry.tick) / TICKS_PER_BEAT;
         // qn → ts-beats: 1 ts-beat = 4/unit qn, so 1 qn = unit/4 ts-beats.
-        const deltaQn = backendQuantSec / originalSecPerQuarterNote;
-        backendQuantBeats = deltaQn * (originalBar.time.unit / 4);
+        snapBeats = snapDeltaQn * (originalBar.time.unit / 4);
+        snapSec = snapDeltaQn * originalSecPerQuarterNote;
+        snapMs = snapSec * 1000;
+        // Post-snap position in the ORIGINAL bar, built off the detected
+        // position rather than re-deriving from the post-snap tick (which
+        // would require walking the structure to recover the bar's start
+        // tick). Equivalent: detected + snap_delta lands at the snapped
+        // position by construction.
+        originalQuantizedBeat = entry.beat_in_bar + snapBeats;
+        originalQuantizedSec = entry.detected_time_sec + snapSec;
+        originalQuantizedTick = postSnapTick;
       }
-    }
 
-    // Snap delta is the audio-time displacement from the detected onset
-    // to where the 1/48 MIDI grid landed — both expressed in the
-    // ORIGINAL bar's tempo frame. Derived from `entry.tick`
-    // (post-`onsets_midi.py` rounding to integer ticks, pre-`from_midi`
-    // grid snap), so the value is a fixed property of the MIDI and
-    // doesn't move when the Beat-offset slider re-buckets the rendered
-    // note into a different bar.
-    if (
-      originalBar &&
-      originalSecPerQuarterNote !== undefined &&
-      entry.tick !== null
-    ) {
-      const postSnapTick =
-        Math.round(entry.tick / MIDI_GRID_TICKS) * MIDI_GRID_TICKS;
-      const snapDeltaQn = (postSnapTick - entry.tick) / TICKS_PER_BEAT;
-      // qn → ts-beats: 1 ts-beat = 4/unit qn, so 1 qn = unit/4 ts-beats.
-      snapBeats = snapDeltaQn * (originalBar.time.unit / 4);
-      snapSec = snapDeltaQn * originalSecPerQuarterNote;
-      snapMs = snapSec * 1000;
-      // Post-snap position in the ORIGINAL bar, built off the detected
-      // position rather than re-deriving from the post-snap tick (which
-      // would require walking the structure to recover the bar's start
-      // tick). Equivalent: detected + snap_delta lands at the snapped
-      // position by construction.
-      originalQuantizedBeat = entry.beat_in_bar + snapBeats;
-      originalQuantizedSec = entry.detected_time_sec + snapSec;
-      originalQuantizedTick = postSnapTick;
-    }
-
-    // Final position uses the CURRENT bar's timing; where the note
-    // plays now after the slider has applied its shift.
-    if (currentBarTiming && currentSecPerQuarterNote !== undefined) {
-      const intra =
-        (currentQuantizedBeat - 1) *
-        (4 / rendered.bar.time.unit) *
-        currentSecPerQuarterNote;
-      finalSec = currentBarTiming.startSec + intra + jotPlayer.drumsT0Sec;
-    }
-
-    // Bar-anchor drift: the difference between where the JOT places
-    // the note's original bar in audio time and where the detector's
-    // post-alignment view of beat_in_bar implies it should be. In a
-    // perfect round-trip these match exactly; in practice the most
-    // common source of mismatch is `transcriber/app/pipeline/onsets_midi.py`'s
-    // `compute_bar_tick_grid` rounding `lead_bars = round(lead_in_secs *
-    // initial_tempo_ticks_per_sec / bar0_ticks)` to zero when the
-    // pre-roll is shorter than ~half a bar. The MIDI then carries no
-    // lead-in, `from_midi.ts` reconstructs `drumsT0Sec = 0`, and every
-    // bar is anchored `lead_in_secs` early in audio time. Secondary
-    // sources (per-bar bpm attribution drift, integer-tick rounding)
-    // can also contribute small amounts but are dominated by lead-in
-    // rounding when it triggers.
-    if (
-      originalBar &&
-      originalBarTiming &&
-      originalSecPerQuarterNote !== undefined &&
-      originalSecPerQuarterNote > 0
-    ) {
-      // Where the detector says `originalBar` starts in audio time:
-      // back out the intra-bar offset from the detected onset.
-      const intraSecFromDetected =
-        (entry.beat_in_bar - 1) *
-        (4 / originalBar.time.unit) *
-        originalSecPerQuarterNote;
-      const transcriberBarAudioTime =
-        entry.detected_time_sec - intraSecFromDetected;
-      // Where the JOT places that same bar in audio time.
-      const jotBarAudioTime = originalBarTiming.startSec + jotPlayer.drumsT0Sec;
-      const drift = jotBarAudioTime - transcriberBarAudioTime;
-      if (Math.abs(drift) > 1e-6) {
-        anchorDriftSec = drift;
-        anchorDriftBeats =
-          (drift / originalSecPerQuarterNote) * (originalBar.time.unit / 4);
+      // Final position uses the CURRENT bar's timing; where the note
+      // plays now after the slider has applied its shift.
+      if (currentBarTiming && currentSecPerQuarterNote !== undefined) {
+        const intra =
+          (currentQuantizedBeat - 1) * (4 / rendered.bar.time.unit) * currentSecPerQuarterNote;
+        finalSec = currentBarTiming.startSec + intra + jotPlayer.drumsT0Sec;
       }
-    }
 
-    // Old bundles emit `null` when alignment didn't apply; new bundles
-    // always carry a numeric value (0.0 on rejection). Coerce to 0 so
-    // the displayed alignment row reads consistently as "+0.000s"
-    // either way instead of disappearing on legacy bundles. Converted
-    // to ts-beats using the original bar's tempo (the bar the alignment
-    // was anchored to when the transcriber computed it).
-    const offsetSec = rendered.provenance.beatAlignmentOffsetSec ?? 0;
-    if (originalBar && originalSecPerQuarterNote !== undefined && originalSecPerQuarterNote > 0) {
-      alignmentBeats =
-        (offsetSec / originalSecPerQuarterNote) * (originalBar.time.unit / 4);
-    }
-
-    // Manual drum-offset slider (`effectiveDrumOffsetBeats` is in
-    // quarter notes by convention — `applyDrumOffset` shifts each
-    // `note.beat` by this amount, and `note.beat` itself is in quarter
-    // notes from bar start). The audio-time displacement uses the
-    // CURRENT (destination) bar's tempo, since that's the tempo the
-    // note's new intra-bar position is interpreted under. Cross-bar
-    // shifts under a per-bar bpm change are approximate; the residual
-    // surfaces in the Unknown-drift row.
-    const offsetQn = renderedJot?.effectiveDrumOffsetBeats;
-    if (typeof offsetQn === 'number' && Math.abs(offsetQn) > 1e-9) {
-      drumOffsetBeats = offsetQn;
-      if (currentSecPerQuarterNote !== undefined) {
-        drumOffsetSec = offsetQn * currentSecPerQuarterNote;
-      }
-    }
-  }
-
-  // Unknown drift residual: `finalSec` minus everything the chain
-  // accounts for (detected onset + snap + alignment + drum offset).
-  // Shared by the textual dl row and the visualization's residual bar
-  // so both surface the same value. Computed here (not inside the
-  // visualization) so the dl can render it even when the timing
-  // diagram itself is suppressed for other reasons.
-  let unknownDriftSec: number | undefined;
-  let unknownDriftBeats: number | undefined;
-  let unknownDriftMs: number | undefined;
-  if (finalSec !== undefined && rendered) {
-    let accountedSec = entry.detected_time_sec;
-    if (backendQuantSec !== undefined) accountedSec += backendQuantSec;
-    if (snapSec !== undefined) accountedSec += snapSec;
-    if (rendered.provenance.beatAlignmentOffsetSec !== null) {
-      accountedSec += rendered.provenance.beatAlignmentOffsetSec;
-    }
-    if (anchorDriftSec !== undefined) accountedSec += anchorDriftSec;
-    if (drumOffsetSec !== undefined) accountedSec += drumOffsetSec;
-    const residual = finalSec - accountedSec;
-    if (Math.abs(residual) > 1e-6) {
-      unknownDriftSec = residual;
-      unknownDriftMs = residual * 1000;
+      // Bar-anchor drift: the difference between where the JOT places
+      // the note's original bar in audio time and where the detector's
+      // post-alignment view of beat_in_bar implies it should be. In a
+      // perfect round-trip these match exactly; in practice the most
+      // common source of mismatch is `transcriber/app/pipeline/onsets_midi.py`'s
+      // `compute_bar_tick_grid` rounding `lead_bars = round(lead_in_secs *
+      // initial_tempo_ticks_per_sec / bar0_ticks)` to zero when the
+      // pre-roll is shorter than ~half a bar. The MIDI then carries no
+      // lead-in, `from_midi.ts` reconstructs `drumsT0Sec = 0`, and every
+      // bar is anchored `lead_in_secs` early in audio time. Secondary
+      // sources (per-bar bpm attribution drift, integer-tick rounding)
+      // can also contribute small amounts but are dominated by lead-in
+      // rounding when it triggers.
       if (
         originalBar &&
+        originalBarTiming &&
         originalSecPerQuarterNote !== undefined &&
         originalSecPerQuarterNote > 0
       ) {
-        unknownDriftBeats =
-          (residual / originalSecPerQuarterNote) * (originalBar.time.unit / 4);
+        // Where the detector says `originalBar` starts in audio time:
+        // back out the intra-bar offset from the detected onset.
+        const intraSecFromDetected =
+          (entry.beat_in_bar - 1) * (4 / originalBar.time.unit) * originalSecPerQuarterNote;
+        const transcriberBarAudioTime = entry.detected_time_sec - intraSecFromDetected;
+        // Where the JOT places that same bar in audio time.
+        const jotBarAudioTime = originalBarTiming.startSec + jotPlayer.drumsT0Sec;
+        const drift = jotBarAudioTime - transcriberBarAudioTime;
+        if (Math.abs(drift) > 1e-6) {
+          anchorDriftSec = drift;
+          anchorDriftBeats = (drift / originalSecPerQuarterNote) * (originalBar.time.unit / 4);
+        }
+      }
+
+      // Old bundles emit `null` when alignment didn't apply; new bundles
+      // always carry a numeric value (0.0 on rejection). Coerce to 0 so
+      // the displayed alignment row reads consistently as "+0.000s"
+      // either way instead of disappearing on legacy bundles. Converted
+      // to ts-beats using the original bar's tempo (the bar the alignment
+      // was anchored to when the transcriber computed it).
+      const offsetSec = rendered.provenance.beatAlignmentOffsetSec ?? 0;
+      if (originalBar && originalSecPerQuarterNote !== undefined && originalSecPerQuarterNote > 0) {
+        alignmentBeats = (offsetSec / originalSecPerQuarterNote) * (originalBar.time.unit / 4);
+      }
+
+      // Manual drum-offset slider (`effectiveDrumOffsetBeats` is in
+      // quarter notes by convention — `applyDrumOffset` shifts each
+      // `note.beat` by this amount, and `note.beat` itself is in quarter
+      // notes from bar start). The audio-time displacement uses the
+      // CURRENT (destination) bar's tempo, since that's the tempo the
+      // note's new intra-bar position is interpreted under. Cross-bar
+      // shifts under a per-bar bpm change are approximate; the residual
+      // surfaces in the Unknown-drift row.
+      const offsetQn = renderedJot?.effectiveDrumOffsetBeats;
+      if (typeof offsetQn === 'number' && Math.abs(offsetQn) > 1e-9) {
+        drumOffsetBeats = offsetQn;
+        if (currentSecPerQuarterNote !== undefined) {
+          drumOffsetSec = offsetQn * currentSecPerQuarterNote;
+        }
       }
     }
-  }
 
-  const renderSignedMs = (ms: number) =>
-    `${ms >= 0 ? '+' : ''}${ms.toFixed(1)} ms`;
-  const renderSignedBeats = (b: number) =>
-    `${b >= 0 ? '+' : ''}${b.toFixed(3)}`;
-  const renderSignedSec = (s: number) =>
-    `${s >= 0 ? '+' : ''}${s.toFixed(3)}s`;
-  // Convert a delta expressed in ts-beats of the original bar into the
-  // matching 1/48 slot count, using `48 / unit` slots-per-ts-beat.
-  // Returns `undefined` when the bar (and hence its `time.unit`) didn't
-  // resolve; the call site should then omit the 48ths annotation.
-  const origBeatsToSlots = (beats: number | undefined): number | undefined =>
-    beats !== undefined && originalBar !== undefined
-      ? (beats * 48) / originalBar.time.unit
-      : undefined;
+    // Unknown drift residual: `finalSec` minus everything the chain
+    // accounts for (detected onset + snap + alignment + drum offset).
+    // Shared by the textual dl row and the visualization's residual bar
+    // so both surface the same value. Computed here (not inside the
+    // visualization) so the dl can render it even when the timing
+    // diagram itself is suppressed for other reasons.
+    let unknownDriftSec: number | undefined;
+    let unknownDriftBeats: number | undefined;
+    let unknownDriftMs: number | undefined;
+    if (finalSec !== undefined && rendered) {
+      let accountedSec = entry.detected_time_sec;
+      if (backendQuantSec !== undefined) accountedSec += backendQuantSec;
+      if (snapSec !== undefined) accountedSec += snapSec;
+      if (rendered.provenance.beatAlignmentOffsetSec !== null) {
+        accountedSec += rendered.provenance.beatAlignmentOffsetSec;
+      }
+      if (anchorDriftSec !== undefined) accountedSec += anchorDriftSec;
+      if (drumOffsetSec !== undefined) accountedSec += drumOffsetSec;
+      const residual = finalSec - accountedSec;
+      if (Math.abs(residual) > 1e-6) {
+        unknownDriftSec = residual;
+        unknownDriftMs = residual * 1000;
+        if (
+          originalBar &&
+          originalSecPerQuarterNote !== undefined &&
+          originalSecPerQuarterNote > 0
+        ) {
+          unknownDriftBeats = (residual / originalSecPerQuarterNote) * (originalBar.time.unit / 4);
+        }
+      }
+    }
 
-  return (
-    <div className={styles.debugDetails} onMouseDown={stop}>
-      <button
-        type="button"
-        className={styles.debugDetailsToggle}
-        onClick={(e) => {
-          stop(e);
-          setOpen((o) => !o);
-        }}
-        onMouseDown={stop}
-        aria-expanded={open}
-      >
-        {open ? '▾' : '▸'} Debug details
-      </button>
-      {open && rendered && (
-        <OnsetTimingVisualization
-          entry={entry}
-          rendered={rendered}
-          backendQuantSec={backendQuantSec}
-          backendQuantBeats={backendQuantBeats}
-          backendQuantSlots={backendQuantSlots}
-          snapSec={snapSec}
-          snapBeats={snapBeats}
-          alignmentBeats={alignmentBeats}
-          anchorDriftSec={anchorDriftSec}
-          anchorDriftBeats={anchorDriftBeats}
-          drumOffsetSec={drumOffsetSec}
-          drumOffsetBeats={drumOffsetBeats}
-          finalSec={finalSec}
-          unknownDriftSecPerQuarterNote={originalSecPerQuarterNote}
-          unknownDriftTimeUnit={originalBar?.time.unit}
-          displayedBarIndex={displayedBarIndex}
-        />
-      )}
-      {open && (
-        <dl className={styles.debugDetailsList}>
-          <dt>Detected beat</dt>
-          <dd>
-            {/* `entry.bar` is the transcriber's 0-indexed structural
+    const renderSignedMs = (ms: number) => `${ms >= 0 ? '+' : ''}${ms.toFixed(1)} ms`;
+    const renderSignedBeats = (b: number) => `${b >= 0 ? '+' : ''}${b.toFixed(3)}`;
+    const renderSignedSec = (s: number) => `${s >= 0 ? '+' : ''}${s.toFixed(3)}s`;
+    // Convert a delta expressed in ts-beats of the original bar into the
+    // matching 1/48 slot count, using `48 / unit` slots-per-ts-beat.
+    // Returns `undefined` when the bar (and hence its `time.unit`) didn't
+    // resolve; the call site should then omit the 48ths annotation.
+    const origBeatsToSlots = (beats: number | undefined): number | undefined =>
+      beats !== undefined && originalBar !== undefined
+        ? (beats * 48) / originalBar.time.unit
+        : undefined;
+
+    return (
+      <div className={styles.debugDetails} onMouseDown={stop}>
+        <button
+          type="button"
+          className={styles.debugDetailsToggle}
+          onClick={(e) => {
+            stop(e);
+            setOpen((o) => !o);
+          }}
+          onMouseDown={stop}
+          aria-expanded={open}
+        >
+          {open ? '▾' : '▸'} Debug details
+        </button>
+        {open && rendered && (
+          <OnsetTimingVisualization
+            entry={entry}
+            rendered={rendered}
+            backendQuantSec={backendQuantSec}
+            backendQuantBeats={backendQuantBeats}
+            backendQuantSlots={backendQuantSlots}
+            snapSec={snapSec}
+            snapBeats={snapBeats}
+            alignmentBeats={alignmentBeats}
+            anchorDriftSec={anchorDriftSec}
+            anchorDriftBeats={anchorDriftBeats}
+            drumOffsetSec={drumOffsetSec}
+            drumOffsetBeats={drumOffsetBeats}
+            finalSec={finalSec}
+            unknownDriftSecPerQuarterNote={originalSecPerQuarterNote}
+            unknownDriftTimeUnit={originalBar?.time.unit}
+            displayedBarIndex={displayedBarIndex}
+          />
+        )}
+        {open && (
+          <dl className={styles.debugDetailsList}>
+            <dt>Detected beat</dt>
+            <dd>
+              {/* `entry.bar` is the transcriber's 0-indexed structural
                 bar. We display the rendered jot's `bar.index` for the
                 same bar (resolved via the array-position lookup above)
                 so the value matches where the note actually lives in
@@ -1694,182 +1663,174 @@ const NoteProvenanceDetails = observer(({
                 mapping no longer always equals the displayed bar. Falls
                 back to `entry.bar + 1` when the lookup couldn't resolve
                 (no rendered jot context). */}
-            {new NotePosition({
-              barIndex: originalBarIndex ?? entry.bar + 1,
-              beatInBar: entry.beat_in_bar,
-              timeSig: originalBar?.time,
-              audioSec: entry.detected_time_sec,
-              midiTick: entry.tick ?? undefined,
-            }).toString()}
-          </dd>
-          <dt>Strength</dt>
-          <dd>{entry.strength.toFixed(3)}</dd>
-          {backendQuantSec !== undefined && (
-            <>
-              <dt>Backend quantise+shift</dt>
-              <dd>
-                {backendQuantBeats !== undefined &&
-                  `${renderSignedBeats(backendQuantBeats)} beats `}
-                {/* Prefer the stage's exact integer slot count when
+              {new NotePosition({
+                barIndex: originalBarIndex ?? entry.bar + 1,
+                beatInBar: entry.beat_in_bar,
+                timeSig: originalBar?.time,
+                audioSec: entry.detected_time_sec,
+                midiTick: entry.tick ?? undefined,
+              }).toString()}
+            </dd>
+            <dt>Strength</dt>
+            <dd>{entry.strength.toFixed(3)}</dd>
+            {backendQuantSec !== undefined && (
+              <>
+                <dt>Backend quantise+shift</dt>
+                <dd>
+                  {backendQuantBeats !== undefined &&
+                    `${renderSignedBeats(backendQuantBeats)} beats `}
+                  {/* Prefer the stage's exact integer slot count when
                     surfaced; fall back to the seconds-derived count for
                     legacy bundles. */}
-                {(backendQuantSlots !== undefined
-                  ? `· ${formatSignedSlots(backendQuantSlots)} `
-                  : origBeatsToSlots(backendQuantBeats) !== undefined
-                  ? `· ${formatSignedSlots(origBeatsToSlots(backendQuantBeats)!)} `
-                  : '')}
-                ({renderSignedMs(backendQuantSec * 1000)})
-              </dd>
-            </>
-          )}
-          {originalQuantizedBeat !== undefined && originalBarIndex !== undefined && (
-            <>
-              <dt>Quantized to</dt>
-              <dd>
-                {new NotePosition({
-                  barIndex: originalBarIndex,
-                  beatInBar: originalQuantizedBeat,
-                  timeSig: originalBar?.time,
-                  audioSec: originalQuantizedSec,
-                  midiTick: originalQuantizedTick,
-                }).toString()}
-              </dd>
-              <dt>Snap delta</dt>
-              <dd>
-                {snapBeats !== undefined && `${renderSignedBeats(snapBeats)} beats `}
-                {origBeatsToSlots(snapBeats) !== undefined &&
-                  `· ${formatSignedSlots(origBeatsToSlots(snapBeats)!)} `}
-                {snapMs !== undefined && `(${renderSignedMs(snapMs)})`}
-              </dd>
-            </>
-          )}
-          {rendered && (
-            <>
-              <dt>Global beat alignment</dt>
-              <dd>
-                {alignmentBeats !== undefined &&
-                  `${renderSignedBeats(alignmentBeats)} beats `}
-                {origBeatsToSlots(alignmentBeats) !== undefined &&
-                  `· ${formatSignedSlots(origBeatsToSlots(alignmentBeats)!)} `}
-                ({renderSignedSec(
-                  rendered.provenance.beatAlignmentOffsetSec ?? 0,
-                )})
-              </dd>
-            </>
-          )}
-          {anchorDriftSec !== undefined && (
-            <>
-              <dt>Bar anchor drift</dt>
-              <dd>
-                {anchorDriftBeats !== undefined &&
-                  `${renderSignedBeats(anchorDriftBeats)} beats `}
-                {origBeatsToSlots(anchorDriftBeats) !== undefined &&
-                  `· ${formatSignedSlots(origBeatsToSlots(anchorDriftBeats)!)} `}
-                ({renderSignedMs(anchorDriftSec * 1000)})
-              </dd>
-            </>
-          )}
-          {drumOffsetBeats !== undefined && (
-            <>
-              <dt>Drum offset</dt>
-              <dd>
-                {renderSignedBeats(drumOffsetBeats)} beats
-                {' '}
-                {/* `drumOffsetBeats` is in quarter notes (see compute
-                    block above); 1 qn = 12 slots, independent of the
-                    bar's time signature. */}
-                · {formatSignedSlots(drumOffsetBeats * 12)}
-                {drumOffsetSec !== undefined &&
-                  ` (${renderSignedMs(drumOffsetSec * 1000)})`}
-              </dd>
-            </>
-          )}
-          {unknownDriftSec !== undefined && (
-            <>
-              <dt>Unknown drift source</dt>
-              <dd>
-                {unknownDriftBeats !== undefined &&
-                  `${renderSignedBeats(unknownDriftBeats)} beats `}
-                {origBeatsToSlots(unknownDriftBeats) !== undefined &&
-                  `· ${formatSignedSlots(origBeatsToSlots(unknownDriftBeats)!)} `}
-                ({renderSignedMs(unknownDriftMs!)})
-              </dd>
-            </>
-          )}
-          {finalSec !== undefined &&
-            currentQuantizedBeat !== undefined &&
-            displayedBarIndex !== undefined && (
-              <>
-                <dt>Final position</dt>
-                <dd>
-                  {new NotePosition({
-                    barIndex: displayedBarIndex,
-                    beatInBar: currentQuantizedBeat,
-                    timeSig: rendered?.bar.time,
-                    audioSec: finalSec,
-                  }).toString()}
+                  {backendQuantSlots !== undefined
+                    ? `· ${formatSignedSlots(backendQuantSlots)} `
+                    : origBeatsToSlots(backendQuantBeats) !== undefined
+                      ? `· ${formatSignedSlots(origBeatsToSlots(backendQuantBeats)!)} `
+                      : ''}
+                  ({renderSignedMs(backendQuantSec * 1000)})
                 </dd>
               </>
             )}
-          {entry.midi_note !== null && (
-            <>
-              <dt>MIDI note</dt>
-              <dd>{entry.midi_note}</dd>
-            </>
-          )}
-          {(() => {
-            // Raw MIDI velocity is preserved on `note.metadata.midi.velocity`
-            // by from_midi.ts; the same file's [A7] step maps it into the
-            // `:a` (≥100) / `:g` (<40) modifiers visible in the description
-            // above. Surface the raw value so the operator can see exactly
-            // why a note picked up (or didn't) the accent/ghost decoration.
-            const velocity = (
-              rendered?.note.source.metadata as
-                | { midi?: { velocity?: number } }
-                | undefined
-            )?.midi?.velocity;
-            if (typeof velocity !== 'number') return null;
-            return (
+            {originalQuantizedBeat !== undefined && originalBarIndex !== undefined && (
               <>
-                <dt>Velocity</dt>
-                <dd>{velocity}</dd>
+                <dt>Quantized to</dt>
+                <dd>
+                  {new NotePosition({
+                    barIndex: originalBarIndex,
+                    beatInBar: originalQuantizedBeat,
+                    timeSig: originalBar?.time,
+                    audioSec: originalQuantizedSec,
+                    midiTick: originalQuantizedTick,
+                  }).toString()}
+                </dd>
+                <dt>Snap delta</dt>
+                <dd>
+                  {snapBeats !== undefined && `${renderSignedBeats(snapBeats)} beats `}
+                  {origBeatsToSlots(snapBeats) !== undefined &&
+                    `· ${formatSignedSlots(origBeatsToSlots(snapBeats)!)} `}
+                  {snapMs !== undefined && `(${renderSignedMs(snapMs)})`}
+                </dd>
               </>
-            );
-          })()}
-          <dt>Filter</dt>
-          <dd>
-            {entry.kept
-              ? 'kept'
-              : (() => {
-                  const source =
-                    entry.rejected_by ??
-                    (entry.out_of_range ? 'out of range' : 'rejected');
-                  const reasonLabel = entry.reason_code
-                    ? FILTER_REASON_LABELS[entry.reason_code] ?? entry.reason_code
-                    : null;
-                  return reasonLabel ? (
-                    <>
-                      {source} ·{' '}
-                      <span className={styles.reasonCode}>{reasonLabel}</span>
-                    </>
-                  ) : (
-                    source
-                  );
-                })()}
-          </dd>
-          {!entry.kept && !entry.out_of_range && entry.reason_text && (
-            <>
-              <dt>Reason</dt>
-              <dd>
-                <span className={styles.reasonText}>{entry.reason_text}</span>
-              </dd>
-            </>
-          )}
-        </dl>
-      )}
-    </div>
-  );
-});
+            )}
+            {rendered && (
+              <>
+                <dt>Global beat alignment</dt>
+                <dd>
+                  {alignmentBeats !== undefined && `${renderSignedBeats(alignmentBeats)} beats `}
+                  {origBeatsToSlots(alignmentBeats) !== undefined &&
+                    `· ${formatSignedSlots(origBeatsToSlots(alignmentBeats)!)} `}
+                  ({renderSignedSec(rendered.provenance.beatAlignmentOffsetSec ?? 0)})
+                </dd>
+              </>
+            )}
+            {anchorDriftSec !== undefined && (
+              <>
+                <dt>Bar anchor drift</dt>
+                <dd>
+                  {anchorDriftBeats !== undefined &&
+                    `${renderSignedBeats(anchorDriftBeats)} beats `}
+                  {origBeatsToSlots(anchorDriftBeats) !== undefined &&
+                    `· ${formatSignedSlots(origBeatsToSlots(anchorDriftBeats)!)} `}
+                  ({renderSignedMs(anchorDriftSec * 1000)})
+                </dd>
+              </>
+            )}
+            {drumOffsetBeats !== undefined && (
+              <>
+                <dt>Drum offset</dt>
+                <dd>
+                  {renderSignedBeats(drumOffsetBeats)} beats{' '}
+                  {/* `drumOffsetBeats` is in quarter notes (see compute
+                    block above); 1 qn = 12 slots, independent of the
+                    bar's time signature. */}
+                  · {formatSignedSlots(drumOffsetBeats * 12)}
+                  {drumOffsetSec !== undefined && ` (${renderSignedMs(drumOffsetSec * 1000)})`}
+                </dd>
+              </>
+            )}
+            {unknownDriftSec !== undefined && (
+              <>
+                <dt>Unknown drift source</dt>
+                <dd>
+                  {unknownDriftBeats !== undefined &&
+                    `${renderSignedBeats(unknownDriftBeats)} beats `}
+                  {origBeatsToSlots(unknownDriftBeats) !== undefined &&
+                    `· ${formatSignedSlots(origBeatsToSlots(unknownDriftBeats)!)} `}
+                  ({renderSignedMs(unknownDriftMs!)})
+                </dd>
+              </>
+            )}
+            {finalSec !== undefined &&
+              currentQuantizedBeat !== undefined &&
+              displayedBarIndex !== undefined && (
+                <>
+                  <dt>Final position</dt>
+                  <dd>
+                    {new NotePosition({
+                      barIndex: displayedBarIndex,
+                      beatInBar: currentQuantizedBeat,
+                      timeSig: rendered?.bar.time,
+                      audioSec: finalSec,
+                    }).toString()}
+                  </dd>
+                </>
+              )}
+            {entry.midi_note !== null && (
+              <>
+                <dt>MIDI note</dt>
+                <dd>{entry.midi_note}</dd>
+              </>
+            )}
+            {(() => {
+              // Raw MIDI velocity is preserved on `note.metadata.midi.velocity`
+              // by from_midi.ts; the same file's [A7] step maps it into the
+              // `:a` (≥100) / `:g` (<40) modifiers visible in the description
+              // above. Surface the raw value so the operator can see exactly
+              // why a note picked up (or didn't) the accent/ghost decoration.
+              const velocity = (
+                rendered?.note.source.metadata as { midi?: { velocity?: number } } | undefined
+              )?.midi?.velocity;
+              if (typeof velocity !== 'number') return null;
+              return (
+                <>
+                  <dt>Velocity</dt>
+                  <dd>{velocity}</dd>
+                </>
+              );
+            })()}
+            <dt>Filter</dt>
+            <dd>
+              {entry.kept
+                ? 'kept'
+                : (() => {
+                    const source =
+                      entry.rejected_by ?? (entry.out_of_range ? 'out of range' : 'rejected');
+                    const reasonLabel = entry.reason_code
+                      ? (FILTER_REASON_LABELS[entry.reason_code] ?? entry.reason_code)
+                      : null;
+                    return reasonLabel ? (
+                      <>
+                        {source} · <span className={styles.reasonCode}>{reasonLabel}</span>
+                      </>
+                    ) : (
+                      source
+                    );
+                  })()}
+            </dd>
+            {!entry.kept && !entry.out_of_range && entry.reason_text && (
+              <>
+                <dt>Reason</dt>
+                <dd>
+                  <span className={styles.reasonText}>{entry.reason_text}</span>
+                </dd>
+              </>
+            )}
+          </dl>
+        )}
+      </div>
+    );
+  }
+);
 
 /**
  * Display labels for the filter LLM's short reason codes. Keep in
@@ -1898,7 +1859,7 @@ const FILTER_REASON_LABELS: Record<string, string> = {
  * SelectionStore — a filtered onset is not a real note); hover shows
  * the same popover transiently.
  */
-export const FilteredOnsetView = ({
+export const FilteredOnsetView = observer(({
   entry,
   beatOffset,
   color,
@@ -1914,8 +1875,10 @@ export const FilteredOnsetView = ({
   color: string;
   trackHeight: number;
 }) => {
+  const store = React.useContext(JotViewStoreContext);
+  const pinnedKey = `${entry.pitch}:${entry.detected_time_sec}`;
+  const clicked = store?.pinnedFilteredOnsetKey === pinnedKey;
   const [hovered, setHovered] = React.useState(false);
-  const [clicked, setClicked] = React.useState(false);
   const show = hovered || clicked;
   const stop = (e: React.MouseEvent) => e.stopPropagation();
   const anchorRef = React.useRef<HTMLDivElement>(null);
@@ -1932,27 +1895,24 @@ export const FilteredOnsetView = ({
   // dismissing click from also moving the playhead via the bars-row
   // seek handler (or any other bubbling onClick further up the tree).
   React.useEffect(() => {
-    if (!clicked) return;
+    if (!clicked || !store) return;
     const onClickCapture = (e: MouseEvent) => {
       const target = e.target as Node;
       if (anchorRef.current?.contains(target)) return;
       if (labelRef.current?.contains(target)) return;
       e.stopPropagation();
-      setClicked(false);
+      store.setPinnedFilteredOnsetKey(undefined);
     };
     document.addEventListener('click', onClickCapture, true);
     return () => document.removeEventListener('click', onClickCapture, true);
-  }, [clicked]);
+  }, [clicked, store]);
   return (
     <div
       ref={anchorRef}
       // Same opt-out as real notes so a click on the ghost doesn't move
       // the playhead via the bars-row seek handler.
       data-noseek="true"
-      className={classNames(
-        styles.filteredOnset,
-        show && styles.filteredOnsetShowingLabel,
-      )}
+      className={classNames(styles.filteredOnset, show && styles.filteredOnsetShowingLabel)}
       style={
         {
           ['--filtered-beat' as string]: beatOffset,
@@ -1963,7 +1923,7 @@ export const FilteredOnsetView = ({
       onMouseDown={stop}
       onClick={(e) => {
         stop(e);
-        setClicked((c) => !c);
+        store?.setPinnedFilteredOnsetKey(clicked ? undefined : pinnedKey);
       }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -1974,7 +1934,7 @@ export const FilteredOnsetView = ({
           ref={labelRef}
           className={classNames(
             styles.filteredOnsetLabel,
-            flipAbove && styles.filteredOnsetLabelAbove,
+            flipAbove && styles.filteredOnsetLabelAbove
           )}
         >
           <NoteProvenanceDetails entry={entry} startOpen />
@@ -1982,7 +1942,7 @@ export const FilteredOnsetView = ({
       )}
     </div>
   );
-};
+});
 
 function pickBadge(note: StructuralNote): string | undefined {
   const m = note.modifiers;

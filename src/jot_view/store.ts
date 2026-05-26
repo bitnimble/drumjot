@@ -119,6 +119,25 @@ export type GridLineSettings = {
 export const BASE_BAR_WIDTH = 448;
 export const MIN_ZOOM = 0.1;
 export const MAX_ZOOM = 4.0;
+
+/** Snap a CSS-pixel value to the nearest 1/dpr boundary. The
+ *  `.scrollViewport`'s `transform: translate3d(--scroll-x × -1px, ...)`
+ *  is composited at device-pixel resolution; if scroll values are
+ *  sub-device-pixel (e.g. 100.3 CSS px on a 2x display = 200.6 device
+ *  px), the compositor bilinearly interpolates the bitmap each frame
+ *  and the interpolation distribution shifts as scroll advances,
+ *  producing a visible ~1px back-and-forth wobble during auto-follow.
+ *  Snapping keeps every scroll value on the device grid: at dpr=2
+ *  that's 0.5 CSS-px steps, fine enough that 60-fps auto-follow at
+ *  120 BPM still advances smoothly (several device pixels per frame).
+ *  Also used to lock `--playhead-x` to the same grid as `scrollX` in
+ *  `PlayheadPosVar` so the centred playhead doesn't drift sub-pixel
+ *  against the bars below it. */
+export function snapToDevicePx(x: number): number {
+  if (typeof window === 'undefined') return x;
+  const dpr = window.devicePixelRatio || 1;
+  return Math.round(x * dpr) / dpr;
+}
 // Row volume faders are pure attenuation (0 = silent, 1 = unscaled).
 // The kit's overall loudness is handled by the drum master gain.
 export const VOLUME_STEP = 0.05;
@@ -475,6 +494,10 @@ export class JotViewStore {
   /** Whether the DebugPanel is expanded, small UI state, kept here so
    * the toolbar toggle and the panel itself stay in sync. */
   debugPanelOpen: boolean = false;
+  /** Lyrics search modal visibility. */
+  lyricsSearchOpen: boolean = false;
+  /** Lyrics plain-text load modal visibility. */
+  lyricsTextOpen: boolean = false;
   /** Height of the DebugPanel (px) when expanded; adjusted by dragging
    * the resize handle along its top edge. */
   debugPanelHeight: number = 280;
@@ -522,7 +545,7 @@ export class JotViewStore {
    * it to `fetch` so the request is genuinely cancelled at the
    * network layer rather than just discarding the response.
    */
-  private transcribeController: AbortController | undefined;
+  transcribeController: AbortController | undefined;
 
   /**
    * In-flight file-load counter. Each top-level loader (jot / midi / paradb
@@ -563,13 +586,8 @@ export class JotViewStore {
 
   constructor() {
     makeAutoObservable(this, {
-      // Plain cached DOM dimensions; not part of the reactive surface.
-      // Excluded so a 60 Hz resize / content-grow tick doesn't fan out
-      // to every observer that read anything off the store.
-      _viewportWidth: false,
-      _viewportHeight: false,
-      _contentWidth: false,
-      _contentHeight: false,
+      transcribeController: false,
+      lyricsAlignController: false,
     });
     // Push mute / solo state to the player whenever it changes. While
     // playback is in flight, the player cancels and reschedules events
@@ -1037,6 +1055,24 @@ export class JotViewStore {
   /** Replace the toolbar's `Show filtered` checkbox state. */
   setShowFilteredOnsets(show: boolean) {
     this.showFilteredOnsets = show;
+  }
+
+  setLyricsSearchOpen(open: boolean) {
+    this.lyricsSearchOpen = open;
+  }
+
+  setLyricsTextOpen(open: boolean) {
+    this.lyricsTextOpen = open;
+  }
+
+  /** Identifies which filtered-onset popover is pinned open. The key is
+   * `${pitch}:${detected_time_sec}` (rejected onsets have `tick === null`,
+   * so we can't use it); `undefined` means none pinned. Hover-only popovers
+   * don't go through here. */
+  pinnedFilteredOnsetKey: string | undefined = undefined;
+
+  setPinnedFilteredOnsetKey(key: string | undefined) {
+    this.pinnedFilteredOnsetKey = key;
   }
 
   toggleGridLine(key: keyof GridLineSettings) {
@@ -1981,7 +2017,7 @@ export class JotViewStore {
   /** Resize the {@link DebugPanel}. Clamped so it can't shrink past the
    * header or grow past the viewport (with headroom for the toolbar). */
   setDebugPanelHeight(px: number): void {
-    const max = Math.max(120, window.innerHeight - 160);
+    const max = Math.max(120, this._viewportHeight - 160);
     this.debugPanelHeight = Math.min(max, Math.max(80, px));
   }
 
@@ -2020,16 +2056,16 @@ export class JotViewStore {
   }
 
   setScrollX(x: number): void {
-    this.scrollX = this.clampScrollX(x);
+    this.scrollX = this.clampScrollX(snapToDevicePx(x));
   }
 
   setScrollY(y: number): void {
-    this.scrollY = this.clampScrollY(y);
+    this.scrollY = this.clampScrollY(snapToDevicePx(y));
   }
 
   setScrollBy(dx: number, dy: number): void {
-    this.scrollX = this.clampScrollX(this.scrollX + dx);
-    this.scrollY = this.clampScrollY(this.scrollY + dy);
+    this.scrollX = this.clampScrollX(snapToDevicePx(this.scrollX + dx));
+    this.scrollY = this.clampScrollY(snapToDevicePx(this.scrollY + dy));
   }
 
   /**
@@ -2348,7 +2384,7 @@ export class JotViewStore {
   lyricsAlignStatus: LyricsAlignStatus = { phase: 'idle' };
   /** In-flight whisper alignment controller, so we can abort when a new
    *  song loads / the user cancels / a second align fires. */
-  private lyricsAlignController: AbortController | undefined;
+  lyricsAlignController: AbortController | undefined;
 
   /**
    * Run whisperx forced-alignment against the given input source, push

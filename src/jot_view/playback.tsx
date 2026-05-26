@@ -264,7 +264,12 @@ export const Playhead = observer(
     };
 
     return (
-      <div className={styles.playhead} onMouseDown={onMouseDown} data-noseek>
+      <div
+        className={styles.playhead}
+        onMouseDown={onMouseDown}
+        data-noseek
+        data-playhead="1"
+      >
         {showLabel && <PlayheadLabel timeline={timeline} />}
       </div>
     );

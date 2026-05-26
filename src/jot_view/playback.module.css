@@ -139,22 +139,32 @@
     position: absolute;
     top: 0;
     bottom: 0;
-    /* Anchor at 0 and move via `transform: translateX(...)` reading the
-       inherited `--playhead-x` variable that `PlayheadPosVar` writes on
-       the score root once per frame. Combined with `will-change:
-       transform` this promotes the playhead to its own compositor layer
-       so per-frame motion is a compose-only op; moving it does NOT
-       repaint the bar-grid lines (or any other content) underneath.
-       Sharing one CSS variable across every mounted playhead also means
-       a debug bundle with N tracks costs one `setProperty` per frame
-       instead of N (vs the old `style.left =` per playhead). */
+    /* Anchor at 0 and move via `transform: translate3d(...)` reading
+       the `--playhead-x` variable that `PlayheadPosVar` (jot_view.tsx)
+       writes on every `[data-playhead="1"]` element once per frame.
+       Combined with `will-change: transform` this promotes the playhead
+       to its own compositor layer so per-frame motion is a compose-only
+       op; moving it does NOT repaint the bar-grid lines (or any other
+       content) underneath.
+       3D transform (not `translateX`): Chrome's compositor honours
+       sub-pixel positions reliably for 3D transforms, but a 2D
+       translate on a `will-change` layer can integer-snap during the
+       parent `.scrollViewport`'s sub-pixel translate, leaving the
+       playhead jittering ~1px around the viewport centre while the
+       bars below scroll smoothly. That mismatch reads as the bars
+       wobbling against the playhead.
+       The var is written per-element rather than inherited from the
+       score root so the per-frame style invalidation is scoped to the
+       playheads themselves; an inherited write on `.jotContainer`
+       would force a style recalc across the entire score subtree
+       (~20ms on a long song) every frame. */
     left: 0;
     width: 2px;
     background: var(--color-accent-strong);
     z-index: 5;
     box-shadow: var(--shadow-accent-glow);
     cursor: ew-resize;
-    transform: translateX(var(--playhead-x, 0px));
+    transform: translate3d(var(--playhead-x, 0px), 0, 0);
     will-change: transform;
 }
 

@@ -93,10 +93,7 @@
 }
 
 .lyricsBarsRow {
-    position: relative;
-    flex: 0 0 auto;
-    width: calc(var(--voice-beats) * var(--px-per-beat) * 1px);
-    will-change: transform;
+    composes: barsRowBase from '../jot_view.module.css';
     /* Tighten glyph tracking as zoom drops so lyric text packs into the
        narrower per-beat budget. Ramps from 0 at px-per-beat ≥ 80 to
        -0.6px around px-per-beat ≈ 20. Inherits down to both `.lyricLine`
