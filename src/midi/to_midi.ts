@@ -30,9 +30,12 @@
  *       emit a tremolo or expand it into multiple strikes; doing so well
  *       depends on tempo/genre and is left for a future pass.
  *
- *  [B7] BPM and time signature meta events are emitted at tick 0 from
- *       `globalMetadata`. Per-bar time-signature overrides ARE honoured and
- *       emitted as additional meta events at the bar boundary.
+ *  [B7] Initial BPM (`globalMetadata.bpm`) and initial time signature meta
+ *       events are emitted at tick 0. Subsequent tempo changes come from
+ *       `jot.tempoEvents` and are emitted as `setTempo` at the precise
+ *       tick (bar offset + beat * TICKS_PER_BEAT), so mid-bar tempo
+ *       changes survive the export. Per-bar time-signature overrides are
+ *       still honoured from `bar.metadata.time`.
  *
  *  [B8] Modifier-only effects that have no MIDI analogue (e.g. `:x`
  *       cross-stick on a snare) are realised by remapping the note number
@@ -42,6 +45,7 @@
 import { writeMidi, MidiEvent } from 'midi-file';
 import { Jot, Volume } from 'src/dsl';
 import { RenderedJot, ResolvedNote, ResolvedTrack } from 'src/jot';
+import { resolveBpm } from 'src/tempo';
 import { defaultMidiNote } from './gm';
 
 export type ToMidiOptions = {
@@ -85,18 +89,47 @@ export function toMidi(jot: Jot, options: ToMidiOptions = {}): Uint8Array {
 
   type TempoChange = { tick: number; bpm: number };
   const tempoChanges: TempoChange[] = [];
-  const globalBpm = typeof jot.globalMetadata.bpm === 'number' ? jot.globalMetadata.bpm : 120;
+  const globalBpm = resolveBpm(jot.globalMetadata.bpm, 120);
+
+  // Compute each voice-0 bar's absolute tick offset; we'll resolve
+  // `jot.tempoEvents` anchors against this. Bars are uniform in length
+  // across voices (same time-signature sequence) so voice 0 is canonical.
+  const voice0 = resolved.voices[0];
+  const barTickStart: number[] = [];
+  if (voice0) {
+    let cursor = 0;
+    for (const bar of voice0.bars) {
+      barTickStart.push(cursor);
+      cursor += Math.max(1, Math.round(bar.beats * TICKS_PER_BEAT));
+    }
+  }
+
+  // [B7] Tempo events: walk `jot.tempoEvents` and emit setTempo at the
+  // exact tick of each anchor. Dedup no-ops (parser already dedupes,
+  // but defensive). Skipped events whose barIndex is out of range
+  // collapse onto the last valid bar.
+  {
+    let currentBpm = globalBpm;
+    for (const ev of jot.tempoEvents ?? []) {
+      const bpm = resolveBpm(ev.bpm, currentBpm);
+      if (bpm === currentBpm) continue;
+      const idx = Math.min(Math.max(0, ev.barIndex), barTickStart.length - 1);
+      const barStart = barTickStart[idx] ?? 0;
+      const tick = barStart + Math.round(ev.beat * TICKS_PER_BEAT);
+      tempoChanges.push({ tick, bpm });
+      currentBpm = bpm;
+    }
+  }
 
   // [B1] Merge all voices onto one MIDI stream.
-  // tsChanges/tempoChanges are collected on the first voice only; bar
-  // tick offsets are identical across voices (same time-signature
-  // sequence and bar count), and emitting the same meta event from
-  // every voice would duplicate it on the merged track.
+  // tsChanges are collected on the first voice only; bar tick offsets
+  // are identical across voices (same time-signature sequence and bar
+  // count), and emitting the same meta event from every voice would
+  // duplicate it on the merged track.
   let firstVoice = true;
   for (const voice of resolved.voices) {
     let barOffset = 0;
     let prevTime = jot.globalMetadata.time ?? { count: 4, unit: 4 };
-    let prevBpm: number | undefined = globalBpm;
     for (let bi = 0; bi < voice.bars.length; bi++) {
       const bar = voice.bars[bi];
       const barTicks = Math.max(1, Math.round(bar.beats * TICKS_PER_BEAT));
@@ -109,26 +142,6 @@ export function toMidi(jot: Jot, options: ToMidiOptions = {}): Uint8Array {
         });
       }
       prevTime = bar.time;
-
-      // Per-bar tempo override (CLEANROOM_SPEC §5.3): emit a setTempo
-      // at the bar boundary whenever the active bpm changes. The
-      // parser snapshots active `bpm` onto bar.metadata so we don't
-      // need to walk the bar's elements. Skipped on voice 2+ (see
-      // firstVoice note above) and on bar 0 (covered by the initial
-      // tick-0 setTempo emitted later).
-      if (firstVoice && bi > 0) {
-        const meta = bar.source.metadata as { bpm?: unknown } | undefined;
-        const rawBpm = meta?.bpm;
-        const bpm = typeof rawBpm === 'number'
-          ? rawBpm
-          : (rawBpm && typeof rawBpm === 'object' && 'end' in rawBpm && typeof (rawBpm as { end: unknown }).end === 'number'
-            ? (rawBpm as { end: number }).end
-            : undefined);
-        if (bpm !== undefined && bpm > 0 && bpm !== prevBpm) {
-          tempoChanges.push({ tick: barOffset, bpm });
-          prevBpm = bpm;
-        }
-      }
 
       for (const pitch of voice.pitches) {
         const track = bar.tracks[pitch];

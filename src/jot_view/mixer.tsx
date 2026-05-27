@@ -6,15 +6,18 @@ import { AudioTrack, AudioTrackId, AudioTrackRole, jotPlayer } from 'src/playbac
 import { waveformWorker, BarSlice } from 'src/playback/waveform_worker_client';
 import {
   BarBeat,
-  ChunkLayout,
-  SECONDS_PER_CHUNK,
   WaveformChunk,
   buildChunkLayout,
 } from './waveform_chunks';
 import { GutterResizeHandle } from './components/gutter_resize_handle';
 import { ClearButton, MuteButton, SoloButton } from './components/icon_button';
 import { DropdownButton, dropdownStyles } from './components/dropdown';
-import { NoteProvenanceContext, RenderedJotContext, UniformWaveformsContext } from './contexts';
+import {
+  JotViewStoreContext,
+  NoteProvenanceContext,
+  RenderedJotContext,
+  UniformWaveformsContext,
+} from './contexts';
 import { LyricsRow } from './lyrics_row';
 import styles from './mixer.module.css';
 import { Playhead } from './playback';
@@ -1031,25 +1034,45 @@ const PitchRow = observer(
 
 /**
  * Tiled waveform row for one audio track, aligned to the score's bar
- * timeline. The row is split into `SECONDS_PER_CHUNK`-jot-time
- * windows; each window renders as its own absolutely-positioned
- * canvas tile (see {@link AudioTrackWaveformChunk}). Tiling unlocks
- * three wins over the legacy single-canvas approach:
+ * timeline. The row is split into `BEATS_PER_CHUNK`-beat windows;
+ * each window renders as its own absolutely-positioned canvas tile
+ * (see {@link AudioTrackWaveformChunk}). Tiling buys:
  *
  *  1. **Unbounded effective resolution.** Each tile picks its own
  *     backing-store size, so the cross-browser 16 384 px per-axis
  *     canvas cap no longer rolls a long or zoomed track off into
- *     lower-resolution rendering.
- *  2. **Lazy draw via IntersectionObserver.** Off-screen tiles never
- *     hit the worker; the cost of rendering a 10-minute track scales
- *     with what's visible, not with track length.
- *  3. **Pure-CSS live zoom.** Each tile's `left` / `width` read the
- *     root `--px-per-beat`, so a wheel tick reflows every tile at the
- *     browser layer with no React or canvas work.
+ *     lower-resolution rendering. `BEATS_PER_CHUNK = 4` (see
+ *     `waveform_chunks.ts`) keeps the worst-case backing well under
+ *     the cap (max zoom × max densityFactor × DPR 3 ≈ 8 600 px).
+ *  2. **Stable chunk identity across zoom.** Chunks key on a beat-
+ *     aligned bucket index, so a zoom change only resizes existing
+ *     chunks via JS-recomputed `left` / `width`; React never unmounts
+ *     / remounts them. No bucket-transition churn, no stretched-
+ *     bitmap holdover gap.
+ *  3. **Parent-driven visibility (no `IntersectionObserver`).** This
+ *     component is an `observer()` that reads `scrollX` +
+ *     `_viewportWidth` from `JotViewStore` (no DOM layout reads, see
+ *     AGENTS.md §5.9) and only mounts the chunks whose CSS box
+ *     currently intersects the viewport (plus a prefetch margin).
+ *     Off-screen chunks unmount cleanly; the worker keeps the PCM,
+ *     so re-entering the viewport draws fresh from stored peaks in
+ *     ~5 ms.
  *
- * Chunk layout is computed once per structural change and memoised so
- * a zoom-driven re-render of this parent doesn't rebuild it.
+ * Chunk layout is memoised on `jot`, so scroll / zoom re-renders of
+ * this observer only walk the filtered visibility check, not the
+ * structure.
  */
+
+/**
+ * Score-px margin around the visible viewport that still counts as
+ * "in viewport" for chunk-mount purposes. Generous enough that a
+ * moderate horizontal scroll never reveals a blank tile before its
+ * draw completes (one chunk at typical zoom ≈ 4 beats × 112 px/beat
+ * ≈ 450 score-px, so a 1200 px margin covers ~2-3 chunks of lookahead
+ * on either side of the visible range).
+ */
+const CHUNK_VIEWPORT_MARGIN_PX = 1200;
+
 const AudioTrackWaveformCanvas = observer(
   ({
     jot,
@@ -1064,7 +1087,9 @@ const AudioTrackWaveformCanvas = observer(
     dim: boolean;
     testId?: string;
   }) => {
+    const store = React.useContext(JotViewStoreContext);
     const uniformWaveforms = React.useContext(UniformWaveformsContext);
+    const padBeats = React.useContext(RenderedJotContext)?.config.barNotePaddingBeats ?? 0.125;
     // Per-track stem-colour resolution: same logic the legacy single
     // canvas used; hoisted to the parent so every chunk reuses the
     // result instead of re-walking the structure on each mount.
@@ -1080,139 +1105,56 @@ const AudioTrackWaveformCanvas = observer(
         }
       }
     }
-    // Chunk layout depends on `jot.structure` (zoom-invariant) plus a
-    // discrete `zoomBucket` derived from the live `pxPerBeat`. At
-    // higher zoom the chunks need to be SHORTER in jot-time so each
-    // chunk's bitmap stays under the cross-browser 16 384 px canvas
-    // cap; otherwise the browser silently down-samples the oversized
-    // bitmap into a blurry tile.
-    //
-    // Bucket transitions are quantised to powers of two (1×, 2×, 4×,
-    // 8×) so a typical wheel zoom only crosses a boundary occasionally;
-    // crossing rebuilds every chunk for the affected row, which is
-    // expensive (new keys → new components → fresh bitmaps), so we
-    // deliberately accept slight blur within a bucket rather than
-    // rebuild on every tick.
-    //
-    // Cap at 8× so chunks don't shrink below ~3.75 s of jot time;
-    // beyond that the per-chunk overhead (IntersectionObserver,
-    // canvas element, React reconciliation) outweighs the resolution
-    // win, since the user has to scroll proportionally to see content
-    // at that zoom anyway.
+    // Beat-stable chunk layout (zoom-invariant). Memoed on `jot` so
+    // scroll / zoom re-renders of this observer don't rebuild it.
+    const layout = React.useMemo(() => buildChunkLayout(jot), [jot]);
     const livePxPerBeat = useLiveJotPxPerBeat();
-    const REFERENCE_PX_PER_BEAT = 112; // pxPerBeat at zoom=1, default density
-    const zoomRatio = Math.max(1, livePxPerBeat / REFERENCE_PX_PER_BEAT);
-    const zoomBucket = Math.max(1, Math.min(8, Math.pow(2, Math.ceil(Math.log2(zoomRatio)))));
-    const layout = React.useMemo(
-      () => buildChunkLayout(jot, SECONDS_PER_CHUNK / zoomBucket),
-      [jot, zoomBucket]
-    );
 
-    // Bucket-transition holdover. When the layout reference changes
-    // (bucket boundary crossed), the previous layout is kept in the
-    // DOM for a short window so its already-rasterised canvases stay
-    // visible while the new (blank-on-mount) chunks ask the worker
-    // for their peaks. Old chunks live BEHIND new chunks via DOM
-    // order; the new ones cover them as soon as they rasterise.
-    //
-    // The chunk key uses the chunk's `jotStart..jotEnd` time range
-    // (not the old monotonic `chunk.key` counter), so React only reuses
-    // a canvas DOM element when its content actually represents the
-    // same audio range. Without this, the old key=0 canvas got reused
-    // for the new key=0 chunk (different time range), the bitmap
-    // stayed at the OLD content but the CSS position shifted to the
-    // new chunk's start beat, and the waveform visibly jumped a few
-    // hundred pixels for one frame before the worker re-rasterised.
-    //
-    // CRITICAL: the holdover is tracked via REFS and computed during
-    // render, not via `useState` + `useEffect`. A state-based
-    // implementation creates a one-render gap where layout=B has been
-    // applied but `holdover` is still null; during that render React
-    // unmounts the previous (A) chunks because they're absent from the
-    // JSX, destroying their canvas bitmaps. The subsequent render
-    // re-mounts A as the holdover but with FRESH (blank) canvases.
-    // Computing the holdover during render keeps A's chunks
-    // continuously in the JSX from the moment B arrives, so React
-    // preserves their canvas content through the transition.
-    const lastLayoutRef = React.useRef<ChunkLayout>(layout);
-    const holdoverRef = React.useRef<{ layout: ChunkLayout; expiry: number } | null>(null);
-    const [, forceUpdate] = React.useReducer((x: number) => x + 1, 0);
-    const HOLDOVER_MS = 1500;
-    const now = performance.now();
-    if (lastLayoutRef.current !== layout && layout.chunks.length > 0) {
-      // New layout: stash the previously-rendered one as holdover.
-      // Mutating refs during render is valid React when used to
-      // capture cross-render state like this.
-      if (lastLayoutRef.current.chunks.length > 0) {
-        holdoverRef.current = {
-          layout: lastLayoutRef.current,
-          expiry: now + HOLDOVER_MS,
-        };
-      }
-      lastLayoutRef.current = layout;
+    if (!store || layout.chunks.length === 0) return null;
+
+    // Visibility: derive the score-px x-range currently on screen
+    // from `JotViewStore` observables. The score uses a virtualised
+    // scroll model (`.scrollViewport` translated by `(-scrollX, 0)`),
+    // so `[scrollX, scrollX + viewportWidth]` is exactly the score-px
+    // window the user sees. Each chunk's score-px left mirrors the
+    // formula the chunk component below uses for its inline `left`
+    // (`chunk.startBeat * livePxPerBeat + padBeats * livePxPerBeat`);
+    // any chunk whose box intersects the viewport plus prefetch
+    // margin is mounted, anything else is unmounted.
+    const scrollX = store.scrollX;
+    const viewportWidth = store._viewportWidth;
+    if (viewportWidth <= 0 || livePxPerBeat <= 0) return null;
+    const visibleLeft = scrollX - CHUNK_VIEWPORT_MARGIN_PX;
+    const visibleRight = scrollX + viewportWidth + CHUNK_VIEWPORT_MARGIN_PX;
+    const padPx = padBeats * livePxPerBeat;
+
+    const visibleChunks: WaveformChunk[] = [];
+    for (const c of layout.chunks) {
+      const left = c.startBeat * livePxPerBeat + padPx;
+      const right = left + c.totalBeats * livePxPerBeat;
+      if (right > visibleLeft && left < visibleRight) visibleChunks.push(c);
     }
-    if (holdoverRef.current && holdoverRef.current.expiry <= now) {
-      holdoverRef.current = null;
-    }
-    const holdover = holdoverRef.current?.layout ?? null;
+    if (visibleChunks.length === 0) return null;
 
-    // Schedule a re-render when the holdover expires so the dead
-    // chunks actually get unmounted (otherwise they linger forever
-    // because no other state change triggers a render).
-    const expiryAt = holdoverRef.current?.expiry ?? 0;
-    React.useEffect(() => {
-      if (!expiryAt) return;
-      const remaining = expiryAt - performance.now();
-      if (remaining <= 0) {
-        forceUpdate();
-        return;
-      }
-      const id = window.setTimeout(forceUpdate, remaining);
-      return () => window.clearTimeout(id);
-    }, [expiryAt]);
-
-    if (layout.chunks.length === 0 && !holdover) return null;
     // Per-track amplitude scale for uniform mode (resolved once at
-    // track registration, identical for every chunk of this track; // so neighbouring chunks render at the same vertical scale and no
+    // track registration, identical for every chunk of this track,
+    // so neighbouring chunks render at the same vertical scale and no
     // amplitude seam shows at the chunk boundary).
     const ampScale = uniformWaveforms ? waveformWorker.getAmpScale(track.id) : 1;
 
-    // Merge holdover + current chunks into a single deduped list keyed
-    // by time range. Holdover added first (rendered first → behind in
-    // DOM order); current overrides on key collision. A chunk that
-    // appears in BOTH (same boundaries before and after the bucket
-    // transition, possible at zoom-out from a higher bucket) keeps the
-    // SAME React identity, so its canvas is preserved across the swap
-    // with no rasterisation needed.
-    const renderChunks = new Map<string, { chunk: WaveformChunk; bars: BarBeat[] }>();
-    if (holdover) {
-      for (const c of holdover.chunks) {
-        renderChunks.set(`${c.jotStart}-${c.jotEnd}`, { chunk: c, bars: holdover.bars });
-      }
-    }
-    for (const c of layout.chunks) {
-      renderChunks.set(`${c.jotStart}-${c.jotEnd}`, { chunk: c, bars: layout.bars });
-    }
-
-    let firstCurrentKey: string | undefined;
-    for (const c of layout.chunks) {
-      firstCurrentKey = `${c.jotStart}-${c.jotEnd}`;
-      break;
-    }
-
     return (
       <>
-        {Array.from(renderChunks.entries()).map(([key, { chunk, bars }]) => (
+        {visibleChunks.map((chunk, i) => (
           <AudioTrackWaveformChunk
-            key={key}
+            key={chunk.key}
             track={track}
             chunk={chunk}
-            bars={bars}
+            bars={layout.bars}
             height={height}
             dim={dim}
             pitchColor={pitchColor}
             ampScale={ampScale}
-            testId={key === firstCurrentKey ? testId : undefined}
+            testId={i === 0 ? testId : undefined}
           />
         ))}
       </>
@@ -1221,32 +1163,19 @@ const AudioTrackWaveformCanvas = observer(
 );
 
 /**
- * Per-chunk lookahead for IntersectionObserver; chunks within this
- * many CSS pixels of the visible viewport edge start drawing in
- * advance, so a moderate horizontal scroll never shows a blank tile.
- * Generous enough to cover one full chunk at typical zoom (~30 s
- * × ~120 px/s ≈ 3600 px), so the next chunk is always already drawn
- * by the time it crosses the visible edge.
- */
-const CHUNK_PREFETCH_MARGIN_PX = 1200;
-
-/**
- * One tile in the tiled waveform row. Owns:
+ * One tile in the tiled waveform row. Owns the `<canvas>` and its
+ * rasterised bitmap (sized to `chunk.totalBeats × livePxPerBeat`,
+ * snapped to integer CSS px).
  *
- *  - The `<canvas>` and its rasterised bitmap (sized to the chunk's
- *    beats × the `renderedPxPerBeat` at last draw time).
- *  - An `IntersectionObserver` against the score's scroll container
- *    (`[data-jot-scroller]`) with a lookahead margin. The draw effect
- *    is gated on intersection so we never call the worker for a
- *    chunk that isn't (or won't soon be) visible.
- *  - `renderedPxPerBeat` state, set after each successful draw so the
- *    chunk's container width tracks the bitmap's intrinsic size
- *    between settles.
- *
- * The CSS in `.musicTrackWaveformChunk` reads `--chunk-start-beat`
- * and `--chunk-beats` (set here, structural so they never change with
- * zoom) plus the root `--px-per-beat` (zoom-driven) to position and
- * size the chunk reactively without any React work.
+ * Visibility is decided by the parent
+ * (`AudioTrackWaveformCanvas`), which only mounts chunks intersecting
+ * the viewport; so mount = visible, and there's no
+ * `IntersectionObserver` round-trip to wait through. The first render
+ * after mount draws immediately so a newly-visible chunk paints on
+ * the same frame as the parent's visibility decision; subsequent
+ * renders triggered by zoom / `drumsT0Sec` / etc. rAF-coalesce so a
+ * sustained wheel-zoom gesture triggers at most one worker call per
+ * displayed frame.
  */
 const AudioTrackWaveformChunk = observer(
   ({
@@ -1270,26 +1199,25 @@ const AudioTrackWaveformChunk = observer(
   }) => {
     const canvasRef = React.useRef<HTMLCanvasElement>(null);
     // Live drum↔audio offset; chunks re-render (and so re-rasterise
-    // on the next settle) when the user nudges the Offset control.
+    // on the next rAF) when the user nudges the Offset control.
     const drumsT0Sec = jotPlayer.drumsT0Sec;
-    // Live zoom: the chunk's CSS calc reads `--px-per-beat`
-    // independently, so this read only matters for triggering a redraw
-    // on settle. Persisted-state `renderedPxPerBeat` decouples the
-    // bitmap rasterisation from the chunk's responsive sizing.
     const livePxPerBeat = useLiveJotPxPerBeat();
     const padBeats = React.useContext(RenderedJotContext)?.config.barNotePaddingBeats ?? 0.125;
-    const [renderedPxPerBeat, setRenderedPxPerBeat] = React.useState<number | null>(null);
-    const [isVisible, setIsVisible] = React.useState(false);
+    // Globally-unique worker-side slot identifier for this tile.
+    // `chunk.key` alone collides across audio tracks (it's
+    // `startBeat / BEATS_PER_CHUNK`, defined per-voice); prefixing
+    // with `track.id` (a string per audio track) disambiguates.
+    const chunkKey = `${track.id}:${chunk.key}`;
 
     // Snap the chunk's CSS left / width to integer CSS pixels in JS so
     // the canvas's backing-store width (= cssWidth × dpr) and the peak
-    // buffer length (= 2 × cssWidth) are both whole integers - and so
+    // buffer length (= 2 × cssWidth) are both whole integers, and so
     // adjacent chunks share an *exactly* aligned boundary (chunk N+1's
     // left = chunk N's right by construction, no asymmetric rounding
     // gap or overlap). Without this, each chunk's CSS width came from
     // `round(right_edge) - round(left_edge)` in CSS, and the two edges
     // would round in different directions for adjacent chunks (one to
-    // -0.5, one to +0.5) - leaving each chunk's canvas bitmap stretched
+    // -0.5, one to +0.5), leaving each chunk's canvas bitmap stretched
     // by a slightly different ratio, which renders as a visible
     // brightness / density step at the chunk boundary. Same snapped
     // width feeds the canvas backing-store, the inline CSS width, and
@@ -1304,182 +1232,117 @@ const AudioTrackWaveformChunk = observer(
       return { left, width: Math.max(0, right - left) };
     }, [chunk.startBeat, chunk.totalBeats, livePxPerBeat, padBeats]);
 
-    // Hook up IntersectionObserver on mount; tear down on unmount.
-    // Root is the score's scroll container (marked with
-    // `data-jot-scroller`), found via `closest()` at mount so we
-    // don't need to thread a ref / context through.
+    // Transfer control of the `<canvas>` to the worker once on mount;
+    // release on unmount. After this point the main thread can no
+    // longer draw into the canvas (any attempt throws); the worker
+    // owns the bitmap, sized via `canvas.width` / `canvas.height` set
+    // on its `OffscreenCanvas` handle inside `renderChunk`. CSS box
+    // dimensions are still controlled here via inline `style.left` /
+    // `style.width` (CSS properties of the `<canvas>` element are
+    // separate from the backing bitmap).
     React.useEffect(() => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-      const root = canvas.closest<HTMLElement>('[data-jot-scroller]') ?? null;
-      const io = new IntersectionObserver(
-        (entries) => {
-          for (const entry of entries) setIsVisible(entry.isIntersecting);
-        },
-        { root, rootMargin: `0px ${CHUNK_PREFETCH_MARGIN_PX}px` }
-      );
-      io.observe(canvas);
-      return () => io.disconnect();
-    }, []);
-
-    // Track whether this chunk was visible on the previous effect run.
-    // Used below to detect "just entered viewport" vs "already visible
-    // and livePxPerBeat changed", which need different scheduling.
-    const prevIsVisibleRef = React.useRef(false);
-
-    // Draw effect. Gated on visibility so off-screen chunks never hit
-    // the worker; gated on `chunk.totalBeats > 0` so a degenerate
-    // tail-clipped chunk doesn't request a zero-width bitmap.
-    React.useEffect(() => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      if (!isVisible) {
-        prevIsVisibleRef.current = false;
+      if (typeof canvas.transferControlToOffscreen !== 'function') {
+        console.warn(
+          '[mixer] OffscreenCanvas not supported; waveform chunk will not render',
+        );
         return;
       }
-      const justEnteredView = !prevIsVisibleRef.current;
-      prevIsVisibleRef.current = true;
-      if (chunk.totalBeats <= 0) return;
-      let cancelled = false;
-      const draw = async () => {
-        if (livePxPerBeat <= 0) return;
-        // Use the snapped CSS width (integer CSS px) for the peak
-        // buffer / canvas backing too, so the bitmap matches the canvas
-        // box exactly with no implicit stretch from the browser. The
-        // peak loop reads `peaks[p * 2 + 1]` for `p < widthPx`, so an
-        // integer keeps every read in bounds.
-        const widthPx = chunkLayout.width;
-        if (widthPx <= 0) return;
-        // Effective per-beat scale for this bitmap. Differs from
-        // `livePxPerBeat` by at most ~0.5 CSS px / chunk.totalBeats
-        // (because `widthPx` is rounded to integer above); using the
-        // bitmap's actual per-beat ratio for the bar slice mapping
-        // keeps each column's audio time aligned to the chunk's CSS
-        // box, so a transient at beat B in the source audio lands
-        // exactly under beat B in the snapped chunk geometry.
-        const renderedScale = widthPx / chunk.totalBeats;
-        // Bar slices in chunk-local pixel coordinates: bars to the
-        // left of the chunk get a negative `x`, bars to the right
-        // get `x >= widthPx`; the worker's clamp drops both groups
-        // without an explicit filter on our side.
-        const barSlices: BarSlice[] = bars.map((b) => ({
-          x: (b.startBeat - chunk.startBeat) * renderedScale,
-          width: b.beats * renderedScale,
-          startSec: b.startSec,
-          durationSec: b.durationSec,
-        }));
-        let peaks: Float32Array;
-        try {
-          peaks = await waveformWorker.computePeaks(track.id, barSlices, widthPx, drumsT0Sec);
-        } catch (err) {
-          if (!cancelled) console.warn('[mixer] waveform chunk peaks failed:', err);
-          return;
-        }
-        if (cancelled) return;
-        const c = canvasRef.current;
-        if (!c) return;
-        const dpr = window.devicePixelRatio || 1;
-        // The 16 384 px backing-store clamp still applies per chunk;
-        // at the SECONDS_PER_CHUNK / typical zoom point this is
-        // never hit (a 30 s chunk at 100 px/s × 2 dpr = 6 000 px),
-        // so chunks are now effectively unbounded in resolution.
-        const MAX_CANVAS_DIM = 16384;
-        // `widthPx` is integer (from `chunkLayout.width`) so
-        // `widthPx * dpr` is also integer - no `Math.floor` needed,
-        // and the backing-store width is exactly `cssWidth × dpr`,
-        // so `image-rendering: pixelated` displays the bitmap 1:1
-        // with no stretch.
-        const backingW = Math.min(Math.max(1, widthPx * dpr), MAX_CANVAS_DIM);
-        const backingH = Math.min(Math.max(1, Math.floor(height * dpr)), MAX_CANVAS_DIM);
-        c.width = backingW;
-        c.height = backingH;
-        const ctx = c.getContext('2d');
-        if (!ctx) return;
-        ctx.imageSmoothingEnabled = false;
-        ctx.setTransform(backingW / widthPx, 0, 0, backingH / height, 0, 0);
-        ctx.clearRect(0, 0, widthPx, height);
-        ctx.fillStyle = pitchColor ?? '#5BA8E8';
-        const mid = height / 2;
-        const yScale = mid * 0.95 * ampScale;
-        // No skip-zero shortcut: silent columns still paint a 1 px
-        // centerline (mn=mx=0 collapses to fillRect(p, mid, 1, 1)) so
-        // the baseline reads as a continuous line across the chunk
-        // instead of breaking into dashes wherever the audio is
-        // quiet. The shortcut was previously safe at zoom 1 where
-        // each pixel column covers enough audio to almost always have
-        // some signal, but at higher zoom each column covers less
-        // audio, silent columns become common, and the missing
-        // baseline reads as a broken/stippled waveform.
-        for (let p = 0; p < widthPx; p++) {
-          const mn = peaks[p * 2];
-          const mx = peaks[p * 2 + 1];
-          const y0 = Math.max(0, mid - mx * yScale);
-          const y1 = Math.min(height, mid - mn * yScale);
-          ctx.fillRect(p, y0, 1, Math.max(1, y1 - y0));
-        }
-        // Track the live zoom (not `renderedScale`, which is the
-        // chunk's effective per-beat ratio after integer rounding) for
-        // staleness detection - we want a redraw when the user zooms,
-        // not when an integer-rounded width happens to shift.
-        setRenderedPxPerBeat(livePxPerBeat);
-      };
-      // First-time draw OR entering the viewport with a bitmap rendered
-      // at a different scale than the live zoom: draw immediately. The
-      // stretched-bitmap fallback (rendering the old bitmap at the new
-      // CSS width) survives an rAF, but the bilinear interpolation
-      // changes line density / perceived brightness, so neighbouring
-      // chunks at different rendered scales read as a brightness step
-      // at the chunk boundary. Drawing on the same tick the chunk
-      // enters view eliminates that flash. Doesn't pile up worker
-      // calls during sustained scroll because each chunk only enters
-      // view once per pass.
-      const staleOnEntry =
-        justEnteredView && renderedPxPerBeat !== null && renderedPxPerBeat !== livePxPerBeat;
-      if (renderedPxPerBeat === null || staleOnEntry) {
-        void draw();
-        return () => {
-          cancelled = true;
-        };
-      }
-      // Subsequent redraws on an already-visible chunk (e.g. mid-zoom
-      // wheel gesture) coalesce on rAF: each livePxPerBeat tick re-runs
-      // this effect and queues a fresh animation-frame callback, the
-      // previous one (via the cleanup below) is cancelled. So a
-      // sustained wheel-zoom gesture triggers at most one worker call
-      // per displayed frame and the bitmap rasterisation tracks the
-      // zoom in near-real-time.
-      const id = requestAnimationFrame(() => {
-        void draw();
-      });
+      const offscreen = canvas.transferControlToOffscreen();
+      waveformWorker.attachChunk(chunkKey, offscreen, track.id);
       return () => {
-        cancelled = true;
-        cancelAnimationFrame(id);
+        waveformWorker.releaseChunk(chunkKey);
       };
+    }, [chunkKey, track.id]);
+
+    // First render after mount paints immediately so a newly-visible
+    // chunk shows up on the same frame as the parent's visibility
+    // decision; subsequent paints (zoom tick, drumsT0Sec change, etc.)
+    // rAF-coalesce so a sustained wheel-zoom gesture triggers at most
+    // one worker call per displayed frame. The paint itself is
+    // fire-and-forget: the worker computes peaks and paints into the
+    // chunk's `OffscreenCanvas` directly, no bytes cross back to the
+    // main thread.
+    const isFirstDrawRef = React.useRef(true);
+
+    React.useEffect(() => {
+      if (chunk.totalBeats <= 0 || livePxPerBeat <= 0) return;
+      const widthPx = chunkLayout.width;
+      if (widthPx <= 0) return;
+      const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+      // `BEATS_PER_CHUNK` is sized so the worst-case backing
+      // dimensions stay well under the 16 384 px cross-browser
+      // canvas cap; this clamp is defensive only and shouldn't fire
+      // in normal use.
+      const MAX_CANVAS_DIM = 16384;
+      // `widthPx` is integer (from `chunkLayout.width`) so
+      // `widthPx * dpr` is also integer, no `Math.floor` needed, and
+      // the backing-store width is exactly `cssWidth × dpr`, so
+      // `image-rendering: pixelated` displays the bitmap 1:1 with no
+      // stretch.
+      const backingW = Math.min(Math.max(1, widthPx * dpr), MAX_CANVAS_DIM);
+      const backingH = Math.min(Math.max(1, Math.floor(height * dpr)), MAX_CANVAS_DIM);
+      // Effective per-beat scale for this bitmap. Differs from
+      // `livePxPerBeat` by at most ~0.5 CSS px / chunk.totalBeats
+      // (because `widthPx` is rounded to integer above); using the
+      // bitmap's actual per-beat ratio for the bar slice mapping
+      // keeps each column's audio time aligned to the chunk's CSS
+      // box, so a transient at beat B in the source audio lands
+      // exactly under beat B in the snapped chunk geometry.
+      const renderedScale = widthPx / chunk.totalBeats;
+      // Bar slices in chunk-local pixel coordinates: bars to the left
+      // of the chunk get a negative `x`, bars to the right get `x >=
+      // widthPx`; the worker's clamp drops both groups without an
+      // explicit filter on our side.
+      const barSlices: BarSlice[] = bars.map((b) => ({
+        x: (b.startBeat - chunk.startBeat) * renderedScale,
+        width: b.beats * renderedScale,
+        startSec: b.startSec,
+        durationSec: b.durationSec,
+      }));
+      const fire = () => {
+        waveformWorker.renderChunk(
+          chunkKey,
+          barSlices,
+          widthPx,
+          height,
+          backingW,
+          backingH,
+          drumsT0Sec,
+          pitchColor ?? '#5BA8E8',
+          ampScale,
+        );
+      };
+      if (isFirstDrawRef.current) {
+        isFirstDrawRef.current = false;
+        fire();
+        return;
+      }
+      const id = requestAnimationFrame(fire);
+      return () => cancelAnimationFrame(id);
     }, [
-      isVisible,
+      chunkKey,
       chunk,
       bars,
       height,
       drumsT0Sec,
       livePxPerBeat,
-      renderedPxPerBeat,
       pitchColor,
       ampScale,
-      track,
-      chunkLayout,
+      chunkLayout.width,
     ]);
 
     // Canvas `left` / `width` come from `chunkLayout` (JS-snapped to
-    // integer CSS px), not from the CSS calc on
-    // `.musicTrackWaveformChunk` - inline styles override CSS, and we
-    // need the canvas's CSS box to match the bitmap's pixel count
+    // integer CSS px). Inline styles override CSS, and we need the
+    // canvas's CSS box to match the bitmap's pixel count
     // (`widthPx * dpr` backing) exactly so adjacent chunks share a
     // pixel-perfect boundary and `image-rendering: pixelated`
-    // displays the bitmap 1:1. During the gap between a zoom event
-    // and the next rasterisation, the chunk's container width grows
+    // displays the bitmap 1:1. During the one-rAF gap between a zoom
+    // event and the next rasterisation, the chunk's CSS width grows
     // with `livePxPerBeat` while the bitmap's intrinsic size is
-    // still at the last rendered scale; the canvas element scales
-    // the bitmap nearest-neighbour (via image-rendering: pixelated)
+    // still at the previous scale; the canvas element scales the
+    // bitmap nearest-neighbour (via image-rendering: pixelated)
     // until the rAF redraw catches up.
     return (
       <canvas

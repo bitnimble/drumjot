@@ -377,15 +377,41 @@ describe('SPEC.md examples', () => {
     expect(jot.voices[0].bars[1].metadata?.time).toEqual({ count: 4, unit: 4 });
   });
 
-  it('attaches inline bpm changes to subsequent bars', () => {
+  it('hoists inline bpm changes between bars into tempoEvents', () => {
     const jot = parse(
       '{{ bpm: 120, time: "4/4" }} | k . s . | {{ bpm: 140 }} | k . s . |'
     );
-    expect(jot.voices[0].bars[0].metadata?.bpm).toBe(120);
-    expect(jot.voices[0].bars[1].metadata?.bpm).toBe(140);
+    // Initial tempo lives on globalMetadata.
+    expect(jot.globalMetadata.bpm).toBe(120);
+    // Mid-track change becomes a tempoEvent anchored at the bar 1 downbeat
+    // (the {{bpm:140}} sits between bars, so it lands at bar 1 beat 0).
+    expect(jot.tempoEvents).toEqual([{ barIndex: 1, beat: 0, bpm: 140 }]);
+    // Bar metadata no longer carries bpm post-hoist.
+    expect(jot.voices[0].bars[0].metadata?.bpm).toBeUndefined();
+    expect(jot.voices[0].bars[1].metadata?.bpm).toBeUndefined();
     // Time signature carries forward unchanged.
     expect(jot.voices[0].bars[0].metadata?.time).toEqual({ count: 4, unit: 4 });
     expect(jot.voices[0].bars[1].metadata?.time).toEqual({ count: 4, unit: 4 });
+  });
+
+  it('hoists a mid-bar {{bpm}} marker into tempoEvents anchored at the next element', () => {
+    // In an 8-slot 4/4 bar, each slot is 0.5 beats. `{{bpm:140}}` after
+    // the snare (slot 2, beat 1.0) anchors at the next element, the
+    // rest at slot 3, beat 1.5.
+    const jot = parse(
+      '{{ bpm: 120, time: "4/4" }} | k . s {{ bpm: 140 }} . k . s . |'
+    );
+    expect(jot.globalMetadata.bpm).toBe(120);
+    expect(jot.tempoEvents).toEqual([{ barIndex: 0, beat: 1.5, bpm: 140 }]);
+  });
+
+  it('hoists {bpm} on a note into a tempoEvent at the note onset', () => {
+    const jot = parse(
+      '{{ bpm: 120, time: "4/4" }} | k . s{bpm: 140} . k . s . |'
+    );
+    expect(jot.globalMetadata.bpm).toBe(120);
+    // The snare sits at slot 2 = beat 1.0 in an 8-slot 4/4 bar.
+    expect(jot.tempoEvents).toEqual([{ barIndex: 0, beat: 1, bpm: 140 }]);
   });
 
   it('example 9: macro + pattern combination', () => {

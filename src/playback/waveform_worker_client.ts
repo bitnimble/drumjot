@@ -1,32 +1,40 @@
 /**
- * Main-thread client for the waveform peaks worker.
+ * Main-thread client for the waveform worker.
  *
  * The worker (see {@link ./waveform_worker}) keeps a copy of each
- * loaded track's PCM so peaks can be recomputed (per-zoom redraw,
- * per-onset timing-viz) without blocking the main thread during heavy
- * UI work like score relayout.
+ * loaded track's PCM and serves two coexisting APIs:
+ *
+ *  - **Peaks-returning** ({@link computePeaks} / {@link computeWindow},
+ *    used by the minimap and the per-note timing-viz snippet): the
+ *    worker computes `[min, max]` per pixel column and ships the
+ *    `Float32Array` back as a transferable.
+ *  - **OffscreenCanvas** ({@link attachChunk} / {@link renderChunk} /
+ *    {@link releaseChunk}, used by the mixer's per-chunk waveform
+ *    tiles): the tile's `<canvas>` is transferred to the worker once
+ *    on mount, after which the worker computes peaks AND paints
+ *    directly into it. No bytes cross back to the main thread on
+ *    redraw, so a sustained zoom gesture costs ~0 main-thread ms
+ *    regardless of how many tiles are visible.
  *
  * Lifecycle:
  *  - The worker is spawned lazily on first use (singleton).
  *  - {@link registerTrack} copies the PCM out of the live `AudioBuffer`
- *    once and ships it across; subsequent peak requests are
+ *    once and ships it across; subsequent peak / render requests are
  *    just-the-bars + width, no buffer payload.
  *  - {@link dropTrack} frees the worker-side copy when the track is
  *    cleared.
  *
- * If the worker can't be constructed (very old runtime, test env
- * without `Worker`), the client falls back to running the same pure
- * compute functions on the main thread. The async API stays the same
- * so callers don't branch.
+ * Workers are assumed available (every supported browser ships them;
+ * see AGENTS.md §5.11). Construction failure throws; a test that
+ * exercises these APIs without mocking will fail loudly rather than
+ * silently degrading to a main-thread fallback that masks the missing
+ * coverage.
  */
 import { makeAutoObservable, runInAction } from 'mobx';
 import { AudioTrackId } from './audio_tracks';
 import {
   BarSlice,
-  ChannelData,
   computeTrackAmpScale,
-  computeWaveformPeaksFromChannels,
-  computeWindowPeaksFromChannels,
   extractChannels,
 } from './waveform_compute';
 import type {
@@ -38,10 +46,6 @@ export type { BarSlice } from './waveform_compute';
 
 class WaveformWorkerClient {
   private worker: Worker | undefined;
-  // On the fallback (no Worker) path we keep the channel copies here
-  // and execute compute synchronously so callers still see the same
-  // Promise<Float32Array> shape.
-  private fallback: Map<AudioTrackId, ChannelData> = new Map();
   /**
    * Per-track uniform-waveform amplitude scale. Computed once on
    * {@link registerTrack} (cheap subsampled scan, ~1 ms) so every
@@ -63,32 +67,21 @@ class WaveformWorkerClient {
   }
 
   /**
-   * Lazily construct (or return) the Worker. We don't build it at
-   * import time because `Worker` doesn't exist in unit-test
-   * environments (bun's `bun test` runs a pure JS host) and we'd
-   * crash the module before any test could opt out via
-   * {@link forceFallback}.
+   * Lazily construct (or return) the Worker. Deferred to first use so
+   * module load stays side-effect-free for test runners that never
+   * exercise the worker code path.
    */
-  private ensureWorker(): Worker | undefined {
+  private ensureWorker(): Worker {
     if (this.worker) return this.worker;
-    if (typeof Worker === 'undefined') return undefined;
-    try {
-      const w = new Worker(new URL('./waveform_worker.ts', import.meta.url), {
-        type: 'module',
-      });
-      w.onmessage = (e: MessageEvent<WaveformWorkerResponse>) => this.onMessage(e.data);
-      w.onerror = (err) => {
-        console.error('[waveform-worker] uncaught:', err);
-      };
-      this.worker = w;
-      return w;
-    } catch (err) {
-      console.warn(
-        '[waveform-worker] could not spawn (running compute on main thread):',
-        err,
-      );
-      return undefined;
-    }
+    const w = new Worker(new URL('./waveform_worker.ts', import.meta.url), {
+      type: 'module',
+    });
+    w.onmessage = (e: MessageEvent<WaveformWorkerResponse>) => this.onMessage(e.data);
+    w.onerror = (err) => {
+      console.error('[waveform-worker] uncaught:', err);
+    };
+    this.worker = w;
+    return w;
   }
 
   /**
@@ -108,13 +101,8 @@ class WaveformWorkerClient {
     runInAction(() => {
       this.ampScales.set(id, scale);
     });
-    const worker = this.ensureWorker();
-    if (!worker) {
-      this.fallback.set(id, data);
-      return;
-    }
     const transfer: Transferable[] = data.channels.map((c) => c.buffer);
-    worker.postMessage(
+    this.ensureWorker().postMessage(
       {
         kind: 'register',
         id,
@@ -144,10 +132,7 @@ class WaveformWorkerClient {
     runInAction(() => {
       this.ampScales.delete(id);
     });
-    if (this.fallback.delete(id)) return;
-    const worker = this.ensureWorker();
-    if (!worker) return;
-    worker.postMessage({ kind: 'drop', id } satisfies WaveformWorkerRequest);
+    this.ensureWorker().postMessage({ kind: 'drop', id } satisfies WaveformWorkerRequest);
   }
 
   /**
@@ -198,6 +183,62 @@ class WaveformWorkerClient {
     });
   }
 
+  /**
+   * Hand the worker control of a tile's `<canvas>` so it can paint
+   * into it directly without the peak bytes ever reaching the main
+   * thread. Call once per tile on mount, after
+   * `HTMLCanvasElement.transferControlToOffscreen()` produces the
+   * `OffscreenCanvas`. `chunkKey` must be globally unique across
+   * tracks; the convention is `${trackId}:${chunk.key}`.
+   */
+  attachChunk(chunkKey: string, canvas: OffscreenCanvas, trackId: AudioTrackId): void {
+    this.ensureWorker().postMessage(
+      { kind: 'attachChunk', chunkKey, trackId, canvas } satisfies WaveformWorkerRequest,
+      [canvas],
+    );
+  }
+
+  /**
+   * Trigger a (re)paint of an already-attached tile. Fire-and-forget;
+   * no Promise to await. The worker recomputes peaks against the
+   * stored PCM and paints into the tile's `OffscreenCanvas` directly.
+   * Cheap to call rapidly (callers should still rAF-coalesce sustained
+   * gestures so the queue doesn't pile up faster than the worker can
+   * drain; see `mixer.tsx`).
+   */
+  renderChunk(
+    chunkKey: string,
+    bars: BarSlice[],
+    widthPx: number,
+    height: number,
+    backingW: number,
+    backingH: number,
+    drumsT0Sec: number,
+    pitchColor: string,
+    ampScale: number,
+  ): void {
+    this.ensureWorker().postMessage({
+      kind: 'renderChunk',
+      chunkKey,
+      bars,
+      widthPx,
+      height,
+      backingW,
+      backingH,
+      drumsT0Sec,
+      pitchColor,
+      ampScale,
+    } satisfies WaveformWorkerRequest);
+  }
+
+  /**
+   * Drop the worker-side slot for a tile. Called on tile unmount so
+   * the worker doesn't accumulate dead `OffscreenCanvas` references.
+   */
+  releaseChunk(chunkKey: string): void {
+    this.ensureWorker().postMessage({ kind: 'releaseChunk', chunkKey } satisfies WaveformWorkerRequest);
+  }
+
   private request(
     base:
       | {
@@ -217,33 +258,6 @@ class WaveformWorkerClient {
   ): Promise<Float32Array> {
     const reqId = this.nextReqId++;
     const worker = this.ensureWorker();
-    if (!worker) {
-      // Synchronous fallback (no Worker available). Still returns a
-      // Promise so the caller's shape is identical.
-      try {
-        const data = this.fallback.get(base.id);
-        if (!data) {
-          return Promise.reject(new Error(`unregistered track ${base.id}`));
-        }
-        const peaks =
-          base.kind === 'peaks'
-            ? computeWaveformPeaksFromChannels(
-                data,
-                base.bars,
-                base.totalWidthPx,
-                base.drumsT0Sec,
-              )
-            : computeWindowPeaksFromChannels(
-                data,
-                base.startSec,
-                base.durationSec,
-                base.widthPx,
-              );
-        return Promise.resolve(peaks);
-      } catch (err) {
-        return Promise.reject(err instanceof Error ? err : new Error(String(err)));
-      }
-    }
     return new Promise<Float32Array>((resolve, reject) => {
       this.pending.set(reqId, { resolve, reject });
       worker.postMessage({ ...base, reqId } satisfies WaveformWorkerRequest);

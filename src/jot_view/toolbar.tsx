@@ -2,7 +2,13 @@ import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { ExampleJot } from 'src/fakes';
-import { jotPlayer, SampleLoadProgress } from 'src/playback';
+import {
+  jotPlayer,
+  PLAYBACK_SPEED_MAX,
+  PLAYBACK_SPEED_MIN,
+  PLAYBACK_SPEED_STEP,
+  SampleLoadProgress,
+} from 'src/playback';
 import { themeStore, ThemeMode } from 'src/theme';
 import {
   BeatInput,
@@ -20,25 +26,17 @@ import {
   SubmenuItem,
   ToggleMenuItem,
 } from './components/dropdown';
+import { NumberStepper } from './components/number_stepper';
 import { Tabs } from './components/tabs';
-import {
-  formatTranscriptionSummary,
-  RecentTranscriptionsPicker,
-} from './recent_transcriptions';
+import { formatTranscriptionSummary, RecentTranscriptionsPicker } from './recent_transcriptions';
 import styles from './toolbar.module.css';
 import {
   GridLineSettings,
   JotViewStore,
   LyricsAlignStatus,
-  LyricsNotice,
   TranscribeOptions,
   TranscribeStatus,
 } from './store';
-
-/** Playback-speed multipliers offered in the toolbar's Playback menu.
- *  1.0 is the natural tempo; below 1.0 spaces drum hits and
- *  time-stretches audio tracks (pitch preserved). */
-const PLAYBACK_SPEEDS: readonly number[] = [0.25, 0.5, 0.75, 1.0, 1.25];
 
 /** Stage labels in pipeline order, shown verbatim in the resume stage
  *  picker. Mirrors `Stage` in `transcriber/app/pipeline/runner.py`. */
@@ -128,11 +126,7 @@ export const Toolbar = observer(
     onClearLyrics,
     hasLyrics,
     onCancelTranscribe,
-    onClearTranscribeStatus,
-    lyricsNotice,
-    onClearLyricsNotice,
     lyricsAlignStatus,
-    onClearLyricsAlignStatus,
     onSetBeatInput,
     onSetLlmModel,
     zoom,
@@ -185,18 +179,11 @@ export const Toolbar = observer(
      *  enable a "Clear lyrics" menu item inside the Lyrics dropdown. */
     hasLyrics: boolean;
     onCancelTranscribe: () => void;
-    onClearTranscribeStatus: () => void;
-    /** Latest lyrics-load notice; rendered as a toolbar pill mirroring
-     *  the transcribe pill so the LRCLIB search modal can close as soon
-     *  as it commits a result. */
-    lyricsNotice: LyricsNotice;
-    onClearLyricsNotice: () => void;
     /** Status of the in-flight Whisper lyric-alignment request. Rendered
-     *  as a busy/error pill in the toolbar so the user sees that the
-     *  backend is extracting vocals + running whisperx after they pick
-     *  "Align with Whisper" from the Lyrics menu. */
+     *  as a busy pill in the toolbar so the user sees that the backend
+     *  is extracting vocals + running whisperx after they pick "Align
+     *  with Whisper" from the Lyrics menu. */
     lyricsAlignStatus: LyricsAlignStatus;
-    onClearLyricsAlignStatus: () => void;
     onSetBeatInput: (input: BeatInput) => void;
     onSetLlmModel: (model: LlmModel) => void;
     zoom: number;
@@ -455,7 +442,11 @@ export const Toolbar = observer(
           )}
         </DropdownButton>
         <DropdownButton
-          label={<ToolbarDropdownLabel>{uploading ? 'Transcribing…' : 'Transcribe'}</ToolbarDropdownLabel>}
+          label={
+            <ToolbarDropdownLabel>
+              {uploading ? 'Transcribing…' : 'Transcribe'}
+            </ToolbarDropdownLabel>
+          }
           className={styles.transcribeButton}
           panelClassName={dropdownStyles.dropdownPanelWide}
           title="Transcribe an audio file using the filter pathway (MIDI). The debug bundle loads automatically when the run completes."
@@ -554,9 +545,7 @@ export const Toolbar = observer(
                         className={sharedStyles.samplesSelect}
                         value={selectedResumeFolder ?? ''}
                         disabled={uploading}
-                        onChange={(e) =>
-                          onSetSelectedResumeFolder(e.target.value || undefined)
-                        }
+                        onChange={(e) => onSetSelectedResumeFolder(e.target.value || undefined)}
                       >
                         <option value="">Select a previous run...</option>
                         {recentTranscriptions.map((s) => (
@@ -587,8 +576,7 @@ export const Toolbar = observer(
                             key={stage}
                             value={stage}
                             disabled={
-                              selectedResumeFolder !== undefined &&
-                              !resumableSet.has(stage)
+                              selectedResumeFolder !== undefined && !resumableSet.has(stage)
                             }
                           >
                             {stage}
@@ -763,7 +751,8 @@ export const Toolbar = observer(
           {() => (
             <>
               <PlaybackKitSubmenu />
-              <PlaybackSpeedSubmenu />
+              <PlaybackSpeedItem />
+              <AudioLatencyItem />
             </>
           )}
         </DropdownButton>
@@ -786,12 +775,8 @@ export const Toolbar = observer(
         </label>
         <div className={styles.toolbarSpacer} aria-hidden="true" />
         <DrumLoadingIndicator />
-        <LyricsAlignStatusPill
-          status={lyricsAlignStatus}
-          onClear={onClearLyricsAlignStatus}
-        />
-        <LyricsStatusPill notice={lyricsNotice} onClear={onClearLyricsNotice} />
-        <TranscribeStatusPill status={transcribeStatus} onClear={onClearTranscribeStatus} />
+        <LyricsAlignBusyPill status={lyricsAlignStatus} />
+        <TranscribeBusyPill status={transcribeStatus} />
       </div>
     );
   }
@@ -873,30 +858,61 @@ const PlaybackKitSubmenu = observer(() => {
 });
 
 /**
- * Playback-speed picker inside the toolbar's Playback menu. Reads
- * `jotPlayer.playbackSpeed` directly so speed changes don't trigger a
- * full toolbar re-render.
+ * Numeric input inside the toolbar's Playback menu for the tempo
+ * multiplier. ± buttons step by `PLAYBACK_SPEED_STEP` (0.25), so the
+ * usual practice grid (0.25 / 0.5 / 0.75 / 1.0 / ...) is one click
+ * apart; arbitrary typed values still snap to the grid in the player.
+ * Reads `jotPlayer.playbackSpeed` directly so speed changes only
+ * re-render this row, not the whole toolbar.
  */
-const PlaybackSpeedSubmenu = observer(() => {
-  const current = jotPlayer.playbackSpeed;
-  return (
-    <SubmenuItem
-      label="Speed"
-      title="Tempo multiplier applied to playback. Slowing down spaces the drum hits further apart and time-stretches the audio tracks, pitch is preserved for both, so a half-speed practice pass stays in tune."
-    >
-      {() =>
-        PLAYBACK_SPEEDS.map((s) => (
-          <ToggleMenuItem
-            key={s}
-            label={`${s.toFixed(2)}×`}
-            active={s === current}
-            onToggle={() => jotPlayer.setPlaybackSpeed(s)}
-          />
-        ))
-      }
-    </SubmenuItem>
-  );
-});
+const PlaybackSpeedItem = observer(() => (
+  <label
+    className={styles.dropdownStepperRow}
+    title="Tempo multiplier applied to playback. Slowing down spaces the drum hits further apart and time-stretches the audio tracks (pitch preserved), so a half-speed practice pass stays in tune."
+  >
+    <span>Speed</span>
+    <span className={styles.dropdownStepperControl}>
+      <NumberStepper
+        value={jotPlayer.playbackSpeed}
+        onChange={(v) => jotPlayer.setPlaybackSpeed(v)}
+        step={PLAYBACK_SPEED_STEP}
+        min={PLAYBACK_SPEED_MIN}
+        max={PLAYBACK_SPEED_MAX}
+        precision={2}
+        ariaLabel="Playback speed multiplier"
+      />
+      <span className={styles.dropdownStepperUnit}>×</span>
+    </span>
+  </label>
+));
+
+/**
+ * Numeric input inside the toolbar's Playback menu for the audio-vs-visual
+ * sync trim, in milliseconds. Positive values delay the perceived audio
+ * relative to the playhead (visual leads); negative values pull audio
+ * earlier. Reads `jotPlayer.audioLatencyMs` directly so changes only
+ * re-render this row, not the whole toolbar.
+ */
+const AudioLatencyItem = observer(() => (
+  <label
+    className={styles.dropdownStepperRow}
+    title="Adjust the on-screen playhead's position relative to the audio playback clock. Positive values mean the audio is delayed (visual playhead leads); negative values pull the audio earlier. Use this to compensate if the playhead appears to lead or lag the sound. Has no effect on the jot, beats, notes, or audio tracks themselves."
+  >
+    <span>Audio latency</span>
+    <span className={styles.dropdownStepperControl}>
+      <NumberStepper
+        value={jotPlayer.audioLatencyMs}
+        onChange={(v) => jotPlayer.setAudioLatencyMs(v)}
+        step={5}
+        min={-500}
+        max={500}
+        precision={0}
+        ariaLabel="Audio latency adjustment in milliseconds"
+      />
+      <span className={styles.dropdownStepperUnit}>ms</span>
+    </span>
+  </label>
+));
 
 function samplePct(p: SampleLoadProgress): number {
   return Math.min(100, Math.round((p.loaded / p.total) * 100));
@@ -957,137 +973,50 @@ const DrumLoadingIndicator = observer(() => {
   );
 });
 
-const LyricsStatusPill = observer(
-  ({ notice, onClear }: { notice: LyricsNotice; onClear: () => void }) => {
-    if (notice.phase === 'idle') return null;
-    return (
-      <span
-        className={classNames(sharedStyles.statusPill, sharedStyles.statusPillSuccess)}
-        onClick={onClear}
-        role="button"
-        title={`Loaded "${notice.trackName}" by ${notice.artistName} from LRCLIB (click to dismiss)`}
-        data-testid="lyrics-search-loaded"
-      >
-        Loaded {notice.trackName} by {notice.artistName} from LRCLIB (click to dismiss)
-      </span>
-    );
-  },
-);
+/**
+ * Busy pill for the Whisper lyric-alignment flow. While the backend is
+ * extracting vocals (BS-Roformer) + running whisperx the pill shows a
+ * spinner + the file being aligned. Returns to nothing on completion;
+ * success is signalled by the row appearing, failure by an error toast.
+ */
+const LyricsAlignBusyPill = observer(({ status }: { status: LyricsAlignStatus }) => {
+  if (status.phase !== 'aligning') return null;
+  return (
+    <span
+      className={classNames(sharedStyles.statusPill, sharedStyles.statusPillBusy)}
+      title={`Extracting vocals + running whisperx on ${status.detail}…`}
+      data-testid="lyrics-align-busy"
+    >
+      <span className={styles.statusPillSpinner} aria-hidden="true" />
+      Aligning lyrics: {status.detail}…
+    </span>
+  );
+});
 
 /**
- * Pill that mirrors {@link TranscribeStatusPill} for the Whisper
- * lyric-alignment flow. While the backend is extracting vocals
- * (BS-Roformer) + running whisperx, surfaces a busy pill with a
- * spinner; on failure, an error pill that dismisses on click. Success
- * is signalled by the gutter row appearing + the
- * {@link LyricsStatusPill}'s "loaded" notice, not by this pill.
+ * Busy pill for an in-flight transcribe / resume call. Surfaces the
+ * live pipeline stage (and substage detail, if any) alongside the
+ * filename so the operator can see what the server is actually
+ * working on; fed from the NDJSON progress stream via
+ * `JotViewStore.applyProgress`. Completion (success or failure) drops
+ * back to nothing; the user-visible result surfaces as a toast.
  */
-const LyricsAlignStatusPill = observer(
-  ({ status, onClear }: { status: LyricsAlignStatus; onClear: () => void }) => {
-    if (status.phase === 'idle') return null;
-    if (status.phase === 'aligning') {
-      return (
-        <span
-          className={classNames(sharedStyles.statusPill, sharedStyles.statusPillBusy)}
-          title={`Extracting vocals + running whisperx on ${status.detail}…`}
-          data-testid="lyrics-align-busy"
-        >
-          <span className={styles.statusPillSpinner} aria-hidden="true" />
-          Aligning lyrics: {status.detail}…
-        </span>
-      );
-    }
-    return (
-      <span
-        className={classNames(sharedStyles.statusPill, sharedStyles.statusPillError)}
-        onClick={onClear}
-        role="button"
-        title={status.message}
-        data-testid="lyrics-align-error"
-      >
-        Lyrics align failed: {truncate(status.message, 60)} (click to dismiss)
-      </span>
-    );
-  },
-);
-
-const TranscribeStatusPill = observer(
-  ({ status, onClear }: { status: TranscribeStatus; onClear: () => void }) => {
-    if (status.phase === 'idle') return null;
-    if (status.phase === 'uploading') {
-      // Surface the live pipeline stage (and substage detail, if any)
-      // alongside the filename so the operator can see what the server
-      // is actually working on. Fed from the NDJSON progress stream via
-      // `JotViewStore.applyProgress`; the inline spinner reinforces
-      // that work is in flight while text labels swap between stages.
-      const stagePart = status.stage
-        ? ` · ${formatStageLabel(status.stage)}${status.substage ? ` (${status.substage})` : ''}`
-        : '';
-      return (
-        <span
-          className={classNames(sharedStyles.statusPill, sharedStyles.statusPillBusy)}
-          title={status.substage ?? status.stage ?? 'starting'}
-        >
-          <span className={styles.statusPillSpinner} aria-hidden="true" />
-          Transcribing {status.filename}
-          {stagePart}…
-        </span>
-      );
-    }
-    if (status.phase === 'error') {
-      return (
-        <span
-          className={classNames(sharedStyles.statusPill, sharedStyles.statusPillError)}
-          onClick={onClear}
-          role="button"
-          title={status.message}
-        >
-          Error: {truncate(status.message, 60)} (click to dismiss)
-        </span>
-      );
-    }
-    let detail = `@ ${status.tempo.toFixed(0)} bpm, ${status.barCount} bars`;
-    if (status.hasTempoChanges) detail += ', tempo changes';
-    if (status.hasTimeSigChanges) detail += ', time-sig changes';
-    if (status.debugDir) {
-      detail += `, debug @ ${status.debugDir}`;
-    }
-    const titleLines: string[] = [];
-    if (status.debugDir) {
-      titleLines.push(
-        `Debug artifacts saved to ${status.debugDir} (under ./debug/ on the host with the default docker-compose mount).`
-      );
-    }
-    return (
-      <span
-        className={classNames(sharedStyles.statusPill, sharedStyles.statusPillSuccess)}
-        title={titleLines.length > 0 ? titleLines.join('\n') : undefined}
-      >
-        <span onClick={onClear} role="button">
-          Loaded {status.filename} {detail} (click to dismiss)
-        </span>
-        {status.debugZipUrl && (
-          <>
-            {' '}
-            <a
-              href={status.debugZipUrl}
-              download
-              data-noseek="true"
-              onClick={(e) => e.stopPropagation()}
-              title="Download the debug bundle (.zip) for this run — score + per-stem MP3s + JSON manifest with stage timings + the full log stream. Drop the file into `Load > Load debug bundle` to inspect it back in this UI."
-            >
-              [debug.zip]
-            </a>
-          </>
-        )}
-      </span>
-    );
-  }
-);
-
-function truncate(s: string, n: number): string {
-  return s.length <= n ? s : `${s.slice(0, n - 1)}…`;
-}
+const TranscribeBusyPill = observer(({ status }: { status: TranscribeStatus }) => {
+  if (status.phase !== 'uploading') return null;
+  const stagePart = status.stage
+    ? ` · ${formatStageLabel(status.stage)}${status.substage ? ` (${status.substage})` : ''}`
+    : '';
+  return (
+    <span
+      className={classNames(sharedStyles.statusPill, sharedStyles.statusPillBusy)}
+      title={status.substage ?? status.stage ?? 'starting'}
+    >
+      <span className={styles.statusPillSpinner} aria-hidden="true" />
+      Transcribing {status.filename}
+      {stagePart}…
+    </span>
+  );
+});
 
 /**
  * Bottom-pinned drawer that surfaces a loaded transcriber debug bundle.

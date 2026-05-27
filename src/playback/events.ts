@@ -2,26 +2,22 @@
  * RenderedJot -> flat playback event list, keyed by DSL pitch.
  *
  * We walk the laid-out jot directly (rather than round-tripping through
- * `toMidi` + `parseMidi` like an earlier revision did) for two reasons:
+ * `toMidi` + `parseMidi`) for two reasons:
  *
  *  1. The DSL pitch letter ('k', 's', 'h', ...) survives end-to-end. The
- *     scheduler uses it to filter by mute/solo row — MIDI bytes don't
- *     carry that information, so the previous round-trip stripped it.
+ *     scheduler uses it to filter by mute/solo row; MIDI bytes don't
+ *     carry that information.
  *
- *  2. `toMidi` only emits a `setTempo` at tick 0, so the MIDI bytes
- *     can't carry per-bar `{{ bpm }}` overrides. Walking the rendered
- *     bars lets us accumulate the effective tempo bar by bar (same logic
- *     as `buildTimeline`), which is what keeps a variable-tempo chart —
- *     e.g. a ParaDB import whose `bpmEvents` became per-bar overrides —
- *     locked to its backing recording instead of slewing apart.
- *
- * The MIDI-byte path is still the source of truth for downstream MIDI
- * consumers — `toMidi` is unchanged.
+ *  2. The tempo timeline lives on `jot.tempoEvents`, which supports
+ *     mid-bar tempo changes natively. The MIDI export carries the same
+ *     information but the scheduler reads `tempoEvents` directly via the
+ *     shared per-bar tempo helper so the playhead, audio waveform and
+ *     scheduled drums all share one clock.
  */
 import { Volume } from 'src/dsl';
 import { RenderedJot, ResolvedNote, ResolvedTrack } from 'src/jot';
 import { defaultMidiNote } from 'src/midi/gm';
-import { resolveBpm } from './timeline';
+import { beatToSecWithinBar, buildBarTempos } from 'src/tempo';
 
 export type PlaybackEvent = {
   /** Absolute time from the start of the jot, in seconds. */
@@ -62,7 +58,6 @@ const FLAM_GRACE_VELOCITY_RATIO = 0.9;
 
 export function jotToEvents(rendered: RenderedJot): PlaybackEvent[] {
   const resolved = rendered.resolved;
-  const globalBpm = resolveBpm(resolved.globalMetadata.bpm, 120);
   const events: PlaybackEvent[] = [];
 
   // Bar 1 (= first non-lead-in bar) sits at jot time 0 by convention,
@@ -83,26 +78,18 @@ export function jotToEvents(rendered: RenderedJot): PlaybackEvent[] {
       if (b.index >= 0) break;
       leadBars++;
     }
-    // Per-bar `{{ bpm }}` overrides are sticky; carry the effective
-    // tempo across bars exactly as `buildTimeline` does so the playhead
-    // and the scheduled audio stay on the same clock. Compute durations
-    // in one forward pass, then derive each bar's jot-time anchor from
-    // the leadBars offset.
-    let currentBpm = globalBpm;
-    const durations: number[] = new Array(voice.bars.length);
-    for (let i = 0; i < voice.bars.length; i++) {
-      const bar = voice.bars[i];
-      const override = bar.source.metadata?.bpm;
-      if (override !== undefined) currentBpm = resolveBpm(override, currentBpm);
-      durations[i] = bar.beats * (60 / currentBpm);
-    }
+    // Per-bar tempo segments from `jot.tempoEvents` give the exact
+    // intra-bar tempo curve. Each note's time is `barOffset +
+    // beatToSecWithinBar(barTempos, note.beat)` so a note that sits
+    // after a mid-bar tempo change picks up the post-change rate.
+    const tempos = buildBarTempos(rendered.source, voice.bars);
     let leadOffsetSec = 0;
-    for (let i = 0; i < leadBars; i++) leadOffsetSec += durations[i];
+    for (let i = 0; i < leadBars; i++) leadOffsetSec += tempos[i].durationSec;
 
     let barOffsetSec = -leadOffsetSec;
     for (let i = 0; i < voice.bars.length; i++) {
       const bar = voice.bars[i];
-      const barDurationSec = durations[i];
+      const barTempos = tempos[i];
       for (const pitch of voice.pitches) {
         const track = bar.tracks[pitch];
         if (!track) continue;
@@ -110,7 +97,7 @@ export function jotToEvents(rendered: RenderedJot): PlaybackEvent[] {
           const midiNote = resolveMidiNote(note, track);
           if (midiNote === undefined) continue;
           const velocity = resolveVelocity(note);
-          const time = barOffsetSec + (note.beat / bar.beats) * barDurationSec;
+          const time = barOffsetSec + beatToSecWithinBar(barTempos, note.beat);
           events.push({ time, midiNote, velocity, pitch });
           if (note.modifiers.has('fl')) {
             // The grace stroke clamps to -leadOffsetSec so it can't run
@@ -126,7 +113,7 @@ export function jotToEvents(rendered: RenderedJot): PlaybackEvent[] {
           }
         }
       }
-      barOffsetSec += barDurationSec;
+      barOffsetSec += barTempos.durationSec;
     }
   }
 

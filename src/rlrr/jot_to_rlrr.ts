@@ -2,9 +2,11 @@
  * Drumjot Jot -> Paradiddle `.rlrr` conversion.
  *
  * Assumptions (tagged [S#] inline):
- *  [S1] Tempo is taken from `globalMetadata.bpm` (number form only). If a
- *       `BpmTransition` is set, only its `start` (else `end`) is used as a
- *       single tempo; we don't yet emit a multi-segment bpm timeline.
+ *  [S1] Tempo is taken from `globalMetadata.bpm` (initial) plus
+ *       `jot.tempoEvents` for sticky tempo changes. Each tempoEvent
+ *       (mid-bar OK) becomes a separate RLRR `bpmEvent` at the event's
+ *       wall-clock time; `BpmTransition` values are flattened to
+ *       `start` (else `end`) since RLRR has no transition concept.
  *  [S2] The drum kit (`instruments`) is taken from `globalMetadata.rlrr
  *       .instruments` if present (preserves a round trip), else falls back
  *       to `DEFAULT_INSTRUMENTS`.
@@ -27,6 +29,7 @@
  */
 import { Jot, Volume } from 'src/dsl';
 import { RenderedJot, ResolvedNote, ResolvedTrack } from 'src/jot';
+import { beatToSecWithinBar, buildBarTempos, initialBpm, resolveBpm } from 'src/tempo';
 import {
   CLASS_TO_DRUM,
   describeDrum,
@@ -88,22 +91,37 @@ export function jotToRlrr(jot: Jot, options: JotToRlrrOptions = {}): RlrrFile {
   const instruments: RlrrInstrument[] =
     options.instruments ?? sidecar.instruments ?? [...DEFAULT_INSTRUMENTS];
 
-  const bpmVal = resolveBpm(jot);
-  const events: RlrrEvent[] = [];
+  // Voice 0 is canonical for tempo (its bar grid is shared across voices).
+  // `buildBarTempos` produces per-bar `durationSec` + within-bar segments
+  // so a note at `note.beat` resolves via `beatToSecWithinBar` even when
+  // its bar contains mid-bar tempo changes.
+  const voice0 = resolved.voices[0];
+  const barTempos = voice0 ? buildBarTempos(jot, voice0.bars) : [];
+  const barStartSec: number[] = new Array(voice0?.bars.length ?? 0);
+  {
+    let cursor = 0;
+    for (let i = 0; i < barStartSec.length; i++) {
+      barStartSec[i] = cursor;
+      cursor += barTempos[i]?.durationSec ?? 0;
+    }
+  }
 
-  // [S5] Merge all voices.
+  const events: RlrrEvent[] = [];
+  // [S5] Merge all voices. All voices share voice 0's bar timing.
   for (const voice of resolved.voices) {
-    let secondsAtBarStart = 0;
-    for (const bar of voice.bars) {
-      const barDurationSeconds = (bar.beats * 60) / bpmVal;
+    for (let bi = 0; bi < voice.bars.length; bi++) {
+      const bar = voice.bars[bi];
+      const tempos = barTempos[bi];
+      const startSec = barStartSec[bi] ?? 0;
       for (const pitch of voice.pitches) {
         const track = bar.tracks[pitch];
         if (!track) continue;
         for (const note of track.notes) {
           const target = resolveInstrument(note, track, instruments);
           if (!target) continue;
-          const seconds =
-            secondsAtBarStart + (note.beat / Math.max(bar.beats, 1e-9)) * barDurationSeconds;
+          const seconds = tempos
+            ? startSec + beatToSecWithinBar(tempos, note.beat)
+            : startSec;
           const vel = clampVelocity(resolveVelocity(note, opts));
           const event: RlrrEvent = {
             name: target.name,
@@ -116,7 +134,6 @@ export function jotToRlrr(jot: Jot, options: JotToRlrrOptions = {}): RlrrFile {
           events.push(event);
         }
       }
-      secondsAtBarStart += barDurationSeconds;
     }
   }
 
@@ -147,6 +164,20 @@ export function jotToRlrr(jot: Jot, options: JotToRlrrOptions = {}): RlrrFile {
     ...(options.audioFileData ?? {}),
   };
 
+  // [S1] One bpmEvent per tempoEvent at its wall-clock time, prefixed by
+  // the initial tempo at time 0. RLRR has no `BpmTransition`, so a
+  // transition flattens to its `start` (else `end`).
+  const bpmEvents = [{ bpm: initialBpm(jot), time: 0 }];
+  for (const ev of jot.tempoEvents ?? []) {
+    const tempos = barTempos[ev.barIndex];
+    if (!tempos) continue;
+    const startSec = barStartSec[ev.barIndex] ?? 0;
+    const time = startSec + beatToSecWithinBar(tempos, ev.beat);
+    const bpm = resolveBpm(ev.bpm, bpmEvents[bpmEvents.length - 1].bpm);
+    if (bpm === bpmEvents[bpmEvents.length - 1].bpm) continue;
+    bpmEvents.push({ bpm, time });
+  }
+
   return {
     version: RLRR_VERSION,
     authoringTool: opts.authoringTool,
@@ -154,18 +185,11 @@ export function jotToRlrr(jot: Jot, options: JotToRlrrOptions = {}): RlrrFile {
     audioFileData,
     instruments,
     events,
-    bpmEvents: [{ bpm: bpmVal, time: 0 }],
+    bpmEvents,
   };
 }
 
 // ---------- helpers ----------
-
-function resolveBpm(jot: Jot): number {
-  const bpm = jot.globalMetadata.bpm;
-  if (typeof bpm === 'number') return bpm;
-  if (bpm && typeof bpm === 'object') return bpm.start ?? bpm.end ?? 120;
-  return 120;
-}
 
 function resolveInstrument(
   note: ResolvedNote,

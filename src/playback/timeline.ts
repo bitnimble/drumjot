@@ -1,26 +1,23 @@
 /**
  * Time-to-pixel mapping for the playback playhead.
  *
- * Tempo follows `globalMetadata.bpm` and any per-bar `{{ bpm: ... }}`
- * overrides, accumulated bar by bar. Browser playback does NOT go through
- * the MIDI bytes (which only carry a `setTempo` at tick 0) — the scheduler
- * in `events.ts` walks the rendered jot with the same per-bar tempo logic
- * — so honouring per-bar bpm here is exactly what keeps the playhead and
- * the audio-track waveform locked to the scheduled drums. Ignoring it (the
- * old behaviour) is what made a variable-tempo chart drift against its
- * recording.
+ * Tempo follows `jot.tempoEvents` (sticky tempo changes anchored at
+ * `(barIndex, beat)`, mid-bar precision) on top of the initial
+ * `globalMetadata.bpm`. Browser playback does NOT go through the MIDI
+ * bytes; the scheduler in `events.ts` walks the same per-bar tempo
+ * segments so the playhead, the audio-track waveform and the scheduled
+ * drums all share one clock.
  *
  * Jot-time anchor: bar 1 (= the first drum bar, `voice.bars[leadBars]`)
  * sits at jot time 0 by construction. That coincides with the audio time
- * stored in `globalMetadata.drumsT0Sec` — so the player's
+ * stored in `globalMetadata.drumsT0Sec` so the player's
  * `media = jot + drumsT0Sec` identity lines the synth drums up with the
  * recorded audio drums. Pre-drum lead-in bars (if any) sit at negative
  * startSec; their notes (rare, but possible if an upstream generator
  * stamps drums into a pre-drum bar) fire at negative jot time, which
  * maps back to positive media time during playback. Anacrusis, when
- * present, is itself drum content — under the drums-t0 convention it
- * sits at jot 0 alongside bar 1's downbeat, which matches the existing
- * single-voice playback semantics.
+ * present, is itself drum content; under the drums-t0 convention it
+ * sits at jot 0 alongside bar 1's downbeat.
  *
  * Pixel offsets are looked up against the LIVE `RenderedJot` on every call
  * to {@link timeToX}, not cached at build time, so the playhead stays in
@@ -28,27 +25,11 @@
  * `ViewConfig.barWidth` change reflows the rendered bars reactively and
  * the playhead re-reads their new `x` / `width`).
  */
-import { BpmTransition, TimeSignature } from 'src/dsl';
+import { TimeSignature } from 'src/dsl';
 import { Pixels, RenderedJot, px } from 'src/jot';
+import { buildBarTempos, resolveBpm } from 'src/tempo';
 
-/**
- * Resolve a `Metadata.bpm` field (a number, a {@link BpmTransition}, or
- * absent) to a positive BPM, falling back to `fallback` when missing or
- * non-positive. Transitions are not interpolated — we take `start` (else
- * `end`), mirroring the no-interpolation policy `events.ts` uses for
- * volume so the scheduler, playhead and waveform share one definition.
- */
-export function resolveBpm(
-  field: number | BpmTransition | undefined,
-  fallback: number,
-): number {
-  if (typeof field === 'number') return field > 0 ? field : fallback;
-  if (field && typeof field === 'object') {
-    const v = field.start ?? field.end;
-    return typeof v === 'number' && v > 0 ? v : fallback;
-  }
-  return fallback;
-}
+export { resolveBpm };
 
 /**
  * Pick the BPM and time signature the song spends the largest proportion
@@ -56,10 +37,10 @@ export function resolveBpm(
  * `index`) whose bpm is artificially scaled to fit the audio pre-roll.
  *
  * Used by the subtitle formatter (cosmetic), and by `store.setDrumOffset`
- * to convert a beat-shift delta to the audio-compensation seconds —
- * `globalMetadata.bpm` is the *first* `setTempo` event, which for
- * transcribed bundles is the back-solved lead-in tempo and can be very
- * different from the song's actual tempo.
+ * to convert a beat-shift delta to the audio-compensation seconds.
+ * `globalMetadata.bpm` is the initial tempo (before any tempoEvent
+ * fires), which for transcribed bundles is the back-solved lead-in
+ * tempo and can differ markedly from the song's playing tempo.
  */
 export function pickDominantBpmAndTime(jot: RenderedJot): {
   dominantBpm: number | undefined;
@@ -69,20 +50,22 @@ export function pickDominantBpmAndTime(jot: RenderedJot): {
   if (!voice || voice.bars.length === 0) {
     return { dominantBpm: undefined, dominantTime: undefined };
   }
-  let currentBpm = resolveBpm(jot.globalMetadata.bpm, 120);
+  const tempos = buildBarTempos(jot.source, voice.bars);
   const bpmDur = new Map<number, number>();
   const timeDur = new Map<string, { time: TimeSignature; duration: number }>();
-  for (const bar of voice.bars) {
-    const override = bar.source.metadata?.bpm;
-    if (override !== undefined) currentBpm = resolveBpm(override, currentBpm);
+  for (let i = 0; i < voice.bars.length; i++) {
+    const bar = voice.bars[i];
     if (bar.index < 0) continue;
-    const duration = bar.beats * (60 / currentBpm);
-    const bpmKey = Math.round(currentBpm);
-    bpmDur.set(bpmKey, (bpmDur.get(bpmKey) ?? 0) + duration);
+    const barTempos = tempos[i];
+    for (const seg of barTempos.segments) {
+      const segDuration = (seg.endBeat - seg.startBeat) * (60 / seg.bpm);
+      const bpmKey = Math.round(seg.bpm);
+      bpmDur.set(bpmKey, (bpmDur.get(bpmKey) ?? 0) + segDuration);
+    }
     const timeKey = `${bar.time.count}/${bar.time.unit}`;
     const prev = timeDur.get(timeKey);
-    if (prev) prev.duration += duration;
-    else timeDur.set(timeKey, { time: bar.time, duration });
+    if (prev) prev.duration += barTempos.durationSec;
+    else timeDur.set(timeKey, { time: bar.time, duration: barTempos.durationSec });
   }
   let dominantBpm: number | undefined;
   let bestBpmDur = -Infinity;
@@ -128,38 +111,31 @@ export const EMPTY_TIMELINE: JotTimeline = {
 };
 
 export function buildTimeline(rendered: RenderedJot): JotTimeline {
-  // The audio-time fields we need (`bar.beats`, `bar.source.metadata.bpm`,
-  // `globalMetadata.bpm`/`.leadBars`) all live on the structural cache,
-  // which is zoom-invariant. Reading from `rendered.structure` rather
-  // than `rendered.resolved` means observers calling `buildTimeline`
-  // don't pick up a spurious dependency on `viewConfig.barWidth`, so
-  // the per-bar timings stay stable across wheel ticks.
+  // The audio-time fields we need (`bar.beats`, `bar.index`,
+  // `jot.tempoEvents`, `globalMetadata.bpm`) all live on the structural
+  // cache or on the source jot, which are zoom-invariant. Reading from
+  // `rendered.structure` rather than `rendered.resolved` means observers
+  // calling `buildTimeline` don't pick up a spurious dependency on
+  // `viewConfig.barWidth`, so the per-bar timings stay stable across
+  // wheel ticks.
   const structure = rendered.structure;
   // All voices in a Jot share the same bar grid (they're laid out from the
   // same global metadata), so the first voice's timing is canonical.
   const voice = structure.voices[0];
   if (!voice || voice.bars.length === 0) return EMPTY_TIMELINE;
 
-  const globalBpm = resolveBpm(rendered.globalMetadata.bpm, 120);
-
-  // Per-bar `{{ bpm }}` overrides are sticky — a change holds until the
-  // next one — so carry the effective tempo forward across bars rather
-  // than re-reading the global each iteration. We do it in one forward
-  // pass so each bar's duration is computed at the tempo in force at
-  // that bar's start.
-  let currentBpm = globalBpm;
+  // Per-bar tempo segments come from `jot.tempoEvents`. Mid-bar tempo
+  // changes are honoured natively: each bar's `durationSec` is the sum
+  // of its constant-tempo intra-bar segments.
+  const tempos = buildBarTempos(rendered.source, voice.bars);
   const durations: number[] = new Array(voice.bars.length);
-  for (let i = 0; i < voice.bars.length; i++) {
-    const bar = voice.bars[i];
-    const override = bar.source.metadata?.bpm;
-    if (override !== undefined) currentBpm = resolveBpm(override, currentBpm);
-    durations[i] = bar.beats * (60 / currentBpm);
-  }
+  for (let i = 0; i < voice.bars.length; i++) durations[i] = tempos[i].durationSec;
 
   // Anchor bar 1 (= the first non-lead-in bar) at jot time 0, so the
   // audio scheduler's "media = jot + drumsT0Sec" identity lines up the
   // synth drums with the recorded audio drums. Pre-drum bars (the
-  // lead-in, identified by `bar.index < 0`) get negative `startSec`; // playback's rAF loop already accepts negative jot times for the
+  // lead-in, identified by `bar.index < 0`) get negative `startSec`;
+  // playback's rAF loop already accepts negative jot times for the
   // pre-roll scrub, and `timeToX` resolves them via the per-bar loop.
   // Lead-in count is read directly from the structure (counting the
   // leading run of negative-indexed bars) rather than from

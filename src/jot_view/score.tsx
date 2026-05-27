@@ -15,7 +15,8 @@ import {
 import { TICKS_PER_BEAT } from 'src/midi';
 import { buildTimeline, jotPlayer } from 'src/playback';
 import { waveformWorker } from 'src/playback/waveform_worker_client';
-import { pickDominantBpmAndTime, resolveBpm } from 'src/playback/timeline';
+import { pickDominantBpmAndTime } from 'src/playback/timeline';
+import { buildBarTempos } from 'src/tempo';
 import sharedStyles from '../jot_view.module.css';
 import { GutterResizeHandle } from './components/gutter_resize_handle';
 import {
@@ -228,16 +229,14 @@ export const TimelineHeader = observer(
     let voiceBeats = 0;
     for (const b of voice.bars) voiceBeats += b.beats;
 
+    // Effective tempo at each bar's downbeat, derived from the shared
+    // tempo timeline. Mid-bar tempo changes inside a bar aren't shown
+    // separately by the header pill; the displayed value tracks the
+    // tempo in force at the bar's downbeat.
+    const tempos = buildBarTempos(jot.source, voice.bars);
+
     let cumBeats = 0;
-    // Pills render on the first visible bar (anchor) and on any bar
-    // whose time signature or resolved BPM differs from the previous
-    // bar's, so meter and tempo changes are visible in the ruler
-    // without scanning the score. BPM resolution mirrors
-    // `pickDominantBpmAndTime` / `events.ts` (per-bar `{{ bpm }}`
-    // overrides accumulate on top of `globalMetadata.bpm`), so the
-    // numbers shown here match what the scheduler is playing.
     let prevTime: { count: number; unit: number } | undefined;
-    let currentBpm = resolveBpm(jot.globalMetadata.bpm, 120);
     let prevBpm: number | undefined;
     return (
       <div className={styles.timelineHeader}>
@@ -258,12 +257,11 @@ export const TimelineHeader = observer(
             const showTimeSig =
               !prevTime || bar.time.count !== prevTime.count || bar.time.unit !== prevTime.unit;
             prevTime = bar.time;
-            const bpmOverride = bar.source.metadata?.bpm;
-            if (bpmOverride !== undefined) currentBpm = resolveBpm(bpmOverride, currentBpm);
+            // Tempo at the bar's downbeat = first segment's bpm.
             // Round before comparing so floating-point jitter on
             // transcribed bundles (e.g. 119.97 vs 120.03) doesn't paint
             // a "change" pill on every bar.
-            const displayBpm = Math.round(currentBpm);
+            const displayBpm = Math.round(tempos[i]?.segments[0]?.bpm ?? 120);
             const showBpm = prevBpm === undefined || displayBpm !== prevBpm;
             prevBpm = displayBpm;
             return (
@@ -539,6 +537,17 @@ const PATTERN_COLOR_VARS: readonly string[] = [
   'var(--color-pattern-11)',
   'var(--color-pattern-12)',
 ];
+
+/**
+ * Hex literal used by Canvas paint sites for the waveform's stroke colour.
+ * Mirrors `--color-pattern-2` in `src/design_tokens.css` (sky blue);
+ * Canvas 2D needs a literal RGB string and reading it via
+ * `getComputedStyle(canvas).getPropertyValue('--color-pattern-2')` per
+ * paint forces a style flush, so we duplicate the value here and accept
+ * the carve-out from "no naked color literals" (AGENTS.md §5.8). If the
+ * CSS token's hex changes, update this in lockstep.
+ */
+export const WAVEFORM_PAINT_COLOR = '#5ba8e8';
 
 const PatternBracket = observer(
   ({
@@ -1035,12 +1044,7 @@ const OnsetTimingVisualization = observer(
         ctx.clearRect(0, 0, TIMING_VIZ_WIDTH, TIMING_VIZ_WAVE_HEIGHT);
         const mid = TIMING_VIZ_WAVE_HEIGHT / 2;
         const scale = mid * 0.9;
-        // Canvas doesn't resolve CSS vars in fillStyle strings; read the
-        // waveform's blue off the element's computed style so the snippet
-        // matches the main mixer waveform's colour.
-        const computed = window.getComputedStyle(c);
-        const wave = computed.getPropertyValue('--color-pattern-2').trim();
-        ctx.fillStyle = wave || '#5BA8E8';
+        ctx.fillStyle = WAVEFORM_PAINT_COLOR;
         // Always paint at least a 1 px centerline per column (no skip-zero
         // shortcut) so silent ranges render as a continuous ground line
         // instead of empty gaps; in the long mixer waveform the skip is

@@ -326,6 +326,7 @@ class LyricsAligner:
             # dtype as the model so generate_emissions can run without
             # an extra copy / cast inside its inner loop.
             audio_waveform = load_audio(str(audio_path), model.dtype, model.device)
+            _log_audio_stats(audio_waveform, audio_path)
 
             language_code = (
                 language
@@ -390,10 +391,17 @@ class LyricsAligner:
                 emissions, stride = generate_emissions(
                     model, audio_waveform, batch_size=_CTC_BATCH_SIZE,
                 )
+                _log_emissions_stats(emissions, tokenizer)
                 segments, scores, blank_token = get_alignments(
                     emissions, all_tokens, tokenizer,
                 )
-                spans = get_spans(all_tokens, segments, blank_token)
+                try:
+                    spans = get_spans(all_tokens, segments, blank_token)
+                except AssertionError as inner:
+                    _diagnose_get_spans_failure(
+                        all_tokens, segments, blank_token, inner,
+                    )
+                    raise
                 word_timestamps = postprocess_results(
                     all_text, spans, stride, scores,
                 )
@@ -530,6 +538,157 @@ def _detect_language_from_text(input_lines: list[InputLine]) -> str | None:
 # Helpers for the ctc-forced-aligner pipeline. Kept module-private so
 # tests can drive each transformation in isolation.
 # --------------------------------------------------------------------
+
+
+def _log_audio_stats(audio_waveform: Any, audio_path: Path) -> None:
+    """Summarise the vocals-stem waveform fed to the aligner so we can
+    tell at a glance whether the upstream fp16 separator produced sane
+    audio. NaN/Inf counts catch fp16 underflow tainting; `near_silent`
+    catches the case where the separator zeroed out quiet regions and
+    the model is being asked to align text against a near-flat signal."""
+    import torch  # type: ignore[import-not-found]
+
+    numel = audio_waveform.numel()
+    if numel == 0:
+        log.warning("lyrics: audio_stats: %s is empty", audio_path.name)
+        return
+    nan = int(torch.isnan(audio_waveform).sum())
+    inf = int(torch.isinf(audio_waveform).sum())
+    finite = audio_waveform[torch.isfinite(audio_waveform)]
+    if finite.numel() == 0:
+        log.warning(
+            "lyrics: audio_stats: %s shape=%s dtype=%s ALL NON-FINITE "
+            "(nan=%d inf=%d)",
+            audio_path.name, tuple(audio_waveform.shape), audio_waveform.dtype,
+            nan, inf,
+        )
+        return
+    finite_f32 = finite.float()
+    abs_max = float(finite_f32.abs().max())
+    rms = float(finite_f32.pow(2).mean().sqrt())
+    near_silent = float((audio_waveform.float().abs() < 1e-3).float().mean())
+    log.info(
+        "lyrics: audio_stats: %s shape=%s dtype=%s nan=%d inf=%d "
+        "abs_max=%.4f rms=%.4f near_silent_frac=%.3f",
+        audio_path.name, tuple(audio_waveform.shape), audio_waveform.dtype,
+        nan, inf, abs_max, rms, near_silent,
+    )
+
+
+def _log_emissions_stats(emissions: Any, tokenizer: Any) -> None:
+    """Summarise MMS-300m's per-frame log-probs before forced alignment.
+
+    Two failure modes we're trying to catch:
+      - `nan` / `inf` > 0 -> fp16 instability in the aligner itself
+        (LayerNorm / softmax over fp16 activations); Viterbi degenerates
+        to whatever the C++ kernel does with NaN log-probs.
+      - `top_label_frac` near 1.0 -> the model is predicting the same
+        class at every frame (the failure mode we already observed:
+        every frame -> 'r', producing one giant segment). Indicates
+        either fp16 NaN that collapsed softmax to a default class or a
+        broken input waveform.
+
+    Decodes the dominant argmax index via the tokenizer vocab so the
+    log line reads "top=r 0.92" rather than just a bare integer. The
+    `<star>` column appended by `generate_emissions` lives at index
+    `vocab_size` and shows up as '<star-col>' since it isn't in the
+    tokenizer's own vocab map."""
+    import torch  # type: ignore[import-not-found]
+
+    nan = int(torch.isnan(emissions).sum())
+    inf = int(torch.isinf(emissions).sum())
+    em_f32 = emissions.float()
+    mean = float(em_f32.mean())
+    std = float(em_f32.std())
+
+    argmax = em_f32.argmax(dim=-1).view(-1)
+    total = argmax.numel()
+    counts = torch.bincount(argmax)
+    k = min(3, counts.numel())
+    top_counts, top_indices = torch.topk(counts, k=k)
+    vocab = tokenizer.get_vocab()
+    vocab_inv = {v: k_ for k_, v in vocab.items()}
+    star_col = len(vocab)  # `generate_emissions` appends this column
+
+    def _label(idx: int) -> str:
+        if idx == star_col:
+            return "<star-col>"
+        return vocab_inv.get(idx, f"?{idx}")
+
+    top_summary = ", ".join(
+        f"{_label(int(i))}={int(c)}({int(c) / total:.2f})"
+        for i, c in zip(top_indices, top_counts)
+    )
+    log.info(
+        "lyrics: emissions_stats: shape=%s dtype=%s nan=%d inf=%d "
+        "mean=%.3f std=%.3f top_argmax=[%s]",
+        tuple(emissions.shape), emissions.dtype, nan, inf, mean, std,
+        top_summary,
+    )
+
+
+def _diagnose_get_spans_failure(
+    all_tokens: list[str],
+    segments: list[Any],
+    blank: str,
+    error: AssertionError,
+) -> None:
+    """Re-walk `get_spans`'s loop to pinpoint where it diverged, then log
+    a snapshot. Strictly diagnostic; the original AssertionError is still
+    raised by the caller. Mirrors `get_spans`'s state machine exactly so
+    the reproduced position matches the package's failure site."""
+    tokens_idx = 0
+    ltr_idx = 0
+    non_blank_count = 0
+    for seg_idx, seg in enumerate(segments):
+        if tokens_idx == len(all_tokens):
+            break
+        if seg.label == blank:
+            continue
+        cur_token = all_tokens[tokens_idx].split(" ")
+        ltr = cur_token[ltr_idx]
+        if seg.label != ltr:
+            ctx_lo = max(0, tokens_idx - 2)
+            ctx_hi = min(len(all_tokens), tokens_idx + 3)
+            seg_lo = max(0, seg_idx - 5)
+            seg_hi = min(len(segments), seg_idx + 6)
+            log.warning(
+                "lyrics: get_spans diverged at seg_idx=%d (label=%r) vs "
+                "tokens_idx=%d ltr_idx=%d (token=%r expected_ltr=%r). "
+                "AssertionError: %s",
+                seg_idx, seg.label, tokens_idx, ltr_idx,
+                all_tokens[tokens_idx], ltr, error,
+            )
+            log.warning(
+                "lyrics:   token context [%d:%d] = %r",
+                ctx_lo, ctx_hi, all_tokens[ctx_lo:ctx_hi],
+            )
+            log.warning(
+                "lyrics:   segment context [%d:%d] = %r",
+                seg_lo, seg_hi,
+                [(s.label, s.start, s.end) for s in segments[seg_lo:seg_hi]],
+            )
+            log.warning(
+                "lyrics:   totals: tokens=%d segments=%d non_blank_segs_so_far=%d",
+                len(all_tokens), len(segments), non_blank_count,
+            )
+            return
+        non_blank_count += 1
+        if ltr_idx == len(cur_token) - 1:
+            ltr_idx = 0
+            tokens_idx += 1
+            while tokens_idx < len(all_tokens) and len(all_tokens[tokens_idx]) == 0:
+                tokens_idx += 1
+        else:
+            ltr_idx += 1
+    log.warning(
+        "lyrics: get_spans diagnostic walked the entire loop without "
+        "reproducing the divergence; AssertionError was: %s",
+        error,
+    )
+
+
+
 
 # ISO-639-1 (Whisper / our text detector) -> ISO-639-3 (the language
 # code expected by ctc_forced_aligner.preprocess_text, which feeds MMS

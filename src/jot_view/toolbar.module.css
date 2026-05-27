@@ -130,6 +130,33 @@
     display: none;
 }
 
+/* Numeric-input row inside the Playback dropdown. Matches the
+   dropdownItem typography (bodyMd, primary text colour, same padding
+   as toggle/submenu rows) so it reads as part of the same list, but
+   stays inert on click (the stepper inside owns interaction). Label on
+   the left, stepper + unit grouped on the right via space-between. */
+.dropdownStepperRow {
+    composes: bodyMd from '../typography.module.css';
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 4px 10px;
+    color: var(--color-text);
+    cursor: default;
+}
+
+.dropdownStepperControl {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.dropdownStepperUnit {
+    composes: readout from '../typography.module.css';
+    color: var(--color-text-muted-alt);
+}
+
 .zoomSlider {
     width: 100px;
 }

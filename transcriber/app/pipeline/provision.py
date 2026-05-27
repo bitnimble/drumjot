@@ -47,6 +47,7 @@ degrade transcription quality.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from dataclasses import dataclass
@@ -225,6 +226,19 @@ _VOCALS_DEFAULT_URL = (
 # `_ensure_vocals_fp16` for the conversion details.
 _VOCALS_FP16_FILENAME = "UVR-MDX-NET-Voc_FT_fp16.onnx"
 
+# audio-separator looks up MDX-Net architecture parameters by the MD5 of
+# the model file's trailing ~10MB (see `Separator.get_model_hash`) in
+# `<models_dir>/mdx_model_data.json`. Our fp16 derivative has a different
+# MD5 than the fp32 source, so even after we register it in
+# `download_checks.json` it still needs its own entry here. We fetch
+# upstream's copy ourselves so the file is present before
+# `_register_vocals_fp16` reads it, mirroring how `_ensure_registry`
+# eagerly stages `download_checks.json`.
+_MDX_MODEL_DATA_URL = (
+    "https://raw.githubusercontent.com/TRvlvr/application_data/"
+    "main/mdx_model_data/model_data_new.json"
+)
+
 # whisperx's English aligner is torchaudio's WAV2VEC2_ASR_BASE_960H
 # bundle, which torch.hub fetches into `$TORCH_HOME/hub/checkpoints/`.
 # Pre-stage it at the exact filename torch.hub computes from the URL so
@@ -242,10 +256,12 @@ def _ensure_vocals_fp16(fp32_path: Path, fp16_path: Path) -> None:
 
     Idempotent: skips when `fp16_path` already exists at non-zero size,
     so re-running provision on warm containers is free. Fails-soft: on
-    any conversion error, warns and leaves the runtime to fall back to
-    the fp32 model (audio-separator will try to load whatever filename
-    `settings.vocals_model` points at; the operator can manually flip
-    that to the fp32 filename if the fp16 path keeps failing).
+    any conversion error, warns and leaves the operator to fall back to
+    the fp32 model by setting `VOCALS_MODEL=UVR-MDX-NET-Voc_FT.onnx`
+    (audio-separator rejects unknown filenames outright, so the fp16
+    path needs `_register_vocals_fp16` to succeed; see that function
+    for the dual registry injection required to make the derived file
+    loadable).
 
     `keep_io_types=True` retains fp32 graph inputs and outputs so
     upstream (audio-separator's STFT path) and downstream (ISTFT,
@@ -279,14 +295,36 @@ def _ensure_vocals_fp16(fp32_path: Path, fp16_path: Path) -> None:
         )
         return
 
+    # Block the fp16-fragile ops in MDX-Net's STFT-magnitude path. With a
+    # bare `convert_float_to_float16(...)` the network produces all-zero
+    # vocal stems on at least some songs: ReduceL2 / Sqrt / Div on quiet
+    # spectral magnitudes underflow to fp16 zero, then InstanceNorm /
+    # GroupNorm of zero variance cascades zeros forward, and iSTFT of a
+    # zero spectrum is silence. Keeping these ops in fp32 (and inserting
+    # Casts at their boundaries) costs some of the throughput win
+    # vs pure fp16, but salvages numerical sanity on quiet vocals.
+    fp16_op_blocklist = [
+        "InstanceNormalization",
+        "LayerNormalization",
+        "GroupNormalization",
+        "Sqrt",
+        "Div",
+        "ReduceMean",
+        "ReduceL2",
+    ]
     log.info(
-        "provision: converting %s -> %s (graph-level fp16, keep_io_types=True)",
-        fp32_path.name, fp16_path.name,
+        "provision: converting %s -> %s (graph-level fp16, "
+        "keep_io_types=True, op_block_list=%s)",
+        fp32_path.name, fp16_path.name, fp16_op_blocklist,
     )
     tmp = fp16_path.with_name(fp16_path.name + ".part")
     try:
         model = onnx.load(str(fp32_path))
-        model_fp16 = convert_float_to_float16(model, keep_io_types=True)
+        model_fp16 = convert_float_to_float16(
+            model,
+            keep_io_types=True,
+            op_block_list=fp16_op_blocklist,
+        )
         onnx.save(model_fp16, str(tmp))
         tmp.replace(fp16_path)
     except Exception as exc:
@@ -301,6 +339,132 @@ def _ensure_vocals_fp16(fp32_path: Path, fp16_path: Path) -> None:
         "provision: wrote %s (%d bytes)",
         fp16_path.name, fp16_path.stat().st_size,
     )
+
+
+def _audio_separator_hash(path: Path) -> str:
+    """Compute the MD5 hash audio-separator uses to key `mdx_model_data.json`.
+
+    Mirrors `audio_separator.separator.Separator.get_model_hash`: MD5 of
+    the trailing 10,240,000 bytes (or the whole file when smaller). Must
+    match exactly, otherwise our injected `mdx_model_data.json` entry
+    won't be found when audio-separator hashes the same file at load time.
+    """
+    bytes_to_hash = 10_000 * 1024
+    size = path.stat().st_size
+    md5 = hashlib.md5()
+    with open(path, "rb") as fh:
+        if size > bytes_to_hash:
+            fh.seek(size - bytes_to_hash)
+        while True:
+            chunk = fh.read(1 << 20)
+            if not chunk:
+                break
+            md5.update(chunk)
+    return md5.hexdigest()
+
+
+def _register_vocals_fp16(
+    models_dir: Path, fp32_path: Path, fp16_path: Path
+) -> None:
+    """Make audio-separator recognize the derived fp16 vocals model.
+
+    audio-separator's `load_model` gates on two on-disk registries:
+
+      1. `download_checks.json::mdx_download_list` -- a
+         `friendly_name -> filename` map; `download_model_files` rejects
+         any `model_filename` not present here with "not found in
+         supported model files".
+      2. `mdx_model_data.json` -- a `md5_hash -> arch_params` map keyed
+         by the MD5 of the model file's trailing ~10MB
+         (`_audio_separator_hash`). Missing keys produce
+         "Unsupported Model File: parameters for MD5 hash ...".
+
+    Upstream knows only about the fp32 file. The fp16 derivative this
+    module creates at startup is unknown on both axes (different
+    filename, different MD5), so without injection
+    `load_model(model_filename=<fp16>)` blows up. The fp16 graph
+    conversion preserves topology (only weights move to fp16; IO stays
+    fp32 via `keep_io_types=True`), so cloning the fp32 arch entry under
+    the fp16 hash is a faithful pointer to the same MDX-Net params.
+
+    Idempotent: rerunning with both entries already present is a no-op.
+    Fails soft: missing upstream entries (registry shape drift, network
+    failure on the lazy `mdx_model_data.json` fetch) log and skip
+    registration, leaving the operator to switch
+    `VOCALS_MODEL=UVR-MDX-NET-Voc_FT.onnx`.
+    """
+    if not fp16_path.exists() or fp16_path.stat().st_size == 0:
+        return
+
+    checks_path = models_dir / "download_checks.json"
+    mdx_data_path = models_dir / "mdx_model_data.json"
+
+    try:
+        _download(_MDX_MODEL_DATA_URL, mdx_data_path)
+    except Exception as exc:
+        log.warning(
+            "provision: could not fetch mdx_model_data.json (%s); "
+            "skipping fp16 vocals registration.",
+            exc,
+        )
+        return
+
+    try:
+        checks = json.loads(checks_path.read_text(encoding="utf-8"))
+        mdx_data = json.loads(mdx_data_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        log.warning(
+            "provision: cannot read registry files (%s); skipping fp16 "
+            "vocals registration.",
+            exc,
+        )
+        return
+
+    mdx_list = checks.get("mdx_download_list", {})
+    fp32_friendly = next(
+        (k for k, v in mdx_list.items() if v == _VOCALS_FP32_FILENAME),
+        None,
+    )
+    if fp32_friendly is None:
+        log.warning(
+            "provision: %s not in upstream mdx_download_list; skipping "
+            "fp16 vocals registration.",
+            _VOCALS_FP32_FILENAME,
+        )
+        return
+
+    fp32_hash = _audio_separator_hash(fp32_path)
+    fp32_entry = mdx_data.get(fp32_hash)
+    if fp32_entry is None:
+        log.warning(
+            "provision: fp32 vocals MD5 %s missing from mdx_model_data.json; "
+            "skipping fp16 vocals registration.",
+            fp32_hash,
+        )
+        return
+
+    fp16_hash = _audio_separator_hash(fp16_path)
+    fp16_friendly = f"{fp32_friendly} (fp16, drumjot-derived)"
+
+    if checks.setdefault("mdx_download_list", {}).get(fp16_friendly) != _VOCALS_FP16_FILENAME:
+        checks["mdx_download_list"][fp16_friendly] = _VOCALS_FP16_FILENAME
+        tmp = checks_path.with_name(checks_path.name + ".part")
+        tmp.write_text(json.dumps(checks, indent=1), encoding="utf-8")
+        tmp.replace(checks_path)
+        log.info(
+            "provision: injected %r -> %s into mdx_download_list",
+            fp16_friendly, _VOCALS_FP16_FILENAME,
+        )
+
+    if mdx_data.get(fp16_hash) != fp32_entry:
+        mdx_data[fp16_hash] = fp32_entry
+        tmp = mdx_data_path.with_name(mdx_data_path.name + ".part")
+        tmp.write_text(json.dumps(mdx_data, indent=1), encoding="utf-8")
+        tmp.replace(mdx_data_path)
+        log.info(
+            "provision: injected fp16 vocals arch params under MD5 %s",
+            fp16_hash,
+        )
 
 
 def _provision_lyrics_assets(models_dir: Path) -> None:
@@ -346,7 +510,9 @@ def _provision_lyrics_assets(models_dir: Path) -> None:
                 exc,
             )
         if fp32_ok and configured == _VOCALS_FP16_FILENAME:
-            _ensure_vocals_fp16(fp32_path, models_dir / _VOCALS_FP16_FILENAME)
+            fp16_path = models_dir / _VOCALS_FP16_FILENAME
+            _ensure_vocals_fp16(fp32_path, fp16_path)
+            _register_vocals_fp16(models_dir, fp32_path, fp16_path)
     else:
         log.info(
             "provision: vocals_model=%s differs from defaults; skipping "

@@ -1,5 +1,7 @@
 import {
   Bar,
+  BarTempoSource,
+  BpmTransition,
   Element,
   Group,
   Jot,
@@ -15,6 +17,7 @@ import {
 } from 'src/dsl';
 import { Cursor } from './cursor';
 import { ParseError } from './errors';
+import { hoistTempoEvents } from './hoist_tempo';
 import { parseMetadata } from './metadata';
 import { preprocessMacros } from './preprocess';
 
@@ -24,11 +27,18 @@ import { preprocessMacros } from './preprocess';
  * Steps:
  *   1. Macro preprocessing (textual `[$name=...]` / `[$name]` substitution).
  *   2. Recursive-descent parse of the resulting text into a Jot.
+ *   3. Hoist every `bpm` declaration (global, bar-opening, mid-bar, group,
+ *      note) into `jot.tempoEvents`; strip `bpm` from element/bar
+ *      metadata. After this step `jot.tempoEvents` is the single
+ *      runtime source of truth for tempo and no `metadata.bpm` survives
+ *      anywhere except `jot.globalMetadata.bpm` (the initial tempo).
  */
 export function parse(src: string): Jot {
   const { text } = preprocessMacros(src);
   const cursor = new Cursor(text);
-  return parseJot(cursor);
+  const jot = parseJot(cursor);
+  hoistTempoEvents(jot);
+  return jot;
 }
 
 // ---------- Top-level: voices, bars, patterns, global metadata ----------
@@ -48,7 +58,15 @@ type BarMeta = Pick<Metadata, 'time' | 'bpm'>;
 type Item =
   | { kind: 'el'; el: Element }
   | { kind: 'bar'; activeMeta: BarMeta; pos: number }
-  | { kind: 'voice' };
+  | { kind: 'voice' }
+  /**
+   * A mid-track `{{bpm: X}}`. `buildVoice` attaches each marker to the
+   * next element pushed into the current bar (its index in
+   * `bar.elements`). Markers seen before the first `|` (anacrusis
+   * section) are dropped; the global / bar-opening tempo path already
+   * carries those via `globalMetadata.bpm` and the `barActive` snapshot.
+   */
+  | { kind: 'tempoMarker'; bpm: number | BpmTransition };
 
 function parseJot(c: Cursor): Jot {
   let globalMetadata: Metadata = {};
@@ -68,7 +86,13 @@ function parseJot(c: Cursor): Jot {
       const meta = parseMetadata(c, true);
       globalMetadata = { ...globalMetadata, ...meta };
       if (meta.time !== undefined) barActive = { ...barActive, time: meta.time };
-      if (meta.bpm !== undefined) barActive = { ...barActive, bpm: meta.bpm };
+      if (meta.bpm !== undefined) {
+        barActive = { ...barActive, bpm: meta.bpm };
+        // Emit a marker so a `{{bpm}}` between elements in the same bar
+        // anchors at the next element's onset. Markers before the first
+        // `|` are silently dropped by `buildVoice`.
+        items.push({ kind: 'tempoMarker', bpm: meta.bpm });
+      }
       continue;
     }
     if (c.match('||')) {
@@ -136,21 +160,33 @@ function buildVoice(
   // the first `|` is seen; the linter degrades gracefully when this is
   // absent (e.g. inline jots with no bar separator at all).
   let barOpeningPos: number | null = null;
-  // Source range for the voice as a whole — set lazily when we see the
+  // Source range for the voice as a whole; set lazily when we see the
   // first item, extended as we go.
   let voiceStart: number | null = null;
   let voiceEnd = 0;
+  // Mid-bar `{{bpm}}` markers issued since the last element was pushed,
+  // waiting for the next element to anchor against. They survive `|`
+  // boundaries (a marker between bars attaches to the first element of
+  // the next bar at beat 0); they're dropped at the start of the voice
+  // (before the first `|`) since the anacrusis isn't part of the
+  // bar-indexed tempo timeline.
+  let pendingTempoMarkers: Array<number | BpmTransition> = [];
+  // BarTempoSources accumulated for the bar currently being assembled
+  // in `current`. Flushed onto the bar at `commit`, then reset.
+  let barTempoSources: BarTempoSource[] = [];
 
   const commit = (
     els: Element[],
     meta: BarMeta,
     start: number | null,
-    end: number
+    end: number,
+    sources: BarTempoSource[]
   ) => {
     if (els.length === 0) return;
     const bar: Bar = { elements: els };
     if (hasAnyMeta(meta)) bar.metadata = meta as Metadata;
     if (start !== null) bar.range = { start, end };
+    if (sources.length > 0) bar.tempoSources = sources;
     bars.push(bar);
   };
 
@@ -161,20 +197,35 @@ function buildVoice(
       if (!seenBarSep) {
         if (current.length > 0) anacrusis = current;
         current = [];
+        // Tempo markers before the first `|` are dropped; they live in
+        // the anacrusis section, which the bar-indexed tempo timeline
+        // doesn't represent. `globalMetadata.bpm` + the `barActive`
+        // snapshot still carry their effect to bar 0 via the closing `|`.
+        pendingTempoMarkers = [];
+        barTempoSources = [];
         seenBarSep = true;
       } else {
-        // Skip empty bars: consecutive `|`s separated only by whitespace or
-        // metadata blocks act as a single separator, not an empty bar.
-        commit(current, barOpeningMeta, barOpeningPos, it.pos);
+        commit(current, barOpeningMeta, barOpeningPos, it.pos, barTempoSources);
         current = [];
+        barTempoSources = [];
       }
       barOpeningMeta = it.activeMeta;
       barOpeningPos = it.pos;
+    } else if (it.kind === 'tempoMarker') {
+      // Markers before the first `|` are dropped (anacrusis section).
+      if (seenBarSep) pendingTempoMarkers.push(it.bpm);
     } else {
       const range = elementRange(it.el);
       if (range) {
         if (voiceStart === null) voiceStart = range.start;
         voiceEnd = Math.max(voiceEnd, range.end);
+      }
+      if (seenBarSep && pendingTempoMarkers.length > 0) {
+        const elementIndex = current.length;
+        for (const bpm of pendingTempoMarkers) {
+          barTempoSources.push({ elementIndex, bpm });
+        }
+        pendingTempoMarkers = [];
       }
       current.push(it.el);
     }
@@ -182,7 +233,7 @@ function buildVoice(
   if (current.length > 0) {
     // Either trailing content after the last '|' (a final bar) or content
     // with no '|' anywhere (treat as a single bar for usability).
-    commit(current, barOpeningMeta, barOpeningPos, srcLength);
+    commit(current, barOpeningMeta, barOpeningPos, srcLength, barTempoSources);
   }
 
   const voice: Voice = { bars };

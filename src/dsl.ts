@@ -55,8 +55,38 @@ export type Instrument = {
 };
 
 /**
+ * Sticky tempo change anchored to a precise (bar, beat) position within
+ * voice 0's bar timeline. The single source of truth for tempo at
+ * runtime; readers walk `Jot.tempoEvents` forward and the tempo at any
+ * (bar, beat) is the most recent event at or before that position,
+ * falling back to `globalMetadata.bpm` (else 120) for the pre-first-event
+ * span.
+ *
+ * Anchored by array index into `voices[0].bars[]` (NOT the renderer's
+ * 1-based `index` field) so the position survives lead-in synthesis,
+ * anacrusis insertion, and drum-offset shifts. Tempo is jot-global (a
+ * single MIDI tempo track on output), so anchoring against voice 0 is
+ * sufficient; additional voices share the same bar grid.
+ */
+export type TempoEvent = {
+  /** 0-based index into voices[0].bars. */
+  barIndex: number;
+  /** Beat-within-bar offset of the anchor (quarter notes from bar start). 0 = downbeat. */
+  beat: number;
+  bpm: number | BpmTransition;
+};
+
+/**
  * Metadata as it appears in `{ ... }` or `{{ ... }}`. Per-note > per-group >
  * global > instrumentMapping precedence is the consumer's responsibility.
+ *
+ * NOTE: `bpm` on `globalMetadata` is the song's initial tempo (the value
+ * in force before any `tempoEvents` fire). `bpm` is NOT honoured on
+ * per-bar, per-group, or per-note metadata at runtime; the parser
+ * hoists every such occurrence into `Jot.tempoEvents` and strips it from
+ * the element/bar metadata. Producers other than the parser (from_midi,
+ * rlrr_to_jot, hand-authored fakes) should populate `Jot.tempoEvents`
+ * directly and leave `bpm` off element/bar metadata.
  */
 export type Metadata = {
   bpm?: number | BpmTransition;
@@ -222,6 +252,20 @@ export type Element = Note | Rest | Simultaneity | Group | PatternRef;
 // ---------- Bars, voices, patterns, jot ----------
 
 /**
+ * Mid-bar tempo marker anchored at an element index within a bar's
+ * (post-parse, pre-expansion) element list. Emitted by the parser when
+ * `{{bpm}}` appears between elements; consumed and stripped by the
+ * tempo-hoist pass which turns it into a {@link TempoEvent} with the
+ * anchor element's beat-within-bar position. Should not be present on a
+ * parsed jot after `parse()` returns.
+ */
+export type BarTempoSource = {
+  /** 0-based index into the bar's `elements` (the anchor element). */
+  elementIndex: number;
+  bpm: number | BpmTransition;
+};
+
+/**
  * One bar's worth of elements (between two `|`). The sum of element weights
  * must equal the current time signature's bar length (rendering enforces).
  */
@@ -231,6 +275,11 @@ export type Bar = {
   metadata?: Metadata;
   /** Source range covering the bar's content (`|` to `|`). */
   range?: SourceRange;
+  /**
+   * Transient parser output: mid-bar `{{bpm}}` markers anchored by
+   * element index. Hoisted into `Jot.tempoEvents` and stripped post-parse.
+   */
+  tempoSources?: BarTempoSource[];
 };
 
 /**
@@ -267,6 +316,14 @@ export type Jot = {
   patterns?: Record<string, Pattern>;
   /** Voices laid out in parallel via `||`. A single-voice jot has length 1. */
   voices: Voice[];
+  /**
+   * Sticky tempo changes (mid-bar OK) sorted by (barIndex, beat). The
+   * sole runtime source of truth for tempo; consumers walk this list
+   * forward to compute the active bpm at any position. See
+   * {@link TempoEvent}. The pre-first-event span uses
+   * `globalMetadata.bpm` (else 120).
+   */
+  tempoEvents?: TempoEvent[];
 };
 
 // ---------- Convenience helpers ----------

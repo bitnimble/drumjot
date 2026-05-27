@@ -48,6 +48,61 @@ describe('jotToEvents timing', () => {
     expect(evs[1].time).toBeCloseTo(0.5, 6);
   });
 
+  it('honours a mid-bar bpm change at the next-element onset', () => {
+    // 8-slot 4/4 bar at 60 bpm: each slot is 0.5 beats = 0.5s at 60 bpm.
+    // {{bpm:120}} after the 4th element (slot index 4 is at beat 2.0,
+    // 2.0s into the bar) anchors at the next element (slot 5, beat 2.5).
+    // Until that anchor: 60 bpm. From that anchor: 120 bpm (0.25s/slot).
+    //   slot 0 (k) → 0.0s   (60 bpm region)
+    //   slot 1 (.) → 0.5s
+    //   slot 2 (s) → 1.0s
+    //   slot 3 (.) → 1.5s
+    //   slot 4 (k) → 2.0s   (last 60-bpm element)
+    //   slot 5 (.) → 2.5s   (anchor: tempo flips to 120 here)
+    //   slot 6 (s) → 2.75s  (120 bpm region: 0.25s/slot)
+    //   slot 7 (.) → 3.0s
+    const evs = events(
+      '{{ bpm: 60, time: "4/4", instrumentMapping: { k:{name:"Kick"}, s:{name:"Snare"} } }} ' +
+        '| k . s . k {{ bpm: 120 }} . s . |'
+    );
+    expect(evs.map((e) => e.time)).toEqual([
+      0.0,
+      expect.closeTo(1.0, 6) as unknown as number,
+      expect.closeTo(2.0, 6) as unknown as number,
+      expect.closeTo(2.75, 6) as unknown as number,
+    ]);
+  });
+
+  it('honours a {bpm} modifier on a note at that note onset', () => {
+    // Same shape as above but the change is attached directly to the
+    // post-change rest's beat via a note modifier instead of a
+    // freestanding marker.
+    const evs = events(
+      '{{ bpm: 60, time: "4/4", instrumentMapping: { k:{name:"Kick"}, s:{name:"Snare"} } }} ' +
+        '| k . s . k . s{bpm: 120} . |'
+    );
+    // The second snare is at slot 6 (beat 3.0). Before slot 6: tempo 60.
+    // From slot 6 onward: tempo 120.
+    //   slot 0 (k) → 0.0s
+    //   slot 2 (s) → 1.0s
+    //   slot 4 (k) → 2.0s
+    //   slot 6 (s) → 3.0s (tempo flips to 120 here, but no later events)
+    expect(evs.map((e) => e.time)).toEqual([0.0, 1.0, 2.0, 3.0]);
+  });
+
+  it('buildTimeline reports a half-tempo bar duration when bpm doubles at the midpoint', () => {
+    // 4/4 bar at 60 bpm = 4.0s if uniform. With a tempo doubling halfway
+    // through (beat 2): first half = 2*1.0 = 2.0s, second half =
+    // 2*0.5 = 1.0s, total = 3.0s.
+    const jot = parse(
+      '{{ bpm: 60, time: "4/4", instrumentMapping: { k:{name:"Kick"}, s:{name:"Snare"} } }} ' +
+        '| k . s . {{ bpm: 120 }} k . s . |'
+    );
+    const rendered = new RenderedJot(jot);
+    const timeline = buildTimeline(rendered);
+    expect(timeline.bars[0].durationSec).toBeCloseTo(3.0, 6);
+  });
+
   it('anchors bar 1 at jot 0 when leadBars shifts bars[0] into the pre-drum window', () => {
     // Two empty lead-in bars then a kick on bar-1 downbeat at 120 BPM:
     // bar 1 (= voice.bars[2]) lives at jot 0, so the kick fires at t=0,

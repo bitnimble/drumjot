@@ -20,10 +20,12 @@
  */
 
 import {
+  BpmTransition,
   Element,
   Jot,
   Metadata,
   PatternSubstitution,
+  TempoEvent,
   TimeSignature,
   Voice,
 } from 'src/dsl';
@@ -48,19 +50,31 @@ export function formatJot(jot: Jot): string {
     lines.push(`[${pattern.name}=${formatSequence(pattern.elements)}]`);
   }
 
-  // The parser snapshots the active `time`/`bpm` onto every bar, so a bar's
+  // The parser snapshots the active `time` onto every bar, so a bar's
   // metadata only deserves its own `{{...}}` line when it *changes* the
-  // value already in effect. `time`/`bpm` propagate textually across the
+  // value already in effect. `time` propagates textually across the
   // whole document (including past `||`), so this state is voice-spanning.
+  // `bpm` follows the same propagation rule but comes from
+  // `jot.tempoEvents` (the post-parse SoT) rather than per-bar metadata.
   const active: { time?: unknown; bpm?: unknown } = {
     time: jot.globalMetadata.time,
     bpm: jot.globalMetadata.bpm,
   };
 
+  // Tempo events live at the Jot level and feed only into voice 0's
+  // output (tempo is global; voices 1+ would emit duplicates).
+  const eventsByBar = new Map<number, TempoEvent[]>();
+  for (const ev of jot.tempoEvents ?? []) {
+    const arr = eventsByBar.get(ev.barIndex) ?? [];
+    arr.push(ev);
+    eventsByBar.set(ev.barIndex, arr);
+  }
+  for (const arr of eventsByBar.values()) arr.sort((a, b) => a.beat - b.beat);
+
   // Voices, separated by `||` on its own line.
   jot.voices.forEach((voice, i) => {
     if (i > 0) lines.push('||');
-    lines.push(...formatVoice(voice, active));
+    lines.push(...formatVoice(voice, active, i === 0 ? eventsByBar : undefined));
   });
 
   return lines.join('\n') + '\n';
@@ -70,27 +84,79 @@ export function formatJot(jot: Jot): string {
 
 function formatVoice(
   voice: Voice,
-  active: { time?: unknown; bpm?: unknown }
+  active: { time?: unknown; bpm?: unknown },
+  eventsByBar: Map<number, TempoEvent[]> | undefined
 ): string[] {
   const lines: string[] = [];
   if (voice.anacrusis && voice.anacrusis.length > 0) {
     // Content before the first `|` is the anacrusis; emit it unwrapped.
     lines.push(formatSequence(voice.anacrusis));
   }
-  for (const b of voice.bars) {
+  for (let i = 0; i < voice.bars.length; i++) {
+    const b = voice.bars[i];
     const delta: Metadata = {};
     if (b.metadata?.time !== undefined && !sameValue(b.metadata.time, active.time)) {
       delta.time = b.metadata.time;
       active.time = b.metadata.time;
     }
-    if (b.metadata?.bpm !== undefined && !sameValue(b.metadata.bpm, active.bpm)) {
-      delta.bpm = b.metadata.bpm;
-      active.bpm = b.metadata.bpm;
+    const events = eventsByBar?.get(i) ?? [];
+    // Beat-0 tempo events render as `{{ bpm: X }}` on its own line,
+    // before the bar; same shape as the parser's bar-aligned input.
+    const downbeatEvent = events.find((e) => e.beat === 0);
+    if (downbeatEvent && !sameValue(downbeatEvent.bpm, active.bpm)) {
+      delta.bpm = downbeatEvent.bpm;
+      active.bpm = downbeatEvent.bpm;
     }
     if (hasMetaKeys(delta)) lines.push(formatMetadata(delta, true));
-    lines.push(`| ${formatSequence(b.elements)} |`);
+
+    // Mid-bar tempo events (`beat > 0`) splice `{{ bpm: X }}` between
+    // elements at the matching beat position. The parser re-anchors
+    // these to the next element on re-parse, so a marker emitted before
+    // element k re-hoists to `elementBeats[k]`.
+    const midBarEvents = events.filter((e) => e.beat > 0);
+    if (midBarEvents.length === 0) {
+      lines.push(`| ${formatSequence(b.elements)} |`);
+    } else {
+      const time = (active.time ?? { count: 4, unit: 4 }) as TimeSignature;
+      const beats = (time.count * 4) / time.unit;
+      const elementBeats = computeElementBeats(b.elements, beats);
+      const tokens: string[] = [];
+      let evIdx = 0;
+      const emitEvent = (bpm: number | BpmTransition) => {
+        if (sameValue(bpm, active.bpm)) return;
+        tokens.push(formatMetadata({ bpm }, true));
+        active.bpm = bpm;
+      };
+      for (let k = 0; k < b.elements.length; k++) {
+        const beat = elementBeats[k];
+        while (evIdx < midBarEvents.length && midBarEvents[evIdx].beat <= beat) {
+          emitEvent(midBarEvents[evIdx].bpm);
+          evIdx++;
+        }
+        tokens.push(formatElement(b.elements[k]));
+      }
+      while (evIdx < midBarEvents.length) {
+        emitEvent(midBarEvents[evIdx].bpm);
+        evIdx++;
+      }
+      lines.push(`| ${tokens.join(' ')} |`);
+    }
   }
   return lines;
+}
+
+/** Onset beats (within bar) of each top-level element, accounting for
+ *  `_N` weights. Index-aligned with `els`. */
+function computeElementBeats(els: Element[], totalBeats: number): number[] {
+  const weights = els.map((e) => (e as { weight?: number }).weight ?? 1);
+  const totalWeight = weights.reduce((a, b) => a + b, 0) || 1;
+  const out: number[] = new Array(els.length);
+  let cursor = 0;
+  for (let i = 0; i < els.length; i++) {
+    out[i] = cursor;
+    cursor += (weights[i] / totalWeight) * totalBeats;
+  }
+  return out;
 }
 
 /** Structural equality, enough for `time`/`bpm` (scalars or small objects). */

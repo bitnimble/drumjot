@@ -273,6 +273,103 @@ describe('MIDI <-> Jot synthetic baseline', () => {
     expect(jot.voices[0].bars[1].elements).toHaveLength(36);
   });
 
+  it('lifts a mid-bar setTempo into jot.tempoEvents at the snapped (bar, beat)', () => {
+    // Build a 4/4 bar of 8 eighth notes at 120 bpm, then splice a
+    // setTempo event in at tick = ticksPerBeat * 2 (= beat 2.0, the 5th
+    // slot's onset). After fromMidi: globalMetadata.bpm = 120; tempoEvents
+    // carries one entry at (barIndex: 0, beat: 2.0, bpm: 60).
+    const tpq = 480;
+    const baseBytes = buildMidi({
+      ticksPerBeat: tpq,
+      bpm: 120,
+      notes: [
+        { tick: 0, note: 36, velocity: 100 },
+        { tick: tpq / 2, note: 38, velocity: 100 },
+        { tick: tpq, note: 36, velocity: 100 },
+        { tick: (tpq * 3) / 2, note: 38, velocity: 100 },
+        { tick: tpq * 2, note: 36, velocity: 100 },
+        { tick: tpq * 2 + tpq / 2, note: 38, velocity: 100 },
+        { tick: tpq * 3, note: 36, velocity: 100 },
+        { tick: tpq * 3 + tpq / 2, note: 38, velocity: 100 },
+      ],
+    });
+    // Splice a setTempo (60 bpm = 1_000_000 µs/qn) at tick tpq*2.
+    const parsed = parseMidi(baseBytes);
+    const track = parsed.tracks[0];
+    let cursor = 0;
+    for (let i = 0; i < track.length; i++) {
+      cursor += track[i].deltaTime;
+      if (cursor >= tpq * 2 && track[i].type === 'noteOn') {
+        const dt = track[i].deltaTime;
+        const tempoEvent: MidiEvent = {
+          deltaTime: dt,
+          meta: true,
+          type: 'setTempo',
+          microsecondsPerBeat: 1_000_000,
+        };
+        track.splice(i, 0, tempoEvent);
+        track[i + 1].deltaTime = 0;
+        break;
+      }
+    }
+    const spliced = new Uint8Array(writeMidi(parsed));
+    const jot = fromMidi(spliced);
+    expect(jot.globalMetadata.bpm).toBe(120);
+    expect(jot.tempoEvents).toEqual([
+      { barIndex: 0, beat: 2, bpm: 60 },
+    ]);
+  });
+
+  it('round-trips mid-bar tempoEvents as setTempo at the precise tick', () => {
+    // 4/4 bar with a tempo change at beat 2.0. After toMidi the setTempo
+    // sits at exactly that tick (= 2 * TICKS_PER_BEAT = 960).
+    const tpq = 480;
+    const baseBytes = buildMidi({
+      ticksPerBeat: tpq,
+      bpm: 120,
+      notes: [
+        { tick: 0, note: 36, velocity: 100 },
+        { tick: tpq * 2, note: 36, velocity: 100 },
+      ],
+    });
+    const parsed = parseMidi(baseBytes);
+    const track = parsed.tracks[0];
+    let cursor = 0;
+    for (let i = 0; i < track.length; i++) {
+      cursor += track[i].deltaTime;
+      if (cursor >= tpq * 2 && track[i].type === 'noteOn') {
+        const dt = track[i].deltaTime;
+        const tempoEvent: MidiEvent = {
+          deltaTime: dt,
+          meta: true,
+          type: 'setTempo',
+          microsecondsPerBeat: 1_000_000,
+        };
+        track.splice(i, 0, tempoEvent);
+        track[i + 1].deltaTime = 0;
+        break;
+      }
+    }
+    const spliced = new Uint8Array(writeMidi(parsed));
+    const jot = fromMidi(spliced);
+    const out = parseMidi(toMidi(jot));
+    // Walk the output track, summing deltaTimes, and assert a setTempo
+    // (microsecondsPerBeat=1_000_000) fires at tick 2 * TICKS_PER_BEAT = 960.
+    let t = 0;
+    let foundTick = -1;
+    for (const ev of out.tracks[0]) {
+      t += ev.deltaTime;
+      if (
+        ev.type === 'setTempo' &&
+        ev.microsecondsPerBeat === 1_000_000
+      ) {
+        foundTick = t;
+        break;
+      }
+    }
+    expect(foundTick).toBe(2 * 480);
+  });
+
   it('counts the leading rest run as leadBars and stamps drumsT0Sec', () => {
     // Two empty 4/4 bars at 120 bpm (1.0s/beat / 2.0s/bar) followed by a
     // kick on bar-3 downbeat: leadBars=2, drumsT0Sec=4.0s exactly.

@@ -46,7 +46,9 @@ import {
   AudioTrackPlaybackController,
   AudioTrack,
   AudioTrackRole,
+  preloadStretch,
 } from './audio_tracks';
+import { stretchInitFailure } from './stretch_node';
 import { buildTimeline, EMPTY_TIMELINE, JotTimeline } from './timeline';
 import { waveformWorker } from './waveform_worker_client';
 
@@ -179,11 +181,6 @@ const SCHEDULE_LEAD_SECONDS = 0.05;
 // Buffer added to the last event's time before flipping back to `idle`, so
 // late-decaying samples (cymbals, open hats) aren't cut off visually.
 const PLAYBACK_TAIL_SECONDS = 1.0;
-// How often the rAF loop re-locks the audio-track media elements to the
-// AudioContext clock. Sub-second so audible slip never accumulates,
-// but far coarser than the frame rate — drift correction is a slow
-// control loop, not a per-frame job.
-const DRIFT_CHECK_INTERVAL_SECONDS = 0.5;
 // If the SoundFont can't be fetched within this window we give up so the
 // UI doesn't sit on "Loading…" forever — a typical local network failure
 // mode that's otherwise invisible. Generous because it's a ~30 MB
@@ -199,11 +196,68 @@ const LOAD_TIMEOUT_SECONDS = 120;
 // unchanged.
 const POST_LOAD_SETTLE_SECONDS = 0.2;
 
-// Per CLEANROOM_SPEC §7.4: allowed playback speeds. The transport-bar
-// dropdown picks from this list (see `PLAYBACK_SPEEDS` in
-// jot_view/playback.tsx); the player snaps any value reaching it
-// programmatically to the nearest in-spec speed.
-const SUPPORTED_PLAYBACK_SPEEDS: readonly number[] = [0.25, 0.5, 0.75, 1.0, 1.25];
+// Playback speed bounds + step. The toolbar exposes a numeric stepper
+// that nudges the value by `PLAYBACK_SPEED_STEP` at a time; the player
+// clamps and quantizes anything reaching it (tests, keyboard shortcuts,
+// direct programmatic calls) so the contract is consistent across
+// entry points. Quarter-speed feels are the practice grid musicians
+// already think in, so the step is `0.25`.
+export const PLAYBACK_SPEED_MIN = 0.25;
+export const PLAYBACK_SPEED_MAX = 2.0;
+export const PLAYBACK_SPEED_STEP = 0.25;
+
+// `audioLatencyMs` bounds. Narrow enough that a stray keypress cannot
+// park the playhead seconds away from the audio.
+const AUDIO_LATENCY_MAX_MS = 500;
+// localStorage key for the user's manual `audioLatencyMs` value, so
+// the fine-tune survives reloads.
+const AUDIO_LATENCY_STORAGE_KEY = 'drumjot:audioLatencyMs';
+// Visual presentation latency, in frames, between an rAF callback and
+// the screen actually showing what was drawn. A heuristic: a typical
+// browser pipeline (rAF -> compositor -> GPU -> display) sits in the
+// 1..2 frame range; 1.5 is the conventional midpoint. The unmeasurable
+// pieces (monitor input lag, GPU queue depth) are absorbed into the
+// user's manual fine-tune.
+const VISUAL_LATENCY_FRAMES = 1.5;
+// Wall-clock duration over which to sample rAF intervals when
+// estimating the display refresh period. Fixed in time (not in frame
+// count) so the measurement doesn't drag on high refresh rates:
+// 200 ms => ~12 frames at 60 Hz, ~33 frames at 165 Hz, both plenty
+// for a robust median.
+const FRAME_MEASURE_DURATION_MS = 200;
+
+function clampAudioLatencyMs(ms: number): number {
+  if (!Number.isFinite(ms)) return 0;
+  return Math.max(-AUDIO_LATENCY_MAX_MS, Math.min(AUDIO_LATENCY_MAX_MS, ms));
+}
+
+/**
+ * Resolve with the median rAF interval (ms) sampled over
+ * `durationMs` of wall-clock time. Used by the internal-latency
+ * estimate to derive an approximate frame rate, from which visual
+ * presentation latency is extrapolated (see `VISUAL_LATENCY_FRAMES`).
+ * Falls back to a 60 Hz assumption in non-browser test environments.
+ */
+async function measureFrameIntervalMs(durationMs: number): Promise<number> {
+  if (typeof window === 'undefined') return 1000 / 60;
+  return new Promise((resolve) => {
+    const intervals: number[] = [];
+    let prev: number | undefined;
+    let start: number | undefined;
+    const tick = (t: number) => {
+      if (start === undefined) start = t;
+      if (prev !== undefined) intervals.push(t - prev);
+      prev = t;
+      if (t - start < durationMs) {
+        window.requestAnimationFrame(tick);
+      } else {
+        intervals.sort((a, b) => a - b);
+        resolve(intervals[Math.floor(intervals.length / 2)] ?? 1000 / 60);
+      }
+    };
+    window.requestAnimationFrame(tick);
+  });
+}
 
 type Drums = ReturnType<typeof GeneralUserGsKit>;
 type StopFn = (time?: number) => void;
@@ -263,8 +317,34 @@ export class JotPlayer {
   playbackSpeed: number = 1;
 
   /**
-   * Page-wide master fader (0..1). Scales *everything* — drums and audio
-   * tracks alike — because its GainNode is the last stage before
+   * User-controlled fine-tune of the visual-vs-audio sync, in
+   * milliseconds. Conceptually a delay applied to the audio engine:
+   * positive values shift the visual playhead ahead of the audio
+   * clock (audio appears delayed); negative values do the opposite.
+   * Surfaced as the "Audio latency" stepper in the Playback menu and
+   * persisted to localStorage so the user's manual tune survives
+   * reloads. Default 0 (no fine-tune); the auto-detected baseline
+   * lives separately on `internalLatencyMs` and is added underneath.
+   */
+  audioLatencyMs: number = 0;
+  /**
+   * Auto-detected baseline shift, derived once per session on first
+   * play from `AudioContext.{baseLatency, outputLatency}` and the
+   * measured rAF frame interval. Added to `audioLatencyMs` to form
+   * the total shift applied in the rAF tick. Not surfaced in any UI;
+   * the user only ever sees / edits their own fine-tune.
+   */
+  private internalLatencyMs: number = 0;
+  /**
+   * True once `estimateInternalLatency` has been kicked off for this
+   * session. Latching prevents the kick-off from firing on every
+   * play; `outputLatency` is a device property and doesn't change
+   * after the AudioContext starts running.
+   */
+  private internalLatencyEstimated: boolean = false;
+  /**
+   * Page-wide master fader (0..1). Scales *everything*; drums and audio
+   * tracks alike; because its GainNode is the last stage before
    * `ctx.destination`. Observable so the slider reflects the live value.
    */
   masterVolume: number = DEFAULT_MASTER_VOLUME;
@@ -337,7 +417,14 @@ export class JotPlayer {
    */
   private pageGain: GainNode | undefined;
   private audioBusGain: GainNode | undefined;
-  private audioTrackController: AudioTrackPlaybackController | undefined;
+  /**
+   * Live per-play audio-track playback state (worklet slots + applied
+   * per-track gains). Recreated on every `play()`, disposed on `stop()`.
+   * Exposed so a non-React renderer can read the controller's
+   * `appliedGains` observable to know exactly what's audible right now
+   * without poking the audio graph. Undefined while idle.
+   */
+  audioTrackController: AudioTrackPlaybackController | undefined;
   /** Last mute/solo/volume filter pushed by the store. Observable so an
    * alt renderer can read what filter the audio is actually running under
    * without having to re-derive it. */
@@ -360,13 +447,16 @@ export class JotPlayer {
   drumsT0Sec: number = 0;
   /**
    * AudioContext time of the playback anchor (updated at `play()` and
-   * whenever `setPlaybackSpeed` re-anchors mid-flight) — `currentJotTime`
+   * whenever `setPlaybackSpeed` re-anchors mid-flight); `currentJotTime`
    * is computed from this plus the elapsed real time times speed.
+   * Public so a non-React renderer can map jot-time ↔ audio-time
+   * without going through the rAF tick (`audioTime = startContextTime +
+   * (jotTime - startJotTime) / playbackSpeed`).
    */
-  private startContextTime: number = 0;
+  startContextTime: number = 0;
   /** Jot-time value at `startContextTime`; non-zero after a mid-flight
    * speed change so the playhead doesn't snap back to 0. */
-  private startJotTime: number = 0;
+  startJotTime: number = 0;
   private endTimerId: number | undefined;
   /**
    * AudioContext time of the last scheduled note's start. Retained so
@@ -384,12 +474,6 @@ export class JotPlayer {
   private lastScheduledDrumTime: number = 0;
   private rafId: number | undefined;
   /**
-   * AudioContext time of the last drift check, so the rAF loop can
-   * throttle {@link AudioTrackPlaybackController.correctDrift} to
-   * {@link DRIFT_CHECK_INTERVAL_SECONDS} instead of running it every frame.
-   */
-  private lastDriftCheckTime: number = 0;
-  /**
    * Per-note stop callbacks returned by `drums.start()`. `drums.stop()`
    * on its own only halts notes that have already begun sounding — notes
    * scheduled for future audio-context times keep firing until they
@@ -400,9 +484,12 @@ export class JotPlayer {
   /**
    * The full event list for the currently-playing jot, retained so that
    * `setFilter` can re-derive the scheduled subset on a mute/solo
-   * toggle without having to re-walk the layout.
+   * toggle without having to re-walk the layout. Public + observable so
+   * a non-React renderer can read "all scheduled notes for this jot"
+   * and combine with the observable {@link currentTime} to know which
+   * are upcoming. Empty while idle.
    */
-  private events: PlaybackEvent[] = [];
+  events: PlaybackEvent[] = [];
   /** Last pitch-side mute/solo/volume filter pushed by the store.
    * Same alt-renderer rationale as {@link currentAudioTrackFilter}. */
   currentFilter: PlayerFilter = PASSTHROUGH_FILTER;
@@ -415,6 +502,7 @@ export class JotPlayer {
 
   constructor() {
     makeAutoObservable(this);
+    this.hydrateAudioLatencyFromStorage();
   }
 
   /**
@@ -492,6 +580,77 @@ export class JotPlayer {
     this.applyDrumBusGain();
   }
 
+  /**
+   * Set the visual-vs-audio sync trim in milliseconds. Takes effect on
+   * the next rAF tick (so within ~8 ms on a 120 Hz vsync during
+   * playback, instantly when paused on the next state update). Clamped
+   * to a generous range so a stray keypress can't park the playhead
+   * seconds away from the audio.
+   */
+  setAudioLatencyMs(ms: number): void {
+    const clamped = clampAudioLatencyMs(ms);
+    runInAction(() => {
+      this.audioLatencyMs = clamped;
+    });
+    try {
+      window.localStorage.setItem(AUDIO_LATENCY_STORAGE_KEY, String(clamped));
+    } catch {
+      // localStorage may throw in private mode or with quota errors;
+      // don't crash on a user nudge.
+    }
+  }
+
+  /**
+   * Restore the user's manually-saved `audioLatencyMs` from
+   * localStorage if any. Runs once at construction; absence of the
+   * key just means "no saved fine-tune" and leaves the default 0.
+   */
+  private hydrateAudioLatencyFromStorage(): void {
+    try {
+      if (typeof window === 'undefined') return;
+      const stored = window.localStorage.getItem(AUDIO_LATENCY_STORAGE_KEY);
+      if (stored === null) return;
+      const n = parseFloat(stored);
+      if (!Number.isFinite(n)) return;
+      runInAction(() => {
+        this.audioLatencyMs = clampAudioLatencyMs(n);
+      });
+    } catch {
+      // localStorage unavailable (private mode etc.); silently skip.
+    }
+  }
+
+  /**
+   * Measure the device + browser audio/visual pipeline latency once
+   * per session and bake it into `internalLatencyMs`, which is added
+   * on top of the user's fine-tune in the rAF tick. Fired in the
+   * background from the first `play()` after the AudioContext has
+   * resumed (when `outputLatency` is meaningful). Best-effort: errors
+   * leave `internalLatencyMs` at 0, falling back to the user
+   * fine-tune alone.
+   */
+  private async estimateInternalLatency(): Promise<void> {
+    try {
+      if (typeof window === 'undefined') return;
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const frameMs = await measureFrameIntervalMs(FRAME_MEASURE_DURATION_MS);
+      const baseLatency = ctx.baseLatency ?? 0;
+      const outputLatency = ctx.outputLatency ?? 0;
+      const audioLagMs = (baseLatency + outputLatency) * 1000;
+      const visualLagMs = VISUAL_LATENCY_FRAMES * frameMs;
+      const computed = Math.round(visualLagMs - audioLagMs);
+      this.internalLatencyMs = clampAudioLatencyMs(computed);
+      console.log(
+        `[jotPlayer] internal audio latency baked in: ${this.internalLatencyMs}ms ` +
+          `(visualLag ~${visualLagMs.toFixed(1)}ms, audioLag ~${audioLagMs.toFixed(1)}ms, ` +
+          `frame ${frameMs.toFixed(2)}ms)`
+      );
+    } catch (err) {
+      console.warn('[jotPlayer] internal audio latency estimate failed:', err);
+    }
+  }
+
   /** Move the all-audio-tracks master fader. Same instant/persistent semantics. */
   setAudioTrackMasterVolume(v: number): void {
     const clamped = clampMasterVolume(v);
@@ -557,11 +716,14 @@ export class JotPlayer {
       const ctx = this.ensureAudioContext();
       // Start the soundfont download in the background now; it overlaps
       // with the file decode below and leaves the kit warm for the user's
-      // next `play()`. See `preloadDrums()`.
+      // next `play()`. See `preloadDrums()`. Warm up the audio-track
+      // stretch worklet in parallel so the first speed change doesn't
+      // wait on a fresh WASM/worklet install.
       this.preloadDrums();
-      const { buffer, objectUrl } = await decodeAudioTrackFile(ctx, file);
+      preloadStretch(ctx);
+      const { buffer, sourceBlob } = await decodeAudioTrackFile(ctx, file);
       const id = this.allocateAudioTrackId();
-      this.installAudioTrack(id, file.name, buffer, objectUrl, pitch, role);
+      this.installAudioTrack(id, file.name, buffer, sourceBlob, pitch, role);
       return id;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -584,12 +746,13 @@ export class JotPlayer {
     });
     try {
       const ctx = this.ensureAudioContext();
-      // See `loadAudioTrack`; overlap soundfont download with the
-      // network fetch + decode of this audio track.
+      // See `loadAudioTrack`; overlap soundfont download and stretch
+      // worklet load with the network fetch + decode of this track.
       this.preloadDrums();
-      const { buffer, objectUrl } = await decodeAudioTrackUrl(ctx, url);
+      preloadStretch(ctx);
+      const { buffer, sourceBlob } = await decodeAudioTrackUrl(ctx, url);
       const id = this.allocateAudioTrackId();
-      this.installAudioTrack(id, filename, buffer, objectUrl, pitch, role);
+      this.installAudioTrack(id, filename, buffer, sourceBlob, pitch, role);
       return id;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -608,11 +771,10 @@ export class JotPlayer {
     runInAction(() => {
       this.audioTracks.delete(id);
     });
-    // Tear down the removed track's element/node so it leaves no
-    // dangling media; the remaining tracks keep playing untouched
-    // (each owns its own element, so no reschedule is needed).
+    // Tear down the removed track's worklet/gain so it leaves no
+    // dangling nodes; remaining tracks keep playing untouched (each
+    // owns its own slot, so no reschedule is needed).
     this.audioTrackController?.dropAudioTrack(id);
-    URL.revokeObjectURL(prev.objectUrl);
     // Free the worker-side PCM copy too; otherwise the worker would
     // accumulate dead tracks across the session (the PCM there is a
     // separate copy from the AudioBuffer the player owns).
@@ -623,7 +785,7 @@ export class JotPlayer {
     id: AudioTrackId,
     filename: string,
     buffer: AudioBuffer,
-    objectUrl: string,
+    sourceBlob: Blob,
     pitch?: string,
     role?: AudioTrackRole,
   ): void {
@@ -632,7 +794,7 @@ export class JotPlayer {
       id,
       filename,
       buffer,
-      objectUrl,
+      sourceBlob,
       durationSec: buffer.duration,
       pitch,
       role,
@@ -662,13 +824,9 @@ export class JotPlayer {
         (sid) => audioTrackGainUnder(sid, this.currentAudioTrackFilter)
       );
     }
-    // The controller has now repointed its element at the new blob
-    // (ensureSlot rebuilds on a URL change), so the old one is safe to
-    // release. Replacing the same id with the same bytes can't happen
-    // (each decode mints a fresh URL), so the guard is just defensive.
-    if (prev && prev.objectUrl !== objectUrl) {
-      URL.revokeObjectURL(prev.objectUrl);
-    }
+    // No URL.revoke needed; the source bytes live on the track as a
+    // Blob now, so a replaced track is GC'd when nothing references it.
+    void prev;
   }
 
   /**
@@ -709,14 +867,11 @@ export class JotPlayer {
    * complex fill at half speed.
    */
   setPlaybackSpeed(speed: number): void {
-    // Per CLEANROOM_SPEC §7.4, allowed speeds are a fixed set; clamp
-    // anything reaching the player programmatically (tests, future
-    // shortcuts) to the nearest in-spec value rather than the broad
-    // [0.1, 2.0] range we used to accept.
-    const clamped = SUPPORTED_PLAYBACK_SPEEDS.reduce(
-      (best, s) => (Math.abs(s - speed) < Math.abs(best - speed) ? s : best),
-      SUPPORTED_PLAYBACK_SPEEDS[0]
-    );
+    // Quantize to the 0.25 step grid then clamp into [min, max]. Both
+    // belt and suspenders for entry points other than the stepper UI
+    // (keyboard, tests, future shortcuts), which can hand us anything.
+    const snapped = Math.round(speed / PLAYBACK_SPEED_STEP) * PLAYBACK_SPEED_STEP;
+    const clamped = Math.max(PLAYBACK_SPEED_MIN, Math.min(PLAYBACK_SPEED_MAX, snapped));
     if (this.state !== 'playing' || !this.ctx) {
       runInAction(() => {
         this.playbackSpeed = clamped;
@@ -842,7 +997,7 @@ export class JotPlayer {
    * the current `playbackSpeed` (and any prior speed-change anchor) into
    * account.
    */
-  private currentJotTime(audioTime: number): number {
+  currentJotTime(audioTime: number): number {
     return this.startJotTime + (audioTime - this.startContextTime) * this.playbackSpeed;
   }
 
@@ -938,6 +1093,17 @@ export class JotPlayer {
         await ctx.resume();
       }
 
+      // Measure the device + frame-rate latency once per session and
+      // bake it into `internalLatencyMs`. Fires once on first play
+      // (after resume, when `outputLatency` is meaningful) and is
+      // latched so subsequent plays skip the work. Runs in the
+      // background; the ~200 ms frame measurement does not block
+      // scheduling and the result self-applies in the next rAF tick.
+      if (!this.internalLatencyEstimated) {
+        this.internalLatencyEstimated = true;
+        void this.estimateInternalLatency();
+      }
+
       this.events = jotToEvents(rendered);
       if (this.events.length === 0) {
         throw new Error('No playable notes in this jot.');
@@ -987,6 +1153,16 @@ export class JotPlayer {
         drumsT0Sec,
         (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter)
       );
+      // The stretch worklet preloads on first audio-track load; if it
+      // failed (CSP, network, missing AudioWorklet API) the controller
+      // will silently fail per-track. Surface the failure once here so
+      // the user understands why their music track is silent.
+      const stretchErr = stretchInitFailure();
+      if (stretchErr && this.audioTracks.size > 0) {
+        runInAction(() => {
+          this.audioTrackError = `Audio-track playback unavailable: ${stretchErr.message}`;
+        });
+      }
 
       runInAction(() => {
         this.state = 'playing';
@@ -1082,7 +1258,6 @@ export class JotPlayer {
     // jot's offset (seeded by the store, live-tunable via setDrumsT0Sec),
     // so it must survive stop()/replay. The store re-seeds it when a
     // different jot is loaded.
-    this.lastDriftCheckTime = 0;
     this.pendingStartSec = undefined;
     runInAction(() => {
       if (this.state !== 'idle') this.state = 'idle';
@@ -1260,29 +1435,21 @@ export class JotPlayer {
       }
       const now = this.ctx.currentTime;
       const jotTime = this.currentJotTime(now);
-      // Re-lock the audio tracks to the AudioContext clock (the clock
-      // the drums are scheduled on) so a media element's independent
-      // clock can't slew the backing track away from the score over a
-      // long take. Only needed on the MediaElement (non-1.0×) path; // the BufferSource (1.0×) path already runs on the AudioContext
-      // clock and can't drift, so skip the work entirely there. The
-      // controller's `correctDrift` is also a no-op for BufferSource
-      // slots, but short-circuiting here saves the iteration cost
-      // every rAF when nothing could ever move.
-      if (
-        this.audioTrackController &&
-        this.playbackSpeed !== 1 &&
-        now - this.lastDriftCheckTime >= DRIFT_CHECK_INTERVAL_SECONDS
-      ) {
-        this.lastDriftCheckTime = now;
-        const expectedMediaSec = Math.max(0, jotTime + this.drumsT0Sec);
-        this.audioTrackController.correctDrift(expectedMediaSec, this.playbackSpeed);
-      }
+      // Audio tracks now play through the Signalsmith Stretch worklet,
+      // which consumes samples on the audio thread in lockstep with
+      // the AudioContext clock the drum scheduler uses; no drift
+      // subsystem needed at any speed.
       runInAction(() => {
         // Allow negative jot time during the recording's lead-in so the
         // playhead travels the reserved pre-roll space (timeToX maps
         // [-drumsT0Sec, 0) into the lead-in pixels). Clamp at
         // -drumsT0Sec so it can't run off the left of the lead-in.
-        this.currentTime = Math.max(jotTime, -this.drumsT0Sec);
+        // The user's `audioLatencyMs` fine-tune and the auto-detected
+        // `internalLatencyMs` baseline are summed; both shift the
+        // visual ahead of the audio clock to compensate for perceived
+        // audio/visual sync drift.
+        const latencyShiftSec = (this.audioLatencyMs + this.internalLatencyMs) * 0.001;
+        this.currentTime = Math.max(jotTime + latencyShiftSec, -this.drumsT0Sec);
       });
       this.rafId = window.requestAnimationFrame(tick);
     };

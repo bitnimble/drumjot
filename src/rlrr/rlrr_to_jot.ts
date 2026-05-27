@@ -30,6 +30,7 @@ import {
   Modifier,
   Note,
   Simultaneity,
+  TempoEvent,
   TimeSignature,
   Voice,
 } from 'src/dsl';
@@ -127,11 +128,6 @@ export function rlrrToJot(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
   const slotsPerBar = Math.max(1, Math.round(barBeats / gridBeats));
 
   const bars: Bar[] = [];
-  // Effective tempo at each bar's start beat, emitted as a sticky per-bar
-  // `{{ bpm }}` override whenever it changes. Bar 0 is covered by
-  // `globalMetadata.bpm` (= initialBpm = the tempo at beat 0), so it never
-  // needs its own override; later bars only carry one on a change.
-  let prevBpm = initialBpm;
   for (let bi = 0; bi < barCount; bi++) {
     const bucket = slots.get(bi);
     const elements: Element[] = [];
@@ -149,13 +145,20 @@ export function rlrrToJot(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
         elements.push(simul);
       }
     }
-    const bar: Bar = { elements };
-    const barBpm = bpmAtBeat(bi * barBeats, tempoTimeline);
-    if (bi > 0 && barBpm !== prevBpm) {
-      bar.metadata = { bpm: barBpm };
-    }
-    prevBpm = barBpm;
-    bars.push(bar);
+    bars.push({ elements });
+  }
+
+  // Emit tempo events at each RLRR `bpmEvent` (post-drumsT0 rebase),
+  // anchored at (barIndex, beat-within-bar) so mid-bar tempo changes
+  // survive into the runtime tempo timeline. The initial tempo
+  // (segment at startSeconds=0) is already on `globalMetadata.bpm`;
+  // tempoTimeline[1..] are the genuine changes.
+  const tempoEvents: TempoEvent[] = [];
+  for (let i = 1; i < tempoTimeline.length; i++) {
+    const seg = tempoTimeline[i];
+    const barIdx = Math.max(0, Math.floor(seg.startBeats / barBeats));
+    const beat = Math.max(0, seg.startBeats - barIdx * barBeats);
+    tempoEvents.push({ barIndex: barIdx, beat, bpm: seg.bpm });
   }
 
   // Strip trailing all-rest bars.
@@ -207,11 +210,13 @@ export function rlrrToJot(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
   };
 
   const voice: Voice = { bars };
-  return {
+  const jot: Jot = {
     title: rlrr.recordingMetadata?.title ?? '',
     globalMetadata,
     voices: [voice],
   };
+  if (tempoEvents.length > 0) jot.tempoEvents = tempoEvents;
+  return jot;
 }
 
 // ---------- helpers ----------
@@ -297,18 +302,6 @@ function buildTempoTimeline(
     lastBpm = ev.bpm;
   }
   return out;
-}
-
-/**
- * Effective tempo at a given beat position: the bpm of the last tempo
- * segment whose `startBeats` is at or before `beat`. Beat-space analogue
- * of {@link secondsToBeats}'s segment scan; used to stamp each bar with
- * the tempo in force at its start.
- */
-function bpmAtBeat(beat: number, timeline: TempoSegment[]): number {
-  let i = 0;
-  while (i + 1 < timeline.length && timeline[i + 1].startBeats <= beat) i++;
-  return timeline[i].bpm;
 }
 
 function secondsToBeats(seconds: number, timeline: TempoSegment[]): number {

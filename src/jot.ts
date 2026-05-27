@@ -17,6 +17,7 @@ import {
   TimeSignature,
   Voice,
 } from 'src/dsl';
+import { initialBpm } from 'src/tempo';
 
 /** Branded pixel scalar to avoid mixing pixel and beat measurements. */
 export type Pixels = number & { __pixels: never };
@@ -601,16 +602,9 @@ export class RenderedJot {
     const rawOffset = jot.globalMetadata.drumsT0Sec;
     const drumsT0Sec =
       typeof rawOffset === 'number' && rawOffset > 0 ? rawOffset : 0;
-    const bpmField = jot.globalMetadata.bpm;
-    const globalBpm =
-      typeof bpmField === 'number' && bpmField > 0
-        ? bpmField
-        : typeof bpmField === 'object' &&
-            bpmField !== null &&
-            typeof bpmField.start === 'number' &&
-            bpmField.start > 0
-          ? bpmField.start
-          : 120;
+    // Initial tempo (the value in force before any tempoEvent fires), // what the synthetic lead-in bar runs at, since by construction it
+    // precedes bar 0 / any tempoEvent anchored to it.
+    const globalBpm = initialBpm(jot);
 
     const bars: StructuralBar[] = [];
     const pitchOrder: string[] = [];

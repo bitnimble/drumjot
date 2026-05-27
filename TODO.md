@@ -1,7 +1,7 @@
 - redo midi -> jot conversion, using smart stuff
-- verify stop transcription button works
 - improve UX for beat + audio alignment controls (including issue where it keeps focus so spacebar to play/pause doesn't work)
-- improve audio stability - precaching; etc; most critical is cross-track timing / sync / clock alignment
-- audio tracks: remove the HTMLAudioElement fallback used at non-1.0× speed (1.0× already uses `AudioBufferSourceNode` so drums and music share the AudioContext clock). Two paths to choose between for restoring pitch preservation at non-1.0×:
-  - **Option A — offline pre-render.** When the user picks a speed; run a WASM time-stretcher (SoundTouchJS or RubberBand) over the decoded `AudioBuffer` PCM in a Web Worker; producing a new pitch-preserved buffer. Cache by `(trackId; speed)`. Play via `AudioBufferSourceNode.start(audioStartTime; mediaOffset)` like the 1.0× path. Memory: ~30 MB per 3-min stereo track per cached speed; drop the cache on track clear. Speed switch waits on the stretch (~0.5–2 s); UI shows a brief "preparing playback" state. Sample-accurate sync at every speed.
-  - **Option B — real-time AudioWorkletNode.** Implement an `AudioWorkletNode` running a phase-vocoder / SOLA / SoundTouchJS-worklet style stretcher on the audio thread. Source is still an `AudioBufferSourceNode` feeding the worklet; the worklet rewrites the stream with `playbackRate=speed` and `preservesPitch=true` semantics; output goes through the existing per-track `GainNode`. No pre-render delay on speed change; no extra memory beyond the worklet's internal buffer. More integration code (worklet module loader; parameter messaging) and quality depends on the chosen algorithm (SoundTouch is the safe baseline; phase-vocoder needs care to avoid transient smearing on drum-stem tracks).
+- rename "pitch" tracks to "instrument" tracks
+- pending tasks dropdown in top right - any active backend tasks (stem splitting, transcription, lyrics alignment, etc). see if we can add ETAs or progress bars.
+- move track delete into the overflow menu
+- move lyrics track offset adjuster into the overflow menu
+

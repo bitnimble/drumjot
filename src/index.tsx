@@ -61,6 +61,35 @@ globals.Drumjot = Drumjot;
 globals.jotPlayer = jotPlayer;
 export default Drumjot;
 
+// Audio-track playback runs through an AudioWorklet (Signalsmith Stretch).
+// Guard at boot so the failure is surfaced up front instead of as a
+// cryptic library trace the first time a user presses Play. Two distinct
+// failure modes worth distinguishing:
+//   - Browser exposes no AudioWorklet at all (very old Firefox / Safari):
+//     audio-track playback simply won't work, no fix available client-side.
+//   - AudioWorklet exists in principle but the page is not in a secure
+//     context (LAN IP over plain HTTP is the common one with `vite --host`):
+//     fixable by switching to localhost / 127.0.0.1 / HTTPS.
+// `isSecureContext` is the deciding factor; the constructor presence is
+// only checked as a secondary signal for the generic-unsupported case.
+if (typeof window !== 'undefined') {
+  if (!window.isSecureContext) {
+    console.warn(
+      '[drumjot] This page is not running in a secure context, so the ' +
+        'browser will not expose AudioWorklet. Audio-track playback ' +
+        'will not work. Drum (MIDI) playback is unaffected. Open ' +
+        'the page via localhost / 127.0.0.1 / HTTPS instead of a LAN IP ' +
+        'over plain HTTP.'
+    );
+  } else if (typeof AudioWorkletNode === 'undefined') {
+    console.warn(
+      '[drumjot] AudioWorklet is not available in this browser. ' +
+        'Audio-track playback ' +
+        'will not work. Drum (MIDI) playback is unaffected.'
+    );
+  }
+}
+
 // Auto-bootstrap when loaded as the Vite entry. The store starts with no
 // jot loaded; the View renders an empty-state welcome screen with file-load
 // and example-picker shortcuts until the user picks something.

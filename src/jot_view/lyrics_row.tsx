@@ -14,6 +14,12 @@ import { buildTimeline, jotPlayer } from 'src/playback';
 import { ClearButton } from './components/icon_button';
 import { GutterResizeHandle } from './components/gutter_resize_handle';
 import { NumberStepper } from './components/number_stepper';
+import {
+  LyricLineMeasureInput,
+  computeLyricShifts,
+  lyricShiftKey,
+  lyricsMeasurer,
+} from './lyrics_measure';
 import styles from './lyrics_row.module.css';
 import { Playhead } from './playback';
 import { seekFromClick } from './score';
@@ -331,71 +337,39 @@ export const LyricsRow = observer(
     // `beatOffset * --px-per-beat`, so when two words land on nearly
     // identical beats (e.g. a Japanese sokuon `ッ` immediately before
     // its host syllable), their glyphs render on top of each other.
-    // We post-process the DOM: walk each word-aligned line left-to-
-    // right, measure each glyph's true text width via a Range on the
-    // inner `.lyricWordText` span (so the trailing rule and active-
-    // state padding don't perturb the measurement), and write a per-
-    // word `--lyric-word-shift` px offset that pushes colliding words
-    // just enough to keep a minimum gap. The CSS calc that consumes
-    // `--lyric-word-shift` also subtracts it from the cell width, so
-    // the shifted cell's right edge stays anchored to the word's
-    // `endSec` (the cell shrinks rather than slides).
-    const barsRowRef = React.useRef<HTMLDivElement>(null);
-    const adjustWordSpacing = React.useCallback(() => {
-      const row = barsRowRef.current;
-      if (!row) return;
-      const pxPerBeat = parseFloat(
-        getComputedStyle(row).getPropertyValue('--px-per-beat'),
-      );
-      if (!Number.isFinite(pxPerBeat) || pxPerBeat <= 0) return;
-      const MIN_GAP_PX = 4;
-      const lines = row.querySelectorAll<HTMLElement>('[data-lyric-word-line="1"]');
-      const range = document.createRange();
-      for (const line of lines) {
-        const words = line.querySelectorAll<HTMLElement>('[data-lyric-word="1"]');
-        let prevRight = -Infinity;
-        for (const w of words) {
-          const beatOffset = parseFloat(w.dataset.beatOffset ?? '0');
-          const natural = beatOffset * pxPerBeat;
-          const textNode =
-            w.querySelector<HTMLElement>('[data-lyric-word-text="1"]') ?? w;
-          range.selectNodeContents(textNode);
-          const textWidth = range.getBoundingClientRect().width;
-          const required = Math.max(natural, prevRight + MIN_GAP_PX);
-          const shift = required - natural;
-          // Write only when non-zero to keep the inline style attribute
-          // tidy and avoid no-op style mutations on the first paint of
-          // most words.
-          if (shift > 0) {
-            w.style.setProperty('--lyric-word-shift', `${shift}px`);
-          } else if (w.style.getPropertyValue('--lyric-word-shift')) {
-            w.style.removeProperty('--lyric-word-shift');
-          }
-          prevRight = required + textWidth;
-        }
-      }
-    }, []);
-
-    // Re-run after every render so word add/remove and active-state
-    // changes both leave spacing consistent. The work is a pure
-    // measure-then-write pass over the row's DOM; cheap because lyric
-    // counts per row are small.
-    React.useLayoutEffect(() => {
-      adjustWordSpacing();
-    });
-
-    // Zoom is propagated via the `--px-per-beat` CSS variable rather
-    // than React state (see ScoreZoomVar in jot_view.tsx), so this row
-    // doesn't re-render on zoom. A ResizeObserver on the bars-row
-    // catches the resulting width change and re-runs the spacing
-    // adjustment so shifts stay correct across the full zoom range.
-    React.useEffect(() => {
-      const row = barsRowRef.current;
-      if (!row) return;
-      const ro = new ResizeObserver(() => adjustWordSpacing());
-      ro.observe(row);
-      return () => ro.disconnect();
-    }, [adjustWordSpacing]);
+    // `computeLyricShifts` runs the same left-to-right walk the legacy
+    // DOM round-trip did, but measures each glyph's true text width via
+    // an off-screen canvas whose font string mirrors the variable-font
+    // axes (wdth / wght / letter-spacing) the CSS clamps against
+    // `--px-per-beat`. Result is the source of truth; the JSX writes
+    // each shift into `--lyric-word-shift` as a render sink, and the
+    // CSS calc subtracts it from the cell width so the shifted cell's
+    // right edge stays anchored to the word's `endSec`.
+    //
+    // Reading `jot.pxPerBeat` here re-subscribes the row to zoom (it
+    // was deliberately off the zoom render path under the DOM-walk
+    // model). The cost is bounded. N lyric rows × few-dozen words; // and the alternative (a ResizeObserver-driven imperative pass)
+    // can't see the underlying observable.
+    const pxPerBeat = jot.pxPerBeat;
+    // Read `fontReady` so this row re-renders once Bricolage Grotesque
+    // loads; canvas measurement before that uses the fallback stack and
+    // is off by a glyph or two on long words.
+    void lyricsMeasurer.fontReady;
+    // `lineIdx` in the measure inputs is `p.i` (positioned-line's source
+    // index) so the JSX-side lookup `lyricShiftKey(p.i, w.sourceIdx)`
+    // matches without further bookkeeping.
+    const measureInputs: LyricLineMeasureInput[] = positioned
+      .filter((p) => p.wordPositions !== undefined)
+      .map((p) => ({
+        lineIdx: p.i,
+        activeWordSourceIdx: p.i === activeIdx ? activeWordIdx : undefined,
+        words: p.wordPositions!.map((w) => ({
+          sourceIdx: w.sourceIdx,
+          text: w.text,
+          beatOffset: w.beatOffset,
+        })),
+      }));
+    const shifts = computeLyricShifts(measureInputs, pxPerBeat);
 
     const drop = useDropTarget({
       idx,
@@ -467,7 +441,6 @@ export const LyricsRow = observer(
           </div>
         </div>
         <div
-          ref={barsRowRef}
           className={styles.lyricsBarsRow}
           style={
             {
@@ -496,32 +469,30 @@ export const LyricsRow = observer(
                 }
                 title={p.text}
                 data-testid={`lyrics-line-${p.i}`}
-                data-lyric-word-line={wordAligned ? '1' : undefined}
               >
                 {wordAligned
-                  ? p.wordPositions!.map((w) => (
-                      <span
-                        key={w.sourceIdx}
-                        className={classNames(
-                          styles.lyricWord,
-                          isActive && w.sourceIdx === activeWordIdx && styles.lyricWordActive,
-                        )}
-                        style={
-                          {
-                            ['--lyric-word-beat-offset' as string]: w.beatOffset,
-                            ['--lyric-word-beat-width' as string]: w.beatWidth,
-                          } as React.CSSProperties
-                        }
-                        title={buildWordDebugTitle(w.source)}
-                        data-testid={`lyrics-word-${p.i}-${w.sourceIdx}`}
-                        data-lyric-word="1"
-                        data-beat-offset={w.beatOffset}
-                      >
-                        <span className={styles.lyricWordText} data-lyric-word-text="1">
-                          {w.text}
+                  ? p.wordPositions!.map((w) => {
+                      const shift = shifts.get(lyricShiftKey(p.i, w.sourceIdx)) ?? 0;
+                      const wordStyle: Record<string, string | number> = {
+                        '--lyric-word-beat-offset': w.beatOffset,
+                        '--lyric-word-beat-width': w.beatWidth,
+                      };
+                      if (shift > 0) wordStyle['--lyric-word-shift'] = `${shift}px`;
+                      return (
+                        <span
+                          key={w.sourceIdx}
+                          className={classNames(
+                            styles.lyricWord,
+                            isActive && w.sourceIdx === activeWordIdx && styles.lyricWordActive,
+                          )}
+                          style={wordStyle as React.CSSProperties}
+                          title={buildWordDebugTitle(w.source)}
+                          data-testid={`lyrics-word-${p.i}-${w.sourceIdx}`}
+                        >
+                          <span className={styles.lyricWordText}>{w.text}</span>
                         </span>
-                      </span>
-                    ))
+                      );
+                    })
                   : p.text}
               </span>
             );

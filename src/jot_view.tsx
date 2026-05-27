@@ -7,6 +7,10 @@ import { lyricsStore } from 'src/lyrics';
 import { BarTiming, buildTimeline, jotPlayer, timeToX } from 'src/playback';
 import { SelectionStore } from 'src/selection';
 import styles from './jot_view.module.css';
+import {
+  AudioWorkletWarningModal,
+  detectAudioWorkletState,
+} from './jot_view/audio_worklet_warning_modal';
 import { LyricsSearchModal } from './jot_view/lyrics_search_modal';
 import { LyricsTextLoadModal } from './jot_view/lyrics_text_modal';
 import {
@@ -31,6 +35,7 @@ import { PlaybackBar } from './jot_view/playback';
 import { Legend, TimelineHeader, extractArtist, formatDisplayTitle, formatSubtitle } from './jot_view/score';
 import { GridLineSettings, JotViewStore, TrackKey, snapToDevicePx } from './jot_view/store';
 import { RecentTranscriptionsPicker } from './jot_view/recent_transcriptions';
+import { ToastContainer } from './jot_view/toast_container';
 import { DebugPanel, Toolbar } from './jot_view/toolbar';
 import { ExampleJot } from 'src/fakes';
 
@@ -107,8 +112,21 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     store.setScrollBy((anchorBarsRowX - padLeft) * (factor - 1), 0);
   };
 
+  // Computed once per page load; AudioWorklet availability doesn't
+  // change after boot, so capturing this outside the component (and
+  // outside any observer) keeps it stable across renders without
+  // entering React's dep tracking.
+  const audioWorkletState = detectAudioWorkletState();
+
   const View: React.FC = observer(() => {
     const jot = store.currentJot;
+    // Modal opens on first mount whenever AudioWorklet is unavailable
+    // and closes for the rest of the session once dismissed. A reload
+    // re-shows it intentionally; the limitation is real and ongoing,
+    // and the user might just have forgotten between sessions.
+    const [audioWorkletWarningOpen, setAudioWorkletWarningOpen] = React.useState(
+      audioWorkletState !== 'available',
+    );
 
     // Spacebar = play / pause / resume, from anywhere on the page. Skip
     // only when a text-entry control has focus (the user is typing) or
@@ -216,11 +234,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
           onClearLyrics={() => store.clearLyrics()}
           hasLyrics={lyricsStore.hasLyrics}
           onCancelTranscribe={() => store.cancelTranscribe()}
-          onClearTranscribeStatus={() => store.clearTranscribeStatus()}
-          lyricsNotice={store.lyricsNotice}
-          onClearLyricsNotice={() => store.clearLyricsNotice()}
           lyricsAlignStatus={store.lyricsAlignStatus}
-          onClearLyricsAlignStatus={() => store.clearLyricsAlignStatus()}
           onSetBeatInput={(b) => store.setBeatInput(b)}
           onSetLlmModel={(m) => store.setLlmModel(m)}
           zoom={store.zoom}
@@ -313,7 +327,13 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
           onClose={() => store.setLyricsTextOpen(false)}
           store={store}
         />
+        <AudioWorkletWarningModal
+          state={audioWorkletState}
+          open={audioWorkletWarningOpen}
+          onClose={() => setAudioWorkletWarningOpen(false)}
+        />
         <LoadingOverlay store={store} />
+        <ToastContainer />
       </div>
       </FollowPlayheadContext.Provider>
       </UniformWaveformsContext.Provider>

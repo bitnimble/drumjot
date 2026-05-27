@@ -4,9 +4,18 @@
  * The audio-track waveform used to be one wide canvas spanning the
  * whole score (capped at a 16 384 px backing-store dimension, so very
  * long or very zoomed tracks lost horizontal resolution). It's now a
- * row of fixed-jot-time-width canvases; one per `SECONDS_PER_CHUNK`
- * window; and each chunk picks its own backing-store size, so the
- * effective resolution is unbounded.
+ * row of fixed-beat-width canvases; one per `BEATS_PER_CHUNK` window;
+ * and each chunk picks its own backing-store size, so the effective
+ * resolution is unbounded.
+ *
+ * Chunk identity is stable for the lifetime of the score: chunks are
+ * keyed by `floor(startBeat / BEATS_PER_CHUNK)`, so a zoom change
+ * resizes existing chunks (via CSS-driven `left` / `width` recompute)
+ * without unmounting / remounting them. This is what makes the high-
+ * quality redraw happen on the same frame as the zoom: there's no
+ * IntersectionObserver fire latency to wait through (eliminated, see
+ * mixer's parent-driven visibility derivation), no bucket transition
+ * to churn, no stretched-bitmap holdover gap to mask.
  *
  * `buildChunkLayout` walks the structural bars ONCE to produce
  * everything a chunk row needs to lay itself out:
@@ -14,10 +23,10 @@
  *  - Per-bar `BarBeat`: cumulative beat position + jot-time anchor +
  *    duration. Beat-space is zoom-invariant (pure structure / tempo),
  *    so the values stay stable across wheel ticks.
- *  - `WaveformChunk[]`: each chunk owns a contiguous beat range and
- *    the matching jot-time window. The chunk's CSS position is driven
- *    by `--chunk-start-beat × --px-per-beat` so live zoom is a pure
- *    CSS recompute (no React work).
+ *  - `WaveformChunk[]`: each chunk owns a contiguous beat range
+ *    (`BEATS_PER_CHUNK` beats wide, last chunk possibly shorter). The
+ *    chunk's CSS position is driven in JS from its `startBeat` × the
+ *    live `pxPerBeat`.
  *
  * The lead-in (negative-indexed bars at the front of `voice.bars`) is
  * absorbed transparently: its bars contribute to `startBeat` and
@@ -27,31 +36,29 @@
  * mapping regardless of the bar's role.
  */
 import { RenderedJot } from 'src/jot';
-import { resolveBpm } from 'src/playback/timeline';
+import { buildBarTempos } from 'src/tempo';
 
 /**
- * Default chunk width in jot-time seconds, used at zoom levels at or
- * below 1×. Chosen to keep each chunk's backing-store dimensions
- * comfortably under the 16 384 px cross-browser canvas cap at zoom=1
- * while keeping the chunk count low (a 5-minute song produces 10
- * chunks). Aligned to seconds; bar boundaries are not consulted; so
- * chunks straddle bar edges; the worker's per-bar pixel-to-time mapping
- * handles that without seams.
+ * Beats per chunk. Chunks are sliced on this beat-aligned grid,
+ * independent of bar structure (a 3/4 bar followed by a 4/4 bar
+ * doesn't realign the grid; the worker's per-bar mapping handles the
+ * tempo / duration boundary inside a chunk without seams).
  *
- * At higher zoom the consumer passes a smaller `secondsPerChunk` (see
- * the parameter on {@link buildChunkLayout}) so chunks shrink in
- * jot-time and their bitmaps stay within the canvas cap; without that,
- * a 30 s chunk at zoom 2+ would exceed 16 384 bitmap pixels and the
- * browser would silently downsample it into a blurry tile.
+ * Sized so the worst-case backing bitmap stays comfortably under the
+ * cross-browser 16 384 px canvas cap. Worst case is `pxPerBeat = 112
+ * × densityFactor 1.6 = 179.2` (see `MAX_DENSITY_FACTOR` in
+ * `src/jot.ts`) × `MAX_ZOOM = 4` × `devicePixelRatio = 3` ≈ 2150
+ * backing-px/beat. 4 × 2150 ≈ 8 600 backing-px per chunk, well under
+ * the cap. At normal zoom (pxPerBeat ≈ 112, DPR 2) a chunk is ~896
+ * backing-px, a typical viewport holds 10–30 chunks per track.
  */
-export const SECONDS_PER_CHUNK = 30;
+export const BEATS_PER_CHUNK = 4;
 
 /**
  * Zoom-invariant per-bar layout: where the bar sits in the voice's
- * cumulative beat axis (used to position chunks via CSS calc), the
- * bar's own beat count, and the jot-time window the bar covers (used
- * by the worker to map each chunk pixel column back to an audio
- * sample range).
+ * cumulative beat axis (used to position chunks via JS), the bar's own
+ * beat count, and the jot-time window the bar covers (used by the
+ * worker to map each chunk pixel column back to an audio sample range).
  */
 export type BarBeat = {
   /** Sum of `beats` for every bar before this one in the voice. */
@@ -69,22 +76,18 @@ export type BarBeat = {
 
 /**
  * One tile in the row. Each chunk renders its own canvas, sized to
- * `totalBeats × renderedPxPerBeat` (chunk-local pixel width) and
- * positioned at `startBeat × pxPerBeat + notePadPx` (in score-pixel
- * space). The CSS calc reads the LIVE `--px-per-beat`, so zoom moves
- * every chunk reactively without any React re-render.
+ * `totalBeats × pxPerBeat` (chunk-local pixel width). `key` is stable
+ * across the lifetime of the score (= the chunk's beat-aligned bucket
+ * index), so React preserves the canvas DOM element across zoom
+ * changes; only `left` / `width` change.
  */
 export type WaveformChunk = {
-  /** Stable React key, monotonically rising from 0. */
+  /** Stable React key: `startBeat / BEATS_PER_CHUNK`. */
   key: number;
   /** Beat position of the chunk's left edge in the voice. */
   startBeat: number;
-  /** Beat span the chunk covers. */
+  /** Beat span the chunk covers (`BEATS_PER_CHUNK`, or smaller for the trailing chunk). */
   totalBeats: number;
-  /** Jot time at the chunk's left edge. */
-  jotStart: number;
-  /** Jot time at the chunk's right edge. */
-  jotEnd: number;
 };
 
 export type ChunkLayout = {
@@ -100,38 +103,26 @@ const EMPTY_LAYOUT: ChunkLayout = { bars: [], totalBeats: 0, chunks: [] };
 
 /**
  * Walk the structural voice once, accumulating beat and jot-time
- * cursors, then slice the jot-time axis into {@link SECONDS_PER_CHUNK}
- * windows. Per-bar `{{ bpm }}` overrides are honoured the same way
- * `events.ts` / `buildTimeline` do: sticky until the next override.
+ * cursors, then slice the beat axis into `BEATS_PER_CHUNK` windows.
+ * Per-bar `{{ bpm }}` overrides are honoured the same way `events.ts`
+ * / `buildTimeline` do: sticky until the next override.
  *
  * Reads ONLY `rendered.structure` (the zoom-invariant layout), so the
  * returned `bars[*].startBeat / .beats / .startSec / .durationSec` and
  * the derived `chunks[*]` are stable across zoom changes. Callers can
- * memo on `rendered.structure` and reuse the result across every wheel
- * tick.
+ * memo on `rendered.structure` and reuse the result across every
+ * wheel tick.
  */
-export function buildChunkLayout(
-  rendered: RenderedJot,
-  secondsPerChunk: number = SECONDS_PER_CHUNK,
-): ChunkLayout {
+export function buildChunkLayout(rendered: RenderedJot): ChunkLayout {
   const structureVoice = rendered.structure.voices[0];
   if (!structureVoice || structureVoice.bars.length === 0) return EMPTY_LAYOUT;
-  const chunkSeconds = secondsPerChunk > 0 ? secondsPerChunk : SECONDS_PER_CHUNK;
 
-  const globalBpm = resolveBpm(rendered.globalMetadata.bpm, 120);
-
-  // Forward pass: per-bar duration in seconds at the in-force tempo.
-  let currentBpm = globalBpm;
+  const tempos = buildBarTempos(rendered.source, structureVoice.bars);
   const durations: number[] = new Array(structureVoice.bars.length);
   for (let i = 0; i < structureVoice.bars.length; i++) {
-    const bar = structureVoice.bars[i];
-    const override = bar.source.metadata?.bpm;
-    if (override !== undefined) currentBpm = resolveBpm(override, currentBpm);
-    durations[i] = bar.beats * (60 / currentBpm);
+    durations[i] = tempos[i].durationSec;
   }
 
-  // Count of leading lead-in (negative-indexed) bars; same definition
-  // `buildTimeline` uses to anchor bar 1 at jot time 0.
   let leadBars = 0;
   for (const b of structureVoice.bars) {
     if (b.index >= 0) break;
@@ -154,42 +145,18 @@ export function buildChunkLayout(
     cursorBeat += sb.beats;
     cursorSec += durations[i];
   }
-
-  const firstJotStart = bars[0].startSec;
-  const lastJotEnd = bars[bars.length - 1].startSec + bars[bars.length - 1].durationSec;
+  const totalBeats = cursorBeat;
 
   const chunks: WaveformChunk[] = [];
-  let key = 0;
-  for (let t = firstJotStart; t < lastJotEnd; t += chunkSeconds) {
-    const jotStart = t;
-    const jotEnd = Math.min(t + chunkSeconds, lastJotEnd);
-    const startBeat = jotTimeToBeat(bars, jotStart);
-    const endBeat = jotTimeToBeat(bars, jotEnd);
-    const totalBeats = endBeat - startBeat;
-    if (totalBeats <= 0) continue;
-    chunks.push({ key: key++, startBeat, totalBeats, jotStart, jotEnd });
+  for (let startBeat = 0; startBeat < totalBeats; startBeat += BEATS_PER_CHUNK) {
+    const span = Math.min(BEATS_PER_CHUNK, totalBeats - startBeat);
+    if (span <= 0) continue;
+    chunks.push({
+      key: startBeat / BEATS_PER_CHUNK,
+      startBeat,
+      totalBeats: span,
+    });
   }
 
-  return { bars, totalBeats: cursorBeat, chunks };
-}
-
-/**
- * Linear-interpolation lookup: which (fractional) beat position does
- * the given jot-time second correspond to? Out-of-range inputs clamp
- * to the first / last bar's edges. Mirrors `timeToX`'s per-bar walk
- * inside the timeline module.
- */
-function jotTimeToBeat(bars: BarBeat[], jotSec: number): number {
-  if (bars.length === 0) return 0;
-  const first = bars[0];
-  if (jotSec <= first.startSec) return first.startBeat;
-  for (const bar of bars) {
-    const barEnd = bar.startSec + bar.durationSec;
-    if (jotSec < barEnd) {
-      const within = bar.durationSec > 0 ? (jotSec - bar.startSec) / bar.durationSec : 0;
-      return bar.startBeat + within * bar.beats;
-    }
-  }
-  const last = bars[bars.length - 1];
-  return last.startBeat + last.beats;
+  return { bars, totalBeats, chunks };
 }

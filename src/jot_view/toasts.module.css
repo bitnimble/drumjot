@@ -1,0 +1,80 @@
+/* Toast notifications: one-off success / error notices that drop down
+   from the top-centre of the viewport, below the toolbar strip.
+   Long-running status (transcribe / lyrics-align busy) stays in the
+   toolbar pill; anything that's fire-and-forget routes through here
+   instead.
+
+   Container is `position: fixed` so it survives the score's virtual
+   scroll. Top offset clears the toolbar (10px padding + ~32px content
+   + a few px of gap). */
+
+.toastContainer {
+    position: fixed;
+    top: 64px;
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    z-index: 1000;
+    /* Only each toast's own footprint is interactive; the surrounding
+       horizontal strip and the gaps between toasts pass clicks through
+       to the score / toolbar / mixer beneath. */
+    pointer-events: none;
+}
+
+.toast {
+    composes: bodySm from '../typography.module.css';
+    pointer-events: auto;
+    max-width: min(420px, 90vw);
+    padding: 8px 14px;
+    border-radius: var(--radius-pill);
+    border: 1px solid transparent;
+    box-shadow: var(--shadow-lg);
+    cursor: pointer;
+    letter-spacing: 0.02em;
+    line-height: 1.35;
+    /* Toasts have the room to wrap (the toolbar pill doesn't);
+       multi-word "Loaded <song> by <artist> from LRCLIB" reads better
+       on one line until it actually has to wrap. */
+    white-space: normal;
+    word-break: break-word;
+    text-align: center;
+    animation: toastDropIn 180ms ease-out;
+}
+
+.toastSuccess {
+    background: var(--color-success-bg);
+    color: var(--color-success);
+    border-color: var(--color-success-border);
+}
+
+.toastError {
+    background: var(--color-error-bg);
+    color: var(--color-error);
+    border-color: var(--color-error-border);
+}
+
+@keyframes toastDropIn {
+    from {
+        opacity: 0;
+        transform: translateY(-16px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Respect users with reduced-motion preference: drop the slide, keep
+   the fade so the toast's appearance is still perceptible. */
+@media (prefers-reduced-motion: reduce) {
+    .toast {
+        animation: toastFadeIn 180ms ease-out;
+    }
+    @keyframes toastFadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
+    }
+}

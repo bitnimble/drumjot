@@ -1,0 +1,123 @@
+/* AudioWorklet-unavailable warning modal. Same backdrop / panel chrome
+   as the lyrics modals so it feels native to the rest of the app; the
+   body is a single block of warning copy and the footer is one button.
+   Lifts the accent color into a warning tone so it reads as a
+   limitation, not a destructive prompt. */
+
+.modalBackdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    background: var(--color-bg-overlay);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+
+.modalPanel {
+    width: min(520px, 100%);
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+}
+
+.modalHeader {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-bg-cream);
+}
+
+.warningIcon {
+    color: var(--color-warning, var(--color-error));
+    flex: 0 0 auto;
+    display: inline-flex;
+}
+
+.modalTitle {
+    composes: heading from '../typography.module.css';
+    color: var(--color-text-strong);
+    margin: 0;
+    font-size: 14px;
+    flex: 1 1 auto;
+}
+
+.modalClose {
+    appearance: none;
+    background: transparent;
+    border: none;
+    color: var(--color-text-muted-alt);
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0 6px;
+    line-height: 1;
+}
+
+.modalClose:hover {
+    color: var(--color-text-strong);
+}
+
+.modalBody {
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--color-text-strong);
+}
+
+.modalBody p {
+    margin: 0;
+}
+
+.modalBody code {
+    font-family: var(--font-family-mono, ui-monospace, monospace);
+    background: var(--color-bg-cream);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 1px 5px;
+    font-size: 12px;
+}
+
+.note {
+    color: var(--color-text-muted-alt);
+    font-size: 12px;
+}
+
+.modalFooter {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 16px;
+    border-top: 1px solid var(--color-border);
+    background: var(--color-bg-cream);
+}
+
+.primaryButton {
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--color-accent);
+    color: var(--color-bg-base);
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.primaryButton:hover {
+    background: var(--color-accent-hover);
+}

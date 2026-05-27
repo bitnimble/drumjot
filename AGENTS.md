@@ -1077,6 +1077,113 @@ chained into `bun run build`):
    `src/jot_view/components/`.
 4. Run `bun run lint:design` before committing.
 
+### 5.9 Frontend perf; no DOM layout reads in hot paths
+
+The score uses a **virtualised scroll model**: `.jotContainer` is
+`overflow: hidden`, an inner `.scrollViewport` moves via
+`transform: translate(-scrollX, -scrollY)`, and the offsets live on
+`JotViewStore` as MobX observables (`store.scrollX`, `store.scrollY`)
+fed by `setScrollX` / `setScrollY`. Viewport and content extents are
+cached on `_viewportWidth` / `_viewportHeight` / `_contentWidth` /
+`_contentHeight`, fed by a `ResizeObserver` in JotView. See the
+docstring on the `scrollX` field in
+[src/jot_view/store.ts](src/jot_view/store.ts) for the full rationale.
+
+**The rule**: in any render, effect, MobX reaction, or per-frame /
+per-scroll / per-zoom code path, **do not read DOM layout metrics**.
+That means no `scrollLeft` / `scrollTop` / `clientWidth` /
+`clientHeight` / `offsetWidth` / `offsetHeight` /
+`getBoundingClientRect` / `getComputedStyle` for layout properties.
+Read from the store.
+
+**Why**: a layout-metric read forces the browser to synchronously
+flush pending style + layout work before returning the value. In a
+hot path (scroll, zoom, rAF-driven redraws) that's per-frame forced
+reflow; measurable jank, and it serialises against pending paints.
+The virtualised scroll model exists precisely so this never has to
+happen at scroll-time; bypassing it forfeits the guarantee.
+
+**Legitimate exceptions** (these stay as DOM reads, by design):
+
+- **Synchronous user-input handlers** that need a fresh element rect
+  at the moment of the gesture (`onClick` → seek, marquee drag start,
+  dropdown anchor positioning). These run rarely, in response to an
+  event the browser has already laid out for, and the cost is paid
+  once per gesture, not per frame. Examples in the code:
+  `score.tsx:46`, `playback.tsx:253`, `mixer.tsx:330`,
+  `lyrics_row.tsx:527`, `dropdown.tsx:86`.
+- **`ResizeObserver` callbacks** that feed the store. The whole point
+  of those is to convert a one-time DOM measurement into observable
+  state. Example: `minimap.tsx:93-95`.
+
+**If a needed dimension isn't on the store yet**, add an observable
+to `JotViewStore` and feed it from the existing JotView
+`ResizeObserver`, rather than reaching for the DOM. Some
+currently-cached dimensions are marked non-observable
+(`_viewportWidth` & friends) because the original consumer was just
+the scroll clamp; promoting them to observable when a per-frame
+observer needs them is the right move, provided you understand the
+fan-out implication (MobX won't re-run an observer that doesn't read
+the field, so the fan-out is small unless something reads the store
+object as a whole).
+
+### 5.10 Frontend frame-budget target; 120 fps / 8.3 ms
+
+**Default frame-budget target for frontend perf work is 120 fps**, not
+60 fps. That means **8.3 ms per frame**, not 16.6 ms. The user runs a
+165 Hz monitor; 60 Hz reasoning would let work that fits a 16.6 ms
+budget but exceeds 8.3 ms slip in as "fast enough", and produce
+visible drops in practice. Targeting 120 fps also leaves slack
+against the 165 Hz display (120 < 165).
+
+Apply this to every per-frame budget judgement: rAF-coalesced work,
+scroll / zoom latency claims, render-cost analyses, canvas paint
+budgets, worker round-trip overhead estimates, "is this fast enough"
+calls. When you write comments in source about per-frame cost, frame
+them as 120 Hz / 8.3 ms.
+
+The 120 Hz framing also informs how to think about "next frame"
+fallback gaps: at 165 Hz vsync a `requestAnimationFrame` callback
+runs ~6 ms after the trigger, not 16 ms; so a one-frame stretched-
+bitmap fallback (e.g. the chunk-stretch path in `mixer.tsx` between
+wheel and rAF redraw) is genuinely brief, not a jank window.
+
+### 5.11 Browser target; evergreen, last 2 years
+
+**Supported browsers are evergreen only, within the last 2 years.**
+The canonical declaration lives in `package.json`'s `browserslist`
+field:
+
+```json
+"browserslist": [
+  "last 2 years",
+  "not dead",
+  "not op_mini all"
+]
+```
+
+Use **all** modern web platform features without polyfills or
+fallbacks: `OffscreenCanvas`, `ResizeObserver`, `IntersectionObserver`,
+`FontFaceSet` (`document.fonts.ready`), `canvas.letterSpacing`,
+variable-font `font-stretch` percentages, `BigInt`, `structuredClone`,
+top-level `await`, ES2023 array methods (`findLast`,
+`toReversed`, …), `Object.hasOwn`, `Array.prototype.group`,
+`Intl.Segmenter`, modern CSS (`:has()`, container queries,
+`color-mix()`, `clamp()`, `content-visibility`, subgrid). Don't ship
+compatibility shims for browsers older than that, and don't add
+feature-detection branches for features that have been universally
+supported for ≥18 months. If a feature is borderline (e.g. Safari
+just shipped it in the last release), prefer it but verify the
+canIuse rows cover all four evergreens; otherwise note the gap in
+the call site.
+
+`browserslist` is not yet wired into Vite's `build.target`
+(currently defaults to `'modules'` ≈ Chrome 87+). If output-side
+enforcement matters later, integrate via `browserslist-to-esbuild`
+in `vite.config.ts`. For now the field is the **declarative source
+of truth** for tooling (PostCSS, Autoprefixer, downstream linters)
+and for agents reasoning about what's safe to ship.
+
 ---
 
 ## 6. The two paths for accuracy improvement

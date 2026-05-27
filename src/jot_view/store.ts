@@ -43,16 +43,18 @@ import {
   TranscribeStage,
   TranscriptionSummary,
 } from 'src/transcriber';
+import { transcribeSuccessToastMessage } from './toasts_messages';
+import { toastStore } from './toasts';
 
-export type LyricsNotice =
-  | { phase: 'idle' }
-  | { phase: 'loaded'; trackName: string; artistName: string };
-
+/** Long-running lyric-alignment indicator. Only the in-flight `aligning`
+ *  phase is modelled here, success and failure surface as toasts (see
+ *  `./toasts.ts`). */
 export type LyricsAlignStatus =
   | { phase: 'idle' }
-  | { phase: 'aligning'; detail: string }
-  | { phase: 'error'; message: string };
+  | { phase: 'aligning'; detail: string };
 
+/** Long-running transcribe indicator. Only the in-flight `uploading`
+ *  phase is modelled here; success and failure surface as toasts. */
 export type TranscribeStatus =
   | { phase: 'idle' }
   | {
@@ -60,27 +62,12 @@ export type TranscribeStatus =
       filename: string;
       /** Current pipeline stage (`stems_all`, `beats`, `transcribe`, …)
        *  reported by the server's NDJSON progress stream. `undefined`
-       *  until the first stage event arrives — the initial "uploading"
+       *  until the first stage event arrives; the initial "uploading"
        *  read covers everything before the first stage starts. */
       stage?: TranscribeStage;
       /** Optional in-stage detail, e.g. "filtering 3/5 instruments
        *  (latest: snare)". Cleared whenever the stage advances. */
       substage?: string;
-    }
-  | { phase: 'error'; message: string }
-  | {
-      phase: 'success';
-      filename: string;
-      tempo: number;
-      hasTempoChanges: boolean;
-      hasTimeSigChanges: boolean;
-      barCount: number;
-      debugDir?: string | null;
-      /** Resolved URL of the debug bundle for this run (see
-       * `TranscribeResponse.debug_zip_url`). The success pill renders a
-       * download link to this; the user can then drop the zip back into
-       * "Load debug bundle" to inspect logs in-app. */
-      debugZipUrl?: string | null;
     };
 
 export type TranscribeOptions = {
@@ -128,8 +115,9 @@ export const MAX_ZOOM = 4.0;
  *  and the interpolation distribution shifts as scroll advances,
  *  producing a visible ~1px back-and-forth wobble during auto-follow.
  *  Snapping keeps every scroll value on the device grid: at dpr=2
- *  that's 0.5 CSS-px steps, fine enough that 60-fps auto-follow at
- *  120 BPM still advances smoothly (several device pixels per frame).
+ *  that's 0.5 CSS-px steps, fine enough that 120-fps auto-follow at
+ *  120 BPM still advances smoothly (~3-4 device pixels per frame at
+ *  pxPerBeat 112, more at higher zoom).
  *  Also used to lock `--playhead-x` to the same grid as `scrollX` in
  *  `PlayheadPosVar` so the centred playhead doesn't drift sub-pixel
  *  against the bars below it. */
@@ -328,10 +316,6 @@ export class JotViewStore {
   examples: readonly ExampleJot[] = [];
   currentExampleId: string | undefined = undefined;
   transcribeStatus: TranscribeStatus = { phase: 'idle' };
-  /** Toolbar-pill notice for the most recent lyrics load. Mirrors the
-   *  transcribe pill so a successful LRCLIB load is surfaced outside the
-   *  search modal (which closes itself on success). */
-  lyricsNotice: LyricsNotice = { phase: 'idle' };
   /** UI-controlled options for the next transcribe call. `debug=true`
    *  so the run is resumable. */
   transcribeOptions: TranscribeOptions = {
@@ -527,12 +511,22 @@ export class JotViewStore {
   /** Virtual vertical scroll offset (px). See `scrollX`. */
   scrollY: number = 0;
   /**
-   * Non-observable cached viewport (jotContainer clientWidth/Height) and
-   * content (scrollViewport offsetWidth/Height) dimensions, used to
-   * clamp `scrollX` / `scrollY` to `[0, content - viewport]`. Marked
-   * non-observable in the `makeAutoObservable` annotation so changing
-   * them (e.g. on a resize tick) doesn't fan out to every observer
-   * that touched the store; their only consumer is the internal clamp.
+   * Cached viewport (jotContainer clientWidth/Height) and content
+   * (scrollViewport offsetWidth/Height) dimensions, fed by a
+   * ResizeObserver in JotView via `setViewportSize` / `setContentSize`.
+   * Used internally to clamp `scrollX` / `scrollY` to `[0, content -
+   * viewport]`, and also read by per-frame observers that derive what
+   * to paint from the visible viewport (e.g. the waveform-chunk
+   * visibility slice in `mixer.tsx`; see AGENTS.md §5.9 on the no-DOM-
+   * layout-reads rule).
+   *
+   * MobX-observable (the constructor's `makeAutoObservable` only marks
+   * `transcribeController` / `lyricsAlignController` as non-observable;
+   * everything else defaults to observable). The underscore prefix is
+   * historical and signals "consumers should generally go through the
+   * dedicated setters" rather than "non-reactive"; an observer that
+   * reads any of these will re-run when its specific field changes,
+   * and only that observer (MobX tracks per-field).
    */
   _viewportWidth: number = 0;
   _viewportHeight: number = 0;
@@ -951,12 +945,7 @@ export class JotViewStore {
         return await jotPlayer.loadAudioTrack(file, pitch, role);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        runInAction(() => {
-          this.transcribeStatus = {
-            phase: 'error',
-            message: `Audio track load failed: ${message}`,
-          };
-        });
+        toastStore.showError(`Audio track load failed: ${message}`);
         return undefined;
       }
     });
@@ -984,12 +973,9 @@ export class JotViewStore {
   splitAudioTrackFromMix(id: AudioTrackId): void {
     const track = jotPlayer.audioTracks.get(id);
     const name = track ? track.filename : id;
-    runInAction(() => {
-      this.transcribeStatus = {
-        phase: 'error',
-        message: `Split into drums + backing on "${name}" isn't wired up yet.`,
-      };
-    });
+    toastStore.showError(
+      `Split into drums + backing on "${name}" isn't wired up yet.`,
+    );
   }
 
   /**
@@ -1000,12 +986,9 @@ export class JotViewStore {
   splitAudioTrackDrumPieces(id: AudioTrackId): void {
     const track = jotPlayer.audioTracks.get(id);
     const name = track ? track.filename : id;
-    runInAction(() => {
-      this.transcribeStatus = {
-        phase: 'error',
-        message: `Split into drum pieces on "${name}" isn't wired up yet.`,
-      };
-    });
+    toastStore.showError(
+      `Split into drum pieces on "${name}" isn't wired up yet.`,
+    );
   }
 
   /** Drop every loaded audio track. Used when a new source (e.g. a
@@ -1290,22 +1273,25 @@ export class JotViewStore {
     const bundleUrl = stemUrl(response.debug_zip_url ?? null);
     if (!bundleUrl) {
       runInAction(() => {
-        this.transcribeStatus = {
-          phase: 'error',
-          message: 'Transcriber returned no debug bundle.',
-        };
+        this.transcribeStatus = { phase: 'idle' };
       });
+      toastStore.showError('Transcriber returned no debug bundle.');
       return;
     }
     const ok = await this.autoLoadDebugBundle(bundleUrl, fallbackName, signal);
     if (!ok) {
-      // The auto-loader already populated `transcribeStatus` with the
-      // specific failure reason; bail without overwriting it.
+      // The auto-loader already surfaced the specific failure as an
+      // error toast; clear the busy pill back to idle and bail.
+      runInAction(() => {
+        this.transcribeStatus = { phase: 'idle' };
+      });
       return;
     }
     runInAction(() => {
-      this.transcribeStatus = {
-        phase: 'success',
+      this.transcribeStatus = { phase: 'idle' };
+    });
+    toastStore.showSuccess(
+      transcribeSuccessToastMessage({
         filename: fallbackName,
         tempo: response.metadata.initial_tempo,
         hasTempoChanges: response.metadata.has_tempo_changes,
@@ -1313,8 +1299,13 @@ export class JotViewStore {
         barCount: response.metadata.bars.length,
         debugDir: response.debug_dir ?? null,
         debugZipUrl: bundleUrl,
-      };
-    });
+      }),
+      {
+        title: response.debug_dir
+          ? `Debug artifacts saved to ${response.debug_dir} (under ./debug/ on the host with the default docker-compose mount).`
+          : undefined,
+      },
+    );
   }
 
   /**
@@ -1415,8 +1406,9 @@ export class JotViewStore {
           ? err.message
           : String(err);
     runInAction(() => {
-      this.transcribeStatus = { phase: 'error', message };
+      this.transcribeStatus = { phase: 'idle' };
     });
+    toastStore.showError(`${verb} failed: ${message}`);
   }
 
   /**
@@ -1483,22 +1475,12 @@ export class JotViewStore {
         });
         const bundle = await loadDebugZip(file);
         const ok = await this.applyDebugBundle(bundle, fallbackName);
-        runInAction(() => {
-          this.transcribeStatus = ok
-            ? { phase: 'idle' }
-            : {
-                phase: 'error',
-                message: `Could not parse score from ${fallbackName}.`,
-              };
-        });
+        if (!ok) {
+          toastStore.showError(`Could not parse score from ${fallbackName}.`);
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        runInAction(() => {
-          this.transcribeStatus = {
-            phase: 'error',
-            message: `Could not load ${fallbackName}: ${message}`,
-          };
-        });
+        toastStore.showError(`Could not load ${fallbackName}: ${message}`);
       }
     });
   }
@@ -1513,15 +1495,9 @@ export class JotViewStore {
     this.transcribeController = undefined;
   }
 
-  clearTranscribeStatus() {
-    this.transcribeStatus = { phase: 'idle' };
-  }
-
   /**
    * Read a Drumjot DSL file from the user's machine and load it as the
-   * current jot. Parse failures are surfaced through `transcribeStatus`
-   * (same error pill the transcribe flow uses) so the user sees what
-   * went wrong rather than getting silent dismissal.
+   * current jot. Parse failures surface as error toasts.
    */
   async loadJotFile(file: File): Promise<void> {
     return this.withLoading(`Loading ${file.name}…`, async () => {
@@ -1530,12 +1506,7 @@ export class JotViewStore {
         text = await file.text();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        runInAction(() => {
-          this.transcribeStatus = {
-            phase: 'error',
-            message: `Could not read ${file.name}: ${message}`,
-          };
-        });
+        toastStore.showError(`Could not read ${file.name}: ${message}`);
         return;
       }
       try {
@@ -1553,7 +1524,6 @@ export class JotViewStore {
           this.clearNoteProvenance();
           this.clearLyrics();
           jotPlayer.stop();
-          this.transcribeStatus = { phase: 'idle' };
         });
       } catch (err) {
         const message =
@@ -1562,9 +1532,7 @@ export class JotViewStore {
             : err instanceof Error
               ? err.message
               : String(err);
-        runInAction(() => {
-          this.transcribeStatus = { phase: 'error', message };
-        });
+        toastStore.showError(message);
       }
     });
   }
@@ -1582,12 +1550,7 @@ export class JotViewStore {
         bytes = await file.arrayBuffer();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        runInAction(() => {
-          this.transcribeStatus = {
-            phase: 'error',
-            message: `Could not read ${file.name}: ${message}`,
-          };
-        });
+        toastStore.showError(`Could not read ${file.name}: ${message}`);
         return;
       }
       try {
@@ -1604,14 +1567,11 @@ export class JotViewStore {
           this.clearNoteProvenance();
           this.clearLyrics();
           jotPlayer.stop();
-          this.transcribeStatus = { phase: 'idle' };
         });
       } catch (err) {
         const message =
           err instanceof Error ? `Could not convert ${file.name}: ${err.message}` : String(err);
-        runInAction(() => {
-          this.transcribeStatus = { phase: 'error', message };
-        });
+        toastStore.showError(message);
       }
     });
   }
@@ -1631,12 +1591,7 @@ export class JotViewStore {
         map = await loadParadbZip(file);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        runInAction(() => {
-          this.transcribeStatus = {
-            phase: 'error',
-            message: `Could not load ${file.name}: ${message}`,
-          };
-        });
+        toastStore.showError(`Could not load ${file.name}: ${message}`);
         return;
       }
 
@@ -1657,7 +1612,6 @@ export class JotViewStore {
         this.clearNoteProvenance();
         this.clearLyrics();
         jotPlayer.stop();
-        this.transcribeStatus = { phase: 'idle' };
       });
 
       // Audio tracks are best-effort: a chart with the score loaded is
@@ -1706,28 +1660,13 @@ export class JotViewStore {
         bundle = await loadDebugZip(file);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        runInAction(() => {
-          this.transcribeStatus = {
-            phase: 'error',
-            message: `Could not load ${file.name}: ${message}`,
-          };
-        });
+        toastStore.showError(`Could not load ${file.name}: ${message}`);
         return;
       }
       const ok = await this.applyDebugBundle(bundle, file.name);
-      // The shared apply path doesn't touch `transcribeStatus` (callers
-      // own that pill — `transcribeAudio` keeps its success state visible
-      // after auto-loading the bundle). For the explicit "load a bundle"
-      // path the user expects the pill to clear on success or carry the
-      // bundle-specific error on failure.
-      runInAction(() => {
-        this.transcribeStatus = ok
-          ? { phase: 'idle' }
-          : {
-              phase: 'error',
-              message: `Could not parse score from ${file.name}.`,
-            };
-      });
+      if (!ok) {
+        toastStore.showError(`Could not parse score from ${file.name}.`);
+      }
     });
   }
 
@@ -1835,9 +1774,7 @@ export class JotViewStore {
       } catch (err) {
         const message =
           err instanceof Error ? `Could not convert prediction.mid: ${err.message}` : String(err);
-        runInAction(() => {
-          this.transcribeStatus = { phase: 'error', message };
-        });
+        toastStore.showError(message);
       }
     }
 
@@ -2111,22 +2048,12 @@ export class JotViewStore {
         text = await file.text();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        runInAction(() => {
-          this.transcribeStatus = {
-            phase: 'error',
-            message: `Could not read ${file.name}: ${message}`,
-          };
-        });
+        toastStore.showError(`Could not read ${file.name}: ${message}`);
         return;
       }
       const lines = parseLrc(text);
       if (lines.length === 0) {
-        runInAction(() => {
-          this.transcribeStatus = {
-            phase: 'error',
-            message: `No synced lyrics found in ${file.name}.`,
-          };
-        });
+        toastStore.showError(`No synced lyrics found in ${file.name}.`);
         return;
       }
       runInAction(() => {
@@ -2160,11 +2087,10 @@ export class JotViewStore {
       source: 'lrclib',
       sourceLabel: `LRCLIB · ${match.trackName} - ${match.artistName}`,
     });
-    this.lyricsNotice = {
-      phase: 'loaded',
-      trackName: match.trackName,
-      artistName: match.artistName,
-    };
+    toastStore.showSuccess(
+      `Loaded ${match.trackName} by ${match.artistName} from LRCLIB`,
+      { testId: 'lyrics-search-loaded' },
+    );
     if (opts.wordLevel) {
       void this.runWordLevelAlignmentForLrclib(lines, match);
     }
@@ -2186,18 +2112,14 @@ export class JotViewStore {
   ): Promise<void> {
     const pick = this.pickAudioTrackForAlignment();
     if (!pick) {
-      runInAction(() => {
-        this.lyricsAlignStatus = {
-          phase: 'error',
-          message: 'Word-level alignment needs an audio track; load one first.',
-        };
-      });
+      toastStore.showError(
+        'Word-level alignment needs an audio track; load one first.',
+      );
       return;
     }
     const track = jotPlayer.audioTracks.get(pick.id);
     if (!track) return;
-    const blob = await (await fetch(track.objectUrl)).blob();
-    const file = new File([blob], track.filename, { type: blob.type });
+    const file = new File([track.sourceBlob], track.filename, { type: track.sourceBlob.type });
     const label = `${match.trackName} - ${match.artistName}`;
     await this.alignLyricsWhisper(
       {
@@ -2334,18 +2256,14 @@ export class JotViewStore {
   ): Promise<void> {
     const pick = this.pickAudioTrackForAlignment();
     if (!pick) {
-      runInAction(() => {
-        this.lyricsAlignStatus = {
-          phase: 'error',
-          message: 'Word-level alignment needs an audio track; load one first.',
-        };
-      });
+      toastStore.showError(
+        'Word-level alignment needs an audio track; load one first.',
+      );
       return;
     }
     const track = jotPlayer.audioTracks.get(pick.id);
     if (!track) return;
-    const blob = await (await fetch(track.objectUrl)).blob();
-    const file = new File([blob], track.filename, { type: blob.type });
+    const file = new File([track.sourceBlob], track.filename, { type: track.sourceBlob.type });
     await this.alignLyricsWhisper(
       {
         kind: pick.kind,
@@ -2359,14 +2277,9 @@ export class JotViewStore {
     );
   }
 
-  clearLyricsNotice() {
-    this.lyricsNotice = { phase: 'idle' };
-  }
-
   clearLyrics(): void {
     lyricsStore.clear();
     this.cancelLyricsAlign();
-    this.lyricsNotice = { phase: 'idle' };
   }
 
   setLyricsOffsetSec(sec: number): void {
@@ -2374,12 +2287,10 @@ export class JotViewStore {
   }
 
   /**
-   * Status of the Whisper lyric-alignment request, if one is in flight or
-   * recently completed. Drives the row's gutter source label (e.g.
-   * "Whisper · aligning…") and the toolbar status pill. Cleared back to
-   * `idle` once a successful load has happened (the row's existence is
-   * the success signal from then on) or when the user dismisses an
-   * error.
+   * Status of the Whisper lyric-alignment request while it's in flight.
+   * Drives the row's gutter source label ("Whisper · aligning…") and the
+   * toolbar busy pill. Returns to `idle` on completion regardless of
+   * outcome; failures surface as error toasts.
    */
   lyricsAlignStatus: LyricsAlignStatus = { phase: 'idle' };
   /** In-flight whisper alignment controller, so we can abort when a new
@@ -2424,8 +2335,9 @@ export class JotViewStore {
       }
       const message = err instanceof Error ? err.message : String(err);
       runInAction(() => {
-        this.lyricsAlignStatus = { phase: 'error', message };
+        this.lyricsAlignStatus = { phase: 'idle' };
       });
+      toastStore.showError(`Lyrics align failed: ${message}`);
       return;
     } finally {
       if (this.lyricsAlignController === controller) {
@@ -2434,11 +2346,11 @@ export class JotViewStore {
     }
     if (lines.length === 0) {
       runInAction(() => {
-        this.lyricsAlignStatus = {
-          phase: 'error',
-          message: `No lyrics were aligned (whisperx found no speech in ${label}).`,
-        };
+        this.lyricsAlignStatus = { phase: 'idle' };
       });
+      toastStore.showError(
+        `No lyrics were aligned (whisperx found no speech in ${label}).`,
+      );
       return;
     }
     runInAction(() => {
@@ -2448,11 +2360,6 @@ export class JotViewStore {
       });
       this.lyricsAlignStatus = { phase: 'idle' };
     });
-  }
-
-  /** User-dismissed an error or simply cleaned up state on a new load. */
-  clearLyricsAlignStatus(): void {
-    this.lyricsAlignStatus = { phase: 'idle' };
   }
 
   /**

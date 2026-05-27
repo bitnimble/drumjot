@@ -23,15 +23,13 @@
  *       the DSL has no concept of sustain (besides the `:l` modifier which we
  *       do not attempt to infer from MIDI).
  *
- *  [A4] Every `setTempo` is honoured. The first event sets `globalMetadata.bpm`
- *       (so round-trips against `toMidi`, which only writes one tempo at
- *       tick 0, stay lossless). Subsequent events attach as per-bar
- *       `metadata.bpm` overrides on the bar that contains them — the playback
- *       timeline (`playback/timeline.ts`) already walks these overrides bar by
- *       bar, so the score stays in sync with the audio whenever the writer
- *       emits per-bar `set_tempo` events (e.g. `prediction.mid` from the
- *       transcriber, which uses a back-solved lead-in tempo at tick 0 distinct
- *       from each bar's actual rate).
+ *  [A4] Every `setTempo` is honoured at its precise (snapped) tick. The
+ *       first tempo (latest event at or before tick 0) becomes
+ *       `globalMetadata.bpm`. Subsequent setTempo events become
+ *       `jot.tempoEvents` entries anchored at `(barIndex, beat-within-bar)`
+ *       so mid-bar tempo changes survive round-trip with sub-bar precision.
+ *       Ticks are quantized to the same 1/48 grid as note onsets, which
+ *       gives ±~10 ms precision at common drum tempos.
  *
  *  [A5] Time-signature changes ARE honoured. A new bar is started whenever a
  *       `timeSignature` meta event arrives, and the bar carries inline
@@ -67,6 +65,7 @@ import {
   Modifier,
   Note,
   Simultaneity,
+  TempoEvent,
   TimeSignature,
 } from 'src/dsl';
 import { defaultKindForPitch } from 'src/instruments';
@@ -235,17 +234,32 @@ export function fromMidi(
     });
   }
 
-  // [A4] Per-bar tempo attribution. Walk `tempoChanges` once forward,
-  // carrying the most recent tempo into each bar. A tempo event that lands
-  // strictly after a bar's start tick belongs to the next bar -- attribution
-  // is "most recent at or before the bar's startTick". The first tempo is
-  // already on `globalMetadata.bpm`, so per-bar overrides are only emitted
-  // on bars where the effective BPM actually changes (matches the per-bar
-  // time-signature behaviour just below).
-  const initialBpm =
-    tempoChanges.length > 0 ? tempoChanges[0].bpm : bpm;
-  let tempoIdx = 0;
-  let lastEmittedBpm = initialBpm;
+  // [A4] Tempo events: snap each setTempo to the same 1/48 grid as note
+  // onsets, anchor to (barIndex, beat-within-bar), dedup no-ops.
+  // Initial tempo (latest event at or before tick 0) lives on
+  // `globalMetadata.bpm`; later changes become `jot.tempoEvents` and are
+  // honoured at sub-bar precision by the runtime tempo timeline.
+  const initialBpm = tempoChanges.length > 0 ? tempoChanges[0].bpm : bpm;
+  const tempoEvents: TempoEvent[] = [];
+  {
+    let currentBpm = initialBpm;
+    for (let i = 0; i < tempoChanges.length; i++) {
+      const tc = tempoChanges[i];
+      if (i === 0) {
+        // First event already accounted for in `initialBpm`.
+        currentBpm = tc.bpm;
+        continue;
+      }
+      if (tc.bpm === currentBpm) continue;
+      const snapped = Math.round(tc.tick / gridTicks) * gridTicks;
+      const barIndex = locateBar(barSpans, snapped);
+      if (barIndex < 0) continue;
+      const span = barSpans[barIndex];
+      const beat = (snapped - span.startTick) / ticksPerBeat;
+      tempoEvents.push({ barIndex, beat: Math.max(0, beat), bpm: tc.bpm });
+      currentBpm = tc.bpm;
+    }
+  }
 
   // Build bar elements: for each grid slot, either a Rest, a Note, or a Simul.
   const bars: Bar[] = [];
@@ -275,15 +289,6 @@ export function fromMidi(
       }
     }
 
-    // Advance `tempoIdx` to the latest tempo change at or before this bar.
-    while (
-      tempoIdx + 1 < tempoChanges.length &&
-      tempoChanges[tempoIdx + 1].tick <= span.startTick
-    ) {
-      tempoIdx++;
-    }
-    const barBpm = tempoChanges[tempoIdx]?.bpm ?? initialBpm;
-
     // [A5] Attach inline time-signature metadata on bars where the sig changes.
     const bar: Bar = { elements };
     const meta: Metadata = {};
@@ -296,16 +301,7 @@ export function fromMidi(
       if (bi > 0) meta.time = span.time;
       lastEmittedTime = span.time;
     }
-    // [A4] Same pattern for per-bar BPM. Bar 0's tempo lives on
-    // `globalMetadata.bpm`; subsequent bars only annotate when the effective
-    // tempo changes from the previously-emitted value.
-    if (bi > 0 && barBpm !== lastEmittedBpm) {
-      meta.bpm = barBpm;
-      lastEmittedBpm = barBpm;
-    } else if (bi === 0) {
-      lastEmittedBpm = barBpm;
-    }
-    if (meta.time !== undefined || meta.bpm !== undefined) {
+    if (meta.time !== undefined) {
       bar.metadata = meta;
     }
     bars.push(bar);
@@ -381,11 +377,13 @@ export function fromMidi(
   // bars are preserved in `bars[0..leadBars-1]` and surfaced via
   // `globalMetadata.leadBars` / `globalMetadata.drumsT0Sec` so the
   // renderer can label them with negative indices.
-  return {
+  const jot: Jot = {
     title: '',
     globalMetadata,
     voices: [{ bars }],
   };
+  if (tempoEvents.length > 0) jot.tempoEvents = tempoEvents;
+  return jot;
 }
 
 // ---------- Helpers ----------

@@ -1,4 +1,12 @@
-export { JotPlayer, jotPlayer, PASSTHROUGH_FILTER, isAudibleUnder } from './player';
+export {
+  JotPlayer,
+  jotPlayer,
+  PASSTHROUGH_FILTER,
+  isAudibleUnder,
+  PLAYBACK_SPEED_MIN,
+  PLAYBACK_SPEED_MAX,
+  PLAYBACK_SPEED_STEP,
+} from './player';
 export type { PlayerState, PlayerFilter } from './player';
 export type { SampleLoadProgress } from './sample_storage';
 export type { KitInfo } from './gm_kit';

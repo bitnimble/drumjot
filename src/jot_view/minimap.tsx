@@ -31,6 +31,7 @@ import React from 'react';
 import { buildTimeline, jotPlayer } from 'src/playback';
 import { type BarSlice, waveformWorker } from 'src/playback/waveform_worker_client';
 import styles from './minimap.module.css';
+import { WAVEFORM_PAINT_COLOR } from './score';
 import { JotViewStore } from './store';
 
 const NOTE_STRIP_H = 16;
@@ -195,12 +196,9 @@ export const Minimap = observer(({ store }: { store: JotViewStore }) => {
     const waveBottom = NOTE_STRIP_H + WAVEFORM_H;
     const mid = (waveTop + waveBottom) / 2;
 
-    const computed = window.getComputedStyle(canvas);
-
     if (peaks) {
       const scale = (WAVEFORM_H / 2) * 0.9;
-      const wave = computed.getPropertyValue('--color-pattern-2').trim();
-      ctx.fillStyle = wave || '#5BA8E8';
+      ctx.fillStyle = WAVEFORM_PAINT_COLOR;
       const cols = Math.min(width, Math.floor(peaks.length / 2));
       for (let p = 0; p < cols; p++) {
         const mn = peaks[p * 2];
