@@ -542,8 +542,8 @@ def _detect_language_from_text(input_lines: list[InputLine]) -> str | None:
 
 def _log_audio_stats(audio_waveform: Any, audio_path: Path) -> None:
     """Summarise the vocals-stem waveform fed to the aligner so we can
-    tell at a glance whether the upstream fp16 separator produced sane
-    audio. NaN/Inf counts catch fp16 underflow tainting; `near_silent`
+    tell at a glance whether the upstream separator produced sane audio.
+    NaN/Inf counts catch upstream numerical tainting; `near_silent`
     catches the case where the separator zeroed out quiet regions and
     the model is being asked to align text against a near-flat signal."""
     import torch  # type: ignore[import-not-found]

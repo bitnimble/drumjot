@@ -56,20 +56,11 @@ class Settings(BaseSettings):
     # practice ~2× faster on GPU with no observable hit to word-level
     # alignment quality on our inputs.
     #
-    # The default points at a graph-level fp16 variant that
-    # `pipeline/provision.py::_ensure_vocals_fp16` prebakes at container
-    # startup from the fp32 UVR distribution. Internal weights /
-    # activations move to fp16 (TensorCore throughput win on modern
-    # consumer GPUs) while graph I/O stays fp32 so audio-separator's
-    # STFT path doesn't need a call-site change. Loaded lazily on first
-    # /lyrics/align mix call. Override (`VOCALS_MODEL=UVR-MDX-NET-Voc_FT.onnx`)
-    # to drop back to fp32 if a song reproducibly comes out muffled or
-    # NaN-tainted under fp16 - MDX-Net's STFT magnitude reconstruction
-    # can underflow on quiet sections, and there's no fp16-safe variant
-    # of the model published upstream. The vocals cache key includes
-    # the model name (see `app/main.py::_vocals_model_id`), so flipping
-    # this auto-invalidates previously cached fp16 stems.
-    vocals_model: str = "UVR-MDX-NET-Voc_FT_fp16.onnx"
+    # Loaded lazily on first /lyrics/align mix call. The vocals cache
+    # key includes the model name (see `app/main.py::_vocals_model_id`),
+    # so swapping models via env auto-invalidates previously cached
+    # stems.
+    vocals_model: str = "UVR-MDX-NET-Voc_FT.onnx"
 
     # --- ADTOF onset detector tuning ---
     # ADTOF (xavriley/ADTOF-pytorch Frame_RNN) is a fixed pretrained
