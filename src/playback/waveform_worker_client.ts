@@ -1,8 +1,16 @@
 /**
- * Main-thread client for the waveform worker.
+ * Main-thread client for the waveform workers.
  *
- * The worker (see {@link ./waveform_worker}) keeps a copy of each
- * loaded track's PCM and serves two coexisting APIs:
+ * Architecture: one Worker per audio track. Spawned on
+ * {@link registerTrack}, terminated on {@link dropTrack}. The worker
+ * module itself (see {@link ./waveform_worker}) is unchanged and still
+ * keyed internally by track id; each instance just happens to own the
+ * one track it was spawned for, so cross-track peak compute and
+ * OffscreenCanvas tile painting overlap up to hardwareConcurrency
+ * cores. For a typical mixer with N tracks, a sustained zoom gesture
+ * fans out across N worker threads instead of serializing on one.
+ *
+ * Two coexisting modes (each scoped to a single track):
  *
  *  - **Peaks-returning** ({@link computePeaks} / {@link computeWindow},
  *    used by the minimap and the per-note timing-viz snippet): the
@@ -16,13 +24,12 @@
  *    redraw, so a sustained zoom gesture costs ~0 main-thread ms
  *    regardless of how many tiles are visible.
  *
- * Lifecycle:
- *  - The worker is spawned lazily on first use (singleton).
- *  - {@link registerTrack} copies the PCM out of the live `AudioBuffer`
- *    once and ships it across; subsequent peak / render requests are
- *    just-the-bars + width, no buffer payload.
- *  - {@link dropTrack} frees the worker-side copy when the track is
- *    cleared.
+ * Chunk routing: callers only know the `chunkKey` (string), not the
+ * trackId, when calling {@link renderChunk} / {@link releaseChunk}.
+ * {@link attachChunk} records the chunkKey-to-trackId mapping so
+ * later chunk calls find the right worker. {@link dropTrack} also
+ * sweeps this map so a chunk message arriving after its owner was
+ * dropped is a safe no-op.
  *
  * Workers are assumed available (every supported browser ships them;
  * see AGENTS.md §5.11). Construction failure throws; a test that
@@ -44,8 +51,87 @@ import type {
 
 export type { BarSlice } from './waveform_compute';
 
+/**
+ * Per-track Worker wrapper. Owns the Worker, the request-id counter,
+ * and the pending-promise map for `peaks`/`window` requests. Each
+ * handle stores PCM for exactly one track; the worker module's
+ * internal `buffers` Map still exists but only ever holds the single
+ * track this handle was spawned for.
+ */
+class TrackWorkerHandle {
+  readonly worker: Worker;
+  private nextReqId = 1;
+  private pending: Map<
+    number,
+    { resolve: (peaks: Float32Array) => void; reject: (err: Error) => void }
+  > = new Map();
+
+  constructor() {
+    this.worker = new Worker(new URL('./waveform_worker.ts', import.meta.url), {
+      type: 'module',
+    });
+    this.worker.onmessage = (e: MessageEvent<WaveformWorkerResponse>) => {
+      const msg = e.data;
+      const pending = this.pending.get(msg.reqId);
+      if (!pending) return;
+      this.pending.delete(msg.reqId);
+      if (msg.kind === 'result') pending.resolve(msg.peaks);
+      else pending.reject(new Error(msg.message));
+    };
+    this.worker.onerror = (err) => {
+      console.error('[waveform-worker] uncaught:', err);
+    };
+  }
+
+  post(msg: WaveformWorkerRequest, transfer: Transferable[] = []): void {
+    this.worker.postMessage(msg, transfer);
+  }
+
+  request(
+    base:
+      | {
+          kind: 'peaks';
+          id: AudioTrackId;
+          bars: BarSlice[];
+          totalWidthPx: number;
+          drumsT0Sec: number;
+        }
+      | {
+          kind: 'window';
+          id: AudioTrackId;
+          startSec: number;
+          durationSec: number;
+          widthPx: number;
+        },
+  ): Promise<Float32Array> {
+    const reqId = this.nextReqId++;
+    return new Promise<Float32Array>((resolve, reject) => {
+      this.pending.set(reqId, { resolve, reject });
+      this.worker.postMessage({ ...base, reqId } satisfies WaveformWorkerRequest);
+    });
+  }
+
+  terminate(): void {
+    this.worker.terminate();
+    // Reject any in-flight peak/window promises so callers don't hang
+    // on a worker that no longer exists.
+    for (const { reject } of this.pending.values()) {
+      reject(new Error('audio track was dropped'));
+    }
+    this.pending.clear();
+  }
+}
+
 class WaveformWorkerClient {
-  private worker: Worker | undefined;
+  private workers: Map<AudioTrackId, TrackWorkerHandle> = new Map();
+  /**
+   * chunkKey to owning trackId so {@link renderChunk} and
+   * {@link releaseChunk} can route to the right worker without their
+   * callers having to thread trackId through. Populated by
+   * {@link attachChunk}, pruned by {@link releaseChunk} and
+   * {@link dropTrack}.
+   */
+  private chunkOwner: Map<string, AudioTrackId> = new Map();
   /**
    * Per-track uniform-waveform amplitude scale. Computed once on
    * {@link registerTrack} (cheap subsampled scan, ~1 ms) so every
@@ -56,40 +142,18 @@ class WaveformWorkerClient {
    * returns 1 as a passthrough).
    */
   ampScales: Map<AudioTrackId, number> = new Map();
-  private nextReqId = 1;
-  private pending: Map<
-    number,
-    { resolve: (peaks: Float32Array) => void; reject: (err: Error) => void }
-  > = new Map();
 
   constructor() {
     makeAutoObservable(this);
   }
 
   /**
-   * Lazily construct (or return) the Worker. Deferred to first use so
-   * module load stays side-effect-free for test runners that never
-   * exercise the worker code path.
-   */
-  private ensureWorker(): Worker {
-    if (this.worker) return this.worker;
-    const w = new Worker(new URL('./waveform_worker.ts', import.meta.url), {
-      type: 'module',
-    });
-    w.onmessage = (e: MessageEvent<WaveformWorkerResponse>) => this.onMessage(e.data);
-    w.onerror = (err) => {
-      console.error('[waveform-worker] uncaught:', err);
-    };
-    this.worker = w;
-    return w;
-  }
-
-  /**
-   * Hand the worker a copy of the decoded PCM. Sent once per track on
-   * load. Channel arrays are transferred (the worker takes
-   * ownership), which is safe because {@link extractChannels} just
-   * produced fresh copies; the original `AudioBuffer` stays
-   * untouched and usable by the BufferSource playback path.
+   * Spawn a dedicated worker for the track and hand it a copy of the
+   * decoded PCM. Sent once per track on load. Channel arrays are
+   * transferred (the worker takes ownership), which is safe because
+   * {@link extractChannels} just produced fresh copies; the original
+   * `AudioBuffer` stays untouched and usable by the BufferSource
+   * playback path.
    */
   registerTrack(id: AudioTrackId, buffer: AudioBuffer): void {
     const data = extractChannels(buffer);
@@ -101,15 +165,21 @@ class WaveformWorkerClient {
     runInAction(() => {
       this.ampScales.set(id, scale);
     });
+    // Defensive: ids are monotonic so re-registration shouldn't
+    // happen, but if it ever does, tear down the prior worker first
+    // so we don't leak it.
+    this.workers.get(id)?.terminate();
+    const handle = new TrackWorkerHandle();
+    this.workers.set(id, handle);
     const transfer: Transferable[] = data.channels.map((c) => c.buffer);
-    this.ensureWorker().postMessage(
+    handle.post(
       {
         kind: 'register',
         id,
         channels: data.channels,
         sampleRate: data.sampleRate,
         length: data.length,
-      } satisfies WaveformWorkerRequest,
+      },
       transfer,
     );
   }
@@ -124,15 +194,24 @@ class WaveformWorkerClient {
   }
 
   /**
-   * Drop the worker-side PCM copy for `id`. Sent when the track is
-   * cleared so the worker doesn't accumulate dead buffers across a
-   * session.
+   * Drop a track: terminate its worker (also rejects any in-flight
+   * peak/window promises) and forget every chunkKey owned by it.
+   * Sent when the track is cleared. Chunk tiles still mounted will
+   * fire {@link releaseChunk} on unmount; with the routing entries
+   * gone, those calls are safe no-ops.
    */
   dropTrack(id: AudioTrackId): void {
     runInAction(() => {
       this.ampScales.delete(id);
     });
-    this.ensureWorker().postMessage({ kind: 'drop', id } satisfies WaveformWorkerRequest);
+    const handle = this.workers.get(id);
+    if (handle) {
+      handle.terminate();
+      this.workers.delete(id);
+    }
+    for (const [chunkKey, owner] of this.chunkOwner) {
+      if (owner === id) this.chunkOwner.delete(chunkKey);
+    }
   }
 
   /**
@@ -155,7 +234,9 @@ class WaveformWorkerClient {
     widthPx: number,
     drumsT0Sec: number,
   ): Promise<Float32Array> {
-    return this.request({
+    const handle = this.workers.get(id);
+    if (!handle) return Promise.reject(new Error(`unregistered track ${id}`));
+    return handle.request({
       kind: 'peaks',
       id,
       bars,
@@ -174,7 +255,9 @@ class WaveformWorkerClient {
     durationSec: number,
     widthPx: number,
   ): Promise<Float32Array> {
-    return this.request({
+    const handle = this.workers.get(id);
+    if (!handle) return Promise.reject(new Error(`unregistered track ${id}`));
+    return handle.request({
       kind: 'window',
       id,
       startSec,
@@ -184,16 +267,24 @@ class WaveformWorkerClient {
   }
 
   /**
-   * Hand the worker control of a tile's `<canvas>` so it can paint
-   * into it directly without the peak bytes ever reaching the main
-   * thread. Call once per tile on mount, after
+   * Hand the track's worker control of a tile's `<canvas>` so it can
+   * paint into it directly without the peak bytes ever reaching the
+   * main thread. Call once per tile on mount, after
    * `HTMLCanvasElement.transferControlToOffscreen()` produces the
    * `OffscreenCanvas`. `chunkKey` must be globally unique across
    * tracks; the convention is `${trackId}:${chunk.key}`.
+   *
+   * Records the chunkKey-to-trackId mapping so later renderChunk /
+   * releaseChunk calls (which carry only the chunkKey) can find the
+   * right worker. If the track was already dropped between the React
+   * mount and this effect, the call is a safe no-op.
    */
   attachChunk(chunkKey: string, canvas: OffscreenCanvas, trackId: AudioTrackId): void {
-    this.ensureWorker().postMessage(
-      { kind: 'attachChunk', chunkKey, trackId, canvas } satisfies WaveformWorkerRequest,
+    const handle = this.workers.get(trackId);
+    if (!handle) return;
+    this.chunkOwner.set(chunkKey, trackId);
+    handle.post(
+      { kind: 'attachChunk', chunkKey, trackId, canvas },
       [canvas],
     );
   }
@@ -217,7 +308,11 @@ class WaveformWorkerClient {
     pitchColor: string,
     ampScale: number,
   ): void {
-    this.ensureWorker().postMessage({
+    const owner = this.chunkOwner.get(chunkKey);
+    if (owner === undefined) return;
+    const handle = this.workers.get(owner);
+    if (!handle) return;
+    handle.post({
       kind: 'renderChunk',
       chunkKey,
       bars,
@@ -228,7 +323,7 @@ class WaveformWorkerClient {
       drumsT0Sec,
       pitchColor,
       ampScale,
-    } satisfies WaveformWorkerRequest);
+    });
   }
 
   /**
@@ -236,40 +331,12 @@ class WaveformWorkerClient {
    * the worker doesn't accumulate dead `OffscreenCanvas` references.
    */
   releaseChunk(chunkKey: string): void {
-    this.ensureWorker().postMessage({ kind: 'releaseChunk', chunkKey } satisfies WaveformWorkerRequest);
-  }
-
-  private request(
-    base:
-      | {
-          kind: 'peaks';
-          id: AudioTrackId;
-          bars: BarSlice[];
-          totalWidthPx: number;
-          drumsT0Sec: number;
-        }
-      | {
-          kind: 'window';
-          id: AudioTrackId;
-          startSec: number;
-          durationSec: number;
-          widthPx: number;
-        },
-  ): Promise<Float32Array> {
-    const reqId = this.nextReqId++;
-    const worker = this.ensureWorker();
-    return new Promise<Float32Array>((resolve, reject) => {
-      this.pending.set(reqId, { resolve, reject });
-      worker.postMessage({ ...base, reqId } satisfies WaveformWorkerRequest);
-    });
-  }
-
-  private onMessage(msg: WaveformWorkerResponse): void {
-    const pending = this.pending.get(msg.reqId);
-    if (!pending) return;
-    this.pending.delete(msg.reqId);
-    if (msg.kind === 'result') pending.resolve(msg.peaks);
-    else pending.reject(new Error(msg.message));
+    const owner = this.chunkOwner.get(chunkKey);
+    if (owner === undefined) return;
+    this.chunkOwner.delete(chunkKey);
+    const handle = this.workers.get(owner);
+    if (!handle) return;
+    handle.post({ kind: 'releaseChunk', chunkKey });
   }
 }
 

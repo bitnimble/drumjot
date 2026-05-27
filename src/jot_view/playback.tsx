@@ -145,29 +145,33 @@ const PlaybackControls = observer(
         </div>
         <div className={styles.transportAux}>
           <MasterVolumes />
-          {hasJot && (
-            <OffsetControl
-              label="Beat"
-              unit="/48"
-              value={drumOffsetBeats * 12}
-              step={1}
-              precision={0}
-              title="Slide every drum note across the bars by this many 1/48-note units to realign a consistently mis-detected groove (12 = one quarter-note beat; 16 = a triplet 8th; 6 = a 16th). Positive = later, negative = earlier. Reflows the score and reschedules playback live. Notes pushed off either end of the score are dropped."
-              ariaLabel="Drum beat offset in 1/48 units"
-              onChange={(units) => onSetDrumOffset(units / 12)}
-            />
-          )}
-          {hasAudioTracks && (
-            <OffsetControl
-              label="Audio"
-              unit="s"
-              value={audioOffsetSec}
-              step={0.01}
-              min={0}
-              title="Drum-to-audio-track offset (the recording's lead-in), in seconds. Raising it slides the backing audio ahead of the drums; lowering it pulls them together. Takes effect instantly, including mid-playback, so you can nudge it until the drums lock to the track."
-              ariaLabel="Drum to audio track offset in seconds"
-              onChange={onSetAudioOffset}
-            />
+          {(hasJot || hasAudioTracks) && (
+            <div className={styles.offsetStack}>
+              {hasJot && (
+                <OffsetControl
+                  label="Beat"
+                  unit="/48"
+                  value={drumOffsetBeats * 12}
+                  step={1}
+                  precision={0}
+                  title="Slide every drum note across the bars by this many 1/48-note units to realign a consistently mis-detected groove (12 = one quarter-note beat; 16 = a triplet 8th; 6 = a 16th). Positive = later, negative = earlier. Reflows the score and reschedules playback live. Notes pushed off either end of the score are dropped."
+                  ariaLabel="Drum beat offset in 1/48 units"
+                  onChange={(units) => onSetDrumOffset(units / 12)}
+                />
+              )}
+              {hasAudioTracks && (
+                <OffsetControl
+                  label="Audio"
+                  unit="s"
+                  value={audioOffsetSec}
+                  step={0.01}
+                  min={0}
+                  title="Drum-to-audio-track offset (the recording's lead-in), in seconds. Raising it slides the backing audio ahead of the drums; lowering it pulls them together. Takes effect instantly, including mid-playback, so you can nudge it until the drums lock to the track."
+                  ariaLabel="Drum to audio track offset in seconds"
+                  onChange={onSetAudioOffset}
+                />
+              )}
+            </div>
           )}
           {hasError && (
             <span

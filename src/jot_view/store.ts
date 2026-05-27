@@ -415,6 +415,18 @@ export class JotViewStore {
   pitchVolumes: Map<string, number> = new Map();
   audioTrackVolumes: Map<AudioTrackId, number> = new Map();
   /**
+   * Per-audio-track waveform colour overrides set from the mixer row's
+   * overflow menu. Sparse: a track absent from the map inherits its
+   * associated drum pitch's lane colour (see
+   * `AudioTrackWaveformCanvas` in mixer.tsx). Transient session state;
+   * dropped when the track is cleared.
+   *
+   * Drum-instrument note colours have a parallel override that lives on
+   * {@link RenderedJot.pitchColorOverrides} - it's score data, not
+   * audio data, so it follows the jot instance.
+   */
+  audioTrackColorOverrides: Map<AudioTrackId, string> = new Map();
+  /**
    * User-customizable order of mixer rows. Each entry is either a
    * loaded audio track id or a DSL pitch letter; the mixer renders rows
    * top-to-bottom in this exact order, with audio and drum-instrument
@@ -1036,6 +1048,20 @@ export class JotViewStore {
     this.audioTrackVolumes.set(id, clampVolume(v));
   }
 
+  /** Override colour for an audio track's waveform, or undefined if it
+   *  should inherit from the associated drum pitch's lane colour. */
+  audioTrackColor(id: AudioTrackId): string | undefined {
+    return this.audioTrackColorOverrides.get(id);
+  }
+
+  setAudioTrackColor(id: AudioTrackId, color: string) {
+    this.audioTrackColorOverrides.set(id, color);
+  }
+
+  clearAudioTrackColor(id: AudioTrackId) {
+    this.audioTrackColorOverrides.delete(id);
+  }
+
   /**
    * Load an audio file as a new audio track and update the status pill
    * on failure. Decoding goes through the shared `AudioContext`, so the
@@ -1069,6 +1095,7 @@ export class JotViewStore {
     this.mutedAudioTracks.delete(id);
     this.soloedAudioTracks.delete(id);
     this.audioTrackVolumes.delete(id);
+    this.audioTrackColorOverrides.delete(id);
   }
 
   /**

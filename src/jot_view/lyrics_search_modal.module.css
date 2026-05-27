@@ -10,7 +10,11 @@
 .modalPanel {
     composes: panel from './components/modal.module.css';
     width: min(560px, 100%);
+    /* `dvh` recomputes against the visible viewport so the modal
+       doesn't extend past a visible mobile address bar; `vh`
+       fallback for engines without `dvh`. */
     max-height: calc(100vh - 48px);
+    max-height: calc(100dvh - 48px);
 }
 
 .modalHeader {
@@ -106,14 +110,18 @@
 .resultItem {
     composes: reset from './components/button.module.css';
     width: 100%;
+    /* `.reset` is additive only (see the docblock in
+       components/button.module.css); it leaves the UA-default
+       `<button>` border / background untouched, so without these
+       explicit resets each row paints the native grey border on the
+       top and right edges (the bottom is overridden by the row
+       separator below, the left by the selection-accent track) and
+       the native opaque background bleeds through the modal surface.
+       Wipe both, then the longhand `border-left` / `border-bottom`
+       below restores the two sides that carry meaning. */
+    border: 0;
     border-left: 3px solid transparent;
     border-bottom: 1px solid var(--color-border);
-    /* `.reset` no longer carries `background: transparent` (it'd clobber
-       variant backgrounds via cross-module composes order), so any
-       direct-reset consumer that wants the surface to show through must
-       declare it explicitly. Without this the row falls back to the
-       UA-default `<button>` grey/white; opaque white-ish on the dark
-       theme. */
     background: transparent;
     padding: 10px 16px 10px 13px;
     display: flex;

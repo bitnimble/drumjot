@@ -21,7 +21,17 @@
         margin: 0;
         padding: 0;
         width: 100vw;
+        /* `100vh` on mobile measures against the LARGE viewport (browser
+           UI hidden), so content pinned at `bottom: 0` (the playback
+           bar) sits behind a visible address bar until the user
+           scrolls to retract it. `100dvh` is the dynamic viewport
+           height: it recomputes as the address bar shows/hides, so
+           the playback bar stays above the address bar when it's up
+           and re-anchors to the true bottom when it's down. The `vh`
+           line is the fallback for any browser that doesn't support
+           `dvh`; modern evergreen (per AGENTS.md §5.11) all do. */
         height: 100vh;
+        height: 100dvh;
         background: #fff6e8;
         font-family:
           'Bricolage Grotesque',

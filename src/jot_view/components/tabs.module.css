@@ -15,9 +15,12 @@
     composes: bodyMd from '../../typography.module.css';
     flex: 1 1 0;
     padding: 6px 12px;
-    /* `.reset` no longer carries `background: transparent`; without an
-       explicit declaration the UA-default `<button>` background paints
-       through the tab strip. */
+    /* `.reset` is additive only (see the docblock in button.module.css);
+       it leaves the UA-default `<button>` border / background untouched,
+       so without these explicit resets every tab paints its native grey
+       border and beige background inside the strip. Wipe both, then the
+       `border-bottom` below restores the underline track. */
+    border: 0;
     background: transparent;
     color: var(--color-text-muted);
     /* Underline accent on the active tab; on inactive tabs the bar is

@@ -8,7 +8,7 @@
 - add colour picker to track overflow menus. changes colour of notes for instrument tracks, and colour of waveforms for audio tracks
 
 ## Performance
-
+- Worker pool for multi-threaded waveform compute and render on audio tracks
 
 ## Refactoring
 - refactor sweep all code to split out more, be less monolithic:
@@ -43,4 +43,3 @@
  - test multi track
  - swap out non-en model for something commercial license friendly
  - do line-level language detection
- -

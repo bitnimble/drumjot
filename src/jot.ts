@@ -431,9 +431,32 @@ export type JotStructure = {
 export class RenderedJot {
   private viewConfig: ViewConfig;
 
+  /**
+   * Per-pitch colour overrides applied on top of the palette assignment.
+   * Transient (lives only on this RenderedJot instance, lost on reload);
+   * the .jot file format will eventually carry styling metadata and we
+   * will rehydrate from there.
+   *
+   * Mutated by the mixer's per-row colour picker via
+   * {@link setPitchColorOverride} / {@link clearPitchColorOverride}.
+   * `assignTrackColors` reads this before falling back to the palette,
+   * so a single setter call invalidates the `structureForJot` computed
+   * and every render path (score, minimap, audio waveform) repaints
+   * against the override on the next observable tick.
+   */
+  pitchColorOverrides: Map<string, string> = new Map();
+
   constructor(public source: Jot, viewConfig?: ViewConfig) {
     this.viewConfig = viewConfig ?? new ViewConfig();
     makeAutoObservable(this, { source: false });
+  }
+
+  setPitchColorOverride(pitch: string, color: string): void {
+    this.pitchColorOverrides.set(pitch, color);
+  }
+
+  clearPitchColorOverride(pitch: string): void {
+    this.pitchColorOverrides.delete(pitch);
   }
 
   get title() {
@@ -1003,9 +1026,16 @@ export class RenderedJot {
     orderedPitches: string[]
   ): void {
     const palette = this.viewConfig.palette;
-    if (palette.length === 0) return;
+    const overrides = this.pitchColorOverrides;
+    if (palette.length === 0 && overrides.size === 0) return;
     for (const bar of bars) {
       for (const pitch of Object.keys(bar.tracks)) {
+        const override = overrides.get(pitch);
+        if (override !== undefined) {
+          bar.tracks[pitch].color = override;
+          continue;
+        }
+        if (palette.length === 0) continue;
         const idx = orderedPitches.indexOf(pitch);
         const slot = idx >= 0 ? idx : 0;
         bar.tracks[pitch].color = palette[slot % palette.length];

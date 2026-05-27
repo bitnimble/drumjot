@@ -9,7 +9,11 @@
 .modalPanel {
     composes: panel from './components/modal.module.css';
     width: min(640px, 100%);
+    /* `dvh` recomputes against the visible viewport so the modal
+       doesn't extend past a visible mobile address bar; `vh`
+       fallback for engines without `dvh`. */
     max-height: calc(100vh - 48px);
+    max-height: calc(100dvh - 48px);
 }
 
 .modalHeader {

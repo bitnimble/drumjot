@@ -1,0 +1,73 @@
+/* Single row inside a DropdownButton panel that hosts a colour picker
+   and a reset button. Mirrors the geometry of the lyrics overflow's
+   `offsetStepperRow` (label left, control cluster right, same vertical
+   padding) so a row built from this composes cleanly alongside other
+   in-menu setting rows. */
+
+.row {
+    composes: bodyMd from '../../typography.module.css';
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 12px;
+    color: var(--color-text-secondary);
+    cursor: default;
+}
+
+.controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* The native `<input type="color">` paints a tiny coloured rectangle
+   that doubles as the click target opening the OS colour picker. The
+   browser default has a chunky inner padding + grey frame; strip both
+   so the swatch reads as a small filled tile that matches the menu's
+   warm-paper chrome. */
+.swatch {
+    composes: reset from './button.module.css';
+    width: 28px;
+    height: 18px;
+    padding: 0;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+}
+
+.swatch::-webkit-color-swatch-wrapper {
+    padding: 0;
+}
+
+.swatch::-webkit-color-swatch {
+    border: none;
+    border-radius: calc(var(--radius-sm) - 1px);
+}
+
+.swatch::-moz-color-swatch {
+    border: none;
+    border-radius: calc(var(--radius-sm) - 1px);
+}
+
+.swatch:hover {
+    border-color: var(--color-border-strong);
+}
+
+.swatch:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
+/* Reset link sized to match the swatch row without dominating it. */
+.reset {
+    composes: ghost from './button.module.css';
+    composes: bodySm from '../../typography.module.css';
+    padding: 3px 6px;
+    color: var(--color-text-muted-alt);
+}
+
+.reset:disabled {
+    color: var(--color-text-disabled);
+    cursor: not-allowed;
+}

@@ -11,6 +11,7 @@ import {
 } from './waveform_chunks';
 import { GutterResizeHandle } from './components/gutter_resize_handle';
 import { MuteButton, SoloButton } from './components/icon_button';
+import { ColorPickerMenuItem } from './components/color_picker_menu_item';
 import { DropdownButton, dropdownStyles } from './components/dropdown';
 import {
   JotViewStoreContext,
@@ -60,6 +61,13 @@ export type AudioTrackControls = {
   /** Overflow menu: run stage 2 (`stems_per`) on this track,
    *  splitting a drum-only recording into per-instrument pieces. */
   onSplitDrumPieces: (id: AudioTrackId) => void;
+  /** Per-track waveform colour override, or undefined for "inherit
+   *  from associated drum pitch". */
+  colorFor: (id: AudioTrackId) => string | undefined;
+  /** Apply a hex `#rrggbb` colour as this track's waveform tint. */
+  onSetColor: (id: AudioTrackId, color: string) => void;
+  /** Drop the colour override so the waveform reverts to inheriting. */
+  onResetColor: (id: AudioTrackId) => void;
   /** Audio section master M/S; same semantics as on {@link VoiceControls}. */
   masterMuted: boolean;
   masterSoloed: boolean;
@@ -514,25 +522,38 @@ export function splitDrumPiecesState(role: AudioTrackRole | undefined): AudioTra
 
 /** Per-row overflow menu on audio tracks. Hosts the two separation
  *  operations (stage 1, stage 2) with enable state derived from the
- *  track's {@link AudioTrackRole}, plus the "Remove track" action. The
- *  trigger always renders since Remove is always available. */
-const AudioTrackOverflowMenu = ({
+ *  track's {@link AudioTrackRole}, the waveform-colour picker, plus
+ *  the "Remove track" action. The trigger always renders since Remove
+ *  is always available. */
+const AudioTrackOverflowMenu = observer(({
   id,
   role,
   trackLabel,
+  inheritedColor,
+  overrideColor,
   onSplitFromMix,
   onSplitDrumPieces,
+  onSetColor,
+  onResetColor,
   onClear,
 }: {
   id: AudioTrackId;
   role: AudioTrackRole | undefined;
   trackLabel: string;
+  /** Colour the waveform would paint with NO override (the associated
+   *  pitch's lane colour, or a neutral fallback). */
+  inheritedColor: string;
+  /** Active override hex, or undefined if no override is set. */
+  overrideColor: string | undefined;
   onSplitFromMix: (id: AudioTrackId) => void;
   onSplitDrumPieces: (id: AudioTrackId) => void;
+  onSetColor: (id: AudioTrackId, color: string) => void;
+  onResetColor: (id: AudioTrackId) => void;
   onClear: (id: AudioTrackId) => void;
 }) => {
   const mixState = splitFromMixState(role);
   const piecesState = splitDrumPiecesState(role);
+  const pickerValue = overrideColor ?? normaliseColorForPicker(inheritedColor);
   return (
     <DropdownButton
       label="⋯"
@@ -560,6 +581,15 @@ const AudioTrackOverflowMenu = ({
             testId={`audio-track-split-pieces-${id}`}
           />
           <span className={dropdownStyles.dropdownDivider} aria-hidden="true" />
+          <ColorPickerMenuItem
+            label="Waveform colour"
+            value={pickerValue}
+            isOverridden={overrideColor !== undefined}
+            onChange={(hex) => onSetColor(id, hex)}
+            onReset={() => onResetColor(id)}
+            ariaLabel={`Waveform colour for ${trackLabel}`}
+          />
+          <span className={dropdownStyles.dropdownDivider} aria-hidden="true" />
           <button
             type="button"
             className={dropdownStyles.dropdownItem}
@@ -577,7 +607,80 @@ const AudioTrackOverflowMenu = ({
       )}
     </DropdownButton>
   );
-};
+});
+
+/** Per-instrument-row overflow menu. Currently hosts only the note-
+ *  colour picker; we kept the chrome consistent with
+ *  {@link AudioTrackOverflowMenu} so future additions (per-pitch
+ *  velocity scale, label rename, etc.) drop in without an entirely new
+ *  affordance. */
+const InstrumentRowOverflowMenu = observer(({
+  pitch,
+  jot,
+  currentColor,
+  trackLabel,
+}: {
+  pitch: string;
+  jot: RenderedJot;
+  /** The colour currently in effect for this pitch (palette OR
+   *  override). The picker uses it as its initial value. */
+  currentColor: string;
+  trackLabel: string;
+}) => {
+  const isOverridden = jot.pitchColorOverrides.has(pitch);
+  return (
+    <DropdownButton
+      label="⋯"
+      className={styles.overflowTrigger}
+      title={`More actions for ${trackLabel}`}
+    >
+      {() => (
+        <ColorPickerMenuItem
+          label="Note colour"
+          value={normaliseColorForPicker(currentColor)}
+          isOverridden={isOverridden}
+          onChange={(hex) => jot.setPitchColorOverride(pitch, hex)}
+          onReset={() => jot.clearPitchColorOverride(pitch)}
+          ariaLabel={`Note colour for ${trackLabel}`}
+        />
+      )}
+    </DropdownButton>
+  );
+});
+
+/** Native `<input type="color">` requires a `#rrggbb` string and
+ *  silently snaps anything else to `#000000`. The audio-track waveform
+ *  fallback can be a `var(...)` CSS expression for pitches with no
+ *  kept notes; convert anything that isn't a 7-char hex into a neutral
+ *  grey so the picker opens at a sensible starting colour. */
+function normaliseColorForPicker(color: string): string {
+  return /^#[0-9a-fA-F]{6}$/.test(color) ? color : '#7e7e7e';
+}
+
+/** Walk the jot structure to find the lane colour of `pitch` (first
+ *  bar that carries notes for it). Returns `undefined` if `pitch` is
+ *  itself undefined or no bar holds a track for that pitch. Reads
+ *  `t.color` which already reflects any pitch-level override applied
+ *  via {@link RenderedJot.setPitchColorOverride}, so callers don't
+ *  need to layer those in separately. */
+function pitchLaneColor(jot: RenderedJot, pitch: string | undefined): string | undefined {
+  if (!pitch) return undefined;
+  for (const v of jot.structure.voices) {
+    for (const b of v.bars) {
+      const t = b.tracks[pitch];
+      if (t?.color) return t.color;
+    }
+  }
+  return undefined;
+}
+
+/** Waveform default colour for an audio track when no per-track
+ *  override is set; its associated pitch's lane colour, falling back
+ *  to a neutral blue for ad-hoc / non-pitch tracks. Matches the legacy
+ *  `pitchColor ?? '#5BA8E8'` baked into `renderChunk`. */
+function audioTrackInheritedColor(jot: RenderedJot, track: AudioTrack): string {
+  return pitchLaneColor(jot, track.pitch) ?? '#5BA8E8';
+}
 
 const AudioTrackMenuItem = ({
   label,
@@ -652,6 +755,7 @@ const AudioTrackRow = observer(
     const isDragging = dragFromIdx === idx;
     const store = React.useContext(JotViewStoreContext);
     const splitStatus = store?.audioTrackSplitStatuses.get(id);
+    const inheritedWaveformColor = audioTrackInheritedColor(jot, track);
     const splittingTitle =
       splitStatus?.kind === 'mix'
         ? 'Splitting into drums + backing…'
@@ -712,8 +816,12 @@ const AudioTrackRow = observer(
                 id={id}
                 role={track.role}
                 trackLabel={label}
+                inheritedColor={inheritedWaveformColor}
+                overrideColor={controls.colorFor(id)}
                 onSplitFromMix={controls.onSplitFromMix}
                 onSplitDrumPieces={controls.onSplitDrumPieces}
+                onSetColor={controls.onSetColor}
+                onResetColor={controls.onResetColor}
                 onClear={controls.onClear}
               />
             </div>
@@ -908,6 +1016,12 @@ const InstrumentRow = observer(
                 offTitle={`Solo ${pitch}`}
                 onTitle={`Unsolo ${pitch}`}
               />
+              <InstrumentRowOverflowMenu
+                pitch={pitch}
+                jot={jot}
+                currentColor={pitchColor}
+                trackLabel={labelText}
+              />
             </div>
           </div>
         </div>
@@ -1047,21 +1161,19 @@ const AudioTrackWaveformCanvas = observer(
     const store = React.useContext(JotViewStoreContext);
     const uniformWaveforms = React.useContext(UniformWaveformsContext);
     const padBeats = React.useContext(RenderedJotContext)?.config.barNotePaddingBeats ?? 0.125;
-    // Per-track stem-colour resolution: same logic the legacy single
-    // canvas used; hoisted to the parent so every chunk reuses the
-    // result instead of re-walking the structure on each mount.
-    let pitchColor: string | undefined;
-    if (track.pitch) {
-      outer: for (const v of jot.structure.voices) {
-        for (const b of v.bars) {
-          const t = b.tracks[track.pitch];
-          if (t?.color) {
-            pitchColor = t.color;
-            break outer;
-          }
-        }
-      }
-    }
+    // Waveform tint resolution:
+    //   1. an explicit per-audio-track override from the row's overflow
+    //      menu wins outright, so the user can recolour ad-hoc / non-
+    //      pitch tracks (master, backing) too;
+    //   2. otherwise fall back to the associated drum pitch's lane
+    //      colour (which already reflects any pitch-level override);
+    //   3. otherwise undefined; the chunk worker fills in its own
+    //      neutral default downstream.
+    // Reading `store.audioTrackColor` inside this observer is the
+    // observable dependency that drives the chunk to repaint when the
+    // user picks a new colour.
+    const override = store?.audioTrackColor(track.id);
+    const pitchColor = override ?? pitchLaneColor(jot, track.pitch);
     // Beat-stable chunk layout (zoom-invariant). Memoed on `jot` so
     // scroll / zoom re-renders of this observer don't rebuild it.
     const layout = React.useMemo(() => buildChunkLayout(jot), [jot]);
