@@ -155,6 +155,23 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
+class _DropHealthAccessLog(logging.Filter):
+    """Drop uvicorn access-log lines for `GET /health`. Caddy hits the
+    health endpoint on a tight liveness interval; logging every probe
+    drowns out everything else in the container logs."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3:
+            method, path = args[1], args[2]
+            if method == "GET" and isinstance(path, str) and path.startswith("/health"):
+                return False
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_DropHealthAccessLog())
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # The image runs two uvicorn processes (`pipeline` + `api`) behind
