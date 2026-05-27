@@ -1,26 +1,47 @@
 /**
- * Session-only store for the time-aligned lyrics row. Lifecycle is
+ * Session-only store for the time-aligned lyrics rows. Lifecycle is
  * "owned by the current jot": every loader that replaces the song
  * (`loadJotFile`, `loadParadbMap`, `applyDebugBundle`, etc.) clears
  * this store along with the audio tracks, so a stale lyric set from
  * one song can't bleed onto the next.
  *
  * The store doesn't persist anywhere; no `globalMetadata` field, no
- * localStorage; if the user wants the same lyrics next time they reload
- * they re-run the LRCLIB search / re-load the file. Confirmed product
- * decision for v1; revisit when there's a real persistence story for
- * mid-edit jot state.
+ * localStorage; if the user wants the same lyrics next time they
+ * reload they re-run the LRCLIB search / re-load the file.
+ *
+ * Multi-track: callers `add()` a track and get back a stable
+ * `LyricsTrackId`; subsequent loads are additive (a new file or LRCLIB
+ * pick creates another row rather than replacing the singleton).
+ * Duets, side-by-side comparison of alignments, and multi-language
+ * lyrics all become independent rows in the mixer keyed by id. The
+ * source-label collision suffix (` (2)`, ` (3)`) is computed in
+ * `add()` so callers always pass the natural label.
  */
 
 import { makeAutoObservable } from 'mobx';
 import { JotTimeline } from 'src/playback';
-import { LyricLine, activeLineIndexAt } from './lrc';
+import { LyricLine } from './lrc';
 
 export type LyricsSource = 'lrclib' | 'file' | 'plaintext';
 
+export type LyricsTrackId = string;
+
+/**
+ * One lyrics row. Immutable from the consumer's perspective; the store
+ * swaps the whole object on mutation (offset nudge, word-level
+ * upgrade), so React/MobX observers re-render off identity changes.
+ */
+export type LyricsTrack = {
+  readonly id: LyricsTrackId;
+  readonly lines: readonly LyricLine[];
+  readonly source: LyricsSource;
+  readonly sourceLabel: string;
+  readonly offsetSec: number;
+};
+
 /** Slider bounds for the user-facing time-offset nudger. Mirrors the
- *  drumsT0Sec / drum-offset pattern: a single uniform shift across the
- *  whole lyric row, expressed in audio seconds. ±60s covers the realistic
+ *  drumsT0Sec / drum-offset pattern: a single uniform shift across one
+ *  lyric row, expressed in audio seconds. ±60s covers the realistic
  *  range of nudges (file-loaded LRC from a different cut, LRCLIB match
  *  against a remaster/edit) while still acting as a sanity tripwire for
  *  the "wrong song entirely" case, which would be off by minutes. */
@@ -28,70 +49,108 @@ export const LYRICS_OFFSET_MIN_SEC = -60;
 export const LYRICS_OFFSET_MAX_SEC = 60;
 export const LYRICS_OFFSET_STEP_SEC = 0.01;
 
+/**
+ * Module-level monotonic id allocator. Session-scoped, so a page reload
+ * resets the sequence; the store never sees a `lyrics-0`. Ids leak into
+ * `TrackKey` and React keys, so collisions must not happen within a
+ * session even if the user nukes and re-adds many rows.
+ */
+let nextLyricsTrackSeq = 1;
+function allocLyricsTrackId(): LyricsTrackId {
+  return `lyrics-${nextLyricsTrackSeq++}`;
+}
+
 export class LyricsStore {
-  lines: readonly LyricLine[] = [];
-  source: LyricsSource | undefined = undefined;
-  /** Human-readable label for the row gutter (e.g.
-   *  `LRCLIB · Song Title - Artist Name`, `File · my-song.lrc`). */
-  sourceLabel: string | undefined = undefined;
-  offsetSec: number = 0;
+  // ObservableMap via MobX. Insertion order = render order seed for
+  // `syncTrackOrder`'s "slot a new lyrics row next to existing ones"
+  // policy. Replacing an entry preserves its insertion position.
+  private tracksMap: Map<LyricsTrackId, LyricsTrack> = new Map();
 
   constructor() {
     makeAutoObservable(this);
   }
 
-  load(lines: readonly LyricLine[], opts: { source: LyricsSource; sourceLabel: string }): void {
-    this.lines = lines;
-    this.source = opts.source;
-    this.sourceLabel = opts.sourceLabel;
-    // A new source resets the offset; the previous tune's nudge is
-    // meaningless against a fresh recording's lyrics.
-    this.offsetSec = 0;
+  /** Insert a new track, returning its allocated id. Source-label
+   *  collisions are disambiguated with ` (2)`, ` (3)`, etc. so callers
+   *  always pass the natural label (e.g. `LRCLIB · X - Y`). */
+  add(
+    lines: readonly LyricLine[],
+    opts: { source: LyricsSource; sourceLabel: string },
+  ): LyricsTrackId {
+    const id = allocLyricsTrackId();
+    const sourceLabel = this.uniqueSourceLabel(opts.sourceLabel);
+    this.tracksMap.set(id, {
+      id,
+      lines,
+      source: opts.source,
+      sourceLabel,
+      offsetSec: 0,
+    });
+    return id;
   }
 
+  /** Swap a track's lines in place. Preserves `offsetSec` (the user may
+   *  have nudged); preserves `source` / `sourceLabel` unless explicitly
+   *  overridden via `opts`. No-op when `id` is unknown (the caller's
+   *  align job may have raced a removal). */
+  replace(
+    id: LyricsTrackId,
+    lines: readonly LyricLine[],
+    opts: { source?: LyricsSource; sourceLabel?: string } = {},
+  ): void {
+    const existing = this.tracksMap.get(id);
+    if (!existing) return;
+    this.tracksMap.set(id, {
+      ...existing,
+      lines,
+      source: opts.source ?? existing.source,
+      sourceLabel: opts.sourceLabel ?? existing.sourceLabel,
+    });
+  }
+
+  /** Drop one track. No-op when `id` is unknown. */
+  remove(id: LyricsTrackId): void {
+    this.tracksMap.delete(id);
+  }
+
+  /** Drop every track. Called by wholesale-song-reload paths. */
   clear(): void {
-    this.lines = [];
-    this.source = undefined;
-    this.sourceLabel = undefined;
-    this.offsetSec = 0;
+    this.tracksMap.clear();
   }
 
-  setOffsetSec(sec: number): void {
+  /** Update one track's offset, clamping to `[LYRICS_OFFSET_MIN_SEC,
+   *  LYRICS_OFFSET_MAX_SEC]`. Non-finite values are rejected (preserves
+   *  the previous value). No-op when `id` is unknown. */
+  setOffsetSec(id: LyricsTrackId, sec: number): void {
     if (!Number.isFinite(sec)) return;
-    this.offsetSec = Math.max(LYRICS_OFFSET_MIN_SEC, Math.min(LYRICS_OFFSET_MAX_SEC, sec));
+    const existing = this.tracksMap.get(id);
+    if (!existing) return;
+    const clamped = Math.max(LYRICS_OFFSET_MIN_SEC, Math.min(LYRICS_OFFSET_MAX_SEC, sec));
+    this.tracksMap.set(id, { ...existing, offsetSec: clamped });
   }
 
-  get hasLyrics(): boolean {
-    return this.lines.length > 0;
+  get(id: LyricsTrackId): LyricsTrack | undefined {
+    return this.tracksMap.get(id);
   }
 
-  /** Index of the line whose `[startSec + offsetSec, nextStart + offsetSec)`
-   *  contains `audioTimeSec`, or `undefined` if the playhead sits before
-   *  the first line. */
-  activeLineIndexAt(audioTimeSec: number): number | undefined {
-    return activeLineIndexAt(this.lines, audioTimeSec, this.offsetSec);
+  /** Snapshot of ids in insertion order. Consumers (`syncTrackOrder`,
+   *  test code) iterate via this rather than poking at the internal
+   *  Map. */
+  get trackIds(): readonly LyricsTrackId[] {
+    return Array.from(this.tracksMap.keys());
   }
 
-  /** Index of the word inside `lineIndex` that the playhead is currently
-   *  inside (the last word whose `startSec + offsetSec <= audioTimeSec`).
-   *  Returns `undefined` when the line has no word-level alignment, or
-   *  when the playhead sits before the line's first word. Word-aligned
-   *  lyrics (LRCLIB with the word-level upgrade applied) carry `words`;
-   *  plain LRCLIB / file lyrics typically don't, so the caller falls
-   *  back to whole-line highlighting in that case. */
-  activeWordIndexAt(
-    lineIndex: number,
-    audioTimeSec: number,
-  ): number | undefined {
-    const line = this.lines[lineIndex];
-    if (!line || !line.words || line.words.length === 0) return undefined;
-    const shifted = audioTimeSec - this.offsetSec;
-    let active: number | undefined;
-    for (let i = 0; i < line.words.length; i++) {
-      if (line.words[i].startSec <= shifted) active = i;
-      else break;
-    }
-    return active;
+  get hasAnyLyrics(): boolean {
+    return this.tracksMap.size > 0;
+  }
+
+  private uniqueSourceLabel(label: string): string {
+    const existing = new Set<string>();
+    for (const t of this.tracksMap.values()) existing.add(t.sourceLabel);
+    if (!existing.has(label)) return label;
+    let n = 2;
+    while (existing.has(`${label} (${n})`)) n++;
+    return `${label} (${n})`;
   }
 }
 

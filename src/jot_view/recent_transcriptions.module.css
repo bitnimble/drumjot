@@ -16,60 +16,22 @@
 }
 
 /* "cta" trigger: outlined neutral button next to a primary CTA on the
-   empty state. Padding/typography mirror .emptyStatePrimary so the
-   action row stays on a clean baseline. */
+   empty state. Composes `sizeLg` so the action row's two buttons
+   line up at the same height. */
 .triggerCta {
-    composes: bodyEmphasis from '../typography.module.css';
-    display: inline-flex;
-    align-items: center;
+    composes: secondary sizeLg from './components/button.module.css';
     justify-content: space-between;
     gap: 8px;
-    padding: 8px 16px;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    background: var(--color-bg-base);
-    color: var(--color-text);
-    cursor: pointer;
-    font-family: inherit;
 }
 
-.triggerCta:hover {
-    background: var(--color-bg-hover);
-    border-color: var(--color-border-strong);
-}
-
-.triggerCta:focus {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 1px;
-}
-
-/* "menu" trigger: flush row inside a DropdownButton panel. Mirrors the
-   .dropdownItem treatment in toolbar.module.css so it visually nests
-   with the rows above/below it. */
+/* "menu" trigger: flush row inside a DropdownButton panel. Same
+   ghost-row treatment as `.dropdownItem` so it visually nests with the
+   rows above and below it. */
 .triggerMenu {
-    composes: bodyMd from '../typography.module.css';
-    display: flex;
-    align-items: center;
+    composes: ghost from './components/button.module.css';
     justify-content: space-between;
     gap: 12px;
     width: 100%;
-    padding: 7px 10px;
-    border: none;
-    border-radius: var(--radius-md);
-    background: transparent;
-    color: var(--color-text);
-    cursor: pointer;
-    font-family: inherit;
-    text-align: left;
-}
-
-.triggerMenu:hover {
-    background: var(--color-bg-hover);
-}
-
-.triggerMenu:focus {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 1px;
 }
 
 /* SVG icons render with inline baseline by default; even inside a flex
@@ -88,19 +50,12 @@
 }
 
 .panel {
+    composes: popoverPanel from './components/dropdown.module.css';
     position: absolute;
     z-index: 40;
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
     gap: 4px;
     min-width: 240px;
     max-width: 320px;
-    padding: 10px;
-    background: var(--color-bg-base);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-lg);
     text-align: left;
 }
 
@@ -136,29 +91,19 @@
 }
 
 .refresh {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
+    /* Compose the chrome-only `.iconBox` (border + radius + hover)
+       rather than `.secondary`. `.secondary` bakes in a 5px 12px
+       padding that Vite emits AFTER any consumer override, which
+       would crush the 22x22 box's content area to 0 and clip the
+       refresh icon. */
+    composes: iconBox from './components/icon_button.module.css';
     width: 22px;
     height: 22px;
-    padding: 0;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    background: var(--color-bg-base);
     color: var(--color-text-muted);
-    cursor: pointer;
-    font-family: inherit;
 }
 
 .refresh:hover:not(:disabled) {
-    background: var(--color-bg-hover);
-    border-color: var(--color-border-strong);
     color: var(--color-text);
-}
-
-.refresh:focus {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 1px;
 }
 
 .refresh:disabled {
@@ -167,30 +112,13 @@
 }
 
 .item {
-    composes: bodyMd from '../typography.module.css';
-    font-family: inherit;
-    text-align: left;
-    padding: 7px 10px;
-    border: none;
-    border-radius: var(--radius-md);
-    background: transparent;
-    color: var(--color-text);
-    cursor: pointer;
+    composes: ghost from './components/button.module.css';
     /* Long filenames are common; ellipsis keeps rows on one line so the
        panel doesn't stretch to fit the longest entry. The full label
        remains available via the title tooltip. */
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-}
-
-.item:hover {
-    background: var(--color-bg-hover);
-}
-
-.item:focus {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 1px;
 }
 
 .loading {

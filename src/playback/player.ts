@@ -49,7 +49,7 @@ import {
   preloadStretch,
 } from './audio_tracks';
 import { stretchInitFailure } from './stretch_node';
-import { buildTimeline, EMPTY_TIMELINE, JotTimeline } from './timeline';
+import { EMPTY_TIMELINE, JotTimeline } from './timeline';
 import { waveformWorker } from './waveform_worker_client';
 
 export type PlayerState = 'idle' | 'loading' | 'playing' | 'paused';
@@ -63,7 +63,7 @@ export type PlayerFilter = {
    */
   soloedPitches: ReadonlySet<string>;
   /**
-   * True when a solo is engaged *anywhere* — on a pitch row OR an
+   * True when a solo is engaged *anywhere*, on an instrument row OR an
    * audio track. Solo is a single global mode shared across both
    * domains: as soon as the user solos any row, every non-soloed row
    * (drums *and* music) drops out. Computed by the store, which is the
@@ -383,6 +383,40 @@ export class JotPlayer {
    * even before the buffer finishes decoding.
    */
   audioTrackError: string | undefined;
+
+  /**
+   * The track the minimap picks for its waveform: prefer the first
+   * non-pitch backing track (a `no_drums` / song stem) and fall back to
+   * the first loaded track if every track has a pitch (e.g. only
+   * isolated drum stems are loaded). `undefined` when no tracks are
+   * loaded. Mirrors `pickWaveformTrack` in `minimap.tsx` so consumers
+   * can read the choice straight off the player instead of re-deriving
+   * it; observable because it's a computed over `audioTracks`.
+   */
+  get primaryWaveformTrack(): AudioTrack | undefined {
+    let backing: AudioTrack | undefined;
+    let first: AudioTrack | undefined;
+    for (const t of this.audioTracks.values()) {
+      if (!first) first = t;
+      if (!t.pitch && !backing) backing = t;
+    }
+    return backing ?? first;
+  }
+
+  /**
+   * Audio tracks indexed by lowercased filename, for O(1) filename
+   * lookups (e.g. matching a debug bundle's per-pitch manifest entry to
+   * the matching loaded track). Computed once per `audioTracks` change
+   * so per-onset callers in the timing-visualization don't each rebuild
+   * an `Array.from(…).find(…)` walk on every render.
+   */
+  get audioTracksByFilename(): ReadonlyMap<string, AudioTrack> {
+    const out = new Map<string, AudioTrack>();
+    for (const t of this.audioTracks.values()) {
+      out.set(t.filename.toLowerCase(), t);
+    }
+    return out;
+  }
 
   private ctx: AudioContext | undefined;
   private drums: Drums | undefined;
@@ -1024,7 +1058,7 @@ export class JotPlayer {
     let target = Math.max(seconds, -drumsLeadInSec);
 
     if (this.state === 'idle') {
-      const timeline = buildTimeline(rendered);
+      const timeline = rendered.timeline;
       if (timeline.bars.length === 0) return;
       target = Math.min(target, timeline.totalDurationSec);
       this.pendingStartSec = target;
@@ -1109,7 +1143,7 @@ export class JotPlayer {
         throw new Error('No playable notes in this jot.');
       }
 
-      const timeline = buildTimeline(rendered);
+      const timeline = rendered.timeline;
       const audioStartTime = ctx.currentTime + SCHEDULE_LEAD_SECONDS;
       // `drumsT0Sec` on globalMetadata is the audio-time of jot-time 0 in
       // the original recording — i.e. how much silence / non-drum intro

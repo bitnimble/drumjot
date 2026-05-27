@@ -13,10 +13,8 @@ import {
   ViewConfig,
 } from 'src/jot';
 import { TICKS_PER_BEAT } from 'src/midi';
-import { buildTimeline, jotPlayer } from 'src/playback';
+import { AudioTrack, jotPlayer } from 'src/playback';
 import { waveformWorker } from 'src/playback/waveform_worker_client';
-import { pickDominantBpmAndTime } from 'src/playback/timeline';
-import { buildBarTempos } from 'src/tempo';
 import sharedStyles from '../jot_view.module.css';
 import { GutterResizeHandle } from './components/gutter_resize_handle';
 import {
@@ -141,7 +139,7 @@ export function formatDisplayTitle(jot: RenderedJot): string {
 export function formatSubtitle(jot: RenderedJot): string {
   const parts: string[] = [];
   const { bpm: globalBpm, time: globalTime, vol } = jot.globalMetadata;
-  const { dominantBpm, dominantTime } = pickDominantBpmAndTime(jot);
+  const { dominantBpm, dominantTime } = jot.dominantBpmAndTime;
 
   if (dominantBpm !== undefined) parts.push(`${dominantBpm} bpm`);
   else if (typeof globalBpm === 'number') parts.push(`${globalBpm} bpm`);
@@ -156,23 +154,14 @@ export function formatSubtitle(jot: RenderedJot): string {
 
 export const Legend = observer(({ jot }: { jot: RenderedJot }) => {
   // Aggregate unique pitches across all voices, in first-seen order.
-  // Reads `jot.structure` (zoom-invariant) so the legend doesn't
-  // re-render every time the zoom slider moves.
-  const seen = new Map<string, { color: string; name?: string }>();
-  for (const voice of jot.structure.voices) {
-    for (const bar of voice.bars) {
-      for (const pitch of Object.keys(bar.tracks)) {
-        if (!seen.has(pitch)) {
-          const track = bar.tracks[pitch];
-          seen.set(pitch, { color: track.color, name: track.instrument.name });
-        }
-      }
-    }
-  }
-  if (seen.size === 0) return null;
+  // Cached on the jot itself (`legendPitches`) so the walk is shared
+  // across observers and only recomputes when the structural cache
+  // changes, not on every zoom tick.
+  const entries = jot.legendPitches;
+  if (entries.length === 0) return null;
   return (
     <div className={sharedStyles.legend}>
-      {Array.from(seen.entries()).map(([pitch, info]) => (
+      {entries.map(([pitch, info]) => (
         <span key={pitch} className={sharedStyles.legendChip}>
           <span className={sharedStyles.legendSwatch} style={{ background: info.color }} />
           <strong>{pitch}</strong>
@@ -209,31 +198,34 @@ export const TimelineHeader = observer(
     onResizeGutterStart: (e: React.PointerEvent<HTMLDivElement>) => void;
   }) => {
     // Reading the structural cache (not `jot.resolved`) keeps this
-    // header stable across zoom — the per-tick `--bar-start-beat` is
+    // header stable across zoom; the per-tick `--bar-start-beat` is
     // set inline, and CSS calc() multiplies by the score-root's
     // `--px-per-beat` to get the final pixel position. Without this
     // the header re-rendered every wheel tick, re-creating 100+ tick
     // marks just to reposition each by one calc-arithmetic step.
-    const voice = jot.structure.voices[0];
+    const voice = jot.primaryStructuralVoice;
     if (!voice || voice.bars.length === 0) return null;
 
     const liveTimeline = jotPlayer.timeline;
     const timeline =
       liveTimeline.bars.length > 0 && liveTimeline.rendered === jot
         ? liveTimeline
-        : buildTimeline(jot);
+        : jot.timeline;
 
     // Lead-in is materialised as negative-indexed bars by
     // `structureForVoice`, so a single sum over `bar.beats` covers
     // both pre-drum and drum content with no separate chrome offset.
-    let voiceBeats = 0;
-    for (const b of voice.bars) voiceBeats += b.beats;
+    // Cached on the jot (`voiceBeats`) so all observers share one walk.
+    const voiceBeats = jot.voiceBeats;
 
     // Effective tempo at each bar's downbeat, derived from the shared
     // tempo timeline. Mid-bar tempo changes inside a bar aren't shown
     // separately by the header pill; the displayed value tracks the
-    // tempo in force at the bar's downbeat.
-    const tempos = buildBarTempos(jot.source, voice.bars);
+    // tempo in force at the bar's downbeat. Reading the cached
+    // `barTempos` computed avoids rebuilding the layout on every
+    // header render (the tempo timeline is structure-only input, so a
+    // zoom tick doesn't invalidate it).
+    const tempos = jot.barTempos;
 
     let cumBeats = 0;
     let prevTime: { count: number; unit: number } | undefined;
@@ -978,38 +970,44 @@ const OnsetTimingVisualization = observer(
     // The debug bundle's manifest carries an authoritative pitch →
     // audio-filename map (set up server-side in
     // `transcriber/app/debug_bundle.py`); the isolated stem for the
-    // note's pitch is the right source — it isolates the drum we're
+    // note's pitch is the right source; it isolates the drum we're
     // inspecting from the rest of the kit. Fallback chain when the
     // mapping doesn't resolve (legacy bundle, manual file load, etc.):
-    //   1. Any other mapped stem — still a per-pitch isolated source.
-    //   2. Any loaded track other than `no_drums.mp3` — `no_drums` by
+    //   1. Any other mapped stem, still a per-pitch isolated source.
+    //   2. Any loaded track other than `no_drums.mp3`; `no_drums` by
     //      definition has the drum content removed and shows nothing.
     //   3. Whatever's loaded.
     // `undefined` when no audio is loaded; the row collapses to a
     // "(no audio loaded)" placeholder in that case.
-    const audioTrack = (() => {
-      const tracks = Array.from(jotPlayer.audioTracks.values());
-      if (tracks.length === 0) return undefined;
-      const mapping = rendered.provenance.audioFilenameByPitch;
+    //
+    // O(1) per-onset cost: every `audioTracks` walk has been hoisted
+    // off the per-onset path. `jotPlayer.audioTracksByFilename` is a
+    // MobX computed shared across every visible onset; the only thing
+    // we recompute here is the small mapping-derived state, memoized
+    // on the per-onset inputs.
+    const audioTracksByFilename = jotPlayer.audioTracksByFilename;
+    const mapping = rendered.provenance.audioFilenameByPitch;
+    const audioTrack = React.useMemo<AudioTrack | undefined>(() => {
+      if (audioTracksByFilename.size === 0) return undefined;
       const wantedFilename = mapping.get(entry.pitch);
       if (wantedFilename) {
-        const exact = tracks.find((t) => t.filename.toLowerCase() === wantedFilename.toLowerCase());
+        const exact = audioTracksByFilename.get(wantedFilename.toLowerCase());
         if (exact) return exact;
       }
-      // Any other mapped per-pitch stem — skip `no_drums`, which is the
+      // Any other mapped per-pitch stem; skip `no_drums`, which is the
       // backing track and won't show drum hits.
-      const mappedStemFilenames = new Set(
-        Array.from(mapping.entries())
-          .filter(([key]) => key !== 'no_drums')
-          .map(([, filename]) => filename.toLowerCase())
-      );
-      const anyMappedStem = tracks.find((t) => mappedStemFilenames.has(t.filename.toLowerCase()));
-      if (anyMappedStem) return anyMappedStem;
+      for (const [key, filename] of mapping.entries()) {
+        if (key === 'no_drums') continue;
+        const t = audioTracksByFilename.get(filename.toLowerCase());
+        if (t) return t;
+      }
       const noDrumsName = mapping.get('no_drums')?.toLowerCase();
-      const nonNoDrums = tracks.find((t) => t.filename.toLowerCase() !== noDrumsName);
-      if (nonNoDrums) return nonNoDrums;
-      return tracks[0];
-    })();
+      for (const t of audioTracksByFilename.values()) {
+        if (t.filename.toLowerCase() !== noDrumsName) return t;
+      }
+      // Last fallback: whatever's loaded (first by insertion order).
+      return audioTracksByFilename.values().next().value;
+    }, [audioTracksByFilename, mapping, entry.pitch]);
 
     React.useEffect(() => {
       const canvas = canvasRef.current;
@@ -1852,7 +1850,7 @@ const FILTER_REASON_LABELS: Record<string, string> = {
 
 /**
  * Renders one rejected onset as a dashed ghost circle at its detected
- * `(bar, beat_in_bar)` position inside a `PitchRow`'s bars row.
+ * `(bar, beat_in_bar)` position inside an `InstrumentRow`'s bars row.
  * Absolutely positioned via the same `--note-pad-px` / `--px-per-beat`
  * CSS vars the real notes use, but with `--filtered-beat` = the
  * onset's cumulative beat offset from the start of the row (lead-in +

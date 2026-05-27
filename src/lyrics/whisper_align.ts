@@ -6,15 +6,13 @@
  * timings against an uploaded audio source.
  *
  * The endpoint base mirrors `src/transcriber.ts::TRANSCRIBER_BASE`:
- * `VITE_TRANSCRIBER_URL` in prod, `/api` in dev (proxied to the
- * transcriber service by Vite).
+ * always `/api` on the frontend's own origin, proxied onward by Vite to
+ * the configured `TRANSCRIBER_URL`.
  */
 
 import type { LyricLine } from './lrc';
 
-const TRANSCRIBER_BASE: string =
-  (import.meta as unknown as { env?: Record<string, string> }).env
-    ?.VITE_TRANSCRIBER_URL ?? '/api';
+const TRANSCRIBER_BASE = '/api';
 
 /**
  * Caller-provided lyric text + initial timings. The backend treats the
@@ -44,7 +42,8 @@ export type AlignLyricsOptions = {
 /**
  * POST to `/lyrics/align` and return the parsed lyric lines. The server
  * response shape (`{lines: LyricLine[]}`) matches our in-memory type
- * exactly, so the response goes straight into `lyricsStore.load()`.
+ * exactly, so the response goes straight into `lyricsStore.replace(id, ...)`
+ * via `JotViewStore.alignLyricsWhisper`.
  */
 export async function alignLyricsWhisper(
   req: AlignLyricsRequest,

@@ -1,4 +1,4 @@
-export { parseLrc, activeLineIndexAt, stripLyricNoise } from './lrc';
+export { parseLrc, activeLineIndexAt, activeWordIndexAt, stripLyricNoise } from './lrc';
 export type { LyricLine, LyricWord } from './lrc';
 export { searchLrclib, ciTrimEq } from './lrclib';
 export type { LrclibMatch, SearchOptions } from './lrclib';
@@ -16,4 +16,4 @@ export {
   LYRICS_OFFSET_MAX_SEC,
   LYRICS_OFFSET_STEP_SEC,
 } from './store';
-export type { LyricsSource } from './store';
+export type { LyricsSource, LyricsTrack, LyricsTrackId } from './store';

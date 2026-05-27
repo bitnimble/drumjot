@@ -25,13 +25,6 @@
     z-index: 20;
 }
 
-.toolbarLabel {
-    font-size: 11px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--color-text-muted-alt);
-}
-
 .toolbarDivider {
     width: 1px;
     height: 18px;
@@ -40,14 +33,7 @@
 }
 
 .transcribeButton {
-    composes: bodyEmphasis from '../typography.module.css';
-    padding: 5px 12px;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    background: var(--color-accent);
-    color: var(--color-bg-base);
-    cursor: pointer;
-    font-family: inherit;
+    composes: secondary from './components/button.module.css';
 }
 
 /* Resume-tab field rows share a fixed-width label column so both
@@ -56,44 +42,8 @@
     min-width: 80px;
 }
 
-.transcribeButton:hover:not(:disabled) {
-    background: var(--color-accent-hover);
-}
-
-.transcribeButton:disabled {
-    background: var(--color-border);
-    cursor: progress;
-}
-
-.transcribeButton:focus {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 1px;
-}
-
 .playButton {
-    composes: bodyEmphasis from '../typography.module.css';
-    padding: 5px 12px;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    background: var(--color-bg-base);
-    color: var(--color-text);
-    cursor: pointer;
-    font-family: inherit;
-}
-
-.playButton:hover:not(:disabled) {
-    background: var(--color-bg-hover);
-    border-color: var(--color-border-strong);
-}
-
-.playButton:disabled {
-    color: var(--color-text-disabled-strong);
-    cursor: not-allowed;
-}
-
-.playButton:focus {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 1px;
+    composes: secondary from './components/button.module.css';
 }
 
 .playButtonError {
@@ -106,24 +56,7 @@
 }
 
 .cancelButton {
-    composes: bodyEmphasis from '../typography.module.css';
-    padding: 5px 10px;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    background: var(--color-bg-base);
-    color: var(--color-error);
-    cursor: pointer;
-    font-family: inherit;
-}
-
-.cancelButton:hover {
-    background: var(--color-error-bg);
-    border-color: var(--color-error);
-}
-
-.cancelButton:focus {
-    outline: 2px solid var(--color-error);
-    outline-offset: 1px;
+    composes: danger from './components/button.module.css';
 }
 
 .hiddenInput {
@@ -217,21 +150,15 @@
    /transcribe stream is in flight. Matches the look of the full-screen
    .loadingSpinner but at toolbar-pill size. */
 .statusPillSpinner {
+    composes: spinner from './components/spinner.module.css';
     display: inline-block;
     width: 10px;
     height: 10px;
     margin-right: 4px;
-    border: 1.5px solid var(--color-border-translucent);
+    border-width: 1.5px;
+    border-color: var(--color-border-translucent);
     border-top-color: var(--color-accent);
-    border-radius: var(--radius-circle);
     vertical-align: -1px;
-    animation: statusPillSpinnerRotate 0.8s linear infinite;
-}
-
-@keyframes statusPillSpinnerRotate {
-    to {
-        transform: rotate(360deg);
-    }
 }
 
 /* DebugPanel: a collapsible drawer pinned to the bottom of the app,
@@ -305,10 +232,12 @@
        because CSS Modules' `composes:` only works on rules with a single
        bare class selector (postcss-modules rejects `.foo h4`). Keep in
        sync with metaLabel if its definition changes. */
+    /* stylelint-disable property-disallowed-list -- inlined mirror of `.metaLabel` for a compound selector that composes can't target. */
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.04em;
     text-transform: uppercase;
+    /* stylelint-enable property-disallowed-list */
     line-height: 1;
     margin: 0 0 6px;
     color: var(--color-text-faint-alt);
@@ -367,6 +296,7 @@
 
 .debugLogLevel {
     flex: 0 0 auto;
+    /* stylelint-disable-next-line property-disallowed-list -- bold weight on top of the row's `mono` composition so log levels (WARNING, ERROR) read as the row's anchor. */
     font-weight: 600;
     width: 56px;
     color: var(--color-text-muted);

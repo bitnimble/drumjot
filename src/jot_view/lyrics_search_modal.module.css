@@ -4,58 +4,25 @@
    of the app. */
 
 .modalBackdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 100;
-    background: var(--color-bg-overlay);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
+    composes: backdrop from './components/modal.module.css';
 }
 
 .modalPanel {
+    composes: panel from './components/modal.module.css';
     width: min(560px, 100%);
     max-height: calc(100vh - 48px);
-    box-sizing: border-box;
-    display: flex;
-    flex-direction: column;
-    background: var(--color-bg-base);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-lg);
-    overflow: hidden;
 }
 
 .modalHeader {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 12px 16px;
-    border-bottom: 1px solid var(--color-border);
-    background: var(--color-bg-cream);
+    composes: header from './components/modal.module.css';
 }
 
 .modalTitle {
-    composes: heading from '../typography.module.css';
-    color: var(--color-text-strong);
-    margin: 0;
-    font-size: 14px;
+    composes: title from './components/modal.module.css';
 }
 
 .modalClose {
-    appearance: none;
-    background: transparent;
-    border: none;
-    color: var(--color-text-muted-alt);
-    font-size: 20px;
-    cursor: pointer;
-    padding: 0 6px;
-    line-height: 1;
-}
-
-.modalClose:hover {
-    color: var(--color-text-strong);
+    composes: close from './components/button.module.css';
 }
 
 .modalForm {
@@ -67,76 +34,44 @@
 }
 
 .field {
+    composes: field from './components/form.module.css';
     flex: 1 1 0;
     min-width: 0;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm);
-    padding: 6px 8px;
-    font-size: 13px;
-    font-family: inherit;
-    background: var(--color-bg-base);
-    color: var(--color-text-strong);
-}
-
-.field:focus {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 1px;
-    border-color: transparent;
 }
 
 .searchButton {
-    appearance: none;
+    composes: primary from './components/button.module.css';
     flex: 0 0 auto;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--color-accent);
-    color: var(--color-bg-base);
-    border: none;
-    border-radius: var(--radius-sm);
+    /* Tighter horizontal padding than the default `.primary` so the
+       icon-only search trigger reads as a compact glyph button instead
+       of a full word-label CTA. */
     padding: 0 10px;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-}
-
-.searchButton:hover:not(:disabled) {
-    background: var(--color-accent-hover);
+    border-radius: var(--radius-sm);
 }
 
 .searchButton:disabled {
     opacity: 0.6;
-    cursor: not-allowed;
 }
 
-/* Self-contained spinner for the search button. Not composed from
-   `statusPillSpinner` because that class is tuned for the toolbar's
-   inline-with-text use (inline-block + margin-right + vertical-align)
-   and those defaults push the glyph visibly off-center when dropped
-   into a clean flex-centered icon button. `box-sizing: border-box`
-   keeps the outer dimensions equal to the 16x16 lucide Search icon
-   this swap replaces, so the button height doesn't twitch on toggle. */
+/* Self-contained spinner for the search button. Composes the shared
+   `spinner` primitive for the keyframes + circle, then adds the
+   button-specific size (16x16, matching the lucide Search icon it
+   replaces) and `currentColor` tints so the spinner picks up the
+   button's foreground. */
 .searchButtonSpinner {
-    box-sizing: border-box;
+    composes: spinner from './components/spinner.module.css';
     width: 16px;
     height: 16px;
-    border: 1.5px solid color-mix(in srgb, currentColor 35%, transparent);
+    border-width: 1.5px;
+    border-color: color-mix(in srgb, currentColor 35%, transparent);
     border-top-color: currentColor;
-    border-radius: var(--radius-circle);
-    animation: searchButtonSpinnerRotate 0.8s linear infinite;
-}
-
-@keyframes searchButtonSpinnerRotate {
-    to {
-        transform: rotate(360deg);
-    }
 }
 
 .phaseMessage {
+    composes: bodyMd from '../typography.module.css';
     margin: 0 16px 14px 16px;
     padding: 10px 12px;
     border-radius: var(--radius-sm);
-    font-size: 13px;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -169,20 +104,22 @@
 }
 
 .resultItem {
-    appearance: none;
+    composes: reset from './components/button.module.css';
     width: 100%;
-    background: transparent;
-    border: none;
     border-left: 3px solid transparent;
     border-bottom: 1px solid var(--color-border);
-    text-align: left;
+    /* `.reset` no longer carries `background: transparent` (it'd clobber
+       variant backgrounds via cross-module composes order), so any
+       direct-reset consumer that wants the surface to show through must
+       declare it explicitly. Without this the row falls back to the
+       UA-default `<button>` grey/white; opaque white-ish on the dark
+       theme. */
+    background: transparent;
     padding: 10px 16px 10px 13px;
-    cursor: pointer;
     display: flex;
     flex-direction: column;
     gap: 2px;
     color: var(--color-text-strong);
-    font-family: inherit;
 }
 
 .resultItem:hover {
@@ -196,13 +133,12 @@
 }
 
 .resultPrimary {
-    font-size: 13px;
+    composes: bodyMd from '../typography.module.css';
 }
 
 .resultSecondary {
-    composes: subtle from '../typography.module.css';
+    composes: bodySm from '../typography.module.css';
     color: var(--color-text-muted-alt);
-    font-size: 11px;
 }
 
 .loadFooter {
@@ -228,10 +164,10 @@
 }
 
 .wordLevelLabel {
+    composes: bodyMd from '../typography.module.css';
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    font-size: 13px;
     color: var(--color-text-strong);
     cursor: pointer;
     flex: 1 1 auto;
@@ -243,23 +179,11 @@
 }
 
 .loadButton {
-    appearance: none;
+    composes: primary from './components/button.module.css';
     flex: 0 0 auto;
-    background: var(--color-accent);
-    color: var(--color-bg-base);
-    border: none;
     border-radius: var(--radius-sm);
-    padding: 6px 14px;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-}
-
-.loadButton:hover:not(:disabled) {
-    background: var(--color-accent-hover);
 }
 
 .loadButton:disabled {
     opacity: 0.6;
-    cursor: not-allowed;
 }

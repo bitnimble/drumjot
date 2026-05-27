@@ -1,0 +1,72 @@
+/* Shared modal chrome composed by every full-screen modal (LRCLIB
+   search, plain-text lyrics loader, AudioWorklet warning). Each modal
+   module composes these classes for the backdrop, panel, header,
+   title, body, and footer, and adds only the per-modal width or any
+   extra inline chrome (e.g. the warning icon).
+
+   The associated stylelint rule (`property-disallowed-list` +
+   `declaration-property-value-allowed-list`) ensures no modal CSS
+   declares its own typography or font-family; everything funnels
+   through here. */
+
+.backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    background: var(--color-bg-overlay);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+
+/* Generic centred panel. Modules add their own `width` and (optionally)
+   `max-height` on the consumer class so the modal can be sized for its
+   content; the chrome (border, radius, shadow, overflow) lives here. */
+.panel {
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+}
+
+.header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-bg-cream);
+}
+
+.title {
+    composes: heading from '../../typography.module.css';
+    color: var(--color-text-strong);
+    margin: 0;
+    /* stylelint-disable-next-line property-disallowed-list -- modal headers use a 14px override of the 18px `heading` use case so they don't dominate the panel body. */
+    font-size: 14px;
+}
+
+.body {
+    composes: bodyMd from '../../typography.module.css';
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+    color: var(--color-text-strong);
+}
+
+.footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    border-top: 1px solid var(--color-border);
+    background: var(--color-bg-cream);
+}

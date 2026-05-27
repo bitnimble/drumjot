@@ -54,21 +54,21 @@
 }
 
 .transportButton {
+    composes: reset from './components/button.module.css';
     display: inline-flex;
     align-items: center;
     justify-content: center;
     width: 52px;
     height: 52px;
+    /* One-off transport glyph size (▶ / ⏸ / ■). True one-off per the
+       typography guide, so it stays inline here. */
+    /* stylelint-disable-next-line property-disallowed-list -- the transport glyph is its own visual scale; not a use case worth promoting. */
     font-size: 22px;
     line-height: 1;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-xl);
     background: var(--color-bg-base);
     color: var(--color-text);
-    cursor: pointer;
-    font-family: inherit;
-    /* Keep the glyph optically centred (▶ / ■ sit slightly off otherwise). */
-    padding: 0;
 }
 
 .transportButton:hover:not(:disabled) {
@@ -78,11 +78,9 @@
 
 .transportButton:disabled {
     color: var(--color-text-disabled-strong);
-    cursor: not-allowed;
 }
 
 .transportButton:focus-visible {
-    outline: 2px solid var(--color-accent);
     outline-offset: 2px;
 }
 
@@ -182,16 +180,19 @@
 }
 
 .playheadLabel {
+    composes: labelSm from '../typography.module.css';
     position: absolute;
     top: 0;
     left: 1px;
     transform: translateX(-50%);
     background: var(--color-accent-strong);
     color: var(--color-bg-base);
-    font-size: 10px;
-    font-weight: 700;
+    /* stylelint-disable-next-line property-disallowed-list -- numeric readout under labelSm needs tabular-nums to stop the timecode jumping width as digits change. */
     font-variant-numeric: tabular-nums;
+    /* stylelint-disable-next-line property-disallowed-list -- looser tracking than labelSm's 0.08em so the timecode reads as a chip, not an all-caps tagline. */
     letter-spacing: 0.02em;
+    /* stylelint-disable-next-line property-disallowed-list -- pin upper-case glyphs against the chip's vertical centre. */
+    text-transform: none;
     line-height: 1.15;
     padding: 3px 5px;
     border-radius: var(--radius-xs);
@@ -206,18 +207,16 @@
    is on, outlined when off; sized to sit between the 52px transport
    buttons and the inline label controls without dominating. */
 .followToggle {
+    composes: reset from './components/button.module.css';
     display: inline-flex;
     align-items: center;
     justify-content: center;
     width: 28px;
     height: 28px;
-    padding: 0;
     border: 1px solid var(--color-accent-strong);
     border-radius: var(--radius-sm);
     background: var(--color-accent-strong);
     color: var(--color-bg-base);
-    cursor: pointer;
-    font-family: inherit;
 }
 
 .followToggle:hover {
@@ -226,7 +225,6 @@
 }
 
 .followToggle:focus-visible {
-    outline: 2px solid var(--color-accent);
     outline-offset: 2px;
 }
 
@@ -245,7 +243,9 @@
    down and de-emphasised so the primary timecode stays the dominant
    readout while still surfacing the musical position underneath. */
 .playheadLabelBarBeat {
+    /* stylelint-disable-next-line property-disallowed-list -- the bar/beat readout is one notch smaller than its parent labelSm chip to read as a secondary line. */
     font-size: 9px;
+    /* stylelint-disable-next-line property-disallowed-list -- one notch lighter than labelSm's 700 so it reads as the chip's secondary line. */
     font-weight: 600;
     opacity: 0.85;
     margin-top: 1px;

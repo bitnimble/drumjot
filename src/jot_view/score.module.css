@@ -6,7 +6,7 @@
 
 /* Sticky-gutter ruler above the audio tracks / score that labels each
    bar boundary with bar number and playback time. Same sticky gutter
-   width as `.musicTrackGutter` / `.pitchRowGutter` (`--gutter-width`,
+   width as `.musicTrackGutter` / `.instrumentRowGutter` (`--gutter-width`,
    driven by the resize handle) so the column stays pinned during
    horizontal scroll exactly like the rows below it. */
 .timelineHeader {
@@ -77,21 +77,26 @@
 
 .timelineHeaderBar {
     composes: readout from '../typography.module.css';
+    /* stylelint-disable-next-line property-disallowed-list -- bold bar number on top of the tabular `readout` base. */
     font-weight: 700;
     color: var(--color-text-secondary);
     line-height: 1;
 }
 
 .timelineHeaderTimeSig {
+    /* Score chrome runs at 9px (smaller than `labelSm`/`readoutSm`'s
+       10px) so the meta pills don't dominate the bar number. */
+    /* stylelint-disable property-disallowed-list -- score chrome at its own 9px scale. */
     font-size: 9px;
     font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    /* stylelint-enable property-disallowed-list */
     color: var(--color-text-secondary);
     background: var(--color-bg-base);
     border: 1px solid var(--color-border);
     border-radius: 3px;
     padding: 1px 4px;
     line-height: 1;
-    font-variant-numeric: tabular-nums;
     white-space: nowrap;
 }
 
@@ -100,10 +105,12 @@
 }
 
 .timelineHeaderTime {
+    /* stylelint-disable property-disallowed-list -- score chrome at 9px / tabular-nums; matches the other timeline meta pills. */
     font-size: 9px;
+    font-variant-numeric: tabular-nums;
+    /* stylelint-enable property-disallowed-list */
     color: var(--color-text-faint-strong);
     line-height: 1;
-    font-variant-numeric: tabular-nums;
 }
 
 .bar {
@@ -508,25 +515,27 @@
 }
 
 .patternLabel {
+    composes: reset from './components/button.module.css';
     position: absolute;
     top: -11px;
     left: 4px;
+    /* Pattern chip runs at score-chrome 9px (one notch under `labelSm`'s
+       10px) so it doesn't crowd the notes below. */
+    /* stylelint-disable property-disallowed-list -- score-chrome label at its own 9px scale, with labelSm's tracking/weight. */
     font-size: 9px;
     font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
+    /* stylelint-enable property-disallowed-list */
     color: var(--color-bg-base);
     /* Pattern color flows in inline from the bracket parent; fallback to
        accent for non-mixer callers that don't supply --pattern-color. */
     background: var(--pattern-color, var(--color-accent));
     padding: 2px 6px;
-    border: none;
     border-radius: var(--radius-xs) var(--radius-xs) 0 0;
     pointer-events: auto;
-    cursor: pointer;
     white-space: nowrap;
     user-select: none;
-    font-family: inherit;
     line-height: 1;
 }
 
@@ -563,10 +572,12 @@
      numeral stays legible. Cream matches the score surface. */
     transform: translateY(-50%);
     padding: 0 4px;
+    /* stylelint-disable property-disallowed-list -- italic tabular numeral specific to the tuplet bracket. */
     font-size: 10px;
     font-weight: 700;
     font-style: italic;
     font-variant-numeric: tabular-nums;
+    /* stylelint-enable property-disallowed-list */
     color: var(--color-text-secondary);
     background: var(--color-bg-cream);
     line-height: 1;
@@ -658,12 +669,16 @@
     left: 50%;
     transform: translateX(-50%);
     margin-bottom: 2px;
+    /* Modifier glyphs (a, g, f, …) sit ABOVE a notehead; score-chrome
+       9px so they read as auxiliary marks, not parallel notation. */
+    /* stylelint-disable property-disallowed-list -- score-chrome modifier badge at 9px. */
     font-size: 9px;
     font-weight: 700;
+    letter-spacing: 0.04em;
+    /* stylelint-enable property-disallowed-list */
     line-height: 1;
     color: var(--color-text-muted);
     pointer-events: none;
-    letter-spacing: 0.04em;
 }
 
 .stickingBadge {
@@ -671,6 +686,7 @@
     bottom: -10px;
     left: 50%;
     transform: translateX(-50%);
+    /* stylelint-disable-next-line property-disallowed-list -- sticking glyph (L / R) below a notehead; score-chrome 9px. */
     font-size: 9px;
     color: var(--color-text-faint-strong);
     pointer-events: none;
@@ -686,12 +702,12 @@
 }
 
 /* Lift any note that's currently rendering its `.noteLabel` (hover OR
-   selection) above sibling `.pitchRow`s in the mixer — the inline
+   selection) above sibling `.instrumentRow`s in the mixer; the inline
    label extends below the note, and without this the later-painted
-   `.pitchRow` below would cover it (only the bottommost row, typically
-   the kick, escapes that). The lane chain (.lane / .bar / .barsRow /
-   .pitchRow) is all `position: relative; z-index: auto`, so any
-   positive z-index here outranks them. */
+   `.instrumentRow` below would cover it (only the bottommost row,
+   typically the kick, escapes that). The lane chain (.lane / .bar /
+   .barsRow / .instrumentRow) is all `position: relative; z-index:
+   auto`, so any positive z-index here outranks them. */
 .note.noteShowingLabel {
     z-index: 20;
 }
@@ -724,6 +740,7 @@
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
     padding: 4px 8px;
+    /* stylelint-disable-next-line property-disallowed-list -- mid-weight 500 on top of bodySm so the note-label's leading text reads as the row's anchor. */
     font-weight: 500;
     color: var(--color-text);
     box-shadow: var(--shadow-md);
@@ -780,15 +797,15 @@
 }
 
 .debugDetailsToggle {
+    composes: reset from './components/button.module.css';
     composes: metaCaption from '../typography.module.css';
-    font-family: inherit;
-    color: var(--color-text-faint);
+    /* `.reset` no longer carries `background: transparent`; without an
+       explicit declaration the UA-default `<button>` background paints
+       through. */
     background: transparent;
-    border: none;
+    color: var(--color-text-faint);
     padding: 1px 0;
-    cursor: pointer;
-    text-align: left;
-    /* "▸ Debug details" must stay on one line — without this the
+    /* "▸ Debug details" must stay on one line; without this the
        narrow parent label can wrap the arrow and label across two
        rows. */
     white-space: nowrap;
@@ -825,10 +842,12 @@
        because CSS Modules' `composes:` only works on rules with a single
        bare class selector (postcss-modules rejects `.foo dt`). Keep in
        sync with metaCaption if its definition changes. */
+    /* stylelint-disable property-disallowed-list -- inlined mirror of `.metaCaption` for a compound selector that composes can't target. */
     font-size: 10px;
     font-weight: 600;
     letter-spacing: 0.04em;
     text-transform: uppercase;
+    /* stylelint-enable property-disallowed-list */
     line-height: 1;
     color: var(--color-text-faint-strong);
     /* Keep keys on one line so the grid columns stay flush. */
@@ -847,6 +866,7 @@
    `custom` rationales remain readable when long. */
 .reasonCode {
     color: var(--color-text);
+    /* stylelint-disable-next-line property-disallowed-list -- weight bump highlights the rejection-reason code within the inline label. */
     font-weight: 600;
 }
 
@@ -879,6 +899,7 @@
 }
 
 .timingVizHeaderRange {
+    /* stylelint-disable-next-line property-disallowed-list -- numeric range needs tabular-nums to stop the values jittering. */
     font-variant-numeric: tabular-nums;
 }
 
@@ -922,6 +943,7 @@
     top: 1px;
     transform: translateX(2px);
     color: var(--color-text-faint);
+    /* stylelint-disable-next-line property-disallowed-list -- one notch smaller than metaCaption so the inline bar tag doesn't crowd the waveform diagram. */
     font-size: 9px;
     line-height: 1;
     pointer-events: none;
@@ -1018,6 +1040,7 @@
 
 .timingVizDiffLabel {
     composes: metaCaption from '../typography.module.css';
+    /* stylelint-disable-next-line property-disallowed-list -- one notch smaller than metaCaption so the diff label fits inside narrow bars. */
     font-size: 9px;
     line-height: 1;
     white-space: nowrap;
@@ -1079,6 +1102,7 @@
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
     padding: 4px 8px;
+    /* stylelint-disable-next-line property-disallowed-list -- mid-weight 500 on top of bodySm so the filtered-onset label's leading text anchors the popover. */
     font-weight: 500;
     color: var(--color-text);
     box-shadow: var(--shadow-md);

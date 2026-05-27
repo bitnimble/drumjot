@@ -1,8 +1,8 @@
 """CTC forced-alignment for lyrics.
 
 Loads a vocals stem and produces line + word level time-aligned lyrics
-using `ctc-forced-aligner` (MahmoudAshraf97/ctc-forced-aligner), which
-runs the MMS-300m multilingual CTC model over the FULL audio in one
+using `ctc-forced-aligner` (MahmoudAshraf97/ctc-forced-aligner). The
+package runs a wav2vec2-family CTC model over the FULL audio in one
 pass (with internal chunking + posterior stitching) and a single
 global Viterbi alignment of all the caller's lyric text against the
 resulting posteriors. The benefit over the previous whisperx per-line
@@ -10,6 +10,25 @@ approach is that wav2vec2 picks each word's actual audio position
 instead of being constrained to a `[line.start_sec, next_line.start_sec]`
 search window - which broke down for plain-text inputs (synthesized
 timestamps) and for LRCLIB matches against a different cut.
+
+The CTC checkpoint is dispatched per-language by `_pick_alignment_model`:
+
+  - English uses `facebook/wav2vec2-large-robust-ft-libri-960h`
+    (Apache 2.0, ~317M, multi-domain robust pretraining + LS-960
+    fine-tune). Tighter posteriors on English vocals than the MMS
+    multilingual head because the param budget isn't shared with 1100+
+    other languages, and commercial-licence-clean.
+  - Everything else falls back to MMS-300m via the package's default
+    (`MahmoudAshraf/mms-300m-1130-forced-aligner`, CC-BY-NC 4.0). The
+    CC-BY-NC licence is a known commercial blocker for non-English
+    songs and is tracked as a follow-up; OWSM-CTC v4 1B (CC-BY-4.0)
+    is the current preferred replacement candidate for ja/ko/zh.
+
+Both checkpoints share the same `<star>` wildcard mechanism (appended
+at runtime by `generate_emissions`, model-agnostic) and the same
+`preprocess_text(romanize=True, language=iso3)` output. Vocabs are
+compatible: MMS uses uroman-romanized Latin chars and
+wav2vec2-large-robust uses lowercase Latin + space + apostrophe.
 
 Whisperx is still pulled in for the language-detect fallback (a
 faster-whisper inference over the first 30 s of audio when our script-
@@ -141,6 +160,17 @@ _SIMPLIFIED_CHINESE_MARKERS = frozenset(
     "爱们这时长个听见说话让给风马鸟鱼谁谢发实还对么"
 )
 
+# English-specialized CTC checkpoint. Apache 2.0, ~317M params,
+# wav2vec2-large pretrained on Libri-Light + CommonVoice + Switchboard
+# + Fisher and fine-tuned on LibriSpeech 960h. Used for any request
+# detected as English; everything else falls back to the package's
+# default MMS-300m head (the `model_path=None` branch of
+# `_load_ctc_aligner`). Kept as a module constant rather than a
+# `settings.*` field so a swap stays a one-line code change for now;
+# promote to settings when the non-English replacement (likely
+# OWSM-CTC v4 1B) lands and we need per-language config knobs.
+_ALIGN_MODEL_ENGLISH = "facebook/wav2vec2-large-robust-ft-libri-960h"
+
 
 class LyricsAligner:
     """Lazy-loaded forced-alignment wrapper.
@@ -165,8 +195,13 @@ class LyricsAligner:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._transcribe_model: Any | None = None
-        self._align_model: Any | None = None
-        self._align_tokenizer: Any | None = None
+        # Lazy-loaded CTC aligners keyed by HuggingFace model path
+        # (`None` selects the package's built-in default = MMS-300m).
+        # Each entry is built on first request that routes to it; both
+        # English (wav2vec2-large-robust) and the multilingual MMS-300m
+        # can be resident simultaneously, ~1-1.2 GB each at fp16 / fp32
+        # respectively, well within the alignment-stage VRAM budget.
+        self._align_models: dict[str | None, tuple[Any, Any]] = {}
         self._device: str | None = None
         self._compute_type: str | None = None
 
@@ -232,14 +267,24 @@ class LyricsAligner:
         self._transcribe_model = model
         return model
 
-    def _load_ctc_aligner(self) -> tuple[Any, Any]:
-        """Load (or return cached) the MMS-300m forced-alignment model +
-        its tokenizer via `ctc_forced_aligner.load_alignment_model`.
-        Weights are pulled from HuggingFace
-        (`MahmoudAshraf/mms-300m-1130-forced-aligner`, ~1.2 GB) on first
-        use and cached under `HF_HOME` (the Dockerfile points that at
-        the `models_dir` volume, so the download survives container
-        restarts).
+    def _load_ctc_aligner(
+        self, model_path: str | None = None,
+    ) -> tuple[Any, Any]:
+        """Load (or return cached) a forced-alignment model + tokenizer.
+
+        `model_path=None` -> the package's default
+        `MahmoudAshraf/mms-300m-1130-forced-aligner` (CC-BY-NC 4.0,
+        multilingual, ~1.2 GB at fp32). Any other value is a
+        HuggingFace model id passed straight through to
+        `load_alignment_model`; the package accepts any wav2vec2-family
+        CTC checkpoint there. Used today by `_pick_alignment_model` to
+        route English requests to `_ALIGN_MODEL_ENGLISH`
+        (wav2vec2-large-robust-ft-libri-960h, Apache 2.0, ~317M).
+
+        Caching: per-model-path; each unique path loads once and stays
+        warm for the process lifetime. The same lock that gates
+        `realign_text` serialises model loads, so concurrent first-hit
+        requests for the same model path can't race.
 
         Picks fp16 on CUDA and fp32 on CPU - fp16 halves activation
         memory and roughly doubles throughput on consumer GPUs with no
@@ -249,8 +294,9 @@ class LyricsAligner:
         deterministic. The returned model has `.dtype` / `.device`
         attributes that `load_audio` reads to materialise the waveform
         on the same device + precision as the model."""
-        if self._align_model is not None:
-            return self._align_model, self._align_tokenizer
+        cached = self._align_models.get(model_path)
+        if cached is not None:
+            return cached
         # Lazy import so a process that never touches /lyrics/align
         # doesn't pull in `transformers` + the alignment package's
         # ~1.2 GB model on boot.
@@ -262,13 +308,38 @@ class LyricsAligner:
         device = self._resolve_device()
         dtype = torch.float16 if device == "cuda" else torch.float32
         log.info(
-            "lyrics: loading CTC aligner (device=%s, dtype=%s)",
-            device, dtype,
+            "lyrics: loading CTC aligner (model=%s, device=%s, dtype=%s)",
+            model_path or "<package default (MMS-300m)>", device, dtype,
         )
-        model, tokenizer = load_alignment_model(device, dtype=dtype)
-        self._align_model = model
-        self._align_tokenizer = tokenizer
+        if model_path is None:
+            model, tokenizer = load_alignment_model(device, dtype=dtype)
+        else:
+            model, tokenizer = load_alignment_model(
+                device, model_path=model_path, dtype=dtype,
+            )
+        self._align_models[model_path] = (model, tokenizer)
         return model, tokenizer
+
+    def _pick_alignment_model(self, language_code: str) -> str | None:
+        """Route a detected ISO-639-1 language code to a CTC checkpoint.
+
+        Returns the HuggingFace model id to load, or `None` to use the
+        package's default MMS-300m head. English routes to a
+        purpose-built English wav2vec2-large-robust for tighter
+        posteriors and a commercial-friendly Apache 2.0 licence;
+        everything else falls back to MMS-300m's multilingual head
+        (CC-BY-NC, replacement candidates tracked separately).
+
+        Latin-script languages mis-detected as English by
+        `_detect_language_from_text` (which returns "en" for any
+        Latin-only text it can't tag more specifically) also land on
+        the English aligner. That's a deliberate trade: wav2vec2-EN
+        copes well with Romance / Germanic Latin-script text per the
+        upstream model card, and the dominant case for mis-detection
+        is "mostly English with some non-English" anyway."""
+        if language_code == "en":
+            return _ALIGN_MODEL_ENGLISH
+        return None
 
     def realign_text(
         self,
@@ -321,13 +392,11 @@ class LyricsAligner:
         )
 
         with self._lock:
-            model, tokenizer = self._load_ctc_aligner()
-            # load_audio materialises the waveform on the same device +
-            # dtype as the model so generate_emissions can run without
-            # an extra copy / cast inside its inner loop.
-            audio_waveform = load_audio(str(audio_path), model.dtype, model.device)
-            _log_audio_stats(audio_waveform, audio_path)
-
+            # Resolve language first so the CTC checkpoint can be
+            # picked accordingly. The audio-based fallback uses
+            # whisperx.load_audio internally and doesn't depend on the
+            # CTC model being loaded, so we can do detection before
+            # touching the aligner.
             language_code = (
                 language
                 or settings.whisper_language
@@ -335,6 +404,14 @@ class LyricsAligner:
                 or self._detect_language_via_audio(audio_path)
             )
             iso3 = _iso1_to_iso3(language_code)
+
+            model_path = self._pick_alignment_model(language_code)
+            model, tokenizer = self._load_ctc_aligner(model_path)
+            # load_audio materialises the waveform on the same device +
+            # dtype as the model so generate_emissions can run without
+            # an extra copy / cast inside its inner loop.
+            audio_waveform = load_audio(str(audio_path), model.dtype, model.device)
+            _log_audio_stats(audio_waveform, audio_path)
 
             # Per-line preprocess so we know exactly how many post-
             # process_results entries each input line will receive. We
@@ -350,26 +427,54 @@ class LyricsAligner:
             all_text: list[str] = []
             line_word_counts: list[int] = []
             non_empty_indices: list[int] = []
+            # Per-word preprocessing for whitespace-separated languages so
+            # `<star>` tokens land at every word boundary, not just at line
+            # edges. preprocess_text wraps its input with `<star>` on each
+            # side; calling it per word and concatenating gives one
+            # `<star>` slot between every pair of adjacent words for
+            # Viterbi to absorb sustained-vowel / instrumental-break
+            # frames into. Without these, the most recent lyric word
+            # gets stretched to cover the gap, which is the failure mode
+            # the word-score diagnostic reported as "low score + low
+            # max_phoneme_prob over a multi-second span" (e.g. 'heart'
+            # held across ~5s of sustained vowel).
+            #
+            # For jpn/chi the package switches to char-level tokenisation
+            # and there's no caller-visible word boundary to split on, so
+            # the per-line path stays. Per-char `<star>` would be
+            # over-permissive there anyway (Viterbi could absorb every
+            # individual character into a star).
+            per_word = iso3 not in {"jpn", "chi"}
             for idx, line in enumerate(input_lines):
                 t = line.text.strip()
                 if not t:
                     continue
-                try:
-                    tokens_starred, text_starred = preprocess_text(
-                        t, romanize=True, language=iso3,
-                    )
-                except Exception as exc:
-                    log.warning(
-                        "lyrics: preprocess_text failed for line %d (%r): %s",
-                        idx, t, exc,
-                    )
+                line_tokens: list[str] = []
+                line_text: list[str] = []
+                line_real = 0
+                units = t.split() if per_word else [t]
+                preprocess_failed = False
+                for unit in units:
+                    try:
+                        unit_tokens, unit_text = preprocess_text(
+                            unit, romanize=True, language=iso3,
+                        )
+                    except Exception as exc:
+                        log.warning(
+                            "lyrics: preprocess_text failed for unit %r "
+                            "in line %d (%r): %s",
+                            unit, idx, t, exc,
+                        )
+                        preprocess_failed = True
+                        break
+                    line_tokens.extend(unit_tokens)
+                    line_text.extend(unit_text)
+                    line_real += sum(1 for s in unit_text if s != "<star>")
+                if preprocess_failed or line_real == 0:
                     continue
-                real = sum(1 for s in text_starred if s != "<star>")
-                if real == 0:
-                    continue
-                all_tokens.extend(tokens_starred)
-                all_text.extend(text_starred)
-                line_word_counts.append(real)
+                all_tokens.extend(line_tokens)
+                all_text.extend(line_text)
+                line_word_counts.append(line_real)
                 non_empty_indices.append(idx)
 
             if not all_tokens:
@@ -386,12 +491,26 @@ class LyricsAligner:
                 len(non_empty_indices), audio_path.name,
                 language_code, iso3, sum(line_word_counts),
             )
+            _log_token_sequence(all_tokens, all_text)
 
             try:
                 emissions, stride = generate_emissions(
                     model, audio_waveform, batch_size=_CTC_BATCH_SIZE,
                 )
+                # `stride`'s unit is package-internal (seen as ms or samples
+                # per frame depending on version) so it's not safe to use
+                # for our diagnostic time axis. Derive sec/frame from the
+                # known input duration instead - the audio waveform is at
+                # exactly `_AUDIO_SAMPLE_RATE` because `load_audio` resampled
+                # to that, and emissions frame count maps 1:1 to its time
+                # axis. `postprocess_results` keeps using `stride` because
+                # the package's own conversion handles whatever unit it
+                # emits.
+                audio_seconds = (
+                    int(audio_waveform.shape[-1]) / _AUDIO_SAMPLE_RATE
+                )
                 _log_emissions_stats(emissions, tokenizer)
+                _log_emissions_windowed(emissions, audio_seconds, tokenizer)
                 segments, scores, blank_token = get_alignments(
                     emissions, all_tokens, tokenizer,
                 )
@@ -404,6 +523,24 @@ class LyricsAligner:
                     raise
                 word_timestamps = postprocess_results(
                     all_text, spans, stride, scores,
+                )
+                _log_word_score_diagnostics(
+                    word_timestamps, emissions, audio_seconds, tokenizer,
+                )
+                word_timestamps = _repair_low_score_words(
+                    word_timestamps,
+                    emissions=emissions,
+                    audio_seconds=audio_seconds,
+                    all_tokens=all_tokens,
+                    all_text=all_text,
+                    tokenizer=tokenizer,
+                    stride=stride,
+                    get_alignments=get_alignments,
+                    get_spans=get_spans,
+                    postprocess_results=postprocess_results,
+                )
+                _log_word_score_diagnostics(
+                    word_timestamps, emissions, audio_seconds, tokenizer,
                 )
             except Exception as exc:
                 log.warning(
@@ -467,71 +604,83 @@ def _detect_language_from_text(input_lines: list[InputLine]) -> str | None:
     output entry).
 
     Returns an ISO-639-1 code, or `None` when the text doesn't contain
-    enough alphabetic characters to decide; the caller then falls back
-    to the audio-based detector. Heuristic is script-based with a
-    Japanese bias on ambiguous CJK (see `_SIMPLIFIED_CHINESE_MARKERS`
-    for the override path). For mixed bilingual lyrics (J-pop with
-    English chorus, etc.) we pick the dominant non-Latin script, since
-    the Latin chunks aligned against e.g. the Japanese aligner will
-    fragment anyway - the correct long-term fix is per-line language
-    detection and per-line aligner load, which we don't do today.
+    any alphabetic characters; the caller then falls back to the
+    audio-based detector.
+
+    **Routing rule: majority by character count.** Each alphabetic
+    character votes for one language; the language with the most votes
+    wins. This handles bilingual code-switching by following the bulk
+    of the text rather than letting any sprinkle of non-Latin script
+    flip the whole song. An English-dominant lyric with a few kana
+    ad-libs routes to `en` (so it picks up the English-specialized
+    aligner); a J-pop song whose verses are mostly Japanese still
+    routes to `ja` even if the chorus is English, because the
+    verse-character count dwarfs the chorus character count over the
+    whole song. The trade-off is a bilingual *line* whose English
+    word-count exceeds its Japanese char-count routes to `en` - that's
+    a deliberate acceptance, because (a) one bilingual line isn't
+    representative of a whole song's character distribution and (b)
+    routing to a non-English aligner for an English-majority body
+    fragments worse than the inverse.
+
+    For genuinely ambiguous CJK characters (kanji/hanzi, glyph-
+    identical between Japanese and Traditional Chinese), the ja/zh
+    mapping uses a two-signal heuristic *before* counting:
+      - any kana anywhere -> CJK counts as ja
+      - any simplified-Chinese-only marker, no kana -> CJK counts as zh
+      - otherwise -> CJK counts as ja (J-pop bias for ambiguous text)
+
+    Pure ties (rare in practice) are broken by `counts` dict iteration
+    order (`en` first), because Latin is the most common script in
+    pop music globally and wav2vec2-EN handles Romance / Germanic
+    Latin-script text reasonably.
     """
     text = "".join(line.text for line in input_lines)
     if not text.strip():
         return None
-    # Two-pass: collect script presence first, then prioritise. Single
-    # pass with early-return mis-tagged kanji-leading Japanese as
-    # Chinese, because the kana (the actual ja-distinguishing signal)
-    # appears later in the string than the leading kanji.
+
+    # First pass: presence signals for the CJK ja/zh disambiguator.
+    # Per-text, not per-char - one kana or one marker tips ALL the
+    # ambiguous-CJK chars in the same direction.
     has_kana = False
-    has_hangul = False
-    has_thai = False
-    has_cjk = False
-    has_latin = False
+    has_simplified_marker = False
     for ch in text:
         cp = ord(ch)
         if 0x3040 <= cp <= 0x30FF:
             has_kana = True
-        elif 0xAC00 <= cp <= 0xD7AF:
-            has_hangul = True
-        elif 0x0E00 <= cp <= 0x0E7F:
-            has_thai = True
-        elif 0x4E00 <= cp <= 0x9FFF:
-            has_cjk = True
-        elif ch.isalpha() and cp < 0x250:
-            has_latin = True
-    # Priority order:
-    #   1. kana       -> ja (any kana is a definitive Japanese signal)
-    #   2. hangul     -> ko
-    #   3. thai       -> th
-    #   4. simplified-Chinese-only glyph -> zh
-    #   5. CJK without any of the above -> ja by default
-    #
-    # The kanji-only case (#5) is genuinely ambiguous - 漢字 is
-    # identical glyph-for-glyph in Japanese and Traditional Chinese -
-    # so we lean on the user's stated library bias (mostly Japanese
-    # music) and default to ja. Mis-routing a Traditional-Chinese lyric
-    # is the trade-off; the caller can pin `language="zh"` to override.
+        if ch in _SIMPLIFIED_CHINESE_MARKERS:
+            has_simplified_marker = True
+        if has_kana and has_simplified_marker:
+            break
     if has_kana:
-        return "ja"
-    if has_hangul:
-        return "ko"
-    if has_thai:
-        return "th"
-    if has_cjk:
-        if any(ch in _SIMPLIFIED_CHINESE_MARKERS for ch in text):
-            return "zh"
-        return "ja"
-    # No non-Latin script seen; if there's any Latin letter, treat as
-    # English. The wav2vec2 EN aligner copes well with Latin-script
-    # romance / germanic languages (mis-tagging French or Spanish as
-    # English still yields WORD-level timings, vs the character-soup
-    # failure mode of routing space-separated text through a no-space
-    # aligner). For genuine non-English Latin text the caller can pass
-    # `language` explicitly.
-    if has_latin:
-        return "en"
-    return None
+        cjk_lang = "ja"
+    elif has_simplified_marker:
+        cjk_lang = "zh"
+    else:
+        # Kanji-only (no kana, no markers) is genuinely ambiguous;
+        # default to ja per the library bias. Caller can pin
+        # `language="zh"` to override.
+        cjk_lang = "ja"
+
+    # Second pass: count alphabetic characters by resolved language.
+    # `en` is listed first so it wins pure ties (see docstring).
+    counts: dict[str, int] = {"en": 0, "ja": 0, "ko": 0, "th": 0, "zh": 0}
+    for ch in text:
+        cp = ord(ch)
+        if 0x3040 <= cp <= 0x30FF:
+            counts["ja"] += 1
+        elif 0xAC00 <= cp <= 0xD7AF:
+            counts["ko"] += 1
+        elif 0x0E00 <= cp <= 0x0E7F:
+            counts["th"] += 1
+        elif 0x4E00 <= cp <= 0x9FFF:
+            counts[cjk_lang] += 1
+        elif ch.isalpha() and cp < 0x250:
+            counts["en"] += 1
+
+    if sum(counts.values()) == 0:
+        return None
+    return max(counts, key=lambda k: counts[k])
 
 
 # --------------------------------------------------------------------
@@ -567,18 +716,238 @@ def _log_audio_stats(audio_waveform: Any, audio_path: Path) -> None:
     abs_max = float(finite_f32.abs().max())
     rms = float(finite_f32.pow(2).mean().sqrt())
     near_silent = float((audio_waveform.float().abs() < 1e-3).float().mean())
+    duration_sec = int(audio_waveform.shape[-1]) / _AUDIO_SAMPLE_RATE
     log.info(
-        "lyrics: audio_stats: %s shape=%s dtype=%s nan=%d inf=%d "
-        "abs_max=%.4f rms=%.4f near_silent_frac=%.3f",
+        "lyrics: audio_stats: %s shape=%s dtype=%s duration=%.2fs "
+        "nan=%d inf=%d abs_max=%.4f rms=%.4f near_silent_frac=%.3f",
         audio_path.name, tuple(audio_waveform.shape), audio_waveform.dtype,
-        nan, inf, abs_max, rms, near_silent,
+        duration_sec, nan, inf, abs_max, rms, near_silent,
     )
+
+
+def _repair_low_score_words(
+    word_timestamps: list[dict[str, Any]],
+    *,
+    emissions: Any,
+    audio_seconds: float,
+    all_tokens: list[str],
+    all_text: list[str],
+    tokenizer: Any,
+    stride: float,
+    get_alignments: Any,
+    get_spans: Any,
+    postprocess_results: Any,
+    score_threshold: float = -5.0,
+    neighbor_count: int = 2,
+) -> list[dict[str, Any]]:
+    """Re-run forced alignment locally for every word scoring below
+    `score_threshold`.
+
+    The global Viterbi occasionally lands on degenerate solutions where
+    one word's frame assignment spans many seconds of audio the model
+    couldn't phoneme-match (held vowel after the word, breath, ad-lib,
+    instrumental gap). The standard `<star>` absorber isn't usable on
+    speech-active frames because real wav2vec2 outputs near-zero
+    posterior to the `<star>` column at speech frames; this helper
+    re-aligns each pathological word locally with a small window of
+    well-aligned neighbors as anchors. Two reasons a local rerun can
+    win where the global pass lost:
+      - The package's internal 30 s chunking + posterior stitching
+        introduces cross-chunk boundary effects; aligning a short
+        window avoids them entirely.
+      - The local Viterbi minimisation is over a much smaller trellis;
+        a stretched-word path that was globally optimal can lose to a
+        tighter alternative locally because the gain from "stretching
+        the next word too" no longer applies.
+
+    Conservative accept-gate: replace the local cluster's timings only
+    when the targeted bad word's score strictly improves. A no-op
+    rerun (same audio + same text + same package = same path) never
+    makes things worse, and a regression on the targeted word means
+    something about the local context is also broken and we don't want
+    to propagate that into neighbours either.
+
+    Default threshold `-5.0` is roughly the median score on a typical
+    pop vocals stem aligned with MMS-300m; tune lower (e.g. `-10`) to
+    target only the worst handful of words, higher to be more
+    aggressive at the cost of compute on many no-op reruns."""
+    if not word_timestamps:
+        return word_timestamps
+
+    n_words = len(word_timestamps)
+    # Map word index (in word_timestamps, which has stars filtered out)
+    # to its position in `all_text` (which retains stars). Used to locate
+    # the surrounding `<star>` slots for the sub-token slice.
+    word_to_all_text_idx = [i for i, t in enumerate(all_text) if t != "<star>"]
+    if len(word_to_all_text_idx) != n_words:
+        log.warning(
+            "lyrics: repair: skipping (word_timestamps/all_text mismatch: %d vs %d)",
+            n_words, len(word_to_all_text_idx),
+        )
+        return word_timestamps
+
+    em_dim = int(emissions.dim())
+    total_frames = int(emissions.shape[1 if em_dim == 3 else 0])
+    sec_per_frame = audio_seconds / max(total_frames, 1)
+
+    # Every word scoring below the threshold becomes a repair target.
+    # Walk in index order so cluster merging below stays left-to-right.
+    bad_indices = [
+        i for i, w in enumerate(word_timestamps)
+        if float(w.get("score", 0.0)) < score_threshold
+    ]
+
+    # Cluster nearby bad words so their windows don't overlap. The
+    # condition `next - last <= 2*neighbor_count` is the boundary at
+    # which their N-neighbour windows touch; merging avoids re-aligning
+    # the same audio twice with inconsistent boundaries.
+    clusters: list[list[int]] = []
+    for idx in bad_indices:
+        if clusters and idx - clusters[-1][-1] <= 2 * neighbor_count:
+            clusters[-1].append(idx)
+        else:
+            clusters.append([idx])
+
+    out = list(word_timestamps)
+    accepted = 0
+    for cluster in clusters:
+        n_lo = max(0, cluster[0] - neighbor_count)
+        n_hi = min(n_words - 1, cluster[-1] + neighbor_count)
+
+        # Frame range spans from the left-neighbour start to the
+        # right-neighbour end. Conversion uses our audio-derived
+        # sec/frame, not the package's `stride` (whose unit we don't
+        # trust per the diagnostic-bug investigation earlier).
+        left_start = float(word_timestamps[n_lo].get("start", 0.0))
+        right_end = float(word_timestamps[n_hi].get("end", audio_seconds))
+        f_lo = max(0, int(left_start / max(sec_per_frame, 1e-9)))
+        f_hi = min(total_frames, int(right_end / max(sec_per_frame, 1e-9)) + 1)
+        if f_hi - f_lo < 4:
+            continue
+
+        # Token slice: from the `<star>` immediately before the leftmost
+        # neighbour to the `<star>` immediately after the rightmost.
+        # `preprocess_text` produces alternating star/word/star, so
+        # `word_to_all_text_idx[n] ± 1` lands on the surrounding star.
+        t_left = word_to_all_text_idx[n_lo]
+        t_right = word_to_all_text_idx[n_hi]
+        token_lo = max(0, t_left - 1)
+        token_hi = min(len(all_tokens), t_right + 2)
+        sub_tokens = all_tokens[token_lo:token_hi]
+        sub_text = all_text[token_lo:token_hi]
+
+        local_em = emissions[f_lo:f_hi] if em_dim == 2 else emissions[:, f_lo:f_hi]
+
+        try:
+            local_segments, local_scores, blank_token = get_alignments(
+                local_em, sub_tokens, tokenizer,
+            )
+            local_spans = get_spans(sub_tokens, local_segments, blank_token)
+            local_wt = postprocess_results(
+                sub_text, local_spans, stride, local_scores,
+            )
+        except Exception as exc:
+            log.warning(
+                "lyrics: repair: cluster %s re-align failed: %s",
+                cluster, exc,
+            )
+            continue
+
+        expected = n_hi - n_lo + 1
+        if len(local_wt) != expected:
+            log.warning(
+                "lyrics: repair: cluster %s word-count mismatch (got %d, expected %d)",
+                cluster, len(local_wt), expected,
+            )
+            continue
+
+        # Accept-gate: leftmost bad word in the cluster must improve.
+        target = cluster[0]
+        target_old_score = float(word_timestamps[target].get("score", float("-inf")))
+        target_new_score = float(local_wt[target - n_lo].get("score", float("-inf")))
+        if target_new_score <= target_old_score:
+            log.info(
+                "lyrics: repair: cluster %s SKIP (word %d %r score %.2f -> %.2f)",
+                cluster, target, word_timestamps[target].get("text", ""),
+                target_old_score, target_new_score,
+            )
+            continue
+
+        # Accepted: rewrite timings for all words in the window. Local
+        # timestamps from `postprocess_results` are relative to the
+        # slice start; shift by `offset_sec` to get global times.
+        offset_sec = f_lo * sec_per_frame
+        for local_i, global_i in enumerate(range(n_lo, n_hi + 1)):
+            new_w = dict(local_wt[local_i])
+            new_w["start"] = float(new_w.get("start", 0.0)) + offset_sec
+            new_w["end"] = float(new_w.get("end", 0.0)) + offset_sec
+            out[global_i] = new_w
+        accepted += 1
+        log.info(
+            "lyrics: repair: cluster %s ACCEPT (word %d %r score %.2f -> %.2f, "
+            "old span [%.3f, %.3f]s -> new span [%.3f, %.3f]s)",
+            cluster, target, word_timestamps[target].get("text", ""),
+            target_old_score, target_new_score,
+            float(word_timestamps[target].get("start", 0.0)),
+            float(word_timestamps[target].get("end", 0.0)),
+            float(out[target].get("start", 0.0)),
+            float(out[target].get("end", 0.0)),
+        )
+
+    log.info(
+        "lyrics: repair: %d/%d cluster(s) accepted (threshold=%.2f, "
+        "bad_words=%d, neighbor_count=%d)",
+        accepted, len(clusters), score_threshold, len(bad_indices),
+        neighbor_count,
+    )
+    return out
+
+
+def _log_token_sequence(all_tokens: list[str], all_text: list[str]) -> None:
+    """Print exactly what we hand to `get_alignments` so we can verify
+    `<star>` token placement empirically.
+
+    Three numbers tell the story:
+      - `total` vs `non_star` distinguishes "did we add stars" from "are
+        they being counted as words"; the gap is the absorber budget.
+      - `consecutive_star_pairs` measures whether per-word concatenation
+        actually produced extra stars or whether the package (or our
+        own logic) collapsed them.
+      - `lone_stars` (stars with non-star neighbours on both sides) is
+        the number of in-line absorber slots Viterbi can use without
+        sharing them with another star.
+
+    Also dumps the first 40 token strings so a human can sanity-check
+    the structure ("<star>, word, <star>, word, …" is what we want;
+    "<star>, word, word, word, <star>" would mean stars were collapsed
+    out somewhere)."""
+    total = len(all_tokens)
+    star_count = sum(1 for t in all_text if t == "<star>")
+    non_star = total - star_count
+    consecutive_pairs = 0
+    lone_stars = 0
+    for i, t in enumerate(all_text):
+        if t != "<star>":
+            continue
+        prev_is_star = i > 0 and all_text[i - 1] == "<star>"
+        next_is_star = i + 1 < total and all_text[i + 1] == "<star>"
+        if prev_is_star:
+            consecutive_pairs += 1
+        if not prev_is_star and not next_is_star:
+            lone_stars += 1
+    log.info(
+        "lyrics: token_sequence: total=%d non_star=%d star=%d "
+        "consecutive_star_pairs=%d lone_stars=%d",
+        total, non_star, star_count, consecutive_pairs, lone_stars,
+    )
+    head = all_text[:40]
+    log.info("lyrics:   head[:40] = %r", head)
 
 
 def _log_emissions_stats(emissions: Any, tokenizer: Any) -> None:
     """Summarise MMS-300m's per-frame log-probs before forced alignment.
 
-    Two failure modes we're trying to catch:
+    Three failure modes we're trying to catch:
       - `nan` / `inf` > 0 -> fp16 instability in the aligner itself
         (LayerNorm / softmax over fp16 activations); Viterbi degenerates
         to whatever the C++ kernel does with NaN log-probs.
@@ -587,6 +956,12 @@ def _log_emissions_stats(emissions: Any, tokenizer: Any) -> None:
         every frame -> 'r', producing one giant segment). Indicates
         either fp16 NaN that collapsed softmax to a default class or a
         broken input waveform.
+      - `<star>` argmax dominant + `star_margin` > 5 -> the appended
+        wildcard column is winning by miles (>150x prob ratio over the
+        runner-up). Distinguishes "model genuinely thinks audio is OOV"
+        (margin 0-2 logp; possibly real instrumental input) from
+        "<star> column was initialized to ~+inf or model load is
+        corrupt" (margin large and uniform across all frames).
 
     Decodes the dominant argmax index via the tokenizer vocab so the
     log line reads "top=r 0.92" rather than just a bare integer. The
@@ -610,6 +985,24 @@ def _log_emissions_stats(emissions: Any, tokenizer: Any) -> None:
     vocab_inv = {v: k_ for k_, v in vocab.items()}
     star_col = len(vocab)  # `generate_emissions` appends this column
 
+    # Global star-vs-runner-up margin. We always compute it, not just
+    # when star dominates, so a non-dominant star with a large margin
+    # over an obscure runner-up still surfaces in the log.
+    if star_col < em_f32.shape[-1]:
+        flat = em_f32.view(-1, em_f32.shape[-1])
+        star_logp = float(flat[:, star_col].mean())
+        mask = torch.ones(flat.shape[-1], dtype=torch.bool, device=flat.device)
+        mask[star_col] = False
+        runner_up_logp = float(flat[:, mask].max(dim=-1).values.mean())
+        star_margin = star_logp - runner_up_logp
+        star_summary = (
+            f" star_logp={star_logp:.2f} "
+            f"runner_up_logp={runner_up_logp:.2f} "
+            f"star_margin={star_margin:+.2f}"
+        )
+    else:
+        star_summary = ""
+
     def _label(idx: int) -> str:
         if idx == star_col:
             return "<star-col>"
@@ -617,14 +1010,238 @@ def _log_emissions_stats(emissions: Any, tokenizer: Any) -> None:
 
     top_summary = ", ".join(
         f"{_label(int(i))}={int(c)}({int(c) / total:.2f})"
-        for i, c in zip(top_indices, top_counts)
+        for i, c in zip(top_indices, top_counts, strict=True)
     )
     log.info(
         "lyrics: emissions_stats: shape=%s dtype=%s nan=%d inf=%d "
-        "mean=%.3f std=%.3f top_argmax=[%s]",
+        "mean=%.3f std=%.3f top_argmax=[%s]%s",
         tuple(emissions.shape), emissions.dtype, nan, inf, mean, std,
-        top_summary,
+        top_summary, star_summary,
     )
+
+
+def _log_emissions_windowed(
+    emissions: Any, audio_seconds: float, tokenizer: Any,
+    window_seconds: float = 5.0,
+) -> None:
+    """Per-time-window summary of MMS-300m's posteriors so we can
+    correlate a bad-alignment span to "the model was confident here"
+    vs. "the model was mush here".
+
+    Cascade triage matrix (read alongside `_log_word_score_diagnostics`):
+
+      - low `max_phoneme_prob` + low word score in same window
+            -> model lost the audio (separator artifact, off-mic vocal,
+               or genuinely no speech). Fix is upstream: better vocals
+               separator, or VAD-gating the posteriors to discourage
+               Viterbi from placing words in dead frames.
+      - high `max_phoneme_prob` + low word score in same window
+            -> model heard a phoneme but it doesn't match the text token
+               Viterbi was forced to consume. Fix is text-side: wrong
+               language pick, missing `<star>` tokens around ad-libs /
+               harmonies, or the LRC text disagrees with what's actually
+               sung.
+      - high `star_frac` over many consecutive windows
+            -> the aligner found nothing it wanted to commit to; usually
+               an instrumental section. Words placed in this span are
+               cascade victims by definition; VAD-gating fixes it.
+
+    Reports `max_phoneme_prob` (avg-over-frames of the max non-blank,
+    non-`<star>` probability in linear space) rather than raw log-probs
+    so the numbers read as "0.84 = confident, 0.05 = mush" instead of
+    requiring an exp() in your head. Top-3 argmax classes ride the same
+    `<star-col>` label vocabulary as `_log_emissions_stats` for
+    cross-line greppability."""
+    import torch  # type: ignore[import-not-found]
+
+    em = emissions.float()
+    if em.dim() == 3:
+        # `generate_emissions` returns shape (1, T, V+1) in some versions;
+        # flatten the leading batch dim so the rest of this function can
+        # treat emissions as a 2D (T, V+1) matrix unconditionally.
+        em = em[0]
+    total_frames = em.shape[0]
+    # Seconds per emission frame derived from the known input duration so
+    # we don't have to know `generate_emissions`'s `stride` unit (it's
+    # been observed in ms in this version, samples in others). Robust
+    # to package version drift.
+    sec_per_frame = audio_seconds / max(total_frames, 1)
+    frames_per_window = max(1, int(round(window_seconds / max(sec_per_frame, 1e-9))))
+    vocab = tokenizer.get_vocab()
+    vocab_inv = {v: k_ for k_, v in vocab.items()}
+    star_col = len(vocab)
+    # CTC blank for wav2vec2-style models is conventionally index 0;
+    # excluding it from "phoneme confidence" keeps the metric focused on
+    # whether the model is committing to *any* real phoneme in the window.
+    # Mis-identifying blank only slightly skews `max_phoneme_prob` (the
+    # max over a long axis is dominated by the actual peak phoneme), so
+    # diagnostics stay informative even if a future model uses a
+    # different blank index.
+    blank_col = 0
+    real_phoneme_mask = torch.ones(em.shape[1], dtype=torch.bool, device=em.device)
+    real_phoneme_mask[blank_col] = False
+    if star_col < em.shape[1]:
+        real_phoneme_mask[star_col] = False
+
+    log.info(
+        "lyrics: emissions_windowed: T=%d audio=%.2fs sec/frame=%.4f "
+        "window=%.1fs frames/win=%d",
+        total_frames, audio_seconds, sec_per_frame, window_seconds,
+        frames_per_window,
+    )
+    for w_start in range(0, total_frames, frames_per_window):
+        w_end = min(total_frames, w_start + frames_per_window)
+        window = em[w_start:w_end]
+        t_start = w_start * sec_per_frame
+        t_end = w_end * sec_per_frame
+        # Per-frame max log-prob over real phoneme classes; mean across
+        # frames in the window, then exp -> linear avg "how confident
+        # was the model about *some* phoneme each frame".
+        non_special = window[:, real_phoneme_mask]
+        max_phoneme_logp = non_special.max(dim=-1).values
+        max_phoneme_prob = float(max_phoneme_logp.exp().mean())
+        # Argmax-only stats: fraction of frames where star / blank won,
+        # and top-3 classes by argmax count. Together these distinguish
+        # "model picked a phoneme but the wrong one" from "model couldn't
+        # commit to anything but blank/star".
+        argmax = window.argmax(dim=-1)
+        argmax_n = argmax.numel()
+        star_frac = float((argmax == star_col).float().mean())
+        blank_frac = float((argmax == blank_col).float().mean())
+        counts = torch.bincount(argmax, minlength=star_col + 1)
+        top_k = min(3, int((counts > 0).sum()))
+        if top_k > 0:
+            top_counts, top_indices = torch.topk(counts, k=top_k)
+            top_summary = ", ".join(
+                _label_argmax_class(int(i), vocab_inv, star_col)
+                + f"={int(c) / argmax_n:.2f}"
+                for i, c in zip(top_indices, top_counts, strict=True)
+            )
+        else:
+            top_summary = "(empty)"
+        # When <star> dominates, also report HOW dominant. A small margin
+        # (1-2 logp) over the runner-up means the model is genuinely
+        # uncertain and slightly preferring star ("I don't know what
+        # this audio is"). A huge margin (>5 logp ~= >150x prob ratio)
+        # means star is winning for non-modelling reasons (corrupt
+        # weights, mis-loaded model, broken audio preprocessing) and
+        # the model never actually evaluated this window.
+        star_extra = ""
+        if star_col < em.shape[1] and star_frac > 0.5:
+            star_logp = float(window[:, star_col].mean())
+            runner_up_logp = float(
+                window[:, real_phoneme_mask].max(dim=-1).values.mean()
+            )
+            star_extra = (
+                f" star_logp={star_logp:.2f} "
+                f"runner_up_logp={runner_up_logp:.2f} "
+                f"star_margin={star_logp - runner_up_logp:+.2f}"
+            )
+        log.info(
+            "lyrics:   t=[%6.2f,%6.2f]s max_phoneme_prob=%.3f "
+            "blank_frac=%.2f star_frac=%.2f top=[%s]%s",
+            t_start, t_end, max_phoneme_prob, blank_frac, star_frac,
+            top_summary, star_extra,
+        )
+
+
+def _log_word_score_diagnostics(
+    word_timestamps: list[dict[str, Any]],
+    emissions: Any,
+    audio_seconds: float,
+    tokenizer: Any,
+) -> None:
+    """Distribution + worst-N report for per-word alignment scores.
+
+    `score` from `postprocess_results` is the mean log-prob along the
+    Viterbi path for that word's frames. Sharply negative scores mean
+    Viterbi traversed low-probability frames to land the word there -
+    the canonical signature of a *forced* placement: either the word
+    sits in an instrumental section (no phoneme matched), or it was
+    shifted by an upstream cascade and ended up on the wrong phonemes.
+
+    For each of the worst-N words we also re-read the emissions inside
+    that word's frame range and report `max_phoneme_prob` there. This
+    is the cross-correlation the per-window logger above lets you do by
+    eye, baked in:
+
+      - low score + low max_phoneme_prob
+            -> word placed in a dead-audio span (cascade victim or
+               instrumental). VAD-gating / better separator fixes it.
+      - low score + high max_phoneme_prob
+            -> model heard *something* there but it disagreed with the
+               text token Viterbi was forced to consume. Wrong language,
+               missing `<star>` for ad-libs, or LRC text mismatch.
+    """
+    import torch  # type: ignore[import-not-found]
+
+    if not word_timestamps:
+        log.info("lyrics: word_scores: no words (skipping)")
+        return
+    em = emissions.float()
+    if em.dim() == 3:
+        em = em[0]
+    total_frames = em.shape[0]
+    # Same audio-derived sec/frame as `_log_emissions_windowed`; package
+    # `stride` units differ across versions so we don't trust it here.
+    sec_per_frame = audio_seconds / max(total_frames, 1)
+    vocab = tokenizer.get_vocab()
+    star_col = len(vocab)
+    blank_col = 0
+    real_phoneme_mask = torch.ones(em.shape[1], dtype=torch.bool, device=em.device)
+    real_phoneme_mask[blank_col] = False
+    if star_col < em.shape[1]:
+        real_phoneme_mask[star_col] = False
+
+    scores = [float(w.get("score", 0.0)) for w in word_timestamps]
+    scores_sorted = sorted(scores)
+    n = len(scores)
+
+    def _percentile(p: float) -> float:
+        idx = max(0, min(n - 1, int(round(p * (n - 1)))))
+        return scores_sorted[idx]
+
+    # Threshold of -1.5 is a coarse heuristic: forced-aligner scores on
+    # cleanly-recognised words usually sit between -0.5 and 0; below
+    # ~-1.5 the path is averaging blank / wrong-phoneme frames. Re-tune
+    # once we have a few real songs' baselines logged.
+    threshold = -1.5
+    below = sum(1 for s in scores if s < threshold)
+    log.info(
+        "lyrics: word_scores: n=%d min=%.2f p10=%.2f median=%.2f p90=%.2f max=%.2f below_%.1f=%d",
+        n, scores_sorted[0], _percentile(0.10), _percentile(0.50),
+        _percentile(0.90), scores_sorted[-1], threshold, below,
+    )
+
+    worst = sorted(
+        ((float(w.get("score", 0.0)), w) for w in word_timestamps),
+        key=lambda t: t[0],
+    )[:10]
+    log.info("lyrics:   worst 10 words by alignment score:")
+    for score, w in worst:
+        start = float(w.get("start", 0.0))
+        end = float(w.get("end", start))
+        f_start = max(0, min(total_frames - 1, int(start / max(sec_per_frame, 1e-9))))
+        f_end = max(f_start + 1, min(total_frames, int(end / max(sec_per_frame, 1e-9))))
+        window = em[f_start:f_end]
+        if window.numel() > 0:
+            non_special = window[:, real_phoneme_mask]
+            max_phoneme_prob = float(non_special.max(dim=-1).values.exp().mean())
+        else:
+            max_phoneme_prob = float("nan")
+        log.info(
+            "lyrics:     t=[%7.3f,%7.3f]s score=%6.2f max_phoneme_prob=%.3f text=%r",
+            start, end, score, max_phoneme_prob, w.get("text", ""),
+        )
+
+
+def _label_argmax_class(idx: int, vocab_inv: dict[int, str], star_col: int) -> str:
+    """Decode an argmax index to the same label vocabulary
+    `_log_emissions_stats` uses (`<star-col>` for the appended wildcard,
+    `?N` for genuinely unknown indices)."""
+    if idx == star_col:
+        return "<star-col>"
+    return vocab_inv.get(idx, f"?{idx}")
 
 
 def _diagnose_get_spans_failure(

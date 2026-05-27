@@ -142,3 +142,30 @@ export function activeLineIndexAt(
   }
   return active;
 }
+
+/**
+ * Index of the word inside `lines[lineIndex]` that the playhead is
+ * currently inside (the last word whose `startSec + offsetSec <=
+ * audioTimeSec`). Returns `undefined` when the line has no word-level
+ * alignment, or when the playhead sits before the line's first word.
+ *
+ * Word-aligned lyrics (LRCLIB with the word-level upgrade applied)
+ * carry `words`; plain LRCLIB / file lyrics typically don't, so the
+ * caller falls back to whole-line highlighting in that case.
+ */
+export function activeWordIndexAt(
+  lines: readonly LyricLine[],
+  lineIndex: number,
+  audioTimeSec: number,
+  offsetSec: number,
+): number | undefined {
+  const line = lines[lineIndex];
+  if (!line || !line.words || line.words.length === 0) return undefined;
+  const shifted = audioTimeSec - offsetSec;
+  let active: number | undefined;
+  for (let i = 0; i < line.words.length; i++) {
+    if (line.words[i].startSec <= shifted) active = i;
+    else break;
+  }
+  return active;
+}

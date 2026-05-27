@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
 import React from 'react';
 import { TranscriptionSummary } from 'src/transcriber';
+import { useParentSubmenuRegistry } from './components/dropdown';
 import styles from './recent_transcriptions.module.css';
 
 const LIMIT = 5;
@@ -71,6 +72,12 @@ export const RecentTranscriptionsPicker = ({
 }) => {
   const [open, setOpen] = React.useState(false);
   const ref = React.useRef<HTMLDivElement>(null);
+
+  // Hook into the nearest parent panel's submenu registry so opening
+  // this picker closes any sibling submenu (and vice versa), matching
+  // SubmenuItem's behaviour. No-op when rendered outside a dropdown
+  // panel (the cta variant on the empty-state card).
+  useParentSubmenuRegistry(open, setOpen);
 
   // Stable ref so the open-effect doesn't refire when the parent passes
   // a new closure on every render.

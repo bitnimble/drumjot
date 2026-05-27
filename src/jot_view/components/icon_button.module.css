@@ -1,35 +1,47 @@
-/* Compact 18x18 icon button shared by the mixer's M/S toggles and the
-   audio-track clear button. The base rule defines the box, border, and
-   default colors; mute/solo each layer a single .*Active modifier on
-   top, and .clear overrides the bold + glyph weight for the × mark. */
+/* Compact 18x18 icon button shared by the mixer's M/S toggles, the
+   audio-track clear button, and the per-row overflow trigger. The base
+   `.iconBox` defines the 18x18 box, border, and default colors so any
+   row-level glyph button picks up the same geometry; `.iconButton` /
+   `.clear` then layer on the M/S typography (small bold) or the ×
+   glyph treatment (body-md). */
 
-.iconButton {
+/* Chrome-only base (border + radius + hover treatment). Consumers
+   pick the size (`.iconButton` is 18x18, the mixer overflow trigger
+   is also 18x18, the Recent-transcriptions refresh button is 22x22)
+   so the box class itself stays size-agnostic.
+
+   IMPORTANT: do NOT bake `width` / `height` in here. Vite emits a
+   composed class's rules AFTER the composing class's, so any size
+   on this base would override the consumer's own width / height.
+   See the doc comment on `.reset` in button.module.css for the full
+   ordering rationale. */
+.iconBox {
+    composes: reset from './button.module.css';
     flex: 0 0 auto;
-    width: 18px;
-    height: 18px;
+    box-sizing: border-box;
     padding: 0;
-    font-size: 10px;
-    font-weight: 700;
-    line-height: 1;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
     background: var(--color-bg-base);
     color: var(--color-text-faint-strong);
-    cursor: pointer;
-    font-family: inherit;
     display: inline-flex;
     align-items: center;
     justify-content: center;
 }
 
-.iconButton:hover {
+.iconBox:hover {
     border-color: var(--color-text-faint-strong);
     color: var(--color-text-secondary-alt);
 }
 
-.iconButton:focus {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 1px;
+.iconButton {
+    composes: iconBox;
+    /* The reset already supplies font-family inherit + cursor + focus
+       outline; the icon button adds the 18x18 box and its specific
+       label-size typography (10px / 700 / line-height 1). */
+    composes: labelSm from '../../typography.module.css';
+    width: 18px;
+    height: 18px;
 }
 
 .muteActive {
@@ -56,7 +68,11 @@
 }
 
 .clear {
-    font-size: 13px;
+    /* The × glyph reads better at body-md weight/size than the bold 10px
+       used by the M/S toggles, hence this single override on top of
+       `.iconButton`. */
+    composes: bodyMd from '../../typography.module.css';
+    /* stylelint-disable-next-line property-disallowed-list -- the ✕ glyph reads cleaner unbolded; this strips the labelSm weight inherited via `.iconButton`. */
     font-weight: normal;
 }
 

@@ -212,7 +212,15 @@ export const LyricsSearchModal = observer(
             <button
               type="submit"
               className={styles.searchButton}
-              disabled={phase.kind === 'searching' || title.trim().length === 0}
+              /* Only disable on empty title. While searching, leave the
+                 button live so its accent background + white spinner
+                 stay readable instead of falling into the muted
+                 `:disabled` palette where the currentColor-based spinner
+                 colours blend into the grey background. Re-clicking
+                 mid-search just supersedes the in-flight request via
+                 `requestIdRef` above, so live-during-search is safe. */
+              disabled={title.trim().length === 0}
+              aria-busy={phase.kind === 'searching'}
               aria-label={phase.kind === 'searching' ? 'Searching' : 'Search'}
               title={phase.kind === 'searching' ? 'Searching…' : 'Search'}
               data-testid="lyrics-search-submit"

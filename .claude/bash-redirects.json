@@ -3,6 +3,9 @@
   "redirects": [
     {
       "commands": [
+        "Bash(bun run typecheck *)",
+        "Bash(bun typecheck *)",
+        "Bash(bun x tsc *)",
         "Bash(bunx vite *)",
         "Bash(bunx stylelint *)",
         "Bash(bunx tsc *)",

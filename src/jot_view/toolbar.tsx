@@ -26,6 +26,7 @@ import {
   SubmenuItem,
   ToggleMenuItem,
 } from './components/dropdown';
+import { Logo } from './components/logo';
 import { NumberStepper } from './components/number_stepper';
 import { Tabs } from './components/tabs';
 import { formatTranscriptionSummary, RecentTranscriptionsPicker } from './recent_transcriptions';
@@ -33,7 +34,6 @@ import styles from './toolbar.module.css';
 import {
   GridLineSettings,
   JotViewStore,
-  LyricsAlignStatus,
   TranscribeOptions,
   TranscribeStatus,
 } from './store';
@@ -123,10 +123,8 @@ export const Toolbar = observer(
     onLoadLyricsFile,
     onOpenLyricsTextLoad,
     onOpenLyricsSearch,
-    onClearLyrics,
-    hasLyrics,
     onCancelTranscribe,
-    lyricsAlignStatus,
+    lyricsAnyAligning,
     onSetBeatInput,
     onSetLlmModel,
     zoom,
@@ -172,18 +170,11 @@ export const Toolbar = observer(
      *  against the current jot's title/artist; the toolbar's only job
      *  is to surface the entry point. */
     onOpenLyricsSearch: () => void;
-    /** Drop the session lyrics store. The gutter Clear button on the
-     *  row has its own affordance; this is the alternate menu path. */
-    onClearLyrics: () => void;
-    /** True when the session lyrics store has lines loaded; used to
-     *  enable a "Clear lyrics" menu item inside the Lyrics dropdown. */
-    hasLyrics: boolean;
     onCancelTranscribe: () => void;
-    /** Status of the in-flight Whisper lyric-alignment request. Rendered
-     *  as a busy pill in the toolbar so the user sees that the backend
-     *  is extracting vocals + running whisperx after they pick "Align
-     *  with Whisper" from the Lyrics menu. */
-    lyricsAlignStatus: LyricsAlignStatus;
+    /** True when any lyrics row currently has a Whisper alignment in
+     *  flight. Drives the toolbar busy pill (which doesn't display
+     *  *which* row; the per-row spinner does). */
+    lyricsAnyAligning: boolean;
     onSetBeatInput: (input: BeatInput) => void;
     onSetLlmModel: (model: LlmModel) => void;
     zoom: number;
@@ -272,171 +263,176 @@ export const Toolbar = observer(
 
     return (
       <div className={styles.toolbar}>
+        <Logo size={28} title="Drumjot" />
         <DropdownButton
-          label={<ToolbarDropdownLabel>Load</ToolbarDropdownLabel>}
+          label={<ToolbarDropdownLabel>File</ToolbarDropdownLabel>}
           className={styles.playButton}
           title="Load a score or audio tracks from disk"
         >
           {(close) => (
             <>
-              <RecentTranscriptionsPicker
-                variant="menu"
-                triggerLabel="Recent"
-                items={recentTranscriptions}
-                loaded={recentTranscriptionsLoaded}
-                loading={recentTranscriptionsLoading}
-                onRefresh={onRefreshRecentTranscriptions}
-                onPick={onLoadRecentTranscription}
-                onAfterPick={close}
-              />
-              {examples.length > 0 && (
-                <>
-                  <SubmenuItem label="Examples">
-                    {(closeSub) =>
-                      examples.map((ex) => (
-                        <button
-                          key={ex.id}
-                          type="button"
-                          className={classNames(
-                            dropdownStyles.dropdownItem,
-                            ex.id === currentId && dropdownStyles.dropdownItemActive
-                          )}
-                          onClick={() => {
-                            onSelect(ex.id);
-                            closeSub();
-                            close();
-                          }}
-                          title={`Load the built-in example "${ex.label}".`}
-                        >
-                          {ex.label}
-                        </button>
-                      ))
-                    }
-                  </SubmenuItem>
-                  <span className={dropdownStyles.dropdownDivider} aria-hidden="true" />
-                </>
-              )}
-              <button
-                type="button"
-                className={dropdownStyles.dropdownItem}
-                onClick={() => {
-                  jotInputRef.current?.click();
-                  close();
-                }}
-                title="Load a Drumjot DSL file (`.jot`) from disk and render it. Parser runs entirely client-side; no transcriber service required."
+              <SubmenuItem
+                label="Load"
+                title="Load a score, audio tracks, or a previous transcription from disk."
               >
-                Load .jot file
-              </button>
-              <button
-                type="button"
-                className={dropdownStyles.dropdownItem}
-                onClick={() => {
-                  midiInputRef.current?.click();
-                  close();
+                {(closeSub) => {
+                  const closeAll = () => {
+                    closeSub();
+                    close();
+                  };
+                  return (
+                    <>
+                      <RecentTranscriptionsPicker
+                        variant="menu"
+                        triggerLabel="Recent"
+                        items={recentTranscriptions}
+                        loaded={recentTranscriptionsLoaded}
+                        loading={recentTranscriptionsLoading}
+                        onRefresh={onRefreshRecentTranscriptions}
+                        onPick={onLoadRecentTranscription}
+                        onAfterPick={closeAll}
+                      />
+                      {examples.length > 0 && (
+                        <>
+                          <SubmenuItem label="Examples">
+                            {(closeExamples) =>
+                              examples.map((ex) => (
+                                <button
+                                  key={ex.id}
+                                  type="button"
+                                  className={classNames(
+                                    dropdownStyles.dropdownItem,
+                                    ex.id === currentId && dropdownStyles.dropdownItemActive
+                                  )}
+                                  onClick={() => {
+                                    onSelect(ex.id);
+                                    closeExamples();
+                                    closeAll();
+                                  }}
+                                  title={`Load the built-in example "${ex.label}".`}
+                                >
+                                  {ex.label}
+                                </button>
+                              ))
+                            }
+                          </SubmenuItem>
+                          <span className={dropdownStyles.dropdownDivider} aria-hidden="true" />
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        className={dropdownStyles.dropdownItem}
+                        onClick={() => {
+                          jotInputRef.current?.click();
+                          closeAll();
+                        }}
+                        title="Load a Drumjot DSL file (`.jot`) from disk and render it. Parser runs entirely client-side; no transcriber service required."
+                      >
+                        Load .jot file
+                      </button>
+                      <button
+                        type="button"
+                        className={dropdownStyles.dropdownItem}
+                        onClick={() => {
+                          midiInputRef.current?.click();
+                          closeAll();
+                        }}
+                        title="Load a Standard MIDI File (`.mid`) from disk. Drum-channel notes are quantized to a 16th grid and converted to a score. Runs entirely client-side; no transcriber service required."
+                      >
+                        Load midi
+                      </button>
+                      <button
+                        type="button"
+                        className={dropdownStyles.dropdownItem}
+                        onClick={() => {
+                          paradbInputRef.current?.click();
+                          closeAll();
+                        }}
+                        title="Load a ParaDB / Paradiddle map pack (`.zip`). The chart is converted to a score and its audio tracks are loaded automatically for play-along practice. Runs entirely client-side."
+                      >
+                        Load ParaDB map (.zip)
+                      </button>
+                      <button
+                        type="button"
+                        className={dropdownStyles.dropdownItem}
+                        onClick={() => {
+                          debugBundleInputRef.current?.click();
+                          closeAll();
+                        }}
+                        title="Load a transcriber debug bundle (`.zip`), the same artifact `Transcribe audio` produces server-side. Restores the score, every per-stem audio track (MP3), and surfaces the captured logs + per-stage timings in the debug panel for inspection. Runs entirely client-side."
+                      >
+                        Load debug bundle (.zip)
+                      </button>
+                      <button
+                        type="button"
+                        className={dropdownStyles.dropdownItem}
+                        onClick={() => {
+                          audioTrackInputRef.current?.click();
+                          closeAll();
+                        }}
+                        title="Load one or more audio files (FLAC / WAV / MP3 / ...) as backing tracks. Each plays alongside the MIDI drums and shows a waveform aligned to the score; mute/solo/volume each from its track gutter. Select multiple files to load them all at once."
+                      >
+                        Load audio track(s)
+                      </button>
+                    </>
+                  );
                 }}
-                title="Load a Standard MIDI File (`.mid`) from disk. Drum-channel notes are quantized to a 16th grid and converted to a score. Runs entirely client-side; no transcriber service required."
-              >
-                Load midi
-              </button>
-              <button
-                type="button"
-                className={dropdownStyles.dropdownItem}
-                onClick={() => {
-                  paradbInputRef.current?.click();
-                  close();
-                }}
-                title="Load a ParaDB / Paradiddle map pack (`.zip`). The chart is converted to a score and its audio tracks are loaded automatically for play-along practice. Runs entirely client-side."
-              >
-                Load ParaDB map (.zip)
-              </button>
-              <button
-                type="button"
-                className={dropdownStyles.dropdownItem}
-                onClick={() => {
-                  debugBundleInputRef.current?.click();
-                  close();
-                }}
-                title="Load a transcriber debug bundle (`.zip`), the same artifact `Transcribe audio` produces server-side. Restores the score, every per-stem audio track (MP3), and surfaces the captured logs + per-stage timings in the debug panel for inspection. Runs entirely client-side."
-              >
-                Load debug bundle (.zip)
-              </button>
-              <button
-                type="button"
-                className={dropdownStyles.dropdownItem}
-                onClick={() => {
-                  audioTrackInputRef.current?.click();
-                  close();
-                }}
-                title="Load one or more audio files (FLAC / WAV / MP3 / ...) as backing tracks. Each plays alongside the MIDI drums and shows a waveform aligned to the score; mute/solo/volume each from its track gutter. Select multiple files to load them all at once."
-              >
-                Load audio track(s)
-              </button>
-              <span className={dropdownStyles.dropdownDivider} aria-hidden="true" />
+              </SubmenuItem>
+              {/* Sibling of Load (not nested inside it): the SubmenuItem
+                  registry treats every open submenu as mutually exclusive,
+                  so a Lyrics submenu opened from inside Load would close
+                  Load underneath it and the click would never reach a
+                  loader. Hoisting Lyrics one level up dodges the conflict. */}
               <SubmenuItem
                 label="Lyrics"
                 title="Load time-aligned lyrics that scroll along the score timeline. Lyrics are session-only and clear when a new song is loaded."
               >
-                {(closeSub) => (
-                  <>
-                    <button
-                      type="button"
-                      className={dropdownStyles.dropdownItem}
-                      onClick={() => {
-                        onOpenLyricsSearch();
-                        closeSub();
-                        close();
-                      }}
-                      title="Search LRCLIB (free public DB of synced lyrics) for the current song's title and artist. If exactly one match exists it loads automatically; otherwise pick one from a list."
-                      data-testid="lyrics-menu-search"
-                    >
-                      Search LRCLIB…
-                    </button>
-                    <button
-                      type="button"
-                      className={dropdownStyles.dropdownItem}
-                      onClick={() => {
-                        lyricsInputRef.current?.click();
-                        closeSub();
-                        close();
-                      }}
-                      title="Load a synced-lyrics file (.lrc) from disk."
-                      data-testid="lyrics-menu-load-file"
-                    >
-                      Load from file…
-                    </button>
-                    <button
-                      type="button"
-                      className={dropdownStyles.dropdownItem}
-                      onClick={() => {
-                        onOpenLyricsTextLoad();
-                        closeSub();
-                        close();
-                      }}
-                      title="Paste or type plain-text lyrics. Re-time them against an audio track afterward."
-                      data-testid="lyrics-menu-load-plaintext"
-                    >
-                      Load from plain text…
-                    </button>
-                    {hasLyrics && (
-                      <>
-                        <span className={dropdownStyles.dropdownDivider} aria-hidden="true" />
-                        <button
-                          type="button"
-                          className={dropdownStyles.dropdownItem}
-                          onClick={() => {
-                            onClearLyrics();
-                            closeSub();
-                            close();
-                          }}
-                          title="Drop the currently-loaded lyrics."
-                          data-testid="lyrics-menu-clear"
-                        >
-                          Clear lyrics
-                        </button>
-                      </>
-                    )}
-                  </>
-                )}
+                {(closeLyrics) => {
+                  const closeAll = () => {
+                    closeLyrics();
+                    close();
+                  };
+                  return (
+                    <>
+                      <button
+                        type="button"
+                        className={dropdownStyles.dropdownItem}
+                        onClick={() => {
+                          onOpenLyricsSearch();
+                          closeAll();
+                        }}
+                        title="Search LRCLIB (free public DB of synced lyrics) for the current song's title and artist. If exactly one match exists it loads automatically; otherwise pick one from a list."
+                        data-testid="lyrics-menu-search"
+                      >
+                        Search LRCLIB…
+                      </button>
+                      <button
+                        type="button"
+                        className={dropdownStyles.dropdownItem}
+                        onClick={() => {
+                          lyricsInputRef.current?.click();
+                          closeAll();
+                        }}
+                        title="Load a synced-lyrics file (.lrc) from disk."
+                        data-testid="lyrics-menu-load-file"
+                      >
+                        Load from file…
+                      </button>
+                      <button
+                        type="button"
+                        className={dropdownStyles.dropdownItem}
+                        onClick={() => {
+                          onOpenLyricsTextLoad();
+                          closeAll();
+                        }}
+                        title="Paste or type plain-text lyrics. Re-time them against an audio track afterward."
+                        data-testid="lyrics-menu-load-plaintext"
+                      >
+                        Load from plain text…
+                      </button>
+                    </>
+                  );
+                }}
               </SubmenuItem>
             </>
           )}
@@ -775,7 +771,7 @@ export const Toolbar = observer(
         </label>
         <div className={styles.toolbarSpacer} aria-hidden="true" />
         <DrumLoadingIndicator />
-        <LyricsAlignBusyPill status={lyricsAlignStatus} />
+        <LyricsAlignBusyPill busy={lyricsAnyAligning} />
         <TranscribeBusyPill status={transcribeStatus} />
       </div>
     );
@@ -974,21 +970,23 @@ const DrumLoadingIndicator = observer(() => {
 });
 
 /**
- * Busy pill for the Whisper lyric-alignment flow. While the backend is
- * extracting vocals (BS-Roformer) + running whisperx the pill shows a
- * spinner + the file being aligned. Returns to nothing on completion;
- * success is signalled by the row appearing, failure by an error toast.
+ * Busy pill for the Whisper lyric-alignment flow. Shown whenever any
+ * lyrics row currently has an alignment in flight; the pill doesn't
+ * surface *which* row (per-track aligns can run concurrently and the
+ * per-row spinner already covers that), it just signals "the backend
+ * is doing lyrics work". Returns to nothing on completion; success is
+ * signalled by the row's lines upgrading, failure by an error toast.
  */
-const LyricsAlignBusyPill = observer(({ status }: { status: LyricsAlignStatus }) => {
-  if (status.phase !== 'aligning') return null;
+const LyricsAlignBusyPill = observer(({ busy }: { busy: boolean }) => {
+  if (!busy) return null;
   return (
     <span
       className={classNames(sharedStyles.statusPill, sharedStyles.statusPillBusy)}
-      title={`Extracting vocals + running whisperx on ${status.detail}…`}
+      title="Extracting vocals + running whisperx…"
       data-testid="lyrics-align-busy"
     >
       <span className={styles.statusPillSpinner} aria-hidden="true" />
-      Aligning lyrics: {status.detail}…
+      Aligning lyrics…
     </span>
   );
 });

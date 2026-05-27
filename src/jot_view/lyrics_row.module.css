@@ -1,7 +1,7 @@
 /* Time-aligned lyrics row in the unified mixer. Geometry mirrors
    `mixer.module.css::musicTrack` (sticky gutter, bars-row width driven
    by --voice-beats × --px-per-beat) so the row aligns flush with audio
-   tracks and pitch rows above/below. */
+   tracks and instrument rows above/below. */
 
 .lyricsRow {
     position: relative;
@@ -27,27 +27,7 @@
 }
 
 .dragHandle {
-    flex: 0 0 auto;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 14px;
-    height: 100%;
-    color: var(--color-text-disabled-warm);
-    font-size: 10px;
-    letter-spacing: -1px;
-    cursor: grab;
-    user-select: none;
-    font-family: inherit;
-    line-height: 1;
-}
-
-.dragHandle:hover {
-    color: var(--color-text-secondary);
-}
-
-.dragHandle:active {
-    cursor: grabbing;
+    composes: mixerDragHandle from './mixer.module.css';
 }
 
 .lyricsContent {
@@ -55,19 +35,40 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
+    justify-content: center;
+}
+
+/* Top row mirrors the audio-track row's `musicTrackHeader`: label on the
+   left, overflow trigger on the right so the chrome reads identically
+   across both row types. */
+.lyricsHeader {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 6px;
+    min-width: 0;
 }
 
 .lyricsLabel {
+    flex: 1 1 auto;
     display: flex;
     flex-direction: column;
     gap: 1px;
     overflow: hidden;
+    min-width: 0;
 }
 
 .lyricsTitle {
     composes: label from '../typography.module.css';
     color: var(--color-text-muted-alt);
+}
+
+.lyricsSourceRow {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
 }
 
 .lyricsSource {
@@ -76,19 +77,48 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    min-width: 0;
 }
 
-.lyricsControls {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 4px;
-}
-
-.offsetUnit {
-    composes: readoutSm from '../typography.module.css';
+/* Per-row spinner shown while a Whisper align job is in flight for this
+   track. Visually small (matches the toolbar busy pill's spinner size)
+   and uses currentColor so it picks up the muted source-label color
+   automatically. The `role="status"` is on the JSX side; this is purely
+   the visual. */
+.lyricsAlignSpinner {
+    composes: spinner from './components/spinner.module.css';
     flex: 0 0 auto;
+    width: 10px;
+    height: 10px;
+    border-width: 1.5px;
+    border-color: var(--color-text-disabled);
+    border-top-color: transparent;
+}
+
+/* Inline stepper row used inside the lyrics overflow menu. Mirrors
+   `toolbar.module.css::dropdownStepperRow`: a label-left, control-right
+   menu item that stays inert on click (the stepper inside owns
+   interaction) so the panel doesn't close while the user nudges the
+   value. */
+.offsetStepperRow {
+    composes: bodyMd from '../typography.module.css';
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 12px;
+    color: var(--color-text-secondary);
+    cursor: default;
+}
+
+.offsetStepperControl {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.offsetStepperUnit {
+    composes: readout from '../typography.module.css';
     color: var(--color-text-muted-alt);
 }
 
@@ -98,11 +128,8 @@
        narrower per-beat budget. Ramps from 0 at px-per-beat ≥ 80 to
        -0.6px around px-per-beat ≈ 20. Inherits down to both `.lyricLine`
        (LRC mode) and `.lyricWordText` (word-aligned mode). */
-    letter-spacing: clamp(
-        -0.6px,
-        calc((var(--px-per-beat) - 80) / 100 * 1px),
-        0px
-    );
+    /* stylelint-disable-next-line property-disallowed-list -- zoom-driven dynamic tracking, not a static use case. */
+    letter-spacing: clamp(-0.6px, calc((var(--px-per-beat) - 80) / 100 * 1px), 0px);
     /* Pair the tracking ramp with Bricolage Grotesque's variable axes:
        at px-per-beat ≥ 80 use the normal 100-width / 400-weight, ramping
        linearly down to 75-width / 300-weight around px-per-beat ≈ 20.
@@ -113,7 +140,9 @@
        `--lyric-wght` override to take effect. */
     --lyric-wdth: clamp(75, calc(75 + (var(--px-per-beat) - 20) * 25 / 60), 100);
     --lyric-wght: clamp(300, calc(300 + (var(--px-per-beat) - 20) * 100 / 60), 400);
-    font-variation-settings: 'wdth' var(--lyric-wdth), 'wght' var(--lyric-wght);
+    font-variation-settings:
+        'wdth' var(--lyric-wdth),
+        'wght' var(--lyric-wght);
 }
 
 /* One lyric line, absolutely positioned at its beat offset. Reads the
@@ -134,6 +163,7 @@
     border-radius: var(--radius-sm);
     background: var(--color-bg-cream-strong);
     color: var(--color-text-secondary);
+    /* stylelint-disable-next-line property-disallowed-list -- lyric chips run at a one-off 18px so the karaoke text reads larger than UI body copy. */
     font-size: 18px;
     line-height: 1.2;
     white-space: nowrap;
@@ -189,15 +219,25 @@
    heavy shift (text wider than the duration cell) can't yield a
    negative width. */
 .lyricWord {
+    /* The wrapper extends `--lyric-word-pad-left` past the glyph's left
+       edge so the active-word background has breathing room before the
+       text starts. The text inside (`.lyricWordText`) re-adds the same
+       padding so its first glyph still lands on the beat anchor; i.e.
+       the padding is absorbed into the wrapper, not into the text. */
+    --lyric-word-pad-left: 6px;
     position: absolute;
     top: 50%;
     transform: translateY(-50%);
     left: calc(
-        var(--lyric-word-beat-offset) * var(--px-per-beat) * 1px + var(--lyric-word-shift, 0px)
+        var(--lyric-word-beat-offset) * var(--px-per-beat) * 1px + var(--lyric-word-shift, 0px) -
+            var(--lyric-word-pad-left)
     );
     width: max(
         0px,
-        calc(var(--lyric-word-beat-width) * var(--px-per-beat) * 1px - var(--lyric-word-shift, 0px))
+        calc(
+            var(--lyric-word-beat-width) * var(--px-per-beat) * 1px - var(--lyric-word-shift, 0px) +
+                var(--lyric-word-pad-left)
+        )
     );
     /* At low zoom the beat-derived width can fall below the text's
        natural width and the active-state background no longer bounds
@@ -210,7 +250,7 @@
     align-items: center;
     white-space: nowrap;
     color: var(--color-text-strong);
-    border-radius: var(--radius-xs);
+    border-radius: var(--radius-md);
     transition:
         background-color 80ms ease,
         color 80ms ease;
@@ -233,7 +273,7 @@
 .lyricWordText {
     flex: 0 0 auto;
     color: inherit;
-    padding: 6px 12px 6px 2px;
+    padding: 6px 12px 6px var(--lyric-word-pad-left);
     transition: color 80ms ease;
 }
 
@@ -245,7 +285,7 @@
    the rule picks up the active-state accent automatically when the
    word lights up. */
 .lyricWord::after {
-    content: "";
+    content: '';
     flex: 1 1 0;
     min-width: 0;
     height: 1.5px;
@@ -274,7 +314,9 @@
        --lyric-wdth that the row sets so the active word stays in step
        with the zoom-driven width ramp. */
     --lyric-wght: 600;
-    font-variation-settings: 'wdth' var(--lyric-wdth), 'wght' var(--lyric-wght);
+    font-variation-settings:
+        'wdth' var(--lyric-wdth),
+        'wght' var(--lyric-wght);
 }
 
 /* Group/drag/drop affordances; same visual language as mixer.module.css

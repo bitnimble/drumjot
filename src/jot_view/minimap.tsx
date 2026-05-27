@@ -28,7 +28,7 @@
  */
 import { observer } from 'mobx-react-lite';
 import React from 'react';
-import { buildTimeline, jotPlayer } from 'src/playback';
+import { jotPlayer } from 'src/playback';
 import { type BarSlice, waveformWorker } from 'src/playback/waveform_worker_client';
 import styles from './minimap.module.css';
 import { WAVEFORM_PAINT_COLOR } from './score';
@@ -52,25 +52,6 @@ type NoteMark = {
   x: number;
   color: string;
 };
-
-/**
- * Pick the audio track to render as the minimap's waveform. Priority:
- * a backing track (no `pitch`; typically `no_drums` or an ad-hoc music
- * file), else the first loaded track. Per-pitch drum stems are sparse
- * and the note ticks above already convey those hits, so they're a
- * fallback rather than the preferred surface.
- */
-function pickWaveformTrack(
-  audioTracks: ReadonlyMap<string, { id: string; pitch?: string }>,
-): { id: string } | undefined {
-  let backing: { id: string } | undefined;
-  let first: { id: string } | undefined;
-  for (const t of audioTracks.values()) {
-    if (!first) first = t;
-    if (!t.pitch && !backing) backing = t;
-  }
-  return backing ?? first;
-}
 
 export const Minimap = observer(({ store }: { store: JotViewStore }) => {
   const jot = store.currentJot;
@@ -107,7 +88,7 @@ export const Minimap = observer(({ store }: { store: JotViewStore }) => {
       hasContent: false,
     };
     if (!jot || width <= 0) return empty;
-    const timeline = buildTimeline(jot);
+    const timeline = jot.timeline;
     const structBars = jot.structure.voices[0]?.bars ?? [];
     if (timeline.bars.length === 0 || structBars.length === 0) return empty;
     const first = timeline.bars[0].startSec;
@@ -127,7 +108,7 @@ export const Minimap = observer(({ store }: { store: JotViewStore }) => {
   }, [jot, width]);
 
   // ─── Waveform peaks (worker-computed at minimap resolution) ─────────
-  const audioTrack = pickWaveformTrack(jotPlayer.audioTracks);
+  const audioTrack = jotPlayer.primaryWaveformTrack;
   const drumsT0Sec = jotPlayer.drumsT0Sec;
   const [peaks, setPeaks] = React.useState<Float32Array | null>(null);
   React.useEffect(() => {
@@ -135,7 +116,7 @@ export const Minimap = observer(({ store }: { store: JotViewStore }) => {
       setPeaks(null);
       return;
     }
-    const timeline = buildTimeline(jot);
+    const timeline = jot.timeline;
     const slices: BarSlice[] = timeline.bars.map((t, i) => ({
       x: bars[i]?.x ?? 0,
       width: bars[i]?.width ?? 0,
@@ -262,6 +243,10 @@ export const Minimap = observer(({ store }: { store: JotViewStore }) => {
     if (e.button !== 0 || !hasContent) return;
     if (sw <= 0 || width <= 0) return;
     e.preventDefault();
+    // Clicking or dragging the minimap is an explicit "scroll the score
+    // somewhere else" intent; auto-follow would re-pin the playhead on
+    // the next frame and visually undo the user's nudge.
+    if (store.followPlayhead) store.toggleFollowPlayhead();
     const rect = e.currentTarget.getBoundingClientRect();
     const scale = sw / width;
 

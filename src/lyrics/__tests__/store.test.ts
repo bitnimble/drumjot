@@ -79,56 +79,120 @@ describe('audioSecToBeat', () => {
 });
 
 describe('LyricsStore', () => {
-  test('load + clear lifecycle', () => {
+  test('add returns a fresh id each call', () => {
     const s = new LyricsStore();
-    expect(s.hasLyrics).toBe(false);
-    s.load(
-      [{ startSec: 0, text: 'hi' }],
-      { source: 'lrclib', sourceLabel: 'LRCLIB · Test - Artist' },
-    );
-    expect(s.hasLyrics).toBe(true);
-    expect(s.sourceLabel).toBe('LRCLIB · Test - Artist');
-    expect(s.offsetSec).toBe(0);
-    s.setOffsetSec(2.5);
-    expect(s.offsetSec).toBe(2.5);
+    expect(s.hasAnyLyrics).toBe(false);
+    const a = s.add([{ startSec: 0, text: 'one' }], {
+      source: 'lrclib',
+      sourceLabel: 'LRCLIB · A - X',
+    });
+    const b = s.add([{ startSec: 0, text: 'two' }], {
+      source: 'lrclib',
+      sourceLabel: 'LRCLIB · B - Y',
+    });
+    expect(a).not.toBe(b);
+    expect(s.hasAnyLyrics).toBe(true);
+    expect(s.trackIds).toEqual([a, b]);
+  });
+
+  test('add disambiguates a duplicate sourceLabel with (2), (3) ...', () => {
+    const s = new LyricsStore();
+    const a = s.add([], { source: 'file', sourceLabel: 'File · song.lrc' });
+    const b = s.add([], { source: 'file', sourceLabel: 'File · song.lrc' });
+    const c = s.add([], { source: 'file', sourceLabel: 'File · song.lrc' });
+    expect(s.get(a)?.sourceLabel).toBe('File · song.lrc');
+    expect(s.get(b)?.sourceLabel).toBe('File · song.lrc (2)');
+    expect(s.get(c)?.sourceLabel).toBe('File · song.lrc (3)');
+  });
+
+  test('add with a unique label leaves it unchanged', () => {
+    const s = new LyricsStore();
+    s.add([], { source: 'file', sourceLabel: 'File · a.lrc' });
+    const b = s.add([], { source: 'file', sourceLabel: 'File · b.lrc' });
+    expect(s.get(b)?.sourceLabel).toBe('File · b.lrc');
+  });
+
+  test('add does not mutate other tracks', () => {
+    const s = new LyricsStore();
+    const a = s.add([{ startSec: 0, text: 'first' }], {
+      source: 'lrclib',
+      sourceLabel: 'A',
+    });
+    s.setOffsetSec(a, 1.25);
+    const before = { ...s.get(a)! };
+    s.add([{ startSec: 0, text: 'second' }], { source: 'file', sourceLabel: 'B' });
+    expect(s.get(a)).toEqual(before);
+  });
+
+  test('remove drops one track; others keep their offsets and lines', () => {
+    const s = new LyricsStore();
+    const a = s.add([{ startSec: 0, text: 'a' }], { source: 'file', sourceLabel: 'A' });
+    const b = s.add([{ startSec: 0, text: 'b' }], { source: 'file', sourceLabel: 'B' });
+    s.setOffsetSec(b, 2);
+    s.remove(a);
+    expect(s.trackIds).toEqual([b]);
+    expect(s.get(b)?.offsetSec).toBe(2);
+    expect(s.get(b)?.lines[0].text).toBe('b');
+  });
+
+  test('clear drops every track', () => {
+    const s = new LyricsStore();
+    s.add([], { source: 'file', sourceLabel: 'A' });
+    s.add([], { source: 'file', sourceLabel: 'B' });
     s.clear();
-    expect(s.hasLyrics).toBe(false);
-    expect(s.sourceLabel).toBeUndefined();
-    expect(s.offsetSec).toBe(0);
+    expect(s.hasAnyLyrics).toBe(false);
+    expect(s.trackIds).toEqual([]);
   });
 
-  test('a new load resets the offset', () => {
+  test('setOffsetSec only mutates the targeted track and clamps to ±60s', () => {
     const s = new LyricsStore();
-    s.load([{ startSec: 0, text: 'a' }], { source: 'file', sourceLabel: 'File · a.lrc' });
-    s.setOffsetSec(3);
-    s.load([{ startSec: 0, text: 'b' }], { source: 'file', sourceLabel: 'File · b.lrc' });
-    expect(s.offsetSec).toBe(0);
+    const a = s.add([], { source: 'file', sourceLabel: 'A' });
+    const b = s.add([], { source: 'file', sourceLabel: 'B' });
+    s.setOffsetSec(a, 999);
+    expect(s.get(a)?.offsetSec).toBe(60);
+    expect(s.get(b)?.offsetSec).toBe(0);
+    s.setOffsetSec(a, -999);
+    expect(s.get(a)?.offsetSec).toBe(-60);
+    s.setOffsetSec(a, Number.NaN);
+    // NaN rejected; previous value preserved.
+    expect(s.get(a)?.offsetSec).toBe(-60);
   });
 
-  test('setOffsetSec clamps to ±60s', () => {
+  test('setOffsetSec on unknown id is a no-op', () => {
     const s = new LyricsStore();
-    s.setOffsetSec(999);
-    expect(s.offsetSec).toBe(60);
-    s.setOffsetSec(-999);
-    expect(s.offsetSec).toBe(-60);
-    s.setOffsetSec(Number.NaN);
-    // NaN is rejected; previous value is preserved.
-    expect(s.offsetSec).toBe(-60);
+    s.setOffsetSec('lyrics-99999', 5);
+    expect(s.trackIds).toEqual([]);
   });
 
-  test('activeLineIndexAt honours the current offset', () => {
+  test('replace preserves offsetSec, source, and label by default', () => {
     const s = new LyricsStore();
-    s.load(
-      [
-        { startSec: 0, text: 'first' },
-        { startSec: 10, text: 'second' },
-      ],
-      { source: 'lrclib', sourceLabel: 'LRCLIB · x - y' },
-    );
-    expect(s.activeLineIndexAt(11)).toBe(1);
-    s.setOffsetSec(2);
-    // Line 1 now starts at audio t=12, so t=11 still belongs to line 0.
-    expect(s.activeLineIndexAt(11)).toBe(0);
-    expect(s.activeLineIndexAt(12)).toBe(1);
+    const a = s.add([{ startSec: 0, text: 'line' }], {
+      source: 'lrclib',
+      sourceLabel: 'LRCLIB · X - Y',
+    });
+    s.setOffsetSec(a, 3.5);
+    s.replace(a, [{ startSec: 0, text: 'new' }]);
+    const t = s.get(a)!;
+    expect(t.lines[0].text).toBe('new');
+    expect(t.offsetSec).toBe(3.5);
+    expect(t.source).toBe('lrclib');
+    expect(t.sourceLabel).toBe('LRCLIB · X - Y');
+  });
+
+  test('replace can override sourceLabel without touching offset', () => {
+    const s = new LyricsStore();
+    const a = s.add([], { source: 'plaintext', sourceLabel: 'Plain text' });
+    s.setOffsetSec(a, -1);
+    s.replace(a, [{ startSec: 0, text: 'l' }], { sourceLabel: 'Whisper aligned' });
+    const t = s.get(a)!;
+    expect(t.sourceLabel).toBe('Whisper aligned');
+    expect(t.offsetSec).toBe(-1);
+    expect(t.source).toBe('plaintext');
+  });
+
+  test('replace on unknown id is a no-op', () => {
+    const s = new LyricsStore();
+    s.replace('lyrics-99999', [{ startSec: 0, text: 'x' }]);
+    expect(s.trackIds).toEqual([]);
   });
 });

@@ -17,7 +17,8 @@ import {
   TimeSignature,
   Voice,
 } from 'src/dsl';
-import { initialBpm } from 'src/tempo';
+import { BarTempos, buildBarTempos, initialBpm } from 'src/tempo';
+import { buildTimeline, JotTimeline, pickDominantBpmAndTime } from 'src/playback/timeline';
 
 /** Branded pixel scalar to avoid mixing pixel and beat measurements. */
 export type Pixels = number & { __pixels: never };
@@ -531,6 +532,101 @@ export class RenderedJot {
     return ((this.viewConfig.barWidth as number) * this.structure.densityFactor) / 4;
   }
 
+  // ----- Derived structural views (MobX-cached) -----
+  //
+  // These getters expose structural data that consumers used to compute
+  // ad-hoc in render. They all read from `this.structure` and/or
+  // `this.source` (both stable per-RenderedJot), so MobX caches them on
+  // the observable dependency graph and they only recompute when the
+  // underlying structure changes; not on every zoom tick or React
+  // render. See `makeAutoObservable(this, { source: false })` in the
+  // constructor; `get x()` becomes a `computed` automatically.
+
+  /**
+   * Playback timeline for this jot; per-bar `startSec` / `durationSec`
+   * keyed off `tempoEvents`. Delegated to {@link buildTimeline}, which
+   * only reads `this.structure` and `this.source`, so the cached value
+   * survives zoom changes (viewConfig.barWidth doesn't participate).
+   */
+  get timeline(): JotTimeline {
+    return buildTimeline(this);
+  }
+
+  /** Total quarter-note beats across the primary voice (bar 0 + drum bars
+   * + lead-in). Returns 0 when the jot has no voice. */
+  get voiceBeats(): number {
+    const bars = this.structure.voices[0]?.bars;
+    if (!bars) return 0;
+    let total = 0;
+    for (const b of bars) total += b.beats;
+    return total;
+  }
+
+  /**
+   * First (canonical) voice of the structural cache. All voices in a Jot
+   * share the same bar grid; consumers that need bars / pitches read
+   * through this rather than reaching into `structure.voices[0]`
+   * directly.
+   */
+  get primaryStructuralVoice(): StructuralVoice | undefined {
+    return this.structure.voices[0];
+  }
+
+  /** Per-bar tempo layout (segments + durations) for the primary voice.
+   * Delegates to {@link buildBarTempos}; returns `[]` when no voice. */
+  get barTempos(): readonly BarTempos[] {
+    const bars = this.structure.voices[0]?.bars;
+    if (!bars) return [];
+    return buildBarTempos(this.source, bars);
+  }
+
+  /** Dominant bpm and time signature across the song, excluding the
+   * pre-drum lead-in. Delegates to {@link pickDominantBpmAndTime}. */
+  get dominantBpmAndTime(): {
+    dominantBpm: number | undefined;
+    dominantTime: TimeSignature | undefined;
+  } {
+    return pickDominantBpmAndTime(this);
+  }
+
+  /**
+   * Aggregated legend entries; unique `[pitch, { color, name }]` pairs
+   * walked across every voice/bar in first-seen order. The Legend
+   * component used to do this walk on every render; reading it here
+   * lifts the walk onto MobX's computed graph so observer components
+   * share the cache. Frozen so consumers can't mutate the cached array.
+   */
+  get legendPitches(): ReadonlyArray<readonly [string, { color: string; name?: string }]> {
+    const seen = new Map<string, { color: string; name?: string }>();
+    for (const voice of this.structure.voices) {
+      for (const bar of voice.bars) {
+        for (const pitch of Object.keys(bar.tracks)) {
+          if (!seen.has(pitch)) {
+            const track = bar.tracks[pitch];
+            seen.set(pitch, { color: track.color, name: track.instrument.name });
+          }
+        }
+      }
+    }
+    return Object.freeze(Array.from(seen.entries()));
+  }
+
+  /**
+   * Ordered union of pitches across all voices in their structural
+   * (declaration) order; first-seen wins. NOT mixer-sorted; the store's
+   * `collectJotPitches` applies the mixer sort separately. Used to drive
+   * `trackOrder` sync.
+   */
+  get jotPitches(): readonly string[] {
+    const out: string[] = [];
+    for (const voice of this.structure.voices) {
+      for (const p of voice.pitches) {
+        if (!out.includes(p)) out.push(p);
+      }
+    }
+    return out;
+  }
+
   // ----- Layout pipeline -----
   //
   // Two passes, deliberately separated:
@@ -592,6 +688,63 @@ export class RenderedJot {
       voices,
       globalMetadata: jot.globalMetadata,
       densityFactor,
+    };
+  });
+
+  /**
+   * Per-pitch derived data needed by the mixer's InstrumentRow: the
+   * primary voice's bars, the voice-wide and lead-in beat totals,
+   * cumulative bar-start offsets used to position absolute overlays,
+   * and the row's display colour / instrument name. Memoised on `pitch` via
+   * `computedFn` so each row reads its slice from the MobX cache instead
+   * of recomputing every render. Reads only `this.structure`, so the
+   * cache survives zoom changes.
+   */
+  barsForPitch = computedFn((pitch: string): {
+    bars: readonly StructuralBar[];
+    voiceBeats: number;
+    leadInBarsBeats: number;
+    barBeatStart: readonly number[];
+    startBeats: readonly number[];
+    pitchColor: string;
+    instrumentName: string | undefined;
+  } => {
+    const voice = this.structure.voices[0];
+    const bars = voice?.bars ?? [];
+    let voiceBeats = 0;
+    let leadInBarsBeats = 0;
+    let countedLeadIn = true;
+    const barBeatStart: number[] = new Array(bars.length);
+    let cursor = 0;
+    for (let i = 0; i < bars.length; i++) {
+      barBeatStart[i] = cursor;
+      const b = bars[i];
+      cursor += b.beats;
+      voiceBeats += b.beats;
+      if (countedLeadIn) {
+        if (b.index < 0) leadInBarsBeats += b.beats;
+        else countedLeadIn = false;
+      }
+    }
+    let pitchColor = '';
+    let instrumentName: string | undefined;
+    for (const b of bars) {
+      const t = b.tracks[pitch];
+      if (!t) continue;
+      if (!pitchColor && t.color) pitchColor = t.color;
+      if (instrumentName === undefined && t.instrument?.name !== undefined) {
+        instrumentName = t.instrument.name;
+      }
+      if (pitchColor && instrumentName !== undefined) break;
+    }
+    return {
+      bars,
+      voiceBeats,
+      leadInBarsBeats,
+      barBeatStart,
+      startBeats: barBeatStart,
+      pitchColor,
+      instrumentName,
     };
   });
 

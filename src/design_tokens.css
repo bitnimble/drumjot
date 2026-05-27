@@ -17,7 +17,7 @@
     --color-bg-base: #fff;
     --color-bg-neutral: #fafaf7;        /* near-white app neutral */
     --color-bg-cream: #fbf6ec;          /* palest cream: gutters, tuplet bg */
-    --color-bg-cream-strong: #fff6e8;   /* pitch-row stripe */
+    --color-bg-cream-strong: #fff6e8;   /* instrument-row stripe */
     --color-bg-cream-warm: #f0ebe2;     /* dropdown menu group bg */
     --color-bg-hover: #f6efe0;          /* hover treatment on transport/icon buttons */
 
@@ -280,6 +280,15 @@
     inherits: false;
     initial-value: 0px;
 }
+/* `--scroll-x` is non-inheriting so the per-tick `setProperty` only
+   invalidates style on the elements it's written to. Inheriting it
+   instead would force a style recalc across the entire score subtree
+   (measured at ~21 ms on a long song), which blows the 8.3 ms frame
+   budget during playback. The trade-off is that the JS writing the
+   var must target every consumer explicitly, including any that
+   mount AFTER the var was last set; see the `MutationObserver` in
+   `ScrollVar` (jot_view.tsx) that watches for new sticky elements
+   and seeds them with the current scroll position. */
 @property --scroll-x {
     syntax: '<number>';
     inherits: false;

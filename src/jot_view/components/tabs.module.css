@@ -11,14 +11,15 @@
 }
 
 .tab {
+    composes: reset from './button.module.css';
     composes: bodyMd from '../../typography.module.css';
     flex: 1 1 0;
     padding: 6px 12px;
-    border: none;
+    /* `.reset` no longer carries `background: transparent`; without an
+       explicit declaration the UA-default `<button>` background paints
+       through the tab strip. */
     background: transparent;
     color: var(--color-text-muted);
-    cursor: pointer;
-    font-family: inherit;
     /* Underline accent on the active tab; on inactive tabs the bar is
        transparent but still claims the space so toggling active doesn't
        reflow the row by 2px. */
@@ -34,19 +35,20 @@
 }
 
 .tab:focus-visible {
-    outline: 2px solid var(--color-accent);
     outline-offset: -2px;
     border-radius: var(--radius-sm);
 }
 
 .tab:disabled {
     color: var(--color-text-disabled);
-    cursor: not-allowed;
 }
 
 .tabActive {
+    /* Bold underlined active state; bodyMd doesn't include a weight, so
+       this override is intentional rather than a typography redundancy. */
     color: var(--color-text);
     border-bottom-color: var(--color-accent);
+    /* stylelint-disable-next-line property-disallowed-list -- weight bump on top of bodyMd to mark the active tab; not a standalone use case. */
     font-weight: 600;
 }
 

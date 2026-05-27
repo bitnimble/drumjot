@@ -6,12 +6,17 @@ import {
   LYRICS_OFFSET_MAX_SEC,
   LYRICS_OFFSET_MIN_SEC,
   LYRICS_OFFSET_STEP_SEC,
+  LyricLine,
   LyricWord,
+  LyricsTrackId,
+  activeLineIndexAt,
+  activeWordIndexAt,
   audioSecToBeat,
   lyricsStore,
 } from 'src/lyrics';
-import { buildTimeline, jotPlayer } from 'src/playback';
-import { ClearButton } from './components/icon_button';
+import { JotTimeline, jotPlayer } from 'src/playback';
+import { JotViewStoreContext } from './contexts';
+import { DropdownButton, dropdownStyles } from './components/dropdown';
 import { GutterResizeHandle } from './components/gutter_resize_handle';
 import { NumberStepper } from './components/number_stepper';
 import {
@@ -21,6 +26,7 @@ import {
   lyricsMeasurer,
 } from './lyrics_measure';
 import styles from './lyrics_row.module.css';
+import mixerStyles from './mixer.module.css';
 import { Playhead } from './playback';
 import { seekFromClick } from './score';
 
@@ -82,6 +88,157 @@ function buildWordDebugTitle(w: LyricWord): string {
   return lines.join('\n');
 }
 
+/** Per-word position metadata derived from the lyrics store + timeline.
+ *  Stable under playhead movement; rebuilt only when `lines`, `offsetSec`,
+ *  `timeline`, `drumsT0Sec`, `structuralBeats`, or `voiceBeats` change. */
+type PositionedWord = {
+  /** Index back into the source `line.words` array, so the JSX can
+   *  compare against `activeWordIndexAt`'s return value even when
+   *  out-of-range words at the line edges have been dropped. */
+  sourceIdx: number;
+  text: string;
+  beatOffset: number;
+  /** Width of this word's cell in beats: `endBeat - startBeat`.
+   *  Drives the trailing-rule render in CSS via the `--lyric-word-
+   *  beat-width` var; combined with `--lyric-word-shift` the cell's
+   *  right edge stays anchored to the word's `endSec`. */
+  beatWidth: number;
+  /** Original word entry from the lyrics store, kept by reference
+   *  so the JSX can build the debug tooltip (model raw times,
+   *  fallback marker) without re-indexing into `line.words`. */
+  source: LyricWord;
+};
+type PositionedLine = {
+  i: number;
+  text: string;
+  startBeat: number;
+  endBeat: number;
+  /** When defined, the row renders one absolutely-positioned span
+   *  per word inside the line container (beat offsets are relative
+   *  to `startBeat`). When undefined, the line falls back to the
+   *  inline text (LRCLIB-style). */
+  wordPositions: PositionedWord[] | undefined;
+};
+
+/** Floor for a word's cell width in beats when the aligner emits an
+ *  end-time we can't resolve against the timeline (out-of-range, or
+ *  collapsed by upstream clamping). Matches the Python aligner's
+ *  0.05 s last-ditch epsilon scaled to "noticeable but not silly":
+ *  a quarter of a beat is small enough to read as a point on the
+ *  bars row at any reasonable zoom. */
+const MIN_BEAT_WIDTH = 0.05;
+
+/** Pure beat-positioning pass for the lyrics row. Walks every line and
+ *  every word once, resolving audio-sec → beat against the supplied
+ *  timeline. Extracted out of the render so the result can be memoised
+ *  on its real dependencies (lines / offset / timeline / structure)
+ *  rather than rebuilt on every playhead tick. */
+function positionLyricLines(
+  lines: readonly LyricLine[],
+  timeline: JotTimeline,
+  drumsT0Sec: number,
+  structuralBeats: readonly number[],
+  offsetSec: number,
+  voiceBeats: number,
+): PositionedLine[] {
+  const out: PositionedLine[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // Blank lines (LRC instrumental gap stamps with no text or words)
+    // produce no visible chip - rendering an empty span just leaves a
+    // bare start-beat tick floating above the audio waveform.
+    if (line.text.trim() === '' && (!line.words || line.words.length === 0)) {
+      continue;
+    }
+    const lineSec = line.startSec + offsetSec;
+
+    let startBeat: number | undefined;
+    let endBeat: number | undefined;
+    let wordPositions: PositionedWord[] | undefined;
+
+    if (line.words && line.words.length > 0) {
+      // Walk the words once, dropping any whose start beat falls
+      // outside the timeline (rare; usually the whole line is in-
+      // range or out). End-beats are resolved against the timeline
+      // too; an out-of-range end falls back to `startBeat +
+      // MIN_BEAT_WIDTH` so the cell has a defined, visible width.
+      // The sourceIdx is preserved so word-level highlighting still
+      // matches `activeWordIndexAt` (indexed against the unfiltered
+      // source array) when edge words are dropped.
+      const inRange: {
+        sourceIdx: number;
+        source: LyricWord;
+        startBeat: number;
+        endBeat: number;
+      }[] = [];
+      for (let wi = 0; wi < line.words.length; wi++) {
+        const w = line.words[wi];
+        const ws = audioSecToBeat(
+          w.startSec + offsetSec,
+          timeline,
+          drumsT0Sec,
+          structuralBeats,
+        );
+        if (ws === undefined) continue;
+        const weRaw = audioSecToBeat(
+          w.endSec + offsetSec,
+          timeline,
+          drumsT0Sec,
+          structuralBeats,
+        );
+        const we =
+          weRaw !== undefined && weRaw > ws ? weRaw : ws + MIN_BEAT_WIDTH;
+        inRange.push({ sourceIdx: wi, source: w, startBeat: ws, endBeat: we });
+      }
+      if (inRange.length > 0) {
+        startBeat = inRange[0].startBeat;
+        endBeat = inRange[inRange.length - 1].endBeat;
+        wordPositions = inRange.map((w) => ({
+          sourceIdx: w.sourceIdx,
+          text: w.source.text,
+          beatOffset: w.startBeat - startBeat!,
+          beatWidth: w.endBeat - w.startBeat,
+          source: w.source,
+        }));
+      }
+    } else {
+      startBeat = audioSecToBeat(lineSec, timeline, drumsT0Sec, structuralBeats);
+      if (startBeat !== undefined) {
+        // End beat = next-line's start (clamped to voiceBeats) so the
+        // text has a defined max-width region. The final line uses
+        // voiceBeats as the bound.
+        endBeat = voiceBeats;
+        for (let j = i + 1; j < lines.length; j++) {
+          const next = audioSecToBeat(
+            lines[j].startSec + offsetSec,
+            timeline,
+            drumsT0Sec,
+            structuralBeats,
+          );
+          if (next !== undefined) {
+            endBeat = next;
+            break;
+          }
+        }
+      }
+    }
+
+    if (startBeat === undefined || endBeat === undefined) continue;
+    // Tiny non-zero floor so consecutive same-timestamp lines (or a
+    // single-word line) still establish a visible positioning context
+    // rather than collapsing to width 0.
+    if (endBeat - startBeat < 0.05) endBeat = startBeat + 0.05;
+    out.push({
+      i,
+      text: line.text,
+      startBeat,
+      endBeat,
+      wordPositions,
+    });
+  }
+  return out;
+}
+
 /** Common drag/drop props passed to every mixer row. Subset of MixerRowDragProps
  *  from mixer.tsx; we re-declare here to avoid a circular import.
  *  See mixer.tsx::MixerRowDragProps for the canonical doc. */
@@ -99,30 +256,69 @@ type LyricsRowDragProps = {
   onResizeGutterStart: (e: React.PointerEvent<HTMLDivElement>) => void;
 };
 
-/** Numeric stepper for the lyrics offset, with clamping baked in via
- *  the shared {@link NumberStepper}'s min/max contract. */
-const OffsetInput = ({
-  value,
-  onChange,
+/** Per-row overflow menu on lyrics tracks. Hosts the time-offset stepper
+ *  (replacing the inline gutter control) and the "Remove lyrics" action;
+ *  same trigger position as the audio-track row's overflow so the chrome
+ *  reads identically across the mixer. */
+const LyricsOverflowMenu = ({
+  id,
+  offsetSec,
+  onSetOffset,
+  onRemove,
 }: {
-  value: number;
-  onChange: (v: number) => void;
+  id: LyricsTrackId;
+  offsetSec: number;
+  onSetOffset: (sec: number) => void;
+  onRemove: () => void;
 }) => (
-  <NumberStepper
-    value={value}
-    onChange={onChange}
-    step={LYRICS_OFFSET_STEP_SEC}
-    min={LYRICS_OFFSET_MIN_SEC}
-    max={LYRICS_OFFSET_MAX_SEC}
-    ariaLabel="Lyrics time offset (seconds)"
-    title="Lyrics offset (seconds)"
-    testId="lyrics-offset-input"
-  />
+  <DropdownButton
+    label="⋯"
+    className={mixerStyles.overflowTrigger}
+    title="More actions for this lyrics track"
+  >
+    {(close) => (
+      <>
+        <label
+          className={styles.offsetStepperRow}
+          title="Lyrics offset (seconds). Positive values delay the lyric chips relative to the audio."
+        >
+          <span>Offset</span>
+          <span className={styles.offsetStepperControl}>
+            <NumberStepper
+              value={offsetSec}
+              onChange={onSetOffset}
+              step={LYRICS_OFFSET_STEP_SEC}
+              min={LYRICS_OFFSET_MIN_SEC}
+              max={LYRICS_OFFSET_MAX_SEC}
+              ariaLabel="Lyrics time offset (seconds)"
+              title="Lyrics offset (seconds)"
+              testId={`lyrics-offset-input-${id}`}
+            />
+            <span className={styles.offsetStepperUnit}>s</span>
+          </span>
+        </label>
+        <span className={dropdownStyles.dropdownDivider} aria-hidden="true" />
+        <button
+          type="button"
+          className={dropdownStyles.dropdownItem}
+          role="menuitem"
+          onClick={() => {
+            onRemove();
+            close();
+          }}
+          data-testid="lyrics-clear"
+          title="Remove this lyrics track from the mixer"
+        >
+          Remove track
+        </button>
+      </>
+    )}
+  </DropdownButton>
 );
 
 /**
  * The time-aligned lyrics row in the unified mixer. Same gutter geometry
- * as `AudioTrackRow` / `PitchRow`: drag handle on the leftmost edge, a
+ * as `AudioTrackRow` / `InstrumentRow`: drag handle on the leftmost edge, a
  * stacked label + controls column on the right, sticky-left so it stays
  * pinned during horizontal scroll. The right-hand bars row carries one
  * `<span>` per lyric line, absolutely positioned at the beat offset
@@ -136,6 +332,7 @@ const OffsetInput = ({
  */
 export const LyricsRow = observer(
   ({
+    id,
     jot,
     onSeek,
     idx,
@@ -150,15 +347,24 @@ export const LyricsRow = observer(
     inGroup,
     onResizeGutterStart,
   }: {
+    id: LyricsTrackId;
     jot: RenderedJot;
     onSeek: (x: number) => void;
   } & LyricsRowDragProps) => {
-    const lines = lyricsStore.lines;
-    const offsetSec = lyricsStore.offsetSec;
-    const sourceLabel = lyricsStore.sourceLabel ?? 'Lyrics';
+    const store = React.useContext(JotViewStoreContext);
+    const track = lyricsStore.get(id);
+    // Guard: the reaction in JotViewStore drops dead lyrics ids on the
+    // same MobX tick a `remove()` happens, so this gap is one-frame at
+    // most. Render nothing rather than crash if the maps race.
+    if (!track) return null;
+    const lines = track.lines;
+    const offsetSec = track.offsetSec;
+    const sourceLabel = track.sourceLabel;
+    const isAligning =
+      store?.lyricsAlignStatuses.get(id)?.phase === 'aligning';
 
     // Voice-level total beats for the bars-row width. Same pattern as
-    // AudioTrackRow / PitchRow: read off the structural cache (zoom-
+    // AudioTrackRow / InstrumentRow: read off the structural cache (zoom-
     // invariant) so this row doesn't re-render on every wheel tick;
     // CSS calc handles the per-zoom pixel scaling.
     const structureVoice = jot.structure.voices[0];
@@ -172,28 +378,13 @@ export const LyricsRow = observer(
     );
 
     // The playback timeline is the canonical source for audio-sec → beat
-    // mapping. Live timeline when one is in flight (so per-bar tempo
-    // overrides + lead-in stay in sync with the playhead); otherwise a
-    // one-shot `buildTimeline` matches what the bars header / audio
-    // waveforms use before Play.
-    const liveTimeline = jotPlayer.timeline;
-    const timeline =
-      liveTimeline.bars.length > 0 && liveTimeline.rendered === jot
-        ? liveTimeline
-        : buildTimeline(jot);
+    // mapping. `jot.timeline` is a MobX computed that mirrors what the
+    // bars header / audio waveforms use; depending on `jot` (not on
+    // `jotPlayer.timeline`) keeps this row off the per-frame playback
+    // observable graph.
+    const timeline = jot.timeline;
     const drumsT0Sec = jotPlayer.drumsT0Sec;
-
-    // Compute the active line against the live audio clock + offset. The
-    // `currentTime` observable read in `jotPlayer.currentTime` ticks
-    // every rAF during playback so this row re-renders at the playhead's
-    // cadence; that's the same per-frame cost the score's other
-    // playhead-driven elements already pay.
-    const audioTimeNow = jotPlayer.currentTime + drumsT0Sec;
-    const activeIdx = lyricsStore.activeLineIndexAt(audioTimeNow);
-    const activeWordIdx =
-      activeIdx !== undefined
-        ? lyricsStore.activeWordIndexAt(activeIdx, audioTimeNow)
-        : undefined;
+    const pxPerBeat = jot.pxPerBeat;
 
     // Pre-compute each line's beat positions. For lines with `words`,
     // each word resolves to its own [startBeat, endBeat] cell; the
@@ -202,136 +393,22 @@ export const LyricsRow = observer(
     // / plain LRC) we fall back to the legacy single-stamp chip width:
     // bound by the next line's start so text doesn't run into the
     // following line at low zoom.
-    type PositionedWord = {
-      /** Index back into the source `line.words` array, so the JSX can
-       *  compare against `activeWordIndexAt`'s return value even when
-       *  out-of-range words at the line edges have been dropped. */
-      sourceIdx: number;
-      text: string;
-      beatOffset: number;
-      /** Width of this word's cell in beats: `endBeat - startBeat`.
-       *  Drives the trailing-rule render in CSS via the `--lyric-word-
-       *  beat-width` var; combined with `--lyric-word-shift` the cell's
-       *  right edge stays anchored to the word's `endSec`. */
-      beatWidth: number;
-      /** Original word entry from the lyrics store, kept by reference
-       *  so the JSX can build the debug tooltip (model raw times,
-       *  fallback marker) without re-indexing into `line.words`. */
-      source: LyricWord;
-    };
-    type Positioned = {
-      i: number;
-      text: string;
-      startBeat: number;
-      endBeat: number;
-      /** When defined, the row renders one absolutely-positioned span
-       *  per word inside the line container (beat offsets are relative
-       *  to `startBeat`). When undefined, the line falls back to the
-       *  inline text (LRCLIB-style). */
-      wordPositions: PositionedWord[] | undefined;
-    };
-    /** Floor for a word's cell width in beats when the aligner emits an
-     *  end-time we can't resolve against the timeline (out-of-range, or
-     *  collapsed by upstream clamping). Matches the Python aligner's
-     *  0.05 s last-ditch epsilon scaled to "noticeable but not silly":
-     *  a quarter of a beat is small enough to read as a point on the
-     *  bars row at any reasonable zoom. */
-    const MIN_BEAT_WIDTH = 0.05;
-    const positioned: Positioned[] = [];
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      // Blank lines (LRC instrumental gap stamps with no text or words)
-      // produce no visible chip - rendering an empty span just leaves a
-      // bare start-beat tick floating above the audio waveform.
-      if (line.text.trim() === '' && (!line.words || line.words.length === 0)) {
-        continue;
-      }
-      const lineSec = line.startSec + offsetSec;
-
-      let startBeat: number | undefined;
-      let endBeat: number | undefined;
-      let wordPositions: PositionedWord[] | undefined;
-
-      if (line.words && line.words.length > 0) {
-        // Walk the words once, dropping any whose start beat falls
-        // outside the timeline (rare; usually the whole line is in-
-        // range or out). End-beats are resolved against the timeline
-        // too; an out-of-range end falls back to `startBeat +
-        // MIN_BEAT_WIDTH` so the cell has a defined, visible width.
-        // The sourceIdx is preserved so word-level highlighting still
-        // matches `activeWordIndexAt` (indexed against the unfiltered
-        // source array) when edge words are dropped.
-        const inRange: {
-          sourceIdx: number;
-          source: LyricWord;
-          startBeat: number;
-          endBeat: number;
-        }[] = [];
-        for (let wi = 0; wi < line.words.length; wi++) {
-          const w = line.words[wi];
-          const ws = audioSecToBeat(
-            w.startSec + offsetSec,
-            timeline,
-            drumsT0Sec,
-            structuralBeats,
-          );
-          if (ws === undefined) continue;
-          const weRaw = audioSecToBeat(
-            w.endSec + offsetSec,
-            timeline,
-            drumsT0Sec,
-            structuralBeats,
-          );
-          const we =
-            weRaw !== undefined && weRaw > ws ? weRaw : ws + MIN_BEAT_WIDTH;
-          inRange.push({ sourceIdx: wi, source: w, startBeat: ws, endBeat: we });
-        }
-        if (inRange.length > 0) {
-          startBeat = inRange[0].startBeat;
-          endBeat = inRange[inRange.length - 1].endBeat;
-          wordPositions = inRange.map((w) => ({
-            sourceIdx: w.sourceIdx,
-            text: w.source.text,
-            beatOffset: w.startBeat - startBeat!,
-            beatWidth: w.endBeat - w.startBeat,
-            source: w.source,
-          }));
-        }
-      } else {
-        startBeat = audioSecToBeat(lineSec, timeline, drumsT0Sec, structuralBeats);
-        if (startBeat !== undefined) {
-          // End beat = next-line's start (clamped to voiceBeats) so the
-          // text has a defined max-width region. The final line uses
-          // voiceBeats as the bound.
-          endBeat = voiceBeats;
-          for (let j = i + 1; j < lines.length; j++) {
-            const next = audioSecToBeat(
-              lines[j].startSec + offsetSec,
-              timeline,
-              drumsT0Sec,
-              structuralBeats,
-            );
-            if (next !== undefined) {
-              endBeat = next;
-              break;
-            }
-          }
-        }
-      }
-
-      if (startBeat === undefined || endBeat === undefined) continue;
-      // Tiny non-zero floor so consecutive same-timestamp lines (or a
-      // single-word line) still establish a visible positioning context
-      // rather than collapsing to width 0.
-      if (endBeat - startBeat < 0.05) endBeat = startBeat + 0.05;
-      positioned.push({
-        i,
-        text: line.text,
-        startBeat,
-        endBeat,
-        wordPositions,
-      });
-    }
+    //
+    // Memoised on the pure inputs - none of which tick per frame - so
+    // the active-line/word highlight (driven imperatively below) doesn't
+    // pull this walk along with it.
+    const positioned = React.useMemo(
+      () =>
+        positionLyricLines(
+          lines,
+          timeline,
+          drumsT0Sec,
+          structuralBeats,
+          offsetSec,
+          voiceBeats,
+        ),
+      [lines, timeline, drumsT0Sec, structuralBeats, offsetSec, voiceBeats],
+    );
 
     // Word-collision avoidance. Word spans are absolutely positioned at
     // `beatOffset * --px-per-beat`, so when two words land on nearly
@@ -346,30 +423,40 @@ export const LyricsRow = observer(
     // CSS calc subtracts it from the cell width so the shifted cell's
     // right edge stays anchored to the word's `endSec`.
     //
-    // Reading `jot.pxPerBeat` here re-subscribes the row to zoom (it
-    // was deliberately off the zoom render path under the DOM-walk
-    // model). The cost is bounded. N lyric rows × few-dozen words; // and the alternative (a ResizeObserver-driven imperative pass)
-    // can't see the underlying observable.
-    const pxPerBeat = jot.pxPerBeat;
     // Read `fontReady` so this row re-renders once Bricolage Grotesque
     // loads; canvas measurement before that uses the fallback stack and
     // is off by a glyph or two on long words.
-    void lyricsMeasurer.fontReady;
-    // `lineIdx` in the measure inputs is `p.i` (positioned-line's source
-    // index) so the JSX-side lookup `lyricShiftKey(p.i, w.sourceIdx)`
-    // matches without further bookkeeping.
-    const measureInputs: LyricLineMeasureInput[] = positioned
-      .filter((p) => p.wordPositions !== undefined)
-      .map((p) => ({
-        lineIdx: p.i,
-        activeWordSourceIdx: p.i === activeIdx ? activeWordIdx : undefined,
-        words: p.wordPositions!.map((w) => ({
-          sourceIdx: w.sourceIdx,
-          text: w.text,
-          beatOffset: w.beatOffset,
-        })),
-      }));
-    const shifts = computeLyricShifts(measureInputs, pxPerBeat);
+    const fontReady = lyricsMeasurer.fontReady;
+    // Deliberate decision: measure every word with `isActive=false`. The
+    // active-word weight override (wght 600) only shifts canvas-measured
+    // widths by sub-pixel amounts on the active line, well inside
+    // `MIN_GAP_PX = 4` in `computeLyricShifts`. Dropping the active
+    // dependency keeps shift recomputation off the playhead cadence
+    // entirely - shifts now rebuild only when geometry (positioned,
+    // pxPerBeat) or font readiness change.
+    const shifts = React.useMemo(() => {
+      const measureInputs: LyricLineMeasureInput[] = positioned
+        .filter((p) => p.wordPositions !== undefined)
+        .map((p) => ({
+          lineIdx: p.i,
+          activeWordSourceIdx: undefined,
+          words: p.wordPositions!.map((w) => ({
+            sourceIdx: w.sourceIdx,
+            text: w.text,
+            beatOffset: w.beatOffset,
+          })),
+        }));
+      return computeLyricShifts(measureInputs, pxPerBeat);
+      // `fontReady` is intentionally in the deps so a font-load
+      // completion re-derives shifts against real glyph widths.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [positioned, pxPerBeat, fontReady]);
+
+    // Imperative active-highlight target. The bars-row's children carry
+    // `data-lyric-line-idx` / `data-lyric-word-idx` so `LyricsActiveHighlighter`
+    // can toggle `.lyricLineActive` / `.lyricWordActive` per frame
+    // without re-rendering this subtree.
+    const barsRowRef = React.useRef<HTMLDivElement | null>(null);
 
     const drop = useDropTarget({
       idx,
@@ -420,27 +507,35 @@ export const LyricsRow = observer(
           </div>
           <GutterResizeHandle onResizeStart={onResizeGutterStart} />
           <div className={styles.lyricsContent}>
-            <div className={styles.lyricsLabel}>
-              <span className={styles.lyricsTitle}>Lyrics</span>
-              <span className={styles.lyricsSource} title={sourceLabel}>
-                {sourceLabel}
-              </span>
-            </div>
-            <div className={styles.lyricsControls}>
-              <OffsetInput
-                value={offsetSec}
-                onChange={(v) => lyricsStore.setOffsetSec(v)}
-              />
-              <span className={styles.offsetUnit}>s</span>
-              <ClearButton
-                onClear={() => lyricsStore.clear()}
-                label="Remove lyrics"
-                testId="lyrics-clear"
+            <div className={styles.lyricsHeader}>
+              <div className={styles.lyricsLabel}>
+                <span className={styles.lyricsTitle}>Lyrics</span>
+                <span className={styles.lyricsSourceRow}>
+                  <span className={styles.lyricsSource} title={sourceLabel}>
+                    {sourceLabel}
+                  </span>
+                  {isAligning && (
+                    <span
+                      className={styles.lyricsAlignSpinner}
+                      title="Aligning lyrics to audio…"
+                      aria-label="Aligning lyrics to audio"
+                      role="status"
+                      data-testid={`lyrics-align-spinner-${id}`}
+                    />
+                  )}
+                </span>
+              </div>
+              <LyricsOverflowMenu
+                id={id}
+                offsetSec={offsetSec}
+                onSetOffset={(v) => lyricsStore.setOffsetSec(id, v)}
+                onRemove={() => store?.removeLyricsTrack(id)}
               />
             </div>
           </div>
         </div>
         <div
+          ref={barsRowRef}
           className={styles.lyricsBarsRow}
           style={
             {
@@ -451,7 +546,6 @@ export const LyricsRow = observer(
           onClick={(e) => seekFromClick(e, onSeek)}
         >
           {positioned.map((p) => {
-            const isActive = p.i === activeIdx;
             const wordAligned = p.wordPositions !== undefined;
             return (
               <span
@@ -459,7 +553,6 @@ export const LyricsRow = observer(
                 className={classNames(
                   styles.lyricLine,
                   wordAligned && styles.lyricLineWordAligned,
-                  isActive && styles.lyricLineActive,
                 )}
                 style={
                   {
@@ -469,6 +562,7 @@ export const LyricsRow = observer(
                 }
                 title={p.text}
                 data-testid={`lyrics-line-${p.i}`}
+                data-lyric-line-idx={p.i}
               >
                 {wordAligned
                   ? p.wordPositions!.map((w) => {
@@ -481,13 +575,11 @@ export const LyricsRow = observer(
                       return (
                         <span
                           key={w.sourceIdx}
-                          className={classNames(
-                            styles.lyricWord,
-                            isActive && w.sourceIdx === activeWordIdx && styles.lyricWordActive,
-                          )}
+                          className={styles.lyricWord}
                           style={wordStyle as React.CSSProperties}
                           title={buildWordDebugTitle(w.source)}
                           data-testid={`lyrics-word-${p.i}-${w.sourceIdx}`}
+                          data-lyric-word-idx={w.sourceIdx}
                         >
                           <span className={styles.lyricWordText}>{w.text}</span>
                         </span>
@@ -497,10 +589,101 @@ export const LyricsRow = observer(
               </span>
             );
           })}
+          <LyricsActiveHighlighter
+            barsRowRef={barsRowRef}
+            lines={lines}
+            offsetSec={offsetSec}
+          />
           <Playhead onSeek={onSeek} />
         </div>
       </div>
     );
+  },
+);
+
+/**
+ * Side-effect-only observer that toggles `.lyricLineActive` /
+ * `.lyricWordActive` on the right elements per frame, without forcing
+ * the outer `LyricsRow` to re-render at the playhead cadence. Mirrors
+ * the `PlayheadPosVar` pattern in `jot_view.tsx`: subscribes to
+ * `jotPlayer.currentTime` + `activeLineIndexAt(lines, ...)` /
+ * `activeWordIndexAt(lines, ...)`, finds the target elements via the `data-lyric-
+ * line-idx` / `data-lyric-word-idx` attributes inside `barsRowRef`,
+ * and mutates classList in a `useLayoutEffect`. Returns null.
+ *
+ * Cleanup: refs to the previously-active elements are held so the
+ * highlight is removed before the new one is added; on jot change /
+ * lyrics clear the refs still point at valid (or stale-but-soon-
+ * removed) nodes and `classList.remove` is a no-op on detached
+ * elements.
+ */
+const LyricsActiveHighlighter = observer(
+  ({
+    barsRowRef,
+    lines,
+    offsetSec,
+  }: {
+    barsRowRef: React.RefObject<HTMLDivElement | null>;
+    lines: readonly LyricLine[];
+    offsetSec: number;
+  }) => {
+    const drumsT0Sec = jotPlayer.drumsT0Sec;
+    const audioTimeNow = jotPlayer.currentTime + drumsT0Sec;
+    const activeIdx = activeLineIndexAt(lines, audioTimeNow, offsetSec);
+    const activeWordIdx =
+      activeIdx !== undefined
+        ? activeWordIndexAt(lines, activeIdx, audioTimeNow, offsetSec)
+        : undefined;
+
+    const lastActiveLineEl = React.useRef<HTMLElement | null>(null);
+    const lastActiveWordEl = React.useRef<HTMLElement | null>(null);
+    React.useLayoutEffect(() => {
+      // Remove the previous frame's active classes first so a swap
+      // (active line changes word-by-word) doesn't leave two lines /
+      // words lit at once.
+      if (lastActiveLineEl.current) {
+        lastActiveLineEl.current.classList.remove(styles.lyricLineActive);
+      }
+      if (lastActiveWordEl.current) {
+        lastActiveWordEl.current.classList.remove(styles.lyricWordActive);
+      }
+      lastActiveLineEl.current = null;
+      lastActiveWordEl.current = null;
+
+      const row = barsRowRef.current;
+      if (!row) return;
+      const lineEl =
+        activeIdx !== undefined
+          ? row.querySelector<HTMLElement>(
+              `[data-lyric-line-idx="${activeIdx}"]`,
+            )
+          : null;
+      const wordEl =
+        lineEl && activeWordIdx !== undefined
+          ? lineEl.querySelector<HTMLElement>(
+              `[data-lyric-word-idx="${activeWordIdx}"]`,
+            )
+          : null;
+      if (lineEl) lineEl.classList.add(styles.lyricLineActive);
+      if (wordEl) wordEl.classList.add(styles.lyricWordActive);
+      lastActiveLineEl.current = lineEl;
+      lastActiveWordEl.current = wordEl;
+    });
+
+    // Final unmount cleanup: drop any residual active classes so a
+    // subsequent re-mount (jot replace) starts clean.
+    React.useEffect(() => {
+      return () => {
+        if (lastActiveLineEl.current) {
+          lastActiveLineEl.current.classList.remove(styles.lyricLineActive);
+        }
+        if (lastActiveWordEl.current) {
+          lastActiveWordEl.current.classList.remove(styles.lyricWordActive);
+        }
+      };
+    }, []);
+
+    return null;
   },
 );
 

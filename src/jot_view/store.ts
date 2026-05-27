@@ -1,4 +1,5 @@
-import { makeAutoObservable, reaction, runInAction } from 'mobx';
+import { comparer, makeAutoObservable, reaction, runInAction } from 'mobx';
+import { computedFn } from 'mobx-utils';
 import {
   DebugBundleManifest,
   loadDebugZip,
@@ -14,6 +15,7 @@ import {
   AlignLyricsRequest,
   LyricLine,
   LyricsSource,
+  LyricsTrackId,
   alignLyricsWhisper,
   lyricsStore,
   nameLooksLikeVocals,
@@ -23,11 +25,13 @@ import {
 import { fromMidi } from 'src/midi';
 import { parse, ParseError } from 'src/parser';
 import {
+  AudioTrackFilter,
   AudioTrackId,
   AudioTrackRole,
   isAudibleUnder,
   isAudioTrackAudibleUnder,
   jotPlayer,
+  PlayerFilter,
   buildTimeline,
   xToTime,
 } from 'src/playback';
@@ -43,6 +47,7 @@ import {
   TranscribeStage,
   TranscriptionSummary,
 } from 'src/transcriber';
+import type { NoteProvenanceContextValue } from './contexts';
 import { transcribeSuccessToastMessage } from './toasts_messages';
 import { toastStore } from './toasts';
 
@@ -52,6 +57,17 @@ import { toastStore } from './toasts';
 export type LyricsAlignStatus =
   | { phase: 'idle' }
   | { phase: 'aligning'; detail: string };
+
+/** Long-running stem-split indicator for an audio track. `mix` covers
+ *  stage 1 (`stems_all`, isolating drums + drumless backing from a full
+ *  mix); `pieces` covers stage 2 (`stems_per`, splitting an isolated
+ *  drum stem into per-instrument pieces). Only the in-flight phase is
+ *  modelled here; success and failure surface as toasts. The store
+ *  exposes {@link beginAudioTrackSplit} / {@link endAudioTrackSplit} so
+ *  the future server wiring just brackets its work with those calls
+ *  and the per-row spinner picks it up automatically. */
+export type AudioTrackSplitStatus =
+  | { phase: 'splitting'; kind: 'mix' | 'pieces' };
 
 /** Long-running transcribe indicator. Only the in-flight `uploading`
  *  phase is modelled here; success and failure surface as toasts. */
@@ -136,9 +152,7 @@ export const VOLUME_STEP = 0.05;
 // with `…` and `fit-content` would be too jumpy.
 export const DEFAULT_GUTTER_WIDTH = 132;
 // Floor at the width needed to fit the row gutter's minimum content:
-// padding + drag handle + a short volume slider + the X/M/S button trio
-// (audio-track rows have all three; pitch rows render an invisible
-// spacer where X would sit so both rows share the same geometry).
+// padding + drag handle + a short volume slider + the M/S button pair.
 export const MIN_GUTTER_WIDTH = 128;
 export const MAX_GUTTER_WIDTH = 480;
 
@@ -148,10 +162,10 @@ export function clampVolume(v: number): number {
 }
 
 /**
- * One row in the unified mixer — either a loaded audio (backing) track
- * or a single drum-instrument pitch. Pitch rows are keyed by DSL pitch
- * letter (the same key mute/solo/volume already use), so identity is
- * stable across jot reloads when the user keeps the same instrument
+ * One row in the unified mixer; either a loaded audio (backing) track
+ * or a single drum-instrument lane. Instrument rows are keyed by DSL
+ * pitch letter (the same key mute/solo/volume already use), so identity
+ * is stable across jot reloads when the user keeps the same instrument
  * map. The order of these keys in {@link JotViewStore.trackOrder} drives
  * the row order on screen and can be rearranged by drag-and-drop.
  *
@@ -165,15 +179,16 @@ export function clampVolume(v: number): number {
  */
 export type TrackKey =
   | { kind: 'audio'; id: AudioTrackId; groupId?: string }
-  | { kind: 'pitch'; pitch: string; groupId?: string }
-  | { kind: 'lyrics'; groupId?: string };
+  | { kind: 'instrument'; pitch: string; groupId?: string }
+  | { kind: 'lyrics'; id: LyricsTrackId; groupId?: string };
 
 export function trackKeyEq(a: TrackKey, b: TrackKey): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === 'audio') return a.id === (b as { kind: 'audio'; id: AudioTrackId }).id;
-  if (a.kind === 'pitch') return a.pitch === (b as { kind: 'pitch'; pitch: string }).pitch;
-  // Singleton row; only one lyrics entry exists at a time.
-  return true;
+  if (a.kind === 'instrument') {
+    return a.pitch === (b as { kind: 'instrument'; pitch: string }).pitch;
+  }
+  return a.id === (b as { kind: 'lyrics'; id: LyricsTrackId }).id;
 }
 
 /**
@@ -521,7 +536,7 @@ export class JotViewStore {
    * layout-reads rule).
    *
    * MobX-observable (the constructor's `makeAutoObservable` only marks
-   * `transcribeController` / `lyricsAlignController` as non-observable;
+   * `transcribeController` / `lyricsAlignControllers` as non-observable;
    * everything else defaults to observable). The underscore prefix is
    * historical and signals "consumers should generally go through the
    * dedicated setters" rather than "non-reactive"; an observer that
@@ -581,7 +596,7 @@ export class JotViewStore {
   constructor() {
     makeAutoObservable(this, {
       transcribeController: false,
-      lyricsAlignController: false,
+      lyricsAlignControllers: false,
     });
     // Push mute / solo state to the player whenever it changes. While
     // playback is in flight, the player cancels and reschedules events
@@ -600,35 +615,28 @@ export class JotViewStore {
     // un-solo visually clears yet audio stays soloed). `reaction` only
     // tracks the data selector; the effect runs untracked, so the
     // player's internal reads/writes stay out of the dependency graph.
+    // The data fn returns the `pitchFilter` computed directly. MobX
+    // memoises the getter so re-reads return the same object reference
+    // when the underlying observables haven't changed; the structural
+    // comparer additionally compares Sets/Maps entry-wise, so a no-op
+    // mutation (e.g. setting a pitch volume to the same value) doesn't
+    // refire the effect. See the field's doc comment for why passing the
+    // live Set/Map reference is safe.
     reaction(
-      () => ({
-        mutedPitches: new Set(this.mutedPitches),
-        soloedPitches: new Set(this.soloedPitches),
-        soloActive: this.soloActive,
-        sectionMasterMuted: this.drumMasterMuted,
-        sectionMasterSoloed: this.drumMasterSoloed,
-        volumes: new Map(this.pitchVolumes),
-      }),
+      () => this.pitchFilter,
       (filter) => jotPlayer.setFilter(filter),
-      { fireImmediately: true }
+      { fireImmediately: true, equals: comparer.structural }
     );
-    // Same shape for audio tracks — observed mutations push immediately
+    // Same shape for audio tracks; observed mutations push immediately
     // so toggling M/S on a track is sample-accurate during playback
     // (per-track GainNode flip, no source recreation). Same
     // read-and-write-the-same-observable hazard as above
     // (`setAudioTrackFilter` reads/writes `currentAudioTrackFilter`), so this is a
     // `reaction` for the same reason.
     reaction(
-      () => ({
-        mutedAudioTracks: new Set(this.mutedAudioTracks),
-        soloedAudioTracks: new Set(this.soloedAudioTracks),
-        soloActive: this.soloActive,
-        sectionMasterMuted: this.audioMasterMuted,
-        sectionMasterSoloed: this.audioMasterSoloed,
-        volumes: new Map(this.audioTrackVolumes),
-      }),
+      () => this.audioTrackFilter,
       (filter) => jotPlayer.setAudioTrackFilter(filter),
-      { fireImmediately: true }
+      { fireImmediately: true, equals: comparer.structural }
     );
     // Push the section-audibility booleans to the player so master mute
     // and master solo can flip the bus gain to 0 without touching the
@@ -669,27 +677,28 @@ export class JotViewStore {
     reaction(
       () => ({
         audioIds: Array.from(jotPlayer.audioTracks.keys()),
-        pitches: collectJotPitches(this.currentJot),
-        hasLyrics: lyricsStore.hasLyrics,
+        pitches: this.jotPitches,
+        lyricsIds: lyricsStore.trackIds.slice(),
       }),
-      ({ audioIds, pitches, hasLyrics }) =>
-        this.syncTrackOrder(audioIds, pitches, hasLyrics),
+      ({ audioIds, pitches, lyricsIds }) =>
+        this.syncTrackOrder(audioIds, pitches, lyricsIds),
       { fireImmediately: true }
     );
   }
 
   /**
    * Drop entries from {@link trackOrder} that no longer correspond to a
-   * live audio track or jot pitch, then append the missing ones at a
-   * sensible default position so the row appears immediately:
+   * live audio track, jot pitch, or lyrics track; then append the
+   * missing ones at a sensible default position so the row appears
+   * immediately:
    *   - new audio track  → after the last existing audio entry (or top
    *     of the list if no audio entries exist yet)
    *   - new pitch        → end of the list
-   *   - lyrics row       → very top of the list (above any audio track),
-   *     when `hasLyrics` is true. Dropped from the order when false.
-   *     User can drag it anywhere afterward; its position survives
-   *     subsequent reactions because the filter step preserves
-   *     surviving entries.
+   *   - new lyrics row   → just after the last existing lyrics row,
+   *     keeping the lyrics group contiguous. The very first lyrics row
+   *     (when none exist yet) goes to the top of the list. User can drag
+   *     it elsewhere; its position survives subsequent reactions because
+   *     the filter step preserves surviving entries.
    *
    * Existing entries keep their relative order so a user drag survives
    * an audio-track add/remove or a jot reload that didn't change the
@@ -697,22 +706,36 @@ export class JotViewStore {
    */
   private syncTrackOrder(
     audioIds: AudioTrackId[],
-    pitches: string[],
-    hasLyrics: boolean,
+    pitches: readonly string[],
+    lyricsIds: readonly LyricsTrackId[],
   ): void {
     const wanted: TrackKey[] = [
-      ...(hasLyrics ? [{ kind: 'lyrics' as const }] : []),
+      ...lyricsIds.map((id) => ({ kind: 'lyrics' as const, id })),
       ...audioIds.map((id) => ({ kind: 'audio' as const, id })),
-      ...pitches.map((pitch) => ({ kind: 'pitch' as const, pitch })),
+      ...pitches.map((pitch) => ({ kind: 'instrument' as const, pitch })),
     ];
     const next: TrackKey[] = this.trackOrder.filter((k) => wanted.some((w) => trackKeyEq(w, k)));
     for (const w of wanted) {
       if (next.some((k) => trackKeyEq(k, w))) continue;
       if (w.kind === 'lyrics') {
-        // Default position: very top of the mixer, above all audio /
-        // pitch rows. User can drag it elsewhere; the filter step above
-        // preserves the position they put it at on subsequent runs.
-        next.unshift(w);
+        // Slot a new lyrics row just after the last existing lyrics
+        // entry so lyrics rows stay contiguous by default. When no
+        // lyrics rows exist yet, default to the very top of the mixer
+        // (above any audio / instrument rows); the filter step above
+        // preserves the position the user drags it to on subsequent
+        // runs.
+        let insertAt: number | undefined;
+        for (let i = next.length - 1; i >= 0; i--) {
+          if (next[i].kind === 'lyrics') {
+            insertAt = i + 1;
+            break;
+          }
+        }
+        if (insertAt === undefined) {
+          next.unshift(w);
+        } else {
+          next.splice(insertAt, 0, w);
+        }
       } else if (w.kind === 'audio') {
         // Slot a new audio track in just after the last existing audio
         // entry so audio rows stay contiguous by default.
@@ -788,10 +811,10 @@ export class JotViewStore {
     let repositioned: TrackKey;
     if (moved.kind === 'audio') {
       repositioned = { kind: 'audio', id: moved.id, groupId: newGroupId };
-    } else if (moved.kind === 'pitch') {
-      repositioned = { kind: 'pitch', pitch: moved.pitch, groupId: newGroupId };
+    } else if (moved.kind === 'instrument') {
+      repositioned = { kind: 'instrument', pitch: moved.pitch, groupId: newGroupId };
     } else {
-      repositioned = { kind: 'lyrics', groupId: newGroupId };
+      repositioned = { kind: 'lyrics', id: moved.id, groupId: newGroupId };
     }
     next.splice(adjusted, 0, repositioned);
     this.trackOrder = next;
@@ -831,6 +854,98 @@ export class JotViewStore {
     if (this.drumMasterMuted) return false;
     if (!this.soloActive) return true;
     return this.drumMasterSoloed || this.soloedPitches.size > 0;
+  }
+
+  /**
+   * Live {@link PlayerFilter} view onto the per-pitch mute/solo/volume
+   * state. Returned object is rebuilt on each read but the underlying
+   * Set/Map references are the store's own observable instances; mutations
+   * via `toggleMute` / `toggleSolo` / `setPitchVolume` go through
+   * `.add()` / `.delete()` / `.set()` on those references so MobX still
+   * tracks them. Consumers (the player) only READ from the filter, so
+   * sharing the live references is safe and avoids the per-fire Set/Map
+   * copies the old inline reaction selector paid for.
+   */
+  get pitchFilter(): PlayerFilter {
+    return {
+      mutedPitches: this.mutedPitches,
+      soloedPitches: this.soloedPitches,
+      soloActive: this.soloActive,
+      sectionMasterMuted: this.drumMasterMuted,
+      sectionMasterSoloed: this.drumMasterSoloed,
+      volumes: this.pitchVolumes,
+    };
+  }
+
+  /** Mirror of {@link pitchFilter} for the audio-track domain. */
+  get audioTrackFilter(): AudioTrackFilter {
+    return {
+      mutedAudioTracks: this.mutedAudioTracks,
+      soloedAudioTracks: this.soloedAudioTracks,
+      soloActive: this.soloActive,
+      sectionMasterMuted: this.audioMasterMuted,
+      sectionMasterSoloed: this.audioMasterSoloed,
+      volumes: this.audioTrackVolumes,
+    };
+  }
+
+  /**
+   * Pitches that appear anywhere in the rendered jot, in the default
+   * mixer ordering. Thin wrapper over {@link collectJotPitches} so the
+   * `syncTrackOrder` reaction and any future consumer tracks a single
+   * MobX-memoised computed rather than re-walking the jot structure on
+   * every read.
+   */
+  get jotPitches(): readonly string[] {
+    return collectJotPitches(this.currentJot);
+  }
+
+  /**
+   * Drum-pitch lane order derived from {@link trackOrder}, dropping audio
+   * + lyrics rows and keeping only pitches in the user's mixer order.
+   * Pattern brackets in {@link MixerView} use this to know whether a
+   * given row is the topmost / bottommost participant of a pattern span
+   * so the bracket reads as one continuous outline across rows.
+   */
+  get pitchOrder(): readonly string[] {
+    return this.trackOrder.flatMap((k) => (k.kind === 'instrument' ? [k.pitch] : []));
+  }
+
+  /**
+   * Index of the topmost instrument row in {@link trackOrder}. The mixer
+   * hosts score-wide chrome (tuplet brackets, lead-in label) on that row
+   * because it belongs to the score as a whole, not to any one
+   * instrument. `-1` when no instrument row exists yet.
+   */
+  get firstInstrumentIdx(): number {
+    return this.trackOrder.findIndex((k) => k.kind === 'instrument');
+  }
+
+  /**
+   * Bundle the per-note debug provenance into the shape
+   * {@link NoteProvenanceContext} consumers expect, or `null` when no
+   * filter-mode bundle is loaded. Memoised through the MobX computed
+   * graph so the `audioFilenameByPitch` Map (rebuilt from the manifest's
+   * plain-object `mapping`) is only re-constructed when the underlying
+   * provenance / bundle / toggle changes.
+   */
+  get provenanceContextValue(): NoteProvenanceContextValue | null {
+    const provenance = this.noteProvenance;
+    if (!provenance) return null;
+    return {
+      byTick: this.noteProvenanceByTick,
+      rejectedByPitch: this.filteredOnsetsByPitch,
+      leadBars: provenance.lead_bars ?? 0,
+      showFiltered: this.showFilteredOnsets,
+      beatAlignmentOffsetSec: provenance.beat_alignment_offset_sec ?? null,
+      // Bundle manifest mapping is `Record<string, string>`; rebuild it
+      // as a Map for ergonomic .get() lookups inside the per-onset
+      // timing visualization. Empty when the current bundle didn't ship
+      // a manifest (hand-authored jots, legacy bundles).
+      audioFilenameByPitch: new Map(
+        Object.entries(this.lastDebugBundle?.mapping ?? {}),
+      ),
+    };
   }
 
   toggleAudioMasterMute() {
@@ -875,16 +990,16 @@ export class JotViewStore {
     }
   }
 
-  isPitchAudible(pitch: string): boolean {
-    return isAudibleUnder(pitch, {
-      mutedPitches: this.mutedPitches,
-      soloedPitches: this.soloedPitches,
-      soloActive: this.soloActive,
-      sectionMasterMuted: this.drumMasterMuted,
-      sectionMasterSoloed: this.drumMasterSoloed,
-      volumes: this.pitchVolumes,
-    });
-  }
+  /**
+   * Whether a given drum pitch is currently audible under the live
+   * mute / solo / volume state. `computedFn` memoises per-argument, so
+   * the per-row gutter observer for pitch `k` only re-renders when `k`'s
+   * audibility actually flips; toggling mute on pitch `s` doesn't pull
+   * in `k`'s observer the way a method call would.
+   */
+  isPitchAudible = computedFn((pitch: string): boolean => {
+    return isAudibleUnder(pitch, this.pitchFilter);
+  });
 
   pitchVolume(pitch: string): number {
     return this.pitchVolumes.get(pitch) ?? 1;
@@ -908,16 +1023,10 @@ export class JotViewStore {
     }
   }
 
-  isAudioTrackAudible(id: AudioTrackId): boolean {
-    return isAudioTrackAudibleUnder(id, {
-      mutedAudioTracks: this.mutedAudioTracks,
-      soloedAudioTracks: this.soloedAudioTracks,
-      soloActive: this.soloActive,
-      sectionMasterMuted: this.audioMasterMuted,
-      sectionMasterSoloed: this.audioMasterSoloed,
-      volumes: this.audioTrackVolumes,
-    });
-  }
+  /** Mirror of {@link isPitchAudible} for the audio-track domain. */
+  isAudioTrackAudible = computedFn((id: AudioTrackId): boolean => {
+    return isAudioTrackAudibleUnder(id, this.audioTrackFilter);
+  });
 
   audioTrackVolume(id: AudioTrackId): number {
     return this.audioTrackVolumes.get(id) ?? 1;
@@ -960,6 +1069,31 @@ export class JotViewStore {
     this.mutedAudioTracks.delete(id);
     this.soloedAudioTracks.delete(id);
     this.audioTrackVolumes.delete(id);
+  }
+
+  /**
+   * Per-track stem-split status; read by the audio-track row to render a
+   * loading spinner alongside the label while a split is in flight.
+   * Sparse map: a row absent from this map renders without a spinner.
+   *
+   * Today the actual server-side wiring (POST the track's PCM to the
+   * `stems_all` / `stems_per` stage) is still deferred; the in-progress
+   * state is plumbed through here so future wiring just brackets its
+   * work with {@link beginAudioTrackSplit} / {@link endAudioTrackSplit}
+   * and the existing per-row UI picks it up unchanged.
+   */
+  audioTrackSplitStatuses: Map<AudioTrackId, AudioTrackSplitStatus> = new Map();
+
+  /** Mark an audio track as currently being split. Drives the per-row
+   *  spinner; safe to call multiple times (latest call wins). */
+  beginAudioTrackSplit(id: AudioTrackId, kind: 'mix' | 'pieces'): void {
+    this.audioTrackSplitStatuses.set(id, { phase: 'splitting', kind });
+  }
+
+  /** Clear the splitting status for an audio track once the work has
+   *  finished (success, failure, or cancellation). */
+  endAudioTrackSplit(id: AudioTrackId): void {
+    this.audioTrackSplitStatuses.delete(id);
   }
 
   /**
@@ -1099,7 +1233,7 @@ export class JotViewStore {
   /**
    * Per-pitch list of rejected onsets the {@link FilteredOnsetView}
    * renders. Built once from `noteProvenance` and cached via MobX so
-   * the per-pitch row doesn't re-filter on every render. Out-of-range
+   * the per-instrument row doesn't re-filter on every render. Out-of-range
    * entries (those that fell outside the beat-tracked region) are
    * dropped — they have no displayable bar to anchor against.
    */
@@ -1110,7 +1244,7 @@ export class JotViewStore {
     for (const [pitch, entries] of Object.entries(provenance.per_pitch)) {
       const rejected = entries.filter((e) => !e.kept && !e.out_of_range);
       if (rejected.length === 0) continue;
-      // Canonicalise so the consuming pitch row (which keys by the
+      // Canonicalise so the consuming instrument row (which keys by the
       // jot's `note.pitch`) finds entries even when the transcriber
       // routed them through a synthetic pitch like `H` for open hat; // merge into the existing bucket rather than overwriting so the
       // closed (`h`) and open (`H` → `h`) rejected lists land together.
@@ -1625,14 +1759,22 @@ export class JotViewStore {
       // ParaDB loads don't need lyrics. The user kicks it off explicitly
       // via the Lyrics menu (or the LRCLIB search modal) when they want
       // synced lyrics.
-      for (const track of map.audioTracks) {
-        const id = await this.loadAudioTrack(track.file, undefined, track.role);
-        if (id && track.defaultMuted) {
-          runInAction(() => {
-            this.mutedAudioTracks.add(id);
-          });
+      //
+      // Decode in parallel; `decodeAudioData` runs on browser-side
+      // codec threads so concurrent calls overlap, cutting the song +
+      // drums decode wall time roughly in half. Mirrors the debug-
+      // bundle loader's approach.
+      const resolved = await Promise.all(
+        map.audioTracks.map(async (track) => {
+          const id = await this.loadAudioTrack(track.file, undefined, track.role);
+          return { id, defaultMuted: track.defaultMuted };
+        }),
+      );
+      runInAction(() => {
+        for (const { id, defaultMuted } of resolved) {
+          if (id && defaultMuted) this.mutedAudioTracks.add(id);
         }
-      }
+      });
     });
   }
 
@@ -1855,7 +1997,7 @@ export class JotViewStore {
    * SnareInstrument even though they're all in one flat list.
    *
    * Pitches in the jot that the bundle didn't provide audio for still
-   * appear as their normal pitch row (no audio above them, no group).
+   * appear as their normal instrument row (no audio above them, no group).
    * The `syncTrackOrder` reaction won't reshuffle this — it only ever
    * drops stale entries and appends new ones, both of which are no-ops
    * after a fresh bundle load.
@@ -1872,7 +2014,7 @@ export class JotViewStore {
     // dedupes by filename so both keys resolve to the same
     // `AudioTrackId`; the grouping here picks one pitch as the "primary"
     // (the one whose key matches the audio row's `key`) and slots the
-    // others as sibling pitch rows immediately after the pair, sharing
+    // others as sibling instrument rows immediately after the pair, sharing
     // the same `groupId`. That way the mixer renders the shared audio
     // + all its pitches as one contiguous cluster.
     const pitchesByAudioId = new Map<AudioTrackId, string[]>();
@@ -1929,17 +2071,17 @@ export class JotViewStore {
       if (id !== undefined) {
         const groupId = `pair:${pitch}`;
         next.push({ kind: 'audio', id, groupId });
-        next.push({ kind: 'pitch', pitch, groupId });
+        next.push({ kind: 'instrument', pitch, groupId });
         // Any pitches that share this audio track (siblings via the
         // manifest's many-keys-one-file mapping) ride here with the
         // same `groupId`.
         const sharing = pitchesByAudioId.get(id) ?? [];
         for (const sibling of sharing) {
           if (sibling === pitch) continue;
-          next.push({ kind: 'pitch', pitch: sibling, groupId });
+          next.push({ kind: 'instrument', pitch: sibling, groupId });
         }
       } else {
-        next.push({ kind: 'pitch', pitch });
+        next.push({ kind: 'instrument', pitch });
       }
     }
 
@@ -2057,7 +2199,7 @@ export class JotViewStore {
         return;
       }
       runInAction(() => {
-        lyricsStore.load(lines, {
+        lyricsStore.add(lines, {
           source: 'file',
           sourceLabel: `File · ${file.name}`,
         });
@@ -2083,7 +2225,7 @@ export class JotViewStore {
     match: { trackName: string; artistName: string },
     opts: { wordLevel: boolean } = { wordLevel: false },
   ): void {
-    lyricsStore.load(lines, {
+    const trackId = lyricsStore.add(lines, {
       source: 'lrclib',
       sourceLabel: `LRCLIB · ${match.trackName} - ${match.artistName}`,
     });
@@ -2092,7 +2234,7 @@ export class JotViewStore {
       { testId: 'lyrics-search-loaded' },
     );
     if (opts.wordLevel) {
-      void this.runWordLevelAlignmentForLrclib(lines, match);
+      void this.runWordLevelAlignmentForLrclib(trackId, lines, match);
     }
   }
 
@@ -2107,6 +2249,7 @@ export class JotViewStore {
    * a programming-error safety net rather than a user-reachable path.
    */
   private async runWordLevelAlignmentForLrclib(
+    targetTrackId: LyricsTrackId,
     lines: readonly LyricLine[],
     match: { trackName: string; artistName: string },
   ): Promise<void> {
@@ -2122,6 +2265,7 @@ export class JotViewStore {
     const file = new File([track.sourceBlob], track.filename, { type: track.sourceBlob.type });
     const label = `${match.trackName} - ${match.artistName}`;
     await this.alignLyricsWhisper(
+      targetTrackId,
       {
         kind: pick.kind,
         file,
@@ -2220,12 +2364,12 @@ export class JotViewStore {
       startSec: (spreadSec * i) / cleaned.length,
       text: t,
     }));
-    lyricsStore.load(lines, {
+    const trackId = lyricsStore.add(lines, {
       source: 'plaintext',
       sourceLabel: 'Plain text',
     });
     if (opts.wordLevel) {
-      void this.runWordLevelAlignmentForPlainText(lines);
+      void this.runWordLevelAlignmentForPlainText(trackId, lines);
     }
     return lines.length;
   }
@@ -2252,6 +2396,7 @@ export class JotViewStore {
    *  the lines are replaced with word-timed versions while the source
    *  label stays "Plain text". */
   private async runWordLevelAlignmentForPlainText(
+    targetTrackId: LyricsTrackId,
     lines: readonly LyricLine[],
   ): Promise<void> {
     const pick = this.pickAudioTrackForAlignment();
@@ -2265,6 +2410,7 @@ export class JotViewStore {
     if (!track) return;
     const file = new File([track.sourceBlob], track.filename, { type: track.sourceBlob.type });
     await this.alignLyricsWhisper(
+      targetTrackId,
       {
         kind: pick.kind,
         file,
@@ -2277,76 +2423,113 @@ export class JotViewStore {
     );
   }
 
+  /**
+   * Drop every lyrics row and abort every in-flight align. Called by
+   * wholesale-song-reload paths (`loadJotFile`, `loadParadbMap`,
+   * `applyDebugBundle`) so stale lyrics + still-running aligns can't
+   * leak onto the new song.
+   */
   clearLyrics(): void {
     lyricsStore.clear();
-    this.cancelLyricsAlign();
-  }
-
-  setLyricsOffsetSec(sec: number): void {
-    lyricsStore.setOffsetSec(sec);
+    this.cancelAllLyricsAlign();
   }
 
   /**
-   * Status of the Whisper lyric-alignment request while it's in flight.
-   * Drives the row's gutter source label ("Whisper · aligning…") and the
-   * toolbar busy pill. Returns to `idle` on completion regardless of
-   * outcome; failures surface as error toasts.
+   * Remove a single lyrics row, aborting that row's in-flight align if
+   * any. Routed through here (rather than `lyricsStore.remove(id)`
+   * directly) so the lyrics store stays unaware of the per-track align
+   * state held on `JotViewStore`.
    */
-  lyricsAlignStatus: LyricsAlignStatus = { phase: 'idle' };
-  /** In-flight whisper alignment controller, so we can abort when a new
-   *  song loads / the user cancels / a second align fires. */
-  lyricsAlignController: AbortController | undefined;
+  removeLyricsTrack(id: LyricsTrackId): void {
+    const ctrl = this.lyricsAlignControllers.get(id);
+    if (ctrl) {
+      ctrl.abort();
+      this.lyricsAlignControllers.delete(id);
+    }
+    runInAction(() => {
+      this.lyricsAlignStatuses.delete(id);
+    });
+    lyricsStore.remove(id);
+  }
 
   /**
-   * Run whisperx forced-alignment against the given input source, push
-   * the resulting word-timed lines into the lyrics store on success,
-   * and surface progress / errors via {@link lyricsAlignStatus}.
+   * Per-track Whisper alignment state. Each row aligning at the same
+   * time has its own AbortController and status entry; absence of an
+   * entry means that row is idle. Per-track concurrency lets users
+   * align a duet's two vocal lines without one cancelling the other,
+   * and lets the per-row spinner show *which* row is currently working
+   * (the toolbar busy pill, in contrast, just shows a generic "any
+   * aligning" boolean).
    *
-   * Invoked by both the LRCLIB word-level path and the plain-text
-   * word-level path. The caller supplies the {@link LyricsSource} and
-   * source label to re-apply on success, so the row's gutter label
-   * doesn't get rewritten to a hardcoded LRCLIB string when the
-   * plain-text flow runs through here.
+   * The controller map is non-observable; statuses are observable so
+   * `lyricsAnyAligning` and the per-row spinner re-render on change.
+   */
+  lyricsAlignControllers: Map<LyricsTrackId, AbortController> = new Map();
+  lyricsAlignStatuses: Map<LyricsTrackId, LyricsAlignStatus> = new Map();
+
+  /** True when any lyrics row currently has a Whisper alignment in
+   *  flight. Drives the toolbar busy pill (which doesn't display
+   *  *which* row; the per-row spinner does). */
+  get lyricsAnyAligning(): boolean {
+    for (const s of this.lyricsAlignStatuses.values()) {
+      if (s.phase === 'aligning') return true;
+    }
+    return false;
+  }
+
+  /**
+   * Run whisperx forced-alignment against the given input source and
+   * upgrade `targetTrackId`'s lines on success. The caller supplies the
+   * {@link LyricsSource} and source label to re-apply, so the row's
+   * gutter label doesn't get rewritten to a hardcoded LRCLIB string
+   * when the plain-text flow runs through here.
    *
-   * Concurrent calls cancel any previously in-flight request.
+   * Per-target concurrency: a second align on the SAME track aborts the
+   * first (the newer pick wins). Aligns on DIFFERENT tracks run
+   * concurrently from this layer's perspective; the backend serialises
+   * them GPU-wise.
    */
   private async alignLyricsWhisper(
+    targetTrackId: LyricsTrackId,
     req: AlignLyricsRequest,
     label: string,
     opts: { source: LyricsSource; sourceLabel: string },
   ): Promise<void> {
-    if (this.lyricsAlignController) {
-      this.lyricsAlignController.abort();
+    const existing = this.lyricsAlignControllers.get(targetTrackId);
+    if (existing) {
+      existing.abort();
+      this.lyricsAlignControllers.delete(targetTrackId);
     }
     const controller = new AbortController();
-    this.lyricsAlignController = controller;
+    this.lyricsAlignControllers.set(targetTrackId, controller);
     runInAction(() => {
-      this.lyricsAlignStatus = { phase: 'aligning', detail: label };
+      this.lyricsAlignStatuses.set(targetTrackId, { phase: 'aligning', detail: label });
     });
     let lines: LyricLine[];
     try {
       lines = await alignLyricsWhisper(req, { signal: controller.signal });
     } catch (err) {
       if (controller.signal.aborted) {
-        // A newer align (or a wholesale jot replace) cancelled us;
-        // don't overwrite their state. The newer caller already set
-        // either its own aligning status or cleared back to idle.
+        // A newer align on the same track (or a wholesale jot replace)
+        // cancelled us; don't overwrite their state. The newer caller
+        // already set either its own aligning status or cleared back to
+        // idle for this track.
         return;
       }
       const message = err instanceof Error ? err.message : String(err);
       runInAction(() => {
-        this.lyricsAlignStatus = { phase: 'idle' };
+        this.lyricsAlignStatuses.delete(targetTrackId);
       });
       toastStore.showError(`Lyrics align failed: ${message}`);
       return;
     } finally {
-      if (this.lyricsAlignController === controller) {
-        this.lyricsAlignController = undefined;
+      if (this.lyricsAlignControllers.get(targetTrackId) === controller) {
+        this.lyricsAlignControllers.delete(targetTrackId);
       }
     }
     if (lines.length === 0) {
       runInAction(() => {
-        this.lyricsAlignStatus = { phase: 'idle' };
+        this.lyricsAlignStatuses.delete(targetTrackId);
       });
       toastStore.showError(
         `No lyrics were aligned (whisperx found no speech in ${label}).`,
@@ -2354,28 +2537,27 @@ export class JotViewStore {
       return;
     }
     runInAction(() => {
-      lyricsStore.load(lines, {
+      lyricsStore.replace(targetTrackId, lines, {
         source: opts.source,
         sourceLabel: opts.sourceLabel,
       });
-      this.lyricsAlignStatus = { phase: 'idle' };
+      this.lyricsAlignStatuses.delete(targetTrackId);
     });
   }
 
   /**
-   * Cancel any in-flight Whisper alignment + reset the status. Called by
-   * every loader that replaces the song wholesale, alongside the
-   * existing `lyricsStore.clear()`, so a slow align from the previous
-   * song can't land lines onto the new one.
+   * Abort every in-flight Whisper alignment and clear the statuses.
+   * Called by wholesale-song-reload paths so slow aligns from the
+   * previous song can't land lines onto the new one.
    */
-  private cancelLyricsAlign(): void {
-    if (this.lyricsAlignController) {
-      this.lyricsAlignController.abort();
-      this.lyricsAlignController = undefined;
+  private cancelAllLyricsAlign(): void {
+    for (const ctrl of this.lyricsAlignControllers.values()) {
+      ctrl.abort();
     }
-    if (this.lyricsAlignStatus.phase !== 'idle') {
-      this.lyricsAlignStatus = { phase: 'idle' };
-    }
+    this.lyricsAlignControllers.clear();
+    runInAction(() => {
+      this.lyricsAlignStatuses.clear();
+    });
   }
 
   async playCurrent(): Promise<void> {

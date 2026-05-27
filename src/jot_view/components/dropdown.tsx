@@ -1,4 +1,5 @@
 import classNames from 'classnames';
+import { ChevronRight } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { createPortal } from 'react-dom';
@@ -19,12 +20,67 @@ export { styles as dropdownStyles };
 const openDropdownCloseCallbacks = new Set<() => void>();
 
 /**
- * Sibling registry for `SubmenuItem` fly-outs. Two submenus inside the
- * same parent panel could otherwise be open simultaneously (clicking
- * one's trigger doesn't close the others), which reads as a glitch.
- * Opening any submenu closes every currently-open one.
+ * A registry of "close me" callbacks for the submenus opened within a
+ * single panel. When any submenu inside the panel opens, it registers
+ * with the *nearest* registry (provided via {@link SubmenuRegistryContext})
+ * so siblings under the same parent get closed; but ancestor submenus
+ * (which provide their own registry to their children) are NOT closed,
+ * because they live one level up in the React tree.
+ *
+ * Previously this was a single module-level Set, which couldn't tell a
+ * sibling from an ancestor: opening Examples inside Load closed Load
+ * itself, which then unmounted the Examples panel before its click
+ * could resolve.
  */
-const openSubmenuCloseCallbacks = new Set<() => void>();
+export type SubmenuRegistry = {
+  /** Register a "close me" callback. Closes every other already-
+   *  registered submenu (sibling-exclusivity). Returns an unregister
+   *  fn the consumer should call when its submenu closes. */
+  register: (close: () => void) => () => void;
+};
+
+function createSubmenuRegistry(): SubmenuRegistry {
+  const closers = new Set<() => void>();
+  return {
+    register: (close) => {
+      // Close any currently-registered sibling. Snapshot first because
+      // each `close()` call ultimately removes itself from the set on
+      // its own cleanup, which would mutate the iterator otherwise.
+      const others = Array.from(closers);
+      closers.clear();
+      others.forEach((c) => c());
+      closers.add(close);
+      return () => {
+        closers.delete(close);
+      };
+    },
+  };
+}
+
+export const SubmenuRegistryContext =
+  React.createContext<SubmenuRegistry | null>(null);
+
+/**
+ * Hook a self-managed open/close submenu into the parent panel's
+ * registry so it gets closed when a sibling opens. Safe to call
+ * unconditionally; if there's no parent registry (e.g. a submenu
+ * mounted outside any DropdownButton, in a test harness), the hook
+ * is a no-op.
+ *
+ * Shared by the generic {@link SubmenuItem} and bespoke flyouts like
+ * `RecentTranscriptionsPicker` so every submenu (generic or custom)
+ * participates in sibling-exclusivity the same way.
+ */
+export function useParentSubmenuRegistry(
+  open: boolean,
+  setOpen: (open: boolean) => void,
+): void {
+  const parent = React.useContext(SubmenuRegistryContext);
+  React.useEffect(() => {
+    if (!open || !parent) return;
+    return parent.register(() => setOpen(false));
+  }, [open, parent, setOpen]);
+}
 
 /**
  * A button that toggles a floating panel of related controls. Used by
@@ -68,6 +124,10 @@ export const DropdownButton = observer(
     const panelRef = React.useRef<HTMLDivElement>(null);
     const onOpenRef = React.useRef(onOpen);
     onOpenRef.current = onOpen;
+    // Top-level registry for any submenu opened directly inside this
+    // panel. Stable across renders so children don't churn their effect
+    // hooks; the registry's own state lives in its closure-bound Set.
+    const submenuRegistry = React.useMemo(createSubmenuRegistry, []);
 
     React.useEffect(() => {
       if (!open) return;
@@ -136,14 +196,16 @@ export const DropdownButton = observer(
         {open &&
           anchor &&
           createPortal(
-            <div
-              ref={panelRef}
-              className={classNames(styles.dropdownPanel, panelClassName)}
-              role="menu"
-              style={{ position: 'fixed', top: anchor.top, left: anchor.left }}
-            >
-              {children(() => setOpen(false))}
-            </div>,
+            <SubmenuRegistryContext.Provider value={submenuRegistry}>
+              <div
+                ref={panelRef}
+                className={classNames(styles.dropdownPanel, panelClassName)}
+                role="menu"
+                style={{ position: 'fixed', top: anchor.top, left: anchor.left }}
+              >
+                {children(() => setOpen(false))}
+              </div>
+            </SubmenuRegistryContext.Provider>,
             document.body
           )}
       </div>
@@ -152,12 +214,25 @@ export const DropdownButton = observer(
 );
 
 /**
- * A nested menu item inside a {@link DropdownButton} panel. Renders as a
- * regular dropdown row with a trailing ▸; clicking toggles a fly-out
- * panel anchored to its right edge. Outside-click + Escape are handled
- * by the enclosing DropdownButton, so we only need local open/close
- * state.
+ * A nested menu item inside a {@link DropdownButton} panel. Renders as
+ * a regular dropdown row with a trailing chevron; clicking toggles a
+ * fly-out panel anchored to its right edge.
+ *
+ * Sibling-exclusivity: when this submenu opens, it registers with the
+ * nearest {@link SubmenuRegistryContext}; opening it closes any other
+ * submenu registered in the same panel, but NOT this submenu's
+ * ancestors (they hold their own registry one level up). The submenu
+ * also exposes its own registry to its children so the same rule
+ * applies recursively.
+ *
+ * Outside-click + Escape are handled by the enclosing DropdownButton,
+ * so we only need local open/close state.
  */
+/** Hover dwell before a SubmenuItem opens automatically. Short enough
+ *  that intentional hovers feel responsive, long enough that brushing
+ *  past on the way to a sibling doesn't open the wrong panel. */
+const SUBMENU_HOVER_OPEN_DELAY_MS = 180;
+
 export const SubmenuItem = ({
   label,
   title,
@@ -170,20 +245,33 @@ export const SubmenuItem = ({
   children: (close: () => void) => React.ReactNode;
 }) => {
   const [open, setOpen] = React.useState(false);
+  useParentSubmenuRegistry(open, setOpen);
+  // Registry exposed to *this submenu's* children, so its own
+  // descendants can be siblings-exclusive among themselves without
+  // closing us.
+  const childRegistry = React.useMemo(createSubmenuRegistry, []);
 
-  React.useEffect(() => {
-    if (!open) return;
-    const myClose = () => setOpen(false);
-    // Snapshot before closing so the close() callbacks (which schedule
-    // state updates whose cleanup mutates the set) don't fight us.
-    const others = Array.from(openSubmenuCloseCallbacks);
-    openSubmenuCloseCallbacks.clear();
-    others.forEach((close) => close());
-    openSubmenuCloseCallbacks.add(myClose);
-    return () => {
-      openSubmenuCloseCallbacks.delete(myClose);
-    };
-  }, [open]);
+  // Hover-to-open. Mouse-enter on the trigger arms a short timer; if
+  // the pointer leaves (or the panel opens some other way) before it
+  // fires, the timer is cancelled. Once opened, hover plays no further
+  // role; closing is via click-outside / Escape / sibling open /
+  // re-clicking the trigger, same as before.
+  const hoverTimerRef = React.useRef<number | null>(null);
+  const clearHoverTimer = () => {
+    if (hoverTimerRef.current !== null) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  };
+  React.useEffect(() => clearHoverTimer, []);
+  const handleMouseEnter = () => {
+    if (disabled || open) return;
+    clearHoverTimer();
+    hoverTimerRef.current = window.setTimeout(() => {
+      hoverTimerRef.current = null;
+      setOpen(true);
+    }, SUBMENU_HOVER_OPEN_DELAY_MS);
+  };
 
   return (
     <div className={styles.submenu}>
@@ -194,17 +282,33 @@ export const SubmenuItem = ({
         aria-expanded={open}
         title={title}
         disabled={disabled}
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          clearHoverTimer();
+          // Click only ever opens. Closing happens via outside-click,
+          // Escape, a sibling submenu opening, or selecting an item;
+          // re-clicking the trigger while open would be a disruptive
+          // toggle when the user's mouse is already on its way to a
+          // child item.
+          setOpen(true);
+        }}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={clearHoverTimer}
+        onFocus={handleMouseEnter}
+        onBlur={clearHoverTimer}
       >
         <span>{label}</span>
-        <span aria-hidden="true" className={styles.submenuArrow}>
-          ▸
-        </span>
+        <ChevronRight
+          size={14}
+          aria-hidden="true"
+          className={styles.submenuArrow}
+        />
       </button>
       {open && !disabled && (
-        <div className={styles.submenuPanel} role="menu">
-          {children(() => setOpen(false))}
-        </div>
+        <SubmenuRegistryContext.Provider value={childRegistry}>
+          <div className={styles.submenuPanel} role="menu">
+            {children(() => setOpen(false))}
+          </div>
+        </SubmenuRegistryContext.Provider>
       )}
     </div>
   );

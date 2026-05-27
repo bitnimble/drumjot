@@ -198,6 +198,111 @@ describe('midiToRlrr / rlrrToMidi', () => {
     expect(tempo).toBeDefined();
     expect(Math.round(60_000_000 / tempo!.microsecondsPerBeat)).toBe(92);
   });
+
+  it('round-trips a mid-bar setTempo through MIDI -> RLRR -> MIDI', () => {
+    // 4/4 bar at 120 bpm; tempo change to 60 bpm at beat 2 (= tick 960
+    // = 1.0s in). Round-tripping through RLRR (which carries bpm events
+    // as absolute seconds) must preserve both the initial and the
+    // mid-bar value, with the second event landing back at exactly
+    // tick 960 in the output MIDI.
+    const tpq = 480;
+    const base = buildMidi({
+      ticksPerBeat: tpq,
+      bpm: 120,
+      notes: [
+        { tick: 0, note: 36, velocity: 100 },
+        { tick: tpq * 2, note: 36, velocity: 100 },
+      ],
+    });
+    // Splice a 60 bpm setTempo (1_000_000 µs/qn) at tick tpq*2.
+    const parsed = parseMidi(base);
+    const track = parsed.tracks[0];
+    let cursor = 0;
+    for (let i = 0; i < track.length; i++) {
+      cursor += track[i].deltaTime;
+      if (cursor >= tpq * 2 && track[i].type === 'noteOn') {
+        const dt = track[i].deltaTime;
+        track.splice(i, 0, {
+          deltaTime: dt,
+          meta: true,
+          type: 'setTempo',
+          microsecondsPerBeat: 1_000_000,
+        });
+        track[i + 1].deltaTime = 0;
+        break;
+      }
+    }
+    const spliced = new Uint8Array(writeMidi(parsed));
+
+    const rlrr = midiToRlrr(spliced);
+    // Two bpm events: 120 at t=0, 60 at t=1.0s (= beat 2 of bar 0 at 120 bpm).
+    expect(rlrr.bpmEvents.length).toBeGreaterThanOrEqual(2);
+    expect(rlrr.bpmEvents[0]).toEqual({ bpm: 120, time: 0 });
+    const second = rlrr.bpmEvents[1];
+    expect(second.bpm).toBe(60);
+    expect(second.time).toBeCloseTo(1.0, 5);
+
+    const back = rlrrToMidi(rlrr);
+    const reparsed = parseMidi(back);
+    let t = 0;
+    let mid: number | undefined;
+    for (const ev of reparsed.tracks[0]) {
+      t += ev.deltaTime;
+      if (ev.type === 'setTempo' && ev.microsecondsPerBeat === 1_000_000) {
+        mid = t;
+        break;
+      }
+    }
+    expect(mid).toBeDefined();
+    // RLRR -> MIDI defaults to its own ticksPerBeat (see rlrr_to_midi.ts);
+    // assert the mid-bar tempo lands at exactly 1.0s by walking the
+    // tempo timeline rather than assuming the output's tpq.
+    const outTpq = reparsed.header.ticksPerBeat ?? 480;
+    expect(mid).toBe(2 * outTpq);
+  });
+
+  it('round-trips a mid-bar RLRR bpm event through Jot', () => {
+    // Author an RLRR with a tempo change at t=1.0s (beat 2 of bar 0 at
+    // 120 bpm). After rlrr -> jot the tempo change must surface as a
+    // jot.tempoEvents entry at (barIndex: 0, beat: 2); jot -> rlrr must
+    // re-emit it at the same absolute time, within sixteenth-note
+    // quantization tolerance.
+    const rlrr: RlrrFile = {
+      version: 0.7,
+      authoringTool: 'test-harness',
+      recordingMetadata: { title: 'mid-bar', complexity: 1 },
+      audioFileData: { songTracks: [], drumTracks: [], songPreview: '', calibrationOffset: 0 },
+      instruments: [...DEFAULT_INSTRUMENTS],
+      events: [
+        { name: 'BP_Kick_C_1', vel: 100, time: 0, loc: 0 },
+        // Notes spanning the bar at 120 bpm so the chart actually
+        // contains the mid-bar tick the bpm event sits on.
+        { name: 'BP_Snare_C_1', vel: 100, time: 0.5, loc: 0 },
+        { name: 'BP_Kick_C_1', vel: 100, time: 1.0, loc: 0 },
+        { name: 'BP_Snare_C_1', vel: 100, time: 1.5, loc: 0 },
+      ],
+      bpmEvents: [
+        { bpm: 120, time: 0 },
+        { bpm: 60, time: 1.0 },
+      ],
+    };
+    const jot = rlrrToJot(rlrr);
+    expect(jot.globalMetadata.bpm).toBe(120);
+    expect(jot.tempoEvents).toBeDefined();
+    expect(jot.tempoEvents!.length).toBeGreaterThanOrEqual(1);
+    const ev = jot.tempoEvents![0];
+    expect(ev.bpm).toBe(60);
+    expect(ev.barIndex).toBe(0);
+    expect(ev.beat).toBeCloseTo(2, 3);
+
+    const back = jotToRlrr(jot);
+    expect(back.bpmEvents[0]).toEqual({ bpm: 120, time: 0 });
+    const second = back.bpmEvents.find((e) => Math.abs(e.bpm - 60) < 0.5);
+    expect(second).toBeDefined();
+    // Sixteenth at 120 bpm = 0.125s; the round-trip's quantization
+    // budget is one sixteenth either side of the source time.
+    expect(Math.abs(second!.time - 1.0)).toBeLessThanOrEqual(0.125);
+  });
 });
 
 // ---------- RLRR <-> Jot ----------

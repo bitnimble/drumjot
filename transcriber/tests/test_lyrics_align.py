@@ -4,9 +4,9 @@ Guards the realign-path language pick. The hard regression we guard
 against (one per-letter "word" instead of word-level) fires when an
 English LRC was routed through a no-space-language aligner because
 audio-based detection mis-classified the first 30 s of the vocals
-stem. Tests pin the SCRIPT-based decision tree end-to-end. Imports
-are kept narrow so the test module doesn't transitively pull in
-whisperx / torch.
+stem. Tests pin the **majority-by-character-count** routing rule
+end-to-end. Imports are kept narrow so the test module doesn't
+transitively pull in whisperx / torch.
 """
 
 from __future__ import annotations
@@ -38,9 +38,21 @@ def test_detect_language_japanese_pure_kana():
     assert _detect_language_from_text(_lines("カタカナ")) == "ja"
 
 
-def test_detect_language_japanese_kanji_with_kana():
-    """A typical J-pop line - kanji + kana - must resolve to ja."""
-    assert _detect_language_from_text(_lines("愛してる Forever")) == "ja"
+def test_detect_language_japanese_majority_over_english_sprinkle():
+    """A line whose Japanese characters outnumber its Latin characters
+    resolves to ja under majority routing. Pure Japanese phrases with
+    only a short English ad-lib stay on the multilingual aligner."""
+    # 9 kanji/kana ja chars vs 4 latin chars -> ja wins.
+    assert _detect_language_from_text(_lines("僕の心に住む君よ love")) == "ja"
+
+
+def test_detect_language_english_majority_over_japanese_sprinkle():
+    """Symmetric to the above and the case the majority rule was
+    designed for: an English-dominant line with a few Japanese
+    ad-libs routes to en so it picks up the English-specialized
+    aligner instead of being dragged onto MMS by a stray kana."""
+    # 7 latin chars vs 3 kana -> en wins.
+    assert _detect_language_from_text(_lines("Forever 愛してる")) == "en"
 
 
 def test_detect_language_kanji_leading_japanese():
@@ -56,7 +68,15 @@ def test_detect_language_ambiguous_cjk_defaults_to_japanese():
     bias is toward Japanese music, so the default is ja."""
     assert _detect_language_from_text(_lines("漢字")) == "ja"
     assert _detect_language_from_text(_lines("夜明け前")) == "ja"
-    assert _detect_language_from_text(_lines("Hello, 世界")) == "ja"
+
+
+def test_detect_language_latin_majority_beats_cjk_sprinkle():
+    """Under majority routing, a single CJK glyph no longer flips the
+    whole line. `Hello, 世界` is 5 latin + 2 CJK characters; en wins
+    on count. This is the case the routing change was designed for -
+    an English-dominant line with a tiny non-Latin sprinkle picks up
+    the English aligner instead of being dragged onto MMS."""
+    assert _detect_language_from_text(_lines("Hello, 世界")) == "en"
 
 
 def test_detect_language_chinese_via_simplified_marker():
@@ -68,14 +88,19 @@ def test_detect_language_chinese_via_simplified_marker():
 
 
 def test_detect_language_chinese_marker_in_one_of_many_lines():
-    """A single line with a simplified marker should be enough to flip
-    the whole input to zh; the detector concatenates lines before
-    scanning so the marker doesn't have to be on every line.
+    """A single line containing a simplified-Chinese-only glyph
+    disambiguates all the ambiguous CJK characters in the same input
+    to zh; the detector does the marker scan once over the full
+    concatenated text before counting. The marker doesn't have to be
+    on every line.
 
-    Fixture is kanji-only (no kana) on the first line to isolate the
-    marker check - any kana would correctly short-circuit to ja and
-    defeat the test's intent."""
-    lines = _lines("詩歌", "我爱你", "more text")
+    Fixture is kanji-only (no kana, no Latin) so the marker is the
+    only signal in play and ALL the ambiguous CJK chars get counted
+    as zh, giving zh the majority. Any kana would correctly
+    short-circuit to ja and defeat the test's intent; any Latin chars
+    in a count exceeding the CJK count would flip the majority to en
+    (see `test_detect_language_latin_majority_beats_cjk_sprinkle`)."""
+    lines = _lines("詩歌", "我爱你", "回家")
     assert _detect_language_from_text(lines) == "zh"
 
 

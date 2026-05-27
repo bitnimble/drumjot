@@ -1,0 +1,23 @@
+/* Shared rotating-border spinner. Every in-flight indicator in the app
+   composes one of these classes so the keyframes + circle shape live
+   in one place; consumers add their own size, border-thickness and
+   color (the size/color is wildly different between a 10px pill
+   spinner and a 44px loading-overlay spinner, but the rotation cadence
+   and the border-radius geometry should be uniform). */
+
+/* Base: circle + spin animation. Consumers must still set `width`,
+   `height`, and `border-*` (color + width). The base does NOT set a
+   border-width because the per-consumer choice (1.5px vs 4px) carries
+   visual weight. */
+.spinner {
+    box-sizing: border-box;
+    border-style: solid;
+    border-radius: var(--radius-circle);
+    animation: drumjot-spinner-spin 0.8s linear infinite;
+}
+
+@keyframes drumjot-spinner-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}

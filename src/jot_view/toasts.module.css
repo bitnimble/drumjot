@@ -33,6 +33,7 @@
     border: 1px solid transparent;
     box-shadow: var(--shadow-lg);
     cursor: pointer;
+    /* stylelint-disable-next-line property-disallowed-list -- toasts use a hair of tracking on top of bodySm so the longer wrapped messages read more deliberately. */
     letter-spacing: 0.02em;
     line-height: 1.35;
     /* Toasts have the room to wrap (the toolbar pill doesn't);

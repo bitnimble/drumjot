@@ -7,21 +7,30 @@
     display: inline-flex;
 }
 
-.dropdownPanel {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    z-index: 30;
+/* Geometry-only popover surface (no positioning). Every floating panel
+   in the app. DropdownButton, SubmenuItem, the recent-transcriptions
+   popover; composes this so the border, radius, padding, background,
+   and shadow stay in lockstep across surfaces. Consumers add their own
+   `position` + `top` / `left` / `z-index`. */
+.popoverPanel {
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    gap: 8px;
-    min-width: 180px;
-    padding: 10px;
     background: var(--color-bg-base);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-lg);
+    padding: 10px;
+}
+
+.dropdownPanel {
+    composes: popoverPanel;
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 30;
+    gap: 8px;
+    min-width: 180px;
 }
 
 .dropdownPanelWide {
@@ -29,30 +38,7 @@
 }
 
 .dropdownItem {
-    composes: bodyMd from '../../typography.module.css';
-    font-family: inherit;
-    text-align: left;
-    padding: 7px 10px;
-    border: none;
-    border-radius: var(--radius-md);
-    background: transparent;
-    color: var(--color-text);
-    cursor: pointer;
-}
-
-.dropdownItem:hover {
-    background: var(--color-bg-hover);
-}
-
-.dropdownItem:focus {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 1px;
-}
-
-.dropdownItem:disabled {
-    color: var(--color-text-disabled);
-    background: transparent;
-    cursor: not-allowed;
+    composes: ghost from './button.module.css';
 }
 
 .dropdownItemActive {
@@ -74,24 +60,21 @@
 }
 
 .submenuArrow {
+    /* `display: block` strips the inline-SVG baseline offset so the
+       chevron rides the flex centre line cleanly. Mirrors how the
+       Recent-transcriptions picker positions its own ChevronRight. */
+    display: block;
     color: var(--color-text-muted-alt);
 }
 
 .submenuPanel {
+    composes: popoverPanel;
     position: absolute;
     top: 0;
     left: calc(100% + 6px);
     z-index: 40;
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
     gap: 4px;
     min-width: 200px;
-    padding: 10px;
-    background: var(--color-bg-base);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-lg);
 }
 
 .dropdownDivider {

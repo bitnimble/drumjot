@@ -8,7 +8,7 @@ import { GridLineSettings, JotViewStore } from './store';
 /**
  * Routes the active {@link SelectionStore} to deep score chrome (today:
  * `NoteView`) without threading props through `JotView → MixerView →
- * PitchRow → BarView`. `null` outside the view so a `NoteView` rendered
+ * InstrumentRow → BarView`. `null` outside the view so a `NoteView` rendered
  * in isolation just no-ops the click-to-select interaction.
  */
 export const SelectionContext = React.createContext<SelectionStore | null>(null);
@@ -24,7 +24,7 @@ export const JotViewStoreContext = React.createContext<JotViewStore | null>(null
 /**
  * Routes the loaded debug bundle's per-note provenance to two deep
  * consumers: `NoteView` (looks up its own entry via `byTick` to render
- * the `Debug details` collapsible in the selection label) and `PitchRow`
+ * the `Debug details` collapsible in the selection label) and `InstrumentRow`
  * (reads `rejectedByPitch` + `leadBars` + `showFiltered` to render
  * filtered onsets as ghost overlays). `null` outside the View, or when
  * no bundle is loaded — both consumers no-op in that case.
@@ -33,7 +33,7 @@ export type NoteProvenanceContextValue = {
   /** Keyed by `${pitch}:${tick}` — exact-match lookup from NoteView. */
   byTick: Map<string, NoteProvenanceEntry>;
   /**
-   * Per-pitch rejected onsets used by PitchRow to render the dashed
+   * Per-pitch rejected onsets used by InstrumentRow to render the dashed
    * ghost overlays. Out-of-range entries are pre-filtered out (they
    * have no anchored bar to render against).
    */
@@ -85,7 +85,7 @@ export const NoteProvenanceContext =
  * lookup work even on an idle score.
  *
  * Keyed by `bar.index` rather than by `StructuralBar` reference
- * because the rendering chain shallow-clones bars (PitchRow rewrites
+ * because the rendering chain shallow-clones bars (InstrumentRow rewrites
  * `tracks` for its lane) — the original reference doesn't survive the
  * walk down to NoteView. `bar.index` is preserved across those clones
  * and across `drumOffsetBeats` reflows, so it's the stable key.
@@ -102,7 +102,7 @@ export const BarTimingsContext = React.createContext<
  * timing-drift visualization, which reads `effectiveDrumOffsetBeats` to
  * account for the user-applied Beat-offset slider as a separate stage in
  * the detected → final chain) don't have to thread the jot down through
- * MixerView → PitchRow → BarView → NoteView.
+ * MixerView → InstrumentRow → BarView → NoteView.
  *
  * `null` outside the View; consumers should fall back to a sensible
  * "no offset / nothing to show" default in that case.
@@ -112,7 +112,7 @@ export const RenderedJotContext = React.createContext<RenderedJot | null>(null);
 /**
  * Grid-line toggles surfaced through the View dropdown. Threaded as
  * context so the deep `BarView` can read each setting without every
- * intermediate ({MixerView} → {PitchRow} → {BarView}) carrying a prop.
+ * intermediate ({MixerView} → {InstrumentRow} → {BarView}) carrying a prop.
  * Defaults match the store's initial state so a BarView rendered outside
  * the View (e.g. unit tests, future embedded usage) still has the
  * classic look.

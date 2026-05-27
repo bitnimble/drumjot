@@ -1,20 +1,14 @@
 /**
  * Client for the local / IaaS transcriber service.
  *
- * The service URL is resolved at module load time:
- *   - In dev, requests go through Vite's `/api` proxy (see vite.config.ts),
- *     which forwards them to `http://localhost:8001` (the docker-compose
- *     default for `transcriber/`). The browser bundle reads
- *     `VITE_TRANSCRIBER_URL` from `import.meta.env` and falls back to
- *     `/api` (i.e. the proxy path) when it isn't set.
- *   - In production, set `VITE_TRANSCRIBER_URL` at build time to a fully
- *     qualified base URL of a deployed transcriber instance. The same
- *     variable also feeds the dev-server proxy target, so dev and prod
- *     agree on the name.
+ * Requests always go to `/api` on the frontend's own origin. The Vite
+ * dev / preview server (see vite.config.ts) proxies that prefix onward
+ * to the actual transcriber URL configured via `TRANSCRIBER_URL` in the
+ * server-side env. Keeping the browser bundle origin-relative avoids
+ * cross-origin CORS when the frontend and the transcriber sit on
+ * different hosts (e.g. drumjot.kumo.dev vs. a LAN GPU box).
  */
-const TRANSCRIBER_BASE: string =
-  (import.meta as unknown as { env?: Record<string, string> }).env
-    ?.VITE_TRANSCRIBER_URL ?? '/api';
+const TRANSCRIBER_BASE = '/api';
 
 export type BarSummary = {
   bar: number;

@@ -980,11 +980,44 @@ that's exactly the kind of drift the design-token lint catches.
   `readoutSm`, `subtle`, `mono`. Each bundles font-size + font-weight
   + letter-spacing + text-transform + line-height + family for its
   use case in one place.
-- **[src/jot_view/components/](src/jot_view/components/)** — shared
-  React UI primitives. Today: `icon_button.tsx` (the 18×18
-  `IconButton` base + `MuteButton` / `SoloButton` / `ClearButton`
-  used by the mixer rows). New shared chrome goes here, not inlined
-  into the page-level modules.
+- **[src/jot_view/components/button.module.css](src/jot_view/components/button.module.css)**, shared `<button>` reset + variants
+  (`reset`, `primary`, `secondary`, `danger`, `ghost`, `close`). Every
+  page-level button class composes one of these so the
+  `font-family: inherit` reset, focus outline, and standard primary /
+  secondary / ghost chrome live in one place. New visual chrome
+  belongs as another variant here, not a freshly hand-rolled
+  `.fooButton` class with its own padding + border + cursor.
+- **[src/jot_view/components/icon_button.module.css](src/jot_view/components/icon_button.module.css)**,
+  `iconBox` (18x18 bordered box, no typography) and `iconButton`
+  (iconBox + labelSm). Every row-level glyph button (M/S/Clear, the
+  mixer overflow trigger) composes one of these so box geometry +
+  hover + focus match across the row cluster.
+- **[src/jot_view/components/modal.module.css](src/jot_view/components/modal.module.css)**,
+  `backdrop`, `panel`, `header`, `title`, `body`, `footer`. Every
+  full-screen modal composes these for cross-modal chrome; each modal
+  module only adds its per-modal width and any inline extras
+  (warning icons, etc.).
+- **[src/jot_view/components/form.module.css](src/jot_view/components/form.module.css)**,
+  `field` (single-line input chrome) and `fieldBlock` (textarea
+  chrome). All text inputs / textareas compose these so border /
+  radius / padding / focus / typography match across forms.
+- **[src/jot_view/components/spinner.module.css](src/jot_view/components/spinner.module.css)**,
+  one `spinner` class providing the border-radius circle + 0.8s
+  rotation keyframes. Every in-flight indicator (loading overlay,
+  status pill, lyrics-align, music-track split, search button)
+  composes this and adds its own size + border colors; the keyframes
+  are defined once.
+- **[src/jot_view/components/dropdown.module.css](src/jot_view/components/dropdown.module.css)**,
+  `popoverPanel` is the chrome (border, radius, shadow, padding,
+  background) every floating panel composes; `dropdownPanel` /
+  `submenuPanel` / recent-transcriptions' `panel` all build on it
+  with their own positioning. `dropdownItem` composes `ghost` from
+  button.module.css, so dropdown rows are real buttons.
+- **[src/jot_view/components/](src/jot_view/components/)**, other
+  shared React UI primitives. `icon_button.tsx` (the 18x18 `IconButton`
+  base + `MuteButton` / `SoloButton` / `ClearButton`), `dropdown.tsx`,
+  `tabs.tsx`, `number_stepper.tsx`, `checkbox.tsx`. New shared chrome
+  goes here, not inlined into the page-level modules.
 
 **How consumers use it**:
 
@@ -1028,25 +1061,41 @@ strings, so colors still flow through tokens:
 <div style={{ color: 'var(--color-text-faint-strong)' }}>…</div>
 ```
 
-**The rules** (rule 1 enforced by stylelint via
-[`.stylelintrc.json`](.stylelintrc.json) — run with `bun run lint:design`,
+**The rules** (rules 1 + 2 + 3 enforced by stylelint via
+[`.stylelintrc.json`](.stylelintrc.json); run with `bun run lint:design`,
 chained into `bun run build`):
 
 1. **No hex literals (`#xxx` / `#xxxxxx`) or `rgb()`/`rgba()`/`hsl()`/`hsla()`
    calls in any `src/**/*.css` outside `src/design_tokens.css`.** Every
    color is a named token. If you genuinely need a new color, add it
    to `design_tokens.css` first and reference the var. Caught by
-   stylelint's `color-no-hex` + `function-disallowed-list` rules; the
-   `overrides` block in `.stylelintrc.json` is the one place those
-   are permitted.
-2. **Prefer `composes:` over reinventing typography.** When you find
-   yourself writing `font-size: 11px; font-weight: 700;
-   letter-spacing: 0.08em; text-transform: uppercase;` from scratch,
-   stop — that's a use case (`labelSm`), compose it. Stylelint
-   doesn't enforce this (legitimate per-site overrides exist) but
-   reviewers will.
-3. **Shared visual chrome goes through a primitive.** A 3rd mixer
-   row reaching for a 4th hand-rolled M/S button pair is a smell —
+   stylelint's `color-no-hex` + `function-disallowed-list` rules.
+2. **No direct typography declarations outside
+   `src/typography.module.css`.** `font-size`, `font-weight`,
+   `font-style`, `letter-spacing`, `text-transform`,
+   `font-variant-numeric`, `font-feature-settings` must come through
+   `composes:` from a typography use case. `font-family` outside the
+   typography file may only be `inherit` (the canonical reset for a
+   UA-styled element); custom families live in
+   `src/typography.module.css`. Caught by stylelint's
+   `property-disallowed-list` + `declaration-property-value-allowed-list`.
+   True one-offs (a 14px modal title, the 22px transport glyph, the
+   9px score-chrome label) carry a
+   `/* stylelint-disable-next-line property-disallowed-list -- <reason> */`
+   line above the declaration; the rationale is part of the contract.
+3. **Every `<button>` rule composes from
+   `src/jot_view/components/button.module.css`.** Rule 2 enforces this
+   indirectly: any button styled with `font-weight` / `font-size` /
+   `letter-spacing` etc. has to compose typography, and at that point
+   composing one of `button.module.css`'s variants (`primary`,
+   `secondary`, `danger`, `ghost`, `close`, `reset`) is the only way
+   to bring in the matching `font-family: inherit` reset + focus
+   outline. New buttons that just want a primary/secondary look land
+   on the existing variant with no extra declarations; new visual
+   variants belong in `button.module.css` as their own class, not
+   re-declared at the call site.
+4. **Shared visual chrome goes through a primitive.** A 3rd mixer
+   row reaching for a 4th hand-rolled M/S button pair is a smell;
    it belongs as a variant of `IconButton`.
 
 **Carve-outs** (these stay as raw values, by design):

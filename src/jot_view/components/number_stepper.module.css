@@ -22,15 +22,22 @@
 }
 
 .stepperButton {
+    composes: reset from './button.module.css';
+    composes: body from '../../typography.module.css';
     flex: 0 0 auto;
     width: 18px;
+    /* `.reset` deliberately doesn't strip the UA-default `<button>`
+       border / padding / background (it's additive-only; see the
+       docblock in button.module.css). The stepper wants flush bare
+       glyphs inside its shared pill border, so kill all three here.
+       `.stepperButtonMinus` / `.stepperButtonPlus` add the inner
+       divider via `border-right` / `border-left` longhand, which wins
+       over the shorthand reset to 0 on the relevant side. */
+    border: 0;
     padding: 0;
-    border: none;
     background: transparent;
     color: var(--color-text-faint-strong);
-    cursor: pointer;
-    font-family: inherit;
-    font-size: 12px;
+    /* stylelint-disable-next-line property-disallowed-list -- bold weight for the +/− glyphs so they read as buttons rather than running body text. */
     font-weight: 700;
     line-height: 1;
     display: inline-flex;
@@ -43,14 +50,12 @@
     color: var(--color-text-secondary-alt);
 }
 
-.stepperButton:focus {
-    outline: 2px solid var(--color-accent);
+.stepperButton:focus-visible {
     outline-offset: -2px;
 }
 
 .stepperButton:disabled {
     color: var(--color-text-disabled);
-    cursor: not-allowed;
 }
 
 .stepperButtonMinus {
@@ -70,6 +75,7 @@
     border: none;
     background: transparent;
     color: var(--color-text);
+    /* stylelint-disable-next-line property-disallowed-list -- numeric input wants tabular-nums so the value doesn't jitter as digits change. */
     font-variant-numeric: tabular-nums;
     text-align: center;
 }

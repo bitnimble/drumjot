@@ -3,13 +3,35 @@
     "color-no-hex": [
       true,
       {
-        "message": "Hex color literal — use var(--color-*) from src/design_tokens.css. See AGENTS.md §5.8."
+        "message": "Hex color literal. Use var(--color-*) from src/design_tokens.css. See AGENTS.md §5.8."
       }
     ],
     "function-disallowed-list": [
       ["rgb", "rgba", "hsl", "hsla"],
       {
-        "message": "Color function literal — use var(--color-*) or var(--shadow-*) from src/design_tokens.css. See AGENTS.md §5.8."
+        "message": "Color function literal. Use var(--color-*) or var(--shadow-*) from src/design_tokens.css. See AGENTS.md §5.8."
+      }
+    ],
+    "property-disallowed-list": [
+      [
+        "font-size",
+        "font-weight",
+        "font-style",
+        "letter-spacing",
+        "text-transform",
+        "font-variant-numeric",
+        "font-feature-settings"
+      ],
+      {
+        "message": "Typography property declared directly. Pull a use case via `composes: <className> from '../typography.module.css'` instead. True one-offs (a single transport glyph, a modal title) may add `/* stylelint-disable-next-line property-disallowed-list -- <reason> */` with a one-line rationale. See AGENTS.md §5.8."
+      }
+    ],
+    "declaration-property-value-allowed-list": [
+      {
+        "font-family": ["inherit"]
+      },
+      {
+        "message": "`font-family` outside src/typography.module.css must be `inherit` (a reset on a UA-styled element). Custom families belong in typography.module.css."
       }
     ]
   },
@@ -19,6 +41,13 @@
       "rules": {
         "color-no-hex": null,
         "function-disallowed-list": null
+      }
+    },
+    {
+      "files": ["src/typography.module.css"],
+      "rules": {
+        "property-disallowed-list": null,
+        "declaration-property-value-allowed-list": null
       }
     }
   ]

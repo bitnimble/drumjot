@@ -209,7 +209,7 @@ export const PlaybackBar = observer(({ store }: { store: JotViewStore }) => (
 
 /**
  * Travelling playback marker. Rendered in three places (timeline header,
- * each audio-track row, each drum-pitch row) so the playhead line is
+ * each audio-track row, each instrument row) so the playhead line is
  * visible across the whole vertical stack.
  *
  * Position is NOT driven from this component; it's read from the

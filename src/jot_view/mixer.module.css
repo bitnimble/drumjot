@@ -6,7 +6,7 @@
 
 /* Unified mixer — audio tracks and drum-instrument pitches interleaved
    in user-defined order. Each row sets its own height (audio rows are
-   ~56px, pitch rows are ~36px); they're separated visually by their
+   ~56px, instrument rows are ~36px); they're separated visually by their
    gutter borders, so no flex gap. */
 .mixer {
     display: flex;
@@ -43,6 +43,7 @@
     justify-content: center;
     gap: 3px;
     padding: 4px 6px;
+    /* stylelint-disable-next-line property-disallowed-list -- weight bump on top of bodySm to keep the section-master labels visually distinct from per-row labels. */
     font-weight: 600;
     color: var(--color-text-faint);
     background: var(--color-bg-cream);
@@ -96,7 +97,7 @@
 /* Drum-instrument row in the unified mixer. Same gutter geometry as
    .musicTrack so audio and drum rows look like siblings (same sticky
    132px gutter, matching control column on the right). */
-.pitchRow {
+.instrumentRow {
     position: relative;
     display: flex;
     min-width: max-content;
@@ -104,23 +105,24 @@
     background: var(--color-bg-cream-strong);
 }
 
-.pitchRow:first-of-type,
-.musicTrack + .pitchRow,
-.gutterMasterRow + .pitchRow,
-/* A group-start pitch row sits 12px below the previous row's
+.instrumentRow:first-of-type,
+.musicTrack + .instrumentRow,
+.gutterMasterRow + .instrumentRow,
+/* A group-start instrument row sits 12px below the previous row's
    border-bottom (see .mixerRowGroupStart), so it needs its own
-   border-top — otherwise its upper edge floats in the gap with no
+   border-top; otherwise its upper edge floats in the gap with no
    visible separator. */
-.pitchRow.mixerRowGroupStart {
+.instrumentRow.mixerRowGroupStart {
     border-top: 1px solid var(--color-border);
 }
 
-/* Paired (audio↔pitch) group inner edge: the musicTrack above already
-   draws its own bottom border, so suppress the pitchRow's top border
-   to avoid a doubled-up 2×1px line between them. A pitchRow that
-   STARTS a new group (different groupId from the audio above it) keeps
-   its top border so the cluster boundary still reads. */
-.musicTrack + .pitchRow:not(.mixerRowGroupStart) {
+/* Paired (audio ↔ instrument) group inner edge: the musicTrack above
+   already draws its own bottom border, so suppress the instrument row's
+   top border to avoid a doubled-up 2×1px line between them. An
+   instrument row that STARTS a new group (different groupId from the
+   audio above it) keeps its top border so the cluster boundary still
+   reads. */
+.musicTrack + .instrumentRow:not(.mixerRowGroupStart) {
     border-top: none;
 }
 
@@ -138,7 +140,7 @@
     border-bottom-width: 2px;
 }
 
-.pitchRowGutter {
+.instrumentRowGutter {
     composes: scrollStickyHorizontal from '../jot_view.module.css';
     z-index: 6;
     flex: 0 0 auto;
@@ -152,12 +154,12 @@
     gap: 4px;
 }
 
-/* Stacked content column inside the pitch gutter: label on top, the
-   slider + M/S buttons on a second line below. Matches `musicTrackContent`
-   so audio and drum rows have the same right-hand-side anatomy; the
-   stacking is what lets the label use the full gutter width instead of
-   sharing it with the controls. */
-.pitchRowContent {
+/* Stacked content column inside the instrument gutter: label on top,
+   the slider + M/S buttons on a second line below. Matches
+   `musicTrackContent` so audio and drum rows have the same right-hand-
+   side anatomy; the stacking is what lets the label use the full gutter
+   width instead of sharing it with the controls. */
+.instrumentRowContent {
     flex: 1 1 auto;
     min-width: 0;
     display: flex;
@@ -166,7 +168,7 @@
     gap: 4px;
 }
 
-.pitchRowLabel {
+.instrumentRowLabel {
     composes: bodySm from '../typography.module.css';
     display: flex;
     flex-direction: row;
@@ -174,13 +176,14 @@
     gap: 6px;
     flex: 0 0 auto;
     min-width: 0;
+    /* stylelint-disable-next-line property-disallowed-list -- weight bump on top of bodySm so the instrument name reads as the row's primary identifier. */
     font-weight: 600;
     color: var(--color-text-secondary);
     line-height: 1.1;
     transition: opacity 120ms ease;
 }
 
-.pitchRowControls {
+.instrumentRowControls {
     display: flex;
     flex-direction: row;
     align-items: center;
@@ -189,19 +192,10 @@
     flex: 0 0 auto;
 }
 
-/* Invisible, non-interactive placeholder that occupies the same width
-   as an icon button so the pitch row's volume slider lines up with the
-   audio-track row's slider (which has an extra Clear button before
-   M/S). Width matches `.iconButton` in components/icon_button.module.css. */
-.controlSpacer {
-    flex: 0 0 auto;
-    width: 18px;
-    height: 18px;
-}
-
-.pitchRowName {
-    font-size: 11px;
+.instrumentRowName {
+    composes: bodySm from '../typography.module.css';
     color: var(--color-text-faint-strong);
+    /* stylelint-disable-next-line property-disallowed-list -- mid-weight 500 sits between bodySm's default and the parent label's 600 so the instrument's full name reads as a softer secondary line. */
     font-weight: 500;
     white-space: nowrap;
     overflow: hidden;
@@ -221,7 +215,9 @@
     width: 14px;
     height: 100%;
     color: var(--color-text-disabled-warm);
+    /* stylelint-disable-next-line property-disallowed-list -- the drag-handle glyph is a tightly-tracked ⋮⋮ pair; not a use case worth promoting. */
     font-size: 10px;
+    /* stylelint-disable-next-line property-disallowed-list -- negative tracking pulls the ⋮⋮ pair together. */
     letter-spacing: -1px;
     cursor: grab;
     user-select: none;
@@ -365,12 +361,37 @@
     word-break: break-word;
 }
 
+/* Filename + per-track spinner share one flex row so the spinner sits
+   flush against the (possibly ellipsised) filename instead of pushing
+   it off the label column. */
+.musicTrackFileRow {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+
 .musicTrackFile {
     composes: subtle from '../typography.module.css';
     color: var(--color-text-disabled);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    min-width: 0;
+}
+
+/* Per-row spinner shown while a stem split is in flight for this audio
+   track. Same shape/animation as the lyrics-align spinner so the two
+   in-flight indicators read identically across track types. */
+.musicTrackSplitSpinner {
+    composes: spinner from './components/spinner.module.css';
+    flex: 0 0 auto;
+    width: 10px;
+    height: 10px;
+    border-width: 1.5px;
+    border-color: var(--color-text-disabled);
+    border-top-color: transparent;
 }
 
 .musicTrackButtons {
@@ -380,45 +401,16 @@
     justify-content: flex-end;
 }
 
-/* Audio-track overflow-menu trigger. Sized to match the 18x18 icon
-   button cluster (Clear / Mute / Solo) it sits next to so the row
-   reads as one even-height control strip. */
+/* Audio-track overflow-menu trigger. Shares its 18x18 box geometry +
+   hover treatment with the M/S icon buttons via `.iconBox`; the ⋯
+   glyph itself reads better at body-md size than the bold 10px M/S
+   labels, hence the bodyMd composition on top. */
 .overflowTrigger {
-    flex: 0 0 auto;
+    composes: iconBox from './components/icon_button.module.css';
+    composes: bodyMd from '../typography.module.css';
     width: 18px;
     height: 18px;
-    padding: 0;
-    font-size: 14px;
-    font-weight: 700;
     line-height: 1;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm);
-    background: var(--color-bg-base);
-    color: var(--color-text-faint-strong);
-    cursor: pointer;
-    font-family: inherit;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.overflowTrigger:hover {
-    border-color: var(--color-text-faint-strong);
-    color: var(--color-text-secondary-alt);
-}
-
-.overflowTrigger:focus {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 1px;
-}
-
-/* The shared dropdown panel is left-anchored to its trigger. The mixer
-   row sits at the right edge of the gutter, so the default placement
-   would push the panel off the side; pull it back so its right edge
-   aligns with the trigger's right edge instead. */
-.overflowPanel {
-    left: auto;
-    right: 0;
 }
 
 .musicTrackBarsRow {
@@ -486,6 +478,7 @@
 
 .gutterPitch {
     flex: 0 0 auto;
+    /* stylelint-disable-next-line property-disallowed-list -- single-letter pitch ID; tabular-nums keeps it aligned with the readouts above/below. */
     font-variant-numeric: tabular-nums;
     color: var(--color-text-muted-alt);
     /* The instrument-name span beside it takes the rest of the row, so
@@ -510,7 +503,7 @@
 
 .barsRow {
     composes: barsRowBase from '../jot_view.module.css';
-    /* Lift pitch-row bars above any neighbouring audio bars row so a
+    /* Lift instrument-row bars above any neighbouring audio bars row so a
        note-label popover extending vertically into the row below isn't
        painted under that row's waveform. `barsRowBase` gives both rows
        `position: relative`, so this z-index forms a stacking context
@@ -521,10 +514,11 @@
 }
 
 .leadInLabel {
-    font-size: 10px;
+    composes: labelSm from '../typography.module.css';
+    /* labelSm is 700 weight; nudging this overlay label down to 600 keeps
+       it from competing with the bar numbers in the timeline header. */
+    /* stylelint-disable-next-line property-disallowed-list -- intentional weight override on top of labelSm. */
     font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
     color: var(--color-lead-in-label);
     user-select: none;
     pointer-events: none;

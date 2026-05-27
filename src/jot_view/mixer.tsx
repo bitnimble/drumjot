@@ -1,7 +1,7 @@
 import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
-import { RenderedJot, StructuralBar, ViewConfig } from 'src/jot';
+import { RenderedJot, ViewConfig } from 'src/jot';
 import { AudioTrack, AudioTrackId, AudioTrackRole, jotPlayer } from 'src/playback';
 import { waveformWorker, BarSlice } from 'src/playback/waveform_worker_client';
 import {
@@ -10,7 +10,7 @@ import {
   buildChunkLayout,
 } from './waveform_chunks';
 import { GutterResizeHandle } from './components/gutter_resize_handle';
-import { ClearButton, MuteButton, SoloButton } from './components/icon_button';
+import { MuteButton, SoloButton } from './components/icon_button';
 import { DropdownButton, dropdownStyles } from './components/dropdown';
 import {
   JotViewStoreContext,
@@ -52,7 +52,7 @@ export type AudioTrackControls = {
   onSetVolume: (id: AudioTrackId, v: number) => void;
   onToggleMute: (id: AudioTrackId) => void;
   onToggleSolo: (id: AudioTrackId) => void;
-  /** Drop a loaded audio track (button in the gutter clears the slot). */
+  /** Drop a loaded audio track (exposed in the row's overflow menu). */
   onClear: (id: AudioTrackId) => void;
   /** Overflow menu: run stage 1 (`stems_all`) on this track,
    *  isolating drums + drumless backing from a full-mix recording. */
@@ -129,7 +129,7 @@ type MixerRowDragProps = {
  * then one row per entry in `trackOrder` — an audio track or a single
  * drum-instrument pitch, freely interleavable. Drag-and-drop on each
  * row's gutter handle rewrites the order via `JotViewStore.moveTrack`;
- * the topmost drum-pitch row hosts the pattern/tuplet bracket overlay
+ * the topmost instrument row hosts the pattern/tuplet bracket overlay
  * so they read as a single piece of score chrome regardless of where
  * the user has moved the rows.
  */
@@ -170,19 +170,20 @@ export const MixerView = observer(
       setDropTargetIdx(undefined);
     };
 
-    // The topmost drum-pitch row in the user's mixer order hosts the
-    // tuplet brackets and the lead-in label — chrome that belongs to
-    // the score as a whole, not to any one instrument.
-    const firstPitchIdx = trackOrder.findIndex((k) => k.kind === 'pitch');
+    // The topmost instrument row in the user's mixer order hosts the
+    // tuplet brackets and the lead-in label; chrome that belongs to
+    // the score as a whole, not to any one instrument. Both this index
+    // and the mixer-ordered pitch list are MobX computeds on the store,
+    // so MixerView (already an observer) gets correct invalidation when
+    // the user reorders rows.
+    const store = React.useContext(JotViewStoreContext);
+    const firstInstrumentIdx = store?.firstInstrumentIdx ?? -1;
     // Drum pitches in mixer order. Pattern brackets are drawn on every
     // row whose pitch participates in the pattern; this list lets each
     // row know whether it's the topmost / bottommost participant for a
     // given span so the bracket reads as one continuous outline across
     // rows (with non-participating rows in between visually skipped).
-    const pitchOrder = React.useMemo(
-      () => trackOrder.flatMap((k) => (k.kind === 'pitch' ? [k.pitch] : [])),
-      [trackOrder]
-    );
+    const pitchOrder: readonly string[] = store?.pitchOrder ?? [];
 
     return (
       <div className={styles.mixer}>
@@ -219,9 +220,9 @@ export const MixerView = observer(
           const reactKey =
             key.kind === 'audio'
               ? `audio:${key.id}`
-              : key.kind === 'pitch'
-                ? `pitch:${key.pitch}`
-                : 'lyrics';
+              : key.kind === 'instrument'
+                ? `instrument:${key.pitch}`
+                : `lyrics:${key.id}`;
           // A row begins a new "group" — and so renders with a small
           // top gap — whenever its `groupId` differs from the previous
           // row's. Solo (groupId undefined) rows are each their own
@@ -268,15 +269,15 @@ export const MixerView = observer(
             );
           }
           if (key.kind === 'lyrics') {
-            return <LyricsRow key={reactKey} jot={jot} onSeek={onSeek} {...rowProps} />;
+            return <LyricsRow key={reactKey} id={key.id} jot={jot} onSeek={onSeek} {...rowProps} />;
           }
           return (
-            <PitchRow
+            <InstrumentRow
               key={reactKey}
               pitch={key.pitch}
               jot={jot}
               config={config}
-              showBrackets={idx === firstPitchIdx}
+              showBrackets={idx === firstInstrumentIdx}
               pitchOrder={pitchOrder}
               highlightedPattern={highlightedPattern}
               onPatternClick={onPatternClick}
@@ -513,30 +514,29 @@ export function splitDrumPiecesState(role: AudioTrackRole | undefined): AudioTra
 
 /** Per-row overflow menu on audio tracks. Hosts the two separation
  *  operations (stage 1, stage 2) with enable state derived from the
- *  track's {@link AudioTrackRole}. When both items would be disabled
- *  the trigger button isn't rendered at all; those rows have nothing
- *  actionable and a dead button would just be visual clutter. */
+ *  track's {@link AudioTrackRole}, plus the "Remove track" action. The
+ *  trigger always renders since Remove is always available. */
 const AudioTrackOverflowMenu = ({
   id,
   role,
   trackLabel,
   onSplitFromMix,
   onSplitDrumPieces,
+  onClear,
 }: {
   id: AudioTrackId;
   role: AudioTrackRole | undefined;
   trackLabel: string;
   onSplitFromMix: (id: AudioTrackId) => void;
   onSplitDrumPieces: (id: AudioTrackId) => void;
+  onClear: (id: AudioTrackId) => void;
 }) => {
   const mixState = splitFromMixState(role);
   const piecesState = splitDrumPiecesState(role);
-  if (!mixState.enabled && !piecesState.enabled) return null;
   return (
     <DropdownButton
       label="⋯"
       className={styles.overflowTrigger}
-      panelClassName={styles.overflowPanel}
       title={`More actions for ${trackLabel}`}
     >
       {(close) => (
@@ -559,6 +559,20 @@ const AudioTrackOverflowMenu = ({
             }}
             testId={`audio-track-split-pieces-${id}`}
           />
+          <span className={dropdownStyles.dropdownDivider} aria-hidden="true" />
+          <button
+            type="button"
+            className={dropdownStyles.dropdownItem}
+            role="menuitem"
+            onClick={() => {
+              onClear(id);
+              close();
+            }}
+            data-testid={`audio-track-clear-${id}`}
+            title={`Remove the ${trackLabel} audio track`}
+          >
+            Remove track
+          </button>
         </>
       )}
     </DropdownButton>
@@ -614,20 +628,14 @@ const AudioTrackRow = observer(
     controls: AudioTrackControls;
     onSeek: (x: number) => void;
   } & MixerRowDragProps) => {
-    // Voice-level total beats for the bars-row width (in beats — the
+    // Voice-level total beats for the bars-row width (in beats, the
     // row's pixel width is `voiceBeats × --px-per-beat` via CSS calc).
-    // Reading the structural cache (not `jot.resolved`) keeps this row
-    // stable across zoom changes; pixel width updates via CSS variable
-    // on the score root. The waveform canvas reads the zoom-dependent
-    // pixel width itself so only IT re-renders on zoom.
-    const structureVoice = jot.structure.voices[0];
-    // Total quarter-note span of the voice, lead-in lives in
-    // `voice.bars` as negative-indexed bars, so summing `bar.beats`
-    // covers both the pre-drum and the drum content with one pass.
-    let voiceBeats = 0;
-    if (structureVoice) {
-      for (const b of structureVoice.bars) voiceBeats += b.beats;
-    }
+    // `jot.voiceBeats` reads off the structural cache (not
+    // `jot.resolved`) so the value is stable across zoom changes; pixel
+    // width updates via CSS variable on the score root. The waveform
+    // canvas reads the zoom-dependent pixel width itself so only IT
+    // re-renders on zoom.
+    const voiceBeats = jot.voiceBeats;
     const audible = controls.isAudioTrackAudible(id);
     const muted = controls.mutedAudioTracks.has(id);
     const soloed = controls.soloedAudioTracks.has(id);
@@ -642,6 +650,14 @@ const AudioTrackRow = observer(
       onResetDrag,
     });
     const isDragging = dragFromIdx === idx;
+    const store = React.useContext(JotViewStoreContext);
+    const splitStatus = store?.audioTrackSplitStatuses.get(id);
+    const splittingTitle =
+      splitStatus?.kind === 'mix'
+        ? 'Splitting into drums + backing…'
+        : splitStatus?.kind === 'pieces'
+          ? 'Splitting into per-instrument pieces…'
+          : undefined;
     return (
       <div
         className={classNames(
@@ -677,8 +693,19 @@ const AudioTrackRow = observer(
                 <span className={styles.musicTrackName} title={label}>
                   {label}
                 </span>
-                <span className={styles.musicTrackFile} title={track.filename}>
-                  {track.filename}
+                <span className={styles.musicTrackFileRow}>
+                  <span className={styles.musicTrackFile} title={track.filename}>
+                    {track.filename}
+                  </span>
+                  {splitStatus && (
+                    <span
+                      className={styles.musicTrackSplitSpinner}
+                      title={splittingTitle}
+                      aria-label={splittingTitle}
+                      role="status"
+                      data-testid={`audio-track-split-spinner-${id}`}
+                    />
+                  )}
                 </span>
               </div>
               <AudioTrackOverflowMenu
@@ -687,6 +714,7 @@ const AudioTrackRow = observer(
                 trackLabel={label}
                 onSplitFromMix={controls.onSplitFromMix}
                 onSplitDrumPieces={controls.onSplitDrumPieces}
+                onClear={controls.onClear}
               />
             </div>
             <div className={styles.musicTrackButtons}>
@@ -694,15 +722,6 @@ const AudioTrackRow = observer(
                 value={controls.volumeFor(id)}
                 onChange={(v) => controls.onSetVolume(id, v)}
                 label={`${label} audio track`}
-              />
-              {/* Clear sits before Mute/Solo so the M/S pair stays flush
-                  with the gutter's right edge, aligned with the M/S
-                  column on the instrument rows below (both gutters share
-                  a width). */}
-              <ClearButton
-                onClear={() => controls.onClear(id)}
-                label={`Remove the ${lc} audio track`}
-                testId={`audio-track-clear-${id}`}
               />
               <MuteButton
                 active={muted}
@@ -746,22 +765,22 @@ const AudioTrackRow = observer(
 );
 
 /**
- * One drum-instrument row in the unified mixer — exactly one DSL pitch
+ * One drum-instrument row in the unified mixer; exactly one DSL pitch
  * (kick, snare, hi-hat, …). Mirrors `AudioTrackRow`: same gutter
  * geometry, M/S/volume controls, drag handle, bars-row + barlines +
  * beat dividers; the lane content is this pitch's notes (drawn through
- * `BarView` with `pitches=[pitch]`). The topmost drum row in the mixer
- * (`showBrackets={true}`) also paints the pattern + tuplet brackets so
- * the score chrome stays visible regardless of where the user has
- * dragged the rows.
+ * `BarView` with `pitches=[pitch]`). The topmost instrument row in the
+ * mixer (`showBrackets={true}`) also paints the pattern + tuplet
+ * brackets so the score chrome stays visible regardless of where the
+ * user has dragged the rows.
  *
  * Multi-voice jots: pitches can belong to any voice (e.g. kick lives in
  * the "Feet" voice). The bar geometry is taken from voice[0] (every voice
  * shares the same bar grid), and per-bar tracks are looked up across all
- * voices for this pitch — so the row works whether the pitch lives in
+ * voices for this pitch, so the row works whether the pitch lives in
  * voice 0 or 1.
  */
-const PitchRow = observer(
+const InstrumentRow = observer(
   ({
     pitch,
     jot,
@@ -794,86 +813,34 @@ const PitchRow = observer(
     onSeek: (x: number) => void;
     voiceControls: VoiceControls;
   } & MixerRowDragProps) => {
-    const structure = jot.structure;
-    const voice0 = structure.voices[0];
+    const voice0 = jot.primaryStructuralVoice;
     if (!voice0) return null;
     const trackHeight = config.trackHeight as number;
-    // Look up the first instrument and color found for this pitch
-    // across all voices, so the gutter label is correct even when the
-    // pitch lives in voice[1] (e.g. kick under the "Feet" voice).
-    let instrumentName: string | undefined;
-    for (const v of structure.voices) {
-      if (instrumentName) break;
-      for (const bar of v.bars) {
-        const t = bar.tracks[pitch];
-        if (t?.instrument.name) {
-          instrumentName = t.instrument.name;
-          break;
-        }
-      }
-    }
-    // Replace voice[0]'s per-bar tracks with this pitch's track wherever
-    // it appears across the jot's voices. Bar geometry (time, beats,
-    // patternSpans, tupletSpans) is untouched — only `tracks` changes
-    // — so BarView reads the same beat-coord layout as before. Reading
-    // the structural cache (not `jot.resolved`) keeps these bar refs
-    // stable across zoom changes; the surrounding container's
-    // `--px-per-beat` CSS variable does the actual rescaling.
-    const bars: StructuralBar[] = voice0.bars.map((b, i) => {
-      let track = b.tracks[pitch];
-      if (!track) {
-        for (let v = 1; v < structure.voices.length; v++) {
-          const t = structure.voices[v].bars[i]?.tracks[pitch];
-          if (t) {
-            track = t;
-            break;
-          }
-        }
-      }
-      return { ...b, tracks: track ? { [pitch]: track } : {} };
-    });
-    // Voice-level totals for the bars-row width (in beats, the row's
-    // pixel width is `voiceBeats × --px-per-beat` via CSS calc).
-    // Lead-in lives in `voice.bars` as negative-indexed bars so a single
-    // sum over `bar.beats` covers both pre-drum and drum content.
-    let voiceBeats = 0;
-    for (const b of voice0.bars) voiceBeats += b.beats;
-    // Cumulative quarter-note span of the leading negative-indexed bars
-    //; used to size the centered "lead-in" label overlay across them.
-    let leadInBarsBeats = 0;
-    for (const b of voice0.bars) {
-      if (b.index >= 0) break;
-      leadInBarsBeats += b.beats;
-    }
+    // Per-pitch derived data (bars, voice-wide totals, cumulative
+    // bar-start offsets, label color/instrument name); all memoised on
+    // the jot via `barsForPitch(pitch)`, so each row reads its slice
+    // from the MobX cache instead of recomputing on every render.
+    // `barBeatStart` and `startBeats` are the same array; the keyed
+    // names just disambiguate the two historical use sites.
+    const {
+      bars: pitchBars,
+      voiceBeats,
+      leadInBarsBeats,
+      barBeatStart,
+      startBeats,
+      pitchColor: rawPitchColor,
+      instrumentName,
+    } = jot.barsForPitch(pitch);
+    // Pitch's lane colour for the ghost dashed outline. `barsForPitch`
+    // returns '' when no kept notes anchor a color; fall back to the
+    // neutral grey the old inline code used.
+    const pitchColor = rawPitchColor || 'var(--color-text-faint-strong)';
 
     // Filtered-onset ghost overlays (debug bundle + checkbox gated).
     // Resolve once per row so the per-entry render below is just a map.
     const provenance = React.useContext(NoteProvenanceContext);
     const showFiltered = provenance?.showFiltered ?? false;
     const rejectedForPitch = showFiltered ? (provenance!.rejectedByPitch.get(pitch) ?? []) : [];
-    // Cumulative beat offsets so each rejected entry can be positioned
-    // absolutely in the bars row without walking back through bar
-    // widths on every render. Same scale (quarter-note beats) as the
-    // CSS-var positioning the kept notes use.
-    const barBeatStart: number[] = [];
-    {
-      let acc = 0;
-      for (let i = 0; i < bars.length; i++) {
-        barBeatStart.push(acc);
-        acc += bars[i].beats;
-      }
-    }
-    // Pitch's lane colour for the ghost dashed outline. Best-effort
-    // lookup: a pitch with no kept notes has no `tracks[pitch]` entry
-    // in any bar — falls back to neutral grey then.
-    let pitchColor = 'var(--color-text-faint-strong)';
-    for (const b of bars) {
-      const t = b.tracks[pitch];
-      if (t?.color) {
-        pitchColor = t.color;
-        break;
-      }
-    }
 
     const audible = voiceControls.isPitchAudible(pitch);
     const muted = voiceControls.mutedPitches.has(pitch);
@@ -891,7 +858,7 @@ const PitchRow = observer(
     return (
       <div
         className={classNames(
-          styles.pitchRow,
+          styles.instrumentRow,
           groupStart && styles.mixerRowGroupStart,
           groupEnd && styles.mixerRowGroupEnd,
           inGroup && styles.mixerRowInGroup,
@@ -899,12 +866,12 @@ const PitchRow = observer(
           drop.isDropIndicatorAbove && styles.mixerDropIndicatorAbove,
           drop.isDropIndicatorBelow && styles.mixerDropIndicatorBelow
         )}
-        data-testid={`pitch-row-${pitch}`}
+        data-testid={`instrument-row-${pitch}`}
         onDragOver={drop.onDragOver}
         onDragLeave={drop.onDragLeave}
         onDrop={drop.onDrop}
       >
-        <div className={styles.pitchRowGutter}>
+        <div className={styles.instrumentRowGutter}>
           <MixerDragHandle
             idx={idx}
             onDragStartIdx={onDragStartIdx}
@@ -915,24 +882,20 @@ const PitchRow = observer(
           {/* Two-row stack: the label gets the full gutter width on top
               so long instrument names breathe instead of getting clipped
               with `…`; the slider + M/S sit on a second line below. */}
-          <div className={styles.pitchRowContent}>
+          <div className={styles.instrumentRowContent}>
             <div
-              className={classNames(styles.pitchRowLabel, !audible && styles.musicTrackLabelDim)}
+              className={classNames(styles.instrumentRowLabel, !audible && styles.musicTrackLabelDim)}
               title={instrumentName ? `${instrumentName} (pitch ${pitch})` : `Pitch ${pitch}`}
             >
               <span className={styles.gutterPitch}>{pitch}</span>
-              {instrumentName && <span className={styles.pitchRowName}>{instrumentName}</span>}
+              {instrumentName && <span className={styles.instrumentRowName}>{instrumentName}</span>}
             </div>
-            <div className={styles.pitchRowControls}>
+            <div className={styles.instrumentRowControls}>
               <RowVolumeSlider
                 value={voiceControls.volumeFor(pitch)}
                 onChange={(v) => voiceControls.onSetVolume(pitch, v)}
                 label={labelText}
               />
-              {/* Reserves the Clear-button slot so the slider width
-                  matches the audio-track row (which has X/M/S, vs M/S
-                  here). aria-hidden + non-interactive — purely layout. */}
-              <span className={styles.controlSpacer} aria-hidden="true" />
               <MuteButton
                 active={muted}
                 onToggle={() => voiceControls.onToggleMute(pitch)}
@@ -963,7 +926,7 @@ const PitchRow = observer(
               (`.barLeadIn` / `.barLeadInLast`); this overlay just adds
               the centered "lead-in" caption. Topmost-row only
               (`showBrackets`) so the label doesn't repeat on every
-              pitch row. */}
+              instrument row. */}
           {leadInBarsBeats > 0 && showBrackets && (
             <div
               className={styles.leadInOverlay}
@@ -976,40 +939,34 @@ const PitchRow = observer(
               <span className={styles.leadInLabel}>lead-in</span>
             </div>
           )}
-          {(() => {
-            // Cumulative quarter-note position of each bar's left edge
-            // within the voice. Drives the bar's absolute left via
-            // `--bar-start-beat`; see `.bar` in score.module.css.
-            const startBeats = new Array<number>(bars.length);
-            let cursor = 0;
-            for (let i = 0; i < bars.length; i++) {
-              startBeats[i] = cursor;
-              cursor += bars[i].beats;
-            }
-            return bars.map((bar, i) => (
-              <BarView
-                key={i}
-                bar={bar}
-                barStartBeat={startBeats[i]}
-                pitches={[pitch]}
-                config={config}
-                isAnacrusis={bar.index === 0}
-                highlightedPattern={highlightedPattern}
-                onPatternClick={onPatternClick}
-                isPitchAudible={voiceControls.isPitchAudible}
-                showBrackets={showBrackets}
-                rowPitch={pitch}
-                pitchOrder={pitchOrder}
-              />
-            ));
-          })()}
+          {/* Cumulative quarter-note position of each bar's left edge
+              within the voice (drives the bar's absolute left via
+              `--bar-start-beat`; see `.bar` in score.module.css) is
+              precomputed by `jot.barsForPitch(pitch)` as `startBeats`,
+              so this map is just a render. */}
+          {pitchBars.map((bar, i) => (
+            <BarView
+              key={i}
+              bar={bar}
+              barStartBeat={startBeats[i]}
+              pitches={[pitch]}
+              config={config}
+              isAnacrusis={bar.index === 0}
+              highlightedPattern={highlightedPattern}
+              onPatternClick={onPatternClick}
+              isPitchAudible={voiceControls.isPitchAudible}
+              showBrackets={showBrackets}
+              rowPitch={pitch}
+              pitchOrder={pitchOrder}
+            />
+          ))}
           {rejectedForPitch.map((entry, i) => {
             // The MIDI lays `leadBars` empty bar-0-sized blocks before
             // struct bar 0, so the struct bar index maps to the
             // rendered jot's bars array as `leadBars + entry.bar`.
             // Out-of-range entries are already filtered out upstream.
             const barIdx = provenance!.leadBars + entry.bar;
-            if (barIdx < 0 || barIdx >= bars.length) return null;
+            if (barIdx < 0 || barIdx >= pitchBars.length) return null;
             // beat_in_bar is 1-indexed in the provenance (per the
             // transcriber's OnsetCandidate convention); the CSS calc
             // expects a 0-indexed beat offset within the bar.

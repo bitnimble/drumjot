@@ -3,7 +3,6 @@ import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { Point } from 'src/geom';
 import { RenderedJot } from 'src/jot';
-import { lyricsStore } from 'src/lyrics';
 import { BarTiming, buildTimeline, jotPlayer, timeToX } from 'src/playback';
 import { SelectionStore } from 'src/selection';
 import styles from './jot_view.module.css';
@@ -19,7 +18,6 @@ import {
   GridLineSettingsContext,
   JotViewStoreContext,
   NoteProvenanceContext,
-  NoteProvenanceContextValue,
   RenderedJotContext,
   SelectionContext,
   UniformWaveformsContext,
@@ -29,6 +27,7 @@ import {
   MixerView,
   VoiceControls,
 } from './jot_view/mixer';
+import { Logo } from './jot_view/components/logo';
 import { Minimap } from './jot_view/minimap';
 import { VerticalScrollbar } from './jot_view/vertical_scrollbar';
 import { PlaybackBar } from './jot_view/playback';
@@ -172,23 +171,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
       return () => window.removeEventListener('keydown', onKeyDown);
     }, []);
 
-    const provenanceContextValue: NoteProvenanceContextValue | null = store.noteProvenance
-      ? {
-          byTick: store.noteProvenanceByTick,
-          rejectedByPitch: store.filteredOnsetsByPitch,
-          leadBars: store.noteProvenance.lead_bars ?? 0,
-          showFiltered: store.showFilteredOnsets,
-          beatAlignmentOffsetSec:
-            store.noteProvenance.beat_alignment_offset_sec ?? null,
-          // Bundle manifest mapping is `Record<string, string>`; rebuild
-          // it as a Map for ergonomic .get() lookups inside the per-onset
-          // timing visualization. Empty when the current bundle didn't
-          // ship a manifest (hand-authored jots, legacy bundles).
-          audioFilenameByPitch: new Map(
-            Object.entries(store.lastDebugBundle?.mapping ?? {}),
-          ),
-        }
-      : null;
+    const provenanceContextValue = store.provenanceContextValue;
 
     // Lyrics modal visibility lives on the store so any TS consumer can
     // observe / drive it; the seeded title/artist fields are still local
@@ -231,10 +214,8 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
           onLoadLyricsFile={(file) => store.loadLyricsFile(file)}
           onOpenLyricsTextLoad={() => store.setLyricsTextOpen(true)}
           onOpenLyricsSearch={() => store.setLyricsSearchOpen(true)}
-          onClearLyrics={() => store.clearLyrics()}
-          hasLyrics={lyricsStore.hasLyrics}
           onCancelTranscribe={() => store.cancelTranscribe()}
-          lyricsAlignStatus={store.lyricsAlignStatus}
+          lyricsAnyAligning={store.lyricsAnyAligning}
           onSetBeatInput={(b) => store.setBeatInput(b)}
           onSetLlmModel={(m) => store.setLlmModel(m)}
           zoom={store.zoom}
@@ -278,7 +259,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
             voiceControls={{
               mutedPitches: store.mutedPitches,
               soloedPitches: store.soloedPitches,
-              isPitchAudible: (pitch) => store.isPitchAudible(pitch),
+              isPitchAudible: store.isPitchAudible,
               volumeFor: (pitch) => store.pitchVolume(pitch),
               onSetVolume: (pitch, v) => store.setPitchVolume(pitch, v),
               onToggleMute: (pitch) => store.toggleMute(pitch),
@@ -292,7 +273,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
             audioTrackControls={{
               mutedAudioTracks: store.mutedAudioTracks,
               soloedAudioTracks: store.soloedAudioTracks,
-              isAudioTrackAudible: (id) => store.isAudioTrackAudible(id),
+              isAudioTrackAudible: store.isAudioTrackAudible,
               volumeFor: (id) => store.audioTrackVolume(id),
               onSetVolume: (id, v) => store.setAudioTrackVolume(id, v),
               onToggleMute: (id) => store.toggleAudioTrackMute(id),
@@ -313,7 +294,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
           <EmptyState store={store} />
         )}
         <Minimap store={store} />
-        <PlaybackBar store={store} />
+        {jot && <PlaybackBar store={store} />}
         <DebugPanel store={store} />
         <LyricsSearchModal
           open={store.lyricsSearchOpen}
@@ -374,7 +355,7 @@ type JotViewProps = {
   /**
    * User-customizable mixer ordering — drum-instrument rows and audio
    * tracks freely interleaved. Drives both row order and which
-   * drum-pitch row hosts the pattern/tuplet bracket overlay (the
+   * instrument row hosts the pattern/tuplet bracket overlay (the
    * topmost drum row in this list).
    */
   trackOrder: readonly TrackKey[];
@@ -593,6 +574,9 @@ const JotView = observer((props: JotViewProps) => {
       lastY = e.clientY;
       prevCursor = el.style.cursor;
       el.style.cursor = 'grabbing';
+      // Middle-mouse pan is an explicit "I want to look somewhere else"
+      // gesture; auto-follow would just fight it on the next frame.
+      if (store.followPlayhead) store.toggleFollowPlayhead();
     };
     const onMouseMove = (e: MouseEvent) => {
       if (!panning) return;
@@ -867,6 +851,15 @@ const GridLineVars = observer(
  * pattern: read the observable, write the var, no React re-render in
  * the subtree.
  *
+ * Vars are registered `inherits: false` (see `design_tokens.css`) so
+ * the per-tick `setProperty` only invalidates style on the elements
+ * that actually consume them. Letting `--scroll-x` cascade across the
+ * entire score subtree costs ~21 ms per playback tick on a long song,
+ * blowing the 8.3 ms frame budget. The trade-off is that sticky
+ * elements mounted AFTER the last scroll change need to be seeded; a
+ * `MutationObserver` below catches those and writes the current
+ * `--scroll-x` onto each newly-added sticky descendant.
+ *
  * The wrapper `.scrollViewport` reads these vars via
  * `transform: translate3d(calc(var(--scroll-x) * -1px), ...)`, and the
  * `.scrollStickyHorizontal` class reads the same `--scroll-x` to
@@ -901,24 +894,54 @@ const ScrollVar = observer(
       setScrollX(el, x);
       setScrollY(el, y);
     }, [x, y, containerRef]);
+
+    // Seed `--scroll-x` on any sticky element that mounts AFTER the
+    // last scroll write. Without this, a row added later (a new audio
+    // track, a freshly loaded lyrics track) has no `--scroll-x` set
+    // and its counter-transform falls back to 0; the gutter scrolls
+    // with the content instead of staying pinned. Watching the
+    // container's `childList` with `subtree: true` catches every
+    // descendant insert; we read the live store value inside the
+    // observer callback so the seeded var reflects the current scroll
+    // position regardless of when the mutation lands.
+    React.useEffect(() => {
+      const el = containerRef.current;
+      if (!el) return;
+      const stickyClass = styles.scrollStickyHorizontal;
+      const mo = new MutationObserver((records) => {
+        const currentX = store.scrollX;
+        for (const r of records) {
+          if (r.addedNodes.length === 0) continue;
+          seedScrollXOnNewSticky(
+            Array.from(r.addedNodes),
+            stickyClass,
+            currentX,
+          );
+        }
+      });
+      mo.observe(el, { childList: true, subtree: true });
+      return () => mo.disconnect();
+    }, [containerRef, store]);
     return null;
   },
 );
 
 /**
  * Per-frame animation vars (`--playhead-x`, `--scroll-x`, `--scroll-y`)
- * are written on each consumer element rather than on `.jotContainer`.
- * The vars are registered `inherits: false` (see design_tokens.css), so
- * writing them on `.jotContainer` would no longer cascade to consumers;
- * instead, we target each consumer directly. Without this, the default
- * inheritance forces a style recalc across the entire score subtree
- * (~22ms on a long song) every frame.
+ * are written by these helpers. Writing strategy differs per var:
  *
- * `--playhead-x` consumers: `.playhead` (tagged `data-playhead="1"`).
- * `--scroll-x` consumers: `.scrollViewport` (tagged `data-jot-scroll-
- * content`) AND every `.scrollStickyHorizontal` element (composed into
- * title / subtitle / legend / row gutters / drag handles).
- * `--scroll-y` consumers: `.scrollViewport` only.
+ * `--playhead-x`: registered `inherits: false`. Targeted at every
+ *   `[data-playhead="1"]` element directly. Per-element writes here so
+ *   the per-tick style invalidation stays scoped to the few playhead
+ *   elements rather than cascading across the score.
+ *
+ * `--scroll-x` / `--scroll-y`: registered `inherits: true`. Written
+ *   only on the inner `.scrollViewport` (`data-jot-scroll-content`);
+ *   every descendant inherits via the cascade. This eliminates the
+ *   new-element race the old per-element write had (a sticky gutter
+ *   mounted after the user scrolled never received the var), and the
+ *   inheritance scope is constrained to `.scrollViewport` so toolbar /
+ *   playback bar siblings don't pay the per-tick recalc.
  */
 function setPlayheadVar(root: HTMLElement, x: number): void {
   const px = `${x}px`;
@@ -935,6 +958,13 @@ function setScrollX(root: HTMLElement, x: number): void {
   const xStr = String(x);
   const viewport = root.querySelector<HTMLElement>('[data-jot-scroll-content]');
   if (viewport) viewport.style.setProperty('--scroll-x', xStr);
+  // Per-consumer write keeps the style invalidation scoped to the
+  // elements that actually use the var. Letting `--scroll-x` cascade
+  // through the score subtree forces a ~21 ms style recalc per
+  // playback tick on a long song; see the doc comment in
+  // `design_tokens.css`. The trade-off is that new sticky elements
+  // added after the last scroll change need to be seeded explicitly;
+  // that's what the MutationObserver in `ScrollVar` handles.
   const sticky = root.querySelectorAll<HTMLElement>(
     '.' + styles.scrollStickyHorizontal,
   );
@@ -944,6 +974,28 @@ function setScrollX(root: HTMLElement, x: number): void {
 function setScrollY(root: HTMLElement, y: number): void {
   const viewport = root.querySelector<HTMLElement>('[data-jot-scroll-content]');
   if (viewport) viewport.style.setProperty('--scroll-y', String(y));
+}
+
+/** Seed `--scroll-x` on newly-mounted sticky elements (only). Called
+ *  from the `MutationObserver` reaction; avoids the broader
+ *  `setScrollX` walk that would touch every existing sticky element
+ *  on every mutation tick. */
+function seedScrollXOnNewSticky(
+  added: readonly Node[],
+  stickyClass: string,
+  x: number,
+): void {
+  const xStr = String(x);
+  for (const node of added) {
+    if (!(node instanceof HTMLElement)) continue;
+    if (node.classList.contains(stickyClass)) {
+      node.style.setProperty('--scroll-x', xStr);
+    }
+    // A row inserts a nested `.scrollStickyHorizontal` gutter, so
+    // also seed any matching descendants of the added node.
+    const inner = node.querySelectorAll<HTMLElement>('.' + stickyClass);
+    for (const el of inner) el.style.setProperty('--scroll-x', xStr);
+  }
 }
 
 /**
@@ -1102,43 +1154,35 @@ const MarqueeOverlay = observer(() => {
 
 /**
  * First-load welcome screen rendered when no jot is loaded. Surfaces the
- * primary "open a .jot file" path directly and lists the built-in example
- * jots as one-click shortcuts; other formats (MIDI, ParaDB, debug bundle,
- * audio tracks, transcribe) stay in the toolbar's Load / Transcribe menus
- * to avoid duplicating that whole surface here.
+ * primary entry points (.jot file, ParaDB map, recent transcriptions)
+ * directly and lists the built-in example jots as one-click shortcuts;
+ * other formats (MIDI, debug bundle, audio tracks, transcribe) stay in
+ * the toolbar's File / Transcribe menus to avoid duplicating that whole
+ * surface here.
  */
 const EmptyState = observer(({ store }: { store: JotViewStore }) => {
   const jotInputRef = React.useRef<HTMLInputElement>(null);
+  const paradbInputRef = React.useRef<HTMLInputElement>(null);
   const handleJotFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) store.loadJotFile(file);
+    e.target.value = '';
+  };
+  const handleParadbFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) store.loadParadbMap(file);
     e.target.value = '';
   };
   return (
     <div className={styles.emptyState}>
       <div className={styles.emptyStateCard}>
         <div className={styles.emptyStateIcon} aria-hidden="true">
-          <svg
-            width="56"
-            height="56"
-            viewBox="0 0 56 56"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-          >
-            <line x1="8" y1="22" x2="48" y2="22" />
-            <line x1="8" y1="30" x2="48" y2="30" />
-            <line x1="8" y1="38" x2="48" y2="38" />
-            <circle cx="16" cy="22" r="3" fill="currentColor" />
-            <circle cx="28" cy="30" r="3" fill="currentColor" />
-            <circle cx="40" cy="22" r="3" fill="currentColor" />
-          </svg>
+          <Logo size={56} />
         </div>
         <h2 className={styles.emptyStateTitle}>Open a file to get started</h2>
         <p className={styles.emptyStateBody}>
-          Load a Drumjot <code>.jot</code>, MIDI file, ParaDB map, or
-          transcriber debug bundle, or try one of the examples below.
+          Load a Drumjot <code>.jot</code>, a ParaDB map, or a recent
+          transcription, or try one of the examples below.
         </p>
         <div className={styles.emptyStateActions}>
           <button
@@ -1148,19 +1192,29 @@ const EmptyState = observer(({ store }: { store: JotViewStore }) => {
           >
             Open .jot file
           </button>
-          <RecentTranscriptionsPicker
-            variant="cta"
-            triggerLabel="Open recent"
-            triggerTitle="Open a previously transcribed audio file from the server's recent runs."
-            items={store.recentTranscriptions}
-            loaded={store.recentTranscriptionsLoaded}
-            loading={store.recentTranscriptionsLoading}
-            onRefresh={() => store.refreshRecentTranscriptions()}
-            onPick={(folder) => store.loadRecentTranscription(folder)}
-          />
+          <div className={styles.emptyStateAltActions}>
+            <button
+              type="button"
+              className={styles.emptyStateSecondary}
+              onClick={() => paradbInputRef.current?.click()}
+              title="Load a ParaDB / Paradiddle map pack (.zip). The chart is converted to a score and its audio tracks are loaded automatically for play-along practice."
+            >
+              Open ParaDB map
+            </button>
+            <RecentTranscriptionsPicker
+              variant="cta"
+              triggerLabel="Open recent"
+              triggerTitle="Open a previously transcribed audio file from the server's recent runs."
+              items={store.recentTranscriptions}
+              loaded={store.recentTranscriptionsLoaded}
+              loading={store.recentTranscriptionsLoading}
+              onRefresh={() => store.refreshRecentTranscriptions()}
+              onPick={(folder) => store.loadRecentTranscription(folder)}
+            />
+          </div>
         </div>
         <p className={styles.emptyStateHint}>
-          For other formats, use the <b>Load</b> or <b>Transcribe</b> menus in
+          For other formats, use the <b>File</b> or <b>Transcribe</b> menus in
           the toolbar above.
         </p>
         {store.examples.length > 0 && (
@@ -1188,6 +1242,13 @@ const EmptyState = observer(({ store }: { store: JotViewStore }) => {
           accept=".jot,.txt,text/plain"
           className={styles.emptyStateFileInput}
           onChange={handleJotFileChange}
+        />
+        <input
+          ref={paradbInputRef}
+          type="file"
+          accept=".zip,application/zip"
+          className={styles.emptyStateFileInput}
+          onChange={handleParadbFileChange}
         />
       </div>
     </div>
