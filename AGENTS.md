@@ -7,6 +7,28 @@ code, plans that exist but haven't been executed yet, and a list of
 gotchas worth knowing before making changes. Read it top to bottom
 once; refer back as needed.
 
+**Update (later session, MIDI↔audio alignment-score design):** recording
+verified corrections to the state below.
+- **The bun bridge is gone end-to-end** (committed). The legacy-pathway
+  purge removed `transcriber/tools/*.ts` (`jot_to_onsets.ts`,
+  `recompose_jot.ts`), `src/recompose.ts` / `recompose.test.ts`, and
+  `app/pipeline/recompose.py`. The transcriber is now **pure Python**
+  and never interprets a Jot: it emits MIDI directly (`onsets_midi.py`)
+  and `from_midi.ts` converts MIDI→Jot on the frontend. §5.2 has been
+  rewritten to match; the §2 layout and timeline #24 still narrate the
+  removed bridge/recomposition as history; read them as such.
+- **New pipeline stages** not in the §2 tree below: `quantise.py`,
+  `lyrics_align.py`, `beat_transformer.py`, `provision.py` (and a
+  `benchmarks/` harness, §B of the layout is absent). `recompose.py` is
+  gone.
+- **New design doc**: `research/midi-audio-alignment-score.md`
+  specs an offline tool that scores externally-sourced MIDI against a
+  drum stem (per-lane soft-cost monotonic DTW + an ICP correction loop).
+- A working-tree **Docker restructure** toward a single all-in-one
+  container (root `Dockerfile`, `docker-compose.{base,dev,prod}.yml`)
+  plus lyrics-alignment and frontend color-picker work is **uncommitted**
+  and deliberately NOT documented here until it lands.
+
 Last updated by the assistant: May 2026, after the legacy-pathway
 purge (timeline #26): the DSL-output transcribe endpoint and the
 librosa onset backend are gone. The backend now produces only MIDI
@@ -115,12 +137,6 @@ drumjot/
 │   ├── fakes.ts                    EXAMPLE_JOTS (rockJot, tripletJot).
 │   ├── geom.ts                     Tiny Point/Box helpers.
 │   ├── selection.ts                Marquee + pattern selection store.
-│   ├── recompose.ts                Deterministic merge of per-instrument
-│   │                               monophonic fragments into one Jot
-│   │                               (hands `+`, polyrhythm `(A)+(B)`,
-│   │                               kick = 2nd `||` voice). Used by the
-│   │                               transcriber via tools/recompose_jot.ts.
-│   ├── recompose.test.ts           bun-test coverage for the above.
 │   ├── transcriber.ts              HTTP client for the transcriber service.
 │   ├── playback/                   Browser drum playback via smplr.
 │   │   ├── player.ts               JotPlayer singleton (MobX-observable
@@ -181,9 +197,11 @@ drumjot/
 ├── .mcp.json                       Project-scoped @playwright/mcp server.
 └── transcriber/                    Python backend (FastAPI + Docker).
     ├── README.md                   Service-level docs (formats, API, perf).
-    ├── Dockerfile                  CUDA 12.4 base; installs bun + madmom.
-    ├── docker-compose.yml          Build context = REPO ROOT (so src/ is
-    │                               available to the bun bridge).
+    ├── Dockerfile / compose        Being restructured to a single root
+    │                               all-in-one container (uncommitted; see
+    │                               root Dockerfile + docker-compose.*.yml).
+    │                               Transcriber runtime is pure Python; no
+    │                               bun in the runtime image.
     ├── pyproject.toml              Deps: fastapi, audio-separator[gpu],
     │                               adtof_pytorch, madmom (from git),
     │                               mir_eval, anthropic.
@@ -453,12 +471,14 @@ automatically. When working in the venv directly:
 Current `bun test` count: **103 passing, 2 skipped** (the skipped
 tests are fixture suites — drop `.mid` files in
 `src/midi/__tests__/fixtures/` or `.rlrr` files in
-`src/rlrr/__tests__/fixtures/` to activate them). `src/recompose.test.ts`
-(12 tests) is the authoritative correctness coverage for
-recomposition and runs locally. The Python suite (`transcriber/tests/`,
-Docker-only) gained `test_llm_spec_subset.py` this session.
+`src/rlrr/__tests__/fixtures/` to activate them). The Python suite
+(`transcriber/tests/`) runs locally via `scripts/check-py` (the venv is
+the primary loop now; no longer Docker-only) and covers beats, onsets,
+cymbal/hihat split, quantise, lyrics-align, and the benchmark scorer;
+the recomposition tests went with the recompose module.
 (`bun test` is scoped to `src/` via `bunfig.toml` so it never picks up
-the Playwright e2e specs — see below.)
+the Playwright e2e specs; see below.) Test counts in this section are
+stale; run the suites for current numbers.
 
 ### 3.1 End-to-end tests (Playwright)
 
@@ -520,6 +540,23 @@ framework: the agent perceives via accessibility tree + screenshots
 (both produced correctly headless); you can't spectate live or
 intervene by hand. Co-located with Claude Code on the dev box, so no
 networking config. All `.playwright/` paths are gitignored.
+
+### 3.3 Code intelligence (LSP)
+
+The `LSP` tool is wired up on this box; `tsgo --lsp` (the Go-port
+TypeScript native preview, installed as `@typescript/native-preview`)
+behind a shim named `typescript-language-server`, plus
+`pyright-langserver` for the transcriber. **Prefer it over Grep for any
+symbol-level question**; go-to-definition, find-references, hover
+(types + JSDoc / docstrings), document-symbol outline, workspace-symbol
+search, go-to-implementation, and call hierarchy (incoming / outgoing).
+Typed and precise; no false positives from strings, comments, or
+unrelated identifiers that happen to share a name.
+
+Reach for Grep only when the query is genuinely text-shaped: CSS class
+names, log / error strings, cross-language identifiers (a DSL letter
+that appears in both TS and Python), or generated / vendored code the
+LSP doesn't index.
 
 ---
 
@@ -791,30 +828,30 @@ time-signature changes (inline `{{time}}`), velocity (`:a` / `:g` /
 `vol`), and pattern reuse (`[Name=(...)]`) — so the transcriber's job
 is to choose the right DSL constructs, not invent new ones.
 
-### 5.2 Single source of truth for the parser (and DSL manipulation)
+### 5.2 The transcriber is pure Python (no bun bridge)
 
-The DSL parser exists in TypeScript only. The Python transcriber
-service shells out to `bun run transcriber/tools/jot_to_onsets.ts`
-when it needs to interpret a Jot (extract predicted onsets for the
-diff). This avoids maintaining two parsers in lockstep at the cost of
-adding `bun` to the Docker image (~50 MB).
+The DSL parser and all DSL/MIDI manipulation live in TypeScript on the
+**frontend only** (`src/parser/`, `src/midi/`, `src/rlrr/`). The
+transcriber does **not** parse, interpret, or emit Jots: it produces
+MIDI directly (`app/pipeline/onsets_midi.py`), and
+`src/midi/from_midi.ts` converts that MIDI into a Jot in the browser.
 
-The same principle now extends to **recomposition**: merging the
-per-instrument monophonic lines into one Jot is a DSL-manipulation
-task, so it lives in `src/recompose.ts` (next to the parser, with
-local `bun test` coverage) and the Python side calls it through
-`tools/recompose_jot.ts` exactly like the onset bridge.
-`app/pipeline/recompose.py` is a thin subprocess wrapper that owns
-only the domain facts the TS layer can't know (`FEET_PITCHES`,
-display names) and shapes the `BeatStructure` into the bridge's JSON.
-There is deliberately **no recomposition algorithm in Python**.
+The earlier "shell out to `bun run …`" bridge (`tools/jot_to_onsets.ts`,
+`tools/recompose_jot.ts`, `src/recompose.ts`, and
+`app/pipeline/recompose.py`) was removed in the May 2026 legacy-pathway
+purge together with the per-instrument-DSL recomposition it served.
+There is no `bun`, no synthesised `tsconfig.json`, and no `src/` in the
+transcriber runtime; the Python service has no TypeScript dependency at
+all.
 
-The Docker `build context` is the **repo root**, not the transcriber
-folder, so `src/` (TS parser) and `transcriber/` (Python service) end
-up in the same image. The Dockerfile synthesises a `tsconfig.json`
-at `/app/` inline so bun can resolve the `src/*` path alias in the
-container. Locally, bun finds the repo-root tsconfig automatically
-by walking upward from the script path.
+**If Python ever needs to read MIDI again** (e.g. the planned MIDI↔audio
+alignment scorer, `research/midi-audio-alignment-score.md`), the
+decision is to **port the canonical `src/midi/gm.ts` GM→pitch mapping to
+Python with a drift-guard test** rather than resurrect the bridge for a
+single offline consumer. `gm.ts` / `from_midi.ts` stay the source of
+truth for MIDI semantics (whole-file tempo-aware timing, GM fold, the
+fallback letter allocator); a Python reader mirrors them and a fixture
+test fails if they drift.
 
 ### 5.3 Beat-relative coordinates, not fixed grids
 
@@ -1281,15 +1318,22 @@ the research:
 | STAR Drums | 125 | research |
 | ADTOF-YT | 202 | research |
 | Slakh drum stems | 118 | CC-BY 4.0 |
-| **User's 2000-song corpus** | ~117 base, ~585 after 5-kit rendering | user's own |
-| **Total** | **~1500 h after augmentation** | mostly open |
+| **User's 6289-song corpus** | ~368 base, ~1,840 after 5-kit rendering | user's own |
+| **Total** | **~2,700 h base (more after augmentation)** | mostly open |
 
-**Rendering of the 2000-song corpus**: via **Drumgizmo** (GPL,
+**Rendering of the 6289-song corpus**: via **Drumgizmo** (GPL,
 headless CLI, multi-mic kits like DRSKit / MuldjordKit / CrocellKit /
-Aasimonster / MorbidStudioKit, all free). ~$50 in GCP CPU spot to
-render 2000 songs × 5 kits = 10,000 audio files. Could also add
+Aasimonster / MorbidStudioKit, all free). ~$155 in GCP CPU spot to
+render 6289 songs × 5 kits = 31,445 audio files. Could also add
 EZdrummer 3 or BFD3 via Wine + yabridge + Reaper Linux for an
 additional commercial-kit timbre.
+
+> Note: the corpus is 6289 real full-mix songs (with hand-aligned,
+> articulation-accurate charts); the user also has the real recordings
+> and can separate stems directly, so Drumgizmo rendering is one audio
+> source, not the only one. The TPU chip-hour / cost figures below were
+> originally sized for the ~1500 h (2000-song) plan and scale up roughly
+> proportionally with the larger corpus; re-size before committing budget.
 
 **Augmentation suite** (proven gains in piano transcription, expected
 +3–5 F1 on the harder datasets):
@@ -1317,7 +1361,7 @@ additional commercial-kit timbre.
 
 **Engineering plan** (rough):
 1. Re-implement N2N architecture from the paper (1–2 weeks).
-2. Build Drumgizmo Docker pipeline + render 2000-song corpus (3 days).
+2. Build Drumgizmo Docker pipeline + render 6289-song corpus (3 days).
 3. Pre-extract MERT features for all data (~$50 GCP).
 4. Run ablations (~$5K cloud, ~3 weeks wall-clock parallelised).
 5. Final tuned run on full data + best augmentation (~$1200).
@@ -1371,7 +1415,7 @@ Things that look fiddly but matter:
 - **Voice == one side of `||`**. Nothing else calls anything a
   "voice" — see the `Voice` doc comment.
 - **Per-bar metadata** lives in `Bar.metadata` (populated by the
-  parser snapshot logic). Renderer and bun bridge use it; consumers
+  parser snapshot logic). The renderer uses it; consumers
   fall back to `globalMetadata`.
 
 The parser is ~600 lines of recursive descent + ~150 lines of macro
@@ -1625,11 +1669,6 @@ plumbed through; currently `beats.py` falls back automatically on
 ImportError, so madmom can just be removed from `pyproject.toml`
 temporarily).
 
-If the bun bridge errors with "Cannot find module": ensure tsconfig
-has `paths: { "src/*": ["src/*"] }` and that bun is finding it. The
-repo-root tsconfig handles local dev; the Dockerfile synthesises one
-at `/app/tsconfig.json` for the container.
-
 If the LLM returns invalid DSL repeatedly: check that
 `transcribe.md` prompt's `{SPEC}` placeholder is being filled (look
 for the spec text in the generator's first message). The retry-on-
@@ -1654,9 +1693,11 @@ changes:
 1. **N2N training timeline**. Has the user committed to starting Path
    B yet, or is it still "research-complete, execution-pending"?
    At time of writing it's the latter.
-2. **The 2000-song MIDI corpus** — they mentioned it but the agent
-   hasn't seen it. If they want to start the rendering pipeline,
-   ask for the source folder structure.
+2. **The 6289-song corpus**, real full-mix songs with hand-aligned,
+   articulation-accurate charts; the user has the recordings and
+   separates stems directly. The agent hasn't seen the files. If
+   starting the rendering/separation pipeline, ask for the source
+   folder structure.
 3. **Refinement defaults**: refinement is currently on by default
    (`REFINE_BY_DEFAULT=true`). For batch workflows where cost
    matters, they might want to flip this.
