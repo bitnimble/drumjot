@@ -1,16 +1,18 @@
 ## DevX
 - add Prettier and autoformat hook
-- use branches, and write a skill for merging 
+
+## Bugs
 
 ## UX
-- Beat and audio alignment controls: stack them vertically on top of each other, keeping them in the right hand side of the bottom playback bar
+- mobile friendly
 - pending tasks dropdown in top right - any active backend tasks (stem splitting, transcription, lyrics alignment, etc). see if we can add ETAs or progress bars.
-- add colour picker to track overflow menus. changes colour of notes for instrument tracks, and colour of waveforms for audio tracks
+- make a settings schema, move all persistent user settings into it, have it saved to localstorage
 
 ## Performance
-- Worker pool for multi-threaded waveform compute and render on audio tracks
 
 ## Refactoring
+- fix audioTrack.pitch - it shouldn't exist, it should be computed from the track group instead?
+- refactor StructuralTrack type and co to share same source of truth as RenderedJot (or vice versa), using type unions or Omit
 - refactor sweep all code to split out more, be less monolithic:
   - split out files even more by feature/domain/etc. for example, viewport (consisting of the bounds of the viewport, converters between coordinate systems like pixels to beats, DPI awareness, etc) should probably be its own store and presenter.
   - if each feature has multiple files, group them into a folder. it's okay if each folder only has three files (store + presenter + tsx).
