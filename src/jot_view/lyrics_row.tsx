@@ -1,5 +1,5 @@
 import classNames from 'classnames';
-import { observer } from 'mobx-react-lite';
+import { observer, useLocalObservable } from 'mobx-react-lite';
 import React from 'react';
 import { RenderedJot } from 'src/jot';
 import {
@@ -316,6 +316,103 @@ const LyricsOverflowMenu = ({
   </DropdownButton>
 );
 
+/** One absolutely-positioned line chip on the bars row. Pure props +
+ *  `observer` (so `React.memo` short-circuits when nothing changed): the
+ *  parent re-renders on every line/word transition and re-keys this child,
+ *  but identical props mean the body never runs unless `isActive` or
+ *  `activeWordIdx` (this line's word-level highlight target) actually
+ *  flipped. */
+const LyricLineChip = observer(
+  ({
+    lineIdx,
+    startBeat,
+    endBeat,
+    text,
+    wordPositions,
+    shifts,
+    isActive,
+    activeWordIdx,
+  }: {
+    lineIdx: number;
+    startBeat: number;
+    endBeat: number;
+    text: string;
+    wordPositions: PositionedWord[] | undefined;
+    shifts: Map<string, number>;
+    isActive: boolean;
+    /** Defined only when this line is the active line; otherwise undefined
+     *  so non-active lines stay memo-stable across word transitions. */
+    activeWordIdx: number | undefined;
+  }) => {
+    const wordAligned = wordPositions !== undefined;
+    return (
+      <span
+        className={classNames(
+          styles.lyricLine,
+          wordAligned && styles.lyricLineWordAligned,
+          isActive && styles.lyricLineActive,
+        )}
+        style={
+          {
+            ['--lyric-start-beat' as string]: startBeat,
+            ['--lyric-end-beat' as string]: endBeat,
+          } as React.CSSProperties
+        }
+        title={text}
+        data-testid={`lyrics-line-${lineIdx}`}
+      >
+        {wordAligned
+          ? wordPositions!.map((w) => (
+              <LyricWordChip
+                key={w.sourceIdx}
+                lineIdx={lineIdx}
+                wordIdx={w.sourceIdx}
+                word={w}
+                shift={shifts.get(lyricShiftKey(lineIdx, w.sourceIdx)) ?? 0}
+                isActive={activeWordIdx === w.sourceIdx}
+              />
+            ))
+          : text}
+      </span>
+    );
+  },
+);
+
+const LyricWordChip = observer(
+  ({
+    lineIdx,
+    wordIdx,
+    word,
+    shift,
+    isActive,
+  }: {
+    lineIdx: number;
+    wordIdx: number;
+    word: PositionedWord;
+    shift: number;
+    isActive: boolean;
+  }) => {
+    const wordStyle: Record<string, string | number> = {
+      '--lyric-word-beat-offset': word.beatOffset,
+      '--lyric-word-beat-width': word.beatWidth,
+    };
+    if (shift > 0) wordStyle['--lyric-word-shift'] = `${shift}px`;
+    return (
+      <span
+        className={classNames(
+          styles.lyricWord,
+          isActive && styles.lyricWordActive,
+        )}
+        style={wordStyle as React.CSSProperties}
+        title={buildWordDebugTitle(word.source)}
+        data-testid={`lyrics-word-${lineIdx}-${wordIdx}`}
+      >
+        <span className={styles.lyricWordText}>{word.text}</span>
+      </span>
+    );
+  },
+);
+
 /**
  * The time-aligned lyrics row in the unified mixer. Same gutter geometry
  * as `AudioTrackRow` / `InstrumentRow`: drag handle on the leftmost edge, a
@@ -452,11 +549,32 @@ export const LyricsRow = observer(
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [positioned, pxPerBeat, fontReady]);
 
-    // Imperative active-highlight target. The bars-row's children carry
-    // `data-lyric-line-idx` / `data-lyric-word-idx` so `LyricsActiveHighlighter`
-    // can toggle `.lyricLineActive` / `.lyricWordActive` per frame
-    // without re-rendering this subtree.
-    const barsRowRef = React.useRef<HTMLDivElement | null>(null);
+    // Reactive active-line/word state. Reading `playhead.activeLineIdx`
+    // here re-renders `LyricsRow` only when the active line index *flips*
+    // (a few times per second), not on every `currentTime` tick - the
+    // computed dedupes by output value. Child chips are `observer`s
+    // wrapped in `React.memo`, so identical props bail; only the two
+    // chips whose `isActive` actually flipped re-run. Getters read the
+    // live track from `lyricsStore` (rather than closing over `lines` /
+    // `offsetSec`) so updates to those propagate without re-initialising
+    // the local observable.
+    const playhead = useLocalObservable(() => ({
+      get audioTimeNow(): number {
+        return jotPlayer.currentTime + jotPlayer.drumsT0Sec;
+      },
+      get activeLineIdx(): number | undefined {
+        const t = lyricsStore.get(id);
+        if (!t) return undefined;
+        return activeLineIndexAt(t.lines, this.audioTimeNow, t.offsetSec);
+      },
+      get activeWordIdx(): number | undefined {
+        const lineIdx = this.activeLineIdx;
+        if (lineIdx === undefined) return undefined;
+        const t = lyricsStore.get(id);
+        if (!t) return undefined;
+        return activeWordIndexAt(t.lines, lineIdx, this.audioTimeNow, t.offsetSec);
+      },
+    }));
 
     const drop = useDropTarget({
       idx,
@@ -535,7 +653,6 @@ export const LyricsRow = observer(
           </div>
         </div>
         <div
-          ref={barsRowRef}
           className={styles.lyricsBarsRow}
           style={
             {
@@ -546,144 +663,25 @@ export const LyricsRow = observer(
           onClick={(e) => seekFromClick(e, onSeek)}
         >
           {positioned.map((p) => {
-            const wordAligned = p.wordPositions !== undefined;
+            const isActive = playhead.activeLineIdx === p.i;
             return (
-              <span
+              <LyricLineChip
                 key={p.i}
-                className={classNames(
-                  styles.lyricLine,
-                  wordAligned && styles.lyricLineWordAligned,
-                )}
-                style={
-                  {
-                    ['--lyric-start-beat' as string]: p.startBeat,
-                    ['--lyric-end-beat' as string]: p.endBeat,
-                  } as React.CSSProperties
-                }
-                title={p.text}
-                data-testid={`lyrics-line-${p.i}`}
-                data-lyric-line-idx={p.i}
-              >
-                {wordAligned
-                  ? p.wordPositions!.map((w) => {
-                      const shift = shifts.get(lyricShiftKey(p.i, w.sourceIdx)) ?? 0;
-                      const wordStyle: Record<string, string | number> = {
-                        '--lyric-word-beat-offset': w.beatOffset,
-                        '--lyric-word-beat-width': w.beatWidth,
-                      };
-                      if (shift > 0) wordStyle['--lyric-word-shift'] = `${shift}px`;
-                      return (
-                        <span
-                          key={w.sourceIdx}
-                          className={styles.lyricWord}
-                          style={wordStyle as React.CSSProperties}
-                          title={buildWordDebugTitle(w.source)}
-                          data-testid={`lyrics-word-${p.i}-${w.sourceIdx}`}
-                          data-lyric-word-idx={w.sourceIdx}
-                        >
-                          <span className={styles.lyricWordText}>{w.text}</span>
-                        </span>
-                      );
-                    })
-                  : p.text}
-              </span>
+                lineIdx={p.i}
+                startBeat={p.startBeat}
+                endBeat={p.endBeat}
+                text={p.text}
+                wordPositions={p.wordPositions}
+                shifts={shifts}
+                isActive={isActive}
+                activeWordIdx={isActive ? playhead.activeWordIdx : undefined}
+              />
             );
           })}
-          <LyricsActiveHighlighter
-            barsRowRef={barsRowRef}
-            lines={lines}
-            offsetSec={offsetSec}
-          />
           <Playhead onSeek={onSeek} />
         </div>
       </div>
     );
-  },
-);
-
-/**
- * Side-effect-only observer that toggles `.lyricLineActive` /
- * `.lyricWordActive` on the right elements per frame, without forcing
- * the outer `LyricsRow` to re-render at the playhead cadence. Mirrors
- * the `PlayheadPosVar` pattern in `jot_view.tsx`: subscribes to
- * `jotPlayer.currentTime` + `activeLineIndexAt(lines, ...)` /
- * `activeWordIndexAt(lines, ...)`, finds the target elements via the `data-lyric-
- * line-idx` / `data-lyric-word-idx` attributes inside `barsRowRef`,
- * and mutates classList in a `useLayoutEffect`. Returns null.
- *
- * Cleanup: refs to the previously-active elements are held so the
- * highlight is removed before the new one is added; on jot change /
- * lyrics clear the refs still point at valid (or stale-but-soon-
- * removed) nodes and `classList.remove` is a no-op on detached
- * elements.
- */
-const LyricsActiveHighlighter = observer(
-  ({
-    barsRowRef,
-    lines,
-    offsetSec,
-  }: {
-    barsRowRef: React.RefObject<HTMLDivElement | null>;
-    lines: readonly LyricLine[];
-    offsetSec: number;
-  }) => {
-    const drumsT0Sec = jotPlayer.drumsT0Sec;
-    const audioTimeNow = jotPlayer.currentTime + drumsT0Sec;
-    const activeIdx = activeLineIndexAt(lines, audioTimeNow, offsetSec);
-    const activeWordIdx =
-      activeIdx !== undefined
-        ? activeWordIndexAt(lines, activeIdx, audioTimeNow, offsetSec)
-        : undefined;
-
-    const lastActiveLineEl = React.useRef<HTMLElement | null>(null);
-    const lastActiveWordEl = React.useRef<HTMLElement | null>(null);
-    React.useLayoutEffect(() => {
-      // Remove the previous frame's active classes first so a swap
-      // (active line changes word-by-word) doesn't leave two lines /
-      // words lit at once.
-      if (lastActiveLineEl.current) {
-        lastActiveLineEl.current.classList.remove(styles.lyricLineActive);
-      }
-      if (lastActiveWordEl.current) {
-        lastActiveWordEl.current.classList.remove(styles.lyricWordActive);
-      }
-      lastActiveLineEl.current = null;
-      lastActiveWordEl.current = null;
-
-      const row = barsRowRef.current;
-      if (!row) return;
-      const lineEl =
-        activeIdx !== undefined
-          ? row.querySelector<HTMLElement>(
-              `[data-lyric-line-idx="${activeIdx}"]`,
-            )
-          : null;
-      const wordEl =
-        lineEl && activeWordIdx !== undefined
-          ? lineEl.querySelector<HTMLElement>(
-              `[data-lyric-word-idx="${activeWordIdx}"]`,
-            )
-          : null;
-      if (lineEl) lineEl.classList.add(styles.lyricLineActive);
-      if (wordEl) wordEl.classList.add(styles.lyricWordActive);
-      lastActiveLineEl.current = lineEl;
-      lastActiveWordEl.current = wordEl;
-    });
-
-    // Final unmount cleanup: drop any residual active classes so a
-    // subsequent re-mount (jot replace) starts clean.
-    React.useEffect(() => {
-      return () => {
-        if (lastActiveLineEl.current) {
-          lastActiveLineEl.current.classList.remove(styles.lyricLineActive);
-        }
-        if (lastActiveWordEl.current) {
-          lastActiveWordEl.current.classList.remove(styles.lyricWordActive);
-        }
-      };
-    }, []);
-
-    return null;
   },
 );
 

@@ -48,6 +48,32 @@
     pointer-events: none;
 }
 
+/* ─── Per-frame perf strategy for the box + dim strips ────────────
+   `.viewportBox`, `.dimLeft`, and `.dimRight` move on every score-
+   scroll tick - frame cadence (≥ 120 Hz, see browser targets) during
+   auto-follow playback. The 8.3 ms budget at 120 Hz forbids any per-
+   tick property that triggers layout, so:
+
+     - All per-frame updates flow through `transform` (compositor-only,
+       subpixel-precise), NOT `left` / `width` / `right`.
+     - Each element carries `will-change: transform` so it lives on its
+       own GPU layer and the transform writes don't repaint sibling
+       elements (the canvas, the playhead, the other dim).
+     - The viewport box moves via `translateX`; its `width` is set
+       declaratively but only changes on resize (cw / sw / minimap
+       width), not on scroll.
+     - The dim strips are laid out at full minimap width and collapse
+       to the off-viewport range via `scaleX(fraction)` anchored at the
+       outer edge (`transform-origin: left/right center`). This avoids
+       layout entirely - a naive `left + width` per frame would force a
+       relayout that cascades through every absolute-positioned sibling
+       of `.minimap` on each tick and visibly drops frames.
+
+   Future agents: do NOT "simplify" any of these back to per-frame
+   `left` / `width` inline styles. The transform-only path is
+   deliberate; revisiting it requires a frame-budget profile first.
+   ────────────────────────────────────────────────────────────────── */
+
 /* Translucent rectangle showing the score viewport's current visible
    range. Sits above the canvas; receives no pointer events itself
    because the minimap root owns the drag/click gesture for the whole
@@ -65,27 +91,53 @@
     box-sizing: border-box;
     left: 0;
     width: 0;
+    will-change: transform;
 }
 
-/* Fade overlays for the off-viewport regions. Two strips, one to the
-   left of the viewport box and one to the right, painted over the
-   waveform / note ticks so the canvas content there reads as
-   de-emphasised. Position / width are written imperatively in lockstep
-   with `.viewportBox`. */
+/* Fade overlays for the off-viewport regions, one each side of the
+   viewport box. Visually de-emphasise the canvas content outside the
+   in-view range so it reads as the prominent slice. Geometry: each
+   strip is laid out at full minimap width and shrunk via
+   `transform: scaleX(fraction)` anchored to its outer edge. See the
+   per-frame perf block above for why this is `scaleX` and not
+   `left + width`. */
 .dimLeft,
 .dimRight {
     position: absolute;
     top: 0;
     bottom: 0;
+    left: 0;
+    width: 100%;
     background: var(--color-bg-overlay-soft);
     pointer-events: none;
-    left: 0;
-    width: 0;
+    will-change: transform;
+    /* Default to fully-collapsed so the initial render before the first
+       inline-style transform is invisible rather than a full-width band. */
+    transform: scaleX(0);
+}
+
+.dimLeft {
+    transform-origin: left center;
+}
+
+.dimRight {
+    transform-origin: right center;
 }
 
 /* Playback playhead line. Same accent treatment as the score's
    `.playhead` for visual continuity. Tracks playback live but is NOT
-   click-to-seek; the minimap click only scrolls the score viewport. */
+   click-to-seek; the minimap click only scrolls the score viewport.
+
+   Per-frame perf: position changes on every `currentTime` tick - up to
+   120 Hz during playback - so the per-tick update goes through
+   `transform: translateX(...)` (compositor-only, subpixel-precise) and
+   the element has `will-change: transform` so it lives on its own GPU
+   layer and doesn't repaint its siblings. Do NOT replace with
+   `left: ${x}px` per frame: `left` triggers layout, which at 120 Hz
+   cadence over a long score (large absolute-positioned sibling stack
+   in `.minimap`) costs more than the frame budget. `MinimapPlayhead`
+   also conditionally renders this element so there's no
+   between-mount-and-first-tick flash to suppress. */
 .playhead {
     position: absolute;
     top: 0;
@@ -95,8 +147,5 @@
     background: var(--color-accent-strong);
     box-shadow: var(--shadow-accent-glow);
     pointer-events: none;
-    /* `display: none` initially so the playhead doesn't paint at the
-       default `left: 0` between mount and the first effect tick that
-       sets a real position. */
-    display: none;
+    will-change: transform;
 }

@@ -5,7 +5,7 @@
      samplesSelect, statusPill*).
    Per-component chrome (toolbar buttons/pills, transport, mixer rows,
    note/bar styles) lives in the corresponding *.module.css under
-   jot_view/. */
+   jot_view/.  */
 
 .appContainer {
     position: relative;
@@ -170,6 +170,16 @@
     overflow: hidden;
     box-sizing: border-box;
     user-select: none;
+    /* Disable the browser's own touch-driven pan / pinch-zoom inside the
+       score so the touch effect in jot_view.tsx owns both gestures: one
+       finger pans (mirrors middle-mouse drag), two fingers pinch-zoom
+       the score (mirrors the zoom slider). Range inputs and buttons in
+       the mixer chrome still receive their own touch / click events
+       (touch-action: none only suppresses the browser's pan/zoom
+       gestures, not event dispatch), and the touch handler bails on
+       targets inside interactive controls so the native slider drag
+       keeps working. */
+    touch-action: none;
 }
 
 /* Single scroll-translated wrapper inside `.jotContainer`. Sized to its
@@ -196,11 +206,7 @@
        the viewport's left edge, matching the previous layout. */
     padding: 32px 0;
     box-sizing: border-box;
-    transform: translate3d(
-        calc(var(--scroll-x, 0) * -1px),
-        calc(var(--scroll-y, 0) * -1px),
-        0
-    );
+    transform: translate3d(calc(var(--scroll-x, 0) * -1px), calc(var(--scroll-y, 0) * -1px), 0);
     will-change: transform;
 }
 

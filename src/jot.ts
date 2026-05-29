@@ -19,6 +19,7 @@ import {
 } from 'src/dsl';
 import { BarTempos, buildBarTempos, initialBpm } from 'src/tempo';
 import { buildTimeline, JotTimeline, pickDominantBpmAndTime } from 'src/playback/timeline';
+import { PICKER_PALETTE } from 'src/tracks';
 
 /** Branded pixel scalar to avoid mixing pixel and beat measurements. */
 export type Pixels = number & { __pixels: never };
@@ -52,17 +53,11 @@ export class ViewConfig {
    * 448`, `densityFactor = 1`).
    */
   barNotePaddingBeats = 1 / 8;
-  /** Palette used when a pitch has no explicit colour. */
-  palette: string[] = [
-    '#FF8C55',
-    '#5BA8E8',
-    '#7BC74D',
-    '#C77DFF',
-    '#FFD166',
-    '#EF476F',
-    '#06AED5',
-    '#8D6E63',
-  ];
+  /** Palette used when a pitch has no explicit colour. Mirrors the
+   *  shared {@link PICKER_PALETTE} so a colour the user picks from the
+   *  picker's first swatch row matches a lane that landed on the same
+   *  palette slot. */
+  palette: string[] = [...PICKER_PALETTE];
 
   constructor() {
     makeAutoObservable(this);
@@ -431,32 +426,30 @@ export type JotStructure = {
 export class RenderedJot {
   private viewConfig: ViewConfig;
 
-  /**
-   * Per-pitch colour overrides applied on top of the palette assignment.
-   * Transient (lives only on this RenderedJot instance, lost on reload);
-   * the .jot file format will eventually carry styling metadata and we
-   * will rehydrate from there.
-   *
-   * Mutated by the mixer's per-row colour picker via
-   * {@link setPitchColorOverride} / {@link clearPitchColorOverride}.
-   * `assignTrackColors` reads this before falling back to the palette,
-   * so a single setter call invalidates the `structureForJot` computed
-   * and every render path (score, minimap, audio waveform) repaints
-   * against the override on the next observable tick.
-   */
-  pitchColorOverrides: Map<string, string> = new Map();
-
   constructor(public source: Jot, viewConfig?: ViewConfig) {
     this.viewConfig = viewConfig ?? new ViewConfig();
     makeAutoObservable(this, { source: false });
   }
 
-  setPitchColorOverride(pitch: string, color: string): void {
-    this.pitchColorOverrides.set(pitch, color);
-  }
-
-  clearPitchColorOverride(pitch: string): void {
-    this.pitchColorOverrides.delete(pitch);
+  /**
+   * Palette colour assigned to a pitch for this jot's voice ordering,
+   * before any per-instrument override is layered on top. Used as the
+   * fallback by {@link InstrumentTrack}'s colour getter so a track with
+   * no user override picks up whatever the jot's palette would have
+   * painted. Returns undefined when the pitch doesn't appear in any
+   * voice (rare; caller falls back to a neutral grey).
+   *
+   * Reads the structural cache, not the resolved layout, so a wheel-
+   * driven zoom tick doesn't trigger a palette re-lookup.
+   */
+  defaultPaletteColorFor(pitch: string): string | undefined {
+    const palette = this.viewConfig.palette;
+    if (palette.length === 0) return undefined;
+    for (const voice of this.structure.voices) {
+      const idx = voice.pitches.indexOf(pitch);
+      if (idx >= 0) return palette[idx % palette.length];
+    }
+    return undefined;
   }
 
   get title() {
@@ -1026,16 +1019,9 @@ export class RenderedJot {
     orderedPitches: string[]
   ): void {
     const palette = this.viewConfig.palette;
-    const overrides = this.pitchColorOverrides;
-    if (palette.length === 0 && overrides.size === 0) return;
+    if (palette.length === 0) return;
     for (const bar of bars) {
       for (const pitch of Object.keys(bar.tracks)) {
-        const override = overrides.get(pitch);
-        if (override !== undefined) {
-          bar.tracks[pitch].color = override;
-          continue;
-        }
-        if (palette.length === 0) continue;
         const idx = orderedPitches.indexOf(pitch);
         const slot = idx >= 0 ? idx : 0;
         bar.tracks[pitch].color = palette[slot % palette.length];

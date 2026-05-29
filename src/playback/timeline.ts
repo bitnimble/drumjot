@@ -166,93 +166,90 @@ export function buildTimeline(rendered: RenderedJot): JotTimeline {
 
 /**
  * Map an absolute playback time (seconds from start) to the playhead's
- * pixel x within a voice's `barsRow`. Reads `bar.x` / `bar.width` from
- * the live `RenderedJot` on each call so zoom changes are picked up
- * automatically. Clamps to the bar grid at both ends so the playhead
- * never escapes the score.
+ * pixel x within a voice's `barsRow`. Derives bar widths on the fly from
+ * `structure.bars[i].beats * pxPerBeat`, deliberately avoiding
+ * `rendered.resolved`: `timeToX` is called from non-reactive useLayoutEffect
+ * contexts (PlayheadPosVar), where the MobX `computed` cache for `resolved`
+ * is not kept warm, so each call would otherwise re-run the full pixel pass
+ * (layoutJot → pixelVoice for every voice, every frame). Clamps to the bar
+ * grid at both ends so the playhead never escapes the score.
  */
 export function timeToX(timeline: JotTimeline, seconds: number): Pixels {
   const rendered = timeline.rendered;
   if (!rendered) return px(0);
-  const voice = rendered.resolved.voices[0];
-  const renderedBars = voice?.bars ?? [];
+  const voice = rendered.structure.voices[0];
+  const structBars = voice?.bars ?? [];
   const bars = timeline.bars;
-  if (bars.length === 0 || renderedBars.length === 0) return px(0);
-  // Notes sit `notePadPx` inside their bar's left edge (engraving
-  // inset). The playhead marks when an onset *sounds*, so it has to
-  // ride the note grid, not the time-anchored bar box — every branch
-  // below adds `pad` so it lands on the note instead of a constant
-  // `pad` px to its left.
-  const pad = (voice?.notePadPx as number) ?? 0;
+  if (bars.length === 0 || structBars.length === 0) return px(0);
+  const pxPerBeat = rendered.pxPerBeat;
+  // Notes sit `pad` inside their bar's left edge (engraving inset). The
+  // playhead marks when an onset *sounds*, so it has to ride the note
+  // grid, not the time-anchored bar box; every branch below adds `pad`
+  // so it lands on the note instead of a constant `pad` px to its left.
+  const pad = rendered.config.barNotePaddingBeats * pxPerBeat;
   // Lead-in (when present) lives in `voice.bars` as negative-indexed
   // bars with negative `startSec`, so the per-bar loop below resolves
   // negative seek targets that fall inside them without a separate
   // chrome branch.
   const firstStartSec = bars[0]?.startSec ?? 0;
-  const lastTiming = bars[bars.length - 1];
-  const lastBar = renderedBars[renderedBars.length - 1];
-  if (seconds >= lastTiming.startSec + lastTiming.durationSec) {
-    return px((lastBar.x as number) + pad + (lastBar.width as number));
-  }
   // Clamp `seconds` earlier than the first bar's start (the pre-pre-roll
   // window) to that bar's left edge; keeps the playhead anchored
   // somewhere visible if a seek lands before any bar's range.
-  if (seconds < firstStartSec) {
-    return px((renderedBars[0].x as number) + pad);
-  }
+  if (seconds < firstStartSec) return px(pad);
 
   // Linear scan; jots are typically under ~64 bars so binary search adds
-  // complexity without measurable benefit at the rAF rate.
+  // complexity without measurable benefit at the rAF rate. Walking the
+  // bars also lets us accumulate `cursor` (the live `bar.x` analogue)
+  // without a separate prefix-sum pass.
+  let cursor = 0;
   for (let i = 0; i < bars.length; i++) {
     const bar = bars[i];
+    const widthPx = (structBars[i]?.beats ?? 0) * pxPerBeat;
     if (seconds < bar.startSec + bar.durationSec) {
       const within = bar.durationSec > 0 ? (seconds - bar.startSec) / bar.durationSec : 0;
-      const renderedBar = renderedBars[i] ?? lastBar;
-      return px((renderedBar.x as number) + pad + within * (renderedBar.width as number));
+      return px(cursor + pad + within * widthPx);
     }
+    cursor += widthPx;
   }
-  return px((lastBar.x as number) + pad + (lastBar.width as number));
+  return px(cursor + pad);
 }
 
 /**
  * Inverse of {@link timeToX}: map a pixel x within the voice's
- * `barsRow` (same coordinate space `bar.x` is in — origin at the left
+ * `barsRow` (same coordinate space `bar.x` is in; origin at the left
  * edge of the bars region, *after* the gutter) back to an absolute
  * playback time in seconds. Used for click-to-seek on the score and
  * the audio-track waveforms. Clamps to the bar grid at both ends so a click
- * in the margins lands on 0 / the final bar boundary.
+ * in the margins lands on 0 / the final bar boundary. Derives bar widths
+ * from the structural cache + `pxPerBeat`; same rationale as
+ * {@link timeToX}.
  */
 export function xToTime(timeline: JotTimeline, x: number): number {
   const rendered = timeline.rendered;
   if (!rendered) return 0;
-  const voice = rendered.resolved.voices[0];
-  const renderedBars = voice?.bars ?? [];
+  const voice = rendered.structure.voices[0];
+  const structBars = voice?.bars ?? [];
   const bars = timeline.bars;
-  if (bars.length === 0 || renderedBars.length === 0) return 0;
+  if (bars.length === 0 || structBars.length === 0) return 0;
+  const pxPerBeat = rendered.pxPerBeat;
   // Inverse of timeToX's note-grid shift: the clickable axis is offset
   // `pad` px right of the bar boxes, so subtract it before mapping x
   // back to time.
-  const pad = (voice?.notePadPx as number) ?? 0;
-  // Lead-in (when present) lives in `voice.bars` as negative-indexed
-  // bars; the per-bar loop below maps clicks inside their pixel range
-  // back to their negative `startSec` jot times directly.
-
-  const lastBar = renderedBars[renderedBars.length - 1];
+  const pad = rendered.config.barNotePaddingBeats * pxPerBeat;
   const lastTiming = bars[bars.length - 1];
-  const endX = (lastBar.x as number) + pad + (lastBar.width as number);
   const endSec = lastTiming.startSec + lastTiming.durationSec;
-  if (x >= endX) return endSec;
 
-  for (let i = 0; i < renderedBars.length; i++) {
-    const rb = renderedBars[i];
-    const x0 = (rb.x as number) + pad;
-    const w = rb.width as number;
-    if (x < x0 + w) {
+  let cursor = 0;
+  for (let i = 0; i < structBars.length; i++) {
+    const widthPx = (structBars[i]?.beats ?? 0) * pxPerBeat;
+    const x0 = cursor + pad;
+    if (x < x0 + widthPx) {
       const timing = bars[i];
       if (!timing) return endSec;
-      const within = w > 0 ? (x - x0) / w : 0;
+      const within = widthPx > 0 ? (x - x0) / widthPx : 0;
       return timing.startSec + within * timing.durationSec;
     }
+    cursor += widthPx;
   }
   return endSec;
 }

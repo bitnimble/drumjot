@@ -88,6 +88,10 @@
 .dropdownStepperUnit {
     composes: readout from '../typography.module.css';
     color: var(--color-text-muted-alt);
+    /* Reserve a consistent column for the unit so steppers across
+       sibling rows line up regardless of unit length ("×" vs "ms"). */
+    min-width: 16px;
+    text-align: left;
 }
 
 .zoomSlider {

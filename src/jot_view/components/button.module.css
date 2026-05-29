@@ -72,7 +72,7 @@
     padding: 5px 12px;
     border: 1px solid var(--color-accent);
     border-radius: var(--radius-md);
-    background: var(--color-accent);
+    background: pink;
     color: var(--color-bg-base);
 }
 
@@ -84,7 +84,12 @@
 .primary:disabled {
     background: var(--color-border);
     border-color: var(--color-border);
-    color: var(--color-text-disabled-strong);
+    /* `--color-text-disabled-strong` is ~1 step off `--color-border` in
+       both themes (#b9b0a0 / #4d473b vs #c9bfae / #4a4438) so it
+       disappears into this disabled background. Use the muted-alt
+       grey, which carries enough contrast on both surfaces to stay
+       readable while still reading as "inactive". */
+    color: var(--color-text-muted-alt);
 }
 
 /* ─── Secondary / neutral ───────────────────────────────────────────── */

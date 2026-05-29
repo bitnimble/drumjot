@@ -9,10 +9,12 @@
  * each value into `--lyric-word-shift` as a render sink.
  *
  * CSS axis formulas (must stay in lockstep with `lyrics_row.module.css`):
- *   letter-spacing: clamp(-0.6, (pxPerBeat - 80) / 100, 0)   px
- *   --lyric-wdth  : clamp(75,   75 + (pxPerBeat - 20) * 25/60, 100)
- *   --lyric-wght  : clamp(300, 300 + (pxPerBeat - 20) * 100/60, 400)
- *   active word overrides wght to 600 (.lyricWordActive .lyricWordText).
+ *   letter-spacing: clamp(-0.6, (pxPerBeat - 224) * 0.6/179, 0)   px
+ *   --lyric-wdth  : clamp(75,   75 + (pxPerBeat - 45) * 25/179, 100)
+ *   --lyric-wght  : clamp(300, 300 + (pxPerBeat - 45) * 100/179, 400)
+ *   active word overrides wght to 800 (.lyricWordActive .lyricWordText).
+ *   Floor reached at pxPerBeat ≈ 45 (≈40% zoom on a density-1 song);
+ *   max spread reached at pxPerBeat ≈ 224 (≈200% zoom on a density-1 song).
  *
  * Canvas font shorthand carries `wdth` via `font-stretch <percent>` and
  * `wght` via the numeric `font-weight`. Variable axes other than these
@@ -34,7 +36,7 @@ const FONT_FAMILY =
 /** Font size inherited from `.lyricLine`. Keep in lockstep with
  *  `lyrics_row.module.css::.lyricLine { font-size: 18px }`. */
 const LYRIC_FONT_SIZE_PX = 18;
-const ACTIVE_FONT_WEIGHT = 600;
+const ACTIVE_FONT_WEIGHT = 800;
 const MIN_GAP_PX = 4;
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -42,15 +44,15 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 
 function computeLetterSpacingPx(pxPerBeat: number): number {
-  return clamp((pxPerBeat - 80) / 100, -0.6, 0);
+  return clamp(((pxPerBeat - 224) * 0.6) / 179, -0.6, 0);
 }
 
 function computeWdth(pxPerBeat: number): number {
-  return clamp(75 + ((pxPerBeat - 20) * 25) / 60, 75, 100);
+  return clamp(75 + ((pxPerBeat - 45) * 25) / 179, 75, 100);
 }
 
 function computeWght(pxPerBeat: number): number {
-  return clamp(300 + ((pxPerBeat - 20) * 100) / 60, 300, 400);
+  return clamp(300 + ((pxPerBeat - 45) * 100) / 179, 300, 400);
 }
 
 /** Canvas + font-load state, exposed as a MobX-observable singleton so a
@@ -90,7 +92,7 @@ class LyricsMeasurer {
 
   /** Measure `text` as it would render under the row's variable-font
    *  state for the given zoom. `isActive` picks the active-word weight
-   *  override (`wght: 600`). Returns 0 when canvas isn't available. */
+   *  override (`wght: 800`). Returns 0 when canvas isn't available. */
   measureWordPx(text: string, pxPerBeat: number, isActive: boolean): number {
     const ctx = this.ensureCtx();
     if (!ctx) return 0;

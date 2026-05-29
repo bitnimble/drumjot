@@ -4,12 +4,17 @@
    and the mixer rows; all three share these styles). */
 
 .playbackBar {
-    /* Three tracks: an empty left spacer, the centred transport group,
-     and the right-aligned aux controls (speed / error). The 1fr side
-     tracks keep the transport optically centred in the bar regardless
-     of how wide the aux content is. */
+    /* Three tracks: a shrinkable left spacer, the centred transport
+     group, and the right-aligned aux controls. Left is
+     `minmax(0, 1fr)` so it can collapse to zero on narrow viewports;
+     right is `minmax(auto, 1fr)` so it grows past 1fr when the aux
+     content needs more room than an equal share, eating the left
+     spacer instead of overlapping the centre group. Result: when
+     there's space, the centre is optically centred (both 1fr sides
+     equal); when there isn't, the centre slides left and the aux
+     stays right-aligned at its natural width. */
     display: grid;
-    grid-template-columns: 1fr auto 1fr;
+    grid-template-columns: minmax(0, 1fr) auto minmax(auto, 1fr);
     align-items: center;
     gap: 10px;
     padding: 10px 24px;
@@ -26,24 +31,40 @@
 }
 
 .transportSpacer {
-    /* Occupies the left 1fr grid track; no content. */
+    /* Occupies the left grid track; no content. */
+}
+
+/* Narrow viewports (mobile portrait, split-screen tablets). The
+   three-track grid is wider than the screen once the offset stack and
+   master fader are both present, so collapse to a single column and
+   let the aux row wrap. The empty spacer drops out so the transport
+   group sits on its own line above the master + offset controls. */
+@media (max-width: 640px) {
+    .playbackBar {
+        grid-template-columns: 1fr;
+        justify-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+    }
+
+    .transportSpacer {
+        display: none;
+    }
+
+    .transportAux {
+        flex-wrap: wrap;
+        justify-content: center;
+    }
 }
 
 .transportCenter {
-    /* Follow toggle + play/pause are in flow; Stop is positioned
-     absolutely to the right of play so it never shifts the group.
-     The `auto` centre grid track sizes to the in-flow content. */
-    position: relative;
+    /* Follow toggle + play/pause + stop laid out in flow. The `auto`
+     centre grid track sizes to this in-flow content so the column
+     math accounts for all three buttons. */
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 12px;
-}
-
-.transportStop {
-    position: absolute;
-    left: calc(100% + 12px);
-    top: 0;
 }
 
 .transportAux {

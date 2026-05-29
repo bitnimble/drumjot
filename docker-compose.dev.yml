@@ -1,0 +1,72 @@
+# Dev-mode orchestration. The transcriber half (API on :8001) runs in
+# the drumjot container as in prod. The frontend half is replaced by a
+# separate bun container that bind-mounts the host project tree and
+# runs `bun run dev`, so frontend edits on the host are picked up live
+# (no rebuild, no image push). The host Caddy still talks to localhost
+# :5173 and gets routed to vite instead of the bundled Caddy SPA.
+#
+# Usage:
+#   cp transcriber/.env.example transcriber/.env   # populate ANTHROPIC_API_KEY
+#   docker compose -f docker-compose.dev.yml up --build
+#
+# Routing (same external surface as prod):
+#   host :5173       -> frontend-dev container :5173 (vite dev server)
+#   host :8861       -> drumjot container :8001 (transcriber API)
+#   vite /api/*      -> internal compose DNS http://drumjot:8001
+#
+# Notes:
+# - First `up --build` populates the `frontend_dev_node_modules` named
+#   volume by running `bun install` inside the container. Subsequent
+#   starts reuse it. If you update package.json / bun.lock on the host,
+#   nuke the volume to force a fresh install:
+#     docker compose -f docker-compose.dev.yml down
+#     docker volume rm drumjot_frontend_dev_node_modules
+# - vite.config.ts pins `allowedHosts` to a hardcoded list. If you want
+#   to reach the dev server through a non-listed hostname, add it
+#   there or vite returns 403 with a "Blocked request" page.
+
+services:
+  drumjot:
+    extends:
+      file: docker-compose.base.yml
+      service: drumjot
+    environment:
+      # Tells transcriber/entrypoint.sh to skip Caddyfile.frontend when
+      # assembling the runtime Caddyfile - the in-container :5173
+      # listener never binds, freeing the host port for the dev service
+      # below. Explicit overrides any stray value the env_file might
+      # be carrying.
+      DISABLE_FRONTEND: '1'
+    ports:
+      # API only - host :5173 belongs to frontend-dev below.
+      - 8861:8001
+
+  frontend-dev:
+    image: oven/bun:1.3.5
+    container_name: drumjot-frontend-dev
+    working_dir: /workdir
+    # Idempotent install on cold-start (skipped once node_modules is
+    # populated in the named volume), then handoff to vite. `exec` so
+    # vite is PID 1 and signal handling stays clean. `--host 0.0.0.0`
+    # is needed inside the container so vite binds the external
+    # interface; vite.config.ts's `host: true` already does the same
+    # but the explicit flag survives any future config edit.
+    command:
+      - sh
+      - -c
+      - |
+        [ -d node_modules/.bin ] || bun install --frozen-lockfile
+        exec bun run dev --host 0.0.0.0 --port 5173
+    ports:
+      - 5173:5173
+    volumes:
+      # Bind the entire repo so vite watches the live tree.
+      - /capsule/config/docker-volume/codebox/home/bitnimble/code/drumjot:/workdir
+    environment:
+      # vite.config.ts reads TRANSCRIBER_URL to set the dev server's
+      # /api proxy target. Inside the compose network, drumjot is
+      # reachable by its service name.
+      TRANSCRIBER_URL: http://drumjot:8001
+    depends_on:
+      - drumjot
+    restart: unless-stopped

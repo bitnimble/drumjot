@@ -93,11 +93,12 @@ test('LRCLIB multi-result picker: select a row then Load', async ({ page }) => {
   await openLyricsDropdown(page);
   await page.getByTestId('lyrics-menu-search').click();
   await expect(page.getByTestId('lyrics-search-results')).toBeVisible();
-  // No exact match against the default jot's title, so no pre-selection;
-  // footer should be hidden until the user picks a row.
-  await expect(page.getByTestId('lyrics-search-load-footer')).toHaveCount(0);
-  await page.getByTestId('lyrics-search-result-1').click();
+  // Footer is always shown; without a selection the Load button is
+  // disabled until the user picks a row.
   await expect(page.getByTestId('lyrics-search-load-footer')).toBeVisible();
+  await expect(page.getByTestId('lyrics-search-load')).toBeDisabled();
+  await page.getByTestId('lyrics-search-result-1').click();
+  await expect(page.getByTestId('lyrics-search-load')).toBeEnabled();
   await page.getByTestId('lyrics-search-load').click();
   await expect(page.getByTestId('lyrics-search-loaded')).toBeVisible();
 });
@@ -119,7 +120,9 @@ test('LRCLIB zero results shows the no-results message', async ({ page }) => {
   await expect(
     page.getByTestId('lyrics-search-modal').getByText(/No synced lyrics found/i),
   ).toBeVisible();
-  await expect(page.getByTestId('lyrics-search-load-footer')).toHaveCount(0);
+  // Footer always renders; Load is disabled because there's nothing to load.
+  await expect(page.getByTestId('lyrics-search-load-footer')).toBeVisible();
+  await expect(page.getByTestId('lyrics-search-load')).toBeDisabled();
 });
 
 test('Load lyrics from file populates the row + clears via the gutter', async ({ page }) => {

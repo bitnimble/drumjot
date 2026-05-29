@@ -104,6 +104,24 @@
     composes: timelineHeaderTimeSig;
 }
 
+/* Floating bpm pill anchored at a beat offset *inside* a bar; fires when
+   a `{{bpm}}` change lands mid-bar. Mirrors `.timelineHeaderTick`'s
+   positioning so the pill sits at the same vertical row as the bar's
+   downbeat bpm pill; no border-left (this isn't a bar boundary) and no
+   time-string row. */
+.timelineHeaderBpmAnchor {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    padding-left: 4px;
+    left: calc(var(--bar-start-beat) * var(--px-per-beat) * 1px);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    pointer-events: none;
+    user-select: none;
+}
+
 .timelineHeaderTime {
     /* stylelint-disable property-disallowed-list -- score chrome at 9px / tabular-nums; matches the other timeline meta pills. */
     font-size: 9px;

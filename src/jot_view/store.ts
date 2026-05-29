@@ -161,35 +161,13 @@ export function clampVolume(v: number): number {
   return Math.max(0, Math.min(1, v));
 }
 
-/**
- * One row in the unified mixer; either a loaded audio (backing) track
- * or a single drum-instrument lane. Instrument rows are keyed by DSL
- * pitch letter (the same key mute/solo/volume already use), so identity
- * is stable across jot reloads when the user keeps the same instrument
- * map. The order of these keys in {@link JotViewStore.trackOrder} drives
- * the row order on screen and can be rearranged by drag-and-drop.
- *
- * `groupId` is a UI-only clustering tag — consecutive entries that
- * share the same id render flush (no inter-row gap); a transition to a
- * different id (or to/from `undefined`) draws the small inter-group
- * gap. Identity for sync/move purposes is `kind + id/pitch` only;
- * `trackKeyEq` ignores `groupId`. Today only the debug-bundle loader
- * assigns these (one fresh id per audio↔pitch pair); a future
- * "create group" UI could expose it directly.
- */
-export type TrackKey =
-  | { kind: 'audio'; id: AudioTrackId; groupId?: string }
-  | { kind: 'instrument'; pitch: string; groupId?: string }
-  | { kind: 'lyrics'; id: LyricsTrackId; groupId?: string };
-
-export function trackKeyEq(a: TrackKey, b: TrackKey): boolean {
-  if (a.kind !== b.kind) return false;
-  if (a.kind === 'audio') return a.id === (b as { kind: 'audio'; id: AudioTrackId }).id;
-  if (a.kind === 'instrument') {
-    return a.pitch === (b as { kind: 'instrument'; pitch: string }).pitch;
-  }
-  return a.id === (b as { kind: 'lyrics'; id: LyricsTrackId }).id;
-}
+// `TrackKey` + `trackKeyEq` were moved to `src/tracks.ts` alongside the
+// `MixerContext` interface they participate in. Re-exported here so
+// existing callers (and the JSDoc references below to
+// `JotViewStore.trackOrder`) keep working without an import churn.
+import { trackKeyEq, type TrackKey, InstrumentTrack, INSTRUMENT_FALLBACK_COLOR, type MixerContext } from 'src/tracks';
+export type { TrackKey };
+export { trackKeyEq };
 
 /**
  * Default top-to-bottom mixer ordering for drum-instrument kinds when
@@ -415,17 +393,18 @@ export class JotViewStore {
   pitchVolumes: Map<string, number> = new Map();
   audioTrackVolumes: Map<AudioTrackId, number> = new Map();
   /**
-   * Per-audio-track waveform colour overrides set from the mixer row's
-   * overflow menu. Sparse: a track absent from the map inherits its
-   * associated drum pitch's lane colour (see
-   * `AudioTrackWaveformCanvas` in mixer.tsx). Transient session state;
-   * dropped when the track is cleared.
+   * Per-pitch {@link InstrumentTrack} view-models keyed by DSL pitch
+   * letter. Each holds the user's per-instrument note-colour override
+   * (sparse; `_color === undefined` falls back to the jot's palette
+   * default). Survives jot reloads so a customisation made on one song
+   * persists onto matching pitches in the next song; a kept-in-sync
+   * reaction drops entries for pitches no longer present in any
+   * loaded jot (see the constructor reaction).
    *
-   * Drum-instrument note colours have a parallel override that lives on
-   * {@link RenderedJot.pitchColorOverrides} - it's score data, not
-   * audio data, so it follows the jot instance.
+   * Audio-track colour overrides live on the {@link AudioTrack}
+   * instance itself; they're not stored here.
    */
-  audioTrackColorOverrides: Map<AudioTrackId, string> = new Map();
+  instrumentTracks: Map<string, InstrumentTrack> = new Map();
   /**
    * User-customizable order of mixer rows. Each entry is either a
    * loaded audio track id or a DSL pitch letter; the mixer renders rows
@@ -502,6 +481,21 @@ export class JotViewStore {
    * Session-only; resets to true on reload.
    */
   followPlayhead: boolean = true;
+  /**
+   * When true, transitioning to the playing state re-enables
+   * {@link followPlayhead} if the user disabled it *during* the previous
+   * playback session (pan, minimap drag, or the follow-button toggle
+   * while playing). An off-state set while idle/paused is treated as
+   * deliberate and survives the play press. Session-only, defaults on.
+   */
+  autoFollowOnPlay: boolean = true;
+  /**
+   * Internal: was the current `followPlayhead === false` set during
+   * playback (transient, eligible for auto-re-enable on next play) or
+   * during idle/paused (deliberate, must survive). Always false while
+   * `followPlayhead` is true. See {@link setFollowPlayhead}.
+   */
+  private followDisabledIsTransient: boolean = false;
   /** Whether the DebugPanel is expanded, small UI state, kept here so
    * the toolbar toggle and the panel itself stay in sync. */
   debugPanelOpen: boolean = false;
@@ -610,6 +604,29 @@ export class JotViewStore {
       transcribeController: false,
       lyricsAlignControllers: false,
     });
+    // Wire ourselves in as the player's mixer context so freshly-
+    // constructed AudioTracks can resolve grouped-instrument colour
+    // inheritance. Done before any reactions fire so loadAudioTrack
+    // calls made during the same tick see a populated context.
+    jotPlayer.attachMixerContext(this as MixerContext);
+
+    // Prune instrument-track view-models for pitches no longer present
+    // in the active jot. The override is store-owned and survives jot
+    // reloads, so a pitch that comes back in a later jot picks up its
+    // previous override; we only forget pitches that disappeared from
+    // the current jot to keep the map from growing unboundedly across
+    // a long session. `fireImmediately` runs the prune once on boot
+    // (a no-op when the map is empty).
+    reaction(
+      () => new Set(this.jotPitches),
+      (pitches) => {
+        for (const p of Array.from(this.instrumentTracks.keys())) {
+          if (!pitches.has(p)) this.instrumentTracks.delete(p);
+        }
+      },
+      { fireImmediately: true, equals: comparer.structural }
+    );
+
     // Push mute / solo state to the player whenever it changes. While
     // playback is in flight, the player cancels and reschedules events
     // so the toggle takes effect immediately (including bringing
@@ -627,13 +644,14 @@ export class JotViewStore {
     // un-solo visually clears yet audio stays soloed). `reaction` only
     // tracks the data selector; the effect runs untracked, so the
     // player's internal reads/writes stay out of the dependency graph.
-    // The data fn returns the `pitchFilter` computed directly. MobX
-    // memoises the getter so re-reads return the same object reference
-    // when the underlying observables haven't changed; the structural
-    // comparer additionally compares Sets/Maps entry-wise, so a no-op
-    // mutation (e.g. setting a pitch volume to the same value) doesn't
-    // refire the effect. See the field's doc comment for why passing the
-    // live Set/Map reference is safe.
+    // The data fn returns the `pitchFilter` computed; that getter
+    // snapshots its Sets/Maps so the structural comparer can actually
+    // detect mute/solo/volume changes. Sharing the live Set/Map
+    // references would defeat the comparer (prev and next cached
+    // snapshots would point to the same mutated instance, so a deep
+    // walk sees no diff) and the reaction would silently stop firing
+    // after the initial seed; see the `pitchFilter` getter's doc
+    // comment.
     reaction(
       () => this.pitchFilter,
       (filter) => jotPlayer.setFilter(filter),
@@ -870,34 +888,35 @@ export class JotViewStore {
 
   /**
    * Live {@link PlayerFilter} view onto the per-pitch mute/solo/volume
-   * state. Returned object is rebuilt on each read but the underlying
-   * Set/Map references are the store's own observable instances; mutations
-   * via `toggleMute` / `toggleSolo` / `setPitchVolume` go through
-   * `.add()` / `.delete()` / `.set()` on those references so MobX still
-   * tracks them. Consumers (the player) only READ from the filter, so
-   * sharing the live references is safe and avoids the per-fire Set/Map
-   * copies the old inline reaction selector paid for.
+   * state. Sets and Maps are *snapshotted* on each read (small entries;
+   * sparse mute/solo sets, one entry per pitch with a fader nudge), so
+   * the downstream `reaction(..., comparer.structural)` that pushes this
+   * to the player can actually detect changes. Sharing the store's live
+   * Set/Map references here would defeat the comparer: the prev and next
+   * cached values both point to the same mutated instance, so a deep-
+   * equal walk sees no diff and the reaction never refires; mute/solo
+   * toggles update the UI but the player never learns about them.
    */
   get pitchFilter(): PlayerFilter {
     return {
-      mutedPitches: this.mutedPitches,
-      soloedPitches: this.soloedPitches,
+      mutedPitches: new Set(this.mutedPitches),
+      soloedPitches: new Set(this.soloedPitches),
       soloActive: this.soloActive,
       sectionMasterMuted: this.drumMasterMuted,
       sectionMasterSoloed: this.drumMasterSoloed,
-      volumes: this.pitchVolumes,
+      volumes: new Map(this.pitchVolumes),
     };
   }
 
   /** Mirror of {@link pitchFilter} for the audio-track domain. */
   get audioTrackFilter(): AudioTrackFilter {
     return {
-      mutedAudioTracks: this.mutedAudioTracks,
-      soloedAudioTracks: this.soloedAudioTracks,
+      mutedAudioTracks: new Set(this.mutedAudioTracks),
+      soloedAudioTracks: new Set(this.soloedAudioTracks),
       soloActive: this.soloActive,
       sectionMasterMuted: this.audioMasterMuted,
       sectionMasterSoloed: this.audioMasterSoloed,
-      volumes: this.audioTrackVolumes,
+      volumes: new Map(this.audioTrackVolumes),
     };
   }
 
@@ -1048,18 +1067,27 @@ export class JotViewStore {
     this.audioTrackVolumes.set(id, clampVolume(v));
   }
 
-  /** Override colour for an audio track's waveform, or undefined if it
-   *  should inherit from the associated drum pitch's lane colour. */
-  audioTrackColor(id: AudioTrackId): string | undefined {
-    return this.audioTrackColorOverrides.get(id);
-  }
-
-  setAudioTrackColor(id: AudioTrackId, color: string) {
-    this.audioTrackColorOverrides.set(id, color);
-  }
-
-  clearAudioTrackColor(id: AudioTrackId) {
-    this.audioTrackColorOverrides.delete(id);
+  /**
+   * Lazily-constructed {@link InstrumentTrack} for a DSL pitch. The
+   * track's fallback closure reads the active jot's palette default for
+   * the pitch, so a jot reload that re-shuffles palette slots updates
+   * unfilled tracks automatically. Caches the instance in
+   * {@link instrumentTracks} so the picker reads/writes the same MobX
+   * observable from every callsite; the constructor reaction prunes
+   * dead entries when pitches leave every loaded jot.
+   *
+   * Also serves the {@link MixerContext} the player's AudioTrack
+   * colour resolution calls back into.
+   */
+  getInstrumentTrack(pitch: string): InstrumentTrack {
+    let track = this.instrumentTracks.get(pitch);
+    if (track) return track;
+    track = new InstrumentTrack(
+      pitch,
+      () => this.currentJot?.defaultPaletteColorFor(pitch) ?? INSTRUMENT_FALLBACK_COLOR,
+    );
+    this.instrumentTracks.set(pitch, track);
+    return track;
   }
 
   /**
@@ -1089,13 +1117,14 @@ export class JotViewStore {
   clearAudioTrack(id: AudioTrackId): void {
     jotPlayer.clearAudioTrack(id);
     // Drop the removed track's mute/solo/volume so it doesn't linger
-    // (ids are never reused, so the entries would be dead weight) — and
-    // critically so clearing the only soloed audio track doesn't leave a
-    // phantom solo silencing everything else.
+    // (ids are never reused, so the entries would be dead weight); and
+    // critically so clearing the only soloed audio track doesn't leave
+    // a phantom solo silencing everything else. The colour override
+    // lives on the AudioTrack instance itself and is freed alongside it
+    // when the player drops the track.
     this.mutedAudioTracks.delete(id);
     this.soloedAudioTracks.delete(id);
     this.audioTrackVolumes.delete(id);
-    this.audioTrackColorOverrides.delete(id);
   }
 
   /**
@@ -1228,7 +1257,24 @@ export class JotViewStore {
   }
 
   toggleFollowPlayhead() {
-    this.followPlayhead = !this.followPlayhead;
+    this.setFollowPlayhead(!this.followPlayhead);
+  }
+
+  /**
+   * Set {@link followPlayhead} and tag whether the off-state is
+   * transient (set while playing) or deliberate (set while idle/paused).
+   * Idempotent: redundant calls don't reshuffle the transient tag so e.g.
+   * a pan during playback can't promote an already-deliberate off-state
+   * into a transient one.
+   */
+  setFollowPlayhead(on: boolean) {
+    if (on === this.followPlayhead) return;
+    this.followPlayhead = on;
+    this.followDisabledIsTransient = on ? false : jotPlayer.state === 'playing';
+  }
+
+  setAutoFollowOnPlay(on: boolean) {
+    this.autoFollowOnPlay = on;
   }
 
   /**
@@ -2665,14 +2711,30 @@ export class JotViewStore {
   async togglePlayPause(): Promise<void> {
     switch (jotPlayer.state) {
       case 'idle':
+        this.maybeReenableFollowOnPlay();
         await this.playCurrent();
         break;
       case 'playing':
         await jotPlayer.pause();
         break;
       case 'paused':
+        this.maybeReenableFollowOnPlay();
         await jotPlayer.resume();
         break;
     }
+  }
+
+  /**
+   * Restore {@link followPlayhead} on the idle/paused → playing
+   * transition when the off-state was set during the previous playback
+   * session (pan, minimap drag, or follow-button toggle while playing).
+   * No-op when {@link autoFollowOnPlay} is off, when follow is already
+   * on, or when the user deliberately disabled it while idle/paused.
+   */
+  private maybeReenableFollowOnPlay() {
+    if (!this.autoFollowOnPlay) return;
+    if (this.followPlayhead) return;
+    if (!this.followDisabledIsTransient) return;
+    this.setFollowPlayhead(true);
   }
 }

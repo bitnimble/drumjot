@@ -168,14 +168,46 @@
     gap: 4px;
 }
 
+/* Top row of the instrument gutter: label on the left (takes the
+   remaining width), overflow-menu trigger on the right. Mirrors
+   `.musicTrackHeader` so audio and instrument rows share the same
+   header anatomy (label-with-overflow on top, slider + M/S below).
+   `flex-wrap: nowrap` is the default, but the label below sets
+   `flex-direction: row` on itself and the inline-flex DropdownButton
+   wrapper has a default `flex-shrink: 1`; without making the wrap
+   behaviour explicit here, the overflow trigger ended up dropping to
+   its own line when the label's intrinsic-content width nudged past
+   the column. Pinning the wrap + shrink behaviour keeps both children
+   on one row regardless of how long the instrument name is. */
+.instrumentRowHeader {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    min-width: 0;
+}
+
+/* The DropdownButton wraps its trigger in a `display: inline-flex`
+   div; as a flex child of the header it picks up the default
+   `flex-shrink: 1`. With a long instrument name the label wants more
+   space, and the shrinkable trigger collapses to zero width before
+   wrap kicks in. Pin its basis to its content size so the 18×18
+   trigger always renders at its intrinsic width. */
+.instrumentRowHeader > :last-child {
+    flex: 0 0 auto;
+}
+
 .instrumentRowLabel {
     composes: bodySm from '../typography.module.css';
     display: flex;
     flex-direction: row;
     align-items: baseline;
     gap: 6px;
-    flex: 0 0 auto;
+    flex: 1 1 auto;
     min-width: 0;
+    overflow: hidden;
     /* stylelint-disable-next-line property-disallowed-list -- weight bump on top of bodySm so the instrument name reads as the row's primary identifier. */
     font-weight: 600;
     color: var(--color-text-secondary);

@@ -58,7 +58,7 @@ export const LyricsSearchModal = observer(
     const [artist, setArtist] = React.useState(initialArtist);
     const [phase, setPhase] = React.useState<Phase>({ kind: 'idle' });
     const [selectedId, setSelectedId] = React.useState<string | undefined>(undefined);
-    const [wordLevel, setWordLevel] = React.useState(false);
+    const [wordLevel, setWordLevel] = React.useState(true);
     const requestIdRef = React.useRef(0);
 
     // When the modal opens, re-seed the fields with the latest jot
@@ -70,7 +70,7 @@ export const LyricsSearchModal = observer(
       setArtist(initialArtist);
       setPhase({ kind: 'idle' });
       setSelectedId(undefined);
-      setWordLevel(false);
+      setWordLevel(true);
       requestIdRef.current += 1;
     }, [open, initialTitle, initialArtist]);
 
@@ -233,14 +233,13 @@ export const LyricsSearchModal = observer(
             </button>
           </form>
           <PhaseView phase={phase} selectedId={selectedId} onPickResult={onPickResult} />
-          {selectedMatch && (
-            <LoadFooter
-              wordLevel={wordLevel}
-              onSetWordLevel={setWordLevel}
-              hasAudioTracks={hasAudioTracks}
-              onLoad={onLoad}
-            />
-          )}
+          <LoadFooter
+            wordLevel={wordLevel}
+            onSetWordLevel={setWordLevel}
+            hasAudioTracks={hasAudioTracks}
+            onLoad={onLoad}
+            disabled={!selectedMatch}
+          />
         </div>
       </div>
     );
@@ -262,51 +261,60 @@ const PhaseView = ({
   selectedId: string | undefined;
   onPickResult: (match: LrclibMatch) => void;
 }) => {
-  if (phase.kind === 'idle' || phase.kind === 'searching') return null;
-  if (phase.kind === 'no-results') {
+  // Always render the `.results` container so the modal keeps a stable
+  // height across phase transitions (idle → searching → results/no-
+  // results/error) instead of jumping as the section appears.
+  if (phase.kind === 'results') {
     return (
-      <div className={classNames(styles.phaseMessage, styles.phaseMessageMuted)}>
-        No synced lyrics found.
+      <div className={styles.results} data-testid="lyrics-search-results">
+        <ul className={styles.resultsList}>
+          {phase.matches.map((m) => {
+            const key = matchKey(m);
+            const selected = key === selectedId;
+            return (
+              <li key={key}>
+                <button
+                  type="button"
+                  className={classNames(styles.resultItem, selected && styles.resultItemSelected)}
+                  aria-pressed={selected}
+                  onClick={() => onPickResult(m)}
+                  data-testid={`lyrics-search-result-${m.id || m.trackName}`}
+                >
+                  <span className={styles.resultPrimary}>
+                    <strong>{m.trackName}</strong> by {m.artistName}
+                  </span>
+                  <span className={styles.resultSecondary}>
+                    {`Album: ${m.albumName ?? 'Unknown album'}`}
+                    {typeof m.duration === 'number' ? ` · ${formatDuration(m.duration)}` : ''}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
       </div>
     );
   }
-  if (phase.kind === 'error') {
-    return (
-      <div
-        className={classNames(styles.phaseMessage, styles.phaseMessageError)}
-        title={phase.message}
-      >
-        Search failed: {phase.message}
-      </div>
-    );
+  let message: React.ReactNode = null;
+  let messageTitle: string | undefined;
+  let placeholderClass: string | undefined;
+  if (phase.kind === 'searching') {
+    message = 'Searching…';
+  } else if (phase.kind === 'no-results') {
+    message = 'No synced lyrics found.';
+  } else if (phase.kind === 'error') {
+    message = `Search failed: ${phase.message}`;
+    messageTitle = phase.message;
+    placeholderClass = styles.resultsPlaceholderError;
   }
   return (
     <div className={styles.results} data-testid="lyrics-search-results">
-      <ul className={styles.resultsList}>
-        {phase.matches.map((m) => {
-          const key = matchKey(m);
-          const selected = key === selectedId;
-          return (
-            <li key={key}>
-              <button
-                type="button"
-                className={classNames(styles.resultItem, selected && styles.resultItemSelected)}
-                aria-pressed={selected}
-                onClick={() => onPickResult(m)}
-                data-testid={`lyrics-search-result-${m.id || m.trackName}`}
-              >
-                <span className={styles.resultPrimary}>
-                  <strong>{m.trackName}</strong> by {m.artistName}
-                </span>
-                <span className={styles.resultSecondary}>
-                  {`Album: ${m.albumName ?? 'Unknown album'}`}
-                  {typeof m.duration === 'number' ? ` · ${formatDuration(m.duration)}` : ''}
-                </span>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
+      <div
+        className={classNames(styles.resultsPlaceholder, placeholderClass)}
+        title={messageTitle}
+      >
+        {message}
+      </div>
     </div>
   );
 };
@@ -316,11 +324,13 @@ const LoadFooter = ({
   onSetWordLevel,
   hasAudioTracks,
   onLoad,
+  disabled,
 }: {
   wordLevel: boolean;
   onSetWordLevel: (v: boolean) => void;
   hasAudioTracks: boolean;
   onLoad: () => void;
+  disabled: boolean;
 }) => {
   const checkboxDisabled = !hasAudioTracks;
   const checkboxTitle = checkboxDisabled ? WORD_LEVEL_NEEDS_AUDIO : WORD_LEVEL_INFO;
@@ -353,6 +363,7 @@ const LoadFooter = ({
         type="button"
         className={styles.loadButton}
         onClick={onLoad}
+        disabled={disabled}
         data-testid="lyrics-search-load"
       >
         Load

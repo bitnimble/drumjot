@@ -7,7 +7,7 @@
   "author": "D <me@kumo.dev>",
   "license": "MIT",
   "scripts": {
-    "dev": "bunx --bun vite",
+    "dev": "bunx vite",
     "build": "bun run lint:design && bunx tsc --noEmit && bunx --bun vite build",
     "preview": "bunx --bun vite preview",
     "typecheck": "bunx tsc --noEmit",
@@ -25,6 +25,7 @@
     "mobx-react-lite": "^4.0.7",
     "mobx-utils": "^6.1.0",
     "react": "^18.3.1",
+    "react-colorful": "^5.7.0",
     "react-dom": "^18.3.1",
     "signalsmith-stretch": "^1.3.2",
     "smplr": "^0.21.0",
@@ -39,7 +40,8 @@
     "@vitejs/plugin-react": "^4.3.4",
     "stylelint": "^17.12.0",
     "typescript": "^5.7.2",
-    "vite": "^6.0.5"
+    "vite": "^6.0.5",
+    "vite-css-modules": "^1.16.0"
   },
   "browserslist": [
     "last 2 years",

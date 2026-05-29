@@ -35,6 +35,12 @@
  */
 
 import { makeAutoObservable, runInAction } from 'mobx';
+import {
+  AUDIO_FALLBACK_COLOR,
+  MixerContext,
+  resolveAudioInheritedColor,
+  Track,
+} from 'src/tracks';
 import { createStretchNode, preloadStretch, StretchNode } from './stretch_node';
 
 /**
@@ -74,10 +80,23 @@ export type AudioTrackRole =
   | 'drum-piece'  // a single instrument (kick / snare / hi-hat / cymbals)
   | 'unknown';    // ad-hoc / can't tell
 
-export type AudioTrack = {
-  id: AudioTrackId;
+/**
+ * One loaded audio (backing) track. Observable so the mixer can react
+ * to in-place colour overrides without reloading the track. Identity
+ * (id, filename, buffer, sourceBlob, durationSec, pitch, role) is
+ * fixed at construction; the only mutable field is the colour override
+ * the row's overflow menu writes into.
+ *
+ * Implements the unified {@link Track} interface so the picker UI can
+ * read/write `track.color` without branching on track kind. The colour
+ * computation falls back through the {@link resolveAudioInheritedColor}
+ * chain so an unset override inherits from the grouped instrument row.
+ */
+export class AudioTrack implements Track {
+  readonly kind = 'audio' as const;
+  readonly id: AudioTrackId;
   /** Original filename for display in the gutter and tooltips. */
-  filename: string;
+  readonly filename: string;
   /**
    * Decoded PCM. Fed once to the stretch worklet via `addBuffers` to
    * seed its input ring; the waveform renderer also reads channel data
@@ -85,7 +104,7 @@ export type AudioTrack = {
    * playback reloads with the same id can swap PCM without tearing the
    * slot down.
    */
-  buffer: AudioBuffer;
+  readonly buffer: AudioBuffer;
   /**
    * Original encoded bytes, retained for upload paths (the lyrics-
    * alignment flow re-uploads the source file to the transcriber).
@@ -93,22 +112,97 @@ export type AudioTrack = {
    * `buffer` directly; but holding the blob lets us avoid re-fetching
    * the original from network on a re-upload.
    */
-  sourceBlob: Blob;
-  durationSec: number;
+  readonly sourceBlob: Blob;
+  readonly durationSec: number;
   /**
-   * DSL pitch letter (e.g. `k`, `s`, `h`) this audio track is the isolated
-   * stem of, when known. Set from a debug bundle's `mapping` entry; the
-   * waveform canvas tints itself with that pitch's lane color so the
-   * audio track reads as visually paired with its instrument row.
-   * Undefined for ad-hoc / drumless tracks.
+   * DSL pitch letter (e.g. `k`, `s`, `h`) this audio track is the
+   * isolated stem of, when known. Set from a debug bundle's `mapping`
+   * entry; the waveform canvas tints itself with that pitch's lane
+   * color so the audio track reads as visually paired with its
+   * instrument row. Undefined for ad-hoc / drumless tracks.
    */
-  pitch?: string;
+  readonly pitch?: string;
   /**
    * What the loader believes the audio is. Drives the per-row overflow
    * menu's enable matrix. Undefined is treated as `unknown`.
    */
-  role?: AudioTrackRole;
-};
+  readonly role?: AudioTrackRole;
+
+  /** Per-track waveform-colour override (`#rrggbb`). `undefined` means
+   *  "inherit from the grouped instrument track via the mixer context". */
+  _color: string | undefined = undefined;
+
+  /**
+   * @param fields    Immutable identity + audio bits.
+   * @param getCtx    Late-bound mixer-context getter. Called on every
+   *                  read of {@link color} so a context attached after
+   *                  the track was constructed still applies.
+   */
+  constructor(
+    fields: {
+      id: AudioTrackId;
+      filename: string;
+      buffer: AudioBuffer;
+      sourceBlob: Blob;
+      durationSec: number;
+      pitch?: string;
+      role?: AudioTrackRole;
+    },
+    private readonly getCtx: () => MixerContext | undefined,
+  ) {
+    this.id = fields.id;
+    this.filename = fields.filename;
+    this.buffer = fields.buffer;
+    this.sourceBlob = fields.sourceBlob;
+    this.durationSec = fields.durationSec;
+    this.pitch = fields.pitch;
+    this.role = fields.role;
+    // Only the mutable colour field is observable; the buffer / blob
+    // are large immutables and don't need MobX wrappers.
+    makeAutoObservable<
+      this,
+      | 'getCtx'
+      | 'id'
+      | 'filename'
+      | 'buffer'
+      | 'sourceBlob'
+      | 'durationSec'
+      | 'pitch'
+      | 'role'
+    >(this, {
+      getCtx: false,
+      id: false,
+      filename: false,
+      buffer: false,
+      sourceBlob: false,
+      durationSec: false,
+      pitch: false,
+      role: false,
+    });
+  }
+
+  get color(): string {
+    if (this._color !== undefined) return this._color;
+    const ctx = this.getCtx();
+    if (!ctx) return AUDIO_FALLBACK_COLOR;
+    return resolveAudioInheritedColor(this.id, this.pitch, ctx) ?? AUDIO_FALLBACK_COLOR;
+  }
+
+  set color(c: string) {
+    this._color = c;
+  }
+
+  /** Drop the user override so the colour reverts to inheritance. */
+  clearColor(): void {
+    this._color = undefined;
+  }
+
+  /** Whether the user has set an explicit override on this track.
+   *  Drives the picker popover's Reset enable state. */
+  get hasOverride(): boolean {
+    return this._color !== undefined;
+  }
+}
 
 /**
  * Live playback state for an audio track during a single `play()` call.

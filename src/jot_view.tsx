@@ -22,16 +22,18 @@ import {
   SelectionContext,
   UniformWaveformsContext,
 } from './jot_view/contexts';
-import {
-  AudioTrackControls,
-  MixerView,
-  VoiceControls,
-} from './jot_view/mixer';
+import { AudioTrackControls, MixerView, VoiceControls } from './jot_view/mixer';
 import { Logo } from './jot_view/components/logo';
 import { Minimap } from './jot_view/minimap';
 import { VerticalScrollbar } from './jot_view/vertical_scrollbar';
 import { PlaybackBar } from './jot_view/playback';
-import { Legend, TimelineHeader, extractArtist, formatDisplayTitle, formatSubtitle } from './jot_view/score';
+import {
+  Legend,
+  TimelineHeader,
+  extractArtist,
+  formatDisplayTitle,
+  formatSubtitle,
+} from './jot_view/score';
 import { GridLineSettings, JotViewStore, TrackKey, snapToDevicePx } from './jot_view/store';
 import { RecentTranscriptionsPicker } from './jot_view/recent_transcriptions';
 import { ToastContainer } from './jot_view/toast_container';
@@ -68,10 +70,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   const containerPoint = (e: React.MouseEvent<HTMLDivElement>): Point => {
     const el = e.currentTarget;
     const rect = el.getBoundingClientRect();
-    return new Point(
-      e.clientX - rect.left + store.scrollX,
-      e.clientY - rect.top + store.scrollY,
-    );
+    return new Point(e.clientX - rect.left + store.scrollX, e.clientY - rect.top + store.scrollY);
   };
   const onMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
@@ -102,8 +101,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     const padLeft = j.config.barNotePaddingBeats * pxPerBeatBefore;
     const scrollerRect = scroller.getBoundingClientRect();
     const barsRowRect = barsRow.getBoundingClientRect();
-    const anchorBarsRowX =
-      scrollerRect.left + scrollerRect.width / 2 - barsRowRect.left;
+    const anchorBarsRowX = scrollerRect.left + scrollerRect.width / 2 - barsRowRect.left;
     store.setZoom(z);
     if (pxPerBeatBefore <= 0) return;
     const factor = j.pxPerBeat / pxPerBeatBefore;
@@ -124,7 +122,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     // re-shows it intentionally; the limitation is real and ongoing,
     // and the user might just have forgotten between sessions.
     const [audioWorkletWarningOpen, setAudioWorkletWarningOpen] = React.useState(
-      audioWorkletState !== 'available',
+      audioWorkletState !== 'available'
     );
 
     // Spacebar = play / pause / resume, from anywhere on the page. Skip
@@ -154,14 +152,8 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
         const el = e.target as HTMLElement | null;
         const tag = el?.tagName;
         const isTextEntryInput =
-          tag === 'INPUT' &&
-          TEXT_ENTRY_INPUT_TYPES.has((el as HTMLInputElement).type);
-        if (
-          isTextEntryInput ||
-          tag === 'TEXTAREA' ||
-          tag === 'SELECT' ||
-          el?.isContentEditable
-        ) {
+          tag === 'INPUT' && TEXT_ENTRY_INPUT_TYPES.has((el as HTMLInputElement).type);
+        if (isTextEntryInput || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) {
           return;
         }
         e.preventDefault();
@@ -185,145 +177,138 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
         toggle: () => store.toggleFollowPlayhead(),
       }),
       // eslint-disable-next-line react-hooks/exhaustive-deps -- observable read; observer wrapper rebuilds the memo when followPlayhead flips.
-      [store.followPlayhead],
+      [store.followPlayhead]
     );
 
     return (
       <JotViewStoreContext.Provider value={store}>
-      <SelectionContext.Provider value={selection}>
-      <NoteProvenanceContext.Provider value={provenanceContextValue}>
-      <GridLineSettingsContext.Provider value={store.gridLines}>
-      <UniformWaveformsContext.Provider value={store.uniformWaveforms}>
-      <FollowPlayheadContext.Provider value={followPlayheadContextValue}>
-      <div className={styles.appContainer}>
-        <Toolbar
-          examples={store.examples}
-          currentId={store.currentExampleId}
-          onSelect={(id) => store.loadExample(id)}
-          transcribeStatus={store.transcribeStatus}
-          transcribeOptions={store.transcribeOptions}
-          onTranscribe={(file) => store.transcribeAudio(file)}
-          onResumeTranscribe={(folder, stage) =>
-            store.resumeTranscribe(folder, stage)
-          }
-          onLoadJot={(file) => store.loadJotFile(file)}
-          onLoadMidi={(file) => store.loadMidiFile(file)}
-          onLoadParadb={(file) => store.loadParadbMap(file)}
-          onLoadDebugBundle={(file) => store.loadDebugBundleFile(file)}
-          onLoadAudioTrack={(file) => store.loadAudioTrack(file)}
-          onLoadLyricsFile={(file) => store.loadLyricsFile(file)}
-          onOpenLyricsTextLoad={() => store.setLyricsTextOpen(true)}
-          onOpenLyricsSearch={() => store.setLyricsSearchOpen(true)}
-          onCancelTranscribe={() => store.cancelTranscribe()}
-          lyricsAnyAligning={store.lyricsAnyAligning}
-          onSetBeatInput={(b) => store.setBeatInput(b)}
-          onSetLlmModel={(m) => store.setLlmModel(m)}
-          zoom={store.zoom}
-          onSetZoom={setZoomCentered}
-          hasNoteProvenance={store.noteProvenance !== undefined}
-          showFilteredOnsets={store.showFilteredOnsets}
-          onSetShowFilteredOnsets={(v) => store.setShowFilteredOnsets(v)}
-          gridLines={store.gridLines}
-          onToggleGridLine={(k) => store.toggleGridLine(k)}
-          uniformWaveforms={store.uniformWaveforms}
-          onSetUniformWaveforms={(v) => store.setUniformWaveforms(v)}
-          recentTranscriptions={store.recentTranscriptions}
-          recentTranscriptionsLoaded={store.recentTranscriptionsLoaded}
-          recentTranscriptionsLoading={store.recentTranscriptionsLoading}
-          selectedResumeFolder={store.selectedResumeFolder}
-          selectedResumeStage={store.selectedResumeStage}
-          onSetSelectedResumeFolder={(f) => store.setSelectedResumeFolder(f)}
-          onSetSelectedResumeStage={(s) => store.setSelectedResumeStage(s)}
-          onRefreshRecentTranscriptions={() =>
-            store.refreshRecentTranscriptions()
-          }
-          onLoadRecentTranscription={(folder) =>
-            store.loadRecentTranscription(folder)
-          }
-          transcribeMode={store.transcribeMode}
-          onSetTranscribeMode={(m) => store.setTranscribeMode(m)}
-        />
-        {jot ? (
-          <JotView
-            store={store}
-            jot={jot}
-            highlightedPattern={selection.selectedPattern}
-            onPatternClick={(name) => selection.togglePattern(name)}
-            onMouseDown={onMouseDown}
-            onMouseMove={onMouseMove}
-            onMouseUp={selection.endSelection}
-            onSeek={(x) => store.seekToX(x)}
-            onZoomBy={(factor) => store.setZoom(store.zoom * factor)}
-            trackOrder={store.trackOrder}
-            onMoveTrack={(from, to) => store.moveTrack(from, to)}
-            voiceControls={{
-              mutedPitches: store.mutedPitches,
-              soloedPitches: store.soloedPitches,
-              isPitchAudible: store.isPitchAudible,
-              volumeFor: (pitch) => store.pitchVolume(pitch),
-              onSetVolume: (pitch, v) => store.setPitchVolume(pitch, v),
-              onToggleMute: (pitch) => store.toggleMute(pitch),
-              onToggleSolo: (pitch) => store.toggleSolo(pitch),
-              masterMuted: store.drumMasterMuted,
-              masterSoloed: store.drumMasterSoloed,
-              masterAudible: store.isDrumSectionAudible,
-              onToggleMasterMute: () => store.toggleDrumMasterMute(),
-              onToggleMasterSolo: () => store.toggleDrumMasterSolo(),
-            }}
-            audioTrackControls={{
-              mutedAudioTracks: store.mutedAudioTracks,
-              soloedAudioTracks: store.soloedAudioTracks,
-              isAudioTrackAudible: store.isAudioTrackAudible,
-              volumeFor: (id) => store.audioTrackVolume(id),
-              onSetVolume: (id, v) => store.setAudioTrackVolume(id, v),
-              onToggleMute: (id) => store.toggleAudioTrackMute(id),
-              onToggleSolo: (id) => store.toggleAudioTrackSolo(id),
-              onClear: (id) => store.clearAudioTrack(id),
-              onSplitFromMix: (id) => store.splitAudioTrackFromMix(id),
-              onSplitDrumPieces: (id) => store.splitAudioTrackDrumPieces(id),
-              colorFor: (id) => store.audioTrackColor(id),
-              onSetColor: (id, color) => store.setAudioTrackColor(id, color),
-              onResetColor: (id) => store.clearAudioTrackColor(id),
-              masterMuted: store.audioMasterMuted,
-              masterSoloed: store.audioMasterSoloed,
-              masterAudible: store.isAudioSectionAudible,
-              onToggleMasterMute: () => store.toggleAudioMasterMute(),
-              onToggleMasterSolo: () => store.toggleAudioMasterSolo(),
-            }}
-            getGutterWidth={() => store.gutterWidth}
-            onSetGutterWidth={(px) => store.setGutterWidth(px)}
-          />
-        ) : (
-          <EmptyState store={store} />
-        )}
-        <Minimap store={store} />
-        {jot && <PlaybackBar store={store} />}
-        <DebugPanel store={store} />
-        <LyricsSearchModal
-          open={store.lyricsSearchOpen}
-          initialTitle={lyricsInitialTitle}
-          initialArtist={lyricsInitialArtist}
-          onClose={() => store.setLyricsSearchOpen(false)}
-          store={store}
-        />
-        <LyricsTextLoadModal
-          open={store.lyricsTextOpen}
-          onClose={() => store.setLyricsTextOpen(false)}
-          store={store}
-        />
-        <AudioWorkletWarningModal
-          state={audioWorkletState}
-          open={audioWorkletWarningOpen}
-          onClose={() => setAudioWorkletWarningOpen(false)}
-        />
-        <LoadingOverlay store={store} />
-        <ToastContainer />
-      </div>
-      </FollowPlayheadContext.Provider>
-      </UniformWaveformsContext.Provider>
-      </GridLineSettingsContext.Provider>
-      </NoteProvenanceContext.Provider>
-      </SelectionContext.Provider>
+        <SelectionContext.Provider value={selection}>
+          <NoteProvenanceContext.Provider value={provenanceContextValue}>
+            <GridLineSettingsContext.Provider value={store.gridLines}>
+              <UniformWaveformsContext.Provider value={store.uniformWaveforms}>
+                <FollowPlayheadContext.Provider value={followPlayheadContextValue}>
+                  <div className={styles.appContainer}>
+                    <Toolbar
+                      examples={store.examples}
+                      currentId={store.currentExampleId}
+                      onSelect={(id) => store.loadExample(id)}
+                      transcribeStatus={store.transcribeStatus}
+                      transcribeOptions={store.transcribeOptions}
+                      onTranscribe={(file) => store.transcribeAudio(file)}
+                      onResumeTranscribe={(folder, stage) => store.resumeTranscribe(folder, stage)}
+                      onLoadJot={(file) => store.loadJotFile(file)}
+                      onLoadMidi={(file) => store.loadMidiFile(file)}
+                      onLoadParadb={(file) => store.loadParadbMap(file)}
+                      onLoadDebugBundle={(file) => store.loadDebugBundleFile(file)}
+                      onLoadAudioTrack={(file) => store.loadAudioTrack(file)}
+                      onLoadLyricsFile={(file) => store.loadLyricsFile(file)}
+                      onOpenLyricsTextLoad={() => store.setLyricsTextOpen(true)}
+                      onOpenLyricsSearch={() => store.setLyricsSearchOpen(true)}
+                      onCancelTranscribe={() => store.cancelTranscribe()}
+                      lyricsAnyAligning={store.lyricsAnyAligning}
+                      onSetBeatInput={(b) => store.setBeatInput(b)}
+                      onSetLlmModel={(m) => store.setLlmModel(m)}
+                      zoom={store.zoom}
+                      onSetZoom={setZoomCentered}
+                      hasNoteProvenance={store.noteProvenance !== undefined}
+                      showFilteredOnsets={store.showFilteredOnsets}
+                      onSetShowFilteredOnsets={(v) => store.setShowFilteredOnsets(v)}
+                      gridLines={store.gridLines}
+                      onToggleGridLine={(k) => store.toggleGridLine(k)}
+                      uniformWaveforms={store.uniformWaveforms}
+                      onSetUniformWaveforms={(v) => store.setUniformWaveforms(v)}
+                      autoFollowOnPlay={store.autoFollowOnPlay}
+                      onSetAutoFollowOnPlay={(v) => store.setAutoFollowOnPlay(v)}
+                      recentTranscriptions={store.recentTranscriptions}
+                      recentTranscriptionsLoaded={store.recentTranscriptionsLoaded}
+                      recentTranscriptionsLoading={store.recentTranscriptionsLoading}
+                      selectedResumeFolder={store.selectedResumeFolder}
+                      selectedResumeStage={store.selectedResumeStage}
+                      onSetSelectedResumeFolder={(f) => store.setSelectedResumeFolder(f)}
+                      onSetSelectedResumeStage={(s) => store.setSelectedResumeStage(s)}
+                      onRefreshRecentTranscriptions={() => store.refreshRecentTranscriptions()}
+                      onLoadRecentTranscription={(folder) => store.loadRecentTranscription(folder)}
+                      transcribeMode={store.transcribeMode}
+                      onSetTranscribeMode={(m) => store.setTranscribeMode(m)}
+                    />
+                    {jot ? (
+                      <JotView
+                        store={store}
+                        jot={jot}
+                        highlightedPattern={selection.selectedPattern}
+                        onPatternClick={(name) => selection.togglePattern(name)}
+                        onMouseDown={onMouseDown}
+                        onMouseMove={onMouseMove}
+                        onMouseUp={selection.endSelection}
+                        onSeek={(x) => store.seekToX(x)}
+                        onZoomBy={(factor) => store.setZoom(store.zoom * factor)}
+                        trackOrder={store.trackOrder}
+                        onMoveTrack={(from, to) => store.moveTrack(from, to)}
+                        voiceControls={{
+                          mutedPitches: store.mutedPitches,
+                          soloedPitches: store.soloedPitches,
+                          isPitchAudible: store.isPitchAudible,
+                          volumeFor: (pitch) => store.pitchVolume(pitch),
+                          onSetVolume: (pitch, v) => store.setPitchVolume(pitch, v),
+                          onToggleMute: (pitch) => store.toggleMute(pitch),
+                          onToggleSolo: (pitch) => store.toggleSolo(pitch),
+                          masterMuted: store.drumMasterMuted,
+                          masterSoloed: store.drumMasterSoloed,
+                          masterAudible: store.isDrumSectionAudible,
+                          onToggleMasterMute: () => store.toggleDrumMasterMute(),
+                          onToggleMasterSolo: () => store.toggleDrumMasterSolo(),
+                        }}
+                        audioTrackControls={{
+                          mutedAudioTracks: store.mutedAudioTracks,
+                          soloedAudioTracks: store.soloedAudioTracks,
+                          isAudioTrackAudible: store.isAudioTrackAudible,
+                          volumeFor: (id) => store.audioTrackVolume(id),
+                          onSetVolume: (id, v) => store.setAudioTrackVolume(id, v),
+                          onToggleMute: (id) => store.toggleAudioTrackMute(id),
+                          onToggleSolo: (id) => store.toggleAudioTrackSolo(id),
+                          onClear: (id) => store.clearAudioTrack(id),
+                          onSplitFromMix: (id) => store.splitAudioTrackFromMix(id),
+                          onSplitDrumPieces: (id) => store.splitAudioTrackDrumPieces(id),
+                          masterMuted: store.audioMasterMuted,
+                          masterSoloed: store.audioMasterSoloed,
+                          masterAudible: store.isAudioSectionAudible,
+                          onToggleMasterMute: () => store.toggleAudioMasterMute(),
+                          onToggleMasterSolo: () => store.toggleAudioMasterSolo(),
+                        }}
+                        getGutterWidth={() => store.gutterWidth}
+                        onSetGutterWidth={(px) => store.setGutterWidth(px)}
+                      />
+                    ) : (
+                      <EmptyState store={store} />
+                    )}
+                    <Minimap store={store} />
+                    {jot && <PlaybackBar store={store} />}
+                    <DebugPanel store={store} />
+                    <LyricsSearchModal
+                      open={store.lyricsSearchOpen}
+                      initialTitle={lyricsInitialTitle}
+                      initialArtist={lyricsInitialArtist}
+                      onClose={() => store.setLyricsSearchOpen(false)}
+                      store={store}
+                    />
+                    <LyricsTextLoadModal
+                      open={store.lyricsTextOpen}
+                      onClose={() => store.setLyricsTextOpen(false)}
+                      store={store}
+                    />
+                    <AudioWorkletWarningModal
+                      state={audioWorkletState}
+                      open={audioWorkletWarningOpen}
+                      onClose={() => setAudioWorkletWarningOpen(false)}
+                    />
+                    <LoadingOverlay store={store} />
+                    <ToastContainer />
+                  </div>
+                </FollowPlayheadContext.Provider>
+              </UniformWaveformsContext.Provider>
+            </GridLineSettingsContext.Provider>
+          </NoteProvenanceContext.Provider>
+        </SelectionContext.Provider>
       </JotViewStoreContext.Provider>
     );
   });
@@ -410,6 +395,22 @@ const JotView = observer((props: JotViewProps) => {
   // model); fed into `store.setContentSize` so `setScrollX` /
   // `setScrollY` clamp to `[0, content - viewport]`.
   const viewportRef = React.useRef<HTMLDivElement>(null);
+  // Shared DOM-target cache for the per-frame animation vars. Owned by
+  // JotView so its lifetime matches the container; ScrollVar and
+  // PlayheadPosVar read through it instead of querying the DOM on every
+  // tick.
+  const cacheRef = React.useRef<DomTargetCache | null>(null);
+  React.useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const cache = new DomTargetCache();
+    cache.attach(container, styles.scrollStickyHorizontal, store);
+    cacheRef.current = cache;
+    return () => {
+      cache.detach();
+      cacheRef.current = null;
+    };
+  }, [store]);
   React.useEffect(() => {
     const container = containerRef.current;
     const viewport = viewportRef.current;
@@ -501,8 +502,7 @@ const JotView = observer((props: JotViewProps) => {
           anchorBarsRowX = Math.max(0, clientX - barsRowRect.left);
         } else {
           const containerRect = el.getBoundingClientRect();
-          anchorBarsRowX =
-            containerRect.left + containerRect.width / 2 - barsRowRect.left;
+          anchorBarsRowX = containerRect.left + containerRect.width / 2 - barsRowRect.left;
         }
       }
 
@@ -533,8 +533,7 @@ const JotView = observer((props: JotViewProps) => {
       // otherwise accumulate into a visible zoom drift. Dead-zone tiny
       // deltaY on pixel-mode events only; mouse wheels (deltaMode 1)
       // deliver large discrete steps and bypass this.
-      const effectiveDeltaY =
-        e.deltaMode === 0 && Math.abs(e.deltaY) < 4 ? 0 : e.deltaY;
+      const effectiveDeltaY = e.deltaMode === 0 && Math.abs(e.deltaY) < 4 ? 0 : e.deltaY;
       // Horizontal-dominant events (two-finger horizontal swipe on a
       // touchpad, shift + wheel on a mouse) pan the timeline instead of
       // zooming. Pinch (delivered as ctrlKey + deltaY by Chrome/Safari)
@@ -579,7 +578,7 @@ const JotView = observer((props: JotViewProps) => {
       el.style.cursor = 'grabbing';
       // Middle-mouse pan is an explicit "I want to look somewhere else"
       // gesture; auto-follow would just fight it on the next frame.
-      if (store.followPlayhead) store.toggleFollowPlayhead();
+      store.setFollowPlayhead(false);
     };
     const onMouseMove = (e: MouseEvent) => {
       if (!panning) return;
@@ -607,6 +606,243 @@ const JotView = observer((props: JotViewProps) => {
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', stop);
       window.removeEventListener('blur', stop);
+    };
+  }, [store]);
+
+  // Touch gestures on the score: one finger pans (analogue of the
+  // middle-mouse drag above), two fingers pinch the score-zoom slider
+  // (analogue of Ctrl + wheel). The native `touchstart` listener uses
+  // `{ passive: false }` because we call `preventDefault` to:
+  //   - suppress the browser's own pan/zoom (also blocked at the CSS
+  //     layer via `touch-action: none` on `.jotContainer`, but a JS
+  //     preventDefault is the belt to the CSS suspenders), and
+  //   - suppress the synthesized `mousedown` that would otherwise fire
+  //     the parent's marquee-selection handler on every touch.
+  // Touches that land on interactive controls (buttons, range inputs,
+  // selects, labels wrapping inputs) bail before preventDefault so the
+  // native input range thumb-drag, button taps, and slider scrubs still
+  // work. Pinch anchors at the midpoint of the two fingers in bars-row
+  // content space and re-derives scrollX from the initial-frame snapshot
+  // each move so the musical point under the midpoint stays pinned (no
+  // integration drift, same math as the wheel-zoom anchor).
+  React.useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    type Gesture =
+      | { kind: 'none' }
+      | { kind: 'pan'; lastX: number; lastY: number }
+      | {
+          kind: 'pinch';
+          initDistance: number;
+          initZoom: number;
+          initScrollX: number;
+          initPxPerBeat: number;
+          initPadLeft: number;
+          anchorBarsRowX: number;
+        };
+    let gesture: Gesture = { kind: 'none' };
+
+    // Tap-to-seek bookkeeping. Touchstart's `preventDefault` (needed to
+    // suppress browser pan/zoom and the synthesized mousedown that
+    // would fire marquee selection) also kills the browser's
+    // synthesized `click` on touchend, so the bars-row onClick
+    // handlers (seekFromClick) never fire on tap. We detect taps
+    // ourselves: a single-finger touchstart records a candidate, any
+    // significant movement during touchmove invalidates it (and
+    // promotes to a real pan), and touchend within the tap budget
+    // dispatches a synthetic click on the original target so the
+    // existing onClick path runs unchanged.
+    const TAP_MOVE_PX = 8;
+    const TAP_MAX_DURATION_MS = 250;
+    let tapCandidate: { startX: number; startY: number; t: number; target: Element } | null = null;
+
+    const isInteractiveControl = (target: EventTarget | null): boolean => {
+      if (!(target instanceof Element)) return false;
+      return !!target.closest('input, button, select, textarea, a, label, [role="slider"]');
+    };
+
+    const touchDistance = (a: Touch, b: Touch): number =>
+      Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
+
+    const disengageFollow = () => {
+      // Touch-pan / pinch are explicit "I want to look somewhere else"
+      // gestures; auto-follow would just fight them on the next frame.
+      // A tap-only touch should NOT disengage follow, so this is only
+      // called once the gesture has been confirmed as a pan/pinch
+      // (movement threshold crossed, or a second finger landed).
+      store.setFollowPlayhead(false);
+    };
+
+    // Start tracking pan state without yet committing to "this is a
+    // pan"; follow-toggle is deferred until movement crosses
+    // TAP_MOVE_PX. Used by the single-finger touchstart path so a
+    // static tap doesn't disengage follow.
+    const startPanState = (t: Touch) => {
+      gesture = { kind: 'pan', lastX: t.clientX, lastY: t.clientY };
+    };
+
+    const beginPan = (t: Touch) => {
+      startPanState(t);
+      disengageFollow();
+    };
+
+    const beginPinch = (a: Touch, b: Touch) => {
+      const j = jotRef.current;
+      const initPxPerBeat = j.pxPerBeat;
+      const initPadLeft = j.config.barNotePaddingBeats * initPxPerBeat;
+      const midClientX = (a.clientX + b.clientX) / 2;
+      const barsRow = el.querySelector<HTMLElement>('[data-bars-row]');
+      let anchorBarsRowX: number;
+      if (barsRow) {
+        const rect = barsRow.getBoundingClientRect();
+        anchorBarsRowX = Math.max(0, midClientX - rect.left);
+      } else {
+        const rect = el.getBoundingClientRect();
+        anchorBarsRowX = midClientX - rect.left;
+      }
+      gesture = {
+        kind: 'pinch',
+        initDistance: touchDistance(a, b),
+        initZoom: store.zoom,
+        initScrollX: store.scrollX,
+        initPxPerBeat,
+        initPadLeft,
+        anchorBarsRowX,
+      };
+      store.setFollowPlayhead(false);
+    };
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (isInteractiveControl(e.target)) {
+        gesture = { kind: 'none' };
+        tapCandidate = null;
+        return;
+      }
+      if (e.touches.length === 1) {
+        const t = e.touches[0];
+        // Set up pan state but DON'T disengage follow yet, wait until
+        // movement crosses TAP_MOVE_PX in onTouchMove. Until then the
+        // touch could still resolve as a tap.
+        startPanState(t);
+        tapCandidate =
+          e.target instanceof Element
+            ? { startX: t.clientX, startY: t.clientY, t: performance.now(), target: e.target }
+            : null;
+        e.preventDefault();
+      } else if (e.touches.length >= 2) {
+        // A second finger landing is unambiguous: this is a pinch, not
+        // a tap. Drop any in-flight tap candidate.
+        tapCandidate = null;
+        beginPinch(e.touches[0], e.touches[1]);
+        e.preventDefault();
+      }
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (gesture.kind === 'pan' && e.touches.length === 1) {
+        const t = e.touches[0];
+        if (tapCandidate) {
+          const adx = t.clientX - tapCandidate.startX;
+          const ady = t.clientY - tapCandidate.startY;
+          if (Math.hypot(adx, ady) > TAP_MOVE_PX) {
+            // Promote tap candidate to a real pan: disengage follow
+            // (mirrors the mouse-pan onMouseDown side effect) and
+            // invalidate the tap.
+            tapCandidate = null;
+            disengageFollow();
+          } else {
+            // Still inside the tap budget; don't scroll yet, but
+            // suppress the browser's native pan so a long-but-still
+            // gesture doesn't end up scrolling the page.
+            e.preventDefault();
+            return;
+          }
+        }
+        const dx = t.clientX - gesture.lastX;
+        const dy = t.clientY - gesture.lastY;
+        gesture.lastX = t.clientX;
+        gesture.lastY = t.clientY;
+        store.setScrollBy(-dx, -dy);
+        e.preventDefault();
+      } else if (gesture.kind === 'pinch' && e.touches.length >= 2) {
+        const a = e.touches[0];
+        const b = e.touches[1];
+        const dist = touchDistance(a, b);
+        if (gesture.initDistance > 0 && gesture.initPxPerBeat > 0) {
+          store.setZoom(gesture.initZoom * (dist / gesture.initDistance));
+          const actualFactor = jotRef.current.pxPerBeat / gesture.initPxPerBeat;
+          if (actualFactor !== 1) {
+            store.setScrollX(
+              gesture.initScrollX +
+                (gesture.anchorBarsRowX - gesture.initPadLeft) * (actualFactor - 1)
+            );
+          }
+        }
+        e.preventDefault();
+      }
+    };
+
+    const onTouchEnd = (e: TouchEvent) => {
+      // Re-initialise based on the remaining touches so a 2 → 1 finger
+      // transition cleanly switches from pinch to pan (and 1 → 0 ends
+      // the gesture). Skips re-init if the remaining touch is on an
+      // interactive control (defensive; shouldn't normally happen since
+      // start would have bailed).
+      if (e.touches.length === 0) {
+        // Tap-to-seek: if the touch stayed within the move budget and
+        // finished within the duration budget, synthesize a click on
+        // the original target. It bubbles through React's delegated
+        // root listener and reaches the bars-row onClick (seekFromClick)
+        // via the normal handler path; data-noseek targets (notes,
+        // pattern labels, playhead) keep their own behaviour because
+        // seekFromClick already bails on them.
+        if (tapCandidate && performance.now() - tapCandidate.t <= TAP_MAX_DURATION_MS) {
+          const touch = e.changedTouches[0];
+          if (touch) {
+            tapCandidate.target.dispatchEvent(
+              new MouseEvent('click', {
+                bubbles: true,
+                cancelable: true,
+                clientX: touch.clientX,
+                clientY: touch.clientY,
+                button: 0,
+              })
+            );
+          }
+        }
+        tapCandidate = null;
+        gesture = { kind: 'none' };
+        return;
+      }
+      // From here on the user still has at least one finger down, so
+      // we're committing to a continued pan/pinch, drop any tap
+      // candidate.
+      tapCandidate = null;
+      if (e.touches.length === 1) {
+        if (isInteractiveControl(e.touches[0].target)) {
+          gesture = { kind: 'none' };
+          return;
+        }
+        beginPan(e.touches[0]);
+      } else {
+        beginPinch(e.touches[0], e.touches[1]);
+      }
+    };
+
+    const onTouchCancel = () => {
+      tapCandidate = null;
+      gesture = { kind: 'none' };
+    };
+
+    el.addEventListener('touchstart', onTouchStart, { passive: false });
+    el.addEventListener('touchmove', onTouchMove, { passive: false });
+    el.addEventListener('touchend', onTouchEnd);
+    el.addEventListener('touchcancel', onTouchCancel);
+    return () => {
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('touchend', onTouchEnd);
+      el.removeEventListener('touchcancel', onTouchCancel);
     };
   }, [store]);
 
@@ -641,7 +877,7 @@ const JotView = observer((props: JotViewProps) => {
   const initialGutterPx = React.useMemo(
     () => untracked(() => getGutterWidth()),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- seed only.
-    [],
+    []
   );
   const containerStyle = {
     ['--note-pad-beats' as string]: String(config.barNotePaddingBeats),
@@ -691,58 +927,54 @@ const JotView = observer((props: JotViewProps) => {
   };
   return (
     <RenderedJotContext.Provider value={jot}>
-    <BarTimingsContext.Provider value={barTimings}>
-      <div
-        ref={containerRef}
-        className={styles.jotContainer}
-        // Stable hook for descendant popovers (note + filtered-onset
-        // labels) to find the scroll viewport's bottom edge and flip
-        // upward when the natural below-placement would overflow into
-        // the playback bar / debug panel below.
-        data-jot-scroller
-        style={containerStyle}
-        onMouseDown={onMouseDown}
-        onMouseMove={onMouseMove}
-        onMouseUp={onMouseUp}
-      >
-        <ScoreZoomVar jot={jot} containerRef={containerRef} />
-        <GutterWidthVar getGutterWidth={getGutterWidth} containerRef={containerRef} />
-        <GridLineVars containerRef={containerRef} />
-        <ScrollVar containerRef={containerRef} store={store} />
-        <PlayheadPosVar
-          containerRef={containerRef}
-          getGutterWidth={getGutterWidth}
-          store={store}
-        />
+      <BarTimingsContext.Provider value={barTimings}>
         <div
-          ref={viewportRef}
-          className={styles.scrollViewport}
-          // Stable hook used by JotView's content ResizeObserver and by
-          // the minimap (offsetWidth is the scroll-content's `scrollWidth`
-          // analogue in this no-native-scroll model).
-          data-jot-scroll-content
+          ref={containerRef}
+          className={styles.jotContainer}
+          // Stable hook for descendant popovers (note + filtered-onset
+          // labels) to find the scroll viewport's bottom edge and flip
+          // upward when the natural below-placement would overflow into
+          // the playback bar / debug panel below.
+          data-jot-scroller
+          style={containerStyle}
+          onMouseDown={onMouseDown}
+          onMouseMove={onMouseMove}
+          onMouseUp={onMouseUp}
         >
-          <h2 className={styles.title}>{formatDisplayTitle(jot) || 'Untitled jot'}</h2>
-          <p className={styles.subtitle}>{formatSubtitle(jot)}</p>
-          <Legend jot={jot} />
-          <TimelineHeader jot={jot} onSeek={onSeek} onResizeGutterStart={onResizeGutterStart} />
-          <MixerView
-            jot={jot}
-            config={config}
-            trackOrder={trackOrder}
-            highlightedPattern={highlightedPattern}
-            onPatternClick={onPatternClick}
-            onSeek={onSeek}
-            onMoveTrack={onMoveTrack}
-            voiceControls={voiceControls}
-            audioTrackControls={audioTrackControls}
-            onResizeGutterStart={onResizeGutterStart}
-          />
-          <MarqueeOverlay />
+          <ScoreZoomVar jot={jot} containerRef={containerRef} />
+          <GutterWidthVar getGutterWidth={getGutterWidth} containerRef={containerRef} />
+          <GridLineVars containerRef={containerRef} />
+          <ScrollVar cacheRef={cacheRef} store={store} />
+          <PlayheadPosVar cacheRef={cacheRef} getGutterWidth={getGutterWidth} store={store} />
+          <div
+            ref={viewportRef}
+            className={styles.scrollViewport}
+            // Stable hook used by JotView's content ResizeObserver and by
+            // the minimap (offsetWidth is the scroll-content's `scrollWidth`
+            // analogue in this no-native-scroll model).
+            data-jot-scroll-content
+          >
+            <h2 className={styles.title}>{formatDisplayTitle(jot) || 'Untitled jot'}</h2>
+            <p className={styles.subtitle}>{formatSubtitle(jot)}</p>
+            <Legend jot={jot} />
+            <TimelineHeader jot={jot} onSeek={onSeek} onResizeGutterStart={onResizeGutterStart} />
+            <MixerView
+              jot={jot}
+              config={config}
+              trackOrder={trackOrder}
+              highlightedPattern={highlightedPattern}
+              onPatternClick={onPatternClick}
+              onSeek={onSeek}
+              onMoveTrack={onMoveTrack}
+              voiceControls={voiceControls}
+              audioTrackControls={audioTrackControls}
+              onResizeGutterStart={onResizeGutterStart}
+            />
+            <MarqueeOverlay />
+          </div>
+          <VerticalScrollbar store={store} />
         </div>
-        <VerticalScrollbar store={store} />
-      </div>
-    </BarTimingsContext.Provider>
+      </BarTimingsContext.Provider>
     </RenderedJotContext.Provider>
   );
 });
@@ -757,13 +989,7 @@ const JotView = observer((props: JotViewProps) => {
  * subtree.
  */
 const ScoreZoomVar = observer(
-  ({
-    jot,
-    containerRef,
-  }: {
-    jot: RenderedJot;
-    containerRef: React.RefObject<HTMLDivElement>;
-  }) => {
+  ({ jot, containerRef }: { jot: RenderedJot; containerRef: React.RefObject<HTMLDivElement> }) => {
     const pxPerBeat = jot.pxPerBeat;
     React.useEffect(() => {
       const el = containerRef.current;
@@ -847,6 +1073,78 @@ const GridLineVars = observer(
 );
 
 /**
+ * Cached DOM targets for the per-frame animation vars. Each playback tick
+ * writes `--scroll-x` / `--scroll-y` to the inner `.scrollViewport` plus
+ * every `.scrollStickyHorizontal` element, and `--playhead-x` to every
+ * `[data-playhead="1"]` element. With many tracks loaded, querySelectorAll
+ * on every tick accounted for ~2 ms of frame budget by itself; we instead
+ * scan once on mount, then maintain the cache via a single
+ * `MutationObserver` so per-frame writes iterate plain arrays.
+ *
+ * New sticky elements get their `--scroll-x` seeded at mutation time so a
+ * gutter mounted after the user scrolled doesn't snap to 0 for one frame.
+ * `--playhead-x` is `<length>`-typed with `initial-value: 0px`, so a freshly
+ * mounted playhead's first frame at 0 is harmless; the next tick writes the
+ * live value.
+ */
+class DomTargetCache {
+  viewport: HTMLElement | null = null;
+  sticky: Set<HTMLElement> = new Set();
+  playheads: Set<HTMLElement> = new Set();
+  private observer?: MutationObserver;
+
+  attach(root: HTMLElement, stickyClass: string, store: JotViewStore): void {
+    this.viewport = root.querySelector<HTMLElement>('[data-jot-scroll-content]');
+    for (const el of root.querySelectorAll<HTMLElement>('.' + stickyClass)) {
+      this.sticky.add(el);
+    }
+    for (const el of root.querySelectorAll<HTMLElement>('[data-playhead="1"]')) {
+      this.playheads.add(el);
+    }
+    this.observer = new MutationObserver((records) => {
+      const seedX = String(store.scrollX);
+      for (const r of records) {
+        for (const node of r.addedNodes) {
+          if (!(node instanceof HTMLElement)) continue;
+          if (node.classList.contains(stickyClass)) {
+            this.sticky.add(node);
+            node.style.setProperty('--scroll-x', seedX);
+          }
+          if (node.dataset.playhead === '1') this.playheads.add(node);
+          for (const sub of node.querySelectorAll<HTMLElement>('.' + stickyClass)) {
+            this.sticky.add(sub);
+            sub.style.setProperty('--scroll-x', seedX);
+          }
+          for (const sub of node.querySelectorAll<HTMLElement>('[data-playhead="1"]')) {
+            this.playheads.add(sub);
+          }
+        }
+        for (const node of r.removedNodes) {
+          if (!(node instanceof HTMLElement)) continue;
+          this.sticky.delete(node);
+          this.playheads.delete(node);
+          for (const sub of node.querySelectorAll<HTMLElement>('.' + stickyClass)) {
+            this.sticky.delete(sub);
+          }
+          for (const sub of node.querySelectorAll<HTMLElement>('[data-playhead="1"]')) {
+            this.playheads.delete(sub);
+          }
+        }
+      }
+    });
+    this.observer.observe(root, { childList: true, subtree: true });
+  }
+
+  detach(): void {
+    this.observer?.disconnect();
+    this.observer = undefined;
+    this.viewport = null;
+    this.sticky.clear();
+    this.playheads.clear();
+  }
+}
+
+/**
  * Side-effect-only observer that writes `--scroll-x` / `--scroll-y` on
  * each consumer (the inner `.scrollViewport` plus every
  * `.scrollStickyHorizontal` element) whenever the store's virtual
@@ -858,10 +1156,7 @@ const GridLineVars = observer(
  * the per-tick `setProperty` only invalidates style on the elements
  * that actually consume them. Letting `--scroll-x` cascade across the
  * entire score subtree costs ~21 ms per playback tick on a long song,
- * blowing the 8.3 ms frame budget. The trade-off is that sticky
- * elements mounted AFTER the last scroll change need to be seeded; a
- * `MutationObserver` below catches those and writes the current
- * `--scroll-x` onto each newly-added sticky descendant.
+ * blowing the 8.3 ms frame budget.
  *
  * The wrapper `.scrollViewport` reads these vars via
  * `transform: translate3d(calc(var(--scroll-x) * -1px), ...)`, and the
@@ -869,136 +1164,51 @@ const GridLineVars = observer(
  * counter-transform formerly `position: sticky; left: 0` elements
  * (gutters, title/subtitle/legend); both consumers stay subpixel-locked
  * because the writes happen in the same effect tick.
- *
- * Per-consumer write rather than a cascading write on `.jotContainer`:
- * the vars are registered `inherits: false` so a single container-level
- * setProperty would no longer reach any consumer; targeting each one
- * directly also keeps the per-frame style invalidation scoped to a few
- * dozen elements instead of the entire score subtree. See
- * `setScrollX` / `setScrollY` for the targeting helpers.
  */
 const ScrollVar = observer(
   ({
-    containerRef,
+    cacheRef,
     store,
   }: {
-    containerRef: React.RefObject<HTMLDivElement>;
+    cacheRef: React.RefObject<DomTargetCache | null>;
     store: JotViewStore;
   }) => {
     const x = store.scrollX;
     const y = store.scrollY;
     React.useLayoutEffect(() => {
-      const el = containerRef.current;
-      if (!el) return;
-      // Unitless so the `calc(var(...) * -1px)` form in CSS multiplies a
-      // number by `1px` to get a length, mirroring `--px-per-beat`'s
-      // unitless storage. Written per-consumer to avoid the inherited-
-      // cascade subtree invalidation; see `setScrollX` / `setScrollY`.
-      setScrollX(el, x);
-      setScrollY(el, y);
-    }, [x, y, containerRef]);
-
-    // Seed `--scroll-x` on any sticky element that mounts AFTER the
-    // last scroll write. Without this, a row added later (a new audio
-    // track, a freshly loaded lyrics track) has no `--scroll-x` set
-    // and its counter-transform falls back to 0; the gutter scrolls
-    // with the content instead of staying pinned. Watching the
-    // container's `childList` with `subtree: true` catches every
-    // descendant insert; we read the live store value inside the
-    // observer callback so the seeded var reflects the current scroll
-    // position regardless of when the mutation lands.
-    React.useEffect(() => {
-      const el = containerRef.current;
-      if (!el) return;
-      const stickyClass = styles.scrollStickyHorizontal;
-      const mo = new MutationObserver((records) => {
-        const currentX = store.scrollX;
-        for (const r of records) {
-          if (r.addedNodes.length === 0) continue;
-          seedScrollXOnNewSticky(
-            Array.from(r.addedNodes),
-            stickyClass,
-            currentX,
-          );
-        }
-      });
-      mo.observe(el, { childList: true, subtree: true });
-      return () => mo.disconnect();
-    }, [containerRef, store]);
+      const cache = cacheRef.current;
+      if (!cache) return;
+      setScrollX(cache, x);
+      setScrollY(cache, y);
+    }, [x, y, cacheRef]);
     return null;
-  },
+  }
 );
 
 /**
- * Per-frame animation vars (`--playhead-x`, `--scroll-x`, `--scroll-y`)
- * are written by these helpers. Writing strategy differs per var:
- *
- * `--playhead-x`: registered `inherits: false`. Targeted at every
- *   `[data-playhead="1"]` element directly. Per-element writes here so
- *   the per-tick style invalidation stays scoped to the few playhead
- *   elements rather than cascading across the score.
- *
- * `--scroll-x` / `--scroll-y`: registered `inherits: true`. Written
- *   only on the inner `.scrollViewport` (`data-jot-scroll-content`);
- *   every descendant inherits via the cascade. This eliminates the
- *   new-element race the old per-element write had (a sticky gutter
- *   mounted after the user scrolled never received the var), and the
- *   inheritance scope is constrained to `.scrollViewport` so toolbar /
- *   playback bar siblings don't pay the per-tick recalc.
+ * Per-frame animation var writers. All four target a {@link DomTargetCache}
+ * rather than walking the DOM each call. `--scroll-x` / `--scroll-y` /
+ * `--playhead-x` are all registered `inherits: false` (see
+ * `design_tokens.css`); per-element writes keep the per-tick style
+ * invalidation scoped to the few elements that actually consume each var.
  */
-function setPlayheadVar(root: HTMLElement, x: number): void {
+function setPlayheadVar(cache: DomTargetCache, x: number): void {
   const px = `${x}px`;
-  const playheads = root.querySelectorAll<HTMLElement>('[data-playhead="1"]');
-  for (const ph of playheads) ph.style.setProperty('--playhead-x', px);
+  for (const ph of cache.playheads) ph.style.setProperty('--playhead-x', px);
 }
 
-function clearPlayheadVar(root: HTMLElement): void {
-  const playheads = root.querySelectorAll<HTMLElement>('[data-playhead="1"]');
-  for (const ph of playheads) ph.style.removeProperty('--playhead-x');
+function clearPlayheadVar(cache: DomTargetCache): void {
+  for (const ph of cache.playheads) ph.style.removeProperty('--playhead-x');
 }
 
-function setScrollX(root: HTMLElement, x: number): void {
+function setScrollX(cache: DomTargetCache, x: number): void {
   const xStr = String(x);
-  const viewport = root.querySelector<HTMLElement>('[data-jot-scroll-content]');
-  if (viewport) viewport.style.setProperty('--scroll-x', xStr);
-  // Per-consumer write keeps the style invalidation scoped to the
-  // elements that actually use the var. Letting `--scroll-x` cascade
-  // through the score subtree forces a ~21 ms style recalc per
-  // playback tick on a long song; see the doc comment in
-  // `design_tokens.css`. The trade-off is that new sticky elements
-  // added after the last scroll change need to be seeded explicitly;
-  // that's what the MutationObserver in `ScrollVar` handles.
-  const sticky = root.querySelectorAll<HTMLElement>(
-    '.' + styles.scrollStickyHorizontal,
-  );
-  for (const el of sticky) el.style.setProperty('--scroll-x', xStr);
+  if (cache.viewport) cache.viewport.style.setProperty('--scroll-x', xStr);
+  for (const el of cache.sticky) el.style.setProperty('--scroll-x', xStr);
 }
 
-function setScrollY(root: HTMLElement, y: number): void {
-  const viewport = root.querySelector<HTMLElement>('[data-jot-scroll-content]');
-  if (viewport) viewport.style.setProperty('--scroll-y', String(y));
-}
-
-/** Seed `--scroll-x` on newly-mounted sticky elements (only). Called
- *  from the `MutationObserver` reaction; avoids the broader
- *  `setScrollX` walk that would touch every existing sticky element
- *  on every mutation tick. */
-function seedScrollXOnNewSticky(
-  added: readonly Node[],
-  stickyClass: string,
-  x: number,
-): void {
-  const xStr = String(x);
-  for (const node of added) {
-    if (!(node instanceof HTMLElement)) continue;
-    if (node.classList.contains(stickyClass)) {
-      node.style.setProperty('--scroll-x', xStr);
-    }
-    // A row inserts a nested `.scrollStickyHorizontal` gutter, so
-    // also seed any matching descendants of the added node.
-    const inner = node.querySelectorAll<HTMLElement>('.' + stickyClass);
-    for (const el of inner) el.style.setProperty('--scroll-x', xStr);
-  }
+function setScrollY(cache: DomTargetCache, y: number): void {
+  if (cache.viewport) cache.viewport.style.setProperty('--scroll-y', String(y));
 }
 
 /**
@@ -1035,11 +1245,11 @@ function seedScrollXOnNewSticky(
  */
 const PlayheadPosVar = observer(
   ({
-    containerRef,
+    cacheRef,
     getGutterWidth,
     store,
   }: {
-    containerRef: React.RefObject<HTMLDivElement>;
+    cacheRef: React.RefObject<DomTargetCache | null>;
     getGutterWidth: () => number;
     store: JotViewStore;
   }) => {
@@ -1048,8 +1258,9 @@ const PlayheadPosVar = observer(
     const cued = jotPlayer.cued;
     const timeline = jotPlayer.timeline;
     const follow = React.useContext(FollowPlayheadContext).follow;
-    // Read `pxPerBeat` so this observer re-runs whenever zoom changes; // `timeToX` reads `bar.x` / `bar.width` (zoom-dependent), but the
-    // effect deps wouldn't otherwise know to re-fire when the user
+    // Read `pxPerBeat` so this observer re-runs whenever zoom changes;
+    // `timeToX` resolves bar widths from `pxPerBeat * structure.bars[i].beats`,
+    // but the effect deps wouldn't otherwise know to re-fire when the user
     // zooms while paused or cued, leaving `--playhead-x` stale until
     // the next `currentTime` tick. During playback `t` updates every
     // frame so this read is a no-op; while paused/idle/cued it's the
@@ -1057,10 +1268,9 @@ const PlayheadPosVar = observer(
     const pxPerBeat = timeline.rendered?.pxPerBeat ?? 0;
     const prevStateRef = React.useRef(state);
     React.useLayoutEffect(() => {
-      const el = containerRef.current;
-      if (!el) return;
-      const wasActive =
-        prevStateRef.current === 'playing' || prevStateRef.current === 'paused';
+      const cache = cacheRef.current;
+      if (!cache) return;
+      const wasActive = prevStateRef.current === 'playing' || prevStateRef.current === 'paused';
       prevStateRef.current = state;
 
       // Stop (active → idle): snap the score back to its start so the
@@ -1070,13 +1280,13 @@ const PlayheadPosVar = observer(
       // no-op until the first play has happened.
       if (wasActive && state === 'idle') {
         store.resetScrollX();
-        clearPlayheadVar(el);
+        clearPlayheadVar(cache);
         return;
       }
 
       const active = state === 'playing' || state === 'paused' || cued;
       if (!active || timeline.bars.length === 0) {
-        clearPlayheadVar(el);
+        clearPlayheadVar(cache);
         return;
       }
 
@@ -1112,21 +1322,11 @@ const PlayheadPosVar = observer(
         const clientWidth = store._viewportWidth;
         if (clientWidth > 0) {
           store.setScrollX(getGutterWidth() + x - clientWidth / 2);
-          setScrollX(el, store.scrollX);
+          setScrollX(cache, store.scrollX);
         }
       }
-      setPlayheadVar(el, x);
-    }, [
-      t,
-      state,
-      cued,
-      timeline,
-      pxPerBeat,
-      follow,
-      containerRef,
-      getGutterWidth,
-      store,
-    ]);
+      setPlayheadVar(cache, x);
+    }, [t, state, cued, timeline, pxPerBeat, follow, cacheRef, getGutterWidth, store]);
     return null;
   }
 );
@@ -1184,8 +1384,8 @@ const EmptyState = observer(({ store }: { store: JotViewStore }) => {
         </div>
         <h2 className={styles.emptyStateTitle}>Open a file to get started</h2>
         <p className={styles.emptyStateBody}>
-          Load a Drumjot <code>.jot</code>, a ParaDB map, or a recent
-          transcription, or try one of the examples below.
+          Load a Drumjot <code>.jot</code>, a ParaDB map, or a recent transcription, or try one of
+          the examples below.
         </p>
         <div className={styles.emptyStateActions}>
           <button
@@ -1217,14 +1417,11 @@ const EmptyState = observer(({ store }: { store: JotViewStore }) => {
           </div>
         </div>
         <p className={styles.emptyStateHint}>
-          For other formats, use the <b>File</b> or <b>Transcribe</b> menus in
-          the toolbar above.
+          For other formats, use the <b>File</b> or <b>Transcribe</b> menus in the toolbar above.
         </p>
         {store.examples.length > 0 && (
           <div className={styles.emptyStateExamples}>
-            <span className={styles.emptyStateExamplesLabel}>
-              Or try an example
-            </span>
+            <span className={styles.emptyStateExamplesLabel}>Or try an example</span>
             <div className={styles.emptyStateExampleRow}>
               {store.examples.map((ex) => (
                 <button
@@ -1277,9 +1474,7 @@ const LoadingOverlay = observer(({ store }: { store: JotViewStore }) => {
       onMouseDown={(e) => e.stopPropagation()}
     >
       <div className={styles.loadingSpinner} aria-hidden="true" />
-      {store.loadingLabel && (
-        <div className={styles.loadingLabel}>{store.loadingLabel}</div>
-      )}
+      {store.loadingLabel && <div className={styles.loadingLabel}>{store.loadingLabel}</div>}
     </div>
   );
 });

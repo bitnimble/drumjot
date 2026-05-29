@@ -20,6 +20,7 @@
 
 import { makeAutoObservable } from 'mobx';
 import { JotTimeline } from 'src/playback';
+import { LYRICS_FALLBACK_COLOR } from 'src/tracks';
 import { LyricLine } from './lrc';
 
 export type LyricsSource = 'lrclib' | 'file' | 'plaintext';
@@ -37,6 +38,15 @@ export type LyricsTrack = {
   readonly source: LyricsSource;
   readonly sourceLabel: string;
   readonly offsetSec: number;
+  /**
+   * Satisfies the unified {@link import('src/tracks').Track} interface.
+   * Lyrics rows have no visible per-row colour today; the fixed neutral
+   * value here is enough to let downstream code (the picker, future
+   * tinting) treat every mixer row uniformly. The overflow menu
+   * deliberately omits a Colour control for this kind, since changing
+   * the value has no current visual effect.
+   */
+  readonly color: string;
 };
 
 /** Slider bounds for the user-facing time-offset nudger. Mirrors the
@@ -85,6 +95,7 @@ export class LyricsStore {
       source: opts.source,
       sourceLabel,
       offsetSec: 0,
+      color: LYRICS_FALLBACK_COLOR,
     });
     return id;
   }

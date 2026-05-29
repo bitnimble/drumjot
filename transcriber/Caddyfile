@@ -1,5 +1,9 @@
 # Drumjot transcriber edge router.
 #
+# This file holds the always-on global block and the :8001 fan-out.
+# The :5173 frontend block lives in Caddyfile.frontend and is appended
+# at runtime by transcriber/entrypoint.sh unless DISABLE_FRONTEND=1.
+#
 # Caddy listens on the container's only externally-exposed port (8001)
 # and fans out to two internal uvicorn workers:
 #
@@ -49,7 +53,7 @@
 
 	# Lightweight control-plane endpoints (/health, GET /transcribe/list,
 	# /outputs/*, CORS preflights). The api worker has the full route
-	# table mounted but rejects the heavy POSTs with 503 — see
+	# table mounted but rejects the heavy POSTs with 503; see
 	# `_require_pipeline_role` in app/main.py.
 	reverse_proxy 127.0.0.1:8003
 }

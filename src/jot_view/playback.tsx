@@ -126,11 +126,7 @@ const PlaybackControls = observer(
           </button>
           <button
             type="button"
-            className={classNames(
-              styles.transportButton,
-              styles.transportButtonStop,
-              styles.transportStop
-            )}
+            className={classNames(styles.transportButton, styles.transportButtonStop)}
             onClick={onStop}
             disabled={!active}
             aria-label="Stop"
@@ -218,14 +214,15 @@ export const PlaybackBar = observer(({ store }: { store: JotViewStore }) => (
  *
  * Position is NOT driven from this component; it's read from the
  * `--playhead-x` CSS custom property that `PlayheadPosVar` writes once
- * per frame on the score root (see jot_view.tsx). Every `.playhead`
- * inherits the variable, so per-frame motion is a single DOM
- * `setProperty` (regardless of how many playheads are mounted) and ZERO
- * React reconciliations on this component. The shell only re-renders
- * when `state` / `cued` / `timeline` change (i.e. transport events,
- * not per-frame playback) so a debug bundle with many tracks doesn't
- * pay N × (reconciliation + new style object + new closure) every
- * frame the way it used to.
+ * per frame on each `[data-playhead="1"]` element (see jot_view.tsx).
+ * The var is registered `inherits: false`, so the per-tick `setProperty`
+ * has to be made per-playhead; `PlayheadPosVar` iterates a cached
+ * `DomTargetCache.playheads` Set (maintained via a single
+ * `MutationObserver` on the JotView root) instead of `querySelectorAll`-ing
+ * every frame. The shell only re-renders when `state` / `cued` / `timeline`
+ * change (i.e. transport events, not per-frame playback) so a debug bundle
+ * with many tracks doesn't pay N × (reconciliation + new style object +
+ * new closure) every frame the way it used to.
  *
  * Drag-to-scrub still works because the mousedown handler measures
  * against the parent bars-row's bounding rect, which is unaffected by

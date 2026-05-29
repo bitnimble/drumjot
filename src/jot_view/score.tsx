@@ -229,6 +229,8 @@ export const TimelineHeader = observer(
 
     let cumBeats = 0;
     let prevTime: { count: number; unit: number } | undefined;
+    // Tempo "carried out" of the previous bar (= its last segment's bpm).
+    // Rounded so float jitter (119.97 vs 120.03) doesn't paint a change.
     let prevBpm: number | undefined;
     return (
       <div className={styles.timelineHeader}>
@@ -249,34 +251,63 @@ export const TimelineHeader = observer(
             const showTimeSig =
               !prevTime || bar.time.count !== prevTime.count || bar.time.unit !== prevTime.unit;
             prevTime = bar.time;
-            // Tempo at the bar's downbeat = first segment's bpm.
-            // Round before comparing so floating-point jitter on
-            // transcribed bundles (e.g. 119.97 vs 120.03) doesn't paint
-            // a "change" pill on every bar.
-            const displayBpm = Math.round(tempos[i]?.segments[0]?.bpm ?? 120);
-            const showBpm = prevBpm === undefined || displayBpm !== prevBpm;
-            prevBpm = displayBpm;
+            // Walk the bar's tempo segments and emit a label whenever the
+            // bpm changes (relative to the running bpm). The label at
+            // segment.startBeat=0 sits in the bar tick's top row alongside
+            // the bar number; later labels float at their beat-anchored
+            // position so a mid-bar tempo change renders where it actually
+            // takes effect, not at the next downbeat.
+            const segments = tempos[i]?.segments ?? [];
+            let downbeatBpm: number | undefined;
+            const midBpmChanges: Array<{ beat: number; bpm: number }> = [];
+            for (let s = 0; s < segments.length; s++) {
+              const seg = segments[s];
+              const bpm = Math.round(seg.bpm);
+              if (prevBpm === undefined || bpm !== prevBpm) {
+                if (seg.startBeat === 0) downbeatBpm = bpm;
+                else midBpmChanges.push({ beat: seg.startBeat, bpm });
+                prevBpm = bpm;
+              }
+            }
             return (
-              <div
-                key={i}
-                className={styles.timelineHeaderTick}
-                style={
-                  {
-                    ['--bar-start-beat' as string]: startBeat,
-                  } as React.CSSProperties
-                }
-              >
-                <div className={styles.timelineHeaderTopRow}>
-                  <span className={styles.timelineHeaderBar}>{bar.index}</span>
-                  {showTimeSig && (
-                    <span className={styles.timelineHeaderTimeSig}>
-                      {bar.time.count}/{bar.time.unit}
-                    </span>
-                  )}
-                  {showBpm && <span className={styles.timelineHeaderBpm}>{displayBpm} bpm</span>}
+              <React.Fragment key={i}>
+                <div
+                  className={styles.timelineHeaderTick}
+                  style={
+                    {
+                      ['--bar-start-beat' as string]: startBeat,
+                    } as React.CSSProperties
+                  }
+                >
+                  <div className={styles.timelineHeaderTopRow}>
+                    <span className={styles.timelineHeaderBar}>{bar.index}</span>
+                    {showTimeSig && (
+                      <span className={styles.timelineHeaderTimeSig}>
+                        {bar.time.count}/{bar.time.unit}
+                      </span>
+                    )}
+                    {downbeatBpm !== undefined && (
+                      <span className={styles.timelineHeaderBpm}>{downbeatBpm} bpm</span>
+                    )}
+                  </div>
+                  <span className={styles.timelineHeaderTime}>{formatTime(timeSec)}</span>
                 </div>
-                <span className={styles.timelineHeaderTime}>{formatTime(timeSec)}</span>
-              </div>
+                {midBpmChanges.map((c, j) => (
+                  <div
+                    key={`bpm-${i}-${j}`}
+                    className={styles.timelineHeaderBpmAnchor}
+                    style={
+                      {
+                        ['--bar-start-beat' as string]: startBeat + c.beat,
+                      } as React.CSSProperties
+                    }
+                  >
+                    <div className={styles.timelineHeaderTopRow}>
+                      <span className={styles.timelineHeaderBpm}>{c.bpm} bpm</span>
+                    </div>
+                  </div>
+                ))}
+              </React.Fragment>
             );
           })}
           <Playhead showLabel onSeek={onSeek} />
@@ -306,6 +337,7 @@ export const BarView = observer(
     showBrackets = true,
     rowPitch,
     pitchOrder,
+    colorForPitch,
   }: {
     bar: StructuralBar;
     /** Cumulative quarter-note position of this bar's left edge within
@@ -336,12 +368,21 @@ export const BarView = observer(
     /**
      * Drum pitches in mixer-row order. Used together with {@link rowPitch}
      * to decide which row is the topmost / bottommost contributor for a
-     * given span — the topmost shows the pattern label and the top edge
+     * given span; the topmost shows the pattern label and the top edge
      * of the bracket, the bottommost shows the bottom edge, middles show
      * only the left/right sides so the outline reads as one connected
      * box across all participating rows.
      */
     pitchOrder?: readonly string[];
+    /**
+     * Optional per-pitch colour override. The unified mixer uses this to
+     * layer the user's per-instrument-track colour pick on top of the
+     * jot's palette default; the jot's structural `track.color` is the
+     * palette-only baseline, and this resolver returns the same value
+     * augmented with the override (or undefined / empty when the row
+     * should fall through to the palette default).
+     */
+    colorForPitch?: (pitch: string) => string | undefined;
   }) => {
     // Inline style carries only zoom-invariant data so React's prop
     // diff sees no change on a zoom tick: `--bar-start-beat` /
@@ -433,7 +474,7 @@ export const BarView = observer(
                   key={i}
                   note={note}
                   bar={bar}
-                  color={track.color}
+                  color={colorForPitch?.(pitch) ?? track.color}
                   config={config}
                   instrument={track.instrument}
                   // A non-straight note already inside a tuplet bracket

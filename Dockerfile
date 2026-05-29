@@ -1,14 +1,49 @@
-# Drumjot transcriber container.
+# Drumjot all-in-one container.
+#
+# Bundles the React/Vite frontend (served as a static SPA) and the
+# Python transcriber service (FastAPI under Caddy) into a single image.
+# Caddy fans out requests:
+#
+#   :5173  -> static `/app/web` (the built frontend) with SPA fallback,
+#            plus `/api/*` reverse-proxied to the transcriber router
+#            on :8001 (with `/api` stripped, mirroring the Vite dev
+#            proxy so the browser bundle stays origin-agnostic).
+#   :8001  -> transcriber router. Splits POST /transcribe* / /lyrics/align
+#            into the pipeline worker (:8002) and everything else into
+#            the api worker (:8003). See transcriber/Caddyfile.
 #
 # Base: CUDA runtime on Ubuntu 22.04. Works on any host with NVIDIA driver
 # 555+ and the NVIDIA Container Toolkit installed. Falls back to CPU
 # automatically if no GPU is exposed to the container (audio-separator
 # handles the device selection).
+
+# -----------------------------------------------------------------------------
+# Stage 1: build the frontend with bun.
 #
-# Build context: the repo root (see transcriber/docker-compose.yml). The
-# image only needs `transcriber/` today — `bun` and the bun bridges used
-# by the legacy DSL pathway are gone — but the build context is left at
-# the repo root so adding a future TS bridge stays a one-line change.
+# Lives in a separate stage so the multi-GB CUDA runtime doesn't carry
+# node_modules into the final image, and so a frontend-only edit
+# doesn't invalidate the Python/torch layers below it (and vice
+# versa). Bun version matches `packageManager` in package.json.
+# -----------------------------------------------------------------------------
+FROM oven/bun:1.3.5 AS frontend-builder
+WORKDIR /build
+
+# Dep manifest first so the install layer caches across source edits.
+COPY package.json bun.lock bunfig.toml ./
+RUN bun install --frozen-lockfile
+
+# Build inputs. `bun run build` runs stylelint + tsc --noEmit + vite
+# build, so we need the stylelint config alongside the source. Public
+# assets (favicon, etc.) are copied so vite's `public/` pass-through
+# works at build time.
+COPY tsconfig.json vite.config.ts index.html .stylelintrc.json ./
+COPY src/ ./src/
+COPY public/ ./public/
+RUN bun run build
+
+# -----------------------------------------------------------------------------
+# Stage 2: transcriber runtime (Python + Caddy + frontend static bundle).
+# -----------------------------------------------------------------------------
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -36,11 +71,12 @@ RUN add-apt-repository -y ppa:deadsnakes/ppa \
     && curl -fsSL https://bootstrap.pypa.io/get-pip.py | python3.11 \
     && rm -rf /var/lib/apt/lists/*
 
-# Caddy: in-container reverse proxy that routes POST /transcribe* to the
-# pipeline worker (loads models) and everything else to the api worker
-# (no GPU). Pulled as the official static binary so the install doesn't
+# Caddy: in-container reverse proxy. Now does double duty; fronts the
+# transcriber workers on :8001 (the original split) AND serves the
+# bundled frontend on :5173 with `/api/*` proxied back through the
+# router. Pulled as the official static binary so the install doesn't
 # drag in apt repository keys / systemd units we don't need. Version
-# pinned for reproducibility — bump deliberately, not by floating tag.
+# pinned for reproducibility; bump deliberately, not by floating tag.
 ARG CADDY_VERSION=2.8.4
 RUN curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_amd64.tar.gz" \
         | tar -xz -C /usr/local/bin caddy \
@@ -148,10 +184,18 @@ COPY transcriber/app/ ./app/
 COPY transcriber/prompts/ ./prompts/
 
 # Caddy config + the entrypoint that launches both uvicorn workers and
-# Caddy as siblings. See the file comments for the routing split.
+# Caddy as siblings. See the file comments for the routing split. The
+# frontend snippet is a separate file so entrypoint.sh can conditionally
+# include it via DISABLE_FRONTEND (lets the host-side Vite dev server
+# claim :5173 without colliding with the bundled SPA).
 COPY transcriber/Caddyfile /etc/caddy/Caddyfile
+COPY transcriber/Caddyfile.frontend /etc/caddy/Caddyfile.frontend
 COPY transcriber/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
+
+# Built frontend bundle from stage 1. Served as static files by Caddy
+# on :5173 with SPA fallback to index.html (see Caddyfile).
+COPY --from=frontend-builder /build/dist /app/web
 
 # Beat Transformer checkpoint (optional). If the directory is empty
 # the image still builds; BT just fails-loud at first use when
@@ -159,7 +203,7 @@ RUN chmod +x /app/entrypoint.sh
 COPY transcriber/checkpoints/ ./checkpoints/
 
 # Benchmark harness code (datasets/ and results/ are intentionally NOT
-# copied — they're host-mounted at runtime via docker-compose volumes
+# copied; they're host-mounted at runtime via docker-compose volumes
 # so the user can paste large fixture files in without rebuilding).
 COPY transcriber/benchmarks/__init__.py \
      transcriber/benchmarks/README.md \
@@ -171,7 +215,7 @@ COPY transcriber/benchmarks/loaders/ ./benchmarks/loaders/
 # Models cache lives on a Docker volume so weights persist across rebuilds.
 # Pre-create the runtime-writable paths and chown them to the `app` user.
 # A named-volume mount onto a directory the image owns at app:app will
-# inherit that ownership on FIRST creation — if you already have a
+# inherit that ownership on FIRST creation; if you already have a
 # models-cache volume from a previous root-owned run, you'll need to
 # `docker compose down -v` once for the new ownership to stick.
 RUN mkdir -p /models /debug /app/benchmarks/datasets /app/benchmarks/results \
@@ -183,7 +227,7 @@ ENV AUDIO_SEPARATOR_MODEL_FILE_DIR=/models \
 
 USER app:app
 
-EXPOSE 8001
+EXPOSE 5173 8001
 
 # Healthcheck so docker-compose / orchestrators can detect readiness.
 # `start-period` is generous because the first container startup eagerly

@@ -13,21 +13,26 @@
         "Bash(tsc *)",
         "Bash(bun test *)",
         "Bash(bun run test *)",
-        "Bash(bun run lint:design *)",
+        "Bash(bun run lint *)",
         "Bash(bunx --bun vite *)"
       ],
       "reason": "Use `scripts/check-ts` instead of invoking tsc / bun test / stylelint directly. It chains stylelint --fix + tsc --noEmit + bun test in the right cwd; trailing args pass through to `bun test` so single-file iteration still works (`scripts/check-ts src/jot_view/store.test.ts`). See AGENTS.md §3."
     },
     {
-      "commands": ["Bash(gh api *)"],
-      "reason": "Use the GitHub API via WebFetch() instead of invoking gh api directly"
+      "commands": ["Bash(gh *)"],
+      "reason": "Use the GitHub API via Fetch() instead of invoking gh directly"
     },
     {
       "commands": ["Bash(sed *)", "Bash(grep *)", "Bash(find *)", "Bash(rg *)", "Bash(awk *)"],
       "reason": "Use the Read(), Write(), Edit() and Find() tools instead of invoking sed, grep, find, rg or awk directly"
     },
     {
-      "commands": ["Bash(bun run dev *)", "Bash(bunx playwright *)"],
+      "commands": [
+        "Bash(bun dev *)",
+        "Bash(bun run dev *)",
+        "Bash(bun x playwright *)",
+        "Bash(bunx playwright *)"
+      ],
       "reason": "Do not start the dev server as the user probably has their own dev server running, and it will fail to bind to the same port. If you need to test something in a browser, use `bun run e2e` to run E2E tests in Playwright instead."
     },
     {

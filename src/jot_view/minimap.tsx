@@ -26,6 +26,7 @@
  *                          as `PlayheadPosVar` in jot_view.tsx; keeps the
  *                          main shell from reconciling 60×/s.
  */
+import { reaction } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { jotPlayer } from 'src/playback';
@@ -53,14 +54,21 @@ type NoteMark = {
   color: string;
 };
 
+const EMPTY_NOTE_MARKS: readonly NoteMark[] = Object.freeze([]);
+
+function noteMarksEqual(a: readonly NoteMark[], b: readonly NoteMark[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].x !== b[i].x || a[i].color !== b[i].color) return false;
+  }
+  return true;
+}
+
 export const Minimap = observer(({ store }: { store: JotViewStore }) => {
   const jot = store.currentJot;
   const containerRef = React.useRef<HTMLDivElement>(null);
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
-  const viewportBoxRef = React.useRef<HTMLDivElement>(null);
-  const dimLeftRef = React.useRef<HTMLDivElement>(null);
-  const dimRightRef = React.useRef<HTMLDivElement>(null);
-  const playheadRef = React.useRef<HTMLDivElement>(null);
 
   // Width measurement. ResizeObserver fires synchronously on `observe`
   // so the first non-zero width arrives before paint. The deps include
@@ -108,11 +116,30 @@ export const Minimap = observer(({ store }: { store: JotViewStore }) => {
   }, [jot, width]);
 
   // ─── Waveform peaks (worker-computed at minimap resolution) ─────────
-  const audioTrack = jotPlayer.primaryWaveformTrack;
+  // Compute peaks for every AUDIBLE audio track in parallel and sum them
+  // element-wise so the minimap waveform reflects the combined mix the
+  // user actually hears, not just one track. Each track's worker returns
+  // a `Float32Array` of `[min, max]` pairs per pixel column; summing the
+  // pairs across tracks gives an envelope-additive view (additive on the
+  // bounds is a valid upper bound on the summed signal, which is what
+  // the audio graph plays). Muted / solo-excluded / master-muted tracks
+  // drop out via {@link JotViewStore.isAudioTrackAudible}, so a mute
+  // toggle reflects in the waveform immediately and a fully-muted bus
+  // renders empty rather than misleading the operator.
+  const audibleAudioTrackIds = Array.from(jotPlayer.audioTracks.keys()).filter((id) =>
+    store.isAudioTrackAudible(id)
+  );
+  const audibleAudioTrackIdsKey = audibleAudioTrackIds.join(',');
   const drumsT0Sec = jotPlayer.drumsT0Sec;
   const [peaks, setPeaks] = React.useState<Float32Array | null>(null);
   React.useEffect(() => {
-    if (!audioTrack || !hasContent || width <= 0 || bars.length === 0 || !jot) {
+    if (
+      audibleAudioTrackIds.length === 0 ||
+      !hasContent ||
+      width <= 0 ||
+      bars.length === 0 ||
+      !jot
+    ) {
       setPeaks(null);
       return;
     }
@@ -124,50 +151,115 @@ export const Minimap = observer(({ store }: { store: JotViewStore }) => {
       durationSec: t.durationSec,
     }));
     let cancelled = false;
-    waveformWorker
-      .computePeaks(audioTrack.id, slices, width, drumsT0Sec)
-      .then((p) => {
-        if (!cancelled) setPeaks(p);
-      })
-      .catch((err) => {
-        if (!cancelled) {
+    Promise.all(
+      audibleAudioTrackIds.map((id) =>
+        waveformWorker.computePeaks(id, slices, width, drumsT0Sec).catch((err) => {
           // eslint-disable-next-line no-console
-          console.warn('[minimap] peaks failed:', err);
-          setPeaks(null);
-        }
-      });
+          console.warn('[minimap] peaks failed for', id, err);
+          return null;
+        })
+      )
+    ).then((perTrack) => {
+      if (cancelled) return;
+      const valid = perTrack.filter((p): p is Float32Array => p !== null);
+      if (valid.length === 0) {
+        setPeaks(null);
+        return;
+      }
+      if (valid.length === 1) {
+        setPeaks(valid[0]);
+        return;
+      }
+      // Pick the longest array as the canonical length; tracks that
+      // came back short (worker hiccup, dropped mid-flight) just don't
+      // contribute to the tail columns.
+      let len = 0;
+      for (const p of valid) if (p.length > len) len = p.length;
+      const combined = new Float32Array(len);
+      for (const p of valid) {
+        const n = Math.min(p.length, len);
+        for (let i = 0; i < n; i++) combined[i] += p[i];
+      }
+      setPeaks(combined);
+    });
     return () => {
       cancelled = true;
     };
-  }, [audioTrack?.id, bars, width, hasContent, drumsT0Sec, jot]);
+    // `audibleAudioTrackIds` is a fresh array every render, so depend on
+    // its string key rather than the array itself; otherwise the effect
+    // would refire on every Minimap render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [audibleAudioTrackIdsKey, bars, width, hasContent, drumsT0Sec, jot]);
 
   // ─── Note marks (color-coded per pitch, plotted in minimap-px) ──────
-  const noteMarks = React.useMemo<NoteMark[]>(() => {
-    if (!jot || !hasContent || width <= 0 || bars.length === 0) return [];
-    const structBars = jot.structure.voices[0]?.bars ?? [];
-    const out: NoteMark[] = [];
-    for (let i = 0; i < structBars.length; i++) {
-      const sb = structBars[i];
-      const layout = bars[i];
-      if (!layout || sb.beats <= 0) continue;
-      for (const track of Object.values(sb.tracks)) {
-        const color = track.color;
-        for (const note of track.notes) {
-          const frac = note.beat / sb.beats;
-          out.push({ x: layout.x + frac * layout.width, color });
-        }
-      }
+  // Driven by a MobX `reaction` rather than computed in the render body so
+  // the array identity stays stable when the underlying data hasn't
+  // changed. Computing in-render gave a fresh array every render, and
+  // even a Minimap re-render triggered by some other observable (e.g. a
+  // stem-mute toggle, a colour pick) refired the canvas paint effect
+  // below because its deps array saw a new `noteMarks` reference. The
+  // reaction tracks the per-pitch `store.getInstrumentTrack(pitch).color`
+  // observable that a useMemo dep array couldn't capture, and
+  // `noteMarksEqual` collapses content-identical results to the same
+  // reference so the canvas paint only refires when notes actually moved
+  // or recoloured.
+  const [noteMarks, setNoteMarks] = React.useState<readonly NoteMark[]>(EMPTY_NOTE_MARKS);
+  React.useEffect(() => {
+    if (!jot || !hasContent || width <= 0 || bars.length === 0) {
+      setNoteMarks(EMPTY_NOTE_MARKS);
+      return;
     }
-    return out;
-  }, [jot, bars, hasContent, width]);
+    return reaction(
+      () => {
+        const structBars = jot.structure.voices[0]?.bars ?? [];
+        const out: NoteMark[] = [];
+        for (let i = 0; i < structBars.length; i++) {
+          const sb = structBars[i];
+          const layout = bars[i];
+          if (!layout || sb.beats <= 0) continue;
+          for (const [pitch, track] of Object.entries(sb.tracks)) {
+            // Skip muted / solo-excluded / master-muted pitches so the
+            // minimap reads as the audible mix, mirroring the audio
+            // waveform path. Tracking `isPitchAudible` here subscribes
+            // the reaction to the underlying mute/solo observables, so
+            // a toggle updates the ticks live.
+            if (!store.isPitchAudible(pitch)) continue;
+            const color = store.getInstrumentTrack(pitch).color || track.color;
+            for (const note of track.notes) {
+              const frac = note.beat / sb.beats;
+              out.push({ x: layout.x + frac * layout.width, color });
+            }
+          }
+        }
+        return out;
+      },
+      (next) => setNoteMarks(next),
+      { fireImmediately: true, equals: noteMarksEqual }
+    );
+  }, [jot, bars, width, hasContent, store]);
 
   // ─── Canvas paint (waveform + note ticks in one bitmap) ─────────────
+  // Waveform and per-color note ticks are batched through a `Path2D` so
+  // each colour pays one `fill()` call regardless of how many bars /
+  // notes contribute to it. The pre-batch version issued a `fillRect`
+  // per pixel column (1000+ for a typical minimap width) plus a
+  // `fillStyle` + `fillRect` pair per note, all of which the profiler
+  // surfaced as a hot `fillRect` ridge under `Minimap` even when paints
+  // were rare. One `fill()` per colour collapses that ridge to a
+  // handful of dispatches.
   React.useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || width <= 0) return;
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.max(1, Math.floor(width * dpr));
-    canvas.height = Math.max(1, Math.floor(TOTAL_CANVAS_H * dpr));
+    // Setting `.width` / `.height` clears the canvas state, so only
+    // touch them when they actually change. Without the guard, every
+    // effect run (jot change, peaks landing, note-color tweak) reset
+    // the bitmap even when dimensions were identical, and on a long
+    // song the implicit clear plus reallocation was nontrivial.
+    const targetW = Math.max(1, Math.floor(width * dpr));
+    const targetH = Math.max(1, Math.floor(TOTAL_CANVAS_H * dpr));
+    if (canvas.width !== targetW) canvas.width = targetW;
+    if (canvas.height !== targetH) canvas.height = targetH;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -179,74 +271,63 @@ export const Minimap = observer(({ store }: { store: JotViewStore }) => {
 
     if (peaks) {
       const scale = (WAVEFORM_H / 2) * 0.9;
-      ctx.fillStyle = WAVEFORM_PAINT_COLOR;
       const cols = Math.min(width, Math.floor(peaks.length / 2));
+      const wavePath = new Path2D();
       for (let p = 0; p < cols; p++) {
         const mn = peaks[p * 2];
         const mx = peaks[p * 2 + 1];
         const y0 = mid - mx * scale;
         const y1 = mid - mn * scale;
-        ctx.fillRect(p, y0, 1, Math.max(1, y1 - y0));
+        wavePath.rect(p, y0, 1, Math.max(1, y1 - y0));
       }
+      ctx.fillStyle = WAVEFORM_PAINT_COLOR;
+      ctx.fill(wavePath);
     }
 
     if (noteMarks.length > 0) {
       const tickH = NOTE_STRIP_H - 2;
+      // Group note rects by colour so each colour becomes one Path2D +
+      // one `fill()`. Typical jots use ≤ 8 distinct lane colours, so
+      // this collapses hundreds of fillRect dispatches into a handful.
+      const pathByColor = new Map<string, Path2D>();
       for (const mark of noteMarks) {
-        ctx.fillStyle = mark.color;
-        ctx.fillRect(Math.floor(mark.x) - 1, 1, 2, tickH);
+        let path = pathByColor.get(mark.color);
+        if (!path) {
+          path = new Path2D();
+          pathByColor.set(mark.color, path);
+        }
+        path.rect(Math.floor(mark.x) - 1, 1, 2, tickH);
+      }
+      for (const [color, path] of pathByColor) {
+        ctx.fillStyle = color;
+        ctx.fill(path);
       }
     }
   }, [peaks, noteMarks, width]);
 
-  // ─── Score scroll → viewport box + dim overlay positions ──────────
-  // The dim overlays sit flush against either side of the viewport box,
-  // covering everything outside it with a subtle fade so the in-view
-  // range reads as the prominent slice (IDE-minimap convention).
-  // Inputs (`scrollX`, `_viewportWidth`, `_contentWidth`) are MobX
-  // observables on the store; the component re-renders whenever any of
-  // them changes and a useLayoutEffect writes the derived px values to
-  // the imperative refs to avoid touching JSX for a high-frequency style.
-  const scrollX = store.scrollX;
-  const sw = store._contentWidth;
-  const cw = store._viewportWidth;
-  React.useLayoutEffect(() => {
-    if (!hasContent || width <= 0) return;
-    const box = viewportBoxRef.current;
-    const dimLeft = dimLeftRef.current;
-    const dimRight = dimRightRef.current;
-    if (!box || !dimLeft || !dimRight) return;
-    if (sw <= 0) {
-      box.style.width = '0px';
-      dimLeft.style.width = '0px';
-      dimRight.style.width = '0px';
-      return;
-    }
-    const boxLeft = (scrollX / sw) * width;
-    const boxWidth = Math.max(2, (cw / sw) * width);
-    box.style.left = `${boxLeft}px`;
-    box.style.width = `${boxWidth}px`;
-    dimLeft.style.left = '0px';
-    dimLeft.style.width = `${Math.max(0, boxLeft)}px`;
-    const rightStart = boxLeft + boxWidth;
-    dimRight.style.left = `${rightStart}px`;
-    dimRight.style.width = `${Math.max(0, width - rightStart)}px`;
-  }, [scrollX, sw, cw, width, hasContent]);
-
   // ─── Pointer interaction: click-to-jump + drag-to-scroll ───────────
   // rAF-coalesced: pointermove can fire 120+ Hz on modern trackpads;
   // each scroll write triggers downstream observer reactions (the
-  // viewport box update above, PlayheadPosVar reading scrollX during
-  // auto-follow). Capping writes at one per frame caps that cascade at
-  // the display refresh rate, which is the maximum useful rate anyway.
+  // viewport box update via `MinimapViewportBox`, PlayheadPosVar reading
+  // scrollX during auto-follow). Capping writes at one per frame caps
+  // that cascade at the display refresh rate, which is the maximum
+  // useful rate anyway.
+  //
+  // The handler reads `store.scrollX` / `_contentWidth` / `_viewportWidth`
+  // FRESH at pointer-down time (not from closure-captured render values)
+  // so the parent `Minimap` doesn't have to subscribe to those
+  // frame-cadence observables. See `MinimapViewportBox` below for why
+  // the viewport-box rendering is its own observer.
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 || !hasContent) return;
+    const sw = store._contentWidth;
+    const cw = store._viewportWidth;
     if (sw <= 0 || width <= 0) return;
     e.preventDefault();
     // Clicking or dragging the minimap is an explicit "scroll the score
     // somewhere else" intent; auto-follow would re-pin the playhead on
     // the next frame and visually undo the user's nudge.
-    if (store.followPlayhead) store.toggleFollowPlayhead();
+    store.setFollowPlayhead(false);
     const rect = e.currentTarget.getBoundingClientRect();
     const scale = sw / width;
 
@@ -254,8 +335,7 @@ export const Minimap = observer(({ store }: { store: JotViewStore }) => {
     const boxWidthAtDown = Math.max(2, (cw / sw) * width);
     const originX = e.clientX;
     const localXAtDown = originX - rect.left;
-    const onBox =
-      localXAtDown >= boxLeftAtDown && localXAtDown <= boxLeftAtDown + boxWidthAtDown;
+    const onBox = localXAtDown >= boxLeftAtDown && localXAtDown <= boxLeftAtDown + boxWidthAtDown;
     let startScroll = store.scrollX;
     if (!onBox) {
       // Centre the box on the click; the drag continues from there.
@@ -301,36 +381,103 @@ export const Minimap = observer(({ store }: { store: JotViewStore }) => {
       aria-label="Song minimap and horizontal scroller"
     >
       <canvas ref={canvasRef} className={styles.canvas} />
-      <div ref={dimLeftRef} className={styles.dimLeft} aria-hidden="true" />
-      <div ref={dimRightRef} className={styles.dimRight} aria-hidden="true" />
-      <div ref={viewportBoxRef} className={styles.viewportBox} aria-hidden="true" />
+      <MinimapViewportBox store={store} width={width} hasContent={hasContent} />
       <MinimapPlayhead
-        playheadRef={playheadRef}
         totalDuration={totalDuration}
         firstStartSec={firstStartSec}
         width={width}
         hasContent={hasContent}
       />
-      <div ref={playheadRef} className={styles.playhead} aria-hidden="true" />
     </div>
   );
 });
 
 /**
- * Side-effect-only observer that tracks `jotPlayer.currentTime` and
- * writes `left` (in CSS px) onto the playhead ref. Renders nothing; * isolating the per-frame observable read here keeps the rest of the
- * minimap shell out of MobX's tick path. Direct mirror of the score's
- * `PlayheadPosVar` (see jot_view.tsx).
+ * Scroll-tracking layer of the minimap: viewport box + the two dim
+ * overlays that fade the off-viewport range. Isolated from the
+ * `Minimap` shell because `store.scrollX` / `_contentWidth` /
+ * `_viewportWidth` update at frame cadence during auto-follow playback;
+ * reading them in the shell would force a per-tick re-render of the
+ * whole minimap (which then rebuilt `noteMarks` and forced the canvas
+ * paint effect to refire because its deps array saw a new array
+ * identity, even when nothing had actually changed).
+ *
+ * The values computed here only ever flow into `transform: translateX`
+ * / `transform: scaleX` on the corresponding elements, never into
+ * `left` / `width` per-frame. That's deliberate: this re-renders at
+ * frame cadence (≥ 120 Hz during auto-follow), and `left` / `width`
+ * writes trigger layout. The dim strips are laid out at full minimap
+ * width with `transform-origin` at their outer edge so
+ * `scaleX(fraction)` collapses each to the off-viewport range without
+ * a layout pass; the box only needs `translateX` because its `width`
+ * is resize-cadence, not scroll-cadence. See the per-frame perf block
+ * at the top of `minimap.module.css` for the full rationale; keep
+ * these two in sync if either changes.
+ */
+const MinimapViewportBox = observer(
+  ({ store, width, hasContent }: { store: JotViewStore; width: number; hasContent: boolean }) => {
+    const scrollX = store.scrollX;
+    const sw = store._contentWidth;
+    const cw = store._viewportWidth;
+    let boxLeft = 0;
+    let boxWidth = 0;
+    let dimLeftScaleX = 0;
+    let dimRightScaleX = 0;
+    if (hasContent && width > 0 && sw > 0) {
+      boxLeft = (scrollX / sw) * width;
+      boxWidth = Math.max(2, (cw / sw) * width);
+      const rightStart = boxLeft + boxWidth;
+      dimLeftScaleX = Math.max(0, boxLeft) / width;
+      dimRightScaleX = Math.max(0, width - rightStart) / width;
+    }
+    return (
+      <>
+        <div
+          className={styles.dimLeft}
+          aria-hidden="true"
+          style={{ transform: `scaleX(${dimLeftScaleX})` }}
+        />
+        <div
+          className={styles.dimRight}
+          aria-hidden="true"
+          style={{ transform: `scaleX(${dimRightScaleX})` }}
+        />
+        <div
+          className={styles.viewportBox}
+          aria-hidden="true"
+          style={{ width: boxWidth, transform: `translateX(${boxLeft}px)` }}
+        />
+      </>
+    );
+  }
+);
+
+/**
+ * Per-frame minimap playhead. Isolated as its own observer so reading
+ * `jotPlayer.currentTime` (a frame-cadence observable) doesn't pull the
+ * surrounding `Minimap` into the per-tick render path.
+ *
+ * Per-frame perf: position flows through `transform: translateX(...)`
+ * - compositor-only and subpixel-precise - paired with
+ * `will-change: transform` on `.playhead` so the element sits on its
+ * own GPU layer and the per-tick write doesn't repaint siblings. Do
+ * NOT replace with `style={{ left: ... }}` per frame: `left` triggers
+ * layout, which at 120 Hz cadence across a long score costs more than
+ * the frame budget. See the `.playhead` rule in `minimap.module.css`
+ * for the matching CSS-side rationale.
+ *
+ * Inactive (`!active`) returns `null` so there's no element to paint
+ * at all - cleaner than a `display: none` toggle and avoids the
+ * between-mount-and-first-tick flash the old imperative version had to
+ * suppress.
  */
 const MinimapPlayhead = observer(
   ({
-    playheadRef,
     totalDuration,
     firstStartSec,
     width,
     hasContent,
   }: {
-    playheadRef: React.RefObject<HTMLDivElement>;
     totalDuration: number;
     firstStartSec: number;
     width: number;
@@ -346,17 +493,15 @@ const MinimapPlayhead = observer(
       hasContent &&
       totalDuration > 0 &&
       width > 0;
-    React.useLayoutEffect(() => {
-      const el = playheadRef.current;
-      if (!el) return;
-      if (!active) {
-        el.style.display = 'none';
-        return;
-      }
-      el.style.display = 'block';
-      const frac = Math.max(0, Math.min(1, (t - firstStartSec) / totalDuration));
-      el.style.left = `${frac * width}px`;
-    }, [t, active, totalDuration, firstStartSec, width, playheadRef]);
-    return null;
+    if (!active) return null;
+    const frac = Math.max(0, Math.min(1, (t - firstStartSec) / totalDuration));
+    const x = frac * width;
+    return (
+      <div
+        className={styles.playhead}
+        aria-hidden="true"
+        style={{ transform: `translateX(${x}px)` }}
+      />
+    );
   }
 );

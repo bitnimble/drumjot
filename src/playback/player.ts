@@ -33,6 +33,7 @@
  */
 import { makeAutoObservable, runInAction } from 'mobx';
 import { RenderedJot } from 'src/jot';
+import { MixerContext } from 'src/tracks';
 import { jotToEvents, PlaybackEvent } from './events';
 import { GeneralUserGsKit, KitInfo } from './gm_kit';
 import { SampleLoadProgress } from './sample_storage';
@@ -378,6 +379,16 @@ export class JotPlayer {
   /** Monotonic counter backing {@link allocateAudioTrackId}; never reused. */
   private audioTrackIdCounter = 0;
   /**
+   * Mixer-context lookup the {@link AudioTrack.color} getter needs to
+   * resolve grouped-instrument inheritance. Late-bound by the UI store
+   * via {@link attachMixerContext} because the store imports the player
+   * (not the other way round), so the player is constructed first with
+   * no context and the store wires itself in at its own construction
+   * time. AudioTracks loaded before the attach still work, their colour
+   * just stays on the neutral fallback until the context arrives.
+   */
+  mixerContext: MixerContext | undefined;
+  /**
    * Latest filename per track id, displayed in the toolbar status. Kept
    * separate from `audioTracks` so the UI knows there was an in-flight load
    * even before the buffer finishes decoding.
@@ -535,7 +546,13 @@ export class JotPlayer {
   private pendingStartSec: number | undefined;
 
   constructor() {
-    makeAutoObservable(this);
+    // `mixerContext` is the UI store itself (large MobX-observable graph);
+    // wrapping it in another observable shell would have no benefit and
+    // could create observation cycles. The AudioTrack getter reads it
+    // through the late-bound callback at compute time, which is the
+    // path the picker UI depends on, not through MobX tracking of the
+    // field itself.
+    makeAutoObservable(this, { mixerContext: false });
     this.hydrateAudioLatencyFromStorage();
   }
 
@@ -738,6 +755,13 @@ export class JotPlayer {
    * call must happen inside a user gesture on some browsers (the click
    * that triggered the file picker inherits the gesture grant).
    */
+  /** Wire the UI store in as the mixer-context source for freshly-
+   *  constructed {@link AudioTrack}s. Called once from the store's
+   *  constructor. Safe to re-call (the new context replaces the old). */
+  attachMixerContext(ctx: MixerContext): void {
+    this.mixerContext = ctx;
+  }
+
   async loadAudioTrack(
     file: File,
     pitch?: string,
@@ -824,15 +848,18 @@ export class JotPlayer {
     role?: AudioTrackRole,
   ): void {
     const prev = this.audioTracks.get(id);
-    const track: AudioTrack = {
-      id,
-      filename,
-      buffer,
-      sourceBlob,
-      durationSec: buffer.duration,
-      pitch,
-      role,
-    };
+    const track = new AudioTrack(
+      {
+        id,
+        filename,
+        buffer,
+        sourceBlob,
+        durationSec: buffer.duration,
+        pitch,
+        role,
+      },
+      () => this.mixerContext,
+    );
     runInAction(() => {
       this.audioTracks.set(id, track);
     });

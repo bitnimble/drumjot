@@ -1,0 +1,18 @@
+/* Single row inside a DropdownButton panel that hosts a colour pot
+   and label. Mirrors the geometry of the lyrics overflow's
+   `offsetStepperRow` (label left, control cluster right, same vertical
+   padding) so a row built from this composes cleanly alongside other
+   in-menu setting rows. The pot itself is the shared {@link ColorPot}
+   component (`color_pot.module.css`); this row carries the layout chrome
+   only. */
+
+.row {
+    composes: bodyMd from '../../typography.module.css';
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 12px;
+    color: var(--color-text-secondary);
+    cursor: default;
+}

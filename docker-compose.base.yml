@@ -1,51 +1,43 @@
-# Local development orchestration for the Drumjot transcriber.
+# Shared base for docker-compose.{prod,dev}.yml. Don't invoke this file
+# directly - pick a variant:
+#   docker compose -f docker-compose.prod.yml up --build   # bundled frontend
+#   docker compose -f docker-compose.dev.yml  up --build   # vite dev mount
 #
-# Usage:
-#   cp .env.example .env       # populate ANTHROPIC_API_KEY
-#   docker compose up --build  # first run downloads models on demand
+# What lives here: everything that doesn't vary between prod and dev -
+# image build, container env_file, host volume mounts, non-root user,
+# GPU passthrough, restart policy. Port mappings and the
+# DISABLE_FRONTEND env live in the variant files since they're exactly
+# what flips between modes.
 #
 # Notes:
-# - The `deploy.resources.reservations.devices` block requires the NVIDIA
-#   Container Toolkit on the host. If you don't have a GPU, comment it
-#   out and the container will fall back to CPU automatically (slow).
+# - `gpus: all` requires the NVIDIA Container Toolkit on the host. If
+#   you don't have a GPU, comment it out and the container will fall
+#   back to CPU automatically (slow).
 services:
-  transcriber:
+  drumjot:
     build:
-      # Build context = repo root. The transcriber image needs both
-      # `transcriber/` (Python service) and `src/` (canonical TS parser).
-      context: ..
-      dockerfile: transcriber/Dockerfile
-    image: drumjot-transcriber:dev
-    container_name: drumjot-transcriber
+      # Build context = repo root. The image bundles both the React
+      # frontend (built by the bun stage in the Dockerfile) and the
+      # Python transcriber, so the context needs to see both `src/`
+      # and `transcriber/`.
+      context: .
+      dockerfile: Dockerfile
+    image: drumjot:dev
+    container_name: drumjot
     # Run as non-root UID:GID 1000:1000 so bind-mounted artifacts (debug,
     # benchmark results) and volume contents (models cache) end up owned
     # by the host user rather than root. Image's USER directive sets the
     # same; this is a redundant runtime guarantee.
-    user: "1000:1000"
-    ports:
-      # Host port is overridable via TRANSCRIBER_PORT in .env (defaults to
-      # 8001). Container-internal port stays 8001 so nothing inside the
-      # image (benchmark client, healthcheck, uvicorn CMD) needs to care.
-      - "${TRANSCRIBER_PORT:-8001}:8001"
-    environment:
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      LLM_MODEL: ${LLM_MODEL:-claude-opus-4-7}
-      INSTRUMENT_CONCURRENCY: ${INSTRUMENT_CONCURRENCY:-4}
-      CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:5173","http://127.0.0.1:5173"]}
-      DEVICE: ${DEVICE:-auto}
-      # `madmom` (default) or `beat_transformer`. The latter requires
-      # transcriber/checkpoints/beat_transformer.pt to exist at build
-      # time; see transcriber/checkpoints/README.md.
-      BEAT_TRACKER: ${BEAT_TRACKER:-madmom}
-      BEAT_TRANSFORMER_CHECKPOINT: ${BEAT_TRANSFORMER_CHECKPOINT:-/app/checkpoints/beat_transformer.pt}
-      # `full_mix` (default) or `drum_stem`. Overridable per-request via
-      # the `beat_input` form parameter on /transcribe.
-      BEAT_INPUT_DEFAULT: ${BEAT_INPUT_DEFAULT:-full_mix}
-      # When set, every /transcribe call persists its intermediate audio
-      # + JSON artifacts into a per-request subdir of this path. Leave
-      # blank to keep request data ephemeral; set debug=true on a
-      # per-request basis to opt-in to the default /debug volume below.
-      DEBUG_DIR: ${DEBUG_DIR:-}
+    user: '1000:1000'
+    env_file:
+      # Loads ANTHROPIC_API_KEY, LLM_MODEL, INSTRUMENT_CONCURRENCY,
+      # CORS_ORIGINS, DEVICE, BEAT_TRACKER, BEAT_TRANSFORMER_CHECKPOINT,
+      # BEAT_INPUT_DEFAULT, DEBUG_DIR. Values map straight into the
+      # container env; no compose-side `${VAR}` indirection needed.
+      # DISABLE_FRONTEND is intentionally NOT loaded from here - each
+      # variant sets it explicitly via `environment:` so the mode
+      # toggle isn't accidentally pinned in a shared env file.
+      - transcriber/.env
     volumes:
       - /codebox-workspace/drumjot/models-cache:/models
       # Debug artifact volume. Files written here by the transcriber
@@ -76,7 +68,6 @@ services:
     # mechanisms, both of which proved insufficient with the modern
     # NVIDIA Container Toolkit on this host.
     gpus: all
+    mem_limit: 8g
+    memswap_limit: 8g
     restart: unless-stopped
-
-volumes:
-  models-cache:

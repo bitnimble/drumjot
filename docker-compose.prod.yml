@@ -1,0 +1,31 @@
+# Prod-mode orchestration. Bundles the pre-built SPA + transcriber API
+# into a single drumjot container: Caddy inside the container serves
+# `/app/web` on :5173 and reverse-proxies /api/* back to the transcriber
+# on :8001. Mirrors what's actually deployed on kumo.dev.
+#
+# Usage:
+#   cp transcriber/.env.example transcriber/.env   # populate ANTHROPIC_API_KEY
+#   docker compose -f docker-compose.prod.yml up --build
+#
+# For live-reload frontend work without an image rebuild, use
+# docker-compose.dev.yml instead. Both files extend docker-compose.base.yml
+# for the shared image / volume / GPU / env_file configuration.
+
+services:
+  drumjot:
+    extends:
+      file: docker-compose.base.yml
+      service: drumjot
+    environment:
+      # Tells transcriber/entrypoint.sh to include Caddyfile.frontend
+      # when assembling the runtime Caddyfile, binding the :5173
+      # listener that serves the bundled SPA. Explicit overrides any
+      # stray value the env_file might be carrying.
+      DISABLE_FRONTEND: '0'
+    ports:
+      # Frontend (bundled SPA + /api/* proxy).
+      - 5173:5173
+      # Transcriber API. Exposed for direct access (benchmark client,
+      # debug curls, healthcheck from outside). The frontend on :5173
+      # talks to it internally, so this is optional for browser users.
+      - 8861:8001

@@ -125,24 +125,57 @@
 .lyricsBarsRow {
     composes: barsRowBase from '../jot_view.module.css';
     /* Tighten glyph tracking as zoom drops so lyric text packs into the
-       narrower per-beat budget. Ramps from 0 at px-per-beat ≥ 80 to
-       -0.6px around px-per-beat ≈ 20. Inherits down to both `.lyricLine`
-       (LRC mode) and `.lyricWordText` (word-aligned mode). */
+       narrower per-beat budget. Ramps from 0 at px-per-beat ≥ 224 to
+       -0.6px around px-per-beat ≈ 45 (≈40% zoom at density 1). Max
+       spread is reached around 200% zoom (pxPerBeat = 224 at density 1).
+       Inherits down to both `.lyricLine` (LRC mode) and `.lyricWordText`
+       (word-aligned mode). */
     /* stylelint-disable-next-line property-disallowed-list -- zoom-driven dynamic tracking, not a static use case. */
-    letter-spacing: clamp(-0.6px, calc((var(--px-per-beat) - 80) / 100 * 1px), 0px);
+    letter-spacing: clamp(-0.6px, calc((var(--px-per-beat) - 224) * 0.6 / 179 * 1px), 0px);
     /* Pair the tracking ramp with Bricolage Grotesque's variable axes:
-       at px-per-beat ≥ 80 use the normal 100-width / 400-weight, ramping
-       linearly down to 75-width / 300-weight around px-per-beat ≈ 20.
+       at px-per-beat ≥ 224 (≈200% zoom at density 1) use the normal
+       100-width / 400-weight, ramping linearly down to 75-width /
+       300-weight around px-per-beat ≈ 45 (≈40% zoom at density 1).
        Exposed as CSS vars so `.lyricWordActive .lyricWordText` can
        override just the wght axis below; `font-variation-settings`
        inherits its computed value (vars already substituted), so the
        active rule has to re-declare the whole property for its
-       `--lyric-wght` override to take effect. */
-    --lyric-wdth: clamp(75, calc(75 + (var(--px-per-beat) - 20) * 25 / 60), 100);
-    --lyric-wght: clamp(300, calc(300 + (var(--px-per-beat) - 20) * 100 / 60), 400);
+       `--lyric-wght` override to take effect.
+
+       Keep in lockstep with lyrics_measure.ts (computeWdth /
+       computeWght / computeLetterSpacingPx); the canvas measurer
+       reproduces these formulas to predict word widths off the DOM. */
+    --lyric-wdth: clamp(75, calc(75 + (var(--px-per-beat) - 45) * 25 / 179), 100);
+    --lyric-wght: clamp(300, calc(300 + (var(--px-per-beat) - 45) * 100 / 179), 400);
     font-variation-settings:
         'wdth' var(--lyric-wdth),
         'wght' var(--lyric-wght);
+}
+
+/* Shared base for both LRC-mode line chips (`.lyricLine`) and word-
+   aligned word chips (`.lyricWord`): the absolute-positioned anchor,
+   pill radius, default color, and active-state transition. Geometry
+   (left / width / max-width) and any container-specific layout
+   (flex vs ellipsis) live on the consumer. Kept here as the single
+   source of truth so the two chip variants can't visually drift. */
+.lyricChipBase {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    border-radius: var(--radius-md);
+    color: var(--color-text-strong);
+    white-space: nowrap;
+    transition:
+        background-color 100ms ease-in-out,
+        color 100ms ease-in-out;
+}
+
+/* Shared active state. `.lyricLineActive` and `.lyricWordActive` both
+   compose from this so the highlight color/background can't drift
+   between modes. */
+.lyricChipActive {
+    background: var(--color-bg-base);
+    color: var(--color-accent);
 }
 
 /* One lyric line, absolutely positioned at its beat offset. Reads the
@@ -150,33 +183,26 @@
    uses, so zoom is purely CSS. The max-width is calc'd from the next
    line's start beat (--lyric-end-beat) so adjacent lines don't visually
    collide at low zoom; long text ellipsises with a tooltip carrying the
-   full string (set via the React `title` attr). */
+   full string (set via the React `title` attr).
+
+   In LRC mode the line *is* the active unit (no words), so the chip
+   mirrors `.lyricWord` styling via `.lyricChipBase` + `.lyricChipActive`:
+   transparent by default, lighting up to the same accent + bg-base
+   background when active. */
 .lyricLine {
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
+    composes: lyricChipBase;
     left: calc(var(--lyric-start-beat) * var(--px-per-beat) * 1px + var(--note-pad-px));
     max-width: calc(
         (var(--lyric-end-beat) - var(--lyric-start-beat)) * var(--px-per-beat) * 1px - 4px
     );
-    padding: 2px 6px;
-    border-radius: var(--radius-sm);
-    background: var(--color-bg-cream-strong);
-    color: var(--color-text-secondary);
+    padding: 6px 12px;
     /* stylelint-disable-next-line property-disallowed-list -- lyric chips run at a one-off 18px so the karaoke text reads larger than UI body copy. */
     font-size: 18px;
     line-height: 1.2;
-    white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     user-select: text;
-    transition:
-        background-color 120ms ease,
-        color 120ms ease;
     pointer-events: auto;
-    /* Marker above the lyric chip on the bars-row so the user can see
-       exactly which beat the line starts on. */
-    border-left: 2px solid var(--color-text-faint-strong);
 }
 
 /* Variant for word-aligned lines: the chip stretches from the first
@@ -186,17 +212,20 @@
    final word's text extend past the right edge when its display width
    outruns the gap to the next line. The container's own text rules
    (white-space, ellipsis) are irrelevant in this mode since the children
-   carry the text. */
+   carry the text.
+
+   Background is forced transparent (even when `.lyricLineActive` is
+   added) so it doesn't double up with the active word's own bg-base
+   highlight. The active *word* is the visible signal in this mode. */
 .lyricLineWordAligned {
     overflow: visible;
     max-width: none;
     padding: 0;
+    background: transparent;
 }
 
 .lyricLineActive {
-    background: var(--color-accent-overlay-medium);
-    color: var(--color-text-strong);
-    border-left-color: var(--color-accent-strong);
+    composes: lyricChipActive;
 }
 
 /* Word-level cell inside a word-aligned line. Each word occupies a
@@ -219,15 +248,13 @@
    heavy shift (text wider than the duration cell) can't yield a
    negative width. */
 .lyricWord {
+    composes: lyricChipBase;
     /* The wrapper extends `--lyric-word-pad-left` past the glyph's left
        edge so the active-word background has breathing room before the
        text starts. The text inside (`.lyricWordText`) re-adds the same
        padding so its first glyph still lands on the beat anchor; i.e.
        the padding is absorbed into the wrapper, not into the text. */
     --lyric-word-pad-left: 6px;
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
     left: calc(
         var(--lyric-word-beat-offset) * var(--px-per-beat) * 1px + var(--lyric-word-shift, 0px) -
             var(--lyric-word-pad-left)
@@ -248,12 +275,6 @@
     min-width: max-content;
     display: flex;
     align-items: center;
-    white-space: nowrap;
-    color: var(--color-text-strong);
-    border-radius: var(--radius-md);
-    transition:
-        background-color 80ms ease,
-        color 80ms ease;
     /* Higher than .lyricWordActive (which clears z-index) so adjacent
        inactive words' glyphs paint over an overflowing active chip
        rather than the other way around (preventing the active chip
@@ -274,7 +295,9 @@
     flex: 0 0 auto;
     color: inherit;
     padding: 6px 12px 6px var(--lyric-word-pad-left);
-    transition: color 80ms ease;
+    transition:
+        color 100ms ease-in-out,
+        font-variation-settings 100ms ease-in-out;
 }
 
 /* Trailing rule that fills the cell's slack space. `flex: 1 1 0` plus
@@ -303,8 +326,7 @@
    drops below neighbors in z-order so adjacent words' glyphs paint
    over an overflowing active chip rather than the other way around. */
 .lyricWordActive {
-    background: var(--color-bg-base);
-    color: var(--color-accent);
+    composes: lyricChipActive;
     z-index: 0;
 }
 
@@ -312,8 +334,12 @@
     /* Override just the wght axis; re-declare font-variation-settings
        so the cascade picks up this rule's --lyric-wght. Reads the same
        --lyric-wdth that the row sets so the active word stays in step
-       with the zoom-driven width ramp. */
-    --lyric-wght: 600;
+       with the zoom-driven width ramp.
+
+       Keep in lockstep with lyrics_measure.ts (ACTIVE_FONT_WEIGHT);
+       the canvas measurer uses the same value to predict active-word
+       widths for the collision pass. */
+    --lyric-wght: 800;
     font-variation-settings:
         'wdth' var(--lyric-wdth),
         'wght' var(--lyric-wght);

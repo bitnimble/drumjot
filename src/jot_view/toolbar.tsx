@@ -136,6 +136,8 @@ export const Toolbar = observer(
     onToggleGridLine,
     uniformWaveforms,
     onSetUniformWaveforms,
+    autoFollowOnPlay,
+    onSetAutoFollowOnPlay,
     recentTranscriptions,
     recentTranscriptionsLoaded,
     recentTranscriptionsLoading,
@@ -189,6 +191,12 @@ export const Toolbar = observer(
     onToggleGridLine: (key: keyof GridLineSettings) => void;
     uniformWaveforms: boolean;
     onSetUniformWaveforms: (on: boolean) => void;
+    /** When true, transitioning to playing re-enables auto-follow if it
+     *  was disabled during the previous play session (pan, minimap,
+     *  follow button mid-play). Off-states set while idle/paused survive
+     *  regardless. */
+    autoFollowOnPlay: boolean;
+    onSetAutoFollowOnPlay: (on: boolean) => void;
     recentTranscriptions: readonly TranscriptionSummary[];
     /** Whether {@link onRefreshRecentTranscriptions} has resolved at
      *  least once (success or empty). The Recent submenu uses this to
@@ -746,6 +754,12 @@ export const Toolbar = observer(
         >
           {() => (
             <>
+              <ToggleMenuItem
+                label="Auto-enable follow on play"
+                active={autoFollowOnPlay}
+                onToggle={() => onSetAutoFollowOnPlay(!autoFollowOnPlay)}
+                title="When on, pressing Play (or resuming) re-enables Auto-follow if it was disabled mid-playback (pan, minimap drag, follow-button toggle while playing). Turning Auto-follow off while paused or stopped is treated as deliberate and survives the next play. Off = current Auto-follow state is always preserved across plays."
+              />
               <PlaybackKitSubmenu />
               <PlaybackSpeedItem />
               <AudioLatencyItem />

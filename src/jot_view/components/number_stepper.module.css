@@ -68,8 +68,14 @@
 
 .stepperInput {
     composes: body from '../../typography.module.css';
-    flex: 1 1 auto;
-    min-width: 0;
+    /* `flex: 1 0 auto`, grow into any extra room inside the pill, but
+       never shrink below the 48px basis. Earlier `1 1 auto` + `min-width:
+       0` let the input collapse to 0 inside a squeezed container (the
+       mobile playback bar's right track), leaving the user with two
+       +/− buttons and no visible value. The stepper is only ever as
+       wide as its content anyway, so refusing to shrink doesn't pinch
+       any of the roomier dropdown usages. */
+    flex: 1 0 auto;
     width: 48px;
     padding: 2px 4px;
     border: none;

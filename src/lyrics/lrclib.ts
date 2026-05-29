@@ -21,9 +21,6 @@ export type LrclibMatch = {
 
 const BASE_URL = 'https://lrclib.net/api';
 
-/** Identifies us in LRCLIB request logs; non-required but encouraged. */
-const USER_AGENT_HEADER = 'Drumjot (https://github.com/bitnimble/drumjot)';
-
 export type SearchOptions = {
   trackName: string;
   artistName: string;
@@ -47,9 +44,14 @@ export async function searchLrclib(opts: SearchOptions): Promise<LrclibMatch[]> 
   // against firing when neither field has content, so by the time we
   // get here at least one of the two is set.
   const url = `${BASE_URL}/search?${params.toString()}`;
+  // No custom request headers on purpose: any non-safelisted header
+  // (LRCLIB's optional `Lrclib-Client` identifier) would force the
+  // browser to send a CORS preflight before every GET, and LRCLIB
+  // doesn't set `Access-Control-Max-Age` so the spec-default 5 s TTL
+  // means the preflight refires for almost every search (~2 s tax).
+  // Keeping only safelisted headers makes this a "simple" CORS request.
   const res = await fetch(url, {
     method: 'GET',
-    headers: { 'Lrclib-Client': USER_AGENT_HEADER },
     signal: opts.signal,
   });
   if (!res.ok) {
