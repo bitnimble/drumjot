@@ -32,6 +32,7 @@ import json
 import logging
 import re
 import shutil
+import threading
 import time
 import uuid
 from contextvars import ContextVar, Token
@@ -101,7 +102,10 @@ class DebugSink:
         self.dir.mkdir(parents=True, exist_ok=True)
         self._started = time.perf_counter()
         # Monotonic counter for LLM-call dumps so files sort in call order.
+        # Guarded by a lock because the quantise stage dumps prompts from
+        # several worker threads at once (parallel bar-window calls).
         self._llm_call_seq = 0
+        self._llm_call_seq_lock = threading.Lock()
         log.info("Debug artifacts will be written to %s", self.dir)
 
     @classmethod
@@ -198,8 +202,9 @@ class DebugSink:
         Returns the integer seq number assigned to this call so the
         caller can pair the response dump (see `write_llm_response`).
         """
-        self._llm_call_seq += 1
-        seq_num = self._llm_call_seq
+        with self._llm_call_seq_lock:
+            self._llm_call_seq += 1
+            seq_num = self._llm_call_seq
         seq = f"{seq_num:02d}"
         safe_purpose = _slugify(purpose) or "llm"
         header_lines: list[str] = [

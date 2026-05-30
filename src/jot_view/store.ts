@@ -318,10 +318,7 @@ export class JotViewStore {
   transcribeOptions: TranscribeOptions = {
     debug: true,
     beatInput: 'full_mix',
-    // Match `settings.llm_model` default server-side so the UI's
-    // shown-but-unchanged selection produces identical behaviour to a
-    // pre-selector run.
-    llmModel: 'claude-opus-4-7',
+    llmModel: 'claude-haiku-4-5-20251001',
   };
   /** Server-side picker of recent /transcribe runs that can be resumed.
    *  Populated by {@link refreshRecentTranscriptions}; an empty array

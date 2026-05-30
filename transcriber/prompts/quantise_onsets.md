@@ -9,11 +9,31 @@ Your job: for each onset, decide whether its current slot is
 return a small integer shift in slots to move it. Negative = earlier,
 positive = later, 0 = leave it where it is.
 
+That upstream snap is **purely audio-driven**: it put each hit on the
+single closest slot to where the detector heard it, with no musical
+reasoning. A performer is human, so a hit that was *meant* for one slot
+can land a hair past the midpoint and round onto the neighbouring slot
+instead, e.g. a note intended for slot 3 played a touch late lands at
+3.5+ and snaps to slot 4. The audio genuinely is closer to slot 4, so
+nothing deterministic can recover this; **that recovery is your whole
+purpose.** Trust the musical context over the literal slot: when the
+bar's pattern and the song's feel say a hit belongs on slot 3, move it
+to 3 even though the raw timing sat marginally closer to 4. You are
+correcting for the performer's micro-timing error AND the rounding it
+caused, using knowledge an audio-only snapper does not have.
+
 You may NOT shift any onset by more than ±{MAX_SHIFT} slots. The server
 will clamp anything larger.
 
 ## When a shift is warranted
 
+- **Rounding correction (your main job).** A hit one slot off the
+  position the bar's subdivision implies, because the performer was
+  slightly early/late and the audio-only snap rounded it to the wrong
+  side. If the rest of the bar lays out a clear grid (straight 16ths,
+  8th-triplets, swing 8ths, etc.) and this note sits one slot off that
+  grid with no musical reason to, pull it onto the grid position the
+  pattern predicts.
 - **Cross-instrument alignment.** Two instruments that obviously
   fired together (kick + crash, kick + snare on the same beat
   accent) but landed one slot apart. Pull the off-grid one onto the
@@ -61,6 +81,12 @@ Bar 0 [4/4, 120.0 BPM, feel=straight16]:
 
 `#N` is the **stable id** you must reference in your response. `(k)` /
 `(s)` / `(h)` etc are the drum pitches.
+
+Some bar blocks are tagged **[context - read-only]**. These are
+neighbouring bars shown only so you can judge groove continuity across
+the edges of this window. Their onsets are listed WITHOUT a `#N` id and
+you cannot and must not shift them, only onsets that carry a `#N` id
+are yours to move.
 
 In the example above, the snare `#3` at slot 11 likely belongs on slot
 12 (beat 2) with the hi-hat; a one-slot earlier snap from jitter. The

@@ -284,7 +284,7 @@ const PhaseView = ({
                     <strong>{m.trackName}</strong> by {m.artistName}
                   </span>
                   <span className={styles.resultSecondary}>
-                    {`Album: ${m.albumName ?? 'Unknown album'}`}
+                    <AlbumLabel albumName={m.albumName} />
                     {typeof m.duration === 'number' ? ` · ${formatDuration(m.duration)}` : ''}
                   </span>
                 </button>
@@ -370,6 +370,17 @@ const LoadFooter = ({
       </button>
     </footer>
   );
+};
+
+/** Album line for a result row. LRCLIB sometimes returns a blank album
+ *  or the literal string "null"; render a subtle placeholder for those
+ *  rather than "Album: null". */
+const AlbumLabel = ({ albumName }: { albumName: string | null | undefined }) => {
+  const trimmed = (albumName ?? '').trim();
+  if (trimmed === '' || trimmed.toLowerCase() === 'null') {
+    return <em className={styles.resultAlbumEmpty}>(no album)</em>;
+  }
+  return <>{`Album: ${trimmed}`}</>;
 };
 
 function formatDuration(seconds: number): string {

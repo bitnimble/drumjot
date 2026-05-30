@@ -135,6 +135,28 @@ class Settings(BaseSettings):
     adtof_noisy_decay_reset_frac: float = 0.6
     adtof_noisy_decay_reset_floor: float = 0.05
 
+    # --- Filter-LLM double-trigger guardrail ---
+    # The filter LLM may flag an onset as a `double_trigger` (the detector
+    # firing twice for one physical strike). A real detector double-trigger
+    # is a NEAR-SIMULTANEOUS re-fire; two hits separated by more than a few
+    # tens of ms are two real strikes (a roll, drag, flam, or fast double),
+    # not an artifact. So after the LLM returns, any `double_trigger`
+    # rejection whose gap to the strike it claims to duplicate (the LLM's
+    # `double_of` index) is >= the per-lane window below is OVERTURNED, the
+    # onset is kept. The guardrail only ever RESTORES hits (recall-positive);
+    # it never adds rejections. A double_trigger rejection that omits a
+    # usable `double_of` is also overturned (unverifiable -> keep).
+    #
+    # Snare/toms/clap/cowbell play fast repeated hits as a matter of course
+    # (a 32nd-note single-stroke roll at 180 BPM is ~42 ms apart), so their
+    # window sits just above the detector's 20 ms min-distance: only the
+    # closest re-fires can be culled. Kick beaters can't re-strike as fast as
+    # a stick bounce, so kick gets a wider window, but fast double-pedal
+    # (16ths/32nds) still clears it at realistic tempos and stays protected.
+    # Crash/ride never reach the filter LLM (cymbal_split vets them upstream).
+    double_trigger_refractory_default_s: float = 0.030
+    double_trigger_refractory_kick_s: float = 0.055
+
     # --- Beat tracker ---
     # `madmom`         = the legacy RNN+DBN downbeat tracker (default).
     # `beat_transformer` = vendored Beat Transformer (Zhao et al. 2022)

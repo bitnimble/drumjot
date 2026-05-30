@@ -36,6 +36,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -90,6 +91,23 @@ _LLM_MODEL = "claude-haiku-4-5-20251001"
 _LLM_MAX_TOKENS_PER_ONSET = 16
 _LLM_MAX_TOKENS_FLOOR = 8192
 _LLM_MAX_TOKENS_OVERHEAD = 1024
+
+# The LLM residual pass is split into windows of consecutive bars that run
+# concurrently. Splitting (a) shrinks per-call latency and lets windows
+# overlap on the wire, and (b) keeps each prompt small enough that Haiku
+# reasons sharply over it instead of skimming a 1000+-onset wall. Onsets
+# never cross a bar boundary, so windows always break on bar boundaries.
+#
+# A window accumulates consecutive (onset-bearing) bars until either the
+# onset target or the bar-span cap is reached, whichever comes first. The
+# onset target is a SOFT cap: a single dense bar that exceeds it alone
+# still becomes its own window (we never split a bar). Each window also
+# renders +/-_CONTEXT_BARS neighbour bars read-only so groove continuity
+# across the window seam is visible without those bars being shiftable.
+_TARGET_ONSETS_PER_WINDOW = 150
+_MAX_BARS_PER_WINDOW = 8       # max bar-index span of a window's core bars
+_CONTEXT_BARS = 1              # read-only neighbour bars rendered per side
+_MAX_PARALLEL_CHUNKS = 8       # cap on concurrent Anthropic requests
 
 
 def _max_tokens_for(n_onsets: int) -> int:
@@ -178,10 +196,11 @@ def quantise_kept_onsets(
             llm_status = "cancelled"
         else:
             try:
-                llm_shifts = _llm_residual_pass(
-                    kept_by_pitch, structure, slots_per_beat=slots_per_beat
+                llm_shifts, llm_status = _llm_residual_pass(
+                    kept_by_pitch, structure,
+                    slots_per_beat=slots_per_beat,
+                    cancel_event=cancel_event,
                 )
-                llm_status = "ok"
             except Exception as exc:
                 log.warning(
                     "quantise: LLM residual pass failed (%s); "
@@ -283,11 +302,22 @@ def _llm_residual_pass(
     structure: BeatStructure,
     *,
     slots_per_beat: int = SLOTS_PER_BEAT,
-) -> dict[tuple[str, int], int]:
-    """One Haiku call across all on-grid kept onsets. Returns the
+    cancel_event: threading.Event | None = None,
+) -> tuple[dict[tuple[str, int], int], str]:
+    """Haiku residual pass over parallel windows of consecutive bars.
+
+    Returns `(shifts, status)`, where `shifts` is the merged
     (pitch, idx_in_pitch_list) -> shift_slots map the model proposed
-    (clamped to ±_MAX_LLM_SHIFT, unknown ids dropped). Off-grid onsets are
-    excluded from the shift-target set; their position is geometric truth.
+    (clamped to ±_MAX_LLM_SHIFT, unknown ids dropped) and `status` is a
+    short summary suitable for `quantise/shifts.json` ("ok",
+    "partial: F/N windows failed", "error: ...", or "cancelled").
+
+    The on-grid onsets are split into windows (`_build_windows`); each
+    window is one forced-tool call carrying its core bars (shiftable,
+    `#id`-tagged) plus ±_CONTEXT_BARS read-only neighbour bars. Windows
+    run concurrently. A window that raises degrades only its own bars to
+    geometric placement, the rest keep their LLM shifts. Off-grid onsets
+    are never offered as shift targets; their position is geometric truth.
     """
     if not settings.anthropic_api_key:
         raise RuntimeError(
@@ -296,27 +326,166 @@ def _llm_residual_pass(
 
     indexed = _index_for_llm(kept_by_pitch, structure, slots_per_beat=slots_per_beat)
     if not indexed:
-        return {}
+        return {}, "ok"
 
-    bar_blocks = _format_for_llm(indexed, structure, slots_per_beat=slots_per_beat)
+    windows = _build_windows(
+        indexed, structure,
+        target_onsets=_TARGET_ONSETS_PER_WINDOW,
+        max_bars=_MAX_BARS_PER_WINDOW,
+        context_bars=_CONTEXT_BARS,
+    )
+    template = _load_prompt_template()
+    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    log.info(
+        "quantise LLM: %d onsets across %d bars -> %d window(s), "
+        "<=%d concurrent",
+        len(indexed), len(structure.bars), len(windows), _MAX_PARALLEL_CHUNKS,
+    )
+
+    shifts: dict[tuple[str, int], int] = {}
+    failed = 0
+    cancelled = False
+    max_workers = max(1, min(_MAX_PARALLEL_CHUNKS, len(windows)))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {}
+        for wi, window in enumerate(windows):
+            if cancel_event is not None and cancel_event.is_set():
+                cancelled = True
+                break
+            futures[pool.submit(
+                _call_window, client, template, structure, window, wi,
+                slots_per_beat, cancel_event,
+            )] = wi
+        for fut in as_completed(futures):
+            wi = futures[fut]
+            try:
+                window_shifts = fut.result()
+            except Exception as exc:
+                failed += 1
+                log.warning(
+                    "quantise LLM: window %d failed (%s); keeping geometric "
+                    "placement for its bars", wi, exc,
+                )
+                continue
+            if window_shifts is None:  # window short-circuited on cancel
+                cancelled = True
+                continue
+            shifts.update(window_shifts)
+
+    n = len(windows)
+    if cancelled:
+        status = "cancelled"
+    elif failed == 0:
+        status = "ok"
+    elif failed >= n:
+        status = f"error: all {n} windows failed"
+    else:
+        status = f"partial: {failed}/{n} windows failed"
+    log.info(
+        "quantise LLM: %d onsets received a non-zero shift (status=%s)",
+        len(shifts), status,
+    )
+    return shifts, status
+
+
+def _build_windows(
+    indexed: list[_LlmEntry],
+    structure: BeatStructure,
+    *,
+    target_onsets: int,
+    max_bars: int,
+    context_bars: int,
+) -> list[_Window]:
+    """Partition the globally-sorted `indexed` entries into bar windows.
+
+    Walks the onset-bearing bars in ascending order, accumulating them
+    into a window until adding the next bar would exceed `target_onsets`
+    (a soft cap, a lone dense bar may exceed it) or push the window's
+    bar-index span past `max_bars`. Each window also picks up the
+    ±`context_bars` neighbour bars (clamped to the score) as read-only
+    context. Local `#id`s are assigned to core-bar onsets in global sort
+    order so a window's response maps cleanly back to (pitch, idx).
+    """
+    by_bar: dict[int, list[tuple[int, _LlmEntry]]] = {}
+    for gid, e in enumerate(indexed):
+        by_bar.setdefault(e.bar, []).append((gid, e))
+    core_bars_sorted = sorted(by_bar.keys())
+
+    groups: list[list[int]] = []
+    cur: list[int] = []
+    cur_onsets = 0
+    for bar_idx in core_bars_sorted:
+        n = len(by_bar[bar_idx])
+        if cur and (
+            cur_onsets + n > target_onsets or bar_idx - cur[0] >= max_bars
+        ):
+            groups.append(cur)
+            cur, cur_onsets = [], 0
+        cur.append(bar_idx)
+        cur_onsets += n
+    if cur:
+        groups.append(cur)
+
+    last_bar = len(structure.bars) - 1
+    windows: list[_Window] = []
+    for core in groups:
+        core_set = set(core)
+        lo = max(0, core[0] - context_bars)
+        hi = min(last_bar, core[-1] + context_bars)
+        # Local id assignment in global sort order (core bars only).
+        local_to_global: list[tuple[str, int]] = []
+        gid_to_lid: dict[int, int] = {}
+        for bar_idx in core:
+            for gid, e in by_bar[bar_idx]:
+                gid_to_lid[gid] = len(local_to_global)
+                local_to_global.append((e.pitch, e.idx))
+        windows.append(_Window(
+            core_set=core_set,
+            render_bars=list(range(lo, hi + 1)),
+            by_bar=by_bar,
+            gid_to_lid=gid_to_lid,
+            local_to_global=local_to_global,
+        ))
+    return windows
+
+
+def _call_window(
+    client: anthropic.Anthropic,
+    template: str,
+    structure: BeatStructure,
+    window: _Window,
+    window_index: int,
+    slots_per_beat: int,
+    cancel_event: threading.Event | None,
+) -> dict[tuple[str, int], int] | None:
+    """Run one window's forced-tool call; return its (pitch, idx) -> shift.
+
+    Returns None if `cancel_event` is set before the call is made (the
+    caller treats this as cancelled, not failed). Raises on API error so
+    the caller can degrade just this window's bars to geometric.
+    """
+    if cancel_event is not None and cancel_event.is_set():
+        return None
+
+    n_local = len(window.local_to_global)
+    bar_blocks = _format_window(structure, window, slots_per_beat=slots_per_beat)
     initial_sig = structure.initial_time_signature
     prompt = (
-        _load_prompt_template()
+        template
         .replace("{INITIAL_TEMPO}", f"{structure.initial_tempo:.2f}")
         .replace("{INITIAL_TIME_SIG}", f"{initial_sig[0]}/{initial_sig[1]}")
-        .replace("{BAR_COUNT}", str(len(structure.bars)))
-        .replace("{ONSET_COUNT}", str(len(indexed)))
+        .replace("{BAR_COUNT}", str(len(window.render_bars)))
+        .replace("{ONSET_COUNT}", str(n_local))
         .replace("{SLOTS_PER_BEAT}", str(slots_per_beat))
         .replace("{MAX_SHIFT}", str(_MAX_LLM_SHIFT))
         .replace("{BARS}", bar_blocks)
     )
 
-    max_tokens = _max_tokens_for(len(indexed))
+    max_tokens = _max_tokens_for(n_local)
     log.info(
-        "Calling quantise LLM model=%s prompt_chars=%d onsets=%d max_tokens=%d",
-        _LLM_MODEL, len(prompt), len(indexed), max_tokens,
+        "quantise LLM window %d: prompt_chars=%d shiftable_onsets=%d "
+        "max_tokens=%d", window_index, len(prompt), n_local, max_tokens,
     )
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
     response = call_messages_with_refusal_retry(
         client,
         {
@@ -327,36 +496,29 @@ def _llm_residual_pass(
             "tool_choice": {"type": "tool", "name": _QUANTISE_TOOL["name"]},
         },
         base_prompt=prompt,
-        purpose="quantise",
+        purpose=f"quantise_w{window_index:02d}",
     )
 
-    stop_reason = getattr(response, "stop_reason", None)
-    if stop_reason == "max_tokens":
+    if getattr(response, "stop_reason", None) == "max_tokens":
         # A forced tool call that hits max_tokens emits unparseable JSON;
         # `block.input` will be empty / partial and we'd silently report
-        # "0 shifts" with no other signal. Flag it explicitly so the
-        # next time this happens it's obvious from the log.
+        # "0 shifts". Flag it so it's obvious from the log next time.
         log.warning(
-            "quantise LLM hit max_tokens (%d) for %d onsets; response will "
-            "be truncated and most shifts will be lost. Bump "
+            "quantise LLM window %d hit max_tokens (%d) for %d onsets; "
+            "response will be truncated and most shifts lost. Bump "
             "_LLM_MAX_TOKENS_PER_ONSET in quantise.py.",
-            max_tokens, len(indexed),
+            window_index, max_tokens, n_local,
         )
-    raw_shifts = _extract_shifts(response, len(indexed))
-    shifts: dict[tuple[str, int], int] = {}
-    for llm_id, shift in raw_shifts.items():
-        if llm_id < 0 or llm_id >= len(indexed):
+    raw_shifts = _extract_shifts(response, n_local)
+    out: dict[tuple[str, int], int] = {}
+    for local_id, shift in raw_shifts.items():
+        if local_id < 0 or local_id >= n_local:
             continue
-        entry = indexed[llm_id]
         clamped = max(-_MAX_LLM_SHIFT, min(_MAX_LLM_SHIFT, shift))
         if clamped == 0:
             continue
-        shifts[(entry.pitch, entry.idx)] = clamped
-    log.info(
-        "quantise LLM: %d / %d onsets received a non-zero shift",
-        len(shifts), len(indexed),
-    )
-    return shifts
+        out[window.local_to_global[local_id]] = clamped
+    return out
 
 
 def _apply_llm_shifts(
@@ -479,40 +641,77 @@ class _LlmEntry:
         self.slot = slot
 
 
-def _format_for_llm(
-    indexed: list[_LlmEntry],
+class _Window:
+    """One LLM call's worth of bars.
+
+    `core_set` holds the bar indices whose onsets are shiftable (rendered
+    with `#id`s); `render_bars` is the full ordered span to print (core +
+    read-only context bars). `gid_to_lid` maps a global onset id (its
+    position in the shared `indexed` list) to this window's local id;
+    `local_to_global` is the inverse for shiftable onsets only, mapping a
+    local id back to its `(pitch, idx)`. `by_bar` is the shared
+    global-id-keyed grouping (read-only here).
+    """
+    __slots__ = ("core_set", "render_bars", "by_bar", "gid_to_lid", "local_to_global")
+
+    def __init__(
+        self,
+        core_set: set[int],
+        render_bars: list[int],
+        by_bar: dict[int, list[tuple[int, _LlmEntry]]],
+        gid_to_lid: dict[int, int],
+        local_to_global: list[tuple[str, int]],
+    ) -> None:
+        self.core_set = core_set
+        self.render_bars = render_bars
+        self.by_bar = by_bar
+        self.gid_to_lid = gid_to_lid
+        self.local_to_global = local_to_global
+
+
+def _format_window(
     structure: BeatStructure,
+    window: _Window,
     *,
     slots_per_beat: int = SLOTS_PER_BEAT,
 ) -> str:
-    """One block per bar: header + indexed onset rows grouped by slot."""
-    by_bar: dict[int, list[tuple[int, _LlmEntry]]] = {}
-    for llm_id, e in enumerate(indexed):
-        by_bar.setdefault(e.bar, []).append((llm_id, e))
+    """Render a window's bars: one block per bar, onset rows grouped by slot.
 
+    Core bars carry shiftable onsets tagged with their window-local `#id`.
+    Context bars are tagged `[context - read-only]` and their onsets are
+    rendered WITHOUT an id, so the model can see the surrounding groove
+    but cannot (and is told not to) shift them.
+    """
     blocks: list[str] = []
-    for bar in structure.bars:
+    for bar_idx in window.render_bars:
+        bar = structure.bars[bar_idx]
+        is_core = bar_idx in window.core_set
+        tag = "" if is_core else " [context - read-only]"
         header = (
             f"Bar {bar.index} "
             f"[{bar.time_signature[0]}/{bar.time_signature[1]}, "
-            f"{bar.tempo_bpm:.1f} BPM, feel={bar.feel}]:"
+            f"{bar.tempo_bpm:.1f} BPM, feel={bar.feel}]{tag}:"
         )
         rows = [header]
-        bar_entries = by_bar.get(bar.index, [])
+        bar_entries = window.by_bar.get(bar_idx, [])
         if not bar_entries:
             rows.append("  (no onsets)")
             blocks.append("\n".join(rows))
             continue
         # Group by slot for compactness.
         by_slot: dict[int, list[tuple[int, _LlmEntry]]] = {}
-        for llm_id, e in bar_entries:
-            by_slot.setdefault(e.slot, []).append((llm_id, e))
+        for gid, e in bar_entries:
+            by_slot.setdefault(e.slot, []).append((gid, e))
         for slot in sorted(by_slot.keys()):
             slot_entries = by_slot[slot]
             beat_label = _slot_label(slot, slots_per_beat)
-            rendered = " ".join(
-                f"#{llm_id}({e.pitch})" for llm_id, e in slot_entries
-            )
+            if is_core:
+                rendered = " ".join(
+                    f"#{window.gid_to_lid[gid]}({e.pitch})"
+                    for gid, e in slot_entries
+                )
+            else:
+                rendered = " ".join(f"({e.pitch})" for _gid, e in slot_entries)
             rows.append(f"  slot {slot:>2} {beat_label}: {rendered}")
         blocks.append("\n".join(rows))
     return "\n\n".join(blocks)

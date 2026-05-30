@@ -41,9 +41,15 @@ near beat 3). Use it to spot bleed.
   with a hit on a *louder* instrument in the `others:` line, and does
   not fit this instrument's own pattern. Classic case: a faint "kick"
   or "tom" onset exactly under every snare backbeat.
-- **Double-trigger**: two onsets implausibly close together where the
-  drummer almost certainly struck once (one is much weaker and
-  immediately follows a strong one).
+- **Double-trigger**: the detector fired twice for ONE physical strike;
+  the two onsets are **nearly simultaneous** (a hair apart) and one is
+  much weaker, immediately following the strong one. If two hits are
+  clearly separated they are two real strikes; never call that a
+  double-trigger, no matter how weak the second. This is **rare**, and
+  rarest of all on **snare and toms**, which routinely play fast repeated
+  hits (rolls, drags, flams, buzz figures) where close spacing IS the
+  groove. Be especially reluctant to flag `{INSTRUMENT_NAME}` here unless
+  the two onsets are essentially on top of each other.
 - **Isolated noise**: a lone weak onset that fits neither this
   instrument's groove nor any other instrument's hit.
 
@@ -84,6 +90,9 @@ one per onset to drop. Each object has:
 - `reason_text`; required only when `reason` is `custom`. Optional for
   the other reasons if you want to add brief extra detail (e.g. which
   pitch you think the bleed is from); keep it short.
+- `double_of`; **required when `reason` is `double_trigger`**: the `#N`
+  index of the real strike this onset duplicates (the one actually
+  played). Omit for the other reasons.
 
 Empty list if every onset is a real hit. Never invent an index that
 wasn't shown.

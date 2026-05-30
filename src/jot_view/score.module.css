@@ -821,6 +821,10 @@
        explicit declaration the UA-default `<button>` background paints
        through. */
     background: transparent;
+    /* `.reset` no longer kills the UA-default `<button>` border either,
+       so the toggle rendered with a native bevelled border around the
+       caption. Wipe it so the heading reads as plain inline text. */
+    border: 0;
     color: var(--color-text-faint);
     padding: 1px 0;
     /* "▸ Debug details" must stay on one line; without this the

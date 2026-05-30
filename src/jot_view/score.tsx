@@ -769,6 +769,12 @@ const NoteView = observer(
         }}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
+        // Marks the row (via a `:has()` rule in mixer.module.css) as
+        // carrying an open label popover so its whole row can be lifted
+        // above the sibling rows the popover extends down into. A data
+        // attribute rather than a class because the row selector lives
+        // in a different CSS module's local scope.
+        data-note-label-open={showLabel || undefined}
       >
         {isFlam && <FlamGrace color={color} config={config} />}
         {isDrag && <DragGrace color={color} config={config} />}

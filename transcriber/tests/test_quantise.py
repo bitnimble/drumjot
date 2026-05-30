@@ -20,8 +20,11 @@ from app.pipeline.quantise import (
     _QUANTISE_TOOL,
     SLOTS_PER_BEAT,
     _apply_llm_shifts,
+    _build_windows,
     _extract_shifts,
+    _format_window,
     _geometric_snap,
+    _LlmEntry,
     _slot_label,
     quantise_kept_onsets,
 )
@@ -242,3 +245,108 @@ def test_slots_per_beat_matches_frontend_default() -> None:
     # `src/midi/from_midi.ts::gridDivision` defaults to 48
     # (1/48-of-whole-note), which is 12 slots per quarter-note beat.
     assert SLOTS_PER_BEAT == 12
+
+
+# ---------- LLM window chunking ----------
+
+def _indexed(*specs):
+    """Build a sorted `[_LlmEntry]` the way `_index_for_llm` would.
+
+    Each spec is `(pitch, idx, bar, slot)`. Entries are returned in the
+    same `(bar, slot, pitch)` order `_index_for_llm` guarantees, so the
+    global ids `_build_windows` assigns line up with real runs.
+    """
+    entries = [_LlmEntry(pitch=p, idx=i, bar=b, slot=s) for (p, i, b, s) in specs]
+    entries.sort(key=lambda e: (e.bar, e.slot, e.pitch))
+    return entries
+
+
+def test_build_windows_never_splits_a_dense_bar() -> None:
+    # A single bar whose onset count exceeds the target is still one window
+    # (the target is a soft cap; we never split a bar).
+    entries = _indexed(*[("k", i, 0, i) for i in range(200)])
+    windows = _build_windows(
+        entries, _structure([_bar(0, 0.0, 2.0)]),  # type: ignore[arg-type]
+        target_onsets=150, max_bars=8, context_bars=0,
+    )
+    assert len(windows) == 1
+    assert windows[0].core_set == {0}
+    assert len(windows[0].local_to_global) == 200
+
+
+def test_build_windows_breaks_on_onset_target() -> None:
+    # Bars of 60 onsets each, target 150: bars 0+1 fit (120), bar 2 would
+    # overflow (180) so it starts a new window.
+    specs = [("k", i, b, i % 60) for b in range(3) for i in range(60)]
+    entries = _indexed(*specs)
+    bars = [_bar(b, b * 2.0, b * 2.0 + 2.0) for b in range(3)]
+    windows = _build_windows(
+        entries, _structure(bars),  # type: ignore[arg-type]
+        target_onsets=150, max_bars=8, context_bars=0,
+    )
+    assert [sorted(w.core_set) for w in windows] == [[0, 1], [2]]
+
+
+def test_build_windows_breaks_on_bar_span() -> None:
+    # Sparse bars far apart: the bar-span cap (8) forces a break even though
+    # the onset target is nowhere near.
+    entries = _indexed(("k", 0, 0, 0), ("k", 1, 10, 0))
+    bars = [_bar(b, b * 2.0, b * 2.0 + 2.0) for b in range(11)]
+    windows = _build_windows(
+        entries, _structure(bars),  # type: ignore[arg-type]
+        target_onsets=150, max_bars=8, context_bars=0,
+    )
+    assert [sorted(w.core_set) for w in windows] == [[0], [10]]
+
+
+def test_build_windows_local_ids_map_back_in_global_order() -> None:
+    # Local ids are assigned in (bar, slot, pitch) order across the window's
+    # core bars; local_to_global must invert that exactly.
+    entries = _indexed(
+        ("s", 0, 0, 5), ("k", 0, 0, 0), ("h", 0, 0, 0), ("k", 1, 1, 3),
+    )
+    bars = [_bar(0, 0.0, 2.0), _bar(1, 2.0, 4.0)]
+    windows = _build_windows(
+        entries, _structure(bars),  # type: ignore[arg-type]
+        target_onsets=150, max_bars=8, context_bars=0,
+    )
+    assert len(windows) == 1
+    w = windows[0]
+    # Global sort order: bar0 slot0 h, bar0 slot0 k, bar0 slot5 s, bar1 slot3 k
+    assert w.local_to_global == [("h", 0), ("k", 0), ("s", 0), ("k", 1)]
+
+
+def test_build_windows_adds_readonly_context_bars() -> None:
+    # With context_bars=1 each window renders its neighbours, but they are
+    # not in core_set (not shiftable).
+    specs = [("k", i, b, i % 60) for b in range(3) for i in range(60)]
+    entries = _indexed(*specs)
+    bars = [_bar(b, b * 2.0, b * 2.0 + 2.0) for b in range(3)]
+    windows = _build_windows(
+        entries, _structure(bars),  # type: ignore[arg-type]
+        target_onsets=150, max_bars=8, context_bars=1,
+    )
+    # Windows core = [0,1] and [2]. The first renders bar 2 as context; the
+    # second renders bar 1 as context. Neither core_set grows.
+    assert sorted(windows[0].core_set) == [0, 1]
+    assert windows[0].render_bars == [0, 1, 2]
+    assert sorted(windows[1].core_set) == [2]
+    assert windows[1].render_bars == [1, 2]  # bar 3 doesn't exist
+
+
+def test_format_window_tags_context_bars_and_drops_their_ids() -> None:
+    entries = _indexed(("k", 0, 0, 0), ("s", 0, 1, 12))
+    bars = [_bar(0, 0.0, 2.0), _bar(1, 2.0, 4.0)]
+    # Window 0 owns bar 0; bar 1 is read-only context.
+    windows = _build_windows(
+        entries, _structure(bars),  # type: ignore[arg-type]
+        target_onsets=1, max_bars=8, context_bars=1,
+    )
+    rendered = _format_window(
+        _structure(bars), windows[0], slots_per_beat=12,  # type: ignore[arg-type]
+    )
+    # Core bar 0: shiftable onset carries a #id.
+    assert "#0(k)" in rendered
+    # Context bar 1: tagged read-only, its onset shown WITHOUT an id.
+    assert "[context - read-only]" in rendered
+    assert "(s)" in rendered and "#0(s)" not in rendered and "#1(s)" not in rendered

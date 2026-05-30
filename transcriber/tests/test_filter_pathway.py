@@ -19,8 +19,10 @@ import pytest
 
 from app.pipeline.filter_llm import (
     _FILTER_TOOL,
+    _apply_refractory_guardrail,
     _extract_rejected,
     _index_in_range,
+    _refractory_window_s,
     filter_onsets_all_instruments,
 )
 from app.pipeline.onsets_midi import onsets_to_midi_bytes
@@ -142,6 +144,99 @@ def test_extract_rejected_dedupes_valid_indices() -> None:
     out = _extract_rejected(_resp([0, 2, 2, 4]), n=5)
     assert set(out.keys()) == {0, 2, 4}
     assert all(info["reason"] == "noise" for info in out.values())
+
+
+def test_extract_rejected_parses_double_of_for_double_trigger() -> None:
+    out = _extract_rejected(
+        _resp([{"index": 1, "reason": "double_trigger", "double_of": 0}]),
+        n=3,
+    )
+    assert out[1] == {"reason": "double_trigger", "reason_text": None, "double_of": 0}
+
+
+def test_extract_rejected_double_trigger_without_double_of_is_allowed() -> None:
+    # A missing double_of is not a hard error; the refractory guardrail
+    # resolves an unverifiable double_trigger by keeping the onset.
+    out = _extract_rejected(
+        _resp([{"index": 1, "reason": "double_trigger"}]), n=3,
+    )
+    assert out[1] == {"reason": "double_trigger", "reason_text": None}
+    assert "double_of" not in out[1]
+
+
+def test_extract_rejected_double_of_must_be_integer() -> None:
+    with pytest.raises(RuntimeError, match="double_of.*integer"):
+        _extract_rejected(
+            _resp([{"index": 1, "reason": "double_trigger", "double_of": "x"}]),
+            n=3,
+        )
+
+
+def test_extract_rejected_ignores_double_of_on_non_double_trigger() -> None:
+    out = _extract_rejected(
+        _resp([{"index": 0, "reason": "bleed", "double_of": 1}]), n=3,
+    )
+    assert out[0] == {"reason": "bleed", "reason_text": None}
+
+
+def _dt(double_of: int | None = None):
+    info: dict = {"reason": "double_trigger", "reason_text": None}
+    if double_of is not None:
+        info["double_of"] = double_of
+    return info
+
+
+def test_guardrail_overturns_widely_spaced_snare_double() -> None:
+    # The real-world case: a snare hit ~217 ms after a stronger one, which
+    # the LLM mislabelled a double_trigger. Snare's window is 30 ms, so the
+    # rejection is overturned and the hit is kept.
+    ordered = [_c(143.152), _c(143.369)]
+    rejected = {1: _dt(double_of=0)}
+    after, overturned = _apply_refractory_guardrail(ordered, rejected, "s")
+    assert after == {}
+    assert set(overturned) == {1}
+
+
+def test_guardrail_keeps_genuine_close_snare_double() -> None:
+    # 25 ms apart, below the 30 ms snare window: a plausible re-fire, so
+    # the LLM's rejection stands.
+    ordered = [_c(1.000), _c(1.025)]
+    rejected = {1: _dt(double_of=0)}
+    after, overturned = _apply_refractory_guardrail(ordered, rejected, "s")
+    assert set(after) == {1}
+    assert overturned == {}
+
+
+def test_guardrail_kick_window_is_wider_than_default() -> None:
+    assert _refractory_window_s("k") > _refractory_window_s("s")
+    # 40 ms apart: stands for kick (window 55 ms) but would be overturned
+    # on snare (window 30 ms).
+    ordered = [_c(2.000), _c(2.040)]
+    rejected = {1: _dt(double_of=0)}
+    kick_after, _ = _apply_refractory_guardrail(ordered, rejected, "k")
+    snare_after, _ = _apply_refractory_guardrail(ordered, dict(rejected), "s")
+    assert set(kick_after) == {1}
+    assert snare_after == {}
+
+
+def test_guardrail_overturns_when_double_of_missing_or_invalid() -> None:
+    ordered = [_c(1.000), _c(1.005), _c(1.010)]
+    # No double_of, out-of-range, and self-reference are all unverifiable.
+    rejected = {0: _dt(), 1: _dt(double_of=9), 2: _dt(double_of=2)}
+    after, overturned = _apply_refractory_guardrail(ordered, rejected, "s")
+    assert after == {}
+    assert set(overturned) == {0, 1, 2}
+
+
+def test_guardrail_leaves_non_double_trigger_reasons_untouched() -> None:
+    ordered = [_c(1.000), _c(5.000)]
+    rejected = {
+        0: {"reason": "bleed", "reason_text": None},
+        1: {"reason": "noise", "reason_text": None},
+    }
+    after, overturned = _apply_refractory_guardrail(ordered, rejected, "s")
+    assert after == rejected
+    assert overturned == {}
 
 
 def test_extract_rejected_returns_reason_codes() -> None:

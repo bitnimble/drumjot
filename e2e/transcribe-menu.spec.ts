@@ -42,8 +42,8 @@ test('Model selection persists across New ↔ Resume tab switch', async ({ page 
   // value rode through the tab switch rather than just matching the
   // default on both sides.
   const modelSelect = page.getByLabel('Model');
-  await modelSelect.selectOption('claude-haiku-4-5-20251001');
-  await expect(modelSelect).toHaveValue('claude-haiku-4-5-20251001');
+  await modelSelect.selectOption('claude-opus-4-7');
+  await expect(modelSelect).toHaveValue('claude-opus-4-7');
 
   await resumeTab.click();
 
@@ -52,5 +52,5 @@ test('Model selection persists across New ↔ Resume tab switch', async ({ page 
   // it inside one of the tab bodies, this assertion catches that
   // regression, either the locator goes stale (mount/unmount) or the
   // value resets to the default.
-  await expect(modelSelect).toHaveValue('claude-haiku-4-5-20251001');
+  await expect(modelSelect).toHaveValue('claude-opus-4-7');
 });

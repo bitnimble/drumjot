@@ -545,6 +545,21 @@
     z-index: 1;
 }
 
+/* While a note's selection / hover popover is open, lift its entire row
+   above every sibling row. The popover extends below the note into the
+   rows underneath (other instrument bars at z-index 1 and audio-track
+   waveforms at z-index auto), and the note's own z-index only orders it
+   *within* this row's bars-row stacking context; so the lift has to
+   live on the row wrapper, which keeps the sticky gutter (z-index 6)
+   correctly above the bars area inside the row. Keyed off the
+   `data-note-label-open` attribute NoteView sets (score.tsx); a data
+   attribute rather than a CSS-module class because the note classes
+   live in a different module's local scope. */
+.instrumentRow:has([data-note-label-open]),
+.musicTrack:has([data-note-label-open]) {
+    z-index: 32;
+}
+
 .leadInLabel {
     composes: labelSm from '../typography.module.css';
     /* labelSm is 700 weight; nudging this overlay label down to 600 keeps

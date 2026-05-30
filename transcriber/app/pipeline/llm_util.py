@@ -88,7 +88,7 @@ def call_messages_with_refusal_retry(
     """
     seq = _dump_prompt(purpose, create_kwargs, base_prompt)
     try:
-        response = client.messages.create(**create_kwargs)
+        response = _create_message(client, create_kwargs)
     except anthropic.BadRequestError as exc:
         if not _looks_like_refusal(str(exc)):
             raise
@@ -124,9 +124,27 @@ def _retry_with_directive(
     ]
     retry_purpose = f"{purpose}__refusal_retry" if purpose else None
     seq = _dump_prompt(retry_purpose, retry_kwargs, retry_prompt)
-    response = client.messages.create(**retry_kwargs)
+    response = _create_message(client, retry_kwargs)
     _dump_response(seq, retry_purpose, response)
     return response
+
+
+def _create_message(
+    client: anthropic.Anthropic,
+    create_kwargs: dict,
+) -> anthropic.types.Message:
+    """Issue one messages request, streaming to dodge the SDK's 10-min guard.
+
+    The Anthropic SDK refuses a non-streaming `messages.create` when
+    `max_tokens` is large enough that worst-case generation could exceed
+    10 minutes. The quantise stage scales `max_tokens` with the onset
+    count and routinely clears that bar, so we always stream and
+    reassemble the final `Message` via `get_final_message()`. The return
+    type, and every downstream `stop_reason` / content-block reader, is
+    unchanged.
+    """
+    with client.messages.stream(**create_kwargs) as stream:
+        return stream.get_final_message()
 
 
 def _dump_prompt(

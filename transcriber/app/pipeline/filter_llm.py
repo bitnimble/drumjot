@@ -66,6 +66,8 @@ _FILTER_TOOL: dict[str, Any] = {
         "Return the onsets that are NOT real musical hits; separation "
         "bleed, detector double-triggers, or noise; each paired with a "
         "short reason code so the operator can see WHY it was flagged. "
+        "For `double_trigger` you MUST also give `double_of`; the index "
+        "of the real strike this onset duplicates. "
         "Keep the list empty if every onset is a genuine hit. Never "
         "include an index that wasn't shown to you."
     ),
@@ -103,6 +105,16 @@ _FILTER_TOOL: dict[str, Any] = {
                                 "Optional brief extra detail for the "
                                 "standard reasons (e.g. which pitch you "
                                 "think the bleed is from). Keep short."
+                            ),
+                        },
+                        "double_of": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": (
+                                "Required when `reason` is `double_trigger`: "
+                                "the `#N` index of the REAL strike this onset "
+                                "is a duplicate of (the one actually played). "
+                                "Omit for other reasons."
                             ),
                         },
                     },
@@ -183,7 +195,13 @@ def filter_onsets_for_instrument(
         purpose=purpose,
     )
 
-    rejected = _extract_rejected(response, len(ordered))
+    rejected_raw = _extract_rejected(response, len(ordered))
+    # Deterministic backstop: the LLM can over-eagerly call two well-spaced
+    # hits a "double_trigger" (a snare roll, a fast kick double). Overturn
+    # any such rejection whose gap to the strike it claims to duplicate
+    # exceeds this lane's physical refractory window, so real fast playing
+    # always survives regardless of the model's judgement.
+    rejected, overturned = _apply_refractory_guardrail(ordered, rejected_raw, pitch)
     kept = [c for i, c in enumerate(ordered) if i not in rejected]
     rejection_info: dict[int, dict[str, Any]] = {
         id(ordered[i]): info for i, info in rejected.items()
@@ -192,6 +210,12 @@ def filter_onsets_for_instrument(
         "filter %s: rejected %d / %d onsets, kept %d",
         pitch, len(rejected), len(ordered), len(kept),
     )
+    if overturned:
+        log.info(
+            "filter %s: overturned %d double_trigger rejection(s) past the "
+            "%.0f ms refractory window",
+            pitch, len(overturned), _refractory_window_s(pitch) * 1000.0,
+        )
 
     sink = current_debug_sink()
     if sink is not None:
@@ -202,6 +226,12 @@ def filter_onsets_for_instrument(
                 "n_input": len(ordered),
                 "rejected": [
                     {"index": i, **info} for i, info in sorted(rejected.items())
+                ],
+                # double_trigger rejections the refractory guardrail
+                # restored as real hits (too far apart to be one strike).
+                "overturned": [
+                    {"index": i, **info}
+                    for i, info in sorted(overturned.items())
                 ],
                 "n_kept": len(kept),
             },
@@ -217,7 +247,7 @@ def filter_onsets_all_instruments(
     cancel_event: threading.Event | None = None,
     skip_pitches: set[str] | None = None,
     llm_model: str | None = None,
-) -> tuple[dict[str, list[OnsetCandidate]], dict[str, dict[int, dict[str. Any]]]]:
+) -> tuple[dict[str, list[OnsetCandidate]], dict[str, dict[int, dict[str, Any]]]]:
     """Filter every instrument that has in-range onsets, in parallel.
 
     Returns `(kept_by_pitch, reasons_by_pitch)` where `reasons_by_pitch`
@@ -451,11 +481,81 @@ def _extract_rejected(
                     f"filter: rejected_onsets item with reason='custom' "
                     f"must include a non-empty `reason_text` (index {i})"
                 )
-            out[i] = {"reason": reason, "reason_text": reason_text}
+            info: dict[str, Any] = {"reason": reason, "reason_text": reason_text}
+            # `double_of` only carries meaning for double_trigger: it's the
+            # index of the real strike this onset duplicates, used by the
+            # refractory guardrail to verify the two are actually close
+            # enough to be one physical hit. A missing/garbage value is NOT
+            # a hard error (it just leaves the rejection unverifiable, which
+            # the guardrail resolves by keeping the onset); but a non-integer
+            # `double_of` is a schema violation, surfaced like the others.
+            if reason == "double_trigger":
+                double_of_raw = v.get("double_of")
+                if double_of_raw is not None:
+                    try:
+                        info["double_of"] = int(double_of_raw)
+                    except (TypeError, ValueError) as exc:
+                        raise RuntimeError(
+                            f"filter: rejected_onsets item `double_of` must be "
+                            f"an integer when present (got {double_of_raw!r}, "
+                            f"index {i})"
+                        ) from exc
+            out[i] = info
         return out
     raise RuntimeError(
         "filter: no tool_use block in response; tool call was not made"
     )
+
+
+def _refractory_window_s(pitch: str) -> float:
+    """Minimum gap below which a `double_trigger` rejection may stand for
+    this lane.
+
+    Kick gets a wider window (a beater can't re-strike as fast as a stick
+    bounce); every other filter-LLM lane uses the default, which sits just
+    above the detector's 20 ms min-distance so rolls / drags / flams /
+    fast doubles survive. Crash/ride never reach here (cymbal_split vets
+    them upstream)."""
+    if pitch == "k":
+        return settings.double_trigger_refractory_kick_s
+    return settings.double_trigger_refractory_default_s
+
+
+def _apply_refractory_guardrail(
+    ordered: list[OnsetCandidate],
+    rejected: dict[int, dict[str, Any]],
+    pitch: str,
+) -> tuple[dict[int, dict[str, Any]], dict[int, dict[str, Any]]]:
+    """Overturn physically-implausible `double_trigger` rejections.
+
+    For each `double_trigger` rejection, look up the real strike the LLM
+    said it duplicates (`double_of`) and measure the time gap. The
+    rejection only STANDS when that strike exists and the gap is below this
+    lane's refractory window; a gap at/above the window (two real hits) or
+    a missing / out-of-range / self-referential `double_of` (unverifiable)
+    overturns it, keeping the onset.
+
+    Returns `(rejected_after, overturned)`, both `{index: info}`. Only
+    `double_trigger` entries are ever touched; bleed / noise / custom pass
+    through unchanged. The guardrail never adds rejections, only restores
+    hits, so it is strictly recall-positive."""
+    window = _refractory_window_s(pitch)
+    n = len(ordered)
+    rejected_after: dict[int, dict[str, Any]] = {}
+    overturned: dict[int, dict[str, Any]] = {}
+    for i, info in rejected.items():
+        if info["reason"] != "double_trigger":
+            rejected_after[i] = info
+            continue
+        j = info.get("double_of")
+        if isinstance(j, int) and 0 <= j < n and j != i:
+            gap = abs(float(ordered[i].time) - float(ordered[j].time))
+            if gap < window:
+                rejected_after[i] = info
+                continue
+        # Gap too wide to be one strike, or no usable reference: keep it.
+        overturned[i] = info
+    return rejected_after, overturned
 
 
 def _load_prompt_template() -> str:

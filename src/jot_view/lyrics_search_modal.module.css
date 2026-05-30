@@ -153,6 +153,15 @@
     color: var(--color-text-muted-alt);
 }
 
+/* Placeholder shown when a result has no album (blank or literal
+   "null"). Italic + slightly dimmer than the rest of the secondary line
+   so it reads as a soft fallback rather than a real album name. */
+.resultAlbumEmpty {
+    /* stylelint-disable-next-line property-disallowed-list -- one-off italic for the "(no album)" fallback; no shared italic typography use case exists */
+    font-style: italic;
+    opacity: 0.75;
+}
+
 .loadFooter {
     display: flex;
     align-items: center;
