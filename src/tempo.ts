@@ -180,6 +180,19 @@ export function beatToSecWithinBar(tempos: BarTempos, beat: number): number {
 }
 
 /**
+ * Convert a sub-slot timing offset in milliseconds to a fraction of a
+ * quarter-note beat, given the bar's local seconds-per-beat. Used by the
+ * score renderer to shift an off-grid note's glyph to where it actually
+ * plays (the score's x-axis is notational beats, so a real-time ms offset
+ * must be divided by the local tempo). Returns 0 for a non-positive
+ * `secPerBeat` (degenerate / zero-length bar).
+ */
+export function msOffsetToBeats(offsetMs: number, secPerBeat: number): number {
+  if (!(secPerBeat > 0)) return 0;
+  return offsetMs / 1000 / secPerBeat;
+}
+
+/**
  * Effective tempo at a given (barIndex, beat) position. Used by readers
  * that need a single number (subtitle formatters, score timeline
  * headers, ad-hoc conversions). For timeline construction prefer

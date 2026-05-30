@@ -8,6 +8,7 @@ import {
   NoteProvenanceFile,
 } from 'src/debug_zip';
 import { Instrument } from 'src/dsl';
+import { slotsPerQuarter } from 'src/grid';
 import { ExampleJot } from 'src/fakes';
 import { DrumInstrumentKind, defaultKindForPitch } from 'src/instruments';
 import { RenderedJot, ViewConfig, px } from 'src/jot';
@@ -51,11 +52,14 @@ import type { NoteProvenanceContextValue } from './contexts';
 import { transcribeSuccessToastMessage } from './toasts_messages';
 import { toastStore } from './toasts';
 
-/** Long-running lyric-alignment indicator. Only the in-flight `aligning`
- *  phase is modelled here, success and failure surface as toasts (see
- *  `./toasts.ts`). */
+/** Long-running lyric-alignment indicator. `queued` is the wait state
+ *  while the request sits behind another in-flight GPU job (a transcribe
+ *  or another align); `aligning` is once it owns the GPU and forced
+ *  alignment is actually running. Success and failure surface as toasts
+ *  (see `./toasts.ts`). */
 export type LyricsAlignStatus =
   | { phase: 'idle' }
+  | { phase: 'queued'; detail: string }
   | { phase: 'aligning'; detail: string };
 
 /** Long-running stem-split indicator for an audio track. `mix` covers
@@ -1958,14 +1962,15 @@ export class JotViewStore {
           bpm > 0
             ? (-alignmentSec * bpm) / 60
             : 0;
-        // Snap the baseline to the nearest 1/48 unit so subsequent
-        // integer-/48 slider nudges produce on-grid effective shifts;
+        // Snap the baseline to the nearest grid slot so subsequent
+        // integer-slot slider nudges produce on-grid effective shifts;
         // a fractional baseline left every drum-offset-shifted note
         // sub-slot off the bar line. Then shift `drumsT0Sec` by the
         // rounding delta in the opposite direction (converted to
         // seconds via bpm) so the loaded audio track still lines up
         // with the snapped baseline rather than the raw one.
-        const alignmentBeats = Math.round(rawAlignmentBeats * 12) / 12;
+        const sPerQuarter = slotsPerQuarter(jot);
+        const alignmentBeats = Math.round(rawAlignmentBeats * sPerQuarter) / sPerQuarter;
         const baselineRoundingDeltaBeats = alignmentBeats - rawAlignmentBeats;
         const audioCompensationSec =
           Math.abs(baselineRoundingDeltaBeats) > 1e-9 && typeof bpm === 'number' && bpm > 0
@@ -2540,14 +2545,19 @@ export class JotViewStore {
   lyricsAlignControllers: Map<LyricsTrackId, AbortController> = new Map();
   lyricsAlignStatuses: Map<LyricsTrackId, LyricsAlignStatus> = new Map();
 
-  /** True when any lyrics row currently has a Whisper alignment in
-   *  flight. Drives the toolbar busy pill (which doesn't display
-   *  *which* row; the per-row spinner does). */
-  get lyricsAnyAligning(): boolean {
+  /** Aggregate lyrics-alignment state across all rows, for the toolbar
+   *  busy pill (which doesn't display *which* row; the per-row spinner
+   *  does). `aligning` wins over `queued` so that once any row owns the
+   *  GPU the pill reads as actively working; `queued` shows only while
+   *  every in-flight row is still waiting its turn. The backend
+   *  serialises GPU work, so at most one row is `aligning` at a time. */
+  get lyricsAlignBusyPhase(): 'idle' | 'queued' | 'aligning' {
+    let anyQueued = false;
     for (const s of this.lyricsAlignStatuses.values()) {
-      if (s.phase === 'aligning') return true;
+      if (s.phase === 'aligning') return 'aligning';
+      if (s.phase === 'queued') anyQueued = true;
     }
-    return false;
+    return anyQueued ? 'queued' : 'idle';
   }
 
   /**
@@ -2580,7 +2590,25 @@ export class JotViewStore {
     });
     let lines: LyricLine[];
     try {
-      lines = await alignLyricsWhisper(req, { signal: controller.signal });
+      lines = await alignLyricsWhisper(req, {
+        signal: controller.signal,
+        onProgress: (event) => {
+          // The stream emits `queued` while waiting behind another GPU
+          // job, then `running` once alignment starts. Flip the per-row
+          // status so the spinner/pill read "Queued…" vs "Aligning…".
+          // Guard against a newer align (or a clear) that raced in while
+          // we were waiting: only this controller may touch the status.
+          if (this.lyricsAlignControllers.get(targetTrackId) !== controller) {
+            return;
+          }
+          runInAction(() => {
+            this.lyricsAlignStatuses.set(targetTrackId, {
+              phase: event.kind === 'queued' ? 'queued' : 'aligning',
+              detail: label,
+            });
+          });
+        },
+      });
     } catch (err) {
       if (controller.signal.aborted) {
         // A newer align on the same track (or a wholesale jot replace)

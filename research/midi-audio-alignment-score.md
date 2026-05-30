@@ -1,9 +1,50 @@
 # MIDI ↔ drum-audio onset-alignment score (spec)
 
-Status: design, reviewed (subagent pass May 2026), not yet implemented.
+Status: design, reviewed (subagent pass May 2026). v1 scoped + approved
+2026-05-30; the v1 build is governed by
+`docs/superpowers/specs/2026-05-30-midi-scoring-utility-design.md`. Not
+yet implemented. See "v1 implementation decisions" below for how that
+spec reframes this doc.
 Sibling reference: `benchmarks/core/score.py` (the existing binary
 3-class onset F1) and `app/pipeline/adtof_onsets.py` (the audio onset
 detector this reuses).
+
+## v1 implementation decisions (2026-05-30)
+
+The v1 build is specified in
+`docs/superpowers/specs/2026-05-30-midi-scoring-utility-design.md`. It
+resolves the open questions and reframes parts of this doc. Where they
+disagree, the v1 spec wins for v1; this doc stays the reference for the
+scoring algorithm (§5) and the full correction vision (§8).
+
+- **Purpose / consumer.** The driving use case is filtering the ParaDB
+  map corpus (~6k songs, ~15k difficulty tracks) for training-data
+  quality. ParaDB `.zip` packs are the primary input; the MIDI path (§4)
+  is now a secondary test input.
+- **Deployment (resolves §11 "Endpoint").** Not a CLI. v1 is a headless
+  batch function plus a thin `POST /score` web endpoint used only as a
+  test harness. No CLI yet.
+- **Parser language (resolves §11 "Parser-language decision").** Approach
+  2, Python owns everything. `mido` reads MIDI; `gm.ts`, `drums.ts`
+  `CLASS_TO_DRUM`, the `.rlrr` encoding sniff, and ParaDB zip selection
+  are ported to Python (stdlib `zipfile`) and guarded by drift tests. The
+  `gm.ts`/`drums.ts` source of truth is unchanged.
+- **Module home (revises §9).** `transcriber/app/scoring/`, not
+  `benchmarks/core/`, since v1 lives in the app and reuses its pipeline
+  stages (`separate`, `adtof_onsets`).
+- **Headline metric (resolves §11 "Score-vs-corrected").**
+  `score_corrected` (post global-align) is the filter metric;
+  pre-correction `score` is also reported.
+- **Correction scope (cuts §8).** v1 implements tiers 0 and 1 (global
+  offset + bounded affine tempo) only. No per-note ICP nudge (§8.2), no
+  cleaned-`.mid` export. The recovered `(offset, tempo)` doubles as the
+  transform that cleans training pairs.
+- **Audio reference (refines §4).** Run ADTOF once on the drum stem and
+  read all 5 lanes (skip the per-instrument second separation `run_stems_per`).
+  Prefer a pack's drums-only `drumTracks` audio directly (skip Demucs);
+  separate the song track only when absent. Score against raw ADTOF
+  detections (no LLM prune); the recall bias is accepted as a uniform,
+  hence filter-valid, offset across the corpus.
 
 ## 1. Purpose
 

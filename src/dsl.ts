@@ -128,6 +128,16 @@ export type Metadata = {
   drumsT0Sec?: number;
   signalT0Sec?: number;
   leadBars?: number;
+  /**
+   * Grid density chosen by whichever producer built this jot, expressed
+   * as 1/N-of-a-whole-note (so 48 = the 1/48 grid `from_midi` defaults
+   * to, 12 slots per quarter). Advisory only: it does NOT change how the
+   * DSL is interpreted (positions come from element weights), it tells
+   * grid-aware consumers (note position readouts, the drum-offset slider,
+   * sub-slot offset math) what slot resolution the producer was working
+   * at. Absent → `DEFAULT_GRID_DIVISION` (see `src/grid.ts`).
+   */
+  gridDivision?: number;
   [key: string]: unknown;
 };
 
@@ -175,6 +185,15 @@ export type Note = {
   kind: 'note';
   /** Single lowercase letter a-z; resolved via the active `instrumentMapping`. */
   pitch: string;
+  /**
+   * Signed sub-slot timing offset in milliseconds, relative to the note's
+   * natural (slot-aligned) position. Lets a hit render and play between
+   * grid slots, swing, ghost flams, push/pull feel; without snapping it
+   * onto the grid. Set programmatically by producers (e.g. `from_midi`
+   * when an onset lands far enough off any grid slot); there is no DSL
+   * surface syntax for it yet. Absent → the note plays exactly on its slot.
+   */
+  offset?: number;
   modifiers?: Modifier[];
   sticking?: Sticking;
   /** Roll/buzz fill (`~`). */

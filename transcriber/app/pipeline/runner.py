@@ -26,8 +26,9 @@ had quantise enabled) and re-runs only the render. Re-running the
 filter LLM itself means resuming from `filter`.
 
 `quantise` is enabled by default and can be disabled per-request via
-the `quantise` form param. It snaps kept onsets to a 1/48 grid
-deterministically and then runs a Haiku LLM pass for jitter-class
+the `quantise` form param. It snaps kept onsets to the slot grid with a
+per-(lane, bar) monotonic-injective geometric pass (leaving genuinely
+off-grid hits off-grid), then runs a Haiku LLM pass for jitter-class
 shifts in cross-instrument context. See `pipeline/quantise.py`.
 
 The legacy `dsl`/`refine` pathway (LLM-emitted Drumjot DSL + F1-gated
@@ -165,11 +166,16 @@ def _safe_progress(progress: ProgressCallback | None, event: ProgressEvent) -> N
 class PipelineOptions:
     beat_input: BeatInput = "full_mix"
     # Whether to run the optional `quantise` stage. Enabled by default;
-    # set False to skip both the deterministic joint-snap pass and the
-    # LLM residual pass; leaving `kept_by_pitch` as the filter stage
-    # produced it (raw seconds; frontend's 1/48 snap in
-    # `src/midi/from_midi.ts` handles quantisation).
+    # set False to skip both the geometric snap and the LLM residual pass,
+    # leaving `kept_by_pitch` as the filter stage produced it (raw seconds;
+    # frontend's 1/48 snap in `src/midi/from_midi.ts` handles quantisation).
     quantise: bool = True
+    # Whether the `quantise` stage runs its LLM residual pass on top of the
+    # geometric snap. Default True; set False to take the geometric snap
+    # alone. Exposed so the geometric-only vs geometric+LLM outputs can be
+    # A/B'd (does the LLM still earn its slot?). No-op when `quantise` is
+    # False.
+    quantise_use_llm: bool = True
     # Anthropic model used by the three Opus-by-default classification
     # stages (`filter`; `hihat_split`; `cymbal_split`). Empty string
     # falls back to `settings.llm_model` inside each call site so callers
@@ -660,12 +666,13 @@ def _do_quantise(
     options: PipelineOptions,
     sink: DebugSink | None,
 ) -> None:
-    """Snap kept onsets to a 1/48 grid: deterministic joint snap +
+    """Snap kept onsets to the slot grid: geometric per-(lane, bar) snap +
     optional LLM residual pass.
 
-    Mutates `ctx.kept_by_pitch` candidates in place, each shifted onset
-    gets `quantised_time` / `quantised_shift_slots` populated, leaving
-    `time` / `beat_in_bar` as the raw detector hit for provenance.
+    Mutates `ctx.kept_by_pitch` candidates in place: placed onsets get
+    `quantised_time` / `quantised_shift_slots` populated, band-rejected
+    onsets get `off_grid = True` (and keep `quantised_time = None`),
+    leaving `time` / `beat_in_bar` as the raw detector hit for provenance.
     Persists `quantise/shifts.json` for resume + inspection. Skipped
     entirely when `options.quantise` is False (no-op; downstream sees
     raw filter output).
@@ -690,12 +697,13 @@ def _do_quantise(
     summary = quantise_kept_onsets(
         ctx.kept_by_pitch,
         ctx.structure,
-        use_llm=True,
+        use_llm=options.quantise_use_llm,
         cancel_event=ctx.cancel_event,
     )
     log.info(
-        "quantise: deterministic shifted %d, LLM shifted %d (llm_status=%s)",
-        summary.get("deterministic_shifted", 0),
+        "quantise: geometric shifted %d, off-grid %d, LLM shifted %d (llm_status=%s)",
+        summary.get("geometric_shifted", 0),
+        summary.get("off_grid", 0),
         summary.get("llm_shifted", 0),
         summary.get("llm_status", "?"),
     )

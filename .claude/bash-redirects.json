@@ -23,7 +23,14 @@
       "reason": "Use the GitHub API via Fetch() instead of invoking gh directly"
     },
     {
-      "commands": ["Bash(sed *)", "Bash(grep *)", "Bash(find *)", "Bash(rg *)", "Bash(awk *)"],
+      "commands": [
+        "Bash(cat *)",
+        "Bash(sed *)",
+        "Bash(grep *)",
+        "Bash(find *)",
+        "Bash(rg *)",
+        "Bash(awk *)"
+      ],
       "reason": "Use the Read(), Write(), Edit() and Find() tools instead of invoking sed, grep, find, rg or awk directly"
     },
     {
@@ -49,7 +56,11 @@
         "Bash(uvx pytest *)",
         "Bash(.venv/bin/pytest *)",
         "Bash(transcriber/.venv/bin/pytest *)",
-        "Bash(./.venv/bin/pytest *)"
+        "Bash(.venv/bin/ruff *)",
+        "Bash(./.venv/bin/ruff *)",
+        "Bash(.venv/bin/pytest *)",
+        "Bash(./.venv/bin/pytest *)",
+        "Bash(.venv/bin/python -m pytest *)"
       ],
       "reason": "Use scripts in the scripts/ folder instead of running pytest or python compile directly"
     }

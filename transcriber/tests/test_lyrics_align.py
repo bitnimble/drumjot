@@ -11,6 +11,8 @@ transitively pull in whisperx / torch.
 
 from __future__ import annotations
 
+import pytest
+
 from app.pipeline.lyrics_align import (
     InputLine,
     LyricLine,
@@ -18,6 +20,8 @@ from app.pipeline.lyrics_align import (
     _detect_language_from_text,
     _iso1_to_iso3,
     _partition_words_by_line,
+    _preprocess_lines,
+    _resolve_cjk_lang,
     _stitch_lines,
     lines_to_json,
 )
@@ -371,3 +375,140 @@ def test_lines_to_json_omits_words_when_alignment_failed():
     lines = [LyricLine(start_sec=1.0, text="just text", words=None)]
     out = lines_to_json(lines)
     assert out == [{"startSec": 1.0, "text": "just text"}]
+
+
+# --------------------------------------------------------------------
+# Japanese-aware romanization wiring
+# --------------------------------------------------------------------
+
+
+def test_resolve_cjk_lang_kana_is_ja():
+    assert _resolve_cjk_lang("はじめまして") == "ja"
+
+
+def test_resolve_cjk_lang_simplified_marker_is_zh():
+    assert _resolve_cjk_lang("这是") == "zh"
+
+
+def test_resolve_cjk_lang_kanji_only_defaults_ja():
+    """Glyph-ambiguous kanji with no kana / markers defaults to the
+    J-pop bias."""
+    assert _resolve_cjk_lang("心") == "ja"
+
+
+def test_stitch_lines_uses_original_surface_and_records_romaji():
+    """With per-word display surfaces, the cell text is the original
+    kana/kanji and the aligned romaji rides along in the debug field."""
+    inputs = _lines("君と")
+    partitioned = [
+        [
+            {"text": "kimi", "start": 0.0, "end": 0.5, "score": -0.2},
+            {"text": "to", "start": 0.5, "end": 0.8, "score": -0.3},
+        ]
+    ]
+    surfaces = [["君", "と"]]
+    out = _stitch_lines(inputs, [0], partitioned, surfaces)
+    words = out[0].words
+    assert [w.text for w in words] == ["君", "と"]
+    assert [w.romaji for w in words] == ["kimi", "to"]
+
+
+def test_stitch_lines_without_surfaces_uses_aligned_text():
+    """English / Chinese path (no surface override): cell text stays the
+    aligned text and romaji is absent - status quo behavior."""
+    inputs = _lines("hello world")
+    partitioned = [
+        [
+            {"text": "hello", "start": 0.0, "end": 0.5, "score": -0.1},
+            {"text": "world", "start": 0.5, "end": 1.0, "score": -0.1},
+        ]
+    ]
+    out = _stitch_lines(inputs, [0], partitioned)
+    words = out[0].words
+    assert [w.text for w in words] == ["hello", "world"]
+    assert all(w.romaji is None for w in words)
+
+
+class _RecordingPreprocess:
+    """Stand-in for ctc_forced_aligner.preprocess_text. Returns one
+    alignment word per call (wrapped in <star> on each side, mirroring
+    the real output shape) and records (unit, language) calls."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def __call__(self, unit: str, romanize: bool, language: str):
+        self.calls.append((unit, language))
+        return (["<star>", unit, "<star>"], ["<star>", unit, "<star>"])
+
+
+pytest.importorskip("cutlet")
+
+
+def test_preprocess_lines_mixed_threads_surfaces_and_counts():
+    """The load-bearing invariant: one morpheme -> one alignment word ->
+    one display surface, in order. Japanese tokens carry their original
+    surface; English tokens carry None (fall back to aligned text)."""
+    pp = _RecordingPreprocess()
+    all_tokens, all_text, surfaces, counts, non_empty = _preprocess_lines(
+        _lines("君と dance"),
+        use_jp_romaji=True,
+        treat_kanji_as_japanese=True,
+        iso3="jpn",
+        preprocess_text=pp,
+    )
+    assert counts == [3]
+    assert non_empty == [0]
+    assert surfaces == ["君", "と", None]
+
+
+def test_preprocess_lines_feeds_romaji_as_english_not_charlevel():
+    """Romaji must go through preprocess_text as language='eng' (word-
+    level), never 'jpn' (which would char-split 'kimi' into k/i/m/i)."""
+    pp = _RecordingPreprocess()
+    _preprocess_lines(
+        _lines("君"),
+        use_jp_romaji=True,
+        treat_kanji_as_japanese=True,
+        iso3="jpn",
+        preprocess_text=pp,
+    )
+    assert pp.calls == [("kimi", "eng")]
+
+
+def test_preprocess_lines_falls_back_when_tokenize_raises(monkeypatch):
+    """If the Japanese romanizer blows up on a line, that line degrades
+    to the char-level path (whole line, language=iso3) instead of
+    failing the whole request."""
+    import app.pipeline.jp_romaji as jp
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("mecab exploded")
+
+    monkeypatch.setattr(jp, "tokenize", _boom)
+    pp = _RecordingPreprocess()
+    _, _, surfaces, counts, _ = _preprocess_lines(
+        _lines("君と"),
+        use_jp_romaji=True,
+        treat_kanji_as_japanese=True,
+        iso3="jpn",
+        preprocess_text=pp,
+    )
+    assert pp.calls == [("君と", "jpn")]  # whole line, original text, iso3
+    assert all(s is None for s in surfaces)
+    assert counts == [1]
+
+
+def test_preprocess_lines_chinese_path_keeps_charlevel_and_no_surfaces():
+    """Chinese is left on the existing char-level path: the whole line is
+    one preprocess unit at language=iso3, and no surface overrides."""
+    pp = _RecordingPreprocess()
+    _, _, surfaces, _, _ = _preprocess_lines(
+        _lines("这是"),
+        use_jp_romaji=False,
+        treat_kanji_as_japanese=False,
+        iso3="chi",
+        preprocess_text=pp,
+    )
+    assert pp.calls == [("这是", "chi")]
+    assert all(s is None for s in surfaces)

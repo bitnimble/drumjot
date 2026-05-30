@@ -97,7 +97,10 @@ export function jotToEvents(rendered: RenderedJot): PlaybackEvent[] {
           const midiNote = resolveMidiNote(note, track);
           if (midiNote === undefined) continue;
           const velocity = resolveVelocity(note);
-          const time = barOffsetSec + beatToSecWithinBar(barTempos, note.beat);
+          // Sub-slot timing offset (ms) nudges the scheduled time directly;
+          // it's already in real seconds so no tempo conversion is needed.
+          const offsetSec = (note.source.offset ?? 0) / 1000;
+          const time = barOffsetSec + beatToSecWithinBar(barTempos, note.beat) + offsetSec;
           events.push({ time, midiNote, velocity, pitch });
           if (note.modifiers.has('fl')) {
             // The grace stroke clamps to -leadOffsetSec so it can't run

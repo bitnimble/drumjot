@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MidiData, MidiEvent, parseMidi, writeMidi } from 'midi-file';
+import { Jot } from 'src/dsl';
 import { RenderedJot } from 'src/jot';
 import { allocatePitchesForMidi, fromMidi, toMidi } from 'src/midi';
 
@@ -368,6 +369,104 @@ describe('MIDI <-> Jot synthetic baseline', () => {
       }
     }
     expect(foundTick).toBe(2 * 480);
+  });
+
+  it('stamps the default grid division (48) onto globalMetadata', () => {
+    const bytes = buildMidi({ notes: [{ tick: 0, note: 36, velocity: 100 }] });
+    const jot = fromMidi(bytes);
+    expect(jot.globalMetadata.gridDivision).toBe(48);
+  });
+
+  it('honours a denser grid division and stamps it onto globalMetadata', () => {
+    const tpq = 480;
+    const bytes = buildMidi({
+      ticksPerBeat: tpq,
+      bpm: 120,
+      notes: [
+        { tick: 0, note: 36, velocity: 100 }, // slot 0
+        { tick: tpq, note: 38, velocity: 100 }, // beat 2 -> slot 24 of 96
+      ],
+    });
+    const jot = fromMidi(bytes, { gridDivision: 96 });
+    expect(jot.globalMetadata.gridDivision).toBe(96);
+    // 4/4 at 1/96 -> 96 slots per bar; quarter beat = 24 slots.
+    const els = jot.voices[0].bars[0].elements;
+    expect(els).toHaveLength(96);
+    expect(els[0].kind).toBe('note');
+    expect(els[24].kind).toBe('note');
+    expect(els[12].kind).toBe('rest');
+  });
+
+  it('round-trips note ticks at a denser (1/96) grid', () => {
+    const tpq = 480;
+    const inputNotes: DrumNote[] = [
+      { tick: 0, note: 36, velocity: 100 },
+      { tick: tpq / 4, note: 42, velocity: 90 }, // 1/16 -> slot 6 of 96
+      { tick: tpq, note: 38, velocity: 100 },
+      { tick: (tpq * 3) / 2, note: 36, velocity: 100 },
+    ];
+    const bytes = buildMidi({ ticksPerBeat: tpq, notes: inputNotes });
+    const jot = fromMidi(bytes, { gridDivision: 96 });
+    const out = collectDrumNotes(parseMidi(toMidi(jot)));
+    expect(out.map((n) => n.tick)).toEqual(inputNotes.map((n) => n.tick));
+  });
+
+  it('reads a sub-slot onset as a note.offset in ms', () => {
+    // 120 BPM, 1/48 grid: one slot = 480/12 = 40 ticks = 41.667 ms.
+    // Put a kick 12 ticks (= 12.5 ms) past beat 1, well over the 5 ms
+    // tolerance, but inside half a slot so it snaps to slot 0 and the
+    // residual surfaces as the offset.
+    const tpq = 480;
+    const bytes = buildMidi({
+      ticksPerBeat: tpq,
+      bpm: 120,
+      notes: [{ tick: 12, note: 36, velocity: 100 }],
+    });
+    const jot = fromMidi(bytes);
+    const el = jot.voices[0].bars[0].elements[0];
+    expect(el.kind).toBe('note');
+    const offset = (el as { offset?: number }).offset;
+    // 12 ticks at 120 BPM = 12 / 480 * 500 ms = 12.5 ms.
+    expect(offset).toBeCloseTo(12.5, 1);
+  });
+
+  it('leaves notes within tolerance free of an offset', () => {
+    // 2 ticks past the beat = ~2.08 ms, under the 5 ms tolerance.
+    const bytes = buildMidi({
+      ticksPerBeat: 480,
+      bpm: 120,
+      notes: [{ tick: 2, note: 36, velocity: 100 }],
+    });
+    const jot = fromMidi(bytes);
+    const el = jot.voices[0].bars[0].elements[0];
+    expect(el.kind).toBe('note');
+    expect((el as { offset?: number }).offset).toBeUndefined();
+  });
+
+  it('round-trips a note.offset through toMidi -> fromMidi within tolerance', () => {
+    // Hand-author a jot with a kick on beat 1 carrying +20 ms, emit to
+    // MIDI, re-read: the offset should survive (the emitted tick is
+    // beat-1 + 20 ms, which re-reads as the same residual).
+    const jot: Jot = {
+      title: '',
+      globalMetadata: { bpm: 120, time: { count: 4, unit: 4 }, gridDivision: 48 },
+      voices: [
+        {
+          bars: [
+            {
+              elements: [
+                { kind: 'note', pitch: 'k', offset: 20, metadata: { midi: { note: 36, velocity: 100 } } },
+                ...Array.from({ length: 47 }, () => ({ kind: 'rest' as const })),
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const reread = fromMidi(toMidi(jot));
+    const el = reread.voices[0].bars[0].elements[0];
+    expect(el.kind).toBe('note');
+    expect((el as { offset?: number }).offset).toBeCloseTo(20, 0);
   });
 
   it('counts the leading rest run as leadBars and stamps drumsT0Sec', () => {

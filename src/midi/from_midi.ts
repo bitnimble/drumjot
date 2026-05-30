@@ -89,6 +89,14 @@ export type FromMidiOptions = {
   accentThreshold?: number;
   /** Velocity below which the note also gains a `:g` ghost modifier. */
   ghostThreshold?: number;
+  /**
+   * Minimum |sub-slot residual| (in ms) for a note to keep a `note.offset`
+   * rather than snapping silently to its grid slot. Below this, the
+   * residual is treated as integer-tick round-trip noise and discarded so
+   * clean hand-authored MIDI doesn't acquire spurious offsets. See
+   * Pillar B of `docs/superpowers/specs/2026-05-29-geometric-quantise-design.md`.
+   */
+  offsetToleranceMs?: number;
 };
 
 const DEFAULTS: Required<FromMidiOptions> = {
@@ -96,6 +104,7 @@ const DEFAULTS: Required<FromMidiOptions> = {
   gridDivision: 48,
   accentThreshold: 100,
   ghostThreshold: 40,
+  offsetToleranceMs: 5,
 };
 
 type AbsEvent = { tick: number; ev: MidiEvent };
@@ -200,9 +209,23 @@ export function fromMidi(
        * can key by the unique `(tick, pitch)` identifier.
        */
       tick: number;
+      /** Sub-slot timing residual in ms, or undefined when within tolerance. */
+      offsetMs: number | undefined;
     }>;
   };
   const slotsByBar: Map<number, Map<number, Slot>> = new Map();
+
+  // Tempo (float bpm) in force at an absolute tick, for the ms<->tick
+  // conversion of sub-slot residuals. `tempoChanges` is tick-ascending
+  // (built from the sorted event stream above).
+  const bpmAtTick = (tick: number): number => {
+    let result = tempoChanges.length > 0 ? tempoChanges[0].bpm : bpm;
+    for (const tc of tempoChanges) {
+      if (tc.tick <= tick) result = tc.bpm;
+      else break;
+    }
+    return result > 0 ? result : 120;
+  };
 
   for (const dn of drumNotes) {
     const snapped = Math.round(dn.tick / gridTicks) * gridTicks;
@@ -210,6 +233,15 @@ export function fromMidi(
     if (barIdx < 0) continue;
     const bar = barSpans[barIdx];
     const slotIdx = Math.round((snapped - bar.startTick) / gridTicks);
+
+    // Sub-slot residual: how far the raw onset sits from the slot it
+    // snapped to, in ms at the local tempo. Kept as `note.offset` only
+    // when it clears the tolerance (else discarded as round-trip noise).
+    const residualTicks = dn.tick - snapped;
+    const msPerTick = 60_000 / bpmAtTick(dn.tick) / ticksPerBeat;
+    const residualMs = residualTicks * msPerTick;
+    const offsetMs =
+      Math.abs(residualMs) >= opts.offsetToleranceMs ? residualMs : undefined;
 
     const entry = GM_PERCUSSION[dn.note];
     const pitch = pitchByMidi.get(dn.note) ?? entry?.pitch ?? 'z';
@@ -231,6 +263,7 @@ export function fromMidi(
       midi: dn.note,
       velocity: dn.velocity,
       tick: dn.tick,
+      offsetMs,
     });
   }
 
@@ -279,7 +312,7 @@ export function fromMidi(
         continue;
       }
       const notes: Note[] = slot.notes.map((s) =>
-        buildNote(s.pitch, s.modifiers, s.midi, s.velocity, s.tick, opts)
+        buildNote(s.pitch, s.modifiers, s.midi, s.velocity, s.tick, s.offsetMs, opts)
       );
       if (notes.length === 1) {
         elements.push(notes[0]);
@@ -369,6 +402,10 @@ export function fromMidi(
     bpm,
     time: barSpans[0].time,
     instrumentMapping,
+    // Record the grid density this load used so grid-aware consumers
+    // (note-position readouts, the drum-offset slider, sub-slot offset
+    // math) read the real resolution instead of assuming 48.
+    gridDivision: opts.gridDivision,
     ...(leadBars > 0 ? { leadBars } : {}),
     ...(drumsT0Sec > 0 ? { drumsT0Sec } : {}),
   };
@@ -455,6 +492,7 @@ function buildNote(
   midi: number,
   velocity: number,
   tick: number,
+  offsetMs: number | undefined,
   opts: Required<FromMidiOptions>
 ): Note {
   const modifiers: Modifier[] = [...baseModifiers];
@@ -466,6 +504,7 @@ function buildNote(
   }
   const note: Note = { kind: 'note', pitch };
   if (modifiers.length > 0) note.modifiers = modifiers;
+  if (offsetMs !== undefined) note.offset = offsetMs;
   // [A6] Stash raw MIDI specifics for lossless round-trip. `tick` is the
   // original absolute tick the noteOn arrived at (before grid snapping); it
   // is *not* written back by `to_midi.ts` (which recomputes tick from the

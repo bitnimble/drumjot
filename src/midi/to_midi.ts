@@ -121,6 +121,18 @@ export function toMidi(jot: Jot, options: ToMidiOptions = {}): Uint8Array {
     }
   }
 
+  // Tempo (bpm) in force at an absolute tick, for converting a note's
+  // ms `offset` into ticks. `tempoChanges` is tick-ascending (tempoEvents
+  // are sorted by (barIndex, beat)).
+  const bpmAtTick = (tick: number): number => {
+    let result = globalBpm;
+    for (const tc of tempoChanges) {
+      if (tc.tick <= tick) result = tc.bpm;
+      else break;
+    }
+    return result > 0 ? result : 120;
+  };
+
   // [B1] Merge all voices onto one MIDI stream.
   // tsChanges are collected on the first voice only; bar tick offsets
   // are identical across voices (same time-signature sequence and bar
@@ -150,7 +162,20 @@ export function toMidi(jot: Jot, options: ToMidiOptions = {}): Uint8Array {
           const midiNote = resolveMidiNote(note, track);
           if (midiNote === undefined) continue;
           const velocity = clampVelocity(resolveVelocity(note, opts));
-          const tick = barOffset + Math.round((note.beat / bar.beats) * barTicks);
+          const baseTick = barOffset + Math.round((note.beat / bar.beats) * barTicks);
+          // Sub-slot timing offset (ms): nudge the emitted tick so swing /
+          // off-grid feel survives the round trip. Absent offset = on-slot.
+          const offsetMs = note.source.offset;
+          const offsetTicks =
+            offsetMs !== undefined
+              ? Math.round((offsetMs * TICKS_PER_BEAT * bpmAtTick(baseTick)) / 60_000)
+              : 0;
+          // Clamp to a non-negative tick: MIDI can't represent an event
+          // before tick 0, so a negative offset on the very first slot
+          // (bar 1 beat 1, baseTick 0) collapses to on-grid and the
+          // sub-slot nuance is lost on round-trip. Unavoidable, and
+          // limited to that one position.
+          const tick = Math.max(0, baseTick + offsetTicks);
           abs.push({ tick, kind: 'noteOn', note: midiNote, velocity });
           // [B3] One-tick gate.
           abs.push({ tick: tick + 1, kind: 'noteOff', note: midiNote, velocity: 0 });

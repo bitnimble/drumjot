@@ -50,10 +50,17 @@ class OnsetCandidate(BaseModel):
     bar: int = -1
     beat_in_bar: float = -1.0
     quantised_time: float | None = None
-    # Integer 1/48-slot shift the `quantise` stage applied (sum of the
-    # deterministic joint-snap pass and the LLM residual pass). Inspection
-    # / debug only; the canonical post-quantise time is `quantised_time`.
+    # Integer slot shift the `quantise` stage applied (sum of the geometric
+    # snap and the LLM residual pass). Inspection / debug only; the
+    # canonical post-quantise time is `quantised_time`.
     quantised_shift_slots: int | None = None
+    # True when the geometric snap deliberately left this onset off-grid
+    # (band-rejected: no free slot within the match band). Off-grid onsets
+    # keep `quantised_time = None` so the MIDI emitter uses their raw
+    # `time`; the frontend then records the sub-slot residual as the note's
+    # `offset` (swing / ghost-flam / push-pull feel). Distinct from a
+    # `quantised_time = None` that merely means "no shift was needed".
+    off_grid: bool = False
 
 
 class TranscribeResponse(BaseModel):

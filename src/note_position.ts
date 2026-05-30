@@ -18,14 +18,18 @@ import type { TimeSignature } from 'src/dsl';
  * site.
  */
 
-/** 48ths per quarter note. Matches the 1/48 grid `from_midi.ts` uses. */
-const SUBDIVISIONS_PER_QUARTER = 12;
-
 export type NotePositionInput = {
   /** 1-indexed; matches `StructuralBar.index` (anacrusis = 0). */
   barIndex: number;
   /** 1-indexed within the bar, float. Downbeat = 1.0. */
   beatInBar: number;
+  /**
+   * Slots per quarter-note beat of the producing jot's grid (e.g. 12 for
+   * the 1/48 default). Supply via `slotsPerQuarter(jot)` from `src/grid.ts`
+   * so the slot readouts track the jot's actual grid density rather than
+   * assuming 48.
+   */
+  slotsPerQuarter: number;
   /**
    * The bar's time signature. Omit when the structural bar isn't
    * resolved (e.g. fallback rendering of a filtered onset whose bar
@@ -37,33 +41,40 @@ export type NotePositionInput = {
   audioSec?: number;
   /** Absolute MIDI tick, if known. */
   midiTick?: number;
+  /** Sub-slot timing offset in ms (the note's `offset`), if any. */
+  offsetMs?: number;
 };
 
 export class NotePosition {
   readonly barIndex: number;
   readonly beatInBar: number;
+  readonly slotsPerQuarter: number;
   readonly timeSig: TimeSignature | undefined;
   readonly audioSec: number | undefined;
   readonly midiTick: number | undefined;
+  readonly offsetMs: number | undefined;
 
   constructor(input: NotePositionInput) {
     this.barIndex = input.barIndex;
     this.beatInBar = input.beatInBar;
+    this.slotsPerQuarter = input.slotsPerQuarter;
     this.timeSig = input.timeSig;
     this.audioSec = input.audioSec;
     this.midiTick = input.midiTick;
+    this.offsetMs = input.offsetMs;
   }
 
-  /** Total 48th-note slots in this bar (e.g. 48 for 4/4, 36 for 3/4 or
-   * 6/8); `null` when no time signature was supplied. */
+  /** Total slots in this bar at the jot's grid (e.g. 48 for 4/4, 36 for
+   * 3/4 or 6/8 at the default 1/48 grid); `null` when no time signature
+   * was supplied. */
   get slotsPerBar(): number | null {
     if (!this.timeSig) return null;
     const { count, unit } = this.timeSig;
-    return Math.round((count * SUBDIVISIONS_PER_QUARTER * 4) / unit);
+    return Math.round((count * this.slotsPerQuarter * 4) / unit);
   }
 
-  /** 1-indexed 48th-note slot of this position within its bar, or
-   * `null` when no time signature was supplied. */
+  /** 1-indexed slot of this position within its bar, or `null` when no
+   * time signature was supplied. */
   get slotIndex(): number | null {
     const slots = this.slotsPerBar;
     if (slots === null || !this.timeSig) return null;
@@ -96,6 +107,12 @@ export class NotePosition {
     return this.midiTick === undefined ? null : `${this.midiTick} t`;
   }
 
+  /** "+12.3 ms" sub-slot offset, or `null` when the note is on its slot. */
+  formatOffset(): string | null {
+    if (this.offsetMs === undefined) return null;
+    return `${this.offsetMs >= 0 ? '+' : ''}${this.offsetMs.toFixed(1)} ms`;
+  }
+
   /**
    * The default dense single-line readout used in the debug details
    * view: bar/beat float, 48ths-of-bar, audio seconds (when present),
@@ -107,6 +124,7 @@ export class NotePosition {
       this.formatBarBeat48ths(),
       this.formatSeconds(),
       this.formatMidiTicks(),
+      this.formatOffset(),
     ]
       .filter((s): s is string => s !== null)
       .join(' · ');

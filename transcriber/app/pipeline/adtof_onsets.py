@@ -189,6 +189,29 @@ def _load_model():
     return model, device
 
 
+def park_model() -> None:
+    """Move the cached ADTOF Frame_RNN model to CPU. No-op when the
+    lru_cache hasn't been hit yet. Callers must hold the process-wide
+    GPU lock; see `app.pipeline.gpu_park`."""
+    if _load_model.cache_info().currsize == 0:
+        return
+    from app.pipeline.gpu_park import park_module
+
+    model, _ = _load_model()
+    park_module(model, "adtof")
+
+
+def unpark_model() -> None:
+    """Move the cached ADTOF Frame_RNN model back to CUDA. No-op when
+    the lru_cache hasn't been hit yet."""
+    if _load_model.cache_info().currsize == 0:
+        return
+    from app.pipeline.gpu_park import unpark_module
+
+    model, _ = _load_model()
+    unpark_module(model, "adtof")
+
+
 @lru_cache(maxsize=1)
 def _audio_processor():
     """Cached ADTOF `AudioProcessor` (filterbank built once per process).

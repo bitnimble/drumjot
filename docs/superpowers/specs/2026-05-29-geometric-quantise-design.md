@@ -387,3 +387,54 @@ shifts on off-grid hits; the LLM doesn't re-snap them.
 - **`gridDivisionFor` fallback to 48:** good for backward compatibility,
   but masks a future bug where the field is forgotten. Consider a strict
   mode asserting presence after a deprecation window.
+
+## 10. As-built notes (deviations from the plan)
+
+Implemented 2026-05-29. Four places where the build diverged from §4–§7
+after the code revealed the plan's premise was off:
+
+- **`to_midi.ts` needs no `gridDivision` read.** §4.3 had `to_midi` read
+  `globalMetadata.gridDivision` "for round-trip fidelity". In fact the
+  writer derives every note's tick from the rendered *layout* (element
+  beat-fraction × bar ticks), which already encodes the grid, so a
+  `gridDivision = 96` jot round-trips bit-for-bit with no `to_midi`
+  change. Proven by `midi.test.ts` "round-trips note ticks at a denser
+  (1/96) grid", which passed before `to_midi` was touched.
+- **RLRR *applies* the offset; it doesn't drop it.** §5.3 said to drop
+  offsets on RLRR export (on the assumption RLRR is 1/16-grid-quantised).
+  RLRR event times are actually real-time **seconds**, so the offset
+  composes exactly like playback, a swung hit charts at the time it
+  plays. `jot_to_rlrr.ts` adds `offset/1000` to the event time. (Import
+  still snaps to RLRR's 1/16 grid, so the offset is lost on the way back
+  in, matching "ignore on import".)
+- **`onsets_midi.py` needs no change.** §6.3 listed a `onsets_midi` edit
+  to emit the raw-time tick for off-grid hits. The emitter already falls
+  back to raw `time` whenever `quantised_time is None`, so leaving
+  off-grid onsets' `quantised_time = None` (which the geometric snap
+  does) emits the raw tick for free.
+- **Phases 3 + 4 shipped together; snap is per-(lane, bar), not
+  cross-bar.** The DP runs per (lane, bar) with the feasible window
+  clamped to the bar's `[0, slots_per_bar − 1]` (new `min_slot`/`max_slot`
+  args on `snap_lane`), preserving the old "no bar crossing" guarantee.
+  Consequently band rejection is a *contention / bar-edge* phenomenon
+  (more onsets than free in-band slots), not "an onset 3 slots from any
+  grid line", every fractional position rounds to a slot ≤ 0.5 away, so
+  a lone onset is never rejected. Placed onsets now get `quantised_time`
+  set to their exact slot time **even at zero shift** (so the frontend
+  sees ~0 residual and adds no spurious offset); only off-grid onsets keep
+  `None`. The `quantise/shifts.json` summary keys were renamed
+  (`deterministic_* → geometric_*`) and gained an `off_grid` count.
+
+**Phase 5 status:** the code half is done; `quantise_use_llm` is a
+request option (`PipelineOptions.quantise_use_llm`) and a form param on
+both `/transcribe` and `/transcribe/resume`, threaded to
+`quantise_kept_onsets(use_llm=…)`. The actual A/B (run real audio twice,
+diff `shifts.json` + MIDIs, decide the LLM's fate) is a manual
+data-collection step requiring audio fixtures + Anthropic budget; not run
+here.
+
+**Not yet verified in-browser:** the score render shift (§5.2, Pillar B)
+applies `note.offset` to the `--note-beat` CSS var via `BarTimingsContext`
++ `msOffsetToBeats` (the conversion is unit-tested). There is no React
+DOM test harness, so the *visual* shift hasn't been confirmed in a
+running browser, worth an eyeball before final sign-off.

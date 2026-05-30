@@ -1,6 +1,7 @@
 import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
+import { DEFAULT_GRID_DIVISION, gridDivisionFor } from 'src/grid';
 import { JotTimeline, jotPlayer, PlayerState } from 'src/playback';
 import sharedStyles from '../jot_view.module.css';
 import { NumberStepper } from './components/number_stepper';
@@ -63,6 +64,7 @@ const PlaybackControls = observer(
     hasAudioTracks,
     audioOffsetSec,
     drumOffsetBeats,
+    gridDivision,
     onTogglePlayPause,
     onStop,
     onSetAudioOffset,
@@ -74,6 +76,8 @@ const PlaybackControls = observer(
     hasAudioTracks: boolean;
     audioOffsetSec: number;
     drumOffsetBeats: number;
+    /** Grid density (1/N-of-whole-note) of the current jot. */
+    gridDivision: number;
     onTogglePlayPause: () => void;
     onStop: () => void;
     onSetAudioOffset: (sec: number) => void;
@@ -146,13 +150,13 @@ const PlaybackControls = observer(
               {hasJot && (
                 <OffsetControl
                   label="Beat"
-                  unit="/48"
-                  value={drumOffsetBeats * 12}
+                  unit={`/${gridDivision}`}
+                  value={drumOffsetBeats * (gridDivision / 4)}
                   step={1}
                   precision={0}
-                  title="Slide every drum note across the bars by this many 1/48-note units to realign a consistently mis-detected groove (12 = one quarter-note beat; 16 = a triplet 8th; 6 = a 16th). Positive = later, negative = earlier. Reflows the score and reschedules playback live. Notes pushed off either end of the score are dropped."
-                  ariaLabel="Drum beat offset in 1/48 units"
-                  onChange={(units) => onSetDrumOffset(units / 12)}
+                  title={`Slide every drum note across the bars by this many 1/${gridDivision}-note units to realign a consistently mis-detected groove (${gridDivision / 4} = one quarter-note beat). Positive = later, negative = earlier. Reflows the score and reschedules playback live. Notes pushed off either end of the score are dropped.`}
+                  ariaLabel={`Drum beat offset in 1/${gridDivision} units`}
+                  onChange={(units) => onSetDrumOffset(units / (gridDivision / 4))}
                 />
               )}
               {hasAudioTracks && (
@@ -199,6 +203,7 @@ export const PlaybackBar = observer(({ store }: { store: JotViewStore }) => (
       hasAudioTracks={jotPlayer.audioTracks.size > 0}
       audioOffsetSec={jotPlayer.drumsT0Sec}
       drumOffsetBeats={store.drumOffsetBeats}
+      gridDivision={store.currentJot ? gridDivisionFor(store.currentJot) : DEFAULT_GRID_DIVISION}
       onTogglePlayPause={() => store.togglePlayPause()}
       onStop={() => store.stopPlayback()}
       onSetAudioOffset={(sec) => jotPlayer.setDrumsT0Sec(sec)}

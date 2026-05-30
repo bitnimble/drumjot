@@ -3,7 +3,8 @@ import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { NotePosition } from 'src/note_position';
 import { NoteProvenanceEntry } from 'src/debug_zip';
-import { Instrument, Modifier, Sticking, TimeSignature } from 'src/dsl';
+import { Instrument, Modifier, Sticking } from 'src/dsl';
+import { DEFAULT_GRID_DIVISION, gridDivisionFor } from 'src/grid';
 import {
   RenderedJot,
   StructuralBar,
@@ -13,6 +14,7 @@ import {
   ViewConfig,
 } from 'src/jot';
 import { TICKS_PER_BEAT } from 'src/midi';
+import { msOffsetToBeats } from 'src/tempo';
 import { AudioTrack, jotPlayer } from 'src/playback';
 import { waveformWorker } from 'src/playback/waveform_worker_client';
 import sharedStyles from '../jot_view.module.css';
@@ -697,6 +699,19 @@ const NoteView = observer(
     // when no bundle is loaded — the `Debug details` section is hidden
     // in those cases.
     const provenance = React.useContext(NoteProvenanceContext);
+    // Sub-slot timing offset: shift the glyph from its slot to where the
+    // note actually plays. The score's x-axis is notational beats, so the
+    // ms offset is converted via the bar's local sec-per-beat (from the
+    // eager per-bar timings, keyed by the clone-stable `bar.index`).
+    const barTimings = React.useContext(BarTimingsContext);
+    const offsetMs = note.source.offset;
+    let offsetBeats = 0;
+    if (offsetMs !== undefined) {
+      const timing = barTimings?.get(bar.index);
+      if (timing && bar.beats > 0) {
+        offsetBeats = msOffsetToBeats(offsetMs, timing.durationSec / bar.beats);
+      }
+    }
     const sourceMeta = note.source.metadata as { midi?: { tick?: number } } | undefined;
     const tick = sourceMeta?.midi?.tick;
     const provenanceEntry =
@@ -731,8 +746,9 @@ const NoteView = observer(
             // Beat is stable per note (set inline); the CSS rule on
             // `.note` derives `left` from `padLeft + beat × pxPerBeat`,
             // so a zoom tick changes one root var instead of mutating
-            // this element's style.
-            ['--note-beat' as string]: note.beat,
+            // this element's style. `offsetBeats` nudges an off-grid note
+            // to its true sub-slot position (0 for on-grid notes).
+            ['--note-beat' as string]: note.beat + offsetBeats,
             top: (config.trackHeight as number) / 2,
             width: config.noteDiameter,
             height: config.noteDiameter,
@@ -856,28 +872,29 @@ function renderedBeatInBar(note: StructuralNote, bar: StructuralBar): number {
   return 1 + (note.beat / bar.beats) * bar.time.count;
 }
 
-/** 1/48 grid step in MIDI ticks, matching `from_midi.ts`'s default
- * `gridDivision = 48` quantization: `gridTicks = ticksPerBeat * 4 / 48`.
- * Used by the per-note Snap-delta computation in {@link NoteProvenanceDetails}
- * so the value depends only on the immutable detected tick, not on the
- * rendered note's current bar (which moves under the Beat-offset slider).
- * Transcribed bundles always come through the no-options `fromMidi` path
- * (see `store.ts`), so the default is the only grid we need to handle. */
-const MIDI_GRID_TICKS = (TICKS_PER_BEAT * 4) / 48;
+/** Grid step in MIDI ticks for a given grid division, matching
+ * `from_midi.ts`'s `gridTicks = ticksPerBeat * 4 / gridDivision`. Used by
+ * the per-note Snap-delta computation in {@link NoteProvenanceDetails} so
+ * the value depends only on the immutable detected tick, not on the
+ * rendered note's current bar (which moves under the Beat-offset slider). */
+function midiGridTicks(gridDivision: number): number {
+  return (TICKS_PER_BEAT * 4) / gridDivision;
+}
 
 /**
- * Render a delta in 1/48-of-whole-note slots with a sign and a `/48`
- * denominator (matching {@link NotePosition.formatBarBeat48ths}'s
- * absolute-position format). Integer-rounded when the slot count is
- * effectively whole (within 0.05) so jitter-class deltas read as
- * `+1/48` rather than `+0.97/48`; fractional otherwise so a
- * sub-slot snap delta (e.g. `+0.3/48`) still surfaces its magnitude.
+ * Render a delta in whole-note-subdivision slots with a sign and a
+ * `/${gridDivision}` denominator (matching {@link
+ * NotePosition.formatBarBeat48ths}'s absolute-position format).
+ * Integer-rounded when the slot count is effectively whole (within 0.05)
+ * so jitter-class deltas read as `+1/48` rather than `+0.97/48`;
+ * fractional otherwise so a sub-slot snap delta (e.g. `+0.3/48`) still
+ * surfaces its magnitude.
  */
-function formatSignedSlots(slots: number): string {
+function formatSignedSlots(slots: number, gridDivision: number): string {
   const sign = slots >= 0 ? '+' : '';
   const rounded = Math.round(slots);
-  if (Math.abs(slots - rounded) < 0.05) return `${sign}${rounded}/48`;
-  return `${sign}${slots.toFixed(1)}/48`;
+  if (Math.abs(slots - rounded) < 0.05) return `${sign}${rounded}/${gridDivision}`;
+  return `${sign}${slots.toFixed(1)}/${gridDivision}`;
 }
 
 /** Total pixel width of the timing-visualization panel, wide enough to
@@ -930,9 +947,12 @@ const OnsetTimingVisualization = observer(
     unknownDriftSecPerQuarterNote,
     unknownDriftTimeUnit,
     displayedBarIndex,
+    gridDivision,
   }: {
     entry: NoteProvenanceEntry;
     rendered: RenderedNoteContext;
+    /** Grid density (1/N-of-whole-note) of the jot, for slot readouts. */
+    gridDivision: number;
     /** Backend `quantise` stage's shift in audio seconds
      * (`quantised_time_sec - detected_time_sec`). `undefined` when the
      * stage didn't run or didn't move this onset. */
@@ -1177,13 +1197,15 @@ const OnsetTimingVisualization = observer(
       endX: number;
       className: string;
     };
-    // Convert audio seconds to a count of 1/48-of-whole-note slots using
-    // the original bar's tempo. 1 slot = 1/12 of a quarter note, so
-    // `seconds / sec_per_qn × 12` lands in slots. Independent of time
-    // signature; the slot is a whole-note subdivision.
+    // Convert audio seconds to a count of whole-note-subdivision slots
+    // using the original bar's tempo. 1 slot = 1/(gridDivision/4) of a
+    // quarter note, so `seconds / sec_per_qn × (gridDivision/4)` lands in
+    // slots. Independent of time signature; the slot is a whole-note
+    // subdivision.
+    const slotsPerQuarterNote = gridDivision / 4;
     const secToSlots = (s: number): number | undefined =>
       unknownDriftSecPerQuarterNote !== undefined && unknownDriftSecPerQuarterNote > 0
-        ? (s / unknownDriftSecPerQuarterNote) * 12
+        ? (s / unknownDriftSecPerQuarterNote) * slotsPerQuarterNote
         : undefined;
     const diffRows: DiffRow[] = [];
     let cursorSec = detectedSec;
@@ -1258,8 +1280,8 @@ const OnsetTimingVisualization = observer(
         label: 'Drum offset',
         deltaBeats: drumOffsetBeats,
         // `drumOffsetBeats` is in quarter notes by convention, so slots is
-        // simply ×12; no time-signature-aware conversion needed.
-        deltaSlots: drumOffsetBeats !== undefined ? drumOffsetBeats * 12 : undefined,
+        // simply ×(gridDivision/4); no time-signature-aware conversion needed.
+        deltaSlots: drumOffsetBeats !== undefined ? drumOffsetBeats * slotsPerQuarterNote : undefined,
         deltaSec: drumOffsetSec,
         anchorX: cursorX,
         endX: timeToX(nextSec),
@@ -1291,7 +1313,7 @@ const OnsetTimingVisualization = observer(
     }
 
     const renderSignedBeats = (b: number) => `${b >= 0 ? '+' : ''}${b.toFixed(3)} beats`;
-    const renderSignedSlots = formatSignedSlots;
+    const renderSignedSlots = (slots: number) => formatSignedSlots(slots, gridDivision);
     const renderSignedMs = (ms: number) => `${ms >= 0 ? '+' : ''}${ms.toFixed(1)} ms`;
 
     return (
@@ -1417,6 +1439,11 @@ const NoteProvenanceDetails = observer(
     // the user-applied Beat-offset slider value, as a labelled stage in
     // the detected → final timing-drift chain.
     const renderedJot = React.useContext(RenderedJotContext);
+    // Grid density the jot was produced at; drives every slot readout in
+    // this panel. Falls back to the default when no rendered jot is in
+    // context (filtered-ghost rendering).
+    const gridDivision = renderedJot ? gridDivisionFor(renderedJot) : DEFAULT_GRID_DIVISION;
+    const slotsPerQuarterNote = gridDivision / 4;
 
     // Two coordinate frames are tracked here:
     //
@@ -1530,7 +1557,8 @@ const NoteProvenanceDetails = observer(
       // doesn't move when the Beat-offset slider re-buckets the rendered
       // note into a different bar.
       if (originalBar && originalSecPerQuarterNote !== undefined && entry.tick !== null) {
-        const postSnapTick = Math.round(entry.tick / MIDI_GRID_TICKS) * MIDI_GRID_TICKS;
+        const gridTicks = midiGridTicks(gridDivision);
+        const postSnapTick = Math.round(entry.tick / gridTicks) * gridTicks;
         const snapDeltaQn = (postSnapTick - entry.tick) / TICKS_PER_BEAT;
         // qn → ts-beats: 1 ts-beat = 4/unit qn, so 1 qn = unit/4 ts-beats.
         snapBeats = snapDeltaQn * (originalBar.time.unit / 4);
@@ -1651,12 +1679,12 @@ const NoteProvenanceDetails = observer(
     const renderSignedBeats = (b: number) => `${b >= 0 ? '+' : ''}${b.toFixed(3)}`;
     const renderSignedSec = (s: number) => `${s >= 0 ? '+' : ''}${s.toFixed(3)}s`;
     // Convert a delta expressed in ts-beats of the original bar into the
-    // matching 1/48 slot count, using `48 / unit` slots-per-ts-beat.
+    // matching slot count, using `gridDivision / unit` slots-per-ts-beat.
     // Returns `undefined` when the bar (and hence its `time.unit`) didn't
-    // resolve; the call site should then omit the 48ths annotation.
+    // resolve; the call site should then omit the slots annotation.
     const origBeatsToSlots = (beats: number | undefined): number | undefined =>
       beats !== undefined && originalBar !== undefined
-        ? (beats * 48) / originalBar.time.unit
+        ? (beats * gridDivision) / originalBar.time.unit
         : undefined;
 
     return (
@@ -1677,6 +1705,7 @@ const NoteProvenanceDetails = observer(
           <OnsetTimingVisualization
             entry={entry}
             rendered={rendered}
+            gridDivision={gridDivision}
             backendQuantSec={backendQuantSec}
             backendQuantBeats={backendQuantBeats}
             backendQuantSlots={backendQuantSlots}
@@ -1709,6 +1738,7 @@ const NoteProvenanceDetails = observer(
               {new NotePosition({
                 barIndex: originalBarIndex ?? entry.bar + 1,
                 beatInBar: entry.beat_in_bar,
+                slotsPerQuarter: slotsPerQuarterNote,
                 timeSig: originalBar?.time,
                 audioSec: entry.detected_time_sec,
                 midiTick: entry.tick ?? undefined,
@@ -1726,9 +1756,9 @@ const NoteProvenanceDetails = observer(
                     surfaced; fall back to the seconds-derived count for
                     legacy bundles. */}
                   {backendQuantSlots !== undefined
-                    ? `· ${formatSignedSlots(backendQuantSlots)} `
+                    ? `· ${formatSignedSlots(backendQuantSlots, gridDivision)} `
                     : origBeatsToSlots(backendQuantBeats) !== undefined
-                      ? `· ${formatSignedSlots(origBeatsToSlots(backendQuantBeats)!)} `
+                      ? `· ${formatSignedSlots(origBeatsToSlots(backendQuantBeats)!, gridDivision)} `
                       : ''}
                   ({renderSignedMs(backendQuantSec * 1000)})
                 </dd>
@@ -1741,6 +1771,7 @@ const NoteProvenanceDetails = observer(
                   {new NotePosition({
                     barIndex: originalBarIndex,
                     beatInBar: originalQuantizedBeat,
+                    slotsPerQuarter: slotsPerQuarterNote,
                     timeSig: originalBar?.time,
                     audioSec: originalQuantizedSec,
                     midiTick: originalQuantizedTick,
@@ -1750,7 +1781,7 @@ const NoteProvenanceDetails = observer(
                 <dd>
                   {snapBeats !== undefined && `${renderSignedBeats(snapBeats)} beats `}
                   {origBeatsToSlots(snapBeats) !== undefined &&
-                    `· ${formatSignedSlots(origBeatsToSlots(snapBeats)!)} `}
+                    `· ${formatSignedSlots(origBeatsToSlots(snapBeats)!, gridDivision)} `}
                   {snapMs !== undefined && `(${renderSignedMs(snapMs)})`}
                 </dd>
               </>
@@ -1761,7 +1792,7 @@ const NoteProvenanceDetails = observer(
                 <dd>
                   {alignmentBeats !== undefined && `${renderSignedBeats(alignmentBeats)} beats `}
                   {origBeatsToSlots(alignmentBeats) !== undefined &&
-                    `· ${formatSignedSlots(origBeatsToSlots(alignmentBeats)!)} `}
+                    `· ${formatSignedSlots(origBeatsToSlots(alignmentBeats)!, gridDivision)} `}
                   ({renderSignedSec(rendered.provenance.beatAlignmentOffsetSec ?? 0)})
                 </dd>
               </>
@@ -1773,7 +1804,7 @@ const NoteProvenanceDetails = observer(
                   {anchorDriftBeats !== undefined &&
                     `${renderSignedBeats(anchorDriftBeats)} beats `}
                   {origBeatsToSlots(anchorDriftBeats) !== undefined &&
-                    `· ${formatSignedSlots(origBeatsToSlots(anchorDriftBeats)!)} `}
+                    `· ${formatSignedSlots(origBeatsToSlots(anchorDriftBeats)!, gridDivision)} `}
                   ({renderSignedMs(anchorDriftSec * 1000)})
                 </dd>
               </>
@@ -1784,9 +1815,9 @@ const NoteProvenanceDetails = observer(
                 <dd>
                   {renderSignedBeats(drumOffsetBeats)} beats{' '}
                   {/* `drumOffsetBeats` is in quarter notes (see compute
-                    block above); 1 qn = 12 slots, independent of the
-                    bar's time signature. */}
-                  · {formatSignedSlots(drumOffsetBeats * 12)}
+                    block above); 1 qn = gridDivision/4 slots, independent
+                    of the bar's time signature. */}
+                  · {formatSignedSlots(drumOffsetBeats * slotsPerQuarterNote, gridDivision)}
                   {drumOffsetSec !== undefined && ` (${renderSignedMs(drumOffsetSec * 1000)})`}
                 </dd>
               </>
@@ -1798,7 +1829,7 @@ const NoteProvenanceDetails = observer(
                   {unknownDriftBeats !== undefined &&
                     `${renderSignedBeats(unknownDriftBeats)} beats `}
                   {origBeatsToSlots(unknownDriftBeats) !== undefined &&
-                    `· ${formatSignedSlots(origBeatsToSlots(unknownDriftBeats)!)} `}
+                    `· ${formatSignedSlots(origBeatsToSlots(unknownDriftBeats)!, gridDivision)} `}
                   ({renderSignedMs(unknownDriftMs!)})
                 </dd>
               </>
@@ -1812,8 +1843,10 @@ const NoteProvenanceDetails = observer(
                     {new NotePosition({
                       barIndex: displayedBarIndex,
                       beatInBar: currentQuantizedBeat,
+                      slotsPerQuarter: slotsPerQuarterNote,
                       timeSig: rendered?.bar.time,
                       audioSec: finalSec,
+                      offsetMs: rendered?.note.source.offset,
                     }).toString()}
                   </dd>
                 </>

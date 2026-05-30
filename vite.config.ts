@@ -50,24 +50,15 @@ const noHmrPushPlugin: Plugin = {
   },
 };
 
-// The transcriber service runs on port 8001 (see transcriber/docker-compose.yml).
-//
-// `TRANSCRIBER_URL` is read server-side only (node `process.env`) and sets
-// the proxy target for both `vite dev` and `vite preview`. It is NOT
-// prefixed with `VITE_`, so it is never exposed to the browser bundle;
-// the bundle always talks to `/api` on its own origin and lets this
-// process proxy the call onward. That keeps the browser CORS-safe when
-// the frontend and the transcriber are on different origins (e.g.
-// drumjot.kumo.dev vs. a LAN GPU box).
-const TRANSCRIBER_URL = process.env.TRANSCRIBER_URL ?? 'http://localhost:8001';
-
-const apiProxy = {
-  '/api': {
-    target: TRANSCRIBER_URL,
-    changeOrigin: true,
-    rewrite: (p: string) => p.replace(/^\/api/, ''),
-  },
-};
+// Note: the dev server intentionally has NO `/api` proxy. The browser
+// bundle talks to `/api` on its own origin, and routing `/api/*` onward
+// to the transcriber is handled by the Caddy edge proxy that fronts this
+// dev server (see Caddyfile.dev / docker-compose.dev.yml). Vite's own
+// `server.proxy` used to do it, but the dev server runs under Bun, whose
+// node:http layer can't relay the transcriber's chunked NDJSON streaming
+// responses (it hangs - oven-sh/bun#5737, #28396). So the proxy lives in
+// Caddy and Vite never touches /api. Running Vite standalone (without the
+// Caddy front) therefore won't have /api routing - that's intentional.
 
 // Signalsmith Stretch installs its AudioWorklet processor by
 // stringifying a function (via `${fn}`) and dropping it into a
@@ -117,12 +108,10 @@ export default defineConfig({
     host: true,
     port: 5173,
     allowedHosts: ['drumjot.kumo.dev'],
-    proxy: apiProxy,
   },
   preview: {
     host: true,
     port: 5173,
     allowedHosts: ['drumjot.kumo.dev'],
-    proxy: apiProxy,
   },
 });

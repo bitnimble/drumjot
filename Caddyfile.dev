@@ -1,0 +1,45 @@
+# Dev-only edge proxy that fronts the Bun-hosted Vite dev server.
+#
+# Why this exists: Vite running under Bun can't relay the transcriber's
+# chunked NDJSON streaming responses (/transcribe, /lyrics/align) - Bun's
+# node:http proxy layer never closes the chunked stream, so the request
+# hangs (oven-sh/bun#5737, oven-sh/bun#28396, vitejs/vite#14413). Rather
+# than move Vite off Bun, this Caddy terminates the browser origin and
+# routes /api itself, so Vite's own proxy is never used:
+#
+#   /api/*  -> drumjot:8001       (transcriber edge router; /api stripped)
+#   else    -> frontend-dev:5173  (Vite dev server: modules, assets, HMR ws)
+#
+# Mirrors transcriber/Caddyfile.frontend, except the catch-all reverse-
+# proxies to the live Vite dev server instead of serving a built bundle.
+{
+	# No runtime reconfig, and the container speaks plain HTTP only (a
+	# bare `:port` site never triggers Caddy's auto-HTTPS anyway).
+	admin off
+	auto_https off
+	log {
+		format console
+	}
+}
+
+:5173 {
+	# Strip /api so the transcriber sees its native paths (/lyrics/align,
+	# /transcribe, /outputs/...). flush_interval -1 carries the NDJSON
+	# streaming flush through from the inner :8001 router so stage / word
+	# progress arrives live instead of buffered. Must be handle_path (not
+	# a top-level matcher) so it's mutually exclusive with the SPA catch-
+	# all below and evaluated in source order - same rationale as
+	# Caddyfile.frontend.
+	handle_path /api/* {
+		reverse_proxy drumjot:8001 {
+			flush_interval -1
+		}
+	}
+
+	# Everything else is the Vite dev server. Caddy upgrades the HMR
+	# WebSocket transparently, so module updates / client handshake keep
+	# working through the proxy.
+	handle {
+		reverse_proxy frontend-dev:5173
+	}
+}

@@ -205,7 +205,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       onOpenLyricsTextLoad={() => store.setLyricsTextOpen(true)}
                       onOpenLyricsSearch={() => store.setLyricsSearchOpen(true)}
                       onCancelTranscribe={() => store.cancelTranscribe()}
-                      lyricsAnyAligning={store.lyricsAnyAligning}
+                      lyricsAlignBusyPhase={store.lyricsAlignBusyPhase}
                       onSetBeatInput={(b) => store.setBeatInput(b)}
                       onSetLlmModel={(m) => store.setLlmModel(m)}
                       zoom={store.zoom}

@@ -1,14 +1,14 @@
 """Quantise-stage unit tests: no LLM, no transcriber service.
 
-Covers the deterministic pieces of `pipeline/quantise.py`:
-  - 1/48 slot computation from `beat_in_bar`,
-  - beat-hierarchy weighting (downbeat > beat > 8th > triplet > 16th
-    > arbitrary 48th),
-  - cross-instrument cluster snap (kick + snare that landed one slot
-    apart get pulled to the stronger slot),
-  - shift bound enforcement (a cluster spanning more than ±2 slots
-    leaves the outliers alone),
+Covers the pure pieces of `pipeline/quantise.py`:
+  - the geometric per-(lane, bar) snap (`_geometric_snap`): placed onsets
+    get an exact slot time, same-lane onsets never share a slot
+    (injectivity), cross-lane onsets are independent (no cluster pull),
+    and an over-full cluster leaves the overflow off-grid,
   - LLM tool-result extraction + clamping.
+
+The DP itself is exercised directly in `test_geometric_snap.py`; here we
+test the orchestration that maps onsets <-> slots and mutates candidates.
 """
 from __future__ import annotations
 
@@ -19,10 +19,11 @@ from app.pipeline.quantise import (
     _MAX_LLM_SHIFT,
     _QUANTISE_TOOL,
     SLOTS_PER_BEAT,
-    _deterministic_joint_snap,
+    _apply_llm_shifts,
     _extract_shifts,
-    _initial_slot_for,
-    _slot_weight,
+    _geometric_snap,
+    _slot_label,
+    quantise_kept_onsets,
 )
 
 
@@ -46,103 +47,130 @@ def _structure(bars):
     )
 
 
-def test_initial_slot_for_round_to_nearest_grid() -> None:
-    bar = _bar(0, 0.0, 2.0)  # 4/4 @ 120 BPM => 2.0s per bar
-    # beat_in_bar = 1.0 => slot 0 (downbeat)
-    c = OnsetCandidate(time=0.0, strength=1.0, bar=0, beat_in_bar=1.0)
-    slot, slot_s = _initial_slot_for(c, bar)
-    assert slot == 0
-    # 4 beats * 12 slots = 48 per bar => 2.0/48 seconds per slot.
-    assert abs(slot_s - 2.0 / 48) < 1e-9
-
-    # beat_in_bar = 2.5 => slot 18 ("& of beat 2" in 4/4)
-    c = OnsetCandidate(time=0.0, strength=1.0, bar=0, beat_in_bar=2.5)
-    slot, _ = _initial_slot_for(c, bar)
-    assert slot == 18
-
-    # Slight jitter early: beat_in_bar = 1.99 => snap to slot 12 (beat 2)
-    c = OnsetCandidate(time=0.0, strength=1.0, bar=0, beat_in_bar=1.99)
-    slot, _ = _initial_slot_for(c, bar)
-    assert slot == 12
-
-    # Clamp at end of bar: beat 5.0 in 4/4 is the next downbeat;
-    # within-bar slot caps at num_beats*12 - 1 = 47.
-    c = OnsetCandidate(time=0.0, strength=1.0, bar=0, beat_in_bar=5.0)
-    slot, _ = _initial_slot_for(c, bar)
-    assert slot == 47
-
-
-def test_slot_weight_hierarchy() -> None:
-    # Downbeat strongest, then other beats, then offbeat 8ths, then
-    # triplets, then 16ths, then arbitrary 48ths.
-    assert _slot_weight(0, 4) > _slot_weight(12, 4)  # downbeat > beat 2
-    assert _slot_weight(12, 4) > _slot_weight(6, 4)  # beat > offbeat 8th
-    assert _slot_weight(6, 4) > _slot_weight(4, 4)   # offbeat 8th > triplet
-    assert _slot_weight(4, 4) > _slot_weight(3, 4)   # triplet > 16th
-    assert _slot_weight(3, 4) > _slot_weight(1, 4)   # 16th > arbitrary 48th
-
-
-def test_deterministic_snap_pulls_cluster_to_stronger_slot() -> None:
-    # 4/4 @ 120 BPM, 2.0s per bar; one slot ~= 41.67 ms.
+def test_geometric_snap_sets_exact_slot_time_for_a_placed_onset() -> None:
+    # 4/4 @ 120 BPM, 2.0s per bar; 48 slots, slot_span = 2/48 s.
     bar = _bar(0, 0.0, 2.0)
     structure = _structure([bar])
+    # Kick on beat 1 exactly -> slot 0 -> quantised_time == bar start.
+    k = OnsetCandidate(time=0.005, strength=5.0, bar=0, beat_in_bar=1.0)
+    kept = {"k": [k]}
+    shifts = _geometric_snap(kept, structure, slots_per_beat=12)  # type: ignore[arg-type]
+    assert shifts == {}  # zero shift -> not in the summary map
+    assert k.quantised_time == 0.0
+    assert k.quantised_shift_slots == 0
+    assert k.off_grid is False
 
-    # Two onsets that fired ~25 ms apart but rounded to different slots:
-    #   kick at beat 1 exactly (slot 0)
-    #   snare jitter: beat_in_bar 1.083 => slot 1 (about 41 ms late)
-    # The deterministic snap should pull the snare to slot 0 (downbeat,
-    # higher weight) since they're within the cluster window.
-    k = OnsetCandidate(time=0.000, strength=5.0, bar=0, beat_in_bar=1.000)
-    s = OnsetCandidate(time=0.025, strength=5.0, bar=0, beat_in_bar=1.083)
+
+def test_geometric_snap_is_injective_within_a_lane_and_bar() -> None:
+    # Two kicks both detected on beat 1 (slot 0) can't share the slot; the
+    # cheaper distinct pair is (0, 1).
+    bar = _bar(0, 0.0, 2.0)
+    structure = _structure([bar])
+    a = OnsetCandidate(time=0.000, strength=5.0, bar=0, beat_in_bar=1.0)
+    b = OnsetCandidate(time=0.010, strength=5.0, bar=0, beat_in_bar=1.0)
+    kept = {"k": [a, b]}
+    _geometric_snap(kept, structure, slots_per_beat=12)  # type: ignore[arg-type]
+    slot_span = 2.0 / 48
+    assert a.quantised_time == 0.0          # slot 0
+    assert b.quantised_time == slot_span    # slot 1
+    assert a.off_grid is False and b.off_grid is False
+
+
+def test_geometric_snap_does_not_pull_cross_lane_onsets_together() -> None:
+    # A kick and a snare both on beat 1 stay on slot 0 each, the old
+    # cross-instrument cluster pull is gone, lanes are independent.
+    bar = _bar(0, 0.0, 2.0)
+    structure = _structure([bar])
+    k = OnsetCandidate(time=0.000, strength=5.0, bar=0, beat_in_bar=1.0)
+    s = OnsetCandidate(time=0.008, strength=5.0, bar=0, beat_in_bar=1.083)  # ~slot 1
     kept = {"k": [k], "s": [s]}
-    shifts = _deterministic_joint_snap(kept, structure)  # type: ignore[arg-type]
-
-    # The snare moves by -1 slot (slot 1 -> slot 0).
-    assert shifts == {("s", 0): -1}
-    assert s.quantised_time == 0.0
-    assert s.quantised_shift_slots == -1
-    # Kick is unchanged.
-    assert k.quantised_time is None
-    assert k.quantised_shift_slots is None
+    _geometric_snap(kept, structure, slots_per_beat=12)  # type: ignore[arg-type]
+    # Each lane snaps to its own nearest slot; the snare is NOT pulled onto
+    # the kick's downbeat.
+    assert k.quantised_time == 0.0           # slot 0
+    assert s.quantised_time == 2.0 / 48      # slot 1
+    assert k.quantised_shift_slots == 0
+    assert s.quantised_shift_slots == 0
 
 
-def test_deterministic_snap_respects_cluster_window() -> None:
-    # Same setup but the snare is ~80 ms late (outside the 60 ms
-    # cluster window), so it should NOT be pulled to the downbeat.
+def test_geometric_snap_band_rejects_overflow_to_off_grid() -> None:
+    # Six kicks all on beat 2 (slot 12): the band-2 window {10..14} holds
+    # only five, so one is left off-grid.
     bar = _bar(0, 0.0, 2.0)
     structure = _structure([bar])
-    k = OnsetCandidate(time=0.000, strength=5.0, bar=0, beat_in_bar=1.000)
-    s = OnsetCandidate(time=0.080, strength=5.0, bar=0, beat_in_bar=1.192)
-    kept = {"k": [k], "s": [s]}
-    shifts = _deterministic_joint_snap(kept, structure)  # type: ignore[arg-type]
-    assert shifts == {}
-    assert s.quantised_time is None
+    kicks = [
+        OnsetCandidate(time=0.5 + i * 0.001, strength=5.0, bar=0, beat_in_bar=2.0)
+        for i in range(6)
+    ]
+    kept = {"k": kicks}
+    _geometric_snap(kept, structure, slots_per_beat=12)  # type: ignore[arg-type]
+    off = [c for c in kicks if c.off_grid]
+    placed = [c for c in kicks if not c.off_grid]
+    assert len(off) == 1
+    assert len(placed) == 5
+    # Off-grid onset keeps quantised_time None so the emitter uses raw time.
+    assert off[0].quantised_time is None
+    # The five placed onsets occupy distinct slots within the band window.
+    placed_slots = sorted(round((c.quantised_time or 0.0) / (2.0 / 48)) for c in placed)
+    assert placed_slots == [10, 11, 12, 13, 14]
 
 
-def test_deterministic_snap_skips_oversized_shifts() -> None:
-    # Three onsets in the same 60 ms cluster but spread across slots 0,
-    # 1 and 4: pulling slot-4 onto slot 0 would be a 4-slot shift,
-    # exceeding the deterministic cap (=2). That onset stays put;
-    # slot-1 still pulls to slot 0.
-    bar = _bar(0, 0.0, 2.0)
-    structure = _structure([bar])
-    a = OnsetCandidate(time=0.000, strength=5.0, bar=0, beat_in_bar=1.000)
-    b = OnsetCandidate(time=0.025, strength=5.0, bar=0, beat_in_bar=1.083)
-    c = OnsetCandidate(time=0.050, strength=5.0, bar=0, beat_in_bar=1.333)
-    kept = {"k": [a], "s": [b], "h": [c]}
-    shifts = _deterministic_joint_snap(kept, structure)  # type: ignore[arg-type]
-    assert shifts == {("s", 0): -1}
-    assert c.quantised_time is None
-
-
-def test_deterministic_snap_out_of_range_ignored() -> None:
+def test_geometric_snap_ignores_out_of_range_bars() -> None:
     bar = _bar(0, 0.0, 2.0)
     structure = _structure([bar])
     c = OnsetCandidate(time=9.9, strength=1.0, bar=-1, beat_in_bar=-1.0)
     kept = {"k": [c]}
-    shifts = _deterministic_joint_snap(kept, structure)  # type: ignore[arg-type]
+    shifts = _geometric_snap(kept, structure, slots_per_beat=12)  # type: ignore[arg-type]
     assert shifts == {}
     assert c.quantised_time is None
+    assert c.off_grid is False
+
+
+def _two_kicks_at_slots_12_13():
+    # 4/4 @ 120 BPM, 48 slots, slot_span = 2/48 s. Beat 2.0 -> slot 12,
+    # beat 2.0833 -> slot 13.
+    bar = _bar(0, 0.0, 2.0)
+    structure = _structure([bar])
+    k0 = OnsetCandidate(time=0.50, strength=5.0, bar=0, beat_in_bar=2.0)
+    k1 = OnsetCandidate(time=0.54, strength=5.0, bar=0, beat_in_bar=2.0 + 1 / 12)
+    kept = {"k": [k0, k1]}
+    _geometric_snap(kept, structure, slots_per_beat=12)  # type: ignore[arg-type]
+    assert round((k0.quantised_time or 0.0) / (2.0 / 48)) == 12
+    assert round((k1.quantised_time or 0.0) / (2.0 / 48)) == 13
+    return kept, structure
+
+
+def test_apply_llm_shifts_rejects_a_colliding_group() -> None:
+    # Shifting k0 (+1) onto k1's slot 13 would break injectivity; the whole
+    # group keeps its geometric placement instead.
+    kept, structure = _two_kicks_at_slots_12_13()
+    slot_span = 2.0 / 48
+    _apply_llm_shifts(kept, structure, {("k", 0): 1}, slots_per_beat=12)  # type: ignore[arg-type]
+    assert kept["k"][0].quantised_time == 12 * slot_span  # unchanged
+    assert kept["k"][1].quantised_time == 13 * slot_span  # unchanged
+
+
+def test_apply_llm_shifts_applies_a_valid_shift() -> None:
+    # Shifting k0 (-1) to slot 11 keeps the group strictly increasing, so
+    # it's applied.
+    kept, structure = _two_kicks_at_slots_12_13()
+    slot_span = 2.0 / 48
+    _apply_llm_shifts(kept, structure, {("k", 0): -1}, slots_per_beat=12)  # type: ignore[arg-type]
+    assert kept["k"][0].quantised_time == 11 * slot_span
+    assert kept["k"][0].quantised_shift_slots == -1
+    assert kept["k"][1].quantised_time == 13 * slot_span  # unchanged
+
+
+def test_apply_llm_shifts_rejects_out_of_bar_shift() -> None:
+    # A shift past the bar's last slot is dropped (no re-barring).
+    bar = _bar(0, 0.0, 2.0)
+    structure = _structure([bar])
+    k = OnsetCandidate(time=1.95, strength=5.0, bar=0, beat_in_bar=4.92)  # ~slot 47
+    kept = {"k": [k]}
+    _geometric_snap(kept, structure, slots_per_beat=12)  # type: ignore[arg-type]
+    before = kept["k"][0].quantised_time
+    _apply_llm_shifts(kept, structure, {("k", 0): 2}, slots_per_beat=12)  # type: ignore[arg-type]
+    assert kept["k"][0].quantised_time == before  # unchanged (would cross bar)
 
 
 def _resp(shifts):
@@ -170,10 +198,10 @@ def test_extract_shifts_filters_invalid_ids() -> None:
 
 
 def test_extract_shifts_preserves_oversized_for_caller_clamp() -> None:
-    # The schema constrains the LLM to ±_MAX_LLM_SHIFT, but a
-    # misbehaving model that returns 7 still gets surfaced; the
-    # caller applies the clamp so a future change to where clamping
-    # lives doesn't silently change behaviour.
+    # The schema constrains the LLM to ±_MAX_LLM_SHIFT, but a misbehaving
+    # model that returns 7 still gets surfaced; the caller applies the
+    # clamp so a future change to where clamping lives doesn't silently
+    # change behaviour.
     out = _extract_shifts(_resp([{"id": 0, "shift": 7}]), n=1)
     assert out == {0: 7}
     assert _MAX_LLM_SHIFT < 7  # sanity: clamp would do something
@@ -182,6 +210,32 @@ def test_extract_shifts_preserves_oversized_for_caller_clamp() -> None:
 def test_extract_shifts_no_tool_block_means_no_shifts() -> None:
     empty = SimpleNamespace(content=[SimpleNamespace(type="text", text="hi")])
     assert _extract_shifts(empty, n=3) == {}
+
+
+def test_slot_label_uses_the_given_grid_density() -> None:
+    # At the default 12 slots/beat: slot 0 = downbeat, 6 = "&", 3 = "e".
+    assert _slot_label(0, 12) == "(beat 1)"
+    assert _slot_label(6, 12) == "(& of 1)"
+    assert _slot_label(3, 12) == "(e of 1)"
+    assert _slot_label(12, 12) == "(beat 2)"
+    # At a denser 24 slots/beat the same musical positions scale: the "&"
+    # is now slot 12, and slot 24 is beat 2, labels track the parameter,
+    # not a hardcoded 12.
+    assert _slot_label(0, 24) == "(beat 1)"
+    assert _slot_label(12, 24) == "(& of 1)"
+    assert _slot_label(24, 24) == "(beat 2)"
+
+
+def test_summary_records_the_grid_density_actually_used() -> None:
+    # The shifts.json summary must reflect the `slots_per_beat` the run
+    # used, not the module default, so a consumer can read back the grid.
+    bar = _bar(0, 0.0, 2.0)
+    structure = _structure([bar])
+    kept = {"k": [OnsetCandidate(time=0.0, strength=5.0, bar=0, beat_in_bar=1.0)]}
+    summary = quantise_kept_onsets(
+        kept, structure, use_llm=False, slots_per_beat=24  # type: ignore[arg-type]
+    )
+    assert summary["slots_per_beat"] == 24
 
 
 def test_slots_per_beat_matches_frontend_default() -> None:

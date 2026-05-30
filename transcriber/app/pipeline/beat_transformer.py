@@ -186,6 +186,29 @@ def _load_model() -> tuple[Demixed_DilatedTransformerModel, torch.device]:
     return model, device
 
 
+def park_model() -> None:
+    """Move the cached Beat Transformer model to CPU. No-op when the
+    lru_cache hasn't been hit yet (model has never loaded). Callers
+    must hold the process-wide GPU lock; see `app.pipeline.gpu_park`."""
+    if _load_model.cache_info().currsize == 0:
+        return
+    from app.pipeline.gpu_park import park_module
+
+    model, _ = _load_model()
+    park_module(model, "beat_transformer")
+
+
+def unpark_model() -> None:
+    """Move the cached Beat Transformer model back to CUDA. No-op when
+    the lru_cache hasn't been hit yet."""
+    if _load_model.cache_info().currsize == 0:
+        return
+    from app.pipeline.gpu_park import unpark_module
+
+    model, _ = _load_model()
+    unpark_module(model, "beat_transformer")
+
+
 def _audio_to_mel(audio_path: Path) -> np.ndarray:
     """Compute the BT-format mel spectrogram for one audio file.
 

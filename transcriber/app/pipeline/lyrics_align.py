@@ -104,6 +104,12 @@ class LyricWord:
     #   - "segment-end"   : (legacy) end clamped to segment boundary
     #   - "epsilon"       : (legacy) last-ditch start + 0.05s
     end_fallback: str | None = None
+    # The Latin romaji actually fed to the aligner, present only when
+    # `text` is a non-Latin display surface that differs from what was
+    # aligned (i.e. Japanese tokens romanized via `jp_romaji`). Lets the
+    # UI debug tooltip show "displayed 君 / aligned kimi". None for
+    # English / Chinese words, where `text` already is the aligned form.
+    romaji: str | None = None
 
 
 @dataclass
@@ -286,14 +292,26 @@ class LyricsAligner:
         `realign_text` serialises model loads, so concurrent first-hit
         requests for the same model path can't race.
 
-        Picks fp16 on CUDA and fp32 on CPU - fp16 halves activation
-        memory and roughly doubles throughput on consumer GPUs with no
-        observable hit to word-alignment accuracy on our inputs; on CPU
-        fp16 has no kernel coverage so we'd silently fall back to fp32
-        anyway, and the explicit dtype here keeps the model load
-        deterministic. The returned model has `.dtype` / `.device`
-        attributes that `load_audio` reads to materialise the waveform
-        on the same device + precision as the model."""
+        Precision is per-checkpoint, not per-device. The English head
+        (`wav2vec2-large-robust`) runs fp16 on CUDA - it's numerically
+        stable there and fp16 halves activation memory + roughly doubles
+        throughput with no observable hit to word-alignment accuracy on
+        our inputs. MMS-300m (the multilingual default, `model_path is
+        None`) runs fp32 everywhere: at fp16 it overflows in the feature-
+        encoder LayerNorm/GELU on loud vocal frames, poisoning the whole
+        emissions tensor with inf -> NaN so Viterbi collapses every frame
+        to `<blank>` (observed as `emissions_stats: nan=~all mean=nan`
+        and a downstream `get_spans` divergence). The overflow sits right
+        at the fp16 threshold, so it's flaky run-to-run (cuDNN picks
+        different conv algorithms) and was masked while the only
+        exercised path was the stable English head; the new Japanese path
+        routes through MMS-300m and trips it reliably. CPU always gets
+        fp32 (no fp16 kernel coverage). The gpu_park machinery parks the
+        drum + vocals models off-GPU before alignment, so MMS-300m's
+        ~1.2 GB fp32 footprint fits the 6 GB budget. The returned model
+        has `.dtype` / `.device` attributes that `load_audio` reads to
+        materialise the waveform on the same device + precision as the
+        model."""
         cached = self._align_models.get(model_path)
         if cached is not None:
             return cached
@@ -306,7 +324,10 @@ class LyricsAligner:
         )
 
         device = self._resolve_device()
-        dtype = torch.float16 if device == "cuda" else torch.float32
+        # fp16 only for the stable English head on CUDA; MMS-300m (and CPU)
+        # must stay fp32 or fp16 NaN-poisons its emissions (see docstring).
+        use_fp16 = device == "cuda" and model_path == _ALIGN_MODEL_ENGLISH
+        dtype = torch.float16 if use_fp16 else torch.float32
         log.info(
             "lyrics: loading CTC aligner (model=%s, device=%s, dtype=%s)",
             model_path or "<package default (MMS-300m)>", device, dtype,
@@ -340,6 +361,33 @@ class LyricsAligner:
         if language_code == "en":
             return _ALIGN_MODEL_ENGLISH
         return None
+
+    def park(self) -> None:
+        """Move every loaded CTC aligner to CPU. Idempotent and a
+        no-op when no aligner has been loaded yet.
+
+        The faster-whisper language-detect model is intentionally
+        skipped: it's a CTranslate2 wrapper without a `.to()` path,
+        and its ~700 MB footprint is small enough to tolerate when the
+        bigger models are off the GPU. Fully unloading it would
+        defeat the warm-cache point.
+
+        Callers must hold the process-wide GPU lock so an in-flight
+        `realign_text` isn't mid-`generate_emissions` on the model
+        being moved. See `app.pipeline.gpu_park.park_for_transcribe`."""
+        from app.pipeline.gpu_park import park_module
+
+        for key, entry in list(self._align_models.items()):
+            label = f"ctc_align[{key or 'mms-default'}]"
+            park_module(entry[0], label)
+
+    def unpark(self) -> None:
+        """Move every loaded CTC aligner back to CUDA. Idempotent."""
+        from app.pipeline.gpu_park import unpark_module
+
+        for key, entry in list(self._align_models.items()):
+            label = f"ctc_align[{key or 'mms-default'}]"
+            unpark_module(entry[0], label)
 
     def realign_text(
         self,
@@ -413,69 +461,38 @@ class LyricsAligner:
             audio_waveform = load_audio(str(audio_path), model.dtype, model.device)
             _log_audio_stats(audio_waveform, audio_path)
 
-            # Per-line preprocess so we know exactly how many post-
-            # process_results entries each input line will receive. We
-            # CAN'T just call text.split() and use that count because:
-            #   - For jpn/chi the package switches to char-level
-            #     tokenisation; a 5-char line returns 5 entries, not 1.
-            #   - text_normalize strips punctuation, brackets with
-            #     digits, etc.; the count can drift from a naive split.
-            # Doing the per-line call upfront pins the boundary count
-            # to whatever the aligner is about to do, so the partition
-            # downstream is always exact.
-            all_tokens: list[str] = []
-            all_text: list[str] = []
-            line_word_counts: list[int] = []
-            non_empty_indices: list[int] = []
-            # Per-word preprocessing for whitespace-separated languages so
-            # `<star>` tokens land at every word boundary, not just at line
-            # edges. preprocess_text wraps its input with `<star>` on each
-            # side; calling it per word and concatenating gives one
-            # `<star>` slot between every pair of adjacent words for
-            # Viterbi to absorb sustained-vowel / instrumental-break
-            # frames into. Without these, the most recent lyric word
-            # gets stretched to cover the gap, which is the failure mode
-            # the word-score diagnostic reported as "low score + low
-            # max_phoneme_prob over a multi-second span" (e.g. 'heart'
-            # held across ~5s of sustained vowel).
-            #
-            # For jpn/chi the package switches to char-level tokenisation
-            # and there's no caller-visible word boundary to split on, so
-            # the per-line path stays. Per-char `<star>` would be
-            # over-permissive there anyway (Viterbi could absorb every
-            # individual character into a star).
-            per_word = iso3 not in {"jpn", "chi"}
-            for idx, line in enumerate(input_lines):
-                t = line.text.strip()
-                if not t:
-                    continue
-                line_tokens: list[str] = []
-                line_text: list[str] = []
-                line_real = 0
-                units = t.split() if per_word else [t]
-                preprocess_failed = False
-                for unit in units:
-                    try:
-                        unit_tokens, unit_text = preprocess_text(
-                            unit, romanize=True, language=iso3,
-                        )
-                    except Exception as exc:
-                        log.warning(
-                            "lyrics: preprocess_text failed for unit %r "
-                            "in line %d (%r): %s",
-                            unit, idx, t, exc,
-                        )
-                        preprocess_failed = True
-                        break
-                    line_tokens.extend(unit_tokens)
-                    line_text.extend(unit_text)
-                    line_real += sum(1 for s in unit_text if s != "<star>")
-                if preprocess_failed or line_real == 0:
-                    continue
-                all_tokens.extend(line_tokens)
-                all_text.extend(line_text)
-                line_word_counts.append(line_real)
-                non_empty_indices.append(idx)
+            # Decide Japanese-aware romanization. cutlet/fugashi reads
+            # kanji with Japanese readings (vs uroman's Chinese inside
+            # preprocess_text); `jp_romaji` rewrites Japanese spans to
+            # romaji before they reach the aligner and carries the
+            # original kana/kanji for display. Skipped for Chinese tracks
+            # (the char-level path stays) and when the optional stack
+            # isn't installed. `treat_kanji_as_japanese` resolves
+            # glyph-ambiguous kanji per the kana/marker heuristic, so a
+            # Chinese sprinkle inside an English-dominant track isn't
+            # romanized as Japanese.
+            use_jp_romaji = iso3 != "chi" and _jp_romaji_available()
+            full_text = "".join(line.text for line in input_lines)
+            treat_kanji_as_japanese = _resolve_cjk_lang(full_text) == "ja"
+
+            # Per-line preprocess pins the exact per-line word count the
+            # aligner will emit (text_normalize strips punctuation, the
+            # jp path expands a span into morphemes, etc.), so the
+            # downstream partition is always exact. `display_surfaces`
+            # rides along, length-locked to the emitted words.
+            (
+                all_tokens,
+                all_text,
+                display_surfaces,
+                line_word_counts,
+                non_empty_indices,
+            ) = _preprocess_lines(
+                input_lines,
+                use_jp_romaji=use_jp_romaji,
+                treat_kanji_as_japanese=treat_kanji_as_japanese,
+                iso3=iso3,
+                preprocess_text=preprocess_text,
+            )
 
             if not all_tokens:
                 # Every line was empty or unprocessable; echo back so
@@ -487,9 +504,9 @@ class LyricsAligner:
 
             log.info(
                 "lyrics: aligning %d non-empty lines against %s "
-                "(language=%s/%s, total_tokens=%d)",
+                "(language=%s/%s, jp_romaji=%s, total_tokens=%d)",
                 len(non_empty_indices), audio_path.name,
-                language_code, iso3, sum(line_word_counts),
+                language_code, iso3, use_jp_romaji, sum(line_word_counts),
             )
             _log_token_sequence(all_tokens, all_text)
 
@@ -510,6 +527,25 @@ class LyricsAligner:
                     int(audio_waveform.shape[-1]) / _AUDIO_SAMPLE_RATE
                 )
                 _log_emissions_stats(emissions, tokenizer)
+                # Fail fast + actionable on poisoned emissions. A non-finite
+                # tensor (fp16 overflow on an unstable head, corrupt weights,
+                # broken audio) otherwise flows into Viterbi, which collapses
+                # to one all-`<blank>` segment and surfaces as a cryptic
+                # `get_spans` AssertionError far from the real cause. The
+                # `except Exception` below catches this and degrades to
+                # returning the caller's lines unchanged.
+                import torch  # type: ignore[import-not-found]
+
+                if not torch.isfinite(emissions).all():
+                    nan = int(torch.isnan(emissions).sum())
+                    inf = int(torch.isinf(emissions).sum())
+                    raise ValueError(
+                        f"acoustic model emitted non-finite emissions "
+                        f"(nan={nan} inf={inf} of {emissions.numel()}); "
+                        f"model={model_path or 'MMS-300m'} "
+                        f"dtype={emissions.dtype} - likely fp16 numerical "
+                        f"instability, load this head in fp32"
+                    )
                 _log_emissions_windowed(emissions, audio_seconds, tokenizer)
                 segments, scores, blank_token = get_alignments(
                     emissions, all_tokens, tokenizer,
@@ -572,7 +608,19 @@ class LyricsAligner:
                     for line in input_lines
                 ]
 
-            return _stitch_lines(input_lines, non_empty_indices, partitioned)
+            # Partition `display_surfaces` with the same per-line counts.
+            # Guaranteed length-locked to `word_timestamps` once the
+            # partition above succeeded (both equal sum(line_word_counts)),
+            # so words map to surfaces 1:1.
+            partitioned_surfaces: list[list[str | None]] = []
+            cursor = 0
+            for count in line_word_counts:
+                partitioned_surfaces.append(display_surfaces[cursor : cursor + count])
+                cursor += count
+
+            return _stitch_lines(
+                input_lines, non_empty_indices, partitioned, partitioned_surfaces,
+            )
 
     def _detect_language_via_audio(self, audio_path: Path) -> str:
         """Fallback language detection: run a single Whisper pass on
@@ -589,6 +637,36 @@ class LyricsAligner:
             detect_slice, batch_size=1, language=None
         )
         return result.get("language") or "en"
+
+
+def _resolve_cjk_lang(text: str) -> str:
+    """Decide whether glyph-ambiguous CJK (kanji/hanzi, identical between
+    Japanese and Traditional Chinese) in `text` should be read as
+    Japanese or Chinese, using two presence signals:
+
+      - any kana anywhere            -> "ja"
+      - else any simplified-Chinese-only marker -> "zh"
+      - else                         -> "ja" (J-pop library bias)
+
+    Used both by `_detect_language_from_text` (to count ambiguous CJK
+    toward the right language) and by `realign_text` (to decide whether
+    to romanize kanji as Japanese via `jp_romaji`). See
+    `_SIMPLIFIED_CHINESE_MARKERS` for the conservative marker set."""
+    has_kana = False
+    has_simplified_marker = False
+    for ch in text:
+        cp = ord(ch)
+        if 0x3040 <= cp <= 0x30FF:
+            has_kana = True
+        if ch in _SIMPLIFIED_CHINESE_MARKERS:
+            has_simplified_marker = True
+        if has_kana and has_simplified_marker:
+            break
+    if has_kana:
+        return "ja"
+    if has_simplified_marker:
+        return "zh"
+    return "ja"
 
 
 def _detect_language_from_text(input_lines: list[InputLine]) -> str | None:
@@ -639,28 +717,10 @@ def _detect_language_from_text(input_lines: list[InputLine]) -> str | None:
     if not text.strip():
         return None
 
-    # First pass: presence signals for the CJK ja/zh disambiguator.
-    # Per-text, not per-char - one kana or one marker tips ALL the
-    # ambiguous-CJK chars in the same direction.
-    has_kana = False
-    has_simplified_marker = False
-    for ch in text:
-        cp = ord(ch)
-        if 0x3040 <= cp <= 0x30FF:
-            has_kana = True
-        if ch in _SIMPLIFIED_CHINESE_MARKERS:
-            has_simplified_marker = True
-        if has_kana and has_simplified_marker:
-            break
-    if has_kana:
-        cjk_lang = "ja"
-    elif has_simplified_marker:
-        cjk_lang = "zh"
-    else:
-        # Kanji-only (no kana, no markers) is genuinely ambiguous;
-        # default to ja per the library bias. Caller can pin
-        # `language="zh"` to override.
-        cjk_lang = "ja"
+    # Resolve glyph-ambiguous CJK to ja/zh once for the whole text - one
+    # kana or one marker tips ALL the ambiguous-CJK chars in the same
+    # direction (see _resolve_cjk_lang).
+    cjk_lang = _resolve_cjk_lang(text)
 
     # Second pass: count alphabetic characters by resolved language.
     # `en` is listed first so it wins pure ties (see docstring).
@@ -1354,6 +1414,135 @@ def _iso1_to_iso3(code: str) -> str:
     return _ISO639_1_TO_3.get(code.lower(), "eng")
 
 
+_jp_romaji_ok: bool | None = None
+
+
+def _jp_romaji_available() -> bool:
+    """True when the cutlet/fugashi stack can be imported. Probed once
+    and cached. When false, callers leave Japanese kanji on the existing
+    uroman path (romanized as Chinese) rather than crashing - a graceful
+    degrade for environments where the optional Japanese deps aren't
+    installed."""
+    global _jp_romaji_ok
+    if _jp_romaji_ok is None:
+        try:
+            import cutlet  # type: ignore[import-not-found]  # noqa: F401
+
+            _jp_romaji_ok = True
+        except Exception as exc:
+            log.warning(
+                "lyrics: cutlet/fugashi unavailable; Japanese kanji will be "
+                "romanized as Chinese (uroman fallback): %s",
+                exc,
+            )
+            _jp_romaji_ok = False
+    return _jp_romaji_ok
+
+
+def _preprocess_lines(
+    input_lines: list[InputLine],
+    *,
+    use_jp_romaji: bool,
+    treat_kanji_as_japanese: bool,
+    iso3: str,
+    preprocess_text: Any,
+) -> tuple[list[str], list[str], list[str | None], list[int], list[int]]:
+    """Build the flat aligner inputs from caller lyric lines.
+
+    Returns `(all_tokens, all_text, display_surfaces, line_word_counts,
+    non_empty_indices)`:
+
+      - `all_tokens` / `all_text`: concatenated `preprocess_text` output
+        over every non-empty line (`all_text` keeps `<star>` markers).
+      - `display_surfaces`: flat list parallel to the NON-star words (one
+        entry per emitted alignment word, in order). A Japanese token
+        contributes its original surface (e.g. "君"); every other token
+        contributes `None`, meaning "display the aligned text as-is".
+      - `line_word_counts` / `non_empty_indices`: per-line non-star word
+        counts and their indices into `input_lines`, for partitioning.
+
+    When `use_jp_romaji` is set, each line is tokenized by `jp_romaji`
+    and every token's romaji is preprocessed individually at
+    `language='eng'` (word-level: one `<star>` slot between every pair of
+    tokens, the same absorber budget the English path already relies on).
+    Otherwise (Chinese, or the stack unavailable) the line takes the
+    original whole-line path at `language=iso3` - char-level for `chi`.
+
+    The load-bearing invariant is that `display_surfaces` stays
+    length-locked to the emitted word list: each token extends it by
+    exactly the number of non-star words that token produced, so the
+    downstream partition maps words to surfaces 1:1."""
+    all_tokens: list[str] = []
+    all_text: list[str] = []
+    display_surfaces: list[str | None] = []
+    line_word_counts: list[int] = []
+    non_empty_indices: list[int] = []
+
+    for idx, line in enumerate(input_lines):
+        t = line.text.strip()
+        if not t:
+            continue
+
+        # `units` is a list of (text_for_aligner, display_surface, lang).
+        # display_surface is None for anything we want rendered as the
+        # aligned text (English, Chinese); the original kana/kanji for
+        # Japanese tokens.
+        units: list[tuple[str, str | None, str]]
+        if use_jp_romaji:
+            try:
+                from app.pipeline.jp_romaji import tokenize
+
+                units = [
+                    (tok.romaji, tok.surface if tok.is_japanese else None, "eng")
+                    for tok in tokenize(
+                        t, treat_kanji_as_japanese=treat_kanji_as_japanese
+                    )
+                ]
+            except Exception as exc:
+                log.warning(
+                    "lyrics: jp_romaji.tokenize failed for line %d (%r); "
+                    "falling back to char-level path: %s",
+                    idx, t, exc,
+                )
+                units = [(t, None, iso3)]
+        else:
+            units = [(t, None, iso3)]
+
+        line_tokens: list[str] = []
+        line_text: list[str] = []
+        line_surfaces: list[str | None] = []
+        line_real = 0
+        preprocess_failed = False
+        for unit_in, surface, lang in units:
+            try:
+                unit_tokens, unit_text = preprocess_text(
+                    unit_in, romanize=True, language=lang,
+                )
+            except Exception as exc:
+                log.warning(
+                    "lyrics: preprocess_text failed for unit %r in line %d "
+                    "(%r): %s",
+                    unit_in, idx, t, exc,
+                )
+                preprocess_failed = True
+                break
+            unit_real = sum(1 for s in unit_text if s != "<star>")
+            line_tokens.extend(unit_tokens)
+            line_text.extend(unit_text)
+            line_surfaces.extend([surface] * unit_real)
+            line_real += unit_real
+
+        if preprocess_failed or line_real == 0:
+            continue
+        all_tokens.extend(line_tokens)
+        all_text.extend(line_text)
+        display_surfaces.extend(line_surfaces)
+        line_word_counts.append(line_real)
+        non_empty_indices.append(idx)
+
+    return all_tokens, all_text, display_surfaces, line_word_counts, non_empty_indices
+
+
 def _partition_words_by_line(
     word_timestamps: list[dict[str, Any]],
     line_word_counts: list[int],
@@ -1384,6 +1573,7 @@ def _stitch_lines(
     input_lines: list[InputLine],
     non_empty_indices: list[int],
     partitioned: list[list[dict[str, Any]]],
+    partitioned_surfaces: list[list[str | None]] | None = None,
 ) -> list[LyricLine]:
     """Build the final {@link LyricLine} list, slotting word-level
     timings back into the non-empty positions and passing empty-text
@@ -1395,19 +1585,43 @@ def _stitch_lines(
     additionally carries `raw_*` debug fields; ctc-forced-aligner
     never substitutes start/end so those mirror the final values and
     `end_fallback` stays None.
+
+    `partitioned_surfaces`, when given, is parallel to `partitioned`
+    (same per-line word lists) and carries the display surface for each
+    word: the original kana/kanji for Japanese tokens, or None to render
+    the aligned text directly. When a surface is present the rendered
+    `text` is the surface and the aligned romaji is preserved on
+    `romaji` for the debug tooltip; when absent (English / Chinese), the
+    aligned text is rendered as-is and `romaji` stays None - the
+    pre-existing behavior.
     """
     by_input_idx = dict(zip(non_empty_indices, partitioned, strict=True))
+    surf_by_idx: dict[int, list[str | None]] = {}
+    if partitioned_surfaces is not None:
+        surf_by_idx = dict(
+            zip(non_empty_indices, partitioned_surfaces, strict=True)
+        )
     out: list[LyricLine] = []
     for idx, line in enumerate(input_lines):
         words = by_input_idx.get(idx)
         if not words:
             out.append(LyricLine(start_sec=line.start_sec, text=line.text, words=None))
             continue
+        surfaces = surf_by_idx.get(idx)
         lyric_words: list[LyricWord] = []
-        for w in words:
+        for w_i, w in enumerate(words):
             start_sec = float(w.get("start", 0.0))
             raw_end = float(w.get("end", start_sec + 0.05))
-            text = str(w.get("text", "")).strip()
+            aligned_text = str(w.get("text", "")).strip()
+            surface = surfaces[w_i] if surfaces is not None else None
+            if surface is not None:
+                # Display the original kana/kanji; keep the aligned romaji
+                # for the debug tooltip.
+                text = surface
+                romaji: str | None = aligned_text or None
+            else:
+                text = aligned_text
+                romaji = None
             if not text:
                 continue
             # CTC alignment is occasionally degenerate on syllables it
@@ -1432,6 +1646,7 @@ def _stitch_lines(
                     raw_start_sec=start_sec,
                     raw_end_sec=raw_end,
                     end_fallback=fallback,
+                    romaji=romaji,
                 )
             )
         refined_start = (
@@ -1468,8 +1683,8 @@ def get_aligner() -> LyricsAligner:
 def _word_to_json(w: LyricWord) -> dict[str, Any]:
     """Per-word wire shape. Required fields (`startSec`, `endSec`,
     `text`) always present; debug fields (`rawStartSec`, `rawEndSec`,
-    `endFallback`) only when set, so the response payload stays small
-    on the common case where the model emitted complete timings."""
+    `endFallback`, `romaji`) only when set, so the response payload stays
+    small on the common case where the model emitted complete timings."""
     entry: dict[str, Any] = {
         "startSec": w.start_sec,
         "endSec": w.end_sec,
@@ -1481,6 +1696,8 @@ def _word_to_json(w: LyricWord) -> dict[str, Any]:
         entry["rawEndSec"] = w.raw_end_sec
     if w.end_fallback is not None:
         entry["endFallback"] = w.end_fallback
+    if w.romaji is not None:
+        entry["romaji"] = w.romaji
     return entry
 
 

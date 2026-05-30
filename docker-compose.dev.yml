@@ -10,9 +10,15 @@
 #   docker compose -f docker-compose.dev.yml up --build
 #
 # Routing (same external surface as prod):
-#   host :5173       -> frontend-dev container :5173 (vite dev server)
-#   host :8861       -> drumjot container :8001 (transcriber API)
-#   vite /api/*      -> internal compose DNS http://drumjot:8001
+#   host :5173       -> frontend-proxy (Caddy) container :5173
+#                         /api/* -> drumjot:8001 (transcriber edge router)
+#                         else   -> frontend-dev:5173 (vite dev server)
+#   host :8861       -> drumjot container :8001 (transcriber API, direct)
+#
+# The frontend-proxy sits in front of Vite on purpose: Vite under Bun
+# can't relay the transcriber's chunked NDJSON streaming responses (Bun
+# node:http proxy bug, oven-sh/bun#5737 / #28396), so we route /api with
+# Caddy instead of Vite's own proxy. See Caddyfile.dev.
 #
 # Notes:
 # - First `up --build` populates the `frontend_dev_node_modules` named
@@ -38,7 +44,7 @@ services:
       # be carrying.
       DISABLE_FRONTEND: '1'
     ports:
-      # API only - host :5173 belongs to frontend-dev below.
+      # API only - host :5173 belongs to the frontend-proxy below.
       - 8861:8001
 
   frontend-dev:
@@ -57,16 +63,33 @@ services:
       - |
         [ -d node_modules/.bin ] || bun install --frozen-lockfile
         exec bun run dev --host 0.0.0.0 --port 5173
-    ports:
-      - 5173:5173
+    # Internal only: the frontend-proxy (Caddy) below owns host :5173 and
+    # reverse-proxies non-/api traffic here. Vite still binds 0.0.0.0 (see
+    # --host) so the proxy can reach it across the compose network.
+    expose:
+      - '5173'
     volumes:
       # Bind the entire repo so vite watches the live tree.
       - /capsule/config/docker-volume/codebox/home/bitnimble/code/drumjot:/workdir
-    environment:
-      # vite.config.ts reads TRANSCRIBER_URL to set the dev server's
-      # /api proxy target. Inside the compose network, drumjot is
-      # reachable by its service name.
-      TRANSCRIBER_URL: http://drumjot:8001
+    # No environment needed: Vite no longer proxies /api (the frontend-proxy
+    # below routes it to the transcriber), so it doesn't read TRANSCRIBER_URL.
     depends_on:
+      - drumjot
+    restart: unless-stopped
+
+  # Edge proxy in front of the Bun-hosted Vite dev server. Owns host
+  # :5173, routes /api/* straight to the transcriber (drumjot:8001) and
+  # everything else to Vite - keeping Bun's broken streaming proxy out of
+  # the /api path. See Caddyfile.dev for the routing rationale.
+  frontend-proxy:
+    image: caddy:2-alpine
+    container_name: drumjot-frontend-proxy
+    command: caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    ports:
+      - 5173:5173
+    volumes:
+      - /capsule/config/docker-volume/codebox/home/bitnimble/code/drumjot/Caddyfile.dev:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - frontend-dev
       - drumjot
     restart: unless-stopped

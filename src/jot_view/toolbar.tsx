@@ -124,7 +124,7 @@ export const Toolbar = observer(
     onOpenLyricsTextLoad,
     onOpenLyricsSearch,
     onCancelTranscribe,
-    lyricsAnyAligning,
+    lyricsAlignBusyPhase,
     onSetBeatInput,
     onSetLlmModel,
     zoom,
@@ -173,10 +173,11 @@ export const Toolbar = observer(
      *  is to surface the entry point. */
     onOpenLyricsSearch: () => void;
     onCancelTranscribe: () => void;
-    /** True when any lyrics row currently has a Whisper alignment in
-     *  flight. Drives the toolbar busy pill (which doesn't display
-     *  *which* row; the per-row spinner does). */
-    lyricsAnyAligning: boolean;
+    /** Aggregate lyrics-alignment state, for the toolbar busy pill (which
+     *  doesn't display *which* row; the per-row spinner does). `queued`
+     *  means waiting behind another GPU job; `aligning` means actively
+     *  running. See `JotViewStore.lyricsAlignBusyPhase`. */
+    lyricsAlignBusyPhase: 'idle' | 'queued' | 'aligning';
     onSetBeatInput: (input: BeatInput) => void;
     onSetLlmModel: (model: LlmModel) => void;
     zoom: number;
@@ -785,7 +786,7 @@ export const Toolbar = observer(
         </label>
         <div className={styles.toolbarSpacer} aria-hidden="true" />
         <DrumLoadingIndicator />
-        <LyricsAlignBusyPill busy={lyricsAnyAligning} />
+        <LyricsAlignBusyPill phase={lyricsAlignBusyPhase} />
         <TranscribeBusyPill status={transcribeStatus} />
       </div>
     );
@@ -988,22 +989,31 @@ const DrumLoadingIndicator = observer(() => {
  * lyrics row currently has an alignment in flight; the pill doesn't
  * surface *which* row (per-track aligns can run concurrently and the
  * per-row spinner already covers that), it just signals "the backend
- * is doing lyrics work". Returns to nothing on completion; success is
+ * is doing lyrics work". `queued` reads as a wait state (the GPU is busy
+ * with another job) and flips to "Aligning lyrics…" once the work
+ * actually starts. Returns to nothing on completion; success is
  * signalled by the row's lines upgrading, failure by an error toast.
  */
-const LyricsAlignBusyPill = observer(({ busy }: { busy: boolean }) => {
-  if (!busy) return null;
-  return (
-    <span
-      className={classNames(sharedStyles.statusPill, sharedStyles.statusPillBusy)}
-      title="Extracting vocals + running whisperx…"
-      data-testid="lyrics-align-busy"
-    >
-      <span className={styles.statusPillSpinner} aria-hidden="true" />
-      Aligning lyrics…
-    </span>
-  );
-});
+const LyricsAlignBusyPill = observer(
+  ({ phase }: { phase: 'idle' | 'queued' | 'aligning' }) => {
+    if (phase === 'idle') return null;
+    const queued = phase === 'queued';
+    return (
+      <span
+        className={classNames(sharedStyles.statusPill, sharedStyles.statusPillBusy)}
+        title={
+          queued
+            ? 'Waiting for the GPU (another job is running)…'
+            : 'Extracting vocals + running whisperx…'
+        }
+        data-testid="lyrics-align-busy"
+      >
+        <span className={styles.statusPillSpinner} aria-hidden="true" />
+        {queued ? 'Queued…' : 'Aligning lyrics…'}
+      </span>
+    );
+  },
+);
 
 /**
  * Busy pill for an in-flight transcribe / resume call. Surfaces the

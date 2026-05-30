@@ -65,6 +65,9 @@ function buildWordDebugTitle(w: LyricWord): string {
   };
   const lines: string[] = [];
   lines.push(`"${w.text}"`);
+  if (w.romaji !== undefined) {
+    lines.push(`aligned as: ${w.romaji}`);
+  }
   lines.push(
     `rendered: ${fmtSec(w.startSec)} – ${fmtSec(w.endSec)}  (${fmtSec(w.endSec - w.startSec)})`,
   );
@@ -457,8 +460,12 @@ export const LyricsRow = observer(
     const lines = track.lines;
     const offsetSec = track.offsetSec;
     const sourceLabel = track.sourceLabel;
-    const isAligning =
-      store?.lyricsAlignStatuses.get(id)?.phase === 'aligning';
+    const alignPhase = store?.lyricsAlignStatuses.get(id)?.phase;
+    const isAligning = alignPhase === 'aligning' || alignPhase === 'queued';
+    const alignLabel =
+      alignPhase === 'queued'
+        ? 'Queued, waiting for the GPU'
+        : 'Aligning lyrics to audio';
 
     // Voice-level total beats for the bars-row width. Same pattern as
     // AudioTrackRow / InstrumentRow: read off the structural cache (zoom-
@@ -635,8 +642,8 @@ export const LyricsRow = observer(
                   {isAligning && (
                     <span
                       className={styles.lyricsAlignSpinner}
-                      title="Aligning lyrics to audio…"
-                      aria-label="Aligning lyrics to audio"
+                      title={`${alignLabel}…`}
+                      aria-label={alignLabel}
                       role="status"
                       data-testid={`lyrics-align-spinner-${id}`}
                     />

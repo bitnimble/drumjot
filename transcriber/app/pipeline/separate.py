@@ -354,6 +354,67 @@ class Separator:
                 sink.copy_audio("stems_per/residual", residual_path)
         return StemsPerResult(per_instrument=per_instrument, residual=residual_path)
 
+    # ---- GPU residency control --------------------------------------
+    # `park_*` / `unpark_*` move the wrapped nn.Module between CUDA
+    # and CPU so the two endpoints can swap GPU ownership without
+    # paying a disk-reload. Coordinated by `app.pipeline.gpu_park`;
+    # callers must hold the process-wide GPU lock (see main.py) so an
+    # in-flight stage isn't mid-forward through a model that's about
+    # to move host-side. Each is idempotent and a no-op when the
+    # wrapped audio-separator hasn't loaded a model_instance yet.
+    #
+    # The wrapped model lives at `model_instance.model_run`; after
+    # `_maybe_compile_model` that's the torch.compile OptimizedModule,
+    # which still routes `.to()` through to the underlying nn.Module.
+    # We also try `.model` as a fallback in case a future audio-separator
+    # version stops mutating `model_run`.
+
+    @staticmethod
+    def _inner_module(separator: object) -> object | None:
+        model_instance = getattr(separator, "model_instance", None)
+        if model_instance is None:
+            return None
+        inner = getattr(model_instance, "model_run", None)
+        if inner is None:
+            inner = getattr(model_instance, "model", None)
+        return inner
+
+    def park_drum_models(self) -> None:
+        from app.pipeline.gpu_park import park_module
+
+        for sep, name in (
+            (self._stems_all, "stems_all"),
+            (self._stems_per, "stems_per"),
+        ):
+            if sep is None:
+                continue
+            park_module(self._inner_module(sep), name)
+
+    def unpark_drum_models(self) -> None:
+        from app.pipeline.gpu_park import unpark_module
+
+        for sep, name in (
+            (self._stems_all, "stems_all"),
+            (self._stems_per, "stems_per"),
+        ):
+            if sep is None:
+                continue
+            unpark_module(self._inner_module(sep), name)
+
+    def park_vocals(self) -> None:
+        from app.pipeline.gpu_park import park_module
+
+        if self._vocals is None:
+            return
+        park_module(self._inner_module(self._vocals), "vocals")
+
+    def unpark_vocals(self) -> None:
+        from app.pipeline.gpu_park import unpark_module
+
+        if self._vocals is None:
+            return
+        unpark_module(self._inner_module(self._vocals), "vocals")
+
     def _load_vocals(self) -> None:
         """Lazily load the vocals-only separator used by /lyrics/align.
 

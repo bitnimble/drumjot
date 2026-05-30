@@ -101,6 +101,18 @@ dependencies = [
     #     preprocess each line independently and count tokens before
     #     concatenating (see `realign_text`).
     "ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git@264e7a1f81bff9ff5e787a5537020c2ad0b0df02",
+    # Japanese-aware romanization for lyrics alignment. uroman (invoked
+    # inside ctc-forced-aligner's `preprocess_text`) reads kanji as
+    # Chinese; cutlet (on the fugashi/MeCab binding + the bundled
+    # unidic-lite dictionary) produces contextual Japanese readings.
+    # We pre-romanize Japanese spans before they reach `preprocess_text`
+    # so the aligner sees romaji that matches the sung audio, while the
+    # original kana/kanji are kept for display. unidic-lite is the
+    # ~50 MB bundled dictionary (no build-time download); fugashi is a
+    # native extension (needs a C toolchain at build time).
+    "cutlet>=0.4",
+    "fugashi>=1.3",
+    "unidic-lite>=1.0.8",
     # Misc
     "httpx>=0.27",
 ]

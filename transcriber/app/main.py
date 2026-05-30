@@ -25,7 +25,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any
@@ -52,6 +52,7 @@ from app.models import (
     TranscriptionSummary,
 )
 from app.outputs import OutputSink, make_output_sink, materialize_pending
+from app.pipeline import gpu_park
 from app.pipeline.beats import summarize_bar_for_prompt
 from app.pipeline.lyrics_align import InputLine, get_aligner, lines_to_json
 from app.pipeline.resume import (
@@ -75,6 +76,18 @@ from app.run_log import RunLog, reset_current_run_log, set_current_run_log
 # Fallback debug dir used when `debug=true` is requested but `DEBUG_DIR`
 # env var wasn't set. Matches the docker-compose volume mount.
 DEFAULT_DEBUG_DIR = Path("/debug")
+
+
+# Process-wide GPU lock. The two heavy endpoints (/transcribe(/resume),
+# /lyrics/align) take this before doing any model work so a second
+# request can't move a model to CPU while the first is mid-forward
+# through it. Also serialises against audio-separator's non-thread-safe
+# `.separate()` state. A queued second request waits; the GPU is a
+# single resource, so concurrency wouldn't make either request faster
+# anyway. /transcribe(/resume) emits a `{"type": "queued"}` NDJSON line
+# before awaiting on contention so the streaming UI can show a wait
+# state instead of a blank stream.
+_gpu_lock = asyncio.Lock()
 
 # Map stage -> HTTP status code surfaced when that stage fails. The
 # `filter` and `quantise` stages are the only external dependencies
@@ -270,6 +283,7 @@ async def transcribe(
     include_candidates: bool = Form(default=False),
     beat_input: BeatInput = Form(default=settings.beat_input_default),
     quantise: bool = Form(default=True),
+    quantise_use_llm: bool = Form(default=True),
     llm_model: str = Form(default=""),
     debug: bool = Form(default=False),
 ) -> StreamingResponse:
@@ -316,6 +330,7 @@ async def transcribe(
         "beat_input": beat_input,
         "include_candidates": include_candidates,
         "quantise": quantise,
+        "quantise_use_llm": quantise_use_llm,
         "llm_model": llm_model or settings.llm_model,
         "debug": debug,
     }
@@ -335,6 +350,7 @@ async def transcribe(
     options = PipelineOptions(
         beat_input=beat_input,
         quantise=quantise,
+        quantise_use_llm=quantise_use_llm,
         llm_model=llm_model or settings.llm_model,
     )
     separator: Separator = request.app.state.separator
@@ -440,6 +456,7 @@ async def transcribe_resume(
     include_candidates: bool = Form(default=False),
     beat_input: BeatInput = Form(default=settings.beat_input_default),
     quantise: bool = Form(default=True),
+    quantise_use_llm: bool = Form(default=True),
     llm_model: str = Form(default=""),
 ) -> StreamingResponse:
     """Re-run the pipeline from `resume_stage` onward, hydrating any
@@ -472,7 +489,10 @@ async def transcribe_resume(
     sink = DebugSink(resume_dir)
     output_sink = make_output_sink(resume_dir.name, settings.outputs_dir)
     options = PipelineOptions(
-        beat_input=beat_input, quantise=quantise, llm_model=resolved_model,
+        beat_input=beat_input,
+        quantise=quantise,
+        quantise_use_llm=quantise_use_llm,
+        llm_model=resolved_model,
     )
     separator: Separator = request.app.state.separator
     run_log = RunLog()
@@ -480,6 +500,7 @@ async def transcribe_resume(
         "beat_input": beat_input,
         "include_candidates": include_candidates,
         "quantise": quantise,
+        "quantise_use_llm": quantise_use_llm,
         "llm_model": resolved_model,
         "resume_folder": str(resume_dir),
         "resume_stage": resume_stage.value,
@@ -561,8 +582,21 @@ async def lyrics_align(
     mix: UploadFile | None = File(default=None),
     lyrics: str = Form(default=""),
     language: str = Form(default=""),
-) -> dict[str, Any]:
+) -> StreamingResponse:
     """Word-level lyrics alignment via whisperx forced alignment.
+
+    Streaming NDJSON response (one JSON object per line):
+
+        {"type": "queued"}                       # only when the GPU is busy
+        {"type": "running"}                       # GPU acquired, work started
+        {"type": "result", "data": {"lines": [...]}}   # terminal success
+        {"type": "error", "status_code": 500, "message": "..."}  # terminal
+
+    The `queued` envelope lets a client that arrives while /transcribe (or
+    another align) holds the GPU show a wait state instead of a silent
+    hang; see `_serialized_gpu_stream`. Input-validation failures still
+    return a real 4xx with a JSON body, we only switch to NDJSON once the
+    GPU phase can actually start.
 
     Exactly one audio source must be supplied:
 
@@ -581,8 +615,6 @@ async def lyrics_align(
     `language` is an optional ISO-639-1 hint that forces a specific
     wav2vec2 aligner. Empty string falls back to text-based heuristic
     detection and then to a 30 s audio-based detector.
-
-    Returns `{lines: [{startSec, text, words: [{startSec, text}]?}]}`.
     """
     _require_pipeline_role()
     aligner = get_aligner()
@@ -600,16 +632,34 @@ async def lyrics_align(
         )
     input_lines = _parse_lyrics_input(lyrics)
 
-    cleanup_dir: Path | None = None
+    # `_require_pipeline_role()` above ensures we're on the worker
+    # that loaded the separator at startup; the None branch is purely
+    # defensive (e.g. eager load failed and we somehow still got here).
+    separator: Separator = request.app.state.separator
+    if separator is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Separator is not loaded on this worker.",
+        )
+
+    # File I/O and the disk-cache lookup don't touch the GPU, so we do
+    # them here, up front: reading the upload needs `await`, and a
+    # StreamingResponse is consumed once returned, so we drain it before
+    # handing the temp dir to the generator (mirrors /transcribe). The
+    # GPU steps (vocals separator + CTC aligner) run inside the streamed
+    # generator under the process-wide lock.
+    cleanup_dir = Path(tempfile.mkdtemp(prefix="drumjot_lyrics_"))
     try:
+        needs_separator = False
+        vocals_key: str | None = None
+        mix_path: Path | None = None
+        vocals_path: Path | None = None
         if vocals is not None:
-            cleanup_dir = Path(tempfile.mkdtemp(prefix="drumjot_lyrics_"))
             vocals_path = cleanup_dir / (vocals.filename or "vocals.wav")
             vocals_bytes = await vocals.read()
             vocals_path.write_bytes(vocals_bytes)
         else:
             assert mix is not None
-            cleanup_dir = Path(tempfile.mkdtemp(prefix="drumjot_lyrics_"))
             mix_path = cleanup_dir / (mix.filename or "input.wav")
             mix_bytes = await mix.read()
             mix_path.write_bytes(mix_bytes)
@@ -624,21 +674,82 @@ async def lyrics_align(
                 log.info("lyrics_align: vocals cache HIT (%s)", vocals_key)
                 vocals_path = cached_vocals
             else:
-                separator: Separator = request.app.state.separator
-                if separator is None:
-                    raise HTTPException(
-                        status_code=503,
-                        detail="Separator is not loaded on this worker.",
-                    )
+                needs_separator = True
+    except Exception:
+        # The generator's `finally` only runs once it starts streaming;
+        # a failure during the up-front drain has to clean up itself.
+        shutil.rmtree(cleanup_dir, ignore_errors=True)
+        raise
+
+    return StreamingResponse(
+        _stream_lyrics_align(
+            separator=separator,
+            aligner=aligner,
+            input_lines=input_lines,
+            language=language or None,
+            needs_separator=needs_separator,
+            vocals_key=vocals_key,
+            mix_path=mix_path,
+            vocals_path=vocals_path,
+            cleanup_dir=cleanup_dir,
+        ),
+        media_type="application/x-ndjson",
+    )
+
+
+async def _stream_lyrics_align(
+    *,
+    separator: Separator,
+    aligner: Any,
+    input_lines: list[InputLine],
+    language: str | None,
+    needs_separator: bool,
+    vocals_key: str | None,
+    mix_path: Path | None,
+    vocals_path: Path | None,
+    cleanup_dir: Path,
+) -> AsyncIterator[bytes]:
+    """Stream the GPU phase of /lyrics/align as NDJSON bytes.
+
+    The upload drain + vocals-cache lookup already ran in the endpoint
+    handler; this owns the GPU-serialised work: park the drum models,
+    (optionally) run the vocals separator, park it before the CTC aligner
+    loads, then run forced alignment and emit the terminal `result`.
+
+    Wrapped in `_serialized_gpu_stream` so a request that arrives while
+    another GPU request is in flight emits a `queued` envelope first and
+    then waits its turn (the GPU is a single resource; serialising also
+    keeps a park from moving a model host-side under an in-flight
+    forward pass). Failures surface as `error` envelopes rather than
+    raising into the ASGI layer. The temp dir is always cleaned up.
+    """
+
+    async def job() -> AsyncIterator[dict[str, Any]]:
+        nonlocal vocals_path
+        try:
+            # park_for_lyrics frees the drum-pipeline VRAM the /transcribe
+            # path holds onto; park_vocals_after_extraction (below) then
+            # frees the vocals separator's VRAM before the CTC aligner
+            # allocates.
+            try:
+                gpu_park.park_for_lyrics(separator, aligner)
+            except Exception:
+                log.exception("lyrics_align: park_for_lyrics failed; continuing")
+
+            if needs_separator:
+                assert mix_path is not None
+                assert vocals_key is not None
                 raw_vocals = await asyncio.to_thread(
                     _extract_vocals_with_separator,
                     separator, mix_path, cleanup_dir,
                 )
                 if raw_vocals is None:
-                    raise HTTPException(
-                        status_code=500,
-                        detail="Separator ran but produced no vocals stem.",
-                    )
+                    yield {
+                        "type": "error",
+                        "status_code": 500,
+                        "message": "Separator ran but produced no vocals stem.",
+                    }
+                    return
                 # Opus-encode into the cache. Whisperx reads opus through
                 # ffmpeg natively, so the cached file IS the file we feed
                 # to alignment; no double-encoding, no decode step.
@@ -665,23 +776,36 @@ async def lyrics_align(
                     )
                     vocals_path = raw_vocals
 
-        lines = await asyncio.to_thread(
-            aligner.realign_text,
-            vocals_path,
-            input_lines,
-            language or None,
-        )
-        return {"lines": lines_to_json(lines)}
-    except HTTPException:
-        raise
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except Exception as exc:
-        log.exception("lyrics_align failed")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+            # Park the vocals separator before the CTC aligner loads.
+            # No-op when we took the cache hit / pre-supplied vocals
+            # path (the separator was never loaded into VRAM this
+            # request); important when we just ran it.
+            try:
+                gpu_park.park_vocals_after_extraction(separator)
+            except Exception:
+                log.exception(
+                    "lyrics_align: park_vocals_after_extraction failed; continuing"
+                )
+
+            assert vocals_path is not None
+            lines = await asyncio.to_thread(
+                aligner.realign_text,
+                vocals_path,
+                input_lines,
+                language,
+            )
+            yield {"type": "result", "data": {"lines": lines_to_json(lines)}}
+        except FileNotFoundError as exc:
+            yield {"type": "error", "status_code": 404, "message": str(exc)}
+        except Exception as exc:
+            log.exception("lyrics_align failed")
+            yield {"type": "error", "status_code": 500, "message": str(exc)}
+
+    try:
+        async for envelope in _serialized_gpu_stream(_gpu_lock, job):
+            yield (json.dumps(envelope) + "\n").encode("utf-8")
     finally:
-        if cleanup_dir is not None:
-            shutil.rmtree(cleanup_dir, ignore_errors=True)
+        shutil.rmtree(cleanup_dir, ignore_errors=True)
 
 
 def _parse_lyrics_input(raw: str) -> list[InputLine]:
@@ -817,6 +941,41 @@ def _encode_vocals_to_opus(src: Path, dest: Path) -> None:
     subprocess.run(cmd, check=True)
 
 
+async def _serialized_gpu_stream(
+    lock: asyncio.Lock,
+    job: Callable[[], AsyncIterator[dict[str, Any]]],
+) -> AsyncIterator[dict[str, Any]]:
+    """Serialise `job` behind the process-wide GPU `lock`, yielding NDJSON
+    envelope dicts.
+
+    Emits ``{"type": "queued"}`` first iff the lock is already held, so a
+    client blocked behind another in-flight request can render a wait
+    state instead of a silent hang. The queued envelope is yielded
+    *before* awaiting acquisition, so it reaches the client immediately
+    rather than after the wait. Once this stream owns the lock it emits
+    ``{"type": "running"}`` and then forwards every envelope `job()`
+    yields (typically a terminal ``result`` / ``error``).
+
+    The lock is always released, even if `job` raises. `job` owns its own
+    error handling and cleanup; it should yield a terminal envelope
+    rather than raise, but a stray exception still unwinds cleanly here.
+
+    This is the /lyrics/align analogue of the queued-event handling baked
+    into `_stream_pipeline`; that streamer keeps its inline form because
+    it also juggles a worker-thread queue, disconnect watching, and
+    post-run assembly that don't generalise.
+    """
+    if lock.locked():
+        yield {"type": "queued"}
+    await lock.acquire()
+    try:
+        yield {"type": "running"}
+        async for envelope in job():
+            yield envelope
+    finally:
+        lock.release()
+
+
 async def _stream_pipeline(
     *,
     request: Request,
@@ -858,7 +1017,25 @@ async def _stream_pipeline(
     (unlinking files that are still open keeps the inode alive until
     the thread's fds close). ContextVars (sink + run_log) are always
     reset.
+
+    Serialised against /lyrics/align via `_gpu_lock`: a request that
+    arrives while the other endpoint is mid-flight waits its turn so
+    the park/unpark can't move a model to CPU under an in-flight
+    forward pass. If the lock is contended we emit a `queued` event
+    first so the streaming UI shows a wait state instead of a blank
+    stream while we await acquisition.
     """
+    lock_held = False
+    if _gpu_lock.locked():
+        log.info("%s: GPU lock contended; queued behind another request", verb)
+        yield (json.dumps({"type": "queued"}) + "\n").encode("utf-8")
+    await _gpu_lock.acquire()
+    lock_held = True
+    try:
+        gpu_park.park_for_transcribe(separator, get_aligner())
+    except Exception:
+        log.exception("%s: park_for_transcribe failed; continuing", verb)
+
     started = time.perf_counter()
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
@@ -1031,6 +1208,8 @@ async def _stream_pipeline(
         reset_current_run_log(log_token)
         run_log.uninstall()
         shutil.rmtree(cleanup_dir, ignore_errors=True)
+        if lock_held:
+            _gpu_lock.release()
 
 
 def _build_debug_zip_if_possible(

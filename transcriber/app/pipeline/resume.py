@@ -592,10 +592,17 @@ def _apply_quantise_shifts(
                 continue
             qt = row.get("quantised_time")
             ts = row.get("total_shift")
+            og = row.get("off_grid")
             if qt is not None:
                 cands[idx].quantised_time = float(qt)
             if ts is not None:
                 cands[idx].quantised_shift_slots = int(ts)
+            # Restore the band-rejected flag so a resumed off-grid onset
+            # isn't mistaken for an ordinary no-shift hit (older shifts.json
+            # files predate the field; default to the candidate's current
+            # value when absent).
+            if og is not None:
+                cands[idx].off_grid = bool(og)
             applied += 1
     log.info(
         "resume: reapplied %d quantise shift(s) from %s (skipped %d)",

@@ -45,6 +45,13 @@ export type LyricWord = {
    *    - `"segment-end"`    (legacy) end clamped to segment boundary
    *    - `"epsilon"`        (legacy) last-ditch `start + 0.05s` */
   endFallback?: 'next-start' | 'segment-end' | 'epsilon' | 'inverted-clamp';
+  /** The Latin romaji actually fed to the aligner, present only when
+   *  `text` is a non-Latin display surface that differs from what was
+   *  aligned - i.e. Japanese tokens romanized via the backend's
+   *  `jp_romaji` pass (君 displayed, `kimi` aligned). Absent for English
+   *  / Chinese words, where `text` already is the aligned form. Debug-
+   *  tooltip only; the renderer shows `text`. */
+  romaji?: string;
 };
 
 export type LyricLine = {

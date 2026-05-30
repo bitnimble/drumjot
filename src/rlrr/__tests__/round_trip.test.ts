@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MidiEvent, parseMidi, writeMidi } from 'midi-file';
+import { Jot } from 'src/dsl';
 import {
   DEFAULT_INSTRUMENTS,
   RlrrFile,
@@ -434,6 +435,36 @@ describe('rlrrToJot / jotToRlrr', () => {
     // Quantization keeps every kick/snare; counts must match.
     expect(outHits).toHaveLength(hits.length);
     expect(new Set(outHits.map((h) => h.note))).toEqual(new Set([36, 38]));
+  });
+
+  it('applies a note.offset to the exported RLRR event time', () => {
+    // RLRR event times are real seconds, so a +30 ms sub-slot offset on a
+    // beat-1 kick at 120 BPM charts at t = 0.030 (not snapped to 0).
+    const jot: Jot = {
+      title: '',
+      globalMetadata: {
+        bpm: 120,
+        time: { count: 4, unit: 4 },
+        instrumentMapping: { k: { kind: 'kick', name: 'Kick', midi: { note: 36 } } },
+      },
+      voices: [
+        {
+          bars: [
+            {
+              elements: [
+                { kind: 'note', pitch: 'k', offset: 30 },
+                { kind: 'rest' },
+                { kind: 'rest' },
+                { kind: 'rest' },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const rlrr = jotToRlrr(jot);
+    expect(rlrr.events).toHaveLength(1);
+    expect(parseFloat(rlrr.events[0].time as string)).toBeCloseTo(0.03, 4);
   });
 
   it('integrates: DSL parser -> Jot -> RLRR -> Jot', async () => {

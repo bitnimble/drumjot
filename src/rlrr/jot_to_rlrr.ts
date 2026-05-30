@@ -119,9 +119,13 @@ export function jotToRlrr(jot: Jot, options: JotToRlrrOptions = {}): RlrrFile {
         for (const note of track.notes) {
           const target = resolveInstrument(note, track, instruments);
           if (!target) continue;
-          const seconds = tempos
-            ? startSec + beatToSecWithinBar(tempos, note.beat)
-            : startSec;
+          // RLRR event times are real-time seconds, so a note's sub-slot
+          // `offset` (ms) applies directly, a swung/off-grid hit charts at
+          // the time it actually plays. (Re-importing snaps to RLRR's 1/16
+          // grid, so the offset is lost on the way back in, by design.)
+          const offsetSec = (note.source.offset ?? 0) / 1000;
+          const seconds =
+            (tempos ? startSec + beatToSecWithinBar(tempos, note.beat) : startSec) + offsetSec;
           const vel = clampVelocity(resolveVelocity(note, opts));
           const event: RlrrEvent = {
             name: target.name,

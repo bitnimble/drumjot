@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 import { parse } from 'src/parser';
+import { Jot } from 'src/dsl';
 import { RenderedJot } from 'src/jot';
 import { buildTimeline } from '../timeline';
 import { jotToEvents } from '../events';
@@ -17,6 +18,51 @@ function events(src: string) {
   const rendered = new RenderedJot(jot);
   return jotToEvents(rendered);
 }
+
+function eventsFor(jot: Jot) {
+  return jotToEvents(new RenderedJot(jot));
+}
+
+/** A 4/4 @ 120 BPM jot whose only note is a kick on beat 1 with `offset` ms. */
+function kickWithOffset(offset: number | undefined): Jot {
+  return {
+    title: '',
+    globalMetadata: { bpm: 120, time: { count: 4, unit: 4 }, instrumentMapping: { k: { kind: 'kick', name: 'Kick' } } },
+    voices: [
+      {
+        bars: [
+          {
+            elements: [
+              { kind: 'note', pitch: 'k', ...(offset !== undefined ? { offset } : {}) },
+              { kind: 'rest' },
+              { kind: 'rest' },
+              { kind: 'rest' },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+describe('jotToEvents note.offset', () => {
+  it('shifts a note by its offset in ms (positive = later)', () => {
+    const evs = eventsFor(kickWithOffset(25));
+    expect(evs).toHaveLength(1);
+    // beat 1 at 120 BPM = 0.0s, +25 ms.
+    expect(evs[0].time).toBeCloseTo(0.025, 6);
+  });
+
+  it('shifts a note earlier for a negative offset', () => {
+    const evs = eventsFor(kickWithOffset(-15));
+    expect(evs[0].time).toBeCloseTo(-0.015, 6);
+  });
+
+  it('leaves a note on its slot when there is no offset', () => {
+    const evs = eventsFor(kickWithOffset(undefined));
+    expect(evs[0].time).toBeCloseTo(0, 6);
+  });
+});
 
 describe('jotToEvents timing', () => {
   it('4 quarter-note kicks at 160 BPM 4/4 land at 0/0.375/0.75/1.125', () => {
