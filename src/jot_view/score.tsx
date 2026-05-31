@@ -1458,7 +1458,12 @@ const NoteProvenanceDetails = observer(
       // grid snap), so the value is a fixed property of the MIDI and
       // doesn't move when the Beat-offset slider re-buckets the rendered
       // note into a different bar.
-      if (originalBar && originalSecPerQuarterNote !== undefined && entry.tick !== null) {
+      if (
+        originalBar &&
+        originalBarTiming &&
+        originalSecPerQuarterNote !== undefined &&
+        entry.tick !== null
+      ) {
         const gridTicks = midiGridTicks(gridDivision);
         const postSnapTick = Math.round(entry.tick / gridTicks) * gridTicks;
         const snapDeltaQn = (postSnapTick - entry.tick) / TICKS_PER_BEAT;
@@ -1466,13 +1471,23 @@ const NoteProvenanceDetails = observer(
         snapBeats = snapDeltaQn * (originalBar.time.unit / 4);
         snapSec = snapDeltaQn * originalSecPerQuarterNote;
         snapMs = snapSec * 1000;
-        // Post-snap position in the ORIGINAL bar, built off the detected
-        // position rather than re-deriving from the post-snap tick (which
-        // would require walking the structure to recover the bar's start
-        // tick). Equivalent: detected + snap_delta lands at the snapped
-        // position by construction.
-        originalQuantizedBeat = entry.beat_in_bar + snapBeats;
-        originalQuantizedSec = entry.detected_time_sec + snapSec;
+        // Post-Python-quantise position, sourced from the provenance
+        // sidecar's `quantised_time_sec` (audio time, set by every pass
+        // that placed this onset). The earlier `entry.beat_in_bar +
+        // snapBeats` formula combined the *detector* beat with only the
+        // JS-side 1/48 snap, it ignored the Python geometric / envelope
+        // / grid / LLM shifts, so the "Quantized to" readout could print
+        // a value past the bar's last slot (e.g. "49/48") while the MIDI
+        // bytes carried the true clamped position. Falls back to the
+        // detected time when quantise didn't shift this onset; that
+        // matches what the MIDI tick was emitted from (see
+        // `onsets_to_midi_bytes`).
+        const quantSourceSec = entry.quantised_time_sec ?? entry.detected_time_sec;
+        const originalBarAudioStart = originalBarTiming.startSec + jotPlayer.drumsT0Sec;
+        const intraBarQn =
+          (quantSourceSec - originalBarAudioStart) / originalSecPerQuarterNote;
+        originalQuantizedBeat = 1 + intraBarQn * (originalBar.time.unit / 4);
+        originalQuantizedSec = quantSourceSec;
       }
 
       // Final position uses the CURRENT bar's timing; where the note
