@@ -720,6 +720,26 @@ export const Toolbar = observer(
         >
           {() => (
             <>
+              <label
+                className={styles.dropdownStepperRow}
+                title="Compress or expand the score horizontally. Has no effect on audio playback, only on how the notation is laid out."
+              >
+                <span>Zoom</span>
+                <span className={styles.dropdownStepperControl}>
+                  <input
+                    type="range"
+                    min={0.1}
+                    max={4.0}
+                    step={0.05}
+                    value={zoom}
+                    onChange={(e) => onSetZoom(Number(e.target.value))}
+                    className={styles.zoomSlider}
+                    style={{ ['--value' as string]: (zoom - 0.1) / 3.9 } as React.CSSProperties}
+                    aria-label="Score zoom"
+                  />
+                  <span className={styles.zoomValue}>{Math.round(zoom * 100)}%</span>
+                </span>
+              </label>
               <DropdownSection label="Overlays">
                 <ToggleMenuItem
                   label="Show filtered"
@@ -796,23 +816,6 @@ export const Toolbar = observer(
             </>
           )}
         </DropdownButton>
-        <label
-          className={sharedStyles.toolbarCheckbox}
-          title="Compress or expand the score horizontally. Has no effect on audio playback, only on how the notation is laid out."
-        >
-          <span>Zoom</span>
-          <input
-            type="range"
-            min={0.1}
-            max={4.0}
-            step={0.05}
-            value={zoom}
-            onChange={(e) => onSetZoom(Number(e.target.value))}
-            className={styles.zoomSlider}
-            style={{ ['--value' as string]: (zoom - 0.1) / 3.9 } as React.CSSProperties}
-          />
-          <span className={styles.zoomValue}>{Math.round(zoom * 100)}%</span>
-        </label>
         <div className={styles.toolbarSpacer} aria-hidden="true" />
         <DrumLoadingIndicator />
         <LyricsAlignBusyPill phase={lyricsAlignBusyPhase} />
