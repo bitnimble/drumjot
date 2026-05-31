@@ -195,6 +195,20 @@
     overflow-clip-margin: calc(var(--note-pad-px) + 12px);
 }
 
+/* A note's label popover (NoteView) and the filtered-onset popover extend
+   well beyond the bar's box, `top: 100%` plus margin, and arbitrarily far
+   when Debug details expand, far past `overflow-clip-margin`. The bar's
+   `content-visibility: auto` (which forces `contain: paint`) would clip
+   that overflow to the bar, and the clipped popover reads as the next
+   track painting over it. Drop paint-containment on just the bar that
+   currently owns an open popover, keyed off the same `data-note-label-open`
+   attribute the row-lift in mixer.module.css uses. That bar is on-screen
+   by definition (the user selected/hovered a note in it), so the
+   virtualization it forgoes for the moment costs nothing. */
+.bar:has([data-note-label-open]) {
+    content-visibility: visible;
+}
+
 .barAnacrusis {
     border-right: 1px dashed var(--color-border);
     background: var(--color-accent-overlay-faint);
@@ -843,6 +857,33 @@
     border-radius: var(--radius-xs);
 }
 
+/* One transcribe-stage's worth of debug rows: header + a tight grid of
+   key/value pairs. Stacked vertically inside the Debug details block
+   so a reader scans top-to-bottom in pipeline order (Onset detection
+   → Beat alignment → Quantise → MIDI render → User-applied → Final →
+   Filter). The header is a slim caption-style label; the list is the
+   same grid as before, scoped per stage so each section's keys align
+   independently. */
+.stageGroup {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-top: 4px;
+}
+
+.stageGroup + .stageGroup {
+    border-top: 1px dashed var(--color-border-soft);
+    padding-top: 4px;
+}
+
+.stageHeading {
+    composes: metaCaption from '../typography.module.css';
+    margin: 0;
+    color: var(--color-text-faint-strong);
+    /* stylelint-disable-next-line property-disallowed-list -- micro caption that pairs visually with the dl below; one notch up from metaCaption's 10px to stand out as a section header. */
+    font-weight: 700;
+}
+
 /* Compact two-column key/value dump. `dt`/`dd` floated into a grid so
    the keys stay aligned across multiple rows; `dl` margin reset because
    we're nested inside the label's tight padding. */
@@ -1021,18 +1062,51 @@
     box-sizing: border-box;
 }
 
-.timingVizDiffBarBackendQuant {
+/* Envelope refinement inside the `onsets` stage (raw ADTOF model peak →
+   audio onset-strength local max). */
+.timingVizDiffBarEnvRefine {
+    background: var(--color-pattern-2);
+    color: var(--color-bg-base);
+}
+
+/* Beat-grid alignment (`beats` stage). Coarse pass (envelope phase) and
+   fine pass (onset-snap median) share the same hue family so the two
+   read as "alignment", with the fine pass slightly darker. */
+.timingVizDiffBarAlignCoarse {
+    background: var(--color-pattern-9);
+    color: var(--color-bg-base);
+}
+
+.timingVizDiffBarAlignFine {
+    background: var(--color-pattern-11);
+    color: var(--color-bg-base);
+}
+
+/* `quantise` stage, four passes. Each pass gets its own hue so a
+   multi-pass shift reads as distinct columns instead of one blob. */
+.timingVizDiffBarQuantGeo {
     background: var(--color-pattern-7);
     color: var(--color-bg-base);
 }
 
-.timingVizDiffBarQuant {
+.timingVizDiffBarQuantEnv {
     background: var(--color-pattern-5);
     color: var(--color-bg-base);
 }
 
-.timingVizDiffBarAlign {
-    background: var(--color-pattern-9);
+.timingVizDiffBarQuantGrid {
+    background: var(--color-pattern-12);
+    color: var(--color-bg-base);
+}
+
+.timingVizDiffBarQuantLlm {
+    background: var(--color-pattern-1);
+    color: var(--color-bg-base);
+}
+
+/* Frontend MIDI 1/48 snap inside `from_midi.ts` (post-render). */
+.timingVizDiffBarMidiSnap {
+    background: var(--color-pattern-10);
     color: var(--color-bg-base);
 }
 

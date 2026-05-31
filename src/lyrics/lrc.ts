@@ -36,14 +36,14 @@ export type LyricWord = {
   /** Marker for when our code adjusted `endSec` away from the model's
    *  output. Absent when the rendered value matches the raw value.
    *  With the current ctc-forced-aligner pipeline only `inverted-clamp`
-   *  fires; the other values are reserved for the legacy whisperx
-   *  per-segment aligner so the wire vocabulary stays stable across
-   *  backend changes:
+   *  fires; the other values are reserved for future per-segment
+   *  aligners that might need similar fix-ups, so the wire vocabulary
+   *  stays stable across backend swaps:
    *    - `"inverted-clamp"` model emitted `end <= start`; bumped to
    *                         `start + 0.05s`
-   *    - `"next-start"`     (legacy) end borrowed from next word's start
-   *    - `"segment-end"`    (legacy) end clamped to segment boundary
-   *    - `"epsilon"`        (legacy) last-ditch `start + 0.05s` */
+   *    - `"next-start"`     (reserved) end borrowed from next word's start
+   *    - `"segment-end"`    (reserved) end clamped to segment boundary
+   *    - `"epsilon"`        (reserved) last-ditch `start + 0.05s` */
   endFallback?: 'next-start' | 'segment-end' | 'epsilon' | 'inverted-clamp';
   /** The Latin romaji actually fed to the aligner, present only when
    *  `text` is a non-Latin display surface that differs from what was

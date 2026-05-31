@@ -2,7 +2,7 @@
 #
 # This file holds the always-on global block and the :8001 fan-out.
 # The :5173 frontend block lives in Caddyfile.frontend and is appended
-# at runtime by transcriber/entrypoint.sh unless DISABLE_FRONTEND=1.
+# at runtime by docker/entrypoint.sh unless DISABLE_FRONTEND=1.
 #
 # Caddy listens on the container's only externally-exposed port (8001)
 # and fans out to two internal uvicorn workers:
@@ -11,7 +11,8 @@
 #   POST /transcribe/resume  } -> 127.0.0.1:8002   (pipeline worker)
 #   POST /lyrics/align      /    eager-loads separation models, hosts the
 #                                long-running NDJSON streaming pipeline,
-#                                and lazy-loads whisperx for alignment.
+#                                and lazy-loads the CTC forced aligner
+#                                (MMS-300m) for /lyrics/align.
 #
 #   everything else         -> 127.0.0.1:8003     (api worker)
 #                              no model load, ~0 VRAM. Serves /health,
@@ -20,7 +21,7 @@
 #                              worker's GIL is pinned by a transcription.
 #
 # Both workers are `app.main:app` with WORKER_ROLE set in
-# transcriber/entrypoint.sh. The healthcheck baked into the Dockerfile
+# docker/entrypoint.sh. The healthcheck baked into the Dockerfile
 # (`curl http://localhost:8001/health`) hits Caddy -> api worker, so a
 # successful 200 confirms the routing layer itself.
 

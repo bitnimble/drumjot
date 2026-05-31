@@ -55,7 +55,7 @@ from typing import Any, Literal
 
 from app.debug import DebugSink, beats_dump, onsets_dump
 from app.models import OnsetCandidate
-from app.outputs import OutputSink
+from app.outputs import OutputSink, encode_batch_parallel
 from app.pipeline.adtof_onsets import (
     detect_drum_onsets_for_alignment,
     detect_onsets_adtof,
@@ -66,6 +66,7 @@ from app.pipeline.beats import (
     detect_feel_for_bars,
 )
 from app.pipeline.cymbal_split import split_cymbal_onsets
+from app.pipeline.envelope import OnsetEnvelope, compute_onset_envelope
 from app.pipeline.filter_llm import filter_onsets_all_instruments
 from app.pipeline.hihat_split import split_hihat_onsets
 from app.pipeline.note_provenance import build_note_provenance
@@ -375,10 +376,17 @@ def _do_stems_per(
     # are the second batch of deliverables, available long before the
     # (slow) beats/onsets/transcribe stages run.
     if output_sink is not None:
-        for pitch, path in ctx.per_instrument_stems.items():
-            output_sink.save_flac_from_wav(f"stem_{pitch}", path)
+        # Parallel FLAC encode: 5 per-instrument stems + optional residual
+        # = up to 6 independent libsndfile writes; each releases the GIL
+        # during compression so threading scales across cores. Sequential
+        # cost was ~1-2 s/stem; parallel is dominated by the slowest one.
+        flac_jobs: list[tuple[str, Path]] = [
+            (f"stem_{pitch}", path)
+            for pitch, path in ctx.per_instrument_stems.items()
+        ]
         if ctx.residual_stem is not None:
-            output_sink.save_flac_from_wav("residual", ctx.residual_stem)
+            flac_jobs.append(("residual", ctx.residual_stem))
+        encode_batch_parallel(output_sink.save_flac_from_wav, flac_jobs)
 
 
 def _do_beats(
@@ -523,20 +531,32 @@ def _attach_beat_positions(
 
     Candidates whose timestamps fall outside the tracked range are kept
     with `bar=-1, beat_in_bar=-1.0` and downstream code should treat
-    them as "out of song" / drop.
+    them as "out of song" / drop. Detector-side provenance fields
+    (`raw_model_time`) are forwarded so the per-note debug popup can
+    still surface them post-positioning.
     """
     out: list[OnsetCandidate] = []
     for c in candidates:
         pos = structure.position(c.time)
         if pos is None:
             out.append(
-                OnsetCandidate(time=c.time, strength=c.strength, bar=-1, beat_in_bar=-1.0)
+                OnsetCandidate(
+                    time=c.time,
+                    raw_model_time=c.raw_model_time,
+                    strength=c.strength,
+                    bar=-1,
+                    beat_in_bar=-1.0,
+                )
             )
             continue
         bar, beat = pos
         out.append(
             OnsetCandidate(
-                time=c.time, strength=c.strength, bar=int(bar), beat_in_bar=float(beat)
+                time=c.time,
+                raw_model_time=c.raw_model_time,
+                strength=c.strength,
+                bar=int(bar),
+                beat_in_bar=float(beat),
             )
         )
     return out
@@ -661,6 +681,40 @@ def _do_filter(
         sink.write_json("filter/rejections.json", rejections_dump)
 
 
+# Split lanes share their parent stem's audio, so their envelope comes from
+# the parent's per-instrument stem: open hi-hat (`H`) from the hi-hat stem
+# (`h`), ride (`d`) from the cymbals stem (`c`).
+_ENVELOPE_PARENT_PITCH = {"H": "h", "d": "c"}
+
+
+def _build_quantise_envelopes(
+    ctx: PipelineContext,
+) -> dict[str, OnsetEnvelope]:
+    """Onset-strength envelope per kept pitch, for the quantise re-snap.
+
+    Computed once per source stem (`ctx.per_instrument_stems`) and mapped to
+    every kept pitch, including the split lanes, which read their parent
+    stem (`_ENVELOPE_PARENT_PITCH`). Stems are paths even on a resume, so
+    this works without an audio-bearing `ctx` field. A lane whose stem can't
+    be read is simply omitted (its onsets skip the re-snap).
+    """
+    if not ctx.kept_by_pitch or not ctx.per_instrument_stems:
+        return {}
+    cache: dict[str, OnsetEnvelope | None] = {}
+    envelopes: dict[str, OnsetEnvelope] = {}
+    for pitch in ctx.kept_by_pitch:
+        src = _ENVELOPE_PARENT_PITCH.get(pitch, pitch)
+        stem = ctx.per_instrument_stems.get(src)
+        if stem is None or not stem.exists():
+            continue
+        if src not in cache:
+            cache[src] = compute_onset_envelope(stem)
+        env = cache[src]
+        if env is not None:
+            envelopes[pitch] = env
+    return envelopes
+
+
 def _do_quantise(
     ctx: PipelineContext,
     options: PipelineOptions,
@@ -698,11 +752,15 @@ def _do_quantise(
         ctx.kept_by_pitch,
         ctx.structure,
         use_llm=options.quantise_use_llm,
+        envelopes=_build_quantise_envelopes(ctx),
         cancel_event=ctx.cancel_event,
     )
     log.info(
-        "quantise: geometric shifted %d, off-grid %d, LLM shifted %d (llm_status=%s)",
+        "quantise: geometric shifted %d, envelope shifted %d, grid shifted %d, "
+        "off-grid %d, LLM shifted %d (llm_status=%s)",
         summary.get("geometric_shifted", 0),
+        summary.get("envelope_shifted", 0),
+        summary.get("grid_shifted", 0),
         summary.get("off_grid", 0),
         summary.get("llm_shifted", 0),
         summary.get("llm_status", "?"),
@@ -773,6 +831,8 @@ def _do_transcribe(
         kept_by_pitch=ctx.kept_by_pitch,
         structure=ctx.structure,
         beat_alignment_offset_sec=ctx.structure.align_offset_sec,
+        beat_align_coarse_offset_sec=ctx.structure.align_coarse_offset_sec,
+        beat_align_fine_offset_sec=ctx.structure.align_fine_offset_sec,
         rejected_by_pitch={
             "h": "hihat_split",
             "H": "hihat_split",

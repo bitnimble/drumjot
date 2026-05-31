@@ -217,44 +217,28 @@ _VOCALS_DEFAULT_URL = (
     "https://github.com/TRvlvr/model_repo/releases/download/"
     "all_public_uvr_models/UVR-MDX-NET-Voc_FT.onnx"
 )
-# whisperx's English aligner is torchaudio's WAV2VEC2_ASR_BASE_960H
-# bundle, which torch.hub fetches into `$TORCH_HOME/hub/checkpoints/`.
-# Pre-stage it at the exact filename torch.hub computes from the URL so
-# the runtime `load_state_dict_from_url` is a cache hit. Other-language
-# aligners are still resolved lazily through HuggingFace.
-_WAV2VEC2_EN_URL = (
-    "https://download.pytorch.org/torchaudio/models/"
-    "wav2vec2_fairseq_base_ls960_asr_ls960.pth"
-)
-_WAV2VEC2_EN_FILENAME = "wav2vec2_fairseq_base_ls960_asr_ls960.pth"
 
 
 def _provision_lyrics_assets(models_dir: Path) -> None:
-    """Pre-fetch the assets the /lyrics/align endpoint pulls lazily.
+    """Pre-fetch the vocals separator the /lyrics/align endpoint pulls
+    lazily.
 
-    All three downloads land in the bind-mounted `/models` volume, so a
-    fresh deployment pays the cost once at container start (matching the
+    The download lands in the bind-mounted `/models` volume, so a fresh
+    deployment pays the cost once at container start (matching the
     drum-pipeline weights above) rather than on the first user-facing
-    /lyrics/align call. Each fetch fails soft: a network blip or upstream
-    rename of one asset shouldn't break the drum pipeline, since the
-    runtime loaders will retry the lazy download themselves.
+    /lyrics/align call. Fails soft: a network blip or upstream rename
+    shouldn't break the drum pipeline, since audio-separator will retry
+    the lazy download itself.
 
-      1. Vocals separator (`settings.vocals_model`): direct HTTP fetch
-         from TRvlvr's mirror. Only attempted when the configured
-         filename matches the default; overrides defer to
-         audio-separator's own download path on first /lyrics/align.
-      2. wav2vec2 English aligner: direct HTTP fetch into
-         `<models_dir>/torch/hub/checkpoints/`, where torchaudio's
-         `WAV2VEC2_ASR_BASE_960H.get_model()` looks first.
-      3. faster-whisper transcribe model (`settings.whisper_model`):
-         delegated to `faster_whisper.download_model` so the model-name
-         -> HF repo mapping and the HuggingFace cache layout match
-         exactly what whisperx expects at load time.
+    Only the default vocals filename is pre-fetched; arbitrary overrides
+    defer to audio-separator's own download path on first /lyrics/align.
+
+    Alignment model weights (English wav2vec2-large-robust + multilingual
+    MMS-300m) are loaded through HuggingFace transformers on first
+    /lyrics/align call; they're not pre-staged here because HF's local
+    cache is in a different directory and the lazy load is the only
+    path through `ctc-forced-aligner.load_alignment_model`.
     """
-    # Pre-stage the fp32 vocals separator when the configured model
-    # matches the default; arbitrary overrides defer to audio-separator's
-    # lazy download path on first use. The other lyrics assets below
-    # still get pre-fetched on their own try blocks.
     configured = settings.vocals_model
     if configured == _VOCALS_FP32_FILENAME:
         try:
@@ -270,40 +254,6 @@ def _provision_lyrics_assets(models_dir: Path) -> None:
             "provision: vocals_model=%s differs from default; skipping "
             "pre-fetch (audio-separator will resolve on first use).",
             configured,
-        )
-
-    try:
-        wav2vec2_dest = (
-            models_dir / "torch" / "hub" / "checkpoints" / _WAV2VEC2_EN_FILENAME
-        )
-        _download(_WAV2VEC2_EN_URL, wav2vec2_dest)
-    except Exception as exc:
-        log.warning(
-            "provision: wav2vec2 EN aligner pre-fetch failed (%s); "
-            "whisperx will retry on first English alignment.",
-            exc,
-        )
-
-    try:
-        # Imported lazily because faster_whisper pulls in CTranslate2.
-        # We're already in the pipeline worker (which loads heavy ML
-        # deps moments later), so the cost is on the same axis.
-        import faster_whisper  # type: ignore[import-not-found]
-
-        whisper_cache = models_dir / "whisperx"
-        whisper_cache.mkdir(parents=True, exist_ok=True)
-        log.info(
-            "provision: ensuring faster-whisper model %s is cached in %s",
-            settings.whisper_model, whisper_cache,
-        )
-        faster_whisper.download_model(
-            settings.whisper_model, cache_dir=str(whisper_cache)
-        )
-    except Exception as exc:
-        log.warning(
-            "provision: faster-whisper pre-fetch failed (%s); whisperx "
-            "will retry on first /lyrics/align call.",
-            exc,
         )
 
 

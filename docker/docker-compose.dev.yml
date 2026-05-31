@@ -5,9 +5,9 @@
 # (no rebuild, no image push). The host Caddy still talks to localhost
 # :5173 and gets routed to vite instead of the bundled Caddy SPA.
 #
-# Usage:
+# Usage (run from the repo root):
 #   cp transcriber/.env.example transcriber/.env   # populate ANTHROPIC_API_KEY
-#   docker compose -f docker-compose.dev.yml up --build
+#   docker compose -f docker/docker-compose.dev.yml up --build
 #
 # Routing (same external surface as prod):
 #   host :5173       -> frontend-proxy (Caddy) container :5173
@@ -25,7 +25,7 @@
 #   volume by running `bun install` inside the container. Subsequent
 #   starts reuse it. If you update package.json / bun.lock on the host,
 #   nuke the volume to force a fresh install:
-#     docker compose -f docker-compose.dev.yml down
+#     docker compose -f docker/docker-compose.dev.yml down
 #     docker volume rm drumjot_frontend_dev_node_modules
 # - vite.config.ts pins `allowedHosts` to a hardcoded list. If you want
 #   to reach the dev server through a non-listed hostname, add it
@@ -37,7 +37,7 @@ services:
       file: docker-compose.base.yml
       service: drumjot
     environment:
-      # Tells transcriber/entrypoint.sh to skip Caddyfile.frontend when
+      # Tells docker/entrypoint.sh to skip Caddyfile.frontend when
       # assembling the runtime Caddyfile - the in-container :5173
       # listener never binds, freeing the host port for the dev service
       # below. Explicit overrides any stray value the env_file might
@@ -88,7 +88,7 @@ services:
     ports:
       - 5173:5173
     volumes:
-      - /capsule/config/docker-volume/codebox/home/bitnimble/code/drumjot/Caddyfile.dev:/etc/caddy/Caddyfile:ro
+      - /capsule/config/docker-volume/codebox/home/bitnimble/code/drumjot/docker/Caddyfile.dev:/etc/caddy/Caddyfile:ro
     depends_on:
       - frontend-dev
       - drumjot

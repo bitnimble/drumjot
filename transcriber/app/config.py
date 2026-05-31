@@ -49,8 +49,8 @@ class Settings(BaseSettings):
     # Used ONLY by /lyrics/align when given a full mix. A fast 2-stem
     # (vocals / instrumental) MDX-Net, ~8× faster than running the drum
     # pipeline's BS-Roformer SW just to throw away five of its six stems.
-    # Vocal SDR doesn't need to be pristine for whisperx. Whisper is
-    # robust to bleed; the downstream wav2vec2 forced aligner cares more
+    # Vocal SDR doesn't need to be pristine for forced alignment, which
+    # is robust to bleed; the downstream wav2vec2 forced aligner cares more
     # about *lead vocal preservation* than separation purity, so we pick
     # the throughput-leaning MDX-Net variant rather than Kim_Vocal_2: in
     # practice ~2× faster on GPU with no observable hit to word-level
@@ -216,7 +216,7 @@ class Settings(BaseSettings):
     ]
 
     # Which role this process is playing inside the multi-process Docker
-    # image (see transcriber/entrypoint.sh + transcriber/Caddyfile):
+    # image (see docker/entrypoint.sh + docker/Caddyfile):
     # - `pipeline` (default) = eager-loads the separation models and
     #                          serves `/transcribe` + `/transcribe/resume`.
     #                          Single-process local runs leave it here.
@@ -232,25 +232,12 @@ class Settings(BaseSettings):
     # `auto` = detect CUDA / MPS / CPU; `cuda`, `cpu`, `mps` for explicit.
     device: str = "auto"
 
-    # --- Lyrics alignment (whisperx) ---
-    # Model size for the lyrics-alignment endpoint. `medium` +
-    # `int8_float16` (the default below) uses ~700 MB VRAM peak and gives
-    # near-large word alignment accuracy; comfortable on a 6 GB GPU even
-    # alongside the separator's eager load. `large-v3` uses ~1.5 GB int8
-    # for higher accuracy on noisy/accented vocals; `small` / `tiny` exist
-    # for CPU-only fallback boxes. Loaded lazily on the first
-    # `/lyrics/align` call; the weights cache lives under
-    # `<models_dir>/whisperx/` and survives container restarts via the
-    # standard models-volume mount.
-    whisper_model: str = "medium"
-    # CTranslate2 compute type. `int8_float16` is the standard
-    # low-VRAM-with-CUDA setting; `float16` is fp16 (less accuracy loss,
-    # ~2x VRAM); `int8` for CPU-only boxes. The aligner forces float32 on
-    # CPU regardless because CT2 can't run int8 on CPU.
-    whisper_compute_type: str = "int8_float16"
-    # ISO-639-1 language hint for transcription. Empty string =
-    # auto-detect on the first 30 s of audio (whisperx default); set
-    # explicitly for higher accuracy on short / noisy clips.
+    # --- Lyrics alignment ---
+    # ISO-639-1 language hint for the /lyrics/align endpoint. Empty
+    # string = detect from the caller's lyric text
+    # (`_detect_language_from_text`); set explicitly to override that
+    # (e.g. to force a specific same-script language uroman would
+    # otherwise guess).
     whisper_language: str = ""
 
 

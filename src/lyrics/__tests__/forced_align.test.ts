@@ -1,5 +1,5 @@
 /**
- * Tests for `alignLyricsWhisper`. The client always uploads a multipart
+ * Tests for `alignLyricsForced`. The client always uploads a multipart
  * form with the audio + the caller's lyrics payload; there's no longer
  * a cache-lookup probe (the realign-only flow has no cacheable output).
  *
@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { alignLyricsWhisper } from '../whisper_align';
+import { alignLyricsForced } from '../forced_align';
 
 type FetchCall = { url: string; method: string; body: BodyInit | null | undefined };
 
@@ -49,7 +49,7 @@ function ndjsonResponse(envelopes: object[], status = 200): Response {
   });
 }
 
-describe('alignLyricsWhisper', () => {
+describe('alignLyricsForced', () => {
   test('mix mode uploads the file + lyrics payload', async () => {
     const file = makeFile('mix-content');
     const aligned = [
@@ -70,7 +70,7 @@ describe('alignLyricsWhisper', () => {
       expect(payload).toEqual([{ startSec: 0, text: 'hello' }]);
       return ndjsonResponse([{ type: 'running' }, { type: 'result', data: { lines: aligned } }]);
     };
-    const lines = await alignLyricsWhisper({
+    const lines = await alignLyricsForced({
       kind: 'mix',
       file,
       realign: { lines: [{ startSec: 0, text: 'hello' }] },
@@ -87,7 +87,7 @@ describe('alignLyricsWhisper', () => {
       expect(form.get('mix')).toBeNull();
       return ndjsonResponse([{ type: 'running' }, { type: 'result', data: { lines: [] } }]);
     };
-    await alignLyricsWhisper({
+    await alignLyricsForced({
       kind: 'vocals',
       file,
       realign: { lines: [{ startSec: 0, text: 'foo' }] },
@@ -102,7 +102,7 @@ describe('alignLyricsWhisper', () => {
       expect(form.get('language')).toBe('ja');
       return ndjsonResponse([{ type: 'running' }, { type: 'result', data: { lines: [] } }]);
     };
-    await alignLyricsWhisper({
+    await alignLyricsForced({
       kind: 'mix',
       file,
       realign: { lines: [{ startSec: 0, text: 'こんにちは' }], language: 'ja' },
@@ -117,7 +117,7 @@ describe('alignLyricsWhisper', () => {
       expect(form.get('language')).toBeNull();
       return ndjsonResponse([{ type: 'running' }, { type: 'result', data: { lines: [] } }]);
     };
-    await alignLyricsWhisper({
+    await alignLyricsForced({
       kind: 'mix',
       file,
       realign: { lines: [{ startSec: 0, text: 'hi' }] },
@@ -133,7 +133,7 @@ describe('alignLyricsWhisper', () => {
         headers: { 'Content-Type': 'application/json' },
       });
     await expect(
-      alignLyricsWhisper({
+      alignLyricsForced({
         kind: 'mix',
         file,
         realign: { lines: [{ startSec: 0, text: 'x' }] },
@@ -142,7 +142,7 @@ describe('alignLyricsWhisper', () => {
   });
 });
 
-describe('alignLyricsWhisper NDJSON stream', () => {
+describe('alignLyricsForced NDJSON stream', () => {
   const req = {
     kind: 'mix' as const,
     file: makeFile('x'),
@@ -155,7 +155,7 @@ describe('alignLyricsWhisper NDJSON stream', () => {
     ];
     fetchHandler = () =>
       ndjsonResponse([{ type: 'running' }, { type: 'result', data: { lines: aligned } }]);
-    const lines = await alignLyricsWhisper(req);
+    const lines = await alignLyricsForced(req);
     expect(lines).toEqual(aligned);
   });
 
@@ -167,7 +167,7 @@ describe('alignLyricsWhisper NDJSON stream', () => {
         { type: 'running' },
         { type: 'result', data: { lines: [] } },
       ]);
-    await alignLyricsWhisper(req, { onProgress: (e) => events.push(e) });
+    await alignLyricsForced(req, { onProgress: (e) => events.push(e) });
     expect(events).toEqual([{ kind: 'queued' }, { kind: 'running' }]);
   });
 
@@ -175,7 +175,7 @@ describe('alignLyricsWhisper NDJSON stream', () => {
     const events: Array<{ kind: string }> = [];
     fetchHandler = () =>
       ndjsonResponse([{ type: 'running' }, { type: 'result', data: { lines: [] } }]);
-    await alignLyricsWhisper(req, { onProgress: (e) => events.push(e) });
+    await alignLyricsForced(req, { onProgress: (e) => events.push(e) });
     expect(events).toEqual([{ kind: 'running' }]);
   });
 
@@ -185,11 +185,11 @@ describe('alignLyricsWhisper NDJSON stream', () => {
         { type: 'running' },
         { type: 'error', status_code: 500, message: 'Separator ran but produced no vocals stem.' },
       ]);
-    await expect(alignLyricsWhisper(req)).rejects.toThrow(/no vocals stem/);
+    await expect(alignLyricsForced(req)).rejects.toThrow(/no vocals stem/);
   });
 
   test('throws when the stream ends without a terminal envelope', async () => {
     fetchHandler = () => ndjsonResponse([{ type: 'running' }]);
-    await expect(alignLyricsWhisper(req)).rejects.toThrow();
+    await expect(alignLyricsForced(req)).rejects.toThrow();
   });
 });

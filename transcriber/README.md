@@ -147,8 +147,8 @@ the LLM input/output, etc.), persist every intermediate file by either:
 
 Both modes write into a per-request subdir of the form
 `<DEBUG_DIR>/<timestamp>_<short-id>_<filename-slug>/`. With the default
-`docker-compose.yml` volume mount, this maps 1:1 to the host's debug
-directory so files are immediately playable.
+`docker/docker-compose.*.yml` volume mount, this maps 1:1 to the host's
+debug directory so files are immediately playable.
 
 Layout of a persisted request:
 
@@ -252,10 +252,13 @@ Response (`application/json`):
 
 ## Project layout
 
+All Docker config (Dockerfile, .dockerignore, docker-compose.*.yml,
+Caddyfile*, entrypoint.sh) lives in the repo-root `docker/` folder; the
+build context is the repo root so it can see both `src/` (frontend) and
+`transcriber/` (this dir).
+
 ```
 transcriber/
-├── Dockerfile              # NVIDIA CUDA base + Python deps + app
-├── docker-compose.yml      # local dev orchestration; build context = repo root
 ├── pyproject.toml          # Python package + deps
 ├── uv.lock                 # pinned dependency lockfile (uv)
 ├── .env.example            # ANTHROPIC_API_KEY etc.

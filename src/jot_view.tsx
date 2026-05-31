@@ -199,6 +199,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       onLoadJot={(file) => store.loadJotFile(file)}
                       onLoadMidi={(file) => store.loadMidiFile(file)}
                       onLoadParadb={(file) => store.loadParadbMap(file)}
+                      onScoreParadb={(file) => store.scoreParadbMap(file)}
                       onLoadDebugBundle={(file) => store.loadDebugBundleFile(file)}
                       onLoadAudioTrack={(file) => store.loadAudioTrack(file)}
                       onLoadLyricsFile={(file) => store.loadLyricsFile(file)}

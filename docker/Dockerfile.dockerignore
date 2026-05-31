@@ -1,6 +1,7 @@
-# Files NOT to ship as build context to `transcriber/Dockerfile`.
+# Files NOT to ship as build context to `docker/Dockerfile`.
 # The build context is the repo root, so we have to exclude bulky
-# things explicitly.
+# things explicitly. BuildKit picks up `<Dockerfile>.dockerignore`
+# next to the Dockerfile, so this lives in docker/ alongside it.
 
 # Frontend deps + builds
 node_modules

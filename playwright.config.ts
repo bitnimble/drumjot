@@ -55,6 +55,12 @@ export default defineConfig({
   ],
   webServer: {
     command: `bun run dev -- --port ${E2E_PORT} --strictPort`,
+    // The docker dev frontend runs Vite as root over a bind-mount, so the
+    // default `node_modules/.vite` cache ends up root-owned and a
+    // host-spawned Vite can't rewrite it (EACCES on startup). Point the
+    // e2e server at a writable host-owned cache dir instead; vite.config
+    // reads VITE_CACHE_DIR. Spread process.env so PATH etc. survive.
+    env: { ...process.env, VITE_CACHE_DIR: process.env.VITE_CACHE_DIR ?? '/tmp/drumjot-vite-e2e' },
     url: E2E_URL,
     reuseExistingServer: !process.env.CI,
     // Cold Vite start is ~250ms, but a fresh container may need to warm

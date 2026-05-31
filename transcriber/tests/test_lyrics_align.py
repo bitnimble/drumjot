@@ -6,7 +6,7 @@ English LRC was routed through a no-space-language aligner because
 audio-based detection mis-classified the first 30 s of the vocals
 stem. Tests pin the **majority-by-character-count** routing rule
 end-to-end. Imports are kept narrow so the test module doesn't
-transitively pull in whisperx / torch.
+transitively pull in ctc-forced-aligner / torch.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from app.pipeline.lyrics_align import (
     _partition_words_by_line,
     _preprocess_lines,
     _resolve_cjk_lang,
+    _resolve_cyrillic_lang,
     _stitch_lines,
     lines_to_json,
 )
@@ -116,6 +117,54 @@ def test_detect_language_thai():
     assert _detect_language_from_text(_lines("สวัสดี")) == "th"
 
 
+def test_detect_language_cyrillic_ukrainian():
+    """Ukrainian-specific letters (і ї є ґ) route to uk."""
+    assert _detect_language_from_text(_lines("Соловей співає і")) == "uk"
+    assert _detect_language_from_text(_lines("їхав козак")) == "uk"
+
+
+def test_detect_language_cyrillic_russian():
+    """Russian-specific letters (ы э ё) route to ru; bare Cyrillic with
+    no distinctive marker also defaults to ru."""
+    assert _detect_language_from_text(_lines("ты моё солнце")) == "ru"
+    assert _detect_language_from_text(_lines("Калинка малинка")) == "ru"
+
+
+def test_detect_language_cyrillic_bulgarian():
+    """ъ as a full vowel, without the Russian markers, routes to bg."""
+    assert _detect_language_from_text(_lines("България е тъжна")) == "bg"
+
+
+def test_detect_language_cyrillic_serbian():
+    assert _detect_language_from_text(_lines("Ђурђевдан")) == "sr"
+
+
+def test_detect_language_cyrillic_macedonian():
+    assert _detect_language_from_text(_lines("Ѓоко ќе дојде")) == "mk"
+
+
+def test_detect_language_cyrillic_majority_over_latin_sprinkle():
+    """Mostly-Cyrillic with a Latin ad-lib still routes to the Cyrillic
+    language (majority by character count) - the case that previously
+    fell through to the audio detector."""
+    assert _detect_language_from_text(_lines("Стефанія мамо oh")) == "uk"
+
+
+def test_detect_language_other_script_routes_to_mms_not_none():
+    """A script we don't classify into a language (Greek, Hebrew, ...)
+    must NOT return None - it routes to the multilingual MMS + uroman
+    path via the `und` tag, so we never drop onto the audio detector."""
+    assert _detect_language_from_text(_lines("Καλημέρα κόσμε")) == "und"  # Greek
+    assert _detect_language_from_text(_lines("שלום עולם")) == "und"  # Hebrew
+
+
+def test_resolve_cyrillic_lang_defaults_to_russian():
+    """No distinctive marker -> ru (most common Cyrillic lyric language)."""
+    assert _resolve_cyrillic_lang("привет мир") == "ru"
+    assert _resolve_cyrillic_lang("їхали") == "uk"
+    assert _resolve_cyrillic_lang("тъга") == "bg"
+
+
 def test_detect_language_empty_returns_none():
     """Empty / whitespace / non-alphabetic input returns None so the
     caller falls back to audio-based detection."""
@@ -161,6 +210,19 @@ def test_iso1_to_iso3_maps_text_detector_outputs():
     assert _iso1_to_iso3("ko") == "kor"
     assert _iso1_to_iso3("zh") == "chi"
     assert _iso1_to_iso3("th") == "tha"
+    # Cyrillic-script languages emitted by `_resolve_cyrillic_lang`.
+    assert _iso1_to_iso3("ru") == "rus"
+    assert _iso1_to_iso3("uk") == "ukr"
+    assert _iso1_to_iso3("bg") == "bul"
+    assert _iso1_to_iso3("sr") == "srp"
+    assert _iso1_to_iso3("mk") == "mkd"
+    # The `_OTHER_SCRIPT_LANG` catch-all (`und`) intentionally rides the
+    # unknown-code default to `eng`: uroman romanizes the actual
+    # (non-Latin) script by codepoint, `eng` is a code the aligner
+    # accepts, and the non-`en` tag still routes to MMS, not the English
+    # head. This is correct behaviour, not the degradation the test below
+    # guards against.
+    assert _iso1_to_iso3("und") == "eng"
 
 
 def test_iso1_to_iso3_falls_back_for_unknown_codes():
@@ -269,9 +331,8 @@ def test_stitch_lines_clamps_inverted_word():
     """Defensive clamp for the rare case CTC alignment emits end<=start
     (a held vowel that wav2vec2 absorbed into a neighbour, etc.). The
     end gets bumped by an epsilon and the fallback marker is set so the
-    UI debug tooltip can flag it - same vocabulary the previous
-    whisperx path used so the frontend doesn't have to know which
-    aligner produced the data."""
+    UI debug tooltip can flag it - vocabulary is backend-agnostic so
+    the frontend doesn't have to know which aligner produced the data."""
     input_lines = [InputLine(start_sec=0.0, text="weird")]
     out = _stitch_lines(input_lines, [0], [[_word("weird", 1.0, 0.8)]])
     assert out[0].words is not None

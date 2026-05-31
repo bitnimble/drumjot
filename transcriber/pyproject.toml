@@ -22,19 +22,15 @@ dependencies = [
     # are the real risk. If the madmom install step fails on a fresh
     # build, pin a specific madmom commit known to work on numpy 2.
     "audio-separator[gpu]>=0.44",
-    # PyTorch + torchaudio pinned to the cu128 range so the Docker
-    # install path (which adds the cu128 wheel index) actually finds a
-    # compatible build. The default PyPI wheel currently ships against
-    # CUDA 13.0 and refuses to run on drivers older than ~580. cu128 is
-    # the highest CUDA version most consumer drivers (570+) support.
-    # Capped at <2.9: torchaudio 2.9 dropped the legacy backend API
-    # (`torchaudio.AudioMetaData`, `torchaudio.list_audio_backends`)
-    # that pyannote.audio 3.4.0; pulled in transitively by whisperx
-    #; still calls unconditionally during `import whisperx`. Bump
-    # this cap only after pyannote.audio ships a release that uses
-    # the new torio-backed dispatcher.
-    "torch>=2.8,<2.9",
-    "torchaudio>=2.8,<2.9",
+    # PyTorch + torchaudio. Capped at <2.12 because torch 2.12 dropped
+    # CUDA 12.x wheel builds entirely (the cu128 index only goes up to
+    # 2.11.0), without the cap, `uv lock --upgrade` would land on
+    # 2.12 (default PyPI, CUDA 13 build) while the Docker install
+    # (`--index-url …/whl/cu128`) would fail to find matching wheels.
+    # cu128 is the highest CUDA version most consumer drivers (570+)
+    # support; cu13 needs driver 580+.
+    "torch>=2.8,<2.12",
+    "torchaudio>=2.8,<2.12",
     # ADTOF onset backend (the sole per-stem onset detector). This is
     # the PyTorch port (xavriley/ADTOF-pytorch), NOT the original
     # TensorFlow ADTOF — it's torch-only (deps:
@@ -57,15 +53,11 @@ dependencies = [
     # LLM
     "anthropic>=0.40",
     # Lyrics alignment.
-    # whisperx is kept around purely for the language-detection
-    # fallback (faster-whisper inference over the first 30 s of audio
-    # when our script-based text detector can't decide). The actual
-    # forced-alignment step has moved to `ctc-forced-aligner` below;
-    # whisperx's per-segment wav2vec2 aligner was clipping words to
-    # caller-provided [start, next_start] windows, which broke down
-    # for plain-text inputs (where the windows are synthesized) and
-    # for LRCLIB matches against different cuts.
-    "whisperx>=3.1",
+    # whisperx was removed: forced alignment runs through
+    # `ctc-forced-aligner` below, and language is now resolved from the
+    # caller's lyric text (`_detect_language_from_text`) instead of a
+    # faster-whisper audio pass, so the whole CTranslate2 / pyannote
+    # stack whisperx dragged in is no longer needed.
     # Long-form CTC forced aligner. MahmoudAshraf97's pure-PyTorch
     # package (the original; not the deskpai PyPI port that currently
     # owns the `ctc-forced-aligner` PyPI name). Pinned by commit SHA so
@@ -119,6 +111,24 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["ruff>=0.6", "pytest>=8"]
+
+# PyTorch lives on a dedicated wheel index because the default PyPI
+# wheels now target CUDA 13 (driver 580+); cu128 = CUDA 12.8 = highest
+# CUDA most consumer drivers (570+) handle. The Docker build path uses
+# the same `--index-url https://download.pytorch.org/whl/cu128` install
+# (see docker/Dockerfile), so this keeps `uv sync` on the dev box
+# resolving the SAME wheel set Docker ships. `explicit = true` means
+# packages are only pulled from this index when listed in
+# `[tool.uv.sources]` below; everything else stays on default PyPI.
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchaudio = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
 
 [tool.setuptools.packages.find]
 include = ["app*", "benchmarks*"]

@@ -2,7 +2,7 @@
 
 Exercises `BlobCache.get` / `put_bytes` / `put_path`, the eviction
 sweep, and the rebuild-from-disk path. Keeps imports narrow so the
-module doesn't transitively pull in fastapi / whisperx.
+module doesn't transitively pull in fastapi / ctc-forced-aligner.
 """
 from __future__ import annotations
 

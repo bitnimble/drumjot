@@ -1,32 +1,44 @@
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 
-const JOT_FIXTURE = fileURLToPath(new URL('./fixtures/loop.jot', import.meta.url));
+// A small but non-trivial multi-bar chart (crash, hi-hat with accents +
+// open hits, backbeat snare, kick, a tom fill), enough to exercise the
+// real render path (multiple instrument rows, patterns, bars, modifiers)
+// rather than a one-bar toy. See e2e/fixtures/song.jot.
+const SONG_FIXTURE = fileURLToPath(new URL('./fixtures/song.jot', import.meta.url));
 
-test('app boots and renders the default example', async ({ page }) => {
+test('boots to the empty state with the probe surface wired', async ({ page }) => {
   await page.goto('/');
-  // Bootstrap loads the first registered example ("Simple rock loop").
-  await expect(page.locator('h2')).toContainText('Simple rock loop');
-  // Probe surface is wired.
+  // Boot no longer auto-loads an example; it lands on the empty-state
+  // welcome screen until the user picks something (src/index.tsx).
+  await expect(page.locator('h2')).toContainText('Open a file to get started');
   const wired = await page.evaluate(
     () => typeof (window as any).jotPlayer === 'object' && !!(window as any).drumjot,
   );
   expect(wired).toBe(true);
 });
 
-test('loads a .jot file from disk', async ({ page }) => {
+test('loads a .jot song from disk and renders it', async ({ page }) => {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Load', exact: true }).click();
+  // Real load path from the empty state: the "Open .jot file" CTA drives a
+  // hidden file input.
   const [chooser] = await Promise.all([
     page.waitForEvent('filechooser'),
-    page.getByRole('button', { name: 'Load .jot file' }).click(),
+    page.getByRole('button', { name: 'Open .jot file' }).click(),
   ]);
-  await chooser.setFiles(JOT_FIXTURE);
-  await expect(page.locator('h2')).toContainText('E2E Fixture Loop');
+  await chooser.setFiles(SONG_FIXTURE);
+
+  await expect(page.locator('h2')).toContainText('Smoke Test Song');
+  // The chart uses six kit pieces; each becomes its own instrument row.
+  const rows = page.locator('[data-testid^="instrument-row-"]');
+  await expect.poll(() => rows.count()).toBeGreaterThanOrEqual(4);
+  // And it actually rendered notes (not just empty lanes).
+  await expect.poll(() => page.locator('[data-noseek="true"]').count()).toBeGreaterThan(8);
 });
 
-// The transcribe-flow e2e was removed when the DSL-output backend was
-// deleted (May 2026): the new MIDI-bundle pathway needs a real .zip
-// containing a valid prediction.mid to round-trip through the auto-load
-// path, which requires more mock infrastructure than the unit-style smoke
-// surface was built for. Re-add when a small MIDI/zip fixture is wired up.
+test('loads a built-in example from the empty-state picker', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Simple rock loop' }).click();
+  await expect(page.locator('h2')).toContainText('Simple rock loop');
+  await page.waitForSelector('[data-testid^="instrument-row-"]');
+});

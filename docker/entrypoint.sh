@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Container entrypoint: launch the pipeline worker, the api worker, and
 # Caddy as siblings. If any of the three dies the script exits, which
-# (combined with `restart: unless-stopped` in docker-compose.yml) lets
+# (combined with `restart: unless-stopped` in docker/docker-compose.*.yml) lets
 # the orchestrator restart the whole image cleanly rather than ending up
 # in a half-up state where one process is missing.
 #

@@ -84,7 +84,7 @@ synthetic lists and never touch audio.
 | Module | Responsibility | Purity |
 |---|---|---|
 | `lanes.py` | GM-note→pitch (port of `src/midi/gm.ts::GM_PERCUSSION`) + Paradiddle-class→pitch (port of `src/rlrr/drums.ts::CLASS_TO_DRUM`) + pitch→5-lane fold | pure |
-| `rlrr_read.py` | parse `.rlrr` JSON (encoding sniff, port of `paradb.ts::decodeRlrrText`) → per-lane onset seconds from raw `event.loc`; expose `audioFileData` track refs | pure-ish |
+| `rlrr_read.py` | parse `.rlrr` JSON (encoding sniff, port of `paradb.ts::decodeRlrrText`) → per-lane onset seconds from `event.time` (`eventTimeSeconds`, number-or-string); resolve each event's instrument-instance `name` to a class via the `instruments[]` array; expose `audioFileData` track refs | pure-ish |
 | `paradb_read.py` | `.zip` pack reader via stdlib `zipfile`: pick best-difficulty `.rlrr`, return chart onsets + song/drum audio bytes | pure-ish |
 | `midi_read.py` | `mido` whole-file read → tempo-aware raw onset seconds, ch-9 + all-channel fallback, GM fold (research §4) | pure-ish |
 | `audio_onsets.py` | drum stem → ADTOF reference onsets, all 5 lanes from one inference | I/O, heavy |
@@ -141,13 +141,16 @@ the audio they reference. Mirror `paradb.ts::loadParadbZip` on stdlib
 
 ### 5.3 RLRR chart onsets (`rlrr_read.py`)
 
-`.rlrr` `events` are `{name, loc, vel}` with **`loc` already in absolute
-recording seconds**, the same clock as the audio tracks in the pack, so
-no tempo math is needed (contrast MIDI). Per event: `name` → Paradiddle
-class (strip the trailing instance index, cf. `drums.ts::
-instanceNameToClass`) → pitch → lane. Emit per-lane ascending onset-second
-lists. Unknown classes counted, not fatal. **Use raw `loc`; never the
-quantized grid** `rlrr_to_jot` builds.
+`.rlrr` `events` are `{name, vel, loc, time}` where **`time` is the
+absolute recording seconds** (number or 4-decimal string; `loc` is a
+hit-zone index, always 0, NOT a timestamp). `time` shares the clock of
+the audio tracks in the pack, so no tempo math is needed (contrast
+MIDI). Per event: resolve `name` (an instrument *instance* name) to its
+class via the `instruments[]` array (`{name, class}`), falling back to
+the `BP_<Class>_C_<idx>` regex (`drums.ts::instanceNameToClass`); class
+→ pitch → lane. Emit per-lane ascending onset-second lists. Unknown
+classes counted, not fatal. **Use `event.time`; never the quantized
+grid** `rlrr_to_jot` builds.
 
 ### 5.4 MIDI (`midi_read.py`, secondary test input)
 

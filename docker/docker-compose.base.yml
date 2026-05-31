@@ -1,7 +1,7 @@
 # Shared base for docker-compose.{prod,dev}.yml. Don't invoke this file
 # directly - pick a variant:
-#   docker compose -f docker-compose.prod.yml up --build   # bundled frontend
-#   docker compose -f docker-compose.dev.yml  up --build   # vite dev mount
+#   docker compose -f docker/docker-compose.prod.yml up --build   # bundled frontend
+#   docker compose -f docker/docker-compose.dev.yml  up --build   # vite dev mount
 #
 # What lives here: everything that doesn't vary between prod and dev -
 # image build, container env_file, host volume mounts, non-root user,
@@ -16,12 +16,12 @@
 services:
   drumjot:
     build:
-      # Build context = repo root. The image bundles both the React
-      # frontend (built by the bun stage in the Dockerfile) and the
-      # Python transcriber, so the context needs to see both `src/`
-      # and `transcriber/`.
-      context: .
-      dockerfile: Dockerfile
+      # Build context = repo root (this compose file lives in ./docker/,
+      # hence `..`). The image bundles both the React frontend (built by
+      # the bun stage in the Dockerfile) and the Python transcriber, so
+      # the context needs to see both `src/` and `transcriber/`.
+      context: ..
+      dockerfile: docker/Dockerfile
     image: drumjot:dev
     container_name: drumjot
     # Run as non-root UID:GID 1000:1000 so bind-mounted artifacts (debug,
@@ -37,7 +37,7 @@ services:
       # DISABLE_FRONTEND is intentionally NOT loaded from here - each
       # variant sets it explicitly via `environment:` so the mode
       # toggle isn't accidentally pinned in a shared env file.
-      - transcriber/.env
+      - ../transcriber/.env
     volumes:
       - /codebox-workspace/drumjot/models-cache:/models
       # Debug artifact volume. Files written here by the transcriber
@@ -50,7 +50,7 @@ services:
       # from /debug so the operator can prune debug freely without
       # invalidating live response URLs the frontend is still using.
       - /codebox-workspace/drumjot/outputs:/outputs
-      # Cache for /lyrics/align (separated vocals + whisperx alignment
+      # Cache for /lyrics/align (separated vocals + CTC forced-alignment
       # results). Content-addressed, LRU-bounded. Safe to nuke; entries
       # refill on demand. See `app/cache.py`.
       - /codebox-workspace/drumjot/cache:/cache

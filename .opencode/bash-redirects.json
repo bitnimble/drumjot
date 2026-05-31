@@ -1,0 +1,73 @@
+{
+  "$comment": "Per-project bash redirects consumed by the opencode plugin at ~/code/opencode-plugins-bitnimble/plugins/redirect-bash-commands.ts. Each entry tests every `commands` pattern (`Bash(...)`-style glob, mirrors opencode's permissions.bash syntax) against the proposed bash command; the first match throws and surfaces `reason` back to the agent.",
+  "redirects": [
+    {
+      "commands": [
+        "Bash(bun run typecheck *)",
+        "Bash(bun typecheck *)",
+        "Bash(bun x tsc *)",
+        "Bash(bunx vite *)",
+        "Bash(bunx stylelint *)",
+        "Bash(bunx tsc *)",
+        "Bash(bun tsc *)",
+        "Bash(tsc *)",
+        "Bash(bun test *)",
+        "Bash(bun run test *)",
+        "Bash(bun run lint *)",
+        "Bash(bunx --bun vite *)"
+      ],
+      "reason": "Use `scripts/check-ts` instead of invoking tsc / bun test / stylelint directly. It chains stylelint --fix + tsc --noEmit + bun test in the right cwd; trailing args pass through to `bun test` so single-file iteration still works (`scripts/check-ts src/jot_view/store.test.ts`)."
+    },
+    {
+      "commands": ["Bash(gh *)"],
+      "reason": "Use the GitHub API via the webfetch tool instead of invoking gh directly"
+    },
+    {
+      "commands": [
+        "Bash(cat *)",
+        "Bash(sed *)",
+        "Bash(grep *)",
+        "Bash(find *)",
+        "Bash(rg *)",
+        "Bash(awk *)",
+        "Bash(head *)",
+        "Bash(tail *)"
+      ],
+      "reason": "Use the read, write, edit, grep and glob tools instead of invoking sed, grep, find, rg or awk directly"
+    },
+    {
+      "commands": [
+        "Bash(bun dev *)",
+        "Bash(bun run dev *)",
+        "Bash(bun x playwright *)",
+        "Bash(bunx playwright *)"
+      ],
+      "reason": "Do not start the dev server as the user probably has their own dev server running, and it will fail to bind to the same port. If you need to test something in a browser, use `bun run e2e` to run E2E tests in Playwright instead."
+    },
+    {
+      "commands": ["Bash(npm *)", "Bash(npx *)", "Bash(node *)"],
+      "reason": "Use bun instead of node, npm, npx"
+    },
+    {
+      "commands": [
+        "Bash(source *)",
+        "Bash(pytest *)",
+        "Bash(python -m pytest *)",
+        "Bash(python3 -m pytest *)",
+        "Bash(uv run pytest *)",
+        "Bash(uvx pytest *)",
+        "Bash(.venv/bin/pytest *)",
+        "Bash(transcriber/.venv/bin/pytest *)",
+        "Bash(.venv/bin/ruff *)",
+        "Bash(./.venv/bin/ruff *)",
+        "Bash(./.venv/bin/pytest *)",
+        "Bash(.venv/bin/python -m pytest *)"
+      ],
+      "reason": "Use scripts in the scripts/ folder instead of running pytest or python compile directly"
+    },
+    {
+      "commands": ["Bash(echo \"rc=$?\")", "Bash(echo \"EXIT=${PIPESTATUS[0]}\")"],
+      "reason": "Use exit=$? to get the exit code of the last command"
+    }
+  ]
+}

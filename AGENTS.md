@@ -25,7 +25,7 @@ verified corrections to the state below.
   specs an offline tool that scores externally-sourced MIDI against a
   drum stem (per-lane soft-cost monotonic DTW + an ICP correction loop).
 - A working-tree **Docker restructure** toward a single all-in-one
-  container (root `Dockerfile`, `docker-compose.{base,dev,prod}.yml`)
+  container (`docker/Dockerfile`, `docker/docker-compose.{base,dev,prod}.yml`)
   plus lyrics-alignment and frontend color-picker work is **uncommitted**
   and deliberately NOT documented here until it lands.
 
@@ -197,9 +197,9 @@ drumjot/
 ├── .mcp.json                       Project-scoped @playwright/mcp server.
 └── transcriber/                    Python backend (FastAPI + Docker).
     ├── README.md                   Service-level docs (formats, API, perf).
-    ├── Dockerfile / compose        Being restructured to a single root
-    │                               all-in-one container (uncommitted; see
-    │                               root Dockerfile + docker-compose.*.yml).
+    ├── Dockerfile / compose        All docker config lives in the
+    │                               repo-root `docker/` folder (see
+    │                               docker/Dockerfile + docker/docker-compose.*.yml).
     │                               Transcriber runtime is pure Python; no
     │                               bun in the runtime image.
     ├── pyproject.toml              Deps: fastapi, audio-separator[gpu],
@@ -1175,6 +1175,18 @@ cached on `_viewportWidth` / `_viewportHeight` / `_contentWidth` /
 docstring on the `scrollX` field in
 [src/jot_view/store.ts](src/jot_view/store.ts) for the full rationale.
 
+### 5.10 Score stacking, z-index layers, and overlay clipping
+
+The score's stacking model is subtle: `.scrollViewport`'s `transform` is the
+root stacking context, rows are equal-z siblings (so a lower row paints over
+an upper one), and `.bar`'s `content-visibility: auto` *clips* any overflowing
+descendant (`contain: paint`) regardless of `overflow`. Selection popovers stay
+visible via two `data-note-label-open`-keyed rules, a row-lift
+(mixer.module.css) and a per-bar paint-containment opt-out (score.module.css).
+Before adding any overlay/popover/badge that escapes its bar or row, read
+[docs/score-stacking.md](docs/score-stacking.md) (full z-index ladder + the
+contract). Regression test: `e2e/popover-visibility.spec.ts`.
+
 **The rule**: in any render, effect, MobX reaction, or per-frame /
 per-scroll / per-zoom code path, **do not read DOM layout metrics**.
 That means no `scrollLeft` / `scrollTop` / `clientWidth` /
@@ -1426,7 +1438,7 @@ preprocessing. Tests cover every spec example.
 ## 8. Known limitations and gotchas
 
 1. **madmom installs from a git main branch**, not from PyPI — the
-   last PyPI release (0.16.1) predates modern Python. The Dockerfile
+   last PyPI release (0.16.1) predates modern Python. The docker/Dockerfile
    pins this. If install breaks in a future Python, fallback paths in
    `beats.py` will use librosa beat tracking (no downbeat detection),
    degrading per-bar feel detection to default-`straight16`. A second

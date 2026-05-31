@@ -5,11 +5,11 @@ using `ctc-forced-aligner` (MahmoudAshraf97/ctc-forced-aligner). The
 package runs a wav2vec2-family CTC model over the FULL audio in one
 pass (with internal chunking + posterior stitching) and a single
 global Viterbi alignment of all the caller's lyric text against the
-resulting posteriors. The benefit over the previous whisperx per-line
-approach is that wav2vec2 picks each word's actual audio position
-instead of being constrained to a `[line.start_sec, next_line.start_sec]`
-search window - which broke down for plain-text inputs (synthesized
-timestamps) and for LRCLIB matches against a different cut.
+resulting posteriors. wav2vec2 picks each word's actual audio position
+across the whole song, instead of being constrained to a
+`[line.start_sec, next_line.start_sec]` search window - which breaks
+down for plain-text inputs (synthesized timestamps) and for LRCLIB
+matches against a different cut.
 
 The CTC checkpoint is dispatched per-language by `_pick_alignment_model`:
 
@@ -30,10 +30,11 @@ at runtime by `generate_emissions`, model-agnostic) and the same
 compatible: MMS uses uroman-romanized Latin chars and
 wav2vec2-large-robust uses lowercase Latin + space + apostrophe.
 
-Whisperx is still pulled in for the language-detect fallback (a
-faster-whisper inference over the first 30 s of audio when our script-
-based text detector can't decide); we don't use whisperx's wav2vec2
-aligner anymore.
+Language is resolved entirely from the caller's lyric text by
+`_detect_language_from_text` (script ranges + distinctive-letter
+heuristics), so there is no audio-based language detector: every
+script with letters routes to the MMS + uroman path, and only
+genuinely letter-free text falls back to a plain `en` default.
 
 Models are loaded **lazily** on the first /lyrics/align request rather
 than eagerly at startup; the existing separator stack already eats most
@@ -41,12 +42,11 @@ of the GPU's wake-up budget, and lyrics alignment is an optional, on-
 demand feature. The aligner keeps the loaded models around for
 subsequent requests so warm-call latency drops to inference time only.
 
-Memory budget on a 6 GB consumer GPU (e.g. GTX 1660 Super, see
-config.py::whisper_compute_type rationale): the separator pipeline
-unloads its model between stages, so when alignment runs the GPU has
-effectively ~5 GB free. MMS-300m at fp16 peaks at ~600 MB; faster-
-whisper `medium` int8_float16 (for language detection) peaks at
-~700 MB and unloads after the detection pass.
+Memory budget on a 6 GB consumer GPU (e.g. GTX 1660 Super): the
+separator pipeline unloads its model between stages, so when alignment
+runs the GPU has effectively ~5 GB free. MMS-300m at fp16 peaks at
+~600 MB and the English wav2vec2-large-robust head at ~650 MB, both
+comfortably within that budget.
 """
 
 from __future__ import annotations
@@ -84,20 +84,19 @@ class LyricWord:
     # Raw MMS-300m outputs before any clamping. With the ctc-forced-
     # aligner path these mirror the final `start_sec` / `end_sec` in
     # the common case because the aligner always emits both edges; the
-    # fields are still optional on the wire because earlier whisperx
-    # output could omit them (and to leave room for future aligners
-    # that don't emit both). Kept so the UI debug tooltip can show
-    # "what the model said" vs "what we render" without the consumer
-    # having to know our substitution rules.
+    # fields stay optional on the wire to leave room for future
+    # aligners that may not emit both. Kept so the UI debug tooltip can
+    # show "what the model said" vs "what we render" without the
+    # consumer having to know our substitution rules.
     raw_start_sec: float | None = None
     raw_end_sec: float | None = None
     # Marker for when our code adjusted `end_sec` away from what the
     # model emitted. None means the rendered value matches the raw
     # value. With ctc-forced-aligner the only path that fires today is
     # `inverted-clamp`; the `next-start` / `segment-end` / `epsilon`
-    # values are reserved for older whisperx-style outputs (the wire
-    # vocabulary stays stable so the frontend doesn't have to know
-    # which aligner produced the data):
+    # values are reserved for future aligners whose outputs may need
+    # similar fix-ups (the wire vocabulary stays stable so the
+    # frontend doesn't have to know which aligner produced the data):
     #   - "inverted-clamp": model emitted end <= start; bumped to
     #                       start + 0.05s
     #   - "next-start"    : (legacy) end borrowed from next word's start
@@ -135,12 +134,10 @@ class InputLine:
     start_sec: float
     text: str
 
-# Audio sample rate the CTC aligner + whisperx language detector both
-# normalise every input to. Used here to slice the first 30 s of audio
-# for language detection without having to read the original audio's
-# sample rate.
+# Audio sample rate the CTC aligner normalises every input to. Used to
+# convert frame counts to seconds in the audio-stats log without having
+# to read the original audio's sample rate.
 _AUDIO_SAMPLE_RATE = 16000
-_LANGUAGE_DETECT_SECONDS = 30
 # Batch size handed to ctc_forced_aligner.generate_emissions: how many
 # chunks of audio are pushed through the model in parallel. Each chunk
 # is ~30 s, so batch_size=4 keeps peak VRAM bounded while still being
@@ -181,16 +178,12 @@ _ALIGN_MODEL_ENGLISH = "facebook/wav2vec2-large-robust-ft-libri-960h"
 class LyricsAligner:
     """Lazy-loaded forced-alignment wrapper.
 
-    Two model groups are loaded and held in memory:
-
-      - `align_model` + `align_tokenizer`: MMS-300m multilingual CTC
-        aligner via `ctc-forced-aligner`. ONE model handles every
-        language; the per-language wav2vec2 pinning that whisperx
-        required is gone.
-      - `transcribe_model`: faster-whisper (CTranslate2) Whisper sized
-        per `settings.whisper_model`. Used ONLY for the language-detect
-        fallback when our script-based text detector returns None
-        (audio-only LRCs etc.). Loaded on first detect call, kept warm.
+    The `align_model` + `align_tokenizer` pair (MMS-300m multilingual
+    CTC aligner via `ctc-forced-aligner`, plus the English-specialised
+    wav2vec2 head) is loaded and held in memory. ONE multilingual model
+    handles every language with no per-language wav2vec2 pinning, and
+    language is resolved from the caller's text alone (no audio-based
+    detector).
 
     Thread safety: callers may invoke `realign_text` concurrently, but
     GPU model inference is single-threaded; we serialise requests on
@@ -200,7 +193,6 @@ class LyricsAligner:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._transcribe_model: Any | None = None
         # Lazy-loaded CTC aligners keyed by HuggingFace model path
         # (`None` selects the package's built-in default = MMS-300m).
         # Each entry is built on first request that routes to it; both
@@ -209,13 +201,11 @@ class LyricsAligner:
         # respectively, well within the alignment-stage VRAM budget.
         self._align_models: dict[str | None, tuple[Any, Any]] = {}
         self._device: str | None = None
-        self._compute_type: str | None = None
 
     def _resolve_device(self) -> str:
-        """Pick the device the alignment + detection models run on.
-        `auto` ≡ `cuda` if available, else `cpu`. faster-whisper
-        doesn't support MPS today, so an `mps` setting silently
-        downgrades to CPU."""
+        """Pick the device the CTC alignment models run on. `auto` ≡
+        `cuda` if available, else `cpu`. MPS isn't exercised for the
+        aligner today, so an `mps` setting silently downgrades to CPU."""
         if self._device is not None:
             return self._device
         configured = settings.device.lower()
@@ -223,8 +213,7 @@ class LyricsAligner:
             self._device = configured
         elif configured == "mps":
             log.warning(
-                "lyrics: device=mps not supported by faster-whisper; "
-                "falling back to CPU"
+                "lyrics: device=mps not supported; falling back to CPU"
             )
             self._device = "cpu"
         else:  # auto
@@ -235,43 +224,6 @@ class LyricsAligner:
             except Exception:
                 self._device = "cpu"
         return self._device
-
-    def _resolve_compute_type(self, device: str) -> str:
-        """CTranslate2 compute type for the language-detect Whisper
-        model. int8_float16 is invalid on CPU (CT2 has no int8 CPU
-        kernel); fall back to plain int8 there."""
-        if self._compute_type is not None:
-            return self._compute_type
-        if device == "cpu":
-            self._compute_type = "int8"
-        else:
-            self._compute_type = settings.whisper_compute_type
-        return self._compute_type
-
-    def _load_transcribe(self) -> Any:
-        if self._transcribe_model is not None:
-            return self._transcribe_model
-        # Imported lazily so `import app.pipeline.lyrics_align` doesn't
-        # pull in 300+ MB of CT2 / pyannote when the endpoint isn't used.
-        import whisperx  # type: ignore[import-not-found]
-
-        device = self._resolve_device()
-        compute_type = self._resolve_compute_type(device)
-        download_root = settings.models_dir / "whisperx"
-        download_root.mkdir(parents=True, exist_ok=True)
-        log.info(
-            "lyrics: loading language-detect model %s "
-            "(device=%s, compute_type=%s)",
-            settings.whisper_model, device, compute_type,
-        )
-        model = whisperx.load_model(
-            settings.whisper_model,
-            device,
-            compute_type=compute_type,
-            download_root=str(download_root),
-        )
-        self._transcribe_model = model
-        return model
 
     def _load_ctc_aligner(
         self, model_path: str | None = None,
@@ -366,12 +318,6 @@ class LyricsAligner:
         """Move every loaded CTC aligner to CPU. Idempotent and a
         no-op when no aligner has been loaded yet.
 
-        The faster-whisper language-detect model is intentionally
-        skipped: it's a CTranslate2 wrapper without a `.to()` path,
-        and its ~700 MB footprint is small enough to tolerate when the
-        bigger models are off the GPU. Fully unloading it would
-        defeat the warm-cache point.
-
         Callers must hold the process-wide GPU lock so an in-flight
         `realign_text` isn't mid-`generate_emissions` on the model
         being moved. See `app.pipeline.gpu_park.park_for_transcribe`."""
@@ -401,11 +347,10 @@ class LyricsAligner:
         timings from scratch via CTC forced alignment. The full audio
         is aligned in ONE call - no per-line `[start, next_start]`
         windows - so each word lands at the audio position MMS picked,
-        not clamped to the caller's rough timestamps. This is the key
-        win over the previous whisperx-per-segment approach, which
-        broke down hard for plain-text inputs (where caller timestamps
-        are evenly synthesised) and for LRCLIB matches against a
-        different cut of the same song.
+        not clamped to the caller's rough timestamps. Critical for
+        plain-text inputs (where caller timestamps are evenly
+        synthesised) and for LRCLIB matches against a different cut of
+        the same song; both would otherwise mis-window the aligner.
 
         `language` overrides automatic detection; pass it whenever the
         caller knows (e.g. lifted from a lyrics-file metadata tag). When
@@ -440,16 +385,15 @@ class LyricsAligner:
         )
 
         with self._lock:
-            # Resolve language first so the CTC checkpoint can be
-            # picked accordingly. The audio-based fallback uses
-            # whisperx.load_audio internally and doesn't depend on the
-            # CTC model being loaded, so we can do detection before
-            # touching the aligner.
+            # Resolve language first so the CTC checkpoint can be picked
+            # accordingly. Detection is text-only (`input_lines`); the
+            # final `"en"` default only fires for letter-free text, where
+            # any choice romanizes to nothing anyway.
             language_code = (
                 language
                 or settings.whisper_language
                 or _detect_language_from_text(input_lines)
-                or self._detect_language_via_audio(audio_path)
+                or "en"
             )
             iso3 = _iso1_to_iso3(language_code)
 
@@ -622,23 +566,6 @@ class LyricsAligner:
                 input_lines, non_empty_indices, partitioned, partitioned_surfaces,
             )
 
-    def _detect_language_via_audio(self, audio_path: Path) -> str:
-        """Fallback language detection: run a single Whisper pass on
-        the leading 30 s of audio purely to harvest the detected
-        language. Returns `'en'` when the detector emits nothing
-        (silent / instrumental clip)."""
-        import whisperx  # type: ignore[import-not-found]
-
-        transcribe = self._load_transcribe()
-        audio = whisperx.load_audio(str(audio_path))
-        slice_len = _LANGUAGE_DETECT_SECONDS * _AUDIO_SAMPLE_RATE
-        detect_slice = audio[:slice_len] if len(audio) > slice_len else audio
-        result = transcribe.transcribe(
-            detect_slice, batch_size=1, language=None
-        )
-        return result.get("language") or "en"
-
-
 def _resolve_cjk_lang(text: str) -> str:
     """Decide whether glyph-ambiguous CJK (kanji/hanzi, identical between
     Japanese and Traditional Chinese) in `text` should be read as
@@ -669,21 +596,80 @@ def _resolve_cjk_lang(text: str) -> str:
     return "ja"
 
 
+# Distinctive letters that disambiguate the major Cyrillic-script
+# languages, mirroring `_SIMPLIFIED_CHINESE_MARKERS` for CJK. Each set
+# holds characters that appear in one language's orthography but not the
+# others we route, so a single occurrence tips the whole text. uroman
+# romanizes Cyrillic by codepoint regardless, so this only refines the
+# per-language hint (e.g. Ukrainian г -> "h" vs Russian г -> "g"); a miss
+# degrades to a slightly different romanization, not a failure.
+_CYRILLIC_UKRAINIAN_MARKERS = frozenset("іїєґ")
+_CYRILLIC_RUSSIAN_MARKERS = frozenset("ыэё")
+_CYRILLIC_SERBIAN_MARKERS = frozenset("ђћ")
+_CYRILLIC_MACEDONIAN_MARKERS = frozenset("ѓќѕ")
+
+
+def _resolve_cyrillic_lang(text: str) -> str:
+    """Pick a specific Cyrillic-script language from `text` via
+    distinctive-letter markers, for the uroman romanization hint on the
+    MMS alignment path. Returns an ISO-639-1 code (`uk` / `ru` / `bg` /
+    `sr` / `mk`), defaulting to `ru` (the most common Cyrillic lyric
+    language) when no distinctive marker is present. Most-specific
+    scripts are checked first; mixed/contradictory marker sets are rare
+    in real lyrics and resolve to whichever is checked first."""
+    chars = {ch.lower() for ch in text}
+    if chars & _CYRILLIC_MACEDONIAN_MARKERS:
+        return "mk"
+    if chars & _CYRILLIC_SERBIAN_MARKERS:
+        return "sr"
+    if chars & _CYRILLIC_UKRAINIAN_MARKERS:
+        return "uk"
+    if chars & _CYRILLIC_RUSSIAN_MARKERS:
+        return "ru"
+    if "ъ" in chars:
+        # Bulgarian leans on ъ as a full vowel and lacks the Russian
+        # markers above (ы / э / ё), which would already have returned
+        # "ru".
+        return "bg"
+    return "ru"
+
+
+# Sentinel language tag for "alphabetic text in a script we don't
+# classify into a specific language" (Greek, Hebrew, Indic, Armenian,
+# Georgian, ...). It deliberately rides two existing defaults rather than
+# naming a language: `_pick_alignment_model` routes any non-`en` tag to
+# the MMS-300m multilingual head, and `_iso1_to_iso3` maps any unknown
+# tag to `eng` - a valid ISO-639-3 that ctc-forced-aligner's uroman pass
+# accepts. uroman romanizes by codepoint (the language hint only refines
+# a few ambiguous letters), so an unclassified script still romanizes
+# correctly and aligns against MMS. The point is purely to stop returning
+# None - which would drop the request onto the audio language detector -
+# whenever the lyric text has *any* letters.
+_OTHER_SCRIPT_LANG = "und"
+
+
 def _detect_language_from_text(input_lines: list[InputLine]) -> str | None:
     """Cheap, deterministic language detection from caller-provided
     lyric text. Used by `realign_text` so we don't have to trust
-    Whisper's audio-based detector - which mis-classifies the first
-    30 s of a vocals stem if the intro is silent / instrumental /
-    background-vocal-only, and which on noise has been observed to
-    return a `LANGUAGES_WITHOUT_SPACES` code even for English audio.
-    That mis-classification then shatters every word into a per-letter
-    "word" because whisperx tokenises no-space languages character-by-
-    character (each char becomes its own alignment unit and its own
-    output entry).
+    an audio-based detector - which mis-classifies the first 30 s of
+    a vocals stem if the intro is silent / instrumental / background-
+    vocal-only, and which on noise has been observed to return a
+    `LANGUAGES_WITHOUT_SPACES` code even for English audio. That
+    mis-classification then shatters every word into a per-letter
+    "word" because the CTC aligner tokenises no-space languages
+    character-by-character (each char becomes its own alignment unit
+    and its own output entry).
 
-    Returns an ISO-639-1 code, or `None` when the text doesn't contain
-    any alphabetic characters; the caller then falls back to the
-    audio-based detector.
+    Returns an ISO-639-1 code, or `None` only when the text contains no
+    alphabetic characters at all (pure punctuation / digits / empty); the
+    caller then falls back to the audio-based detector. Any script with
+    letters resolves here instead - Latin -> `en`, the CJK / Korean /
+    Thai blocks as before, Cyrillic to a specific language via
+    `_resolve_cyrillic_lang`, and every other script (Greek, Hebrew,
+    Indic, ...) to the `_OTHER_SCRIPT_LANG` catch-all. All of the
+    non-`en` codes route to the MMS-300m + uroman pathway, so we no
+    longer drop a non-Latin lyric onto the (slower, less reliable) audio
+    detector just because its script wasn't counted.
 
     **Routing rule: majority by character count.** Each alphabetic
     character votes for one language; the language with the most votes
@@ -717,14 +703,19 @@ def _detect_language_from_text(input_lines: list[InputLine]) -> str | None:
     if not text.strip():
         return None
 
-    # Resolve glyph-ambiguous CJK to ja/zh once for the whole text - one
-    # kana or one marker tips ALL the ambiguous-CJK chars in the same
-    # direction (see _resolve_cjk_lang).
+    # Resolve glyph-ambiguous scripts to a single language once for the
+    # whole text - one distinctive marker tips every ambiguous char in
+    # the same direction (see _resolve_cjk_lang / _resolve_cyrillic_lang).
     cjk_lang = _resolve_cjk_lang(text)
+    cyrillic_lang = _resolve_cyrillic_lang(text)
 
     # Second pass: count alphabetic characters by resolved language.
-    # `en` is listed first so it wins pure ties (see docstring).
+    # `en` is listed first so it wins pure ties; the non-Latin script
+    # buckets are seeded after it so they never steal a tie from Latin
+    # (see docstring).
     counts: dict[str, int] = {"en": 0, "ja": 0, "ko": 0, "th": 0, "zh": 0}
+    counts.setdefault(cyrillic_lang, 0)
+    counts.setdefault(_OTHER_SCRIPT_LANG, 0)
     for ch in text:
         cp = ord(ch)
         if 0x3040 <= cp <= 0x30FF:
@@ -735,8 +726,14 @@ def _detect_language_from_text(input_lines: list[InputLine]) -> str | None:
             counts["th"] += 1
         elif 0x4E00 <= cp <= 0x9FFF:
             counts[cjk_lang] += 1
+        elif 0x0400 <= cp <= 0x04FF or 0x0500 <= cp <= 0x052F:
+            counts[cyrillic_lang] += 1
         elif ch.isalpha() and cp < 0x250:
             counts["en"] += 1
+        elif ch.isalpha():
+            # Any other script with text (Greek, Hebrew, Indic, ...).
+            # Routes through MMS + uroman, which romanizes by codepoint.
+            counts[_OTHER_SCRIPT_LANG] += 1
 
     if sum(counts.values()) == 0:
         return None
@@ -1370,11 +1367,14 @@ def _diagnose_get_spans_failure(
 # ISO-639-1 (Whisper / our text detector) -> ISO-639-3 (the language
 # code expected by ctc_forced_aligner.preprocess_text, which feeds MMS
 # romanization). Covers the codes _detect_language_from_text emits
-# (en/ja/ko/zh/th) plus a few common Latin-script tags so callers can
-# pin specific Romance / Germanic languages through `settings.
-# whisper_language` or the request's `language` field. Anything else
-# falls back to `eng` because MMS handles unspecified Latin text fine
-# but barfs on an unknown ISO-639-3 code.
+# (en/ja/ko/zh/th plus the Cyrillic set uk/ru/bg/sr/mk) plus a few common
+# Latin-script tags so callers can pin specific Romance / Germanic
+# languages through `settings.whisper_language` or the request's
+# `language` field. Anything else - including the `_OTHER_SCRIPT_LANG`
+# (`und`) catch-all - falls back to `eng`, which is deliberate: MMS
+# handles unspecified text fine and uroman romanizes the real script by
+# codepoint, but the aligner barfs on an *unknown* ISO-639-3 code, so an
+# unrecognized tag must resolve to a valid one rather than pass through.
 _ISO639_1_TO_3 = {
     "en": "eng",
     "ja": "jpn",
@@ -1397,6 +1397,11 @@ _ISO639_1_TO_3 = {
     "fi": "fin",
     "pl": "pol",
     "ru": "rus",
+    # Cyrillic-script languages emitted by `_resolve_cyrillic_lang`.
+    "uk": "ukr",
+    "bg": "bul",
+    "sr": "srp",
+    "mk": "mkd",
     "vi": "vie",
     "id": "ind",
     "ms": "msa",
@@ -1629,9 +1634,9 @@ def _stitch_lines(
             # neighbouring word, etc.); clamp so the cell never inverts
             # downstream. Preserve the model's raw end in `raw_end_sec`
             # so the UI tooltip can show what the aligner emitted vs
-            # what we use. Marker vocabulary stays stable across
-            # backends so the frontend doesn't have to know whether
-            # ctc-forced-aligner or whisperx produced the data.
+            # what we use. Marker vocabulary stays stable across any
+            # future aligner backend so the frontend doesn't have to
+            # know which one produced the data.
             if raw_end <= start_sec:
                 end_sec = start_sec + 0.05
                 fallback: str | None = "inverted-clamp"

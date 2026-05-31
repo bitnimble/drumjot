@@ -10,7 +10,7 @@
 #            proxy so the browser bundle stays origin-agnostic).
 #   :8001  -> transcriber router. Splits POST /transcribe* / /lyrics/align
 #            into the pipeline worker (:8002) and everything else into
-#            the api worker (:8003). See transcriber/Caddyfile.
+#            the api worker (:8003). See docker/Caddyfile.
 #
 # Base: CUDA runtime on Ubuntu 22.04. Works on any host with NVIDIA driver
 # 555+ and the NVIDIA Container Toolkit installed. Falls back to CPU
@@ -108,14 +108,16 @@ RUN python3.11 -m pip install --upgrade pip setuptools wheel \
 # BEFORE the editable install so audio-separator's `torch` dep is
 # satisfied by this CUDA-12.8 build rather than the default PyPI wheel
 # (which now ships against CUDA 13.0 and refuses to run on drivers
-# older than ~580). The torch pin matches what cu128 carries so the
-# subsequent `pip install -e .` won't try to upgrade torch out of range.
-# Pinned versions live in this RUN string, not pyproject.toml, so an
+# older than ~580). The version range matches pyproject.toml so the
+# subsequent `pip install -e .` won't try to upgrade torch out of range
+# (the <2.12 upper cap exists because torch 2.12 dropped cu128 wheel
+# builds entirely - if you bump it, drop the cap in pyproject too).
+# The range lives in this RUN string, not pyproject.toml, so an
 # unrelated dep bump on the editable install doesn't blow away the
 # multi-GB torch wheel cache.
 RUN python3.11 -m pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cu128 \
-        'torch>=2.8,<2.9' 'torchaudio>=2.8,<2.9'
+        'torch>=2.8,<2.12' 'torchaudio>=2.8,<2.12'
 
 # Layer 3: editable install of the transcriber package. This is the
 # only layer that re-runs when pyproject.toml changes; torch/torchaudio
@@ -129,55 +131,11 @@ RUN python3.11 -m pip install --no-cache-dir \
         --extra-index-url https://download.pytorch.org/whl/cu128 \
         -e .
 
-# `faster-whisper` (transitive dep of `whisperx`, which we use for the
-# /lyrics/align language-detect fallback) declares plain `onnxruntime`
-# as a hard install_requires for its Silero VAD; that lands alongside
-# the `onnxruntime-gpu` brought in by `audio-separator[gpu]`. Both
-# wheels install into the same `onnxruntime/` package directory and
-# share `onnxruntime_pybind11_state.so`; whichever was installed last
-# wins, and in our resolution order the CPU build ends up shadowing
-# the GPU one. `get_available_providers()` then returns just CPU +
-# Azure and the vocal separator silently runs on CPU at 100% util
-# with multi-GB RSS growth. There is no env var or import-time
-# mechanism to force the GPU build (microsoft/onnxruntime#7313,
-# qdrant/fastembed#608). Uninstall both wheels (they share files -
-# removing only one corrupts the directory) and reinstall just the
-# GPU wheel, which exposes the same `onnxruntime` import name and
-# provides BOTH CUDA and CPU ExecutionProviders, so consumers that
-# only know the plain name (faster-whisper's VAD path) still work.
-RUN python3.11 -m pip uninstall -y onnxruntime onnxruntime-gpu \
-    && python3.11 -m pip install --no-cache-dir onnxruntime-gpu
-
 # ADTOF pretrained weights are NOT provisioned separately: the
 # adtof_pytorch wheel bundles its Frame_RNN weights, so they come in
 # with the editable install above. `_load_model()` still fails loud
 # (then the request falls back to librosa) if the package or its
 # bundled weights are somehow unavailable.
-
-# whisperx ships a Lightning v1.5.4-era checkpoint
-# (`whisperx/assets/pytorch_model.bin`). Lightning 2.x migrates it
-# in-memory on every load and prints a noisy "automatically upgraded"
-# warning. Persist the migrated format inside the image so the runtime
-# loader has nothing to do. Path is resolved from the package itself so
-# the step doesn't bake in a hard-coded site-packages location that
-# could drift across Python versions / install layouts.
-#
-# We bypass Lightning's `upgrade_checkpoint` CLI and call its migration
-# function directly for two reasons the CLI can't handle:
-#
-#   1. CUDA-device tensors: the bundled checkpoint was saved on CUDA;
-#      we force `map_location='cpu'` because `docker build` has no GPU.
-#   2. PyTorch 2.6 flipped `torch.load`'s default to `weights_only=True`,
-#      and the checkpoint contains an `omegaconf.ListConfig` instance
-#      that isn't in the safe-globals allowlist. The CLI calls
-#      `torch.load(...)` without `weights_only=`, so it hits the new
-#      restrictive default with no override knob. The whisperx asset
-#      is a trusted bundled file (shipped via pip in the layer above),
-#      so disabling weights_only here is exactly the intended escape
-#      hatch; not a security regression.
-RUN WHISPERX_DIR=$(python3.11 -c "import whisperx, os; print(os.path.dirname(whisperx.__file__))") \
-    && python3.11 -c "import sys, torch; from lightning.pytorch.utilities.migration import migrate_checkpoint; p = sys.argv[1]; ckpt = torch.load(p, map_location='cpu', weights_only=False); ckpt, _ = migrate_checkpoint(ckpt); torch.save(ckpt, p); print(f'upgraded {p}')" \
-        "$WHISPERX_DIR/assets/pytorch_model.bin"
 
 # Python app + prompts.
 COPY transcriber/app/ ./app/
@@ -188,9 +146,9 @@ COPY transcriber/prompts/ ./prompts/
 # frontend snippet is a separate file so entrypoint.sh can conditionally
 # include it via DISABLE_FRONTEND (lets the host-side Vite dev server
 # claim :5173 without colliding with the bundled SPA).
-COPY transcriber/Caddyfile /etc/caddy/Caddyfile
-COPY transcriber/Caddyfile.frontend /etc/caddy/Caddyfile.frontend
-COPY transcriber/entrypoint.sh /app/entrypoint.sh
+COPY docker/Caddyfile /etc/caddy/Caddyfile
+COPY docker/Caddyfile.frontend /etc/caddy/Caddyfile.frontend
+COPY docker/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
 # Built frontend bundle from stage 1. Served as static files by Caddy

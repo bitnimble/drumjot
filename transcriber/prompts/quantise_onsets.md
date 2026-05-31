@@ -75,12 +75,22 @@ slot 12 = beat 2 (in 4/4), and so on up to `num_beats × 12 - 1`.
 Bar 0 [4/4, 120.0 BPM, feel=straight16]:
   slot  0 (beat 1): #0(k) #1(h)
   slot  6 (& of 1): #2(h)
-  slot 11 (48th +11 of 1): #3(s)
+  slot 11 (48th +11 of 1): #3(s r+0.45)
   slot 12 (beat 2): #4(h)
 ```
 
 `#N` is the **stable id** you must reference in your response. `(k)` /
 `(s)` / `(h)` etc are the drum pitches.
+
+An onset may carry a residual tag like `r+0.45` or `r-0.30`. This is how
+far (in slots, + = late, - = early) the raw audio sat from the slot it
+was rounded to; it's only shown when the round was a near-miss (|r| ≳
+0.25). A large |r| means the snap was a coin-flip and could easily have
+gone to the neighbouring slot. **But `r` is only a hint, not the
+decision:** a hit can be on the WRONG slot with no `r` tag at all (a
+performer who plays consistently a touch late rounds *cleanly* onto the
+wrong slot). Always decide from the musical context; treat `r` as a
+tie-breaker, never as the reason.
 
 Some bar blocks are tagged **[context - read-only]**. These are
 neighbouring bars shown only so you can judge groove continuity across
@@ -89,9 +99,10 @@ you cannot and must not shift them, only onsets that carry a `#N` id
 are yours to move.
 
 In the example above, the snare `#3` at slot 11 likely belongs on slot
-12 (beat 2) with the hi-hat; a one-slot earlier snap from jitter. The
-correct response is `{"shifts": [{"id": 3; "shift": 1}]}` — just the
-one snare entry; nothing for the other onsets.
+12 (beat 2) with the hi-hat; a one-slot earlier snap from jitter (and its
+`r+0.45` confirms the raw hit was nearly halfway to slot 12). The correct
+response is `{"shifts": [{"id": 3, "shift": 1}]}`, just the one snare
+entry; nothing for the other onsets.
 
 ## Onset data
 

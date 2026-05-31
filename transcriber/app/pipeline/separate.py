@@ -442,11 +442,11 @@ class Separator:
         )
 
     def run_vocals(self, audio_path: Path, work_dir: Path) -> Path | None:
-        """Extract a vocals stem from a full mix for whisperx alignment.
+        """Extract a vocals stem from a full mix for CTC forced alignment.
 
         Uses the dedicated 2-stem `vocals_model` (not the drum pipeline's
-        6-stem BS-Roformer SW) so latency is dominated by what whisperx
-        actually needs. Returns the absolute path to the vocals output,
+        6-stem BS-Roformer SW) so latency is dominated by what the
+        aligner actually needs. Returns the absolute path to the vocals output,
         or None when the model ran but no vocals-named output landed
         (would indicate a model swap that no longer emits a `(Vocals)`
         filename token).

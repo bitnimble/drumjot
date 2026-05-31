@@ -2,8 +2,9 @@
  * Client for the Python backend's `/lyrics/align` endpoint. The endpoint
  * always runs in forced-alignment mode: the caller supplies the lyric
  * text + rough line timings (typically pulled straight from LRCLIB) and
- * the backend uses whisperx's wav2vec2 aligner to recompute per-word
- * timings against an uploaded audio source.
+ * the backend runs a CTC forced aligner (MMS-300m via
+ * `ctc-forced-aligner`) to recompute per-word timings against an
+ * uploaded audio source.
  *
  * The endpoint base mirrors `src/transcriber.ts::TRANSCRIBER_BASE`:
  * always `/api` on the frontend's own origin, proxied onward by Vite to
@@ -16,20 +17,20 @@ const TRANSCRIBER_BASE = '/api';
 
 /**
  * Caller-provided lyric text + initial timings. The backend treats the
- * text as authoritative (no Whisper transcription pass) and only
- * recomputes word/line timings via wav2vec2.
+ * text as authoritative (no transcription pass) and only recomputes
+ * word/line timings via the CTC forced aligner.
  */
 export type AlignLyricsRealignInput = {
   lines: readonly Pick<LyricLine, 'startSec' | 'text'>[];
-  /** Optional ISO-639-1 hint that pins the wav2vec2 aligner. Omitted =
-   *  auto-detect from the lyric text + (fallback) the first 30 s of
-   *  audio. */
+  /** Optional ISO-639-1 hint that pins the aligner's language head.
+   *  Omitted = auto-detect from the lyric text + (fallback) the first
+   *  30 s of audio. */
   language?: string;
 };
 
 export type AlignLyricsRequest = {
   /** `mix` runs the 2-stem vocals separator first; `vocals` skips
-   *  separation and feeds the file straight to wav2vec2. */
+   *  separation and feeds the file straight to the aligner. */
   kind: 'mix' | 'vocals';
   file: File;
   realign: AlignLyricsRealignInput;
@@ -57,13 +58,13 @@ export type AlignLyricsOptions = {
  * Non-terminal envelopes drive `opts.onProgress` so the caller can show
  * a wait state; the `result` lines (shape `{lines: LyricLine[]}`, an
  * exact match for our in-memory type) go straight into
- * `lyricsStore.replace(id, ...)` via `JotViewStore.alignLyricsWhisper`.
+ * `lyricsStore.replace(id, ...)` via `JotViewStore.alignLyricsForced`.
  *
  * Input-validation failures arrive as a real 4xx (before any stream
  * bytes) and surface here as the server's `detail` message, same as
  * before the endpoint streamed.
  */
-export async function alignLyricsWhisper(
+export async function alignLyricsForced(
   req: AlignLyricsRequest,
   opts: AlignLyricsOptions = {},
 ): Promise<LyricLine[]> {

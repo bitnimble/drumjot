@@ -42,7 +42,17 @@ from app.pipeline.onsets_midi import (
 #   v1: original kept/rejected entries.
 #   v2: adds `reason_code` / `reason_text` from the filter LLM on
 #       rejected entries (null on kept/upstream-vetted entries).
-FORMAT_VERSION = 2
+#   v3: surfaces every per-stage time shift that affects a kept onset's
+#       final position. Per-entry: `raw_model_time_sec` (pre-envelope-
+#       refine ADTOF time), per-quantise-pass shifts
+#       (`geometric_shift_slots` / `envelope_shift_slots` /
+#       `grid_shift_slots` / `llm_shift_slots`),
+#       `quantised_residual_slots` (signed sub-slot residual from the
+#       geometric pass), and an explicit `off_grid` flag. File-level:
+#       `beat_align_coarse_offset_sec` + `beat_align_fine_offset_sec`
+#       (the previously-collapsed coarse/fine alignment split; their
+#       sum equals `beat_alignment_offset_sec`).
+FORMAT_VERSION = 3
 
 
 def build_note_provenance(
@@ -51,6 +61,8 @@ def build_note_provenance(
     kept_by_pitch: dict[str, list[OnsetCandidate]],
     structure: BeatStructure,
     beat_alignment_offset_sec: float = 0.0,
+    beat_align_coarse_offset_sec: float = 0.0,
+    beat_align_fine_offset_sec: float = 0.0,
     rejected_by_pitch: dict[str, str] | None = None,
     reasons_by_pitch: dict[str, dict[int, dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
@@ -114,6 +126,7 @@ def build_note_provenance(
                 if not kept and in_range
                 else None
             )
+            raw_model_time = getattr(c, "raw_model_time", None)
             entries.append({
                 "pitch": pitch,
                 "midi_note": midi_note,
@@ -122,6 +135,15 @@ def build_note_provenance(
                 "tick": tick,
                 # The raw detector hit; unchanged by quantise.
                 "detected_time_sec": float(c.time),
+                # ADTOF model peak time BEFORE `_refine_peak_times_audio`
+                # snapped it to the audio's onset-strength envelope
+                # local-max. `null` for non-ADTOF detection paths (none
+                # in production today) and for older bundles. Lets the
+                # debug popup surface the envelope refinement as its
+                # own per-onset stage in the detected → final chain.
+                "raw_model_time_sec": (
+                    float(raw_model_time) if raw_model_time is not None else None
+                ),
                 # Post-quantise absolute time. None when the quantise
                 # stage didn't run or this onset wasn't shifted; the
                 # rendered MIDI tick falls back to `detected_time_sec`
@@ -130,6 +152,34 @@ def build_note_provenance(
                     float(quantised_time) if quantised_time is not None else None
                 ),
                 "quantised_shift_slots": getattr(c, "quantised_shift_slots", None),
+                # Per-pass quantise contributions, so the popup can show
+                # "geometric +1, env +0, grid 0, llm -1" instead of one
+                # collapsed sum. `null` when the pass didn't run for
+                # this onset (off-grid for any later pass; envelope pass
+                # skipped because no envelope was available; grid/LLM
+                # pass turned off; LLM pass cancelled/errored; or all
+                # of the above on older bundles). `0` means the pass
+                # ran but didn't shift (or its shift was rejected by
+                # the monotonic-injective guard).
+                "geometric_shift_slots": getattr(c, "geometric_shift_slots", None),
+                "envelope_shift_slots": getattr(c, "envelope_shift_slots", None),
+                "grid_shift_slots": getattr(c, "grid_shift_slots", None),
+                "llm_shift_slots": getattr(c, "llm_shift_slots", None),
+                # Sub-slot residual from the geometric pass: how far the
+                # raw natural slot position sat from the nearest integer
+                # slot, range (-0.5, +0.5]. Surfaces the "performer was
+                # consistently ~0.3 slots late" feel that a clean snap
+                # erases. `null` for off-grid onsets and for older
+                # bundles.
+                "quantised_residual_slots": getattr(
+                    c, "quantised_residual_slots", None
+                ),
+                # Explicit off-grid flag from the geometric snap (= no
+                # free slot within the match band). Previously inferred
+                # from `quantised_time_sec === null`; surfaced as its
+                # own field so the popup can distinguish "off-grid"
+                # from "stage didn't run / no shift needed".
+                "off_grid": bool(getattr(c, "off_grid", False)),
                 "strength": float(c.strength),
                 "bar": bar,
                 "beat_in_bar": float(c.beat_in_bar),
@@ -167,8 +217,14 @@ def build_note_provenance(
         # beat positions were computed. The detected `time` fields here
         # predate this shift; the `bar`/`beat_in_bar` values are
         # post-shift. Useful for the operator to see how much grid
-        # correction was needed.
+        # correction was needed. The coarse / fine split surfaces the
+        # two alignment passes separately so the debug popup can show
+        # them as distinct stages; their sum always equals
+        # `beat_alignment_offset_sec` and downstream code reading just
+        # the combined field keeps working.
         "beat_alignment_offset_sec": beat_alignment_offset_sec,
+        "beat_align_coarse_offset_sec": beat_align_coarse_offset_sec,
+        "beat_align_fine_offset_sec": beat_align_fine_offset_sec,
         # Mapping bar 0 (struct.bars) -> the rendered MIDI bar index a
         # consumer that walks bars from tick 0 would see. The MIDI lays
         # down `lead_bars` empty bar-0-sized blocks before bar 0 to

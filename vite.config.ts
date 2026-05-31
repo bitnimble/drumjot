@@ -53,7 +53,7 @@ const noHmrPushPlugin: Plugin = {
 // Note: the dev server intentionally has NO `/api` proxy. The browser
 // bundle talks to `/api` on its own origin, and routing `/api/*` onward
 // to the transcriber is handled by the Caddy edge proxy that fronts this
-// dev server (see Caddyfile.dev / docker-compose.dev.yml). Vite's own
+// dev server (see docker/Caddyfile.dev / docker/docker-compose.dev.yml). Vite's own
 // `server.proxy` used to do it, but the dev server runs under Bun, whose
 // node:http layer can't relay the transcriber's chunked NDJSON streaming
 // responses (it hangs - oven-sh/bun#5737, #28396). So the proxy lives in
@@ -73,6 +73,13 @@ const noHmrPushPlugin: Plugin = {
 const ESBUILD_TARGET = 'es2022';
 
 export default defineConfig({
+  // Dev dep-prebundle cache location. Defaults to `node_modules/.vite`,
+  // but the docker/docker-compose.dev.yml frontend runs Vite as root over a
+  // bind-mount, so that dir ends up root-owned and a host-spawned Vite
+  // (e.g. the Playwright e2e server on :5273) can't rewrite it. Honour
+  // `VITE_CACHE_DIR` so the e2e runner can point at a writable host path
+  // without colliding with the container's cache. Unset → Vite default.
+  cacheDir: process.env.VITE_CACHE_DIR || undefined,
   // `patchCssModules()` replaces Vite's built-in PostCSS-based CSS-modules
   // handling with one that routes `composes: … from` through Vite's own
   // module resolver. Without it, a file consumed ONLY via `composes`

@@ -13,9 +13,9 @@ import { JotViewStore } from './store';
  * lines, section markers like `[Chorus]` are stripped, and the
  * remaining lines are spread evenly across the song's duration (see
  * `JotViewStore.applyPlainTextLyrics`) so they're immediately visible
- * on the bars row. The word-level checkbox kicks off the same
- * whisperx forced-alignment as the LRCLIB modal so untimed pastes can
- * jump straight to karaoke-style highlighting when an audio track is
+ * on the bars row. The word-level checkbox kicks off the same CTC
+ * forced-alignment as the LRCLIB modal so untimed pastes can jump
+ * straight to karaoke-style highlighting when an audio track is
  * loaded.
  */
 const WORD_LEVEL_INFO =

@@ -49,11 +49,42 @@ class OnsetCandidate(BaseModel):
     strength: float
     bar: int = -1
     beat_in_bar: float = -1.0
+    # ADTOF's raw model peak time, BEFORE `_refine_peak_times_audio`'s
+    # envelope-local-max snap (`time` above is the post-refine value).
+    # Populated by `detect_onsets_adtof` only, non-ADTOF code paths leave
+    # this None. Surfaced in `note_provenance.json` so the per-note debug
+    # popup can show the envelope-refine shift as its own stage; consumers
+    # that just want "where did the detector say the onset was" should
+    # keep reading `time`.
+    raw_model_time: float | None = None
     quantised_time: float | None = None
     # Integer slot shift the `quantise` stage applied (sum of the geometric
     # snap and the LLM residual pass). Inspection / debug only; the
     # canonical post-quantise time is `quantised_time`.
     quantised_shift_slots: int | None = None
+    # Per-pass slot shifts within the `quantise` stage, surfaced separately
+    # so the per-note debug popup can attribute every quantise-induced
+    # movement to a specific pass instead of showing one collapsed sum.
+    # `0` means "the pass processed this onset but didn't shift it",
+    # `None` means "the pass didn't run / didn't see this onset" (e.g.
+    # envelope pass skipped because no envelope was supplied; LLM pass
+    # skipped or rejected by the monotonic-injective guard). The sum of
+    # the four equals `quantised_shift_slots` for any onset that ran the
+    # full chain.
+    geometric_shift_slots: int | None = None
+    envelope_shift_slots: int | None = None
+    grid_shift_slots: int | None = None
+    llm_shift_slots: int | None = None
+    # Signed sub-slot residual from the geometric snap: the fractional part
+    # of the onset's natural slot position, i.e. how far (in slots, range
+    # (-0.5, +0.5]) the raw detector timing sat from the integer slot it was
+    # rounded to. + = the hit was late of its slot, - = early. None for
+    # off-grid onsets (no rounded slot) and for onsets the quantise stage
+    # never processed. Informational provenance carried to the musical-grid
+    # pass and the LLM residual pass; NOT a correctness gate (a performer
+    # consistently a full slot off rounds *cleanly* onto the wrong slot, so
+    # a residual near 0 does not mean the slot is right).
+    quantised_residual_slots: float | None = None
     # True when the geometric snap deliberately left this onset off-grid
     # (band-rejected: no free slot within the match band). Off-grid onsets
     # keep `quantised_time = None` so the MIDI emitter uses their raw

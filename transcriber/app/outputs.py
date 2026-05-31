@@ -27,13 +27,43 @@ live under `<outputs_dir>/<name>/`).
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
 import soundfile as sf
 
 log = logging.getLogger(__name__)
+
+
+def encode_batch_parallel(
+    encoder: Callable[[str, Path], Path | None],
+    items: Sequence[tuple[str, Path]],
+) -> list[Path | None]:
+    """Run `encoder(name, src)` over `items` in parallel; return results in input order.
+
+    ThreadPool (not ProcessPool) because both encoders we batch over
+    (libsndfile's `sf.write` and ffmpeg subprocesses) release the GIL
+    while they run, so OS threads scale across cores without the IPC
+    overhead a process pool would carry. `Executor.map` preserves input
+    order so the caller can zip results back against their entries, matters for the debug bundle, which uses iteration order to
+    determine the zip entry order, and for the FLAC sites that surface
+    URLs in the API response.
+
+    Workers default to `min(len(items), cpu_count())`. Single-item and
+    empty batches short-circuit to a plain serial loop to dodge thread
+    pool spin-up overhead.
+    """
+    if not items:
+        return []
+    workers = min(len(items), os.cpu_count() or 1)
+    if workers <= 1:
+        return [encoder(name, src) for name, src in items]
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        return list(ex.map(lambda item: encoder(*item), items))
 
 
 # MP3 bitrate for the debug-zip audio tracks. 128 kbps is the
@@ -305,29 +335,35 @@ def materialize_pending(
     """
     if output_sink is None:
         return
+    # Collect the missing-FLAC jobs first so we can parallel-encode them
+    # in one batch instead of sequentially shelling through libsndfile.
+    # Each FLAC encode is independent (different dest path) and releases
+    # the GIL during compression, see `encode_batch_parallel`.
+    jobs: list[tuple[str, Path]] = []
     if (
         output_sink.existing_path("drum_stem") is None
         and drum_stem is not None
         and drum_stem.exists()
     ):
-        output_sink.save_flac_from_wav("drum_stem", drum_stem)
+        jobs.append(("drum_stem", drum_stem))
     for pitch, path in per_instrument_stems.items():
         if output_sink.existing_path(f"stem_{pitch}") is None and path.exists():
-            output_sink.save_flac_from_wav(f"stem_{pitch}", path)
+            jobs.append((f"stem_{pitch}", path))
     if output_sink.existing_path("residual") is None:
         # Prefer the context's residual (a fresh stems_per just produced
         # it); fall back to scavenging the debug folder for resumes that
         # skipped stems_per.
         if residual_stem is not None and residual_stem.exists():
-            output_sink.save_flac_from_wav("residual", residual_stem)
+            jobs.append(("residual", residual_stem))
         else:
             scavenged = _scavenge_residual(scavenge_dir)
             if scavenged is not None:
-                output_sink.save_flac_from_wav("residual", scavenged)
+                jobs.append(("residual", scavenged))
     if output_sink.existing_path("no_drums") is None:
         scavenged = _scavenge_no_drums(scavenge_dir)
         if scavenged is not None:
-            output_sink.save_flac_from_wav("no_drums", scavenged)
+            jobs.append(("no_drums", scavenged))
+    encode_batch_parallel(output_sink.save_flac_from_wav, jobs)
     if predicted_midi is not None:
         # Unguarded by design: predicted_midi is set only when the
         # transcribe stage ran this invocation (it stays None on a

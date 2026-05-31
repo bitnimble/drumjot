@@ -39,20 +39,21 @@ export class ViewConfig {
   /**
    * Horizontal offset applied to every note from its bar's left edge,
    * expressed as a fraction of a quarter-note beat (so it scales with
-   * zoom). The first note sits inside the bar line rather than centred
-   * on it (mimicking conventional engraved notation). It is a pure
-   * offset, not a subtraction from the note area: the gap across a bar
-   * boundary stays exactly one note step (the trailing space before
-   * the next bar line works out to `oneStep - padPx`, and the next
-   * bar's first note is itself `padPx` in, summing back to one full
-   * step); and because both `padPx` and `oneStep` are derived from
-   * `pxPerBeat`, that invariant survives zoom.
+   * zoom). Acts as `P/2`, where `P` is the gap across a barline between
+   * the last subbeat of bar N and the first subbeat of bar N+1, set to
+   * exactly the inter-subbeat distance at the finest grid (48ths,
+   * `pxPerBeat/12`), so a 48th sitting on the last slot of bar N lands
+   * at `barline - P/2` and the next bar's downbeat at `barline + P/2`.
+   * The barline becomes a true separator rather than something the
+   * last 48th overflows past, which both fixes the visual (the last
+   * subbeat used to look like it belonged to the next bar) and the hit
+   * region (an overflowing note got covered by bar N+1 and clicks
+   * landed on the seek handler instead of the note).
    *
-   * Default `1/8` matches the previous fixed 14px inset at the default
-   * `pxPerBeat = 112` (= `barWidth/4 * densityFactor` with `barWidth =
-   * 448`, `densityFactor = 1`).
+   * Default `1/24`: half of `1/12` (the 48ths inter-note distance in
+   * beats) so `padLeft = pxPerBeat/24 = P/2`.
    */
-  barNotePaddingBeats = 1 / 8;
+  barNotePaddingBeats = 1 / 24;
   /** Palette used when a pitch has no explicit colour. Mirrors the
    *  shared {@link PICKER_PALETTE} so a colour the user picks from the
    *  picker's first swatch row matches a lane that landed on the same

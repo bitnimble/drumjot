@@ -27,6 +27,7 @@ them as padding noise.
 from __future__ import annotations
 
 import concurrent.futures
+import contextvars
 import logging
 import threading
 from collections.abc import Callable
@@ -317,7 +318,19 @@ def filter_onsets_all_instruments(
     done = 0
     cancelled = False
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = {ex.submit(work, p): p for p in pitches}
+        # Submit each task through a copy of the submitting thread's
+        # context so contextvars propagate into the pool workers;
+        # ThreadPoolExecutor does NOT copy them. This carries the request
+        # id (for log correlation) plus the debug-sink / run-log
+        # contextvars. copy_context() runs here, on the submitting thread,
+        # which is itself running under the pipeline's asyncio.to_thread
+        # context and so already holds those values. (The `work()` body
+        # still re-installs the debug sink explicitly; that's now redundant
+        # but harmless.)
+        futures = {
+            ex.submit(contextvars.copy_context().run, work, p): p
+            for p in pitches
+        }
         try:
             for fut in concurrent.futures.as_completed(futures):
                 if cancel_event is not None and cancel_event.is_set():

@@ -10,7 +10,7 @@
 #   /api/*  -> drumjot:8001       (transcriber edge router; /api stripped)
 #   else    -> frontend-dev:5173  (Vite dev server: modules, assets, HMR ws)
 #
-# Mirrors transcriber/Caddyfile.frontend, except the catch-all reverse-
+# Mirrors docker/Caddyfile.frontend, except the catch-all reverse-
 # proxies to the live Vite dev server instead of serving a built bundle.
 {
 	# No runtime reconfig, and the container speaks plain HTTP only (a

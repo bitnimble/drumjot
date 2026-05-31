@@ -6,6 +6,7 @@ directly.
 """
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from app.pipeline.beats import (
@@ -13,6 +14,7 @@ from app.pipeline.beats import (
     BeatStructure,
     BeatTick,
     _choose_time_signature,
+    _coarse_offset_from_envelope,
     _pad_trailing_bars,
     align_beats_to_onsets,
 )
@@ -121,6 +123,53 @@ def test_position_outside_padded_range_returns_none() -> None:
     _pad_trailing_bars(structure, duration_seconds=3.0)
     # Onset past the audio duration: dropped.
     assert structure.position(50.0) is None
+
+
+# ---------- coarse envelope phase alignment ----------
+
+
+def _pulse_env(frame_times, centers, width=0.01, height=1.0):
+    env = np.zeros_like(frame_times)
+    for c in centers:
+        env += height * np.exp(-((frame_times - c) ** 2) / (2 * width**2))
+    return env
+
+
+def test_coarse_offset_recovers_a_known_phase_error() -> None:
+    # Grid beats at 0.5, 1.0, ... but the real drum hits land 0.1 s later
+    # (a ~2-3 slot systematic error). The coarse search should recover +0.1.
+    ft = np.arange(0.0, 10.0, 0.002)
+    beats = np.array([0.5 * k for k in range(1, 18)], dtype=float)
+    env = _pulse_env(ft, beats + 0.1)
+    off = _coarse_offset_from_envelope(
+        beats, env, ft, max_shift=1.0, step=0.002,
+        center_penalty=0.15, prominence=1.10,
+    )
+    assert off == pytest.approx(0.1, abs=0.005)
+
+
+def test_coarse_offset_prefers_the_smaller_competing_shift() -> None:
+    # Two equally-tall alignment peaks, one near 0 and one far. The centre
+    # taper must pick the near one (don't yank the grid a long way for a
+    # tie), exercising the small-|δ| bias.
+    ft = np.arange(0.0, 3.0, 0.002)
+    env = _pulse_env(ft, [1.05, 1.45])  # beat at 1.0 -> δ=+0.05 or +0.45
+    off = _coarse_offset_from_envelope(
+        np.array([1.0]), env, ft, max_shift=0.5, step=0.002,
+        center_penalty=0.15, prominence=1.10,
+    )
+    assert off == pytest.approx(0.05, abs=0.005)
+
+
+def test_coarse_offset_returns_zero_on_a_flat_envelope() -> None:
+    # No clear pulse -> the prominence gate rejects any shift.
+    ft = np.arange(0.0, 5.0, 0.002)
+    env = np.ones_like(ft)
+    off = _coarse_offset_from_envelope(
+        np.array([0.5 * k for k in range(1, 10)]), env, ft,
+        max_shift=1.0, step=0.002, center_penalty=0.15, prominence=1.10,
+    )
+    assert off == 0.0
 
 
 # ---------- align_beats_to_onsets ----------

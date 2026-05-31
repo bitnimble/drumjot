@@ -29,7 +29,9 @@
         "Bash(grep *)",
         "Bash(find *)",
         "Bash(rg *)",
-        "Bash(awk *)"
+        "Bash(awk *)",
+        "Bash(head *)",
+        "Bash(tail *)"
       ],
       "reason": "Use the Read(), Write(), Edit() and Find() tools instead of invoking sed, grep, find, rg or awk directly"
     },
@@ -63,6 +65,10 @@
         "Bash(.venv/bin/python -m pytest *)"
       ],
       "reason": "Use scripts in the scripts/ folder instead of running pytest or python compile directly"
+    },
+    {
+      "commands": ["Bash(echo \"rc=$?\")", "Bash(echo \"EXIT=${PIPESTATUS[0]}\")"],
+      "reason": "Use exit=$? to get the exit code of the last command"
     }
   ]
 }

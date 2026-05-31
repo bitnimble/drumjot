@@ -8,7 +8,6 @@ import {
   NoteProvenanceFile,
 } from 'src/debug_zip';
 import { Instrument } from 'src/dsl';
-import { slotsPerQuarter } from 'src/grid';
 import { ExampleJot } from 'src/fakes';
 import { DrumInstrumentKind, defaultKindForPitch } from 'src/instruments';
 import { RenderedJot, ViewConfig, px } from 'src/jot';
@@ -17,7 +16,7 @@ import {
   LyricLine,
   LyricsSource,
   LyricsTrackId,
-  alignLyricsWhisper,
+  alignLyricsForced,
   lyricsStore,
   nameLooksLikeVocals,
   parseLrc,
@@ -970,6 +969,8 @@ export class JotViewStore {
       leadBars: provenance.lead_bars ?? 0,
       showFiltered: this.showFilteredOnsets,
       beatAlignmentOffsetSec: provenance.beat_alignment_offset_sec ?? null,
+      beatAlignCoarseOffsetSec: provenance.beat_align_coarse_offset_sec ?? null,
+      beatAlignFineOffsetSec: provenance.beat_align_fine_offset_sec ?? null,
       // Bundle manifest mapping is `Record<string, string>`; rebuild it
       // as a Map for ergonomic .get() lookups inside the per-onset
       // timing visualization. Empty when the current bundle didn't ship
@@ -1853,6 +1854,33 @@ export class JotViewStore {
   }
 
   /**
+   * Score a ParaDB `.zip` map against its own audio via the transcriber's
+   * `POST /score`, surfacing the result as a toast (full result to the
+   * console). A development test harness for the corpus-filtering scorer
+   * (`transcriber/app/scoring`); unlike {@link loadParadbMap} it does NOT
+   * touch the current score, it only reports a quality number.
+   */
+  async scoreParadbMap(file: File): Promise<void> {
+    return this.withLoading(`Scoring ${file.name}…`, async () => {
+      try {
+        const result = await transcriber.scoreParadb(file);
+        const offsetMs = (result.offset_sec * 1000).toFixed(0);
+        toastStore.showSuccess(
+          `${file.name}: ${result.score_corrected}/100 corrected ` +
+            `(raw ${result.score}) · offset ${offsetMs} ms · ` +
+            `tempo ${result.tempo_ratio.toFixed(3)}× · ${result.audio_reference}`,
+          { title: 'See the browser console for the full per-lane breakdown.' },
+        );
+        // eslint-disable-next-line no-console
+        console.log('Alignment score', file.name, result);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        toastStore.showError(`Could not score ${file.name}: ${message}`);
+      }
+    });
+  }
+
+  /**
    * Load a transcriber debug `.zip` bundle: parse the embedded
    * `final.jot`, load every audio track in the manifest's `mapping`, and
    * stash the manifest (stage timings + log stream) on
@@ -1941,48 +1969,15 @@ export class JotViewStore {
           const derivedTitle = titleFromFilename(fallbackName);
           if (derivedTitle) jot.title = derivedTitle;
         }
-        // The downbeat detector recorded the global beat-alignment offset
-        // it applied in the provenance sidecar. Convert it into the same
-        // quarter-note-beat coordinates the Beat control uses (negate
-        // because adding `offset_sec` to every beat.time moves notes by
-        // `-offset_sec * bpm/60` on the beat grid) and seed it as both
-        // the control value AND the baseline — net applied shift is 0,
-        // so notes stay at the MIDI positions while the operator can
-        // see the alignment value and reset it to expose the pre-
-        // alignment positions.
-        const alignmentSec = bundle.noteProvenance?.beat_alignment_offset_sec;
-        const bpm = jot.globalMetadata.bpm;
-        const rawAlignmentBeats =
-          typeof alignmentSec === 'number' &&
-          Number.isFinite(alignmentSec) &&
-          typeof bpm === 'number' &&
-          bpm > 0
-            ? (-alignmentSec * bpm) / 60
-            : 0;
-        // Snap the baseline to the nearest grid slot so subsequent
-        // integer-slot slider nudges produce on-grid effective shifts;
-        // a fractional baseline left every drum-offset-shifted note
-        // sub-slot off the bar line. Then shift `drumsT0Sec` by the
-        // rounding delta in the opposite direction (converted to
-        // seconds via bpm) so the loaded audio track still lines up
-        // with the snapped baseline rather than the raw one.
-        const sPerQuarter = slotsPerQuarter(jot);
-        const alignmentBeats = Math.round(rawAlignmentBeats * sPerQuarter) / sPerQuarter;
-        const baselineRoundingDeltaBeats = alignmentBeats - rawAlignmentBeats;
-        const audioCompensationSec =
-          Math.abs(baselineRoundingDeltaBeats) > 1e-9 && typeof bpm === 'number' && bpm > 0
-            ? (-baselineRoundingDeltaBeats * 60) / bpm
-            : 0;
+        // The beats stage's `align_beats_to_*` shift is already baked
+        // into `prediction.mid`'s tick grid (see `compute_bar_tick_grid`
+        // in `transcriber/app/pipeline/onsets_midi.py`), so the loaded
+        // MIDI is at the aligned positions and the Beat control starts
+        // at 0. The applied alignment is still visible per-note in the
+        // selection popup as the "Beat alignment" row sourced from
+        // `noteProvenance.beat_alignment_offset_sec`.
         runInAction(() => {
-          if (audioCompensationSec !== 0) {
-            jot.globalMetadata.drumsT0Sec =
-              (jot.globalMetadata.drumsT0Sec ?? 0) + audioCompensationSec;
-          }
           const rendered = new RenderedJot(jot, this.viewConfig);
-          if (alignmentBeats !== 0) {
-            rendered.setDrumOffsetBaseline(alignmentBeats);
-            rendered.setDrumOffset(alignmentBeats);
-          }
           this.currentJot = rendered;
           this.currentExampleId = undefined;
           jotPlayer.stop();
@@ -2290,8 +2285,8 @@ export class JotViewStore {
    *
    * When `opts.wordLevel` is true, the LRCLIB lines load immediately
    * (so the row shows up right away with line-level timing) and a
-   * background whisperx forced-alignment job runs against an auto-
-   * picked audio track. Success replaces the lines with word-timed
+   * background CTC forced-alignment job runs against an auto-picked
+   * audio track. Success replaces the lines with word-timed
    * versions; failure leaves the line-level lines in place and surfaces
    * the error on the status pill.
    */
@@ -2314,8 +2309,8 @@ export class JotViewStore {
   }
 
   /**
-   * Auto-pick an audio track and run whisperx forced-alignment against
-   * it using the LRCLIB lines as authoritative text. The picked track
+   * Auto-pick an audio track and run CTC forced-alignment against it
+   * using the LRCLIB lines as authoritative text. The picked track
    * + kind drive whether the backend's vocals separator runs first
    * (`mix` = run separation; `vocals` = skip it).
    *
@@ -2339,7 +2334,7 @@ export class JotViewStore {
     if (!track) return;
     const file = new File([track.sourceBlob], track.filename, { type: track.sourceBlob.type });
     const label = `${match.trackName} - ${match.artistName}`;
-    await this.alignLyricsWhisper(
+    await this.alignLyricsForced(
       targetTrackId,
       {
         kind: pick.kind,
@@ -2358,7 +2353,7 @@ export class JotViewStore {
 
   /**
    * Pick the loaded audio track most likely to carry vocals + the
-   * separator mode to feed it to whisperx with. Heuristic priority:
+   * separator mode to feed it to the CTC aligner with. Heuristic priority:
    *
    *   1. Any track whose filename looks like vocals → `vocals` (skip
    *      separation).
@@ -2412,7 +2407,7 @@ export class JotViewStore {
    * in this paste" error.
    *
    * When `opts.wordLevel` is true and an audio track is loaded, fires
-   * the same background whisperx forced-alignment used by the LRCLIB
+   * the same background CTC forced-alignment used by the LRCLIB
    * word-level path: the spread lines land immediately, then word-
    * timed versions replace them on success.
    */
@@ -2466,9 +2461,9 @@ export class JotViewStore {
   }
 
   /** Mirror of {@link runWordLevelAlignmentForLrclib} for the plain-
-   *  text source. Picks an audio track and runs whisperx forced
-   *  alignment using the spread lines as authoritative text; on success
-   *  the lines are replaced with word-timed versions while the source
+   *  text source. Picks an audio track and runs CTC forced alignment
+   *  using the spread lines as authoritative text; on success the
+   *  lines are replaced with word-timed versions while the source
    *  label stays "Plain text". */
   private async runWordLevelAlignmentForPlainText(
     targetTrackId: LyricsTrackId,
@@ -2484,7 +2479,7 @@ export class JotViewStore {
     const track = jotPlayer.audioTracks.get(pick.id);
     if (!track) return;
     const file = new File([track.sourceBlob], track.filename, { type: track.sourceBlob.type });
-    await this.alignLyricsWhisper(
+    await this.alignLyricsForced(
       targetTrackId,
       {
         kind: pick.kind,
@@ -2558,7 +2553,7 @@ export class JotViewStore {
   }
 
   /**
-   * Run whisperx forced-alignment against the given input source and
+   * Run CTC forced-alignment against the given input source and
    * upgrade `targetTrackId`'s lines on success. The caller supplies the
    * {@link LyricsSource} and source label to re-apply, so the row's
    * gutter label doesn't get rewritten to a hardcoded LRCLIB string
@@ -2569,7 +2564,7 @@ export class JotViewStore {
    * concurrently from this layer's perspective; the backend serialises
    * them GPU-wise.
    */
-  private async alignLyricsWhisper(
+  private async alignLyricsForced(
     targetTrackId: LyricsTrackId,
     req: AlignLyricsRequest,
     label: string,
@@ -2587,7 +2582,7 @@ export class JotViewStore {
     });
     let lines: LyricLine[];
     try {
-      lines = await alignLyricsWhisper(req, {
+      lines = await alignLyricsForced(req, {
         signal: controller.signal,
         onProgress: (event) => {
           // The stream emits `queued` while waiting behind another GPU
@@ -2630,7 +2625,7 @@ export class JotViewStore {
         this.lyricsAlignStatuses.delete(targetTrackId);
       });
       toastStore.showError(
-        `No lyrics were aligned (whisperx found no speech in ${label}).`,
+        `No lyrics were aligned (the aligner found no speech in ${label}).`,
       );
       return;
     }

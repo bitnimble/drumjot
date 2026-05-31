@@ -20,7 +20,7 @@ import { JotViewStore } from './store';
  *
  *  - word-level OFF: line-level LRCLIB timing applied as-is.
  *  - word-level ON: LRCLIB lines load immediately for instant feedback,
- *                   then a background whisperx forced-alignment pass
+ *                   then a background CTC forced-alignment pass
  *                   upgrades them with per-word timings. Requires a
  *                   loaded audio track (the checkbox is disabled
  *                   otherwise).

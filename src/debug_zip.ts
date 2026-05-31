@@ -83,11 +83,18 @@ export type NoteProvenanceEntry = {
    * Unique identifier. The MIDI tick this kept onset was emitted at;
    * matched against `note.metadata.midi.tick` (preserved through
    * `from_midi.ts`) to attach this provenance to its rendered note.
-   * `null` for rejected onsets — those never made it into the MIDI
+   * `null` for rejected onsets, those never made it into the MIDI
    * and are rendered separately as ghost overlays.
    */
   tick: number | null;
   detected_time_sec: number;
+  /** Pre-envelope-refine ADTOF model peak time (the raw `peak_frame /
+   * fps` before `_refine_peak_times_audio` snapped it to the audio's
+   * onset-strength envelope local-max). `null` for non-ADTOF detection
+   * paths and for bundles produced before provenance format v3. The
+   * popup uses it to display the envelope refinement as its own
+   * per-onset stage in the detected → final chain. */
+  raw_model_time_sec?: number | null;
   /** Absolute audio time after the backend `quantise` stage's
    * joint-snap + LLM residual shift. `null` when that stage didn't run
    * or didn't move this onset; in that case the rendered MIDI tick falls
@@ -95,9 +102,31 @@ export type NoteProvenanceEntry = {
    * `OnsetCandidate.quantised_time` in `transcriber/app/models.py`. */
   quantised_time_sec?: number | null;
   /** Total signed integer 1/48-slot shift the backend `quantise` stage
-   * applied to this onset (deterministic pass + LLM residual). `null`
-   * when no shift was applied. */
+   * applied to this onset (sum of all four passes). `null` when no shift
+   * was applied. */
   quantised_shift_slots?: number | null;
+  /** Per-pass quantise contributions in slot units. `null` when the pass
+   * didn't run for this onset (off-grid for any pass after geometric;
+   * envelope pass skipped because no envelope was available; grid/LLM
+   * pass turned off; LLM cancelled/errored; or the bundle predates
+   * provenance format v3). `0` means the pass ran but didn't shift (or
+   * its shift was rejected by the monotonic-injective guard). The sum
+   * of the four equals `quantised_shift_slots` for any onset that ran
+   * the full chain. */
+  geometric_shift_slots?: number | null;
+  envelope_shift_slots?: number | null;
+  grid_shift_slots?: number | null;
+  llm_shift_slots?: number | null;
+  /** Signed sub-slot residual from the geometric pass: how far the raw
+   * natural slot position sat from its nearest integer slot, range
+   * (-0.5, +0.5]. + = late of slot, − = early. `null` for off-grid
+   * onsets and for bundles predating v3. */
+  quantised_residual_slots?: number | null;
+  /** Explicit off-grid flag from the geometric snap (no free slot
+   * within the match band). Older bundles didn't surface this and
+   * leave it `undefined`; consumers fall back to inferring off-grid
+   * from `quantised_time_sec === null`. */
+  off_grid?: boolean | null;
   strength: number;
   /** 0-indexed bar in the transcriber's BeatStructure (NOT the rendered
    * jot's bar index — see {@link NoteProvenanceFile.lead_bars}). */
@@ -120,7 +149,20 @@ export type NoteProvenanceEntry = {
 export type NoteProvenanceFile = {
   format: number;
   generated_at?: string;
+  /** Combined beat-grid alignment shift (coarse + fine). Kept as a sum
+   * for backwards compatibility; new bundles also carry the
+   * per-pass split below. */
   beat_alignment_offset_sec?: number | null;
+  /** Coarse envelope-phase alignment shift (`align_beats_to_envelope`
+   * in `beats.py`; up to ±2 quarter-notes search). Surfaced
+   * separately so the popup can attribute the grid correction to its
+   * specific pass. `null` when the pass didn't apply a shift or the
+   * bundle predates provenance format v3. */
+  beat_align_coarse_offset_sec?: number | null;
+  /** Fine median onset-snap alignment shift (`align_beats_to_onsets`;
+   * ±50 ms window, median over kept matches, coverage-gated). `null`
+   * when the pass didn't apply a shift or the bundle predates v3. */
+  beat_align_fine_offset_sec?: number | null;
   /**
    * Count of empty bar-1-sized blocks the MIDI lays down before bar 1
    * to absorb the audio lead-in. The rendered jot (from `from_midi.ts`)

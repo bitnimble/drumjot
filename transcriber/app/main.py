@@ -71,11 +71,27 @@ from app.pipeline.runner import (
     run_pipeline,
 )
 from app.pipeline.separate import Separator
+from app.request_context import (
+    RequestIdLogFilter,
+    new_request_id,
+    set_request_id,
+)
 from app.run_log import RunLog, reset_current_run_log, set_current_run_log
+from app.scoring.score_map import score_midi, score_paradb
 
 # Fallback debug dir used when `debug=true` is requested but `DEBUG_DIR`
 # env var wasn't set. Matches the docker-compose volume mount.
 DEFAULT_DEBUG_DIR = Path("/debug")
+
+# How long the streaming endpoints will sit silent (no real progress
+# event) before emitting a `{"type": "heartbeat"}` NDJSON line. The heavy
+# stages (Demucs separation, beats, onsets) produce no downstream bytes
+# for tens of seconds; without a keepalive an intermediary proxy with an
+# idle timeout drops the connection and the client sees a broken pipe.
+# The frontend (`src/transcriber.ts`) ignores unknown event types, so
+# heartbeats are inert there. 10 s is comfortably under typical proxy
+# idle timeouts (commonly 30-60 s) while staying low-chatter.
+HEARTBEAT_INTERVAL_SECONDS = 10.0
 
 
 # Process-wide GPU lock. The two heavy endpoints (/transcribe(/resume),
@@ -161,9 +177,19 @@ def _scoped_run_log(run_log: RunLog) -> Iterator[None]:
         run_log.uninstall()
 
 
+# Build the single root StreamHandler by hand so we can attach the
+# request-id filter to it. The format string references %(request_id)s,
+# which would raise during formatting on any record lacking that
+# attribute, RequestIdLogFilter always sets it, so the filter MUST live
+# on this exact handler. basicConfig(handlers=[...]) installs it on the
+# root logger; app.* loggers propagate up to it, so every pipeline log
+# line picks up the id without per-logger wiring.
+_root_handler = logging.StreamHandler()
+_root_handler.addFilter(RequestIdLogFilter())
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    format="%(asctime)s %(levelname)s %(name)s [%(request_id)s]: %(message)s",
+    handlers=[_root_handler],
 )
 log = logging.getLogger(__name__)
 
@@ -191,7 +217,7 @@ async def lifespan(app: FastAPI):
     # Caddy — the `api` role serves the lightweight control endpoints
     # while a transcription occupies the pipeline worker. Only the
     # pipeline role touches the GPU; the api role skips the eager model
-    # load entirely so it adds ~0 VRAM. See transcriber/entrypoint.sh.
+    # load entirely so it adds ~0 VRAM. See docker/entrypoint.sh.
     if settings.worker_role != "pipeline":
         log.info(
             "Starting up in '%s' role: skipping separation-model load.",
@@ -303,6 +329,13 @@ async def transcribe(
     actually start.
     """
     _require_pipeline_role()
+    # Mint + bind the request id before the first log line so it (and
+    # every later line on this request, including worker-thread LLM logs)
+    # carries the same id. Bound again at the top of `_stream_pipeline`
+    # because Starlette consumes the response body generator in a
+    # different context than this handler, see that function's note.
+    request_id = new_request_id()
+    set_request_id(request_id)
     log.info(
         "Transcribe request: %s (%s bytes) beat_input=%s quantise=%s llm_model=%s debug=%s",
         file.filename, file.size, beat_input, quantise,
@@ -396,6 +429,7 @@ async def transcribe(
     return StreamingResponse(
         _stream_pipeline(
             request=request,
+            request_id=request_id,
             ctx=ctx,
             start_stage=Stage.STEMS_ALL,
             separator=separator,
@@ -478,6 +512,10 @@ async def transcribe_resume(
     re-resuming the same folder is idempotent.
     """
     _require_pipeline_role()
+    # See `transcribe`: bind the request id before the first log line and
+    # again at the top of `_stream_pipeline`.
+    request_id = new_request_id()
+    set_request_id(request_id)
     resume_dir = _resolve_resume_dir(resume_folder)
     resolved_model = llm_model or settings.llm_model
     log.info(
@@ -559,6 +597,7 @@ async def transcribe_resume(
     return StreamingResponse(
         _stream_pipeline(
             request=request,
+            request_id=request_id,
             ctx=ctx,
             start_stage=resume_stage,
             separator=separator,
@@ -583,7 +622,7 @@ async def lyrics_align(
     lyrics: str = Form(default=""),
     language: str = Form(default=""),
 ) -> StreamingResponse:
-    """Word-level lyrics alignment via whisperx forced alignment.
+    """Word-level lyrics alignment via CTC forced alignment (MMS-300m).
 
     Streaming NDJSON response (one JSON object per line):
 
@@ -617,6 +656,11 @@ async def lyrics_align(
     detection and then to a 30 s audio-based detector.
     """
     _require_pipeline_role()
+    # See `transcribe`: bind the request id before the first log line and
+    # again at the top of `_stream_lyrics_align` (Starlette consumes the
+    # streamed body generator in a separate context).
+    request_id = new_request_id()
+    set_request_id(request_id)
     aligner = get_aligner()
 
     sources_set = sum(1 for s in (vocals, mix) if s)
@@ -666,8 +710,9 @@ async def lyrics_align(
             audio_hash = _hash_bytes(mix_bytes)
 
             # Vocals-cache check: hit means we skip the separator and feed
-            # the already-isolated opus straight to whisperx (which loads
-            # it via its own ffmpeg pipeline, so no manual decode here).
+            # the already-isolated opus straight to the CTC aligner (which
+            # decodes it through its own ffmpeg pipeline, so no manual
+            # decode here).
             vocals_key = _vocals_cache_key(audio_hash)
             cached_vocals = _vocals_cache_instance().get(vocals_key)
             if cached_vocals is not None:
@@ -683,6 +728,7 @@ async def lyrics_align(
 
     return StreamingResponse(
         _stream_lyrics_align(
+            request_id=request_id,
             separator=separator,
             aligner=aligner,
             input_lines=input_lines,
@@ -699,6 +745,7 @@ async def lyrics_align(
 
 async def _stream_lyrics_align(
     *,
+    request_id: str,
     separator: Separator,
     aligner: Any,
     input_lines: list[InputLine],
@@ -722,7 +769,19 @@ async def _stream_lyrics_align(
     keeps a park from moving a model host-side under an in-flight
     forward pass). Failures surface as `error` envelopes rather than
     raising into the ASGI layer. The temp dir is always cleaned up.
+
+    A `{"type": "heartbeat"}` line is interleaved every
+    HEARTBEAT_INTERVAL_SECONDS while we're waiting between envelopes (the
+    vocals separator + CTC aligner are long silent GPU stages) so an
+    idle-timeout proxy between us and the client doesn't drop the
+    connection. The frontend ignores unknown event types, so heartbeats
+    need no client handling.
     """
+    # Re-bind the request id: Starlette consumes this generator inside the
+    # StreamingResponse task, a different context from the endpoint handler
+    # that minted the id. Binding here guarantees the id is set in the
+    # context that `asyncio.to_thread(...)` snapshots for the GPU work.
+    set_request_id(request_id)
 
     async def job() -> AsyncIterator[dict[str, Any]]:
         nonlocal vocals_path
@@ -801,10 +860,178 @@ async def _stream_lyrics_align(
             log.exception("lyrics_align failed")
             yield {"type": "error", "status_code": 500, "message": str(exc)}
 
+    pending: asyncio.Task[dict[str, Any]] | None = None
     try:
-        async for envelope in _serialized_gpu_stream(_gpu_lock, job):
+        # Drive the envelope stream by hand (rather than `async for`) so we
+        # can race each `__anext__()` against a heartbeat timeout: the
+        # separator/aligner stages can be silent for tens of seconds, and a
+        # proxy with an idle timeout would otherwise drop the connection.
+        # `wait_for` cancels its inner await on timeout, so we hold the
+        # awaitable (a shielded Task) across iterations to avoid dropping an
+        # envelope. A heartbeat is never emitted once the stream ends:
+        # StopAsyncIteration breaks the loop before any further wait.
+        envelopes = _serialized_gpu_stream(_gpu_lock, job).__aiter__()
+        while True:
+            if pending is None:
+                pending = asyncio.ensure_future(envelopes.__anext__())
+            try:
+                envelope = await asyncio.wait_for(
+                    asyncio.shield(pending),
+                    timeout=HEARTBEAT_INTERVAL_SECONDS,
+                )
+            except TimeoutError:
+                # No envelope yet, keep the connection warm and keep
+                # waiting on `pending` (shield kept it alive through the
+                # wait_for cancellation).
+                yield (json.dumps({"type": "heartbeat"}) + "\n").encode("utf-8")
+                continue
+            except StopAsyncIteration:
+                break
+            pending = None
             yield (json.dumps(envelope) + "\n").encode("utf-8")
     finally:
+        # If we're unwound mid-wait (client disconnect), cancel the
+        # in-flight pull so it doesn't leak; the job's own `finally`
+        # releases the GPU lock.
+        if pending is not None and not pending.done():
+            pending.cancel()
+        shutil.rmtree(cleanup_dir, ignore_errors=True)
+
+
+@app.post("/score", response_model=None)
+async def score_chart(
+    request: Request,
+    pack: UploadFile | None = File(default=None),
+    midi: UploadFile | None = File(default=None),
+    audio: UploadFile | None = File(default=None),
+) -> StreamingResponse:
+    """Score a drum chart's onset timing against the real drum audio.
+
+    A development test harness for the corpus-filtering scorer (see
+    `app/scoring/`). Streaming NDJSON, same envelopes as /lyrics/align
+    (`queued` / `running` / `heartbeat` / `result` / `error`); the terminal
+    `result.data` is an `AlignmentResult`.
+
+    Exactly one input form:
+      - `pack`: a ParaDB `.zip` map pack. The best-difficulty chart is
+        scored against the pack's drums-only track (no separation) or, if
+        the pack has only a song track, the separated drum stem.
+      - `midi` + `audio`: a MIDI chart plus the matching audio file. The
+        audio is always separated to get the drum stem.
+    """
+    _require_pipeline_role()
+    request_id = new_request_id()
+    set_request_id(request_id)
+
+    if pack is not None and (midi is not None or audio is not None):
+        raise HTTPException(
+            status_code=400, detail="Supply either `pack`, or `midi` + `audio`, not both."
+        )
+    if pack is None and not (midi is not None and audio is not None):
+        raise HTTPException(
+            status_code=400, detail="Supply a ParaDB `pack`, or both `midi` and `audio`."
+        )
+
+    separator: Separator = request.app.state.separator
+    if separator is None:
+        raise HTTPException(status_code=503, detail="Separator is not loaded on this worker.")
+
+    # Drain uploads up front (needs await; the StreamingResponse body is
+    # consumed once returned). The GPU work runs inside the streamed
+    # generator under the process-wide lock, mirroring /lyrics/align.
+    cleanup_dir = Path(tempfile.mkdtemp(prefix="drumjot_score_"))
+    try:
+        pack_bytes: bytes | None = None
+        midi_bytes: bytes | None = None
+        audio_path: Path | None = None
+        if pack is not None:
+            pack_bytes = await pack.read()
+        else:
+            assert midi is not None and audio is not None
+            midi_bytes = await midi.read()
+            audio_path = cleanup_dir / (audio.filename or "audio.wav")
+            audio_path.write_bytes(await audio.read())
+    except Exception:
+        shutil.rmtree(cleanup_dir, ignore_errors=True)
+        raise
+
+    return StreamingResponse(
+        _stream_score(
+            request_id=request_id,
+            separator=separator,
+            pack_bytes=pack_bytes,
+            midi_bytes=midi_bytes,
+            audio_path=audio_path,
+            cleanup_dir=cleanup_dir,
+        ),
+        media_type="application/x-ndjson",
+    )
+
+
+async def _stream_score(
+    *,
+    request_id: str,
+    separator: Separator,
+    pack_bytes: bytes | None,
+    midi_bytes: bytes | None,
+    audio_path: Path | None,
+    cleanup_dir: Path,
+) -> AsyncIterator[bytes]:
+    """Stream the GPU phase of /score as NDJSON. Parks the lyrics-side
+    models (this uses the drum models), runs the scorer on a worker thread,
+    and emits the terminal `result` / `error`. Heartbeats keep the
+    connection warm through the silent separation + ADTOF stages."""
+    set_request_id(request_id)
+
+    async def job() -> AsyncIterator[dict[str, Any]]:
+        try:
+            try:
+                gpu_park.park_for_transcribe(separator, get_aligner())
+            except Exception:
+                log.exception("score: park_for_transcribe failed; continuing")
+
+            if pack_bytes is not None:
+                result = await asyncio.to_thread(
+                    score_paradb, pack_bytes, work_dir=cleanup_dir, separator=separator
+                )
+            else:
+                assert midi_bytes is not None and audio_path is not None
+                result = await asyncio.to_thread(
+                    score_midi,
+                    midi_bytes,
+                    audio_path=audio_path,
+                    work_dir=cleanup_dir,
+                    separator=separator,
+                )
+            yield {"type": "result", "data": result.model_dump()}
+        except ValueError as exc:
+            yield {"type": "error", "status_code": 400, "message": str(exc)}
+        except FileNotFoundError as exc:
+            yield {"type": "error", "status_code": 404, "message": str(exc)}
+        except Exception as exc:
+            log.exception("score failed")
+            yield {"type": "error", "status_code": 500, "message": str(exc)}
+
+    pending: asyncio.Task[dict[str, Any]] | None = None
+    try:
+        envelopes = _serialized_gpu_stream(_gpu_lock, job).__aiter__()
+        while True:
+            if pending is None:
+                pending = asyncio.ensure_future(envelopes.__anext__())
+            try:
+                envelope = await asyncio.wait_for(
+                    asyncio.shield(pending), timeout=HEARTBEAT_INTERVAL_SECONDS
+                )
+            except TimeoutError:
+                yield (json.dumps({"type": "heartbeat"}) + "\n").encode("utf-8")
+                continue
+            except StopAsyncIteration:
+                break
+            pending = None
+            yield (json.dumps(envelope) + "\n").encode("utf-8")
+    finally:
+        if pending is not None and not pending.done():
+            pending.cancel()
         shutil.rmtree(cleanup_dir, ignore_errors=True)
 
 
@@ -852,8 +1079,8 @@ def _extract_vocals_with_separator(
     separator: Separator, mix_path: Path, work_dir: Path,
 ) -> Path | None:
     """Run the dedicated vocals separator (fast 2-stem MDX-Net) on
-    `mix_path` and return the vocals stem path for whisperx alignment.
-    Avoids the drum pipeline's 6-stem BS-Roformer SW pass; whisperx
+    `mix_path` and return the vocals stem path for CTC forced alignment.
+    Avoids the drum pipeline's 6-stem BS-Roformer SW pass; the aligner
     doesn't need that quality and the throughput cost was untenable.
 
     Returns None when the separator finished but no vocals-named output
@@ -918,8 +1145,8 @@ def _hash_bytes(data: bytes) -> str:
 def _encode_vocals_to_opus(src: Path, dest: Path) -> None:
     """ffmpeg-encode `src` to 16 kHz mono Opus at 24 kbps into `dest`.
 
-    16 kHz mono matches what whisperx.load_audio resamples to anyway,
-    so doing the downmix + downsample at cache-write time shrinks the
+    16 kHz mono matches what the CTC aligner's `load_audio` resamples to
+    anyway, so doing the downmix + downsample at cache-write time shrinks the
     on-disk artifact ~50x vs FLAC with zero impact on alignment quality.
     `-application voip` biases libopus toward speech intelligibility at
     low bitrate. Raises CalledProcessError on encoder failure so the
@@ -979,6 +1206,7 @@ async def _serialized_gpu_stream(
 async def _stream_pipeline(
     *,
     request: Request,
+    request_id: str,
     ctx: PipelineContext,
     start_stage: Stage,
     separator: Separator,
@@ -1024,7 +1252,21 @@ async def _stream_pipeline(
     forward pass. If the lock is contended we emit a `queued` event
     first so the streaming UI shows a wait state instead of a blank
     stream while we await acquisition.
+
+    Re-binds the request id (the endpoint handler already set it, but
+    Starlette consumes this body generator in a separate context). This
+    binding is the one that matters: it runs in the context that
+    `asyncio.to_thread(run_pipeline, ...)` snapshots via `copy_context()`,
+    so the worker thread, and the LLM stages' own thread pools, which
+    copy *their* submitting context, all log under the same id.
+
+    During the long silent stages a `{"type": "heartbeat"}` line is
+    emitted every HEARTBEAT_INTERVAL_SECONDS so an idle-timeout proxy
+    between us and the client doesn't drop the connection.
     """
+    # Bind in the generator's context (see docstring) before the to_thread
+    # hop so the worker thread inherits the id.
+    set_request_id(request_id)
     lock_held = False
     if _gpu_lock.locked():
         log.info("%s: GPU lock contended; queued behind another request", verb)
@@ -1128,7 +1370,25 @@ async def _stream_pipeline(
         cancelled = False
         try:
             while True:
-                envelope = await queue.get()
+                try:
+                    envelope = await asyncio.wait_for(
+                        queue.get(), timeout=HEARTBEAT_INTERVAL_SECONDS
+                    )
+                except TimeoutError:
+                    # No real progress event for HEARTBEAT_INTERVAL_SECONDS
+                    # (a long silent stage is in flight). Emit a keepalive
+                    # without consuming a real event, then keep draining.
+                    # This can never fire after the terminal event: the
+                    # terminal `result`/`error` line is yielded after this
+                    # loop, and the `None` sentinel that ends the loop is
+                    # enqueued in the same worker-thread `finally` as every
+                    # terminal envelope, so once they're queued
+                    # `queue.get()` returns them immediately rather than
+                    # timing out.
+                    yield (
+                        json.dumps({"type": "heartbeat"}) + "\n"
+                    ).encode("utf-8")
+                    continue
                 if envelope is None:
                     break
                 env_type = envelope.get("type")

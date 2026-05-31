@@ -14,17 +14,25 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import numpy as np
+
 from app.models import OnsetCandidate
+from app.pipeline.envelope import OnsetEnvelope
 from app.pipeline.quantise import (
     _MAX_LLM_SHIFT,
     _QUANTISE_TOOL,
     SLOTS_PER_BEAT,
     _apply_llm_shifts,
     _build_windows,
+    _candidate_grids,
+    _envelope_snap,
     _extract_shifts,
     _format_window,
     _geometric_snap,
+    _infer_grid,
     _LlmEntry,
+    _musical_grid_snap,
+    _nearest_grid_slot,
     _slot_label,
     quantise_kept_onsets,
 )
@@ -350,3 +358,192 @@ def test_format_window_tags_context_bars_and_drops_their_ids() -> None:
     # Context bar 1: tagged read-only, its onset shown WITHOUT an id.
     assert "[context - read-only]" in rendered
     assert "(s)" in rendered and "#0(s)" not in rendered and "#1(s)" not in rendered
+
+
+# ---------- Deterministic musical-grid pass ----------
+
+_SLOT_SPAN = 2.0 / 48  # 4/4 @ 120 BPM, 12 slots/beat
+
+
+def _at_slots(slots, bar=0):
+    """Candidates placed (post-geometric) at the given absolute slots.
+
+    `quantised_time` is set directly so `_musical_grid_snap` sees a known
+    current slot without us having to reverse-engineer `beat_in_bar`.
+    """
+    cands = []
+    for s in slots:
+        c = OnsetCandidate(time=s * _SLOT_SPAN, strength=5.0, bar=bar, beat_in_bar=1.0)
+        c.quantised_time = s * _SLOT_SPAN
+        c.off_grid = False
+        cands.append(c)
+    return cands
+
+
+def _slot_of(c):
+    return round((c.quantised_time or 0.0) / _SLOT_SPAN)
+
+
+def test_infer_grid_picks_the_supported_subdivision() -> None:
+    g = _candidate_grids(12)
+
+    def name(folded):
+        grid = _infer_grid(folded, g, 12)
+        assert grid is not None
+        return grid[0]
+
+    assert name([0, 3, 6, 9, 0, 3, 6, 9]) == "straight_16"
+    assert name([0, 4, 8, 0, 4, 8]) == "triplet_8"
+    # Two jittered 8ths (1, 7) still read as straight 8ths, not promoted.
+    assert name([0, 6, 0, 6, 1, 7, 0, 6]) == "straight_8"
+    # Too little evidence -> defer (None).
+    assert _infer_grid([0, 3], g, 12) is None
+
+
+def test_grid_snap_pulls_a_stray_note_onto_the_voted_grid() -> None:
+    # A straight-16 hat lane (0,6,9 across two beats) with one stray note on
+    # slot 4 (a triplet-only position): the lane votes straight-16, so the
+    # stray snaps to slot 3.
+    structure = _structure([_bar(0, 0.0, 2.0)])
+    cands = _at_slots([0, 4, 6, 9, 12, 18, 21])
+    kept = {"h": cands}
+    stray = cands[1]  # the slot-4 note
+    _musical_grid_snap(kept, structure, slots_per_beat=12)  # type: ignore[arg-type]
+    assert _slot_of(stray) == 3
+    # The on-grid notes are untouched.
+    assert _slot_of(cands[0]) == 0 and _slot_of(cands[2]) == 6
+
+
+def test_grid_snap_leaves_a_genuine_triplet_lane_alone() -> None:
+    # A clean 8th-triplet lane (0,4,8 per beat) must NOT be squared.
+    structure = _structure([_bar(0, 0.0, 2.0)])
+    cands = _at_slots([0, 4, 8, 12, 16, 20])
+    kept = {"k": cands}
+    shifts = _musical_grid_snap(kept, structure, slots_per_beat=12)  # type: ignore[arg-type]
+    assert shifts == {}
+    assert [_slot_of(c) for c in cands] == [0, 4, 8, 12, 16, 20]
+
+
+def test_grid_snap_is_per_lane_so_polyrhythm_survives() -> None:
+    # Same bar: straight-16 hats over a triplet kick. Each lane keeps its own
+    # grid; the kick's slot-4 note is NOT squared to 3.
+    structure = _structure([_bar(0, 0.0, 2.0)])
+    hats = _at_slots([0, 6, 9, 12, 18, 21])
+    kick = _at_slots([0, 4, 8, 12, 16, 20])
+    kept = {"h": hats, "k": kick}
+    _musical_grid_snap(kept, structure, slots_per_beat=12)  # type: ignore[arg-type]
+    assert [_slot_of(c) for c in kick] == [0, 4, 8, 12, 16, 20]  # triplet kept
+
+
+def test_grid_snap_sparse_lane_inherits_the_bar_aggregate() -> None:
+    # A crash with only two hits can't vote its own grid; it inherits the
+    # bar aggregate (dominated by the straight-16 hat lane) and its stray
+    # slot-4 hit snaps to 3.
+    structure = _structure([_bar(0, 0.0, 2.0)])
+    hats = _at_slots([0, 3, 6, 9, 12, 15, 18, 21])
+    crash = _at_slots([4, 24])
+    kept = {"h": hats, "cr": crash}
+    _musical_grid_snap(kept, structure, slots_per_beat=12)  # type: ignore[arg-type]
+    assert _slot_of(crash[0]) == 3  # 4 -> 3 via inherited straight-16 grid
+
+
+def test_grid_snap_respects_the_injectivity_guard() -> None:
+    # The stray slot-4 note wants slot 3, but slot 3 is already occupied;
+    # the monotonic-injective guard rejects the group, keeping placement.
+    structure = _structure([_bar(0, 0.0, 2.0)])
+    cands = _at_slots([0, 3, 4, 6])
+    kept = {"h": cands}
+    _musical_grid_snap(kept, structure, slots_per_beat=12)  # type: ignore[arg-type]
+    assert [_slot_of(c) for c in cands] == [0, 3, 4, 6]  # unchanged
+
+
+def test_nearest_grid_slot_wraps_to_the_next_downbeat() -> None:
+    # Slot 11 of 12 is one slot before the next beat, not 11 after this one.
+    assert _nearest_grid_slot(11, (0, 3, 6, 9), 12) == 12
+    assert _nearest_grid_slot(4, (0, 3, 6, 9), 12) == 3
+
+
+def test_geometric_snap_records_the_sub_slot_residual() -> None:
+    # A hit whose natural slot is 3.4 rounds to slot 3 with residual +0.4.
+    structure = _structure([_bar(0, 0.0, 2.0)])
+    c = OnsetCandidate(
+        time=0.0, strength=5.0, bar=0, beat_in_bar=1.0 + 3.4 / 12
+    )
+    _geometric_snap({"k": [c]}, structure, slots_per_beat=12)  # type: ignore[arg-type]
+    assert c.quantised_residual_slots is not None
+    assert abs(c.quantised_residual_slots - 0.4) < 1e-6
+
+
+def test_geometric_snap_leaves_residual_none_for_off_grid() -> None:
+    # Six kicks crammed on beat 2: the band-rejected overflow is off-grid and
+    # gets no residual.
+    structure = _structure([_bar(0, 0.0, 2.0)])
+    kicks = [
+        OnsetCandidate(time=0.5 + i * 0.001, strength=5.0, bar=0, beat_in_bar=2.0)
+        for i in range(6)
+    ]
+    _geometric_snap({"k": kicks}, structure, slots_per_beat=12)  # type: ignore[arg-type]
+    off = [c for c in kicks if c.off_grid]
+    assert len(off) == 1
+    assert off[0].quantised_residual_slots is None
+
+
+# ---------- per-note envelope re-snap ----------
+
+def _env_with_pulses(slot_centers, *, height=10.0, width=0.004):
+    """An OnsetEnvelope with sharp transients centred on the given slots."""
+    ft = np.arange(0.0, 2.0, 0.001)
+    env = np.zeros_like(ft)
+    for s in slot_centers:
+        env += height * np.exp(-((ft - s * _SLOT_SPAN) ** 2) / (2 * width**2))
+    ref = float(np.percentile(env, 99)) if np.any(env) else 0.0
+    return OnsetEnvelope(frame_times=ft, env=env, ref=ref)
+
+
+def test_envelope_snap_moves_a_note_onto_its_transient() -> None:
+    # Note geometrically mis-snapped to slot 11; the real transient is on
+    # slot 12. The envelope re-snap pulls it over.
+    structure = _structure([_bar(0, 0.0, 2.0)])
+    cands = _at_slots([11])
+    env = _env_with_pulses([12])
+    shifts = _envelope_snap(
+        {"s": cands}, structure, {"s": env}, slots_per_beat=12,  # type: ignore[arg-type]
+    )
+    assert shifts == {("s", 0): 1}
+    assert _slot_of(cands[0]) == 12
+
+
+def test_envelope_snap_leaves_a_note_already_on_its_transient() -> None:
+    structure = _structure([_bar(0, 0.0, 2.0)])
+    cands = _at_slots([12])
+    env = _env_with_pulses([12])
+    shifts = _envelope_snap(
+        {"s": cands}, structure, {"s": env}, slots_per_beat=12,  # type: ignore[arg-type]
+    )
+    assert shifts == {}
+    assert _slot_of(cands[0]) == 12
+
+
+def test_envelope_snap_does_nothing_on_a_flat_envelope() -> None:
+    # No dominant transient anywhere -> dominance gate keeps the note put.
+    structure = _structure([_bar(0, 0.0, 2.0)])
+    cands = _at_slots([11])
+    ft = np.arange(0.0, 2.0, 0.001)
+    env = OnsetEnvelope(frame_times=ft, env=np.full_like(ft, 0.05), ref=0.05)
+    shifts = _envelope_snap(
+        {"s": cands}, structure, {"s": env}, slots_per_beat=12,  # type: ignore[arg-type]
+    )
+    assert shifts == {}
+    assert _slot_of(cands[0]) == 11
+
+
+def test_envelope_snap_respects_the_injectivity_guard() -> None:
+    # Two notes (slots 11 and 13) flanking a single transient on slot 12 would
+    # both want to move onto 12; the guard rejects the colliding group.
+    structure = _structure([_bar(0, 0.0, 2.0)])
+    cands = _at_slots([11, 13])
+    env = _env_with_pulses([12])
+    _envelope_snap(
+        {"s": cands}, structure, {"s": env}, slots_per_beat=12,  # type: ignore[arg-type]
+    )
+    assert [_slot_of(c) for c in cands] == [11, 13]  # unchanged

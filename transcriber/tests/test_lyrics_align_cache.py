@@ -2,7 +2,7 @@
 
 The helpers live in `app.main` as module-level private functions.
 Importing them is cheap because the lyrics_align module lazy-loads
-whisperx / torch inside its methods, not at import time.
+ctc-forced-aligner / torch inside its methods, not at import time.
 """
 from __future__ import annotations
 

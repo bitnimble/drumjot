@@ -78,11 +78,22 @@ class BeatStructure:
     # The seconds-space shift `align_beats_to_onsets` applied uniformly
     # to every beat (added to `beat.time`). Defaults to `0.0` and stays
     # that way when alignment didn't run, found no matches, or was
-    # rejected by the coverage gate — so the value is always a number,
+    # rejected by the coverage gate; so the value is always a number,
     # which lets the frontend's Beat control and the per-note "Global
     # beat alignment" row render `+0.000s` consistently instead of
     # disappearing on rejection.
     align_offset_sec: float = 0.0
+    # Per-pass breakdown of `align_offset_sec`. `align_beats_to_envelope`
+    # (coarse, ±2 quarter-notes) writes `align_coarse_offset_sec`;
+    # `align_beats_to_onsets` (fine, ±50 ms median snap) writes
+    # `align_fine_offset_sec`. Their sum always equals `align_offset_sec`,
+    # which downstream code keeps reading as the combined shift. The split
+    # is surfaced in `note_provenance.json` so the per-note debug popup
+    # can show "coarse +12 ms · fine +5 ms" instead of one collapsed
+    # number, useful when diagnosing whether a residual lag survived the
+    # coarse pass.
+    align_coarse_offset_sec: float = 0.0
+    align_fine_offset_sec: float = 0.0
 
     def position(self, t: float) -> tuple[int, float] | None:
         """Map an absolute time `t` (seconds) to `(bar_index, beat_in_bar)`.
@@ -185,6 +196,10 @@ def analyze_beats(
         )
         structure = _librosa_fallback(audio_path)
     if align_onsets:
+        # Coarse envelope phase-align first (wide ±half-bar search) so the
+        # fine onset snap below isn't starved by a multi-slot phase error
+        # outside its ±50 ms window, then remove the residual lag.
+        align_beats_to_envelope(structure, audio_path)
         align_beats_to_onsets(structure, align_onsets)
     _finalize_bar_tempos(structure)
     if duration_seconds is not None and duration_seconds > 0:
@@ -597,20 +612,128 @@ def _pad_trailing_bars(structure: BeatStructure, duration_seconds: float) -> Non
 # bogus global shift.
 MIN_ALIGN_COVERAGE = 0.30
 
-# Wider search window for the very first detected beat. The DBN has no
-# preceding-beat context at the song start, so beat 0 is the noisiest
-# tick in the structure -- its delta to the first audible drum hit can
-# easily exceed the regular `max_distance` even when the rest of the
-# song aligns cleanly. Catching that hit anchors the global shift to
-# the song's intended downbeat, fixing the "kick visibly off the first
-# beat after import" symptom.
-FIRST_BEAT_ANCHOR_WINDOW = 0.10
+# ---- Coarse envelope phase alignment (runs before the fine onset snap) ----
+#
+# The fine `align_beats_to_onsets` only searches ±50 ms (~1 slot). When the
+# beat tracker locks onto a phase that's a few slots off, the true hits sit
+# outside that window, so the fine pass no-ops or misfires and a constant
+# multi-slot offset survives into the score. This coarse pass first finds a
+# single global shift (up to ±`COARSE_MAX_SHIFT_BEATS` quarter notes) that
+# best seats the beat grid on the drum-stem onset-strength envelope, then
+# hands a well-phased grid to the fine pass for sub-frame lag removal.
+COARSE_MAX_SHIFT_BEATS = 2.0   # cap: ± two quarter notes (half a 4/4 bar)
+COARSE_SEARCH_STEP_SEC = 0.002  # offset search resolution (~0.05 slot @120)
+COARSE_ENV_HOP = 256            # onset-strength hop (~5.8 ms @ 44.1 kHz)
+# Multiplicative taper favouring small shifts: a shift at the ±cap must beat
+# the zero-shift score by >this fraction to win, so we never lock onto a
+# louder backbeat a full beat away when the grid is already close.
+COARSE_CENTER_PENALTY = 0.15
+# The winning comb score must exceed the mean comb score over the whole
+# search range by this factor, else there's no clear pulse and we shift
+# nothing (envelope too flat / not enough drum energy).
+COARSE_PROMINENCE = 1.10
 
-# How much weight the first-beat-to-kick delta gets when folded into
-# the global shift. 0.5 = equal influence with the all-beat median;
-# weaker values keep more of the existing behaviour, stronger values
-# risk over-correcting songs whose first beat happens to be unusual.
-FIRST_BEAT_ANCHOR_WEIGHT = 0.5
+
+def align_beats_to_envelope(
+    structure: BeatStructure,
+    audio_path: Path,
+) -> None:
+    """Coarse global phase align: seat the beat grid on the drum envelope.
+
+    Computes the onset-strength envelope of `audio_path` (the drum stem
+    when available) and finds the single global time shift `δ`, within
+    ±`COARSE_MAX_SHIFT_BEATS` quarter notes, that maximises the envelope
+    energy summed over all beat positions shifted by `δ`. A multiplicative
+    centre taper (`COARSE_CENTER_PENALTY`) biases the search toward small
+    shifts so a grid that's already close isn't dragged a full beat onto a
+    louder backbeat, and a prominence gate (`COARSE_PROMINENCE`) leaves the
+    grid untouched when there's no clear pulse to lock onto.
+
+    The shift is applied uniformly to every beat (inter-beat gaps and hence
+    per-bar tempo are preserved) and accumulated into `align_offset_sec`.
+    This runs *before* `align_beats_to_onsets`: it kills a multi-slot phase
+    error the fine pass's ±50 ms window can't see, leaving the fine pass a
+    well-phased grid on which to do precise lag removal.
+    """
+    if len(structure.beats) < 2:
+        return
+    import librosa
+
+    beat_times = np.asarray([b.time for b in structure.beats], dtype=np.float64)
+    beat_period = float(np.median(np.diff(np.sort(beat_times))))
+    if not np.isfinite(beat_period) or beat_period <= 0:
+        return
+    max_shift = COARSE_MAX_SHIFT_BEATS * beat_period
+
+    try:
+        y, sr = librosa.load(str(audio_path), sr=None, mono=True)
+    except Exception as exc:
+        log.warning("coarse align: could not load %s (%s); skipping", audio_path, exc)
+        return
+    if y.size == 0:
+        return
+    env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=COARSE_ENV_HOP)
+    if env.size == 0 or not np.any(env):
+        return
+    frame_times = librosa.frames_to_time(
+        np.arange(env.size), sr=sr, hop_length=COARSE_ENV_HOP
+    )
+
+    offset = _coarse_offset_from_envelope(
+        beat_times, env.astype(np.float64), frame_times,
+        max_shift=max_shift, step=COARSE_SEARCH_STEP_SEC,
+        center_penalty=COARSE_CENTER_PENALTY, prominence=COARSE_PROMINENCE,
+    )
+    if offset == 0.0:
+        log.info(
+            "coarse align: no confident global phase shift found; grid unchanged"
+        )
+        return
+    for beat in structure.beats:
+        beat.time += offset
+    structure.align_offset_sec += offset
+    structure.align_coarse_offset_sec += offset
+    log.info(
+        "coarse align: shifted all %d beats by %+.1f ms (%.2f slot @ %.1f BPM, "
+        "search ±%.0f ms)",
+        len(structure.beats), offset * 1000.0,
+        offset / (beat_period / 12.0), 60.0 / beat_period, max_shift * 1000.0,
+    )
+    _rebuild_bar_fields(structure)
+
+
+def _coarse_offset_from_envelope(
+    beat_times: np.ndarray,
+    env: np.ndarray,
+    frame_times: np.ndarray,
+    *,
+    max_shift: float,
+    step: float,
+    center_penalty: float,
+    prominence: float,
+) -> float:
+    """Global shift `δ` maximising Σ env(beat + δ), centre-biased and gated.
+
+    Pure (no audio I/O) so it's unit-testable: sweeps `δ` over
+    [-max_shift, +max_shift] in `step` increments, sampling the envelope at
+    each shifted beat position by linear interpolation. The raw comb score
+    is tapered by `(1 - center_penalty·|δ|/max_shift)` to favour small
+    shifts, and the winner is accepted only if its raw score clears
+    `prominence × mean(raw scores)`. Returns 0.0 when nothing is confident.
+    """
+    deltas = np.arange(-max_shift, max_shift + step, step)
+    if deltas.size == 0:
+        return 0.0
+    raw = np.array(
+        [float(np.interp(beat_times + d, frame_times, env).sum()) for d in deltas]
+    )
+    if not np.any(raw > 0):
+        return 0.0
+    taper = 1.0 - center_penalty * (np.abs(deltas) / max_shift)
+    best = int(np.argmax(raw * taper))
+    if raw[best] < prominence * float(raw.mean()):
+        return 0.0
+    return float(deltas[best])
 
 
 def align_beats_to_onsets(
@@ -632,24 +755,19 @@ def align_beats_to_onsets(
     even on a dead-steady song — the LLM then emitted a `{{ bpm }}`
     change between nearly every bar.
 
-    Instead, estimate ONE offset — the median over all beats of
-    `(nearest strong onset − beat time)` — and shift every beat by it.
+    Instead, estimate ONE offset, the median over all beats of
+    `(nearest strong onset − beat time)`, and shift every beat by it.
     The grid stays exactly as metrically regular as the DBN produced
     it (per-bar tempo is therefore stable), while the systematic lag is
     still removed. A uniform shift leaves inter-beat gaps unchanged, so
     a genuine accelerando the DBN tracked is preserved untouched.
 
-    The first detected beat gets special treatment: we additionally
-    search a wider ±`FIRST_BEAT_ANCHOR_WINDOW` for the strongest drum
-    hit (the "first kick" in the typical kick-on-1 song). When found,
-    its delta is folded into the global shift with
-    `FIRST_BEAT_ANCHOR_WEIGHT`. Rationale: the DBN has no preceding
-    context for beat 0, so its position is the noisiest in the song
-    and a hit 60-90 ms away (outside the regular `max_distance`)
-    won't even register as a deltas-list entry; without this anchor the
-    median shift leaves beat 0 visibly off the first kick after import.
-    Subsequent beats are constrained by the periodic grid so their
-    local deltas stay close to the median and don't need this fixup.
+    This is the FINE pass: it only searches ±`max_distance` (~50 ms), so
+    it assumes the grid is already within ~1 slot of the true phase.
+    `align_beats_to_envelope` runs first to guarantee that, it kills any
+    larger multi-slot phase error this window can't see. The shift here is
+    *added* to whatever the coarse pass already applied (`align_offset_sec`
+    accumulates).
 
     The offset is only applied when enough beats actually had a nearby
     onset (`MIN_ALIGN_COVERAGE`); a handful of coincidental matches
@@ -687,28 +805,7 @@ def align_beats_to_onsets(
         return
 
     coverage = len(deltas) / len(structure.beats)
-    median_offset = float(np.median(deltas))
-
-    # Wider-window anchor for the first detected beat. Fold its delta
-    # into the global shift only when the search actually finds a hit;
-    # otherwise behave exactly like the median-only path.
-    first_beat = structure.beats[0]
-    lo_a = int(np.searchsorted(
-        times, first_beat.time - FIRST_BEAT_ANCHOR_WINDOW, side="left"
-    ))
-    hi_a = int(np.searchsorted(
-        times, first_beat.time + FIRST_BEAT_ANCHOR_WINDOW, side="right"
-    ))
-    first_beat_delta: float | None = None
-    if hi_a > lo_a:
-        j_a = lo_a + int(np.argmax(strengths[lo_a:hi_a]))
-        first_beat_delta = float(times[j_a] - first_beat.time)
-        offset = (
-            (1.0 - FIRST_BEAT_ANCHOR_WEIGHT) * median_offset
-            + FIRST_BEAT_ANCHOR_WEIGHT * first_beat_delta
-        )
-    else:
-        offset = median_offset
+    offset = float(np.median(deltas))
 
     if coverage < MIN_ALIGN_COVERAGE:
         log.info(
@@ -720,24 +817,13 @@ def align_beats_to_onsets(
 
     for beat in structure.beats:
         beat.time += offset
-    structure.align_offset_sec = offset
-    if first_beat_delta is not None:
-        log.info(
-            "beat alignment: shifted all %d beats by %+.1f ms "
-            "(median %+.1f ms over %d beat→onset deltas, "
-            "anchored to first-beat delta %+.1f ms at weight %.2f, "
-            "coverage %.0f%%)",
-            len(structure.beats), offset * 1000,
-            median_offset * 1000, len(deltas),
-            first_beat_delta * 1000, FIRST_BEAT_ANCHOR_WEIGHT,
-            coverage * 100,
-        )
-    else:
-        log.info(
-            "beat alignment: shifted all %d beats by %+.1f ms "
-            "(median of %d beat→onset deltas, coverage %.0f%%)",
-            len(structure.beats), offset * 1000, len(deltas), coverage * 100,
-        )
+    structure.align_offset_sec += offset
+    structure.align_fine_offset_sec += offset
+    log.info(
+        "beat alignment: shifted all %d beats by %+.1f ms "
+        "(median of %d beat→onset deltas, coverage %.0f%%)",
+        len(structure.beats), offset * 1000, len(deltas), coverage * 100,
+    )
     _rebuild_bar_fields(structure)
 
 

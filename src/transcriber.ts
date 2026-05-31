@@ -228,6 +228,45 @@ export type ResumeOptions = {
   signal?: AbortSignal;
 };
 
+/** Per-lane soft scores in an {@link AlignmentResult}. Mirrors
+ *  `transcriber/app/scoring/models.py::LaneScoreOut`. */
+export type LaneScore = {
+  soft_f1: number;
+  soft_precision: number;
+  soft_recall: number;
+  n_chart: number;
+  n_audio: number;
+};
+
+/**
+ * Result of `POST /score`. Mirrors
+ * `transcriber/app/scoring/models.py::AlignmentResult`. `score_corrected`
+ * (post global offset+tempo align) is the headline corpus-filter metric;
+ * `score` is the pre-correction number.
+ */
+export type AlignmentResult = {
+  score: number;
+  score_corrected: number;
+  f1_macro: number;
+  f1_weighted: number;
+  f1_weighted_raw: number;
+  per_lane: Record<string, LaneScore>;
+  offset_sec: number;
+  tempo_ratio: number;
+  matched_pairs: number;
+  corrected_onsets_by_lane: Record<string, number[]>;
+  unmapped_notes: number;
+  audio_reference: 'drum_track' | 'separated';
+  separation_skipped: boolean;
+};
+
+export type ScoreOptions = {
+  /** Fires when the request is queued behind another GPU job, then again
+   *  when it starts running, lets the UI show a wait state. */
+  onPhase?: (phase: 'queued' | 'running') => void;
+  signal?: AbortSignal;
+};
+
 export class TranscriberClient {
   constructor(private readonly baseUrl: string = TRANSCRIBER_BASE) {}
 
@@ -287,6 +326,112 @@ export class TranscriberClient {
       signal: options.signal,
     });
     return this.readStream(res, options, 'Resume');
+  }
+
+  /**
+   * Score a ParaDB `.zip` map pack against its own audio (the pack's
+   * drums-only track when present, else the separated song track). A
+   * development test harness for the corpus-filtering scorer.
+   */
+  async scoreParadb(pack: File, options: ScoreOptions = {}): Promise<AlignmentResult> {
+    const form = new FormData();
+    form.append('pack', pack);
+    const res = await fetch(`${this.baseUrl}/score`, {
+      method: 'POST',
+      body: form,
+      signal: options.signal,
+    });
+    return this.readScoreStream(res, options);
+  }
+
+  /**
+   * Score a MIDI chart against a matching audio file. The audio is always
+   * separated server-side to recover the drum stem.
+   */
+  async scoreMidi(midi: File, audio: File, options: ScoreOptions = {}): Promise<AlignmentResult> {
+    const form = new FormData();
+    form.append('midi', midi);
+    form.append('audio', audio);
+    const res = await fetch(`${this.baseUrl}/score`, {
+      method: 'POST',
+      body: form,
+      signal: options.signal,
+    });
+    return this.readScoreStream(res, options);
+  }
+
+  /**
+   * Consume the /score NDJSON stream. Envelopes mirror /lyrics/align:
+   * `queued` / `running` (forwarded to `onPhase`), `heartbeat` (ignored),
+   * and a terminal `result` (an {@link AlignmentResult}) or `error`.
+   */
+  private async readScoreStream(res: Response, options: ScoreOptions): Promise<AlignmentResult> {
+    if (!res.ok) {
+      throw new Error(`Score failed (${res.status}): ${await safeReadError(res)}`);
+    }
+    if (!res.body) throw new Error('Score returned no response body');
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    let final: AlignmentResult | null = null;
+    let terminalError: { statusCode: number; message: string } | null = null;
+
+    const handle = (event: Record<string, unknown>): void => {
+      switch (event.type) {
+        case 'queued':
+          options.onPhase?.('queued');
+          break;
+        case 'running':
+          options.onPhase?.('running');
+          break;
+        case 'result':
+          final = event.data as AlignmentResult;
+          break;
+        case 'error':
+          terminalError = {
+            statusCode: typeof event.status_code === 'number' ? event.status_code : 500,
+            message: String(event.message ?? 'unknown error'),
+          };
+          break;
+        default:
+          break; // heartbeat / unknown
+      }
+    };
+
+    try {
+      while (!final && !terminalError) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let newlineIdx: number;
+        while ((newlineIdx = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, newlineIdx).trim();
+          buffer = buffer.slice(newlineIdx + 1);
+          if (!line) continue;
+          const event = safeParseJson(line);
+          if (event) handle(event);
+          if (final || terminalError) break;
+        }
+      }
+      const tail = buffer.trim();
+      if (tail && !final && !terminalError) {
+        const event = safeParseJson(tail);
+        if (event) handle(event);
+      }
+    } finally {
+      try {
+        await reader.cancel();
+      } catch {
+        // already done / aborted
+      }
+    }
+
+    if (terminalError) {
+      const err = terminalError as { statusCode: number; message: string };
+      throw new Error(`Score failed (${err.statusCode}): ${err.message}`);
+    }
+    if (!final) throw new Error('Score stream ended without a terminal result event');
+    return final;
   }
 
   /**

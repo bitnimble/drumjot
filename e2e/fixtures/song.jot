@@ -1,0 +1,19 @@
+{{ bpm: 128, time: "4/4", title: "Smoke Test Song",
+   instrumentMapping: {
+     c: { name: "Crash" },
+     h: { name: "HiHat" },
+     s: { name: "Snare" },
+     t: { name: "Tom" },
+     f: { name: "Floor Tom" },
+     k: { name: "Kick" }
+   } }}
+[Groove=(k+h:c h:c s:a+h:c h:c k+h:c h:c s:a+h:c h:c)]
+[Fill=(s:g s t t f f s:a s:a)]
+(c:o+k+h:c h:c s:a+h:c h:c k+h:c h:c s:a+h:c h:c)
+[Groove]
+[Groove]
+[Fill]
+(c:o+k+h:c h:c s:a+h:c h:c k+h:c h:c s:a+h:c h:c)
+[Groove]
+[Groove]
+[Fill]

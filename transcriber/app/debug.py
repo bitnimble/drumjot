@@ -305,10 +305,19 @@ def beats_dump(structure: Any) -> dict[str, Any]:
                 structure, "has_time_sig_changes", False
             ),
             # `None` until alignment runs (or when it ran but didn't
-            # apply a shift — see `align_beats_to_onsets`). Persisted
+            # apply a shift, see `align_beats_to_onsets`). Persisted
             # here so resumed runs reading beats.json keep the value
-            # without re-detecting onsets.
+            # without re-detecting onsets. The coarse / fine split lets
+            # `note_provenance.json` surface "envelope phase align" and
+            # "median onset snap" as separate stages in the per-note
+            # debug popup; their sum equals `align_offset_sec`.
             "align_offset_sec": getattr(structure, "align_offset_sec", None),
+            "align_coarse_offset_sec": getattr(
+                structure, "align_coarse_offset_sec", None
+            ),
+            "align_fine_offset_sec": getattr(
+                structure, "align_fine_offset_sec", None
+            ),
             "beats": [
                 {
                     "time": round(b.time, 4),

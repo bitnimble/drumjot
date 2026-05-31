@@ -1,15 +1,15 @@
 # Frontend listener block. Conditionally appended to the runtime
-# Caddyfile by transcriber/entrypoint.sh when DISABLE_FRONTEND is unset
+# Caddyfile by docker/entrypoint.sh when DISABLE_FRONTEND is unset
 # or "0". Set DISABLE_FRONTEND=1 to omit this block entirely so the
 # container's :5173 stays free for a host-side Vite dev server bound to
 # the same port (host port mapping is a separate compose concern; see
-# FRONTEND_PORT in docker-compose.yml).
+# FRONTEND_PORT in docker/docker-compose.*.yml).
 #
 # Bundled SPA + same-origin /api proxy back to the :8001 router. Mirrors
 # the Vite dev server's behaviour so the browser bundle stays
 # origin-agnostic (it always calls `/api/*` on its own host, and the
 # proxy decides where that goes). Container-internal port is fixed; the
-# host-side mapping is set via FRONTEND_PORT in docker-compose.yml.
+# host-side mapping is set via FRONTEND_PORT in docker/docker-compose.*.yml.
 :5173 {
 	# Strip the /api prefix before forwarding so the transcriber sees
 	# its native paths (/transcribe, /health, /outputs/...). flush_interval

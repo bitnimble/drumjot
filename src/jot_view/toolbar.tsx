@@ -118,6 +118,7 @@ export const Toolbar = observer(
     onLoadJot,
     onLoadMidi,
     onLoadParadb,
+    onScoreParadb,
     onLoadDebugBundle,
     onLoadAudioTrack,
     onLoadLyricsFile,
@@ -160,6 +161,9 @@ export const Toolbar = observer(
     onLoadJot: (file: File) => void;
     onLoadMidi: (file: File) => void;
     onLoadParadb: (file: File) => void;
+    /** Score a ParaDB map against its own audio (dev test harness for the
+     *  corpus-filtering scorer); reports a quality number, doesn't load it. */
+    onScoreParadb: (file: File) => void;
     onLoadDebugBundle: (file: File) => void;
     onLoadAudioTrack: (file: File) => void;
     /** Load a synced-lyrics file (.lrc or .txt in LRC format) from disk.
@@ -222,6 +226,7 @@ export const Toolbar = observer(
     const jotInputRef = React.useRef<HTMLInputElement>(null);
     const midiInputRef = React.useRef<HTMLInputElement>(null);
     const paradbInputRef = React.useRef<HTMLInputElement>(null);
+    const scoreParadbInputRef = React.useRef<HTMLInputElement>(null);
     const debugBundleInputRef = React.useRef<HTMLInputElement>(null);
     const audioTrackInputRef = React.useRef<HTMLInputElement>(null);
     const lyricsInputRef = React.useRef<HTMLInputElement>(null);
@@ -249,6 +254,12 @@ export const Toolbar = observer(
     const handleParadbChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (file) onLoadParadb(file);
+      e.target.value = '';
+    };
+
+    const handleScoreParadbChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (file) onScoreParadb(file);
       e.target.value = '';
     };
 
@@ -360,6 +371,17 @@ export const Toolbar = observer(
                         title="Load a ParaDB / Paradiddle map pack (`.zip`). The chart is converted to a score and its audio tracks are loaded automatically for play-along practice. Runs entirely client-side."
                       >
                         Load ParaDB map (.zip)
+                      </button>
+                      <button
+                        type="button"
+                        className={dropdownStyles.dropdownItem}
+                        onClick={() => {
+                          scoreParadbInputRef.current?.click();
+                          closeAll();
+                        }}
+                        title="Score a ParaDB map pack (`.zip`) against its own audio: how faithfully the chart's onsets line up with the detected drum onsets (0-100, after a global offset/tempo align). A dev test harness for the corpus-quality scorer, reports a number as a toast (full breakdown in the console); does NOT load the chart. Requires the transcriber service."
+                      >
+                        Score ParaDB map (.zip)
                       </button>
                       <button
                         type="button"
@@ -647,6 +669,13 @@ export const Toolbar = observer(
           accept=".zip,application/zip"
           className={styles.hiddenInput}
           onChange={handleParadbChange}
+        />
+        <input
+          ref={scoreParadbInputRef}
+          type="file"
+          accept=".zip,application/zip"
+          className={styles.hiddenInput}
+          onChange={handleScoreParadbChange}
         />
         <input
           ref={debugBundleInputRef}
@@ -1004,7 +1033,7 @@ const LyricsAlignBusyPill = observer(
         title={
           queued
             ? 'Waiting for the GPU (another job is running)…'
-            : 'Extracting vocals + running whisperx…'
+            : 'Extracting vocals + aligning lyrics…'
         }
         data-testid="lyrics-align-busy"
       >

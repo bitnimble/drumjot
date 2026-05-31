@@ -382,13 +382,17 @@ def _load_beats(path: Path) -> BeatStructure:
         for bt in data.get("beats", [])
     ]
     # Older beats.json files (pre-alignment-tracking) won't have the
-    # field, and earlier code wrote `null` on rejected alignments —
-    # default both to 0.0 so the rest of the pipeline always sees a
-    # number. New runs always persist a numeric value.
-    raw_offset = data.get("align_offset_sec")
-    align_offset_sec = (
-        float(raw_offset) if isinstance(raw_offset, (int, float)) else 0.0
-    )
+    # field, and earlier code wrote `null` on rejected alignments, # default both to 0.0 so the rest of the pipeline always sees a
+    # number. New runs always persist a numeric value. The coarse /
+    # fine split was added later; bundles predating it default each
+    # half to 0.0 and the sum survives via `align_offset_sec`.
+    def _read_float(key: str) -> float:
+        v = data.get(key)
+        return float(v) if isinstance(v, (int, float)) else 0.0
+
+    align_offset_sec = _read_float("align_offset_sec")
+    align_coarse_offset_sec = _read_float("align_coarse_offset_sec")
+    align_fine_offset_sec = _read_float("align_fine_offset_sec")
     return BeatStructure(
         beats=all_beats,
         bars=bars,
@@ -399,6 +403,8 @@ def _load_beats(path: Path) -> BeatStructure:
         has_tempo_changes=bool(data.get("has_tempo_changes", False)),
         has_time_sig_changes=bool(data.get("has_time_sig_changes", False)),
         align_offset_sec=align_offset_sec,
+        align_coarse_offset_sec=align_coarse_offset_sec,
+        align_fine_offset_sec=align_fine_offset_sec,
     )
 
 
@@ -603,6 +609,26 @@ def _apply_quantise_shifts(
             # value when absent).
             if og is not None:
                 cands[idx].off_grid = bool(og)
+            # Per-pass shifts and the sub-slot residual; quantise.py
+            # writes these to `shifts.json` so a resume-from-transcribe
+            # preserves them for the per-note debug popup. Older
+            # shifts.json predates the fields; the candidate keeps its
+            # `None` default in that case.
+            residual = row.get("residual_slots")
+            if residual is not None:
+                cands[idx].quantised_residual_slots = float(residual)
+            geo = row.get("geometric_shift")
+            if geo is not None:
+                cands[idx].geometric_shift_slots = int(geo)
+            env = row.get("envelope_shift")
+            if env is not None:
+                cands[idx].envelope_shift_slots = int(env)
+            grid = row.get("grid_shift")
+            if grid is not None:
+                cands[idx].grid_shift_slots = int(grid)
+            llm = row.get("llm_shift")
+            if llm is not None:
+                cands[idx].llm_shift_slots = int(llm)
             applied += 1
     log.info(
         "resume: reapplied %d quantise shift(s) from %s (skipped %d)",

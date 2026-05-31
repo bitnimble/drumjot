@@ -2,12 +2,12 @@ export { parseLrc, activeLineIndexAt, activeWordIndexAt, stripLyricNoise } from 
 export type { LyricLine, LyricWord } from './lrc';
 export { searchLrclib, ciTrimEq } from './lrclib';
 export type { LrclibMatch, SearchOptions } from './lrclib';
-export { alignLyricsWhisper, pickVocalsTrack, nameLooksLikeVocals } from './whisper_align';
+export { alignLyricsForced, pickVocalsTrack, nameLooksLikeVocals } from './forced_align';
 export type {
   AlignLyricsRequest,
   AlignLyricsOptions,
   AlignLyricsRealignInput,
-} from './whisper_align';
+} from './forced_align';
 export {
   LyricsStore,
   lyricsStore,

@@ -46,7 +46,7 @@ import logging
 import zipfile
 from pathlib import Path
 
-from app.outputs import OutputSink
+from app.outputs import OutputSink, encode_batch_parallel
 from app.pipeline.cymbal_split import STEM_PITCH_ALIASES as CYMBAL_STEM_ALIASES
 from app.run_log import RunLog
 
@@ -102,36 +102,23 @@ def build_debug_zip(
     mapping: dict[str, str] = {}
     audio_entries: list[tuple[str, Path]] = []  # (zip path, mp3 source)
 
+    # Collect every (mapping_key, flac_src, mp3_basename) up front so the
+    # entire MP3 transcode runs as one parallel batch instead of seven
+    # sequential ffmpeg invocations. `mp3_basename` is the OutputSink
+    # name (no extension); `mapping_key` is what the frontend manifest
+    # uses to look up which audio file belongs to which stem.
+    encode_jobs: list[tuple[str, Path, str]] = []
+
     no_drums_flac = output_sink.existing_path(NO_DRUMS_KEY)
     if no_drums_flac is not None:
-        mp3 = output_sink.save_mp3_from_wav(NO_DRUMS_KEY, no_drums_flac)
-        if mp3 is not None:
-            audio_entries.append((mp3.name, mp3))
-            mapping[NO_DRUMS_KEY] = mp3.name
+        encode_jobs.append((NO_DRUMS_KEY, no_drums_flac, NO_DRUMS_KEY))
 
     for pitch in sorted(set(per_instrument_stem_pitches)):
         flac_name = f"stem_{pitch}"
         flac = output_sink.existing_path(flac_name)
         if flac is None:
             continue
-        mp3 = output_sink.save_mp3_from_wav(flac_name, flac)
-        if mp3 is None:
-            continue
-        audio_entries.append((mp3.name, mp3))
-        mapping[pitch] = mp3.name
-
-    # Stem aliases: post-separation splits (today only `cymbal_split`)
-    # produce multiple output pitches sharing one input stem file. The
-    # manifest declares the shared stem under each output pitch's key so
-    # the frontend can cluster all sharing pitches under that one audio
-    # row without recomputing the relationship; see
-    # `cymbal_split.STEM_PITCH_ALIASES`. Skip aliases whose target stem
-    # didn't make it into `mapping` (the stem was absent / encoding
-    # failed): the alias would dangle anyway.
-    for alias_pitch, source_pitch in CYMBAL_STEM_ALIASES.items():
-        if alias_pitch in mapping or source_pitch not in mapping:
-            continue
-        mapping[alias_pitch] = mapping[source_pitch]
+        encode_jobs.append((pitch, flac, flac_name))
 
     # Residual = drum_stem − sum(per-instrument stems). Diagnostic-only; # carries auxiliary percussion (cowbell, tambourine, …) the 5-class
     # MDX23C separator has no lane for, plus the separator's own
@@ -139,10 +126,35 @@ def build_debug_zip(
     # (or runs where the residual write failed) is fine.
     residual_flac = output_sink.existing_path(RESIDUAL_KEY)
     if residual_flac is not None:
-        mp3 = output_sink.save_mp3_from_wav(RESIDUAL_KEY, residual_flac)
-        if mp3 is not None:
-            audio_entries.append((mp3.name, mp3))
-            mapping[RESIDUAL_KEY] = mp3.name
+        encode_jobs.append((RESIDUAL_KEY, residual_flac, RESIDUAL_KEY))
+
+    # Parallel MP3 transcode. `encode_batch_parallel` preserves input
+    # order, so zipping back against `encode_jobs` keeps the bundle
+    # entry order deterministic (no_drums first, then per-instrument
+    # stems in sorted pitch order, residual last).
+    encode_results = encode_batch_parallel(
+        output_sink.save_mp3_from_wav,
+        [(mp3_name, src) for _, src, mp3_name in encode_jobs],
+    )
+    for (mapping_key, _src, _mp3_name), mp3 in zip(encode_jobs, encode_results):
+        if mp3 is None:
+            continue
+        audio_entries.append((mp3.name, mp3))
+        mapping[mapping_key] = mp3.name
+
+    # Stem aliases: post-separation splits (today only `cymbal_split`)
+    # produce multiple output pitches sharing one input stem file. The
+    # manifest declares the shared stem under each output pitch's key so
+    # the frontend can cluster all sharing pitches under that one audio
+    # row without recomputing the relationship; see
+    # `cymbal_split.STEM_PITCH_ALIASES`. Must run AFTER `mapping` is
+    # populated by the parallel encode above; skips aliases whose target
+    # stem didn't make it into the bundle (absent / encoding failed)
+    # because a dangling alias would point at no audio.
+    for alias_pitch, source_pitch in CYMBAL_STEM_ALIASES.items():
+        if alias_pitch in mapping or source_pitch not in mapping:
+            continue
+        mapping[alias_pitch] = mapping[source_pitch]
 
     manifest: dict[str, object] = {
         "filename": original_filename,

@@ -541,15 +541,20 @@ def detect_onsets_adtof(
         window_sec=settings.adtof_audio_refine_window_s,
     )
 
+    # `time` is the post-envelope-refine value (where the audio transient
+    # actually sits); `raw_model_time` carries the pre-refine
+    # `peak_frame / fps` so the per-note debug popup can surface the
+    # envelope refinement as its own stage in the detected → final chain.
     candidates = [
         OnsetCandidate(
             time=refined_time,
+            raw_model_time=raw_time,
             strength=float(activation[peak_idx]),
             bar=-1,
             beat_in_bar=-1.0,
         )
-        for peak_idx, refined_time in zip(
-            peak_frames, refined_times, strict=False
+        for peak_idx, raw_time, refined_time in zip(
+            peak_frames, peak_times_sec, refined_times, strict=False
         )
     ]
     log.info(
@@ -696,3 +701,97 @@ def detect_drum_onsets_for_alignment(
         len(pool), len(_ALIGNMENT_LANES), audio_path.name,
     )
     return pool
+
+
+# ADTOF lane index -> (scoring lane name, pitch key for peak-pick params).
+# The merged ride+crash lane (4) becomes `cy`; we use `c` for its params so
+# it gets the noisy-lane (adaptive threshold + decay-reset) treatment.
+_SCORING_LANES_FROM_ADTOF: tuple[tuple[str, int, str], ...] = (
+    ("k", 0, "k"),
+    ("s", 1, "s"),
+    ("t", 2, "t"),
+    ("h", 3, "h"),
+    ("cy", 4, "c"),
+)
+
+
+def _peak_pick_lane(activation: np.ndarray, pitch: str, fps: float) -> np.ndarray:
+    """Peak-pick one activation lane with `pitch`'s standard parameters
+    (height/min-distance/prominence, plus the decay-reset filter for noisy
+    lanes). Returns ascending peak frame indices. Shared by the all-lanes
+    detector; the per-stem `detect_onsets_adtof` keeps its own copy because
+    it also tracks the reset-removed count for logging."""
+    is_noisy = pitch in _NOISY_LANE_PITCHES
+    threshold = _resolve_threshold(pitch, activation)
+    min_dist_s = (
+        settings.adtof_noisy_peak_min_distance_s
+        if is_noisy
+        else settings.adtof_peak_min_distance_s
+    )
+    min_distance_frames = max(1, round(min_dist_s * fps))
+    prominence_val = (
+        settings.adtof_noisy_peak_prominence
+        if is_noisy
+        else settings.adtof_peak_prominence
+    )
+    prominence = prominence_val if prominence_val > 0.0 else None
+    peaks, _props = find_peaks(
+        activation, height=threshold, distance=min_distance_frames, prominence=prominence
+    )
+    reset_frac = settings.adtof_noisy_decay_reset_frac
+    if is_noisy and reset_frac > 0.0:
+        peaks = _decay_reset_filter(
+            activation, peaks, reset_frac, settings.adtof_noisy_decay_reset_floor
+        )
+    return peaks
+
+
+def detect_all_lanes_adtof(drum_stem_path: Path) -> dict[str, list[float]]:
+    """Per-lane onset seconds for all five scoring lanes from ONE ADTOF
+    inference on a drum stem.
+
+    Unlike `detect_onsets_adtof` (one isolated stem -> one lane), this reads
+    every lane off a single full-drum-mix inference, the in-distribution use
+    ADTOF was trained for, so the alignment scorer needs no per-instrument
+    separation. The merged ride+crash lane is returned as `cy`. Peak times
+    are refined against the drum stem's onset envelope in one pass. Intended
+    audio is a drum stem (a separated `stems_all` drum stem, or a ParaDB
+    pack's drums-only track)."""
+    audio = _load_mono_audio(drum_stem_path)
+    if settings.adtof_median_normalize and audio.size:
+        scale = _median_scale_factor(audio)
+        if scale != 1.0:
+            audio = np.clip(audio * scale, -1.0, 1.0).astype(np.float32, copy=False)
+
+    model, device = _load_model()
+    acts, fps = _adtof_activations(model, device, audio)
+
+    frames_by_lane: dict[str, list[int]] = {}
+    for lane_name, idx, pitch in _SCORING_LANES_FROM_ADTOF:
+        if idx >= acts.shape[1]:
+            continue
+        activation = acts[:, idx]
+        if activation.size == 0:
+            continue
+        frames_by_lane[lane_name] = [int(p) for p in _peak_pick_lane(activation, pitch, fps)]
+
+    # Refine every lane's times against the drum stem in a single
+    # onset-envelope pass (pay the librosa cost once, not per lane).
+    flat = [(lane_name, frame) for lane_name, frames in frames_by_lane.items() for frame in frames]
+    refined = _refine_peak_times_audio(
+        drum_stem_path,
+        [frame / fps for _lane, frame in flat],
+        window_sec=settings.adtof_audio_refine_window_s,
+    )
+
+    out: dict[str, list[float]] = {lane_name: [] for lane_name in frames_by_lane}
+    for (lane_name, _frame), t in zip(flat, refined, strict=False):
+        out[lane_name].append(t)
+    for times in out.values():
+        times.sort()
+    log.info(
+        "ADTOF all-lanes: %s onsets from %s",
+        {ln: len(ts) for ln, ts in out.items()},
+        drum_stem_path.name,
+    )
+    return out

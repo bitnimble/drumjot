@@ -3,7 +3,7 @@
 Two independent caches live under `settings.cache_dir`:
 
   - `vocals/`; opus-encoded separated vocals stems
-  - `alignment/`; whisperx output JSON
+  - `alignment/`; CTC forced-alignment output JSON
 
 Both are content-addressed: callers pass an opaque filename key that
 already encodes the input hash and the model identifiers that produced

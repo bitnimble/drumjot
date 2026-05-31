@@ -51,12 +51,21 @@ export type NoteProvenanceContextValue = {
   showFiltered: boolean;
   /**
    * Global beat-grid alignment offset (seconds) the beat tracker
-   * applied. Same value for every entry — surfaced here so the
+   * applied. Same value for every entry, surfaced here so the
    * per-note Debug details panel can show it as "Grid align" without
    * threading the whole provenance file through. `null` when the
    * sidecar didn't record one (older bundles).
    */
   beatAlignmentOffsetSec: number | null;
+  /** Coarse envelope-phase alignment shift (`align_beats_to_envelope`),
+   * separated from the combined `beatAlignmentOffsetSec` so the popup
+   * can show the two alignment passes as distinct stages. `null` when
+   * the bundle predates provenance format v3 or the pass didn't apply
+   * a shift. */
+  beatAlignCoarseOffsetSec: number | null;
+  /** Fine median onset-snap alignment shift (`align_beats_to_onsets`).
+   * `null` like {@link beatAlignCoarseOffsetSec}. */
+  beatAlignFineOffsetSec: number | null;
   /**
    * Bundle-manifest mapping from pitch letter (and the synthetic
    * `no_drums` key) to the audio filename inside the bundle, e.g.
