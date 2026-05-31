@@ -1067,6 +1067,13 @@ const OnsetTimingVisualization = observer(
       return audioTracksByFilename.values().next().value;
     }, [audioTracksByFilename, mapping, entry.pitch]);
 
+    // Always uniform-normalise the snippet: the debug-details popover is
+    // a fixed-size inspector window the user can't enlarge to compensate
+    // for a quiet recording, so the global mixer's `uniformWaveforms`
+    // toggle isn't sufficient. Read here so MobX subscribes; thread into
+    // the effect via deps so a late-arriving scale repaints.
+    const ampScale = audioTrack ? waveformWorker.getAmpScale(audioTrack.id) : 1;
+
     React.useEffect(() => {
       const canvas = canvasRef.current;
       if (!canvas || !audioTrack) return;
@@ -1107,8 +1114,11 @@ const OnsetTimingVisualization = observer(
         // fine because silent regions fade into the chrome around them,
         // but in the snippet it reads as broken rendering.
         for (let p = 0; p < TIMING_VIZ_WIDTH; p++) {
-          const mn = peaks[p * 2];
-          const mx = peaks[p * 2 + 1];
+          // Clamp post-scale so an aggressive normalisation on a track
+          // with a couple of full-scale transients doesn't shoot peaks
+          // off the row's top/bottom edge.
+          const mn = Math.max(-1, peaks[p * 2] * ampScale);
+          const mx = Math.min(1, peaks[p * 2 + 1] * ampScale);
           const y0 = mid - mx * scale;
           const y1 = mid - mn * scale;
           ctx.fillRect(p, y0, 1, Math.max(1, y1 - y0));
@@ -1117,7 +1127,7 @@ const OnsetTimingVisualization = observer(
       return () => {
         cancelled = true;
       };
-    }, [audioTrack, windowStart, windowDur]);
+    }, [audioTrack, windowStart, windowDur, ampScale]);
 
     // Bar boundaries + per-grid-slot subdivisions visible inside the
     // window. Walk the timeline once; boundaries sit at each bar's
