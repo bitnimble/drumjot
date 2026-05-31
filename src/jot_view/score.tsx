@@ -1651,18 +1651,59 @@ const NoteProvenanceDetails = observer(
         ? (beats * gridDivision) / originalBar.time.unit
         : undefined;
 
+    // ─── Bar-grid frame shift attribution ───
+    //
+    // Two values that LOOK like they should advance the onset along the
+    // detected → final chain actually don't, they shift the *frame*
+    // we're measuring against, not the onset itself:
+    //
+    //   - **Envelope refine** is pre-canonical. `entry.detected_time_sec`
+    //     is set in `note_provenance.py` to `float(c.time)`, and `c.time`
+    //     was already snapped to the audio-envelope local-max by
+    //     `_refine_peak_times_audio` *before* being stored on the
+    //     candidate. The chain starts AT detected_time_sec, so adding
+    //     `envelopeRefineSec = detected − raw_model` on top would
+    //     double-count the move from raw model peak to canonical time.
+    //   - **Beat-grid alignment** shifts every beat's `time` (and thus
+    //     each bar's `start_time`) by `align_offset_sec`, but the
+    //     onset's audio time `c.time` is unchanged. The post-alignment
+    //     bar positions ARE reflected in the JOT's bar audio anchors
+    //     (via the transcriber's per-bar `set_tempo` map +
+    //     `from_midi.ts`'s `drumsT0Sec` reconstruction), so
+    //     `finalSec = currentBarTiming.startSec + intra + drumsT0Sec`
+    //     is already in the post-alignment frame.
+    //
+    // Their combined value `(envelopeRefineSec ?? 0) + combinedAlignSec`
+    // is what previously surfaced unlabeled as "Unknown drift" on every
+    // onset of a track with a non-zero net frame shift, the chain
+    // included those shifts in `accountedSec` while `finalSec` (rightly)
+    // did not, leaving the gap as a confusing residual of magnitude
+    // `|envelopeRefineSec + combinedAlignSec|` (often 50-80 ms once
+    // both contribute). We now keep them OUT of `accountedSec` (so the
+    // residual collapses to just the genuinely-unknown rounding noise)
+    // and surface their sum as its own labeled "Bar-grid frame shift"
+    // row in the debug details below.
+    const barGridFrameShiftSec: number | undefined =
+      envelopeRefineSec !== undefined || Math.abs(combinedAlignSec) > 1e-9
+        ? (envelopeRefineSec ?? 0) + combinedAlignSec
+        : undefined;
+
     // ─── Unknown drift residual ───
     //
     // `finalSec` minus everything the named-stages chain accounts for.
-    // Surfaces every drift source we haven't enumerated yet (per-bar
-    // BPM attribution mismatches between the transcriber and from_midi,
-    // cross-bar drum-offset re-bucketing under varying tempo, etc.).
+    // After the bar-grid frame-shift fix above this should sit at ~0
+    // for well-formed bundles; any remaining gap is a genuine drift
+    // source we haven't enumerated (per-bar BPM attribution mismatches
+    // between the transcriber and from_midi, cross-bar drum-offset
+    // re-bucketing under varying tempo, etc.).
     let unknownDriftSec: number | undefined;
     let unknownDriftBeats: number | undefined;
     let unknownDriftMs: number | undefined;
     if (finalSec !== undefined && rendered) {
       let accountedSec = entry.detected_time_sec;
-      if (envelopeRefineSec !== undefined) accountedSec += envelopeRefineSec;
+      // `envelopeRefineSec` NOT added, see the `barGridFrameShiftSec`
+      // comment above. The chain starts at `entry.detected_time_sec`,
+      // which is already the post-envelope-refine audio time.
       if (hasPerPassQuantise) {
         for (const p of quantisePasses) {
           if (p.slots === null || p.slots === undefined || p.slots === 0) continue;
@@ -1673,7 +1714,11 @@ const NoteProvenanceDetails = observer(
         accountedSec += fallbackQuantSec;
       }
       if (snapSec !== undefined) accountedSec += snapSec;
-      accountedSec += combinedAlignSec;
+      // `combinedAlignSec` NOT added, see the `barGridFrameShiftSec`
+      // comment above. The alignment shifts the beat grid (and
+      // thereby `bar.start_time`), not the onset's audio time; the
+      // post-alignment bar positions are already reflected in
+      // `originalBarTiming.startSec + drumsT0Sec`.
       if (anchorDriftSec !== undefined) accountedSec += anchorDriftSec;
       if (drumOffsetSec !== undefined) accountedSec += drumOffsetSec;
       const residual = finalSec - accountedSec;
@@ -1686,50 +1731,24 @@ const NoteProvenanceDetails = observer(
 
     // ─── Build the ordered chain in pipeline order ───
     //
-    // Each entry is one named shift the popup attributes to a specific
-    // stage; the trailing unknown-drift residual is appended inside
+    // Each entry is one named shift that actually advances the onset
+    // along the detected → final chain in audio time; the trailing
+    // unknown-drift residual is appended inside
     // `OnsetTimingVisualization` so it always lands at the chain's end.
-    // Pipeline order: detection envelope-refine → beat-grid alignment
-    // (coarse, fine) → quantise passes → bar anchor drift → MIDI snap →
+    // Pipeline order: quantise passes → bar anchor drift → MIDI snap →
     // drum offset.
+    //
+    // **Not in the chain:** envelope refine and beat-grid alignment.
+    // Both are frame shifts (pre-canonical for env refine, bar-grid for
+    // alignment), so they don't accumulate into `finalSec` and adding
+    // them as forward chain stages would create the same -64..-68 ms
+    // residual mismatch this code's `barGridFrameShiftSec` attribution
+    // is meant to surface explicitly. The two are still visible as
+    // their own rows in the textual debug details (under "Onset
+    // detection" → envelope refine and "Beat-grid alignment" →
+    // coarse/fine), and their summed contribution is the "Bar-grid
+    // frame shift" row.
     const stages: StageShift[] = [];
-    if (envelopeRefineSec !== undefined && Math.abs(envelopeRefineSec) > 1e-9) {
-      stages.push({
-        key: 'env-refine',
-        label: 'Envelope refine (onsets)',
-        className: styles.timingVizDiffBarEnvRefine,
-        deltaSec: envelopeRefineSec,
-        deltaBeats: secToOrigBeats(envelopeRefineSec),
-      });
-    }
-    if (hasAlignSplit) {
-      if (coarseAlignSec !== null && Math.abs(coarseAlignSec) > 1e-9) {
-        stages.push({
-          key: 'align-coarse',
-          label: 'Beat align · coarse',
-          className: styles.timingVizDiffBarAlignCoarse,
-          deltaSec: coarseAlignSec,
-          deltaBeats: secToOrigBeats(coarseAlignSec),
-        });
-      }
-      if (fineAlignSec !== null && Math.abs(fineAlignSec) > 1e-9) {
-        stages.push({
-          key: 'align-fine',
-          label: 'Beat align · fine',
-          className: styles.timingVizDiffBarAlignFine,
-          deltaSec: fineAlignSec,
-          deltaBeats: secToOrigBeats(fineAlignSec),
-        });
-      }
-    } else if (Math.abs(combinedAlignSec) > 1e-9) {
-      stages.push({
-        key: 'align',
-        label: 'Beat alignment',
-        className: styles.timingVizDiffBarAlignCoarse,
-        deltaSec: combinedAlignSec,
-        deltaBeats: secToOrigBeats(combinedAlignSec),
-      });
-    }
     if (hasPerPassQuantise) {
       for (const p of quantisePasses) {
         if (p.slots === null || p.slots === undefined || p.slots === 0) continue;
@@ -1849,6 +1868,7 @@ const NoteProvenanceDetails = observer(
             anchorDriftBeats,
             drumOffsetSec,
             drumOffsetBeats,
+            barGridFrameShiftSec,
             unknownDriftSec,
             unknownDriftBeats,
             unknownDriftMs,
@@ -1909,6 +1929,11 @@ type DebugStageSectionsProps = {
   anchorDriftBeats: number | undefined;
   drumOffsetSec: number | undefined;
   drumOffsetBeats: number | undefined;
+  /** Summed envelope-refine + combined-align frame shift, the
+   * properly-attributed source of what previously surfaced as
+   * "Unknown drift" on tracks with a non-zero net frame shift. See the
+   * `barGridFrameShiftSec` comment in {@link NoteProvenanceDetails}. */
+  barGridFrameShiftSec: number | undefined;
   unknownDriftSec: number | undefined;
   unknownDriftBeats: number | undefined;
   unknownDriftMs: number | undefined;
@@ -1930,7 +1955,8 @@ function renderDebugStageSections(p: DebugStageSectionsProps): React.ReactNode {
     rawModelSec, coarseAlignSec, fineAlignSec, combinedAlignSec,
     hasAlignSplit, quantisePasses, hasPerPassQuantise, fallbackQuantSec,
     fallbackQuantSlots, anchorDriftSec, anchorDriftBeats, drumOffsetSec,
-    drumOffsetBeats, unknownDriftSec, unknownDriftBeats, unknownDriftMs,
+    drumOffsetBeats, barGridFrameShiftSec, unknownDriftSec,
+    unknownDriftBeats, unknownDriftMs,
     gridDivision, slotsPerQuarterNote, secToOrigBeats, origBeatsToSlots,
     renderSignedMs, renderSignedBeats, renderSignedSec, formatSlots,
   } = p;
@@ -2046,6 +2072,30 @@ function renderDebugStageSections(p: DebugStageSectionsProps): React.ReactNode {
           </dl>
         </section>
       )}
+
+      {/* Bar-grid frame shift: explicit attribution of the previously-
+        * "Unknown drift" residual to its source, the sum of envelope
+        * refine + combined alignment. Both shift the frame the chain
+        * is measured against (envelope refine: raw model peak →
+        * canonical onset time; alignment: pre- → post-alignment bar
+        * grid) without moving the onset's final audio-time position,
+        * so the chain math keeps them out of `accountedSec` while
+        * this row makes their combined contribution visible. See the
+        * `barGridFrameShiftSec` block in NoteProvenanceDetails for
+        * the full rationale. */}
+      {barGridFrameShiftSec !== undefined &&
+        Math.abs(barGridFrameShiftSec) > 1e-9 && (
+          <section className={styles.stageGroup}>
+            <h4 className={styles.stageHeading}>Bar-grid frame shift</h4>
+            <dl className={styles.debugDetailsList}>
+              {shiftRow(
+                'Frame shift (envelope refine + align)',
+                barGridFrameShiftSec,
+                secToOrigBeats(barGridFrameShiftSec),
+              )}
+            </dl>
+          </section>
+        )}
 
       {(hasPerPassQuantise ||
         (fallbackQuantSec !== undefined && Math.abs(fallbackQuantSec) > 1e-9) ||
