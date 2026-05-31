@@ -1,4 +1,5 @@
 import classNames from 'classnames';
+import { ChevronDown } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { ExampleJot } from 'src/fakes';
@@ -78,9 +79,10 @@ export const Select = ({ onChange, ...rest }: React.ComponentPropsWithoutRef<'se
  * triggers compose it via this helper instead.
  */
 const ToolbarDropdownLabel = ({ children }: { children: React.ReactNode }) => (
-  <>
-    {children} <span aria-hidden="true">▾</span>
-  </>
+  <span className={styles.toolbarDropdownLabel}>
+    {children}
+    <ChevronDown size={14} aria-hidden="true" />
+  </span>
 );
 
 /** Human-readable label for one pipeline stage, used in the status

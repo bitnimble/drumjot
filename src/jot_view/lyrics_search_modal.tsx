@@ -1,5 +1,5 @@
 import classNames from 'classnames';
-import { Info, Search } from 'lucide-react';
+import { Info, Search, X } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { ciTrimEq, LrclibMatch, parseLrc, searchLrclib } from 'src/lyrics';
@@ -186,7 +186,7 @@ export const LyricsSearchModal = observer(
               onClick={onClose}
               aria-label="Close lyrics search"
             >
-              ×
+              <X size={18} aria-hidden="true" />
             </button>
           </header>
           <form className={styles.modalForm} onSubmit={onSubmit}>

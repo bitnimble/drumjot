@@ -1,4 +1,4 @@
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, X } from 'lucide-react';
 import React from 'react';
 import styles from './audio_worklet_warning_modal.module.css';
 
@@ -69,7 +69,7 @@ export const AudioWorkletWarningModal: React.FC<{
             aria-label="Close warning"
             data-testid="audio-worklet-warning-close"
           >
-            ×
+            <X size={18} aria-hidden="true" />
           </button>
         </header>
         <div className={styles.modalBody}>

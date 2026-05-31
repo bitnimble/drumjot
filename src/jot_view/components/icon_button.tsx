@@ -1,4 +1,5 @@
 import classNames from 'classnames';
+import { X } from 'lucide-react';
 import React from 'react';
 import styles from './icon_button.module.css';
 
@@ -100,6 +101,6 @@ export const ClearButton = ({ onClear, label, testId }: ClearButtonProps) => (
     aria-label={label}
     data-testid={testId}
   >
-    ×
+    <X size={12} aria-hidden="true" />
   </IconButton>
 );

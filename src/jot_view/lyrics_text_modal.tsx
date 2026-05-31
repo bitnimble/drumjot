@@ -1,5 +1,5 @@
 import classNames from 'classnames';
-import { Info } from 'lucide-react';
+import { Info, X } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { jotPlayer } from 'src/playback';
@@ -107,7 +107,7 @@ export const LyricsTextLoadModal = observer(
               aria-label="Close plain-text lyrics loader"
               data-testid="lyrics-text-close"
             >
-              ×
+              <X size={18} aria-hidden="true" />
             </button>
           </header>
           <div className={styles.modalBody}>

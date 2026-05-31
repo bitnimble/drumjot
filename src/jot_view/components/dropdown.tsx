@@ -1,5 +1,5 @@
 import classNames from 'classnames';
-import { ChevronRight } from 'lucide-react';
+import { Check, ChevronRight } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { createPortal } from 'react-dom';
@@ -365,7 +365,7 @@ export const ToggleMenuItem = ({
     title={title}
   >
     <span className={styles.toggleMenuTick} aria-hidden="true">
-      {active ? '✓' : ''}
+      {active && <Check size={12} aria-hidden="true" />}
     </span>
     <span>{label}</span>
   </button>

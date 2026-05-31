@@ -111,10 +111,10 @@
 }
 
 .toggleMenuTick {
-    composes: bodyEmphasis from '../../typography.module.css';
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     width: 12px;
     color: var(--color-accent);
-    text-align: center;
     line-height: 1;
 }

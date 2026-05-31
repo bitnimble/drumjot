@@ -841,9 +841,12 @@
     border: 0;
     color: var(--color-text-faint);
     padding: 1px 0;
-    /* "▸ Debug details" must stay on one line; without this the
-       narrow parent label can wrap the arrow and label across two
-       rows. */
+    /* The lucide chevron + label must stay on one line; without this the
+       narrow parent label can wrap them across two rows. inline-flex
+       also centers the SVG against the caption baseline. */
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
     white-space: nowrap;
 }
 

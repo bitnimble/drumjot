@@ -1,4 +1,5 @@
 import classNames from 'classnames';
+import { AlertTriangle, Loader, Pause, Play, Square } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { DEFAULT_GRID_DIVISION, gridDivisionFor } from 'src/grid';
@@ -90,9 +91,16 @@ const PlaybackControls = observer(
     // while either playing or paused.
     const active = playing || paused;
     const hasError = !!playerError && !loading && !active;
-    // Icon-only, like a media player. Glyphs: ▶ play/resume, ⏸ pause,
-    // ■ stop, ⚠ error, ⏳ loading.
-    const transportIcon = loading ? '⏳' : playing ? '⏸' : hasError ? '⚠' : '▶';
+    // Icon-only, like a media player. lucide icons: Play (play/resume),
+    // Pause, Square (stop), AlertTriangle (error), Loader (loading; the
+    // .transportButtonLoading class spins it).
+    const TransportIcon = loading
+      ? Loader
+      : playing
+        ? Pause
+        : hasError
+          ? AlertTriangle
+          : Play;
     const transportAria = loading
       ? 'Loading'
       : playing
@@ -111,7 +119,8 @@ const PlaybackControls = observer(
             type="button"
             className={classNames(
               styles.transportButton,
-              hasError && styles.transportButtonError
+              hasError && styles.transportButtonError,
+              loading && styles.transportButtonLoading
             )}
             onClick={onTogglePlayPause}
             disabled={!hasJot || loading}
@@ -126,7 +135,7 @@ const PlaybackControls = observer(
                     : 'Play the current jot through an acoustic General MIDI drum kit (GeneralUser GS, spacebar also toggles play/pause). The first play downloads a ~30 MB SoundFont; it is then cached in the browser for instant loads on later sessions.'
             }
           >
-            {transportIcon}
+            <TransportIcon size={22} aria-hidden="true" />
           </button>
           <button
             type="button"
@@ -140,7 +149,7 @@ const PlaybackControls = observer(
                 : 'Stop (available once playback has started).'
             }
           >
-            ■
+            <Square size={22} fill="currentColor" aria-hidden="true" />
           </button>
         </div>
         <div className={styles.transportAux}>

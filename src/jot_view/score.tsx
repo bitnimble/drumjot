@@ -1,4 +1,5 @@
 import classNames from 'classnames';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { NotePosition } from 'src/note_position';
@@ -1804,7 +1805,12 @@ const NoteProvenanceDetails = observer(
           onMouseDown={stop}
           aria-expanded={open}
         >
-          {open ? '▾' : '▸'} Debug details
+          {open ? (
+            <ChevronDown size={12} aria-hidden="true" />
+          ) : (
+            <ChevronRight size={12} aria-hidden="true" />
+          )}
+          Debug details
         </button>
         {open && rendered && (
           <OnsetTimingVisualization

@@ -152,7 +152,7 @@
 /* ─── Ghost / row item ──────────────────────────────────────────────── */
 
 /* Flush, no-border row used for dropdown items, recent-transcription
-   rows, the modal close × glyph, and similar in-context affordances
+   rows, the modal close affordance, and similar in-context controls
    that should disappear into their surface until hovered. */
 .ghost {
     composes: reset;
@@ -178,12 +178,13 @@
     background: transparent;
 }
 
-/* ─── Modal close × ─────────────────────────────────────────────────── */
+/* ─── Modal close ───────────────────────────────────────────────────── */
 
-/* Headerless square 20px × glyph used by every modal's top-right
-   close affordance. Composes `reset` (not `ghost`) because the
+/* Headerless square close affordance at the top-right of every modal.
+   Hosts a lucide X icon; composes `reset` (not `ghost`) because the
    chrome differs: no border-radius hover background, no body-md
-   text, just a tap target around the ✕. */
+   text, just a tap target around the icon. inline-flex centers the
+   SVG vertically against the modal title's baseline. */
 .close {
     composes: reset;
     /* `.reset` no longer kills the UA defaults that an unstyled
@@ -192,10 +193,9 @@
     background: transparent;
     padding: 0 6px;
     color: var(--color-text-muted-alt);
-    /* The × glyph is the only meaningful content; size it explicitly
-       since the reset doesn't touch font sizing. */
-    /* stylelint-disable-next-line property-disallowed-list -- modal ✕ glyph is its own one-off scale; not a typography use case. */
-    font-size: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     line-height: 1;
 }
 

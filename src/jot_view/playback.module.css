@@ -120,15 +120,26 @@
     justify-content: center;
     width: 52px;
     height: 52px;
-    /* One-off transport glyph size (▶ / ⏸ / ■). True one-off per the
-       typography guide, so it stays inline here. */
-    /* stylelint-disable-next-line property-disallowed-list -- the transport glyph is its own visual scale; not a use case worth promoting. */
-    font-size: 22px;
     line-height: 1;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-xl);
     background: var(--color-bg-base);
     color: var(--color-text);
+}
+
+/* Spin the lucide Loader while the player is hydrating drum samples.
+   The cadence intentionally matches `drumjot-spinner-spin` in
+   `src/jot_view/components/spinner.module.css` so every in-flight
+   indicator in the app rotates in lockstep; CSS-modules keyframes
+   can't be `composes:`-shared across files, so the keyframes are
+   locally re-declared. Keep the duration aligned with the shared
+   spinner module if it ever changes. */
+.transportButtonLoading > svg {
+    animation: transport-spin 0.8s linear infinite;
+}
+
+@keyframes transport-spin {
+    to { transform: rotate(360deg); }
 }
 
 .transportButton:hover:not(:disabled) {

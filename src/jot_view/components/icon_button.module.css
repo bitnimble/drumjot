@@ -1,9 +1,10 @@
 /* Compact 18x18 icon button shared by the mixer's M/S toggles, the
    audio-track clear button, and the per-row overflow trigger. The base
    `.iconBox` defines the 18x18 box, border, and default colors so any
-   row-level glyph button picks up the same geometry; `.iconButton` /
-   `.clear` then layer on the M/S typography (small bold) or the ×
-   glyph treatment (body-md). */
+   row-level glyph button picks up the same geometry; `.iconButton`
+   layers on the M/S typography (small bold). `.clear` is a hover-only
+   marker (no base rule) that swaps the icon button's border + color
+   to the error palette so the affordance reads as destructive. */
 
 /* Chrome-only base (border + radius + hover treatment). Consumers
    pick the size (`.iconButton` is 18x18, the mixer overflow trigger
@@ -67,15 +68,8 @@
     border-color: var(--color-toggle-active-hover-border);
 }
 
-.clear {
-    /* The × glyph reads better at body-md weight/size than the bold 10px
-       used by the M/S toggles, hence this single override on top of
-       `.iconButton`. */
-    composes: bodyMd from '../../typography.module.css';
-    /* stylelint-disable-next-line property-disallowed-list -- the ✕ glyph reads cleaner unbolded; this strips the labelSm weight inherited via `.iconButton`. */
-    font-weight: normal;
-}
-
+/* `.clear` is hover-only: the base look comes from `.iconButton`; this
+   rule only swaps the colors when the user is about to click. */
 .clear:hover {
     border-color: var(--color-error);
     color: var(--color-error);

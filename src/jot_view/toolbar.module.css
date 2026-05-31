@@ -36,6 +36,16 @@
     composes: secondary from './components/button.module.css';
 }
 
+/* Toolbar dropdown trigger label: text + trailing lucide chevron. The
+   inline-flex centerline alignment keeps the SVG riding the text
+   baseline (lucide SVGs default to inline-block which sits a couple
+   of pixels low). */
+.toolbarDropdownLabel {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
 /* Resume-tab field rows share a fixed-width label column so both
    selects' left edges line up and "Previous run" doesn't wrap. */
 .resumeField > span:first-child {
