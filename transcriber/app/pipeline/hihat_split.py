@@ -81,15 +81,34 @@ _OPEN_PITCH = "H"
 # re-triggering: when ADTOF emits a sizzle-train of phantom onsets inside
 # an open-hat ring, a threshold-crossing decay measurement gets capped at
 # the next phantom onset's time and reports identical short decays for
-# everything — open hats end up indistinguishable from closed. Instead we
+# everything, open hats end up indistinguishable from closed. Instead we
 # measure mean RMS over fixed windows (late = after the strike, pre =
 # before it), which average over re-trigger noise and directly capture
 # the two open-hat signatures the classifier needs.
-_PEAK_WIN_S = 0.08      # local peak is searched in [t, t+PEAK_WIN_S]
-_LATE_START_S = 0.20    # "still ringing" window
+_PEAK_WIN_S = 0.08      # local peak is searched in [t-_PEAK_BACK_S, t+_PEAK_WIN_S]
+# Extend the peak search backward by ~one RMS hop so a slightly-late
+# onset time (ADTOF's peak-picking can lag the transient by a frame or
+# two) still catches the real strike amplitude rather than its decay.
+# A peak that lands in the decay portion is artificially small, which
+# makes the late/pre RATIOS explode (a 4.4 late_rms on a closed hit is
+# the diagnostic signature of this failure mode).
+_PEAK_BACK_S = 0.02
+_LATE_START_S = 0.20    # "still ringing" window (then clipped to next onset)
 _LATE_END_S = 0.50
-_PRE_START_S = 0.30     # "riding on existing ring" lookback start (back in time)
+_PRE_START_S = 0.30     # "riding on existing ring" lookback (then clipped to prev onset)
 _PRE_END_S = 0.05       # ...ends just before the attack so we don't sample it
+# Guard band between this strike's late/pre window and a neighbouring
+# strike. The raw windows ([+200,+500] late, [-300,-50] pre) are wider
+# than a typical hi-hat gap (16ths @120 BPM = 125 ms, 8ths = 250 ms),
+# so without clipping the late window samples the NEXT strike's
+# transient and reports "still ringing" energy that's really just the
+# next hit. Clip both windows to leave this much breathing room from
+# the adjacent onset.
+_NEIGHBOR_GUARD_S = 0.02
+# After clipping, a window narrower than this can't average reliably
+# over re-trigger noise; report 0 (silence) instead of a polluted
+# measurement.
+_MIN_WINDOW_S = 0.08
 _TIMBRE_WIN_S = 0.15
 _ATTACK_WIN_S = 0.06    # short window for 10-90% rise of post-onset envelope
 
@@ -178,10 +197,15 @@ class _Feat:
     """Per-onset measured features (kept off `OnsetCandidate` so the
     split stays local and doesn't widen the pipeline-wide onset schema).
 
-    `late_rms` = mean RMS in [t+0.2, t+0.5] / local peak. High = still
-    ringing 200-500ms after the strike (open). `pre_rms` = mean RMS in
-    [t-0.3, t-0.05] / local peak. High = riding on existing ring energy
-    (also open — this is the in-passage sizzle-train signature).
+    `late_rms` = mean RMS in [t+0.2, min(t+0.5, nxt-guard)] / local peak.
+    High = still ringing 200-500ms after the strike (open). The window
+    is clipped against the next onset so a dense hi-hat pattern's late
+    window can't sample the next strike's transient and report it as
+    "still ringing"; an over-narrow clipped window reports 0.
+    `pre_rms` = mean RMS in [max(t-0.3, prev+guard), t-0.05] / local
+    peak. High = riding on existing ring energy (also open, this is
+    the in-passage sizzle-train signature). Same clipping logic against
+    the previous onset.
     """
 
     __slots__ = (
@@ -441,15 +465,25 @@ def _measure(
 ) -> list[_Feat]:
     """Measure late-RMS / pre-RMS / attack / flatness / centroid / gap per onset.
 
-    The hi-hat stem is loaded once. `late_rms` and `pre_rms` are the two
-    discriminators robust to ADTOF re-triggering inside the open-hat
-    ring — both are mean RMS over fixed windows, normalized to the
-    onset's local peak, so neither depends on neighbouring onset times
-    (the bug that made decay-to-threshold useless: with sizzle-train
-    onsets ~80ms apart the decay window collapsed to ~80ms regardless of
-    how long the ring really lasted). `attack_s` is the 10-90% rise time
-    of the early post-onset envelope (closed = sharp; open = slower
-    swell as the cymbals sizzle).
+    The hi-hat stem is loaded once. `late_rms` and `pre_rms` are the
+    two discriminators for the "still ringing" / "riding on ring" open
+    signatures, both are mean RMS over fixed windows, normalized to
+    the onset's local peak. Two corrections vs a naïve implementation:
+
+    1. The peak window extends BEFORE the onset by `_PEAK_BACK_S` so a
+       slightly-late onset time still catches the real transient peak.
+       Without this, an onset that lands a frame past the transient
+       takes `peak = decay`, which inflates the late/pre ratios by an
+       order of magnitude.
+    2. The late / pre windows are clipped to leave `_NEIGHBOR_GUARD_S`
+       away from adjacent onsets, so neighbour transients can't
+       pollute this strike's tail / pre-ring measurements. The raw
+       windows ([+200,+500]ms late, [-300,-50]ms pre) are wider than
+       typical hi-hat gaps; without clipping, `late_rms` reports the
+       NEXT strike's energy at any density above quarter notes.
+
+    `attack_s` is the 10-90% rise time of the early post-onset envelope
+    (closed = sharp; open = slower swell as the cymbals sizzle).
     """
     sr = 44100
     audio, sr = librosa.load(str(stem_path), sr=sr, mono=True)
@@ -476,8 +510,12 @@ def _measure(
         if prev is not None:
             gap = min(gap, t - prev)
 
-        # --- local peak (search a short post-onset window) ---------
-        peak_mask = (rms_t >= t) & (rms_t <= t + _PEAK_WIN_S)
+        # --- local peak (search a short window around the onset) ---
+        # See `_PEAK_BACK_S`: the search starts BEFORE `t` to absorb
+        # onset-time jitter; otherwise an onset that lands one frame
+        # past the real transient gets `peak = decay` and blows up the
+        # late/pre ratios downstream.
+        peak_mask = (rms_t >= t - _PEAK_BACK_S) & (rms_t <= t + _PEAK_WIN_S)
         if not np.any(peak_mask):
             out.append(
                 _Feat(0.0, 0.0, 0.0, 0.0, 0.0, float(gap), t + _TAIL_MIN_S)
@@ -489,16 +527,41 @@ def _measure(
             pre_rms = 0.0
             tail_end_t = t + _TAIL_MIN_S
         else:
-            # --- late RMS [t+0.2, t+0.5] / peak --------------------
-            late_mask = (rms_t >= t + _LATE_START_S) & (rms_t <= t + _LATE_END_S)
-            late_rms = (
-                float(rms[late_mask].mean()) / peak if np.any(late_mask) else 0.0
-            )
-            # --- pre RMS [t-0.3, t-0.05] / peak --------------------
-            pre_mask = (rms_t >= t - _PRE_START_S) & (rms_t <= t - _PRE_END_S)
-            pre_rms = (
-                float(rms[pre_mask].mean()) / peak if np.any(pre_mask) else 0.0
-            )
+            # --- late RMS [t+_LATE_START_S, min(t+_LATE_END_S, nxt-guard)] / peak
+            # Clipped to the next onset so this strike's "still
+            # ringing" measurement doesn't pick up the next strike's
+            # transient. Without the clip, [+200,+500]ms catches the
+            # next hit at any density above quarter notes, and the
+            # ratio reports the neighbour's energy rather than this
+            # strike's tail.
+            late_start_t = t + _LATE_START_S
+            late_end_t = min(t + _LATE_END_S, nxt - _NEIGHBOR_GUARD_S)
+            if late_end_t - late_start_t >= _MIN_WINDOW_S:
+                late_mask = (rms_t >= late_start_t) & (rms_t <= late_end_t)
+                late_rms = (
+                    float(rms[late_mask].mean()) / peak
+                    if np.any(late_mask) else 0.0
+                )
+            else:
+                late_rms = 0.0
+            # --- pre RMS [max(t-_PRE_START_S, prev+guard), t-_PRE_END_S] / peak
+            # Symmetric clip against the previous onset: the previous
+            # strike's transient must not pollute the "background ring"
+            # measurement, otherwise a tight closed pattern reports
+            # high `pre` (= previous transient) and looks like an open
+            # passage.
+            pre_end_t = t - _PRE_END_S
+            pre_start_t = t - _PRE_START_S
+            if prev is not None:
+                pre_start_t = max(pre_start_t, prev + _NEIGHBOR_GUARD_S)
+            if pre_end_t - pre_start_t >= _MIN_WINDOW_S:
+                pre_mask = (rms_t >= pre_start_t) & (rms_t <= pre_end_t)
+                pre_rms = (
+                    float(rms[pre_mask].mean()) / peak
+                    if np.any(pre_mask) else 0.0
+                )
+            else:
+                pre_rms = 0.0
             # --- tail end: first time after the peak window when the
             # smoothed RMS drops below _TAIL_END_FRAC * peak. Capped at
             # _TAIL_MAX_S; floored at _TAIL_MIN_S (physical pedal-close
