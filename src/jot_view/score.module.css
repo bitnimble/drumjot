@@ -939,18 +939,22 @@
 }
 
 /* Per-onset timing diagram, drawn above the textual debug grid.
-   Fixed pixel width (set inline; see TIMING_VIZ_WIDTH in score.tsx) so
-   the waveform pixel ↔ audio-time mapping is stable as the parent
-   label expands to fit other rows. */
+   Two-column grid: [stage label] [bar track]. Track width is fixed
+   (TIMING_VIZ_WIDTH in score.tsx) so the waveform pixel ↔ audio-time
+   mapping is stable; label column width (TIMING_VIZ_LABEL_WIDTH) is
+   set inline via gridTemplateColumns. The header spans both columns;
+   the waveform row sits in the track column only (empty label cell
+   skipped by grid auto-placement). */
 .timingViz {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+    display: grid;
+    column-gap: 6px;
+    row-gap: 2px;
     margin-bottom: 4px;
 }
 
 .timingVizHeader {
     composes: metaCaption from '../typography.module.css';
+    grid-column: 1 / -1;
     display: flex;
     justify-content: space-between;
     color: var(--color-text-faint);
@@ -969,9 +973,11 @@
 /* Waveform row hosts the canvas plus absolutely-positioned overlays:
    bar boundaries, the detected line, and the final-position line.
    `outline` (not `border`) for the frame so it sits in the box's
-   padding box and doesn't shift the canvas inwards — pixel ↔ time
-   alignment depends on the canvas covering the row exactly. */
+   padding box and doesn't shift the canvas inwards, pixel ↔ time
+   alignment depends on the canvas covering the row exactly. Pinned to
+   the track column so it stays aligned with the bars below it. */
 .timingVizWaveformRow {
+    grid-column: 2;
     position: relative;
     background: var(--color-bg-cream);
     outline: 1px solid var(--color-border-soft);
@@ -990,7 +996,22 @@
     padding: 12px 0;
 }
 
-/* Bar boundary — thin dashed line spanning the canvas height. */
+/* Grid subdivision, one tick per slot of the jot's 1/N grid inside
+   each visible bar, so the operator can see how close a detected /
+   final landing falls to the nearest grid position. Rendered before
+   bar boundaries in the JSX so dashed bar lines / detected / final
+   lines paint over coincident grid ticks. */
+.timingVizGridLine {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 0;
+    border-left: 1px solid var(--color-border-soft);
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+/* Bar boundary, thin dashed line spanning the canvas height. */
 .timingVizBarLine {
     position: absolute;
     top: 0;
@@ -1034,12 +1055,31 @@
     pointer-events: none;
 }
 
-/* Each diff row is a horizontal slot containing one coloured bar that
-   shows the displacement applied at that stage. `position: relative`
-   anchors the bar's `left` to the row's left edge — which is aligned
-   with the waveform canvas above, so a stage's bar lines up with the
-   audio-time position it represents. */
-.timingVizDiffRow {
+/* Per-stage label, occupying the grid's left column on the diff row's
+   line. Sits outside the coloured bar; the bars themselves are
+   typically a few px wide (the displacements being visualised are
+   ms-scale), so an inline label clipped to ellipsis almost every
+   time. Right-aligned so the label hugs the track column to its
+   right; the title attribute provides the full text on hover. */
+.timingVizDiffRowLabel {
+    composes: metaCaption from '../typography.module.css';
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    color: var(--color-text);
+    /* stylelint-disable-next-line property-disallowed-list -- numeric details (signed beats/slots/ms) need tabular-nums so the per-stage rows align column-wise. */
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Track column for a diff row, `position: relative` anchors the bar's
+   `left` to the column's left edge, which is aligned with the
+   waveform canvas above, so a stage's bar lines up with the audio-
+   time position it represents. */
+.timingVizDiffRowTrack {
     position: relative;
 }
 
@@ -1047,18 +1087,11 @@
     position: absolute;
     top: 1px;
     bottom: 1px;
-    display: flex;
-    align-items: center;
-    padding: 0 4px;
     border-radius: var(--radius-xs);
-    overflow: hidden;
     /* `border-box` is critical: the inline `width` is the bar's delta
        in pixels (audio-time end minus anchor), and the bar's edges
        must land exactly there so one edge sits flush with the
-       detected line on the waveform. With the default `content-box`
-       the 4 px horizontal padding extends each edge outward, which
-       reads as the line being centered inside narrow bars instead of
-       at one edge. */
+       detected line on the waveform. */
     box-sizing: border-box;
 }
 
@@ -1132,24 +1165,6 @@
         transparent 4px 8px
     );
     color: var(--color-bg-base);
-}
-
-.timingVizDiffLabel {
-    composes: metaCaption from '../typography.module.css';
-    /* stylelint-disable-next-line property-disallowed-list -- one notch smaller than metaCaption so the diff label fits inside narrow bars. */
-    font-size: 9px;
-    line-height: 1;
-    white-space: nowrap;
-    /* Flex children default to `min-width: auto` (content size), which
-       prevents ellipsis from triggering inside narrow bars — the span
-       just overflows its parent instead. `min-width: 0` + `flex: 1`
-       lets the label shrink to fit the bar's actual width so the
-       ellipsis engages; the parent's `title` attribute carries the
-       full text for hover-disclosure. */
-    flex: 1;
-    min-width: 0;
-    text-overflow: ellipsis;
-    overflow: hidden;
 }
 
 /* Filtered-onset ghost — rendered at a rejected onset's detected

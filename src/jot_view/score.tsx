@@ -904,10 +904,15 @@ function formatSignedSlots(slots: number, gridDivision: number): string {
 }
 
 /** Total pixel width of the timing-visualization panel, wide enough to
- * resolve a ±150 ms window without crowding the labels in the diff
+ * resolve a ±150 ms window without crowding the bars in the diff
  * rows, narrow enough that the parent label popover doesn't run off
  * the score for selections near the right edge. */
 const TIMING_VIZ_WIDTH = 320;
+/** Width of the per-stage label column to the left of the bar tracks.
+ * The label sits outside the coloured bar because most stage bars are
+ * a handful of px wide (the deltas being visualised are millisecond-
+ * scale), so an inline label clips to ellipsis almost every time. */
+const TIMING_VIZ_LABEL_WIDTH = 260;
 const TIMING_VIZ_WAVE_HEIGHT = 40;
 const TIMING_VIZ_ROW_HEIGHT = 18;
 /** Minimum half-window so a near-zero snap/alignment still shows
@@ -1114,19 +1119,46 @@ const OnsetTimingVisualization = observer(
       };
     }, [audioTrack, windowStart, windowDur]);
 
-    // Bar boundaries visible inside the window. Walk the timeline once;
-    // boundaries sit at each bar's audio-time start. We label each one
-    // with its rendered bar index so the operator can orient on the
-    // snippet without consulting the score above.
+    // Bar boundaries + per-grid-slot subdivisions visible inside the
+    // window. Walk the timeline once; boundaries sit at each bar's
+    // audio-time start (labeled with the rendered bar index so the
+    // operator can orient on the snippet), and within each visible bar
+    // we drop a subtle tick at every grid slot so the operator can see
+    // where the detected/final onset positions land against the jot's
+    // 1/N grid. Per-slot timing assumes constant tempo within the bar
+    // (matches `tempo.ts`'s uniform-spread when no mid-bar bpm block is
+    // present, see AGENTS.md §8.7); this is a visual aid, not a
+    // precise timing readout.
     const timeline = jotPlayer.timeline;
     const drumsT0Sec = jotPlayer.drumsT0Sec;
     const barBoundaries: { x: number; label: number | null }[] = [];
+    const gridLines: number[] = [];
     if (timeline.rendered) {
-      const renderedBars = timeline.rendered.structure.voices[0]?.bars ?? [];
+      const structBars = timeline.rendered.structure.voices[0]?.bars ?? [];
       for (let i = 0; i < timeline.bars.length; i++) {
-        const t = timeline.bars[i]!.startSec + drumsT0Sec;
-        if (t >= windowStart && t <= windowEnd) {
-          barBoundaries.push({ x: timeToX(t), label: renderedBars[i]?.index ?? null });
+        const bar = timeline.bars[i]!;
+        const structBar = structBars[i];
+        const barStart = bar.startSec + drumsT0Sec;
+        const barEnd = barStart + bar.durationSec;
+        if (barStart >= windowStart && barStart <= windowEnd) {
+          barBoundaries.push({ x: timeToX(barStart), label: structBar?.index ?? null });
+        }
+        if (
+          !structBar ||
+          bar.durationSec <= 0 ||
+          structBar.time.unit <= 0 ||
+          barEnd < windowStart ||
+          barStart > windowEnd
+        ) {
+          continue;
+        }
+        const slots = Math.round((structBar.time.count * gridDivision) / structBar.time.unit);
+        if (slots <= 0) continue;
+        const slotDur = bar.durationSec / slots;
+        // j starts at 1 so the bar-boundary line (j=0) isn't doubled up.
+        for (let j = 1; j < slots; j++) {
+          const t = barStart + j * slotDur;
+          if (t >= windowStart && t <= windowEnd) gridLines.push(timeToX(t));
         }
       }
     }
@@ -1192,7 +1224,12 @@ const OnsetTimingVisualization = observer(
     const renderSignedMs = (ms: number) => `${ms >= 0 ? '+' : ''}${ms.toFixed(1)} ms`;
 
     return (
-      <div className={styles.timingViz} style={{ width: TIMING_VIZ_WIDTH } as React.CSSProperties}>
+      <div
+        className={styles.timingViz}
+        style={{
+          gridTemplateColumns: `${TIMING_VIZ_LABEL_WIDTH}px ${TIMING_VIZ_WIDTH}px`,
+        } as React.CSSProperties}
+      >
         <div className={styles.timingVizHeader}>
           {displayedBarIndex !== undefined && (
             <span className={styles.timingVizHeaderBar}>bar {displayedBarIndex}</span>
@@ -1217,6 +1254,9 @@ const OnsetTimingVisualization = observer(
           ) : (
             <div className={styles.timingVizNoAudio}>(no audio loaded)</div>
           )}
+          {gridLines.map((x, i) => (
+            <div key={`grid-${i}`} className={styles.timingVizGridLine} style={{ left: x }} />
+          ))}
           {barBoundaries.map((b, i) => (
             <React.Fragment key={`bar-${i}`}>
               <div className={styles.timingVizBarLine} style={{ left: b.x }} />
@@ -1249,19 +1289,25 @@ const OnsetTimingVisualization = observer(
             row.deltaSlots !== undefined ? `· ${renderSignedSlots(row.deltaSlots)} ` : '';
           const fullText = `${row.label} ${beatsPart}${slotsPart}· ${renderSignedMs(row.deltaSec * 1000)}`;
           return (
-            <div
-              key={row.key}
-              className={styles.timingVizDiffRow}
-              style={{ height: TIMING_VIZ_ROW_HEIGHT } as React.CSSProperties}
-            >
+            <React.Fragment key={row.key}>
               <div
-                className={`${styles.timingVizDiffBar} ${row.className}`}
-                style={{ left, width }}
+                className={styles.timingVizDiffRowLabel}
+                style={{ height: TIMING_VIZ_ROW_HEIGHT } as React.CSSProperties}
                 title={fullText}
               >
-                <span className={styles.timingVizDiffLabel}>{fullText}</span>
+                {fullText}
               </div>
-            </div>
+              <div
+                className={styles.timingVizDiffRowTrack}
+                style={{ height: TIMING_VIZ_ROW_HEIGHT } as React.CSSProperties}
+              >
+                <div
+                  className={`${styles.timingVizDiffBar} ${row.className}`}
+                  style={{ left, width }}
+                  title={fullText}
+                />
+              </div>
+            </React.Fragment>
           );
         })}
       </div>
@@ -1347,7 +1393,6 @@ const NoteProvenanceDetails = observer(
     let originalSecPerQuarterNote: number | undefined;
     let originalQuantizedBeat: number | undefined;
     let originalQuantizedSec: number | undefined;
-    let originalQuantizedTick: number | undefined;
     let snapBeats: number | undefined;
     let snapSec: number | undefined;
     let snapMs: number | undefined;
@@ -1418,7 +1463,6 @@ const NoteProvenanceDetails = observer(
         // position by construction.
         originalQuantizedBeat = entry.beat_in_bar + snapBeats;
         originalQuantizedSec = entry.detected_time_sec + snapSec;
-        originalQuantizedTick = postSnapTick;
       }
 
       // Final position uses the CURRENT bar's timing; where the note
@@ -1755,7 +1799,6 @@ const NoteProvenanceDetails = observer(
             originalBarIndex,
             originalQuantizedBeat,
             originalQuantizedSec,
-            originalQuantizedTick,
             currentQuantizedBeat,
             displayedBarIndex,
             finalSec,
@@ -1811,7 +1854,6 @@ type DebugStageSectionsProps = {
   originalBarIndex: number | undefined;
   originalQuantizedBeat: number | undefined;
   originalQuantizedSec: number | undefined;
-  originalQuantizedTick: number | undefined;
   currentQuantizedBeat: number | undefined;
   displayedBarIndex: number | undefined;
   finalSec: number | undefined;
@@ -1852,7 +1894,7 @@ type DebugStageSectionsProps = {
 function renderDebugStageSections(p: DebugStageSectionsProps): React.ReactNode {
   const {
     entry, rendered, originalBar, originalBarIndex, originalQuantizedBeat,
-    originalQuantizedSec, originalQuantizedTick, currentQuantizedBeat,
+    originalQuantizedSec, currentQuantizedBeat,
     displayedBarIndex, finalSec, snapBeats, snapMs, envelopeRefineSec,
     rawModelSec, coarseAlignSec, fineAlignSec, combinedAlignSec,
     hasAlignSplit, quantisePasses, hasPerPassQuantise, fallbackQuantSec,
@@ -1909,7 +1951,6 @@ function renderDebugStageSections(p: DebugStageSectionsProps): React.ReactNode {
               slotsPerQuarter: slotsPerQuarterNote,
               timeSig: originalBar?.time,
               audioSec: entry.detected_time_sec,
-              midiTick: entry.tick ?? undefined,
             }).toString()}
           </dd>
           <dt>Strength</dt>
@@ -2024,7 +2065,6 @@ function renderDebugStageSections(p: DebugStageSectionsProps): React.ReactNode {
                     slotsPerQuarter: slotsPerQuarterNote,
                     timeSig: originalBar?.time,
                     audioSec: originalQuantizedSec,
-                    midiTick: originalQuantizedTick,
                   }).toString()}
                 </dd>
               </>

@@ -6,11 +6,9 @@ import type { TimeSignature } from 'src/dsl';
  *
  * The bar index and the float `beatInBar` are the canonical
  * coordinate; the bar's time signature is carried so the 48th-note
- * stringifier can compute the bar's slot count. Audio time and MIDI
- * tick are optional anchors that consumers can attach when they
- * happen to know them (e.g. the detected-onset position has a
- * `detected_time_sec`, the quantized position has both a tick and a
- * second).
+ * stringifier can compute the bar's slot count. Audio time is an
+ * optional anchor that consumers can attach when they happen to know
+ * it (e.g. the detected-onset position has a `detected_time_sec`).
  *
  * Stringifiers return `null` when the requested facet wasn't supplied,
  * so callers can `.filter(Boolean).join(' · ')` to build the debug
@@ -39,8 +37,6 @@ export type NotePositionInput = {
   timeSig?: TimeSignature;
   /** Absolute audio time in seconds, if known. */
   audioSec?: number;
-  /** Absolute MIDI tick, if known. */
-  midiTick?: number;
   /** Sub-slot timing offset in ms (the note's `offset`), if any. */
   offsetMs?: number;
 };
@@ -51,7 +47,6 @@ export class NotePosition {
   readonly slotsPerQuarter: number;
   readonly timeSig: TimeSignature | undefined;
   readonly audioSec: number | undefined;
-  readonly midiTick: number | undefined;
   readonly offsetMs: number | undefined;
 
   constructor(input: NotePositionInput) {
@@ -60,7 +55,6 @@ export class NotePosition {
     this.slotsPerQuarter = input.slotsPerQuarter;
     this.timeSig = input.timeSig;
     this.audioSec = input.audioSec;
-    this.midiTick = input.midiTick;
     this.offsetMs = input.offsetMs;
   }
 
@@ -102,11 +96,6 @@ export class NotePosition {
       : `${this.audioSec.toFixed(decimals)}s`;
   }
 
-  /** "480 t" or `null` if no MIDI tick anchor is attached. */
-  formatMidiTicks(): string | null {
-    return this.midiTick === undefined ? null : `${this.midiTick} t`;
-  }
-
   /** "+12.3 ms" sub-slot offset, or `null` when the note is on its slot. */
   formatOffset(): string | null {
     if (this.offsetMs === undefined) return null;
@@ -116,14 +105,13 @@ export class NotePosition {
   /**
    * The default dense single-line readout used in the debug details
    * view: bar/beat float, 48ths-of-bar, audio seconds (when present),
-   * MIDI tick (when present); joined with " · ".
+   * sub-slot offset (when present); joined with " · ".
    */
   toString(): string {
     return [
       this.formatBarBeat(),
       this.formatBarBeat48ths(),
       this.formatSeconds(),
-      this.formatMidiTicks(),
       this.formatOffset(),
     ]
       .filter((s): s is string => s !== null)
