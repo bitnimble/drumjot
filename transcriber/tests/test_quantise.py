@@ -126,6 +126,38 @@ def test_geometric_snap_band_rejects_overflow_to_off_grid() -> None:
     assert placed_slots == [10, 11, 12, 13, 14]
 
 
+def test_geometric_snap_reassigns_overflow_onset_to_next_bar_downbeat() -> None:
+    # Two bars of 4/4 @ 120 BPM (2.0 s each, 48 slots, slot_span = 2/48 s).
+    # The detector placed a kick in bar 0 just before bar 1's downbeat:
+    # beat_in_bar = 4.99 -> natural slot = 47.88 -> rounds to 48 = past
+    # bar 0's last slot (47). Without the cross-bar pre-pass it'd clamp
+    # to slot 47 of bar 0 ("bar 1, 48/48" in 1-indexed display); with it,
+    # it moves to bar 1's downbeat (slot 0) instead.
+    bars = [_bar(0, 0.0, 2.0), _bar(1, 2.0, 4.0)]
+    structure = _structure(bars)
+    k = OnsetCandidate(time=1.995, strength=5.0, bar=0, beat_in_bar=4.99)
+    kept = {"k": [k]}
+    _geometric_snap(kept, structure, slots_per_beat=12)  # type: ignore[arg-type]
+    assert k.bar == 1
+    assert k.beat_in_bar == 1.0
+    assert k.quantised_time == 2.0          # bar 1's start = slot 0
+    assert k.off_grid is False
+
+
+def test_geometric_snap_does_not_reassign_overflow_in_final_bar() -> None:
+    # No bar 1 to receive the overflow: the onset falls through to the
+    # existing per-bar clamp.
+    bars = [_bar(0, 0.0, 2.0)]
+    structure = _structure(bars)
+    k = OnsetCandidate(time=1.995, strength=5.0, bar=0, beat_in_bar=4.99)
+    kept = {"k": [k]}
+    _geometric_snap(kept, structure, slots_per_beat=12)  # type: ignore[arg-type]
+    assert k.bar == 0
+    # Clamped to bar 0's last slot (47).
+    assert k.quantised_time == 47 * (2.0 / 48)
+    assert k.off_grid is False
+
+
 def test_geometric_snap_ignores_out_of_range_bars() -> None:
     bar = _bar(0, 0.0, 2.0)
     structure = _structure([bar])

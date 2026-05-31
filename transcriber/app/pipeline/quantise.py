@@ -24,12 +24,19 @@ Runs between `filter` and `transcribe`. Two passes:
 Placed onsets get `quantised_time` set to their exact slot time (even at
 zero shift) so the emitted MIDI is grid-aligned and the frontend adds no
 spurious offset; off-grid onsets keep `quantised_time = None`. The
-original `time` / `beat_in_bar` fields are left untouched so per-note
-provenance still reports the original detector hit.
+original detector hit is preserved on `c.time`; per-note provenance
+uses that for the "Detected" stage.
 
-Snapping is bounded to within a bar (the per-bar slot range clamps the
-DP's feasible window); an onset never crosses a bar boundary, so `bar` /
-`beat_in_bar` never need resyncing.
+The per-bar DP's feasible window is bounded to `[0, max_slot]`, but a
+forward cross-bar pre-pass in `_geometric_snap` first reassigns any
+onset whose natural slot rounds past its bar's last slot (the common
+"early downbeat" case: a hit detected just before a downbeat by the beat
+tracker still landed in the previous bar). On reassignment `c.bar` /
+`c.beat_in_bar` are rewritten to the next bar's slot frame so every
+downstream pass (envelope re-snap, musical-grid snap, LLM residual,
+MIDI render) operates on the correct bar. Backward cross-bar isn't
+needed: the beat tracker guarantees `beat_in_bar >= 1.0`, so naturals
+are never negative.
 """
 from __future__ import annotations
 
@@ -345,12 +352,44 @@ def _geometric_snap(
     None` (so the MIDI emitter falls back to their raw `time`, which the
     frontend then records as the note's sub-slot `offset`).
 
+    A forward cross-bar pre-pass runs first: any onset whose natural slot
+    rounds past its bar's last slot is reassigned to the next bar's
+    corresponding slot before the DP groups by bar, so an "early
+    downbeat" hit lands on the downbeat instead of being clamped to the
+    previous bar's last slot. `c.bar` / `c.beat_in_bar` are rewritten on
+    reassignment so every downstream pass operates on the new bar.
+
     Returns `{(pitch, idx): shift_slots}` for the non-zero shifts (for the
     debug summary). Mutates candidates in place.
     """
     shifts: dict[tuple[str, int], int] = {}
     if not structure.bars:
         return shifts
+
+    # Forward cross-bar reassignment. The beat tracker puts each onset
+    # in the bar whose downbeat it has just passed, so a hit detected
+    # ~1 slot before the next downbeat lands in the *previous* bar with
+    # beat_in_bar ≈ num_beats + small (natural slot ≈ max_slot + 1).
+    # Without this pre-pass the per-bar DP clamps it to the last slot of
+    # the original bar (musically wrong); with it, the onset is moved
+    # into the next bar's slot frame and the DP places it there.
+    # Backward overflow can't arise (beat_in_bar >= 1.0 by construction).
+    for cands in kept_by_pitch.values():
+        for c in cands:
+            bar_idx = int(c.bar)
+            if not (0 <= bar_idx < len(structure.bars) - 1):
+                continue
+            here = structure.bars[bar_idx]
+            num_beats_here = max(int(here.time_signature[0]), 1)
+            max_slot_here = num_beats_here * slots_per_beat - 1
+            natural_here = (float(c.beat_in_bar) - 1.0) * slots_per_beat
+            overflow = round(natural_here) - max_slot_here
+            if overflow <= 0:
+                continue
+            # Slot `max_slot+k` in this bar maps to slot `k-1` in the
+            # next bar (max_slot+1 is the next bar's downbeat).
+            c.bar = bar_idx + 1
+            c.beat_in_bar = 1.0 + (overflow - 1) / slots_per_beat
 
     for pitch, cands in kept_by_pitch.items():
         # Group this lane's in-range onsets by bar; out-of-range onsets
