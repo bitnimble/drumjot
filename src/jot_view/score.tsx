@@ -909,11 +909,6 @@ function formatSignedSlots(slots: number, gridDivision: number): string {
  * rows, narrow enough that the parent label popover doesn't run off
  * the score for selections near the right edge. */
 const TIMING_VIZ_WIDTH = 320;
-/** Width of the per-stage label column to the left of the bar tracks.
- * The label sits outside the coloured bar because most stage bars are
- * a handful of px wide (the deltas being visualised are millisecond-
- * scale), so an inline label clips to ellipsis almost every time. */
-const TIMING_VIZ_LABEL_WIDTH = 260;
 const TIMING_VIZ_WAVE_HEIGHT = 40;
 const TIMING_VIZ_ROW_HEIGHT = 18;
 /** Minimum half-window so a near-zero snap/alignment still shows
@@ -1023,7 +1018,13 @@ const OnsetTimingVisualization = observer(
     const windowEnd = center + halfWindow;
     const windowDur = windowEnd - windowStart;
 
-    const timeToX = (t: number): number => ((t - windowStart) / windowDur) * TIMING_VIZ_WIDTH;
+    // Returns the audio-time `t`'s position inside the snippet as a
+    // percentage of the timing-viz row width. Percentages (not pixels)
+    // for every overlay (bar boundaries, grid ticks, detected/final
+    // lines, diff-row bars, inverted-text clip) so the waveform and
+    // every aligned overlay stretch with the popover instead of being
+    // pinned to a 320 px box on the left.
+    const timeToPct = (t: number): number => ((t - windowStart) / windowDur) * 100;
 
     // Pick the audio track most likely to expose this onset clearly.
     // The debug bundle's manifest carries an authoritative pitch →
@@ -1142,7 +1143,12 @@ const OnsetTimingVisualization = observer(
     // precise timing readout.
     const timeline = jotPlayer.timeline;
     const drumsT0Sec = jotPlayer.drumsT0Sec;
-    const barBoundaries: { x: number; label: number | null }[] = [];
+    // Per-overlay positions are stored as percentage values (`pct`,
+    // 0..100) of the timing-viz row width, not pixels. The waveform +
+    // every aligned overlay stretch with the popover; using pixels
+    // would pin them to a fixed 320 px box while the labels around
+    // them grew.
+    const barBoundaries: { pct: number; label: number | null }[] = [];
     const gridLines: number[] = [];
     if (timeline.rendered) {
       const structBars = timeline.rendered.structure.voices[0]?.bars ?? [];
@@ -1152,7 +1158,7 @@ const OnsetTimingVisualization = observer(
         const barStart = bar.startSec + drumsT0Sec;
         const barEnd = barStart + bar.durationSec;
         if (barStart >= windowStart && barStart <= windowEnd) {
-          barBoundaries.push({ x: timeToX(barStart), label: structBar?.index ?? null });
+          barBoundaries.push({ pct: timeToPct(barStart), label: structBar?.index ?? null });
         }
         if (
           !structBar ||
@@ -1169,52 +1175,54 @@ const OnsetTimingVisualization = observer(
         // j starts at 1 so the bar-boundary line (j=0) isn't doubled up.
         for (let j = 1; j < slots; j++) {
           const t = barStart + j * slotDur;
-          if (t >= windowStart && t <= windowEnd) gridLines.push(timeToX(t));
+          if (t >= windowStart && t <= windowEnd) gridLines.push(timeToPct(t));
         }
       }
     }
 
-    const detectedX = timeToX(detectedSec);
-    const finalX = finalSec !== undefined ? timeToX(finalSec) : undefined;
+    const detectedPct = timeToPct(detectedSec);
+    const finalPct = finalSec !== undefined ? timeToPct(finalSec) : undefined;
 
-    // Each diff row: a coloured bar from `anchorX` to `endX` (always
+    // Each diff row: a coloured bar from `anchorPct` to `endPct` (always
     // drawn left-to-right via min/abs), with an inline label. The chain
     // anchors at the detected line and advances by each stage's
     // `deltaSec`; the trailing residual (`finalSec` minus the cumulative
     // sum) surfaces as the "Unknown drift" bar so every gap between
     // named stages and the actual final landing remains visible rather
-    // than silently absorbed.
+    // than silently absorbed. Positions are in row-width percentages so
+    // they stay aligned with the waveform's overlays at any popover
+    // width.
     type DiffRow = {
       key: string;
       label: string;
       deltaBeats: number | undefined;
       deltaSlots: number | undefined;
       deltaSec: number;
-      anchorX: number;
-      endX: number;
+      anchorPct: number;
+      endPct: number;
       className: string;
     };
     const diffRows: DiffRow[] = [];
     let cursorSec = detectedSec;
-    let cursorX = detectedX;
+    let cursorPct = detectedPct;
     for (const s of stages) {
       if (Math.abs(s.deltaSec) < 1e-9) continue;
       const nextSec = cursorSec + s.deltaSec;
-      const nextX = timeToX(nextSec);
+      const nextPct = timeToPct(nextSec);
       diffRows.push({
         key: s.key,
         label: s.label,
         deltaBeats: s.deltaBeats,
         deltaSlots: s.deltaSlots,
         deltaSec: s.deltaSec,
-        anchorX: cursorX,
-        endX: nextX,
+        anchorPct: cursorPct,
+        endPct: nextPct,
         className: s.className,
       });
       cursorSec = nextSec;
-      cursorX = nextX;
+      cursorPct = nextPct;
     }
-    if (finalSec !== undefined && finalX !== undefined) {
+    if (finalSec !== undefined && finalPct !== undefined) {
       const unknownSec = finalSec - cursorSec;
       if (Math.abs(unknownSec) > 1e-6) {
         diffRows.push({
@@ -1223,8 +1231,8 @@ const OnsetTimingVisualization = observer(
           deltaBeats: undefined,
           deltaSlots: undefined,
           deltaSec: unknownSec,
-          anchorX: cursorX,
-          endX: finalX,
+          anchorPct: cursorPct,
+          endPct: finalPct,
           className: styles.timingVizDiffBarUnknown,
         });
       }
@@ -1235,12 +1243,7 @@ const OnsetTimingVisualization = observer(
     const renderSignedMs = (ms: number) => `${ms >= 0 ? '+' : ''}${ms.toFixed(1)} ms`;
 
     return (
-      <div
-        className={styles.timingViz}
-        style={{
-          gridTemplateColumns: `${TIMING_VIZ_LABEL_WIDTH}px ${TIMING_VIZ_WIDTH}px`,
-        } as React.CSSProperties}
-      >
+      <div className={styles.timingViz}>
         <div className={styles.timingVizHeader}>
           {displayedBarIndex !== undefined && (
             <span className={styles.timingVizHeaderBar}>bar {displayedBarIndex}</span>
@@ -1257,22 +1260,35 @@ const OnsetTimingVisualization = observer(
             <canvas
               ref={canvasRef}
               className={styles.timingVizCanvas}
-              style={{
-                width: TIMING_VIZ_WIDTH,
-                height: TIMING_VIZ_WAVE_HEIGHT,
-              }}
+              // Canvas backing buffer stays at `TIMING_VIZ_WIDTH × dpr`
+              // (set in the effect); CSS stretches it to the row's
+              // actual width. The horizontal scale is unimportant for
+              // a context snippet, and the time-mapped overlays use
+              // percentages so they stay aligned with the peaks under
+              // them regardless of stretch.
+              style={{ width: '100%', height: TIMING_VIZ_WAVE_HEIGHT }}
             />
           ) : (
             <div className={styles.timingVizNoAudio}>(no audio loaded)</div>
           )}
-          {gridLines.map((x, i) => (
-            <div key={`grid-${i}`} className={styles.timingVizGridLine} style={{ left: x }} />
+          {gridLines.map((pct, i) => (
+            <div
+              key={`grid-${i}`}
+              className={styles.timingVizGridLine}
+              style={{ left: `${pct}%` }}
+            />
           ))}
           {barBoundaries.map((b, i) => (
             <React.Fragment key={`bar-${i}`}>
-              <div className={styles.timingVizBarLine} style={{ left: b.x }} />
+              <div
+                className={styles.timingVizBarLine}
+                style={{ left: `${b.pct}%` }}
+              />
               {b.label !== null && (
-                <div className={styles.timingVizBarLabel} style={{ left: b.x }}>
+                <div
+                  className={styles.timingVizBarLabel}
+                  style={{ left: `${b.pct}%` }}
+                >
                   {b.label}
                 </div>
               )}
@@ -1280,45 +1296,48 @@ const OnsetTimingVisualization = observer(
           ))}
           <div
             className={styles.timingVizDetectedLine}
-            style={{ left: detectedX }}
+            style={{ left: `${detectedPct}%` }}
             title={`Detected · ${detectedSec.toFixed(3)}s`}
           />
-          {finalX !== undefined && (
+          {finalPct !== undefined && (
             <div
               className={styles.timingVizFinalLine}
-              style={{ left: finalX }}
+              style={{ left: `${finalPct}%` }}
               title={`Final · ${finalSec!.toFixed(3)}s`}
             />
           )}
         </div>
         {diffRows.map((row) => {
-          const left = Math.min(row.anchorX, row.endX);
-          const width = Math.abs(row.endX - row.anchorX);
+          const leftPct = Math.min(row.anchorPct, row.endPct);
+          const widthPct = Math.abs(row.endPct - row.anchorPct);
           const beatsPart =
             row.deltaBeats !== undefined ? `· ${renderSignedBeats(row.deltaBeats)} ` : '';
           const slotsPart =
             row.deltaSlots !== undefined ? `· ${renderSignedSlots(row.deltaSlots)} ` : '';
           const fullText = `${row.label} ${beatsPart}${slotsPart}· ${renderSignedMs(row.deltaSec * 1000)}`;
           return (
-            <React.Fragment key={row.key}>
+            <div
+              key={row.key}
+              className={styles.timingVizDiffRow}
+              style={{
+                height: TIMING_VIZ_ROW_HEIGHT,
+                '--bar-left': `${leftPct}%`,
+                '--bar-width': `${widthPct}%`,
+              } as React.CSSProperties}
+              title={fullText}
+            >
               <div
-                className={styles.timingVizDiffRowLabel}
-                style={{ height: TIMING_VIZ_ROW_HEIGHT } as React.CSSProperties}
-                title={fullText}
+                className={`${styles.timingVizDiffBar} ${row.className}`}
+                style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+              />
+              <div className={styles.timingVizDiffRowText}>{fullText}</div>
+              <div
+                className={styles.timingVizDiffRowTextInverted}
+                aria-hidden="true"
               >
                 {fullText}
               </div>
-              <div
-                className={styles.timingVizDiffRowTrack}
-                style={{ height: TIMING_VIZ_ROW_HEIGHT } as React.CSSProperties}
-              >
-                <div
-                  className={`${styles.timingVizDiffBar} ${row.className}`}
-                  style={{ left, width }}
-                  title={fullText}
-                />
-              </div>
-            </React.Fragment>
+            </div>
           );
         })}
       </div>
@@ -1987,7 +2006,7 @@ function renderDebugStageSections(p: DebugStageSectionsProps): React.ReactNode {
   };
 
   return (
-    <>
+    <div className={styles.debugStageSections}>
       <section className={styles.stageGroup}>
         <h4 className={styles.stageHeading}>Onset detection</h4>
         <dl className={styles.debugDetailsList}>
@@ -2258,7 +2277,7 @@ function renderDebugStageSections(p: DebugStageSectionsProps): React.ReactNode {
           )}
         </dl>
       </section>
-    </>
+    </div>
   );
 }
 

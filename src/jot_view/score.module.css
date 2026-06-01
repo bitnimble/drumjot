@@ -860,47 +860,61 @@
     border-radius: var(--radius-xs);
 }
 
-/* One transcribe-stage's worth of debug rows: header + a tight grid of
-   key/value pairs. Stacked vertically inside the Debug details block
-   so a reader scans top-to-bottom in pipeline order (Onset detection
-   → Beat alignment → Quantise → MIDI render → User-applied → Final →
-   Filter). The header is a slim caption-style label; the list is the
-   same grid as before, scoped per stage so each section's keys align
-   independently. */
-.stageGroup {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding-top: 4px;
+/* Outer grid host for every stage section in the Debug-details panel.
+   Sections + their `<dl>`s are flattened into this grid via
+   `display: contents`, so every section's keys live in column 1 and
+   every section's values live in column 2, the labels and values
+   line up across `Onset detection`, `Beat-grid alignment`, etc. as
+   one big two-column table. Each section's heading spans both
+   columns. The headings preserve pipeline order (Onset detection →
+   Beat-grid alignment → Quantise → MIDI render → User adjustment →
+   Final → Filter) so a reader scans top-to-bottom. */
+.debugStageSections {
+    composes: readoutSm from '../typography.module.css';
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    /* `align-items: baseline` so dt's tight `line-height: 1` baseline
+       lines up with the dd's looser `line-height: 1.35` baseline. */
+    align-items: baseline;
+    column-gap: 8px;
+    row-gap: 1px;
+    line-height: 1.35;
 }
 
-.stageGroup + .stageGroup {
-    border-top: 1px dashed var(--color-border-soft);
-    padding-top: 4px;
+/* `display: contents` makes the section element disappear from layout
+   while keeping its DOM identity, so the heading + dl's dt/dd flow
+   directly into the outer `.debugStageSections` grid. The actual
+   per-section visual chrome (dashed top separator, padding) is
+   reattached to `.stageHeading` below; `.stageGroup` itself can't
+   draw a border any more because it has no box. */
+.stageGroup {
+    display: contents;
 }
 
 .stageHeading {
     composes: metaCaption from '../typography.module.css';
-    margin: 0;
+    grid-column: 1 / -1;
+    margin: 4px 0 0;
+    padding-top: 4px;
+    border-top: 1px dashed var(--color-border-soft);
     color: var(--color-text-faint-strong);
     /* stylelint-disable-next-line property-disallowed-list -- micro caption that pairs visually with the dl below; one notch up from metaCaption's 10px to stand out as a section header. */
     font-weight: 700;
 }
 
-/* Compact two-column key/value dump. `dt`/`dd` floated into a grid so
-   the keys stay aligned across multiple rows; `dl` margin reset because
-   we're nested inside the label's tight padding. */
+/* First section has no preceding sibling to separate from, so drop
+   the dashed top border + extra spacing. */
+.debugStageSections > .stageGroup:first-child > .stageHeading {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+}
+
+/* The `<dl>` is also `display: contents`: its dt/dd flow into the
+   outer grid alongside dt/dd from every other section. */
 .debugDetailsList {
-    composes: readoutSm from '../typography.module.css';
-    display: grid;
-    grid-template-columns: max-content 1fr;
-    /* `align-items: baseline` so the dt's `line-height: 1` text baseline
-       lines up with the dd's `line-height: 1.35` baseline — without it
-       the keys sit visibly higher than their values inside the row. */
-    align-items: baseline;
-    gap: 1px 8px;
+    display: contents;
     margin: 0;
-    line-height: 1.35;
 }
 
 .debugDetailsList dt {
@@ -942,22 +956,23 @@
 }
 
 /* Per-onset timing diagram, drawn above the textual debug grid.
-   Two-column grid: [stage label] [bar track]. Track width is fixed
-   (TIMING_VIZ_WIDTH in score.tsx) so the waveform pixel ↔ audio-time
-   mapping is stable; label column width (TIMING_VIZ_LABEL_WIDTH) is
-   set inline via gridTemplateColumns. The header spans both columns;
-   the waveform row sits in the track column only (empty label cell
-   skipped by grid auto-placement). */
+   Flex column: header → waveform → one row per pipeline stage that
+   produced a non-zero delta. Default `align-items: stretch` so every
+   row fills the popover width; the popover sizes to the widest diff
+   row's intrinsic text (see `.timingVizDiffRowText`), and the waveform
+   stretches to match. Every overlay (bar boundaries, grid ticks,
+   detected/final lines, diff-row bars, inverted-text clip) is
+   positioned in percentage units (set inline from `timeToPct`), so
+   the time axis stays calibrated at any width. */
 .timingViz {
-    display: grid;
-    column-gap: 6px;
-    row-gap: 2px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
     margin-bottom: 4px;
 }
 
 .timingVizHeader {
     composes: metaCaption from '../typography.module.css';
-    grid-column: 1 / -1;
     display: flex;
     justify-content: space-between;
     color: var(--color-text-faint);
@@ -976,11 +991,12 @@
 /* Waveform row hosts the canvas plus absolutely-positioned overlays:
    bar boundaries, the detected line, and the final-position line.
    `outline` (not `border`) for the frame so it sits in the box's
-   padding box and doesn't shift the canvas inwards, pixel ↔ time
-   alignment depends on the canvas covering the row exactly. Pinned to
-   the track column so it stays aligned with the bars below it. */
+   padding box and doesn't shift the canvas inwards; canvas-to-time
+   alignment depends on the canvas covering the row exactly. Width
+   flexes to the popover (the canvas is `width: 100%`, overlays use
+   percentage positions from `timeToPct`), so the waveform stretches
+   in step with the diff rows below it. */
 .timingVizWaveformRow {
-    grid-column: 2;
     position: relative;
     background: var(--color-bg-cream);
     outline: 1px solid var(--color-border-soft);
@@ -1058,32 +1074,66 @@
     pointer-events: none;
 }
 
-/* Per-stage label, occupying the grid's left column on the diff row's
-   line. Sits outside the coloured bar; the bars themselves are
-   typically a few px wide (the displacements being visualised are
-   ms-scale), so an inline label clipped to ellipsis almost every
-   time. Right-aligned so the label hugs the track column to its
-   right; the title attribute provides the full text on hover. */
-.timingVizDiffRowLabel {
+/* A single diff-row container, holding the coloured stage bar (sized
+   to its audio-time delta) plus two overlaid copies of the row text
+   so the label and the bar share the same horizontal space. The
+   inverted copy is clipped to the bar's rectangle via the
+   `--bar-left` / `--bar-width` per-row CSS vars (percentages of the
+   row width), so wherever the bar occludes the label the text
+   re-paints in the bar-foreground colour and stays readable on the
+   coloured fill. Replaces the older two-column layout where the
+   labels lived in a gutter to the left of the track; the deltas are
+   so narrow that the gutter ate most of the popover's width without
+   buying readability.
+
+   The normal-flow text layer is the only in-flow child, so it drives
+   the row's intrinsic width and, via the parent's
+   `align-items: stretch`, the whole popover's width. Bars and the
+   inverted twin are absolutely positioned and contribute nothing to
+   measurement. */
+.timingVizDiffRow {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+}
+
+/* Normal-colour row text, in flow so its intrinsic width sizes the
+   row and the popover stretches to match. Bars and the inverted twin
+   layer on top via absolute positioning, so neither contributes to
+   the row's measured width; the label is what the popover sees. */
+.timingVizDiffRowText {
     composes: metaCaption from '../typography.module.css';
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    padding: 0 4px;
     color: var(--color-text);
     /* stylelint-disable-next-line property-disallowed-list -- numeric details (signed beats/slots/ms) need tabular-nums so the per-stage rows align column-wise. */
     font-variant-numeric: tabular-nums;
     line-height: 1;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    flex: 0 0 auto;
 }
 
-/* Track column for a diff row, `position: relative` anchors the bar's
-   `left` to the column's left edge, which is aligned with the
-   waveform canvas above, so a stage's bar lines up with the audio-
-   time position it represents. */
-.timingVizDiffRowTrack {
-    position: relative;
+/* Inverted-colour copy of the row text, layered on top of the normal
+   layer and clipped via the bar's per-row `--bar-left` + `--bar-width`
+   CSS vars (percentages of the row width, audio-time mapped via
+   `timeToPct`) so it only paints inside the bar's rectangle. The
+   visible window is `[bar-left, bar-left + bar-width]` from the row's
+   left edge, same origin as the waveform above it, so the inversion
+   lines up with the audio-time position the bar represents. `max(0%, …)`
+   on the right inset keeps the clip valid when the bar extends to the
+   row's right edge. Composes the normal text styles so the two layers
+   paint at identical positions; only `color` + the absolute overlay +
+   `clip-path` differ. */
+.timingVizDiffRowTextInverted {
+    composes: timingVizDiffRowText;
+    position: absolute;
+    inset: 0;
+    color: var(--color-bg-base);
+    clip-path: inset(
+        0 max(0%, calc(100% - var(--bar-left) - var(--bar-width))) 0
+            max(0%, var(--bar-left))
+    );
 }
 
 .timingVizDiffBar {
