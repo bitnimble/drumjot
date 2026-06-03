@@ -38,9 +38,12 @@ transcriber/
         │                       BS-Roformer SW + Jarredou MDX23C 5-stem DrumSep.
         ├── beats.py            madmom RNN+DBN downbeat tracker (default) OR Beat
         │                       Transformer activations into the shared DBN.
-        ├── adtof_onsets.py     ADTOF Frame_RNN per-stem onset detection.
+        ├── adtof_onsets.py     ADTOF Frame_RNN per-stem onsets; hi-hat lane
+        │                       adds audio-domain supplement + energy floor.
         ├── cymbal_split.py     Splits merged cymbals -> ride (d) / crash (c).
-        ├── hihat_split.py      Splits hi-hat -> closed (h) / open (H).
+        ├── hihat_split.py      Splits hi-hat -> closed (h) / open (H) / discard:
+        │                       ring-envelope features + LLM + envelope guardrail
+        │                       + discard-rescue. See "Hi-hat lane" below.
         ├── filter_llm.py       Per-instrument Claude artifact-rejection filter.
         ├── onsets_midi.py      Render kept onsets to prediction.mid.
         ├── note_provenance.py  Per-note debug sidecar (kept + rejected onsets).
@@ -83,6 +86,59 @@ loop and the whole DSL-output pathway were removed. See
 `transcriber/docs/ai-midi-to-jot-notes.md` for the captured techniques
 (per-instrument prompting, deterministic recompose, F1-gated refine,
 critic triage, best-of-K, pattern-aware suppression).
+
+## Hi-hat lane (load-bearing specifics)
+
+The hi-hat lane diverges from the other ADTOF lanes
+(kick/snare/toms/cymbals) because the ~14 kHz MP3 band-limit (the source
+lowpasses there; the separator doesn't restore it) starves ADTOF of the
+high-frequency sizzle that defines a hat. Detection (`adtof_onsets.py`):
+
+- **Inference on the ISOLATED hat stem**, not the drum mix.
+  `_DRUM_STEM_INFERENCE_PITCHES` is now empty (the drum-stem-substitution
+  path is retained but unused; re-add `"h"` to revert). Moving it back to
+  the isolated stem recovered hits the full-mix HH lane was masking.
+- **Looser peak-pick gates than cymbals** (`adtof_hihat_*`: adaptive floor
+  0.12, prominence 0.10, min-dist 50 ms), the band-limited HH activation
+  is weak, so the cymbal-tuned noisy-lane gates culled real hits.
+- **Audio-domain onset supplement**: librosa onset-strength peaks detected
+  directly on the hat stem (median-flux floor for sizzle rejection) are
+  unioned into ADTOF's onsets, recovering hits ADTOF never activated on. A
+  signal-based detector, so it works where ADTOF (acoustic-trained) is OOD.
+- **Energy floor**: onsets below `adtof_hihat_min_amplitude_frac` (0.25) ×
+  the median onset amplitude are dropped, near-silent phantoms (a previous
+  hit's decay / the noise floor), where a near-zero peak would otherwise
+  make the split's `pre_rms` explode. Skipped below 8 onsets (median
+  unstable).
+
+`hihat_split.py` then splits the lane into closed (`h`) / open (`H`) /
+discard:
+
+- Per-onset **ring-envelope features**, `late_rms`, `pre_rms`,
+  `tail_end_s`, `attack_flux` (onset-strength spike), `lowband_ratio`
+  (200–1500 Hz energy fraction, a bleed discriminator); feed a ternary
+  LLM call. `flatness`/`centroid` are still measured (UI/provenance) but
+  NOT shown to the LLM: the band-limit makes full-band timbre meaningless.
+- A **deterministic envelope guardrail** (`_envelope_open_verdict`)
+  overrides the LLM's open/closed call when the ring is decisive (long
+  `tail`/`late` = open; short + dry = closed). Open/closed is a
+  decay/sustain property, far more reliable from the envelope than from the
+  LLM. The `pre_rms` "riding-on-ring" open-signature requires sustain
+  corroboration (`late_rms`) so a degenerate phantom can't read open.
+- The **open-within-open** sizzle filter (`_open_tail_filter`) keys on
+  `attack_flux` (a fresh transient) not `pre_rms` (which is high for every
+  strike in a sustained open groove).
+- A **discard-rescue** (`_rescue_discards`) overturns LLM discards that are
+  decisively real hits, bleed-guarded via `lowband_ratio`, fresh-attack +
+  non-double-trigger gated, and gated on the LLM's own
+  `low_confidence_discards` OR overwhelming envelope evidence.
+
+The filter LLM (`transcribe` stage) is skipped for `h`/`H`, the split
+owns their discard decision. All thresholds are `adtof_hihat_*` /
+module-level constants, tuned on one acoustic track; validate across a
+kit-diverse sample before trusting them broadly. The longer-term plan is
+to replace this heuristic split with a trained model
+([../research/HIHAT.md](../research/HIHAT.md)).
 
 ## `/transcribe/resume`
 

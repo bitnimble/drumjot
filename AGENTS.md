@@ -72,6 +72,26 @@ the post-change loop.
 Transcriber (Docker or the local venv): see
 [docs/transcriber-pipeline.md](docs/transcriber-pipeline.md#build--run).
 
+**Sandbox** (`sandbox/Dockerfile`): a throwaway CUDA + Python container
+carrying the *same* dep stack as the transcriber (uv-managed venv, torch
+cu128, audio-separator, madmom, …) plus `bun`, but running nothing of
+Drumjot. Use it to run experimental scripts against the real stack and
+GPU, and to inspect prior transcribe output under the mounted
+`/codebox-workspace`. Deps stay in lockstep automatically: the image
+does `uv pip install -e .` against `transcriber/pyproject.toml`.
+
+- `scripts/sandbox-py '<code>' [argv…]`, runs `python3 -c` in the
+  container (extra args → `sys.argv[1:]`; reads stdin if no arg).
+- `scripts/sandbox-bun '<code>' [argv…]`, runs `bun -e` (extra args →
+  `Bun.argv[1:]`, like `node -e`; reads stdin if no arg).
+- `scripts/sandbox-run <cmd…>`, exec any command (e.g. `nvidia-smi`).
+
+The scripts auto-start the `drumjot-sandbox` container if stopped and
+fall back to `sudo docker`; they print the build/run recipe if it
+doesn't exist yet. Build context is the repo root (needs
+`transcriber/pyproject.toml`): `docker build -f sandbox/Dockerfile -t
+drumjot-sandbox .`.
+
 **Code intelligence (LSP)**: the `LSP` tool is wired up (`tsgo` +
 `pyright-langserver`). **Prefer it over Grep for symbol-level questions**
 (definition, references, hover, call hierarchy), typed, no false

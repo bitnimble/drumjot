@@ -67,6 +67,15 @@
       "reason": "Use scripts in the scripts/ folder instead of running pytest or python compile directly"
     },
     {
+      "commands": [
+        "Bash(python -c *)",
+        "Bash(python3 -c *)",
+        "Bash(python3.11 -c *)",
+        "Bash(bun -e *)"
+      ],
+      "reason": "Use scripts/sandbox-py and scripts/sandbox-bun in the scripts/ folder instead of running python or bun directly"
+    },
+    {
       "commands": ["Bash(echo \"rc=$?\")", "Bash(echo \"EXIT=${PIPESTATUS[0]}\")"],
       "reason": "Use exit=$? to get the exit code of the last command"
     }

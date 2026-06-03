@@ -74,6 +74,14 @@ project, not history.
   drum mix.** Detector windows are tuned tight on this assumption, see
   [transcriber-pipeline.md](transcriber-pipeline.md#beat-tracking-load-bearing-invariants).
 
+- **The hi-hat lane is a special case**, don't assume it behaves like the
+  other ADTOF lanes. It runs on the isolated stem with its own looser
+  `adtof_hihat_*` gates, an audio-domain onset supplement, and an energy
+  floor (the ~14 kHz band-limit starves ADTOF of hat sizzle); open/closed
+  is decided by a deterministic envelope guardrail that *overrides* the
+  LLM, plus a discard-rescue. Full contract in
+  [transcriber-pipeline.md](transcriber-pipeline.md#hi-hat-lane-load-bearing-specifics).
+
 - **Beat-grid finalization order is load-bearing.** Preserve
   `tracker → align_beats_to_onsets → _finalize_bar_tempos →
   _pad_trailing_bars`. Full rationale in
