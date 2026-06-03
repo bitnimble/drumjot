@@ -82,49 +82,159 @@ _DECAY_MAX_S = 3.0
 _DECAY_DROP_DB = -20.0  # decay = time for RMS to fall this far below peak
 _TIMBRE_WIN_S = 0.18
 
-# Coarse deterministic fallback: a crash both rings long AND is not part
-# of a tight stream (an isolated, sustained hit). A ride ping in a
-# timekeeping pattern is short and densely spaced.
-_FALLBACK_DECAY_S = 0.70
-_FALLBACK_ISOLATION_S = 0.25
+# STFT size for the timbre measurements (flatness / band slicing).
+_TIMBRE_NFFT = 2048
+
+# Flatness is measured only across the band cymbals actually occupy.
+# Computed over the full 0-Nyquist range the metric collapses toward zero:
+# the source/stem is dead above ~14 kHz (lossy-source lowpass + separator
+# bandwidth), so the silent high bins crush the geometric mean (a single
+# near-zero bin drags it down). The HI cut removes that dead region. The
+# LO cut sits low (~250 Hz, not up in the kHz) on purpose: the ride/crash
+# tonal cue is the pitched "ping" partial around 300-700 Hz, so the
+# flatness band must reach down far enough to feel it; cutting higher hides
+# exactly what distinguishes a tonal ride from a noisy crash. Below ~200 Hz
+# is sub-band rumble / bleed with no cymbal content, so it stays excluded.
+_FLATNESS_LO_HZ = 250.0
+_FLATNESS_HI_HZ = 14000.0
+
+# The low-band spectral-crest ("tonal") feature: peak-to-mean power over
+# this band, in dB. It is the perception-matching ride/crash discriminator
+# the flatness band can't capture. A ride has a tall narrow partial here
+# (its pitched ping -> high crest); a crash is flat broadband noise here
+# (-> crest near 0 dB). Measured low because that is where the pitched
+# partial lives; everything above ~2 kHz is broadband mush for both
+# classes. See `_band_crest_db`.
+_TONAL_LO_HZ = 200.0
+_TONAL_HI_HZ = 1500.0
+
+# Post-onset energy envelope: RMS at these offsets past the hit's own peak,
+# expressed in dB below that peak. Gives the model the decay *shape*
+# (a crash sustains, a ride ping drops fast) instead of the single
+# `decay_s` scalar, which collapses to a near-constant value whenever the
+# next onset truncates the decay window. Offsets past the next onset are
+# dropped, so a crowded hit returns a short list.
+_ENV_OFFSETS_S = (0.05, 0.1, 0.2, 0.3, 0.5, 0.8)
+_ENV_FLOOR_DB = -60.0
+
+# Lane letters used as deterministic voice labels.
+_CRASH_LABEL = "crash"
+_RIDE_LABEL = "ride"
+
+# --- Voice-based classification ---------------------------------------
+#
+# Strategy: a song has a small number of distinct cymbal *voices* (a ride
+# and/or a crash, occasionally two crashes). Each voice has a consistent
+# timbre fingerprint. We cluster onsets into voices by timbre, then label
+# each voice by whether it is the *timekeeping* cymbal -- the ride -- using
+# the voice's GLOBAL stream fraction (how much of the whole song that voice
+# spends in dense, evenly-spaced runs), defaulting to crash.
+#
+# Why voice-level density and not per-onset density: a crash played as a
+# fast stream in one chorus (Cold Hard Bitch) still belongs to a voice
+# that is sparse *across the whole song*, so its streamed hits inherit the
+# crash label. A ride is the timekeeper, so its voice is dense everywhere.
+# Per-onset density was the old bug (it called those streamed crashes ride);
+# the global voice statistic is what fixes it. Timbre alone can't decide
+# (a crash's tonal/decay overlaps a ride's, and neither is portable across
+# songs), so the ride/crash call is relative-within-the-song.
+#
+# Intrinsic decay was tried and rejected: with room, a ride and a crash
+# decay about the same (~0.9 s in both test songs), so `decay_s` / sustain
+# / decay-rate don't separate them. Those features are still measured for
+# the LLM discard pass and debug visibility, just not for the label.
+
+# The LLM only flags artifacts to discard; it no longer makes the
+# ride/crash call.
+
+# Decay/sustain measurement window: look at the post-peak fall only this
+# far past the peak (or to the next onset, whichever is sooner). Feeds the
+# `sustain_db` / `decay_rate_db_s` debug features (not the label).
+_SUSTAIN_HORIZON_S = 0.5
+
+# An onset is "in a stream" when its nearest-neighbour gap is at or below
+# this. A voice is labelled RIDE when at least `_RIDE_STREAM_FRACTION` of
+# its onsets are in-stream (it is predominantly timekeeping); otherwise
+# CRASH (the default). Measured CHB crash voices sit at ~0.16-0.19, ride
+# voices at ~0.69-0.87, so the 0.45 bar separates them with wide margin.
+_RIDE_STREAM_GAP_S = 0.35
+_RIDE_STREAM_FRACTION = 0.45
+
+# Accent recovery (a pure TIMBRE gate): a hit inside a ride voice is
+# relabelled crash when its low/mid energy ratio (`low_mid_db`) sits at
+# least this far below the median for the voice's in-stream notes. A ride
+# has a pitched fundamental that fills the LOW band (~250-800 Hz), so its
+# low/mid reads high; a crash is a mid "wash" with little low-band energy,
+# so it reads low. Used RELATIVE to the voice (the absolute level isn't
+# portable across kits: one kit's crash can have more low end than another
+# kit's ride), so a genuine sparse RIDE note (which still has the
+# fundamental) is spared while a foreign crash that fell inside the
+# ride's cluster is caught -- regardless of rhythm/isolation.
+#
+# Ear-confirmed on itte (`low_mid_db` measured on the post-attack window):
+# the 6 labelled crashes sit at -28..-36 dB, the ride stream median is
+# ~-18 with no note below ~-27, so a 9 dB margin (threshold ~-27)
+# recovers all 6 crashes -- including one embedded at ride spacing -- with
+# zero in-stream false positives. `tonal` (pitched-ping crest) was tried
+# and rejected: a crash's crest overlaps a ride's, so it didn't separate.
+_RIDE_ACCENT_LOWMID_MARGIN_DB = 9.0
+
+# Bands for `low_mid_db`: the ride's fundamental "tone" band over the
+# crash's mid "wash" band.
+_FUND_LO_HZ = 250.0
+_FUND_HI_HZ = 800.0
+_WASH_LO_HZ = 1500.0
+_WASH_HI_HZ = 5000.0
+
+# `low_mid_db` is measured on this post-attack window (seconds from the
+# onset), NOT the short attack window the other timbre features use. The
+# attack is a broadband transient for BOTH classes and blurs the ratio;
+# after it, a ride's pitched fundamental rings on while a crash's wash
+# fades, which is where the two separate cleanly. Measured on itte: this
+# window gives zero overlap between the crash and ride distributions,
+# versus 3/67 overlap on the attack window.
+_LOWMID_WIN_START_S = 0.08
+_LOWMID_WIN_END_S = 0.35
+
+# Voice clustering (deterministic k-means on the standardized timbre
+# fingerprint [centroid, tonal, flatness]). We try k = 2.._VOICE_MAX_K and
+# keep the largest split where every cluster is big enough and the clusters
+# are clearly separated; else fewer voices (down to one). The separation
+# gate is what stops a single cymbal's articulations from over-splitting.
+_KMEANS_ITERS = 20
+_VOICE_MAX_K = 3              # ride + crash, occasionally a third cymbal
+_VOICE_MIN_SIZE = 4           # min onsets for a voice to be real
+_VOICE_SEPARATION_MIN = 1.5   # min pairwise centroid dist / within spread
 
 _SPLIT_TOOL: dict[str, Any] = {
-    "name": "report_cymbal_classification",
+    "name": "report_cymbal_artifacts",
     "description": (
-        "Classify each detected cymbal onset into one of three buckets: "
-        "CRASH (sparse accent, long sustained decay, often coincident "
-        "with a kick on a strong beat), RIDE (steady timekeeping stream, "
-        "short articulate decay), or DISCARD (not a real hit; bleed "
-        "from another cymbal-like instrument lining up with `others:`, "
-        "double-triggers, or sizzle re-triggers inside a long crash "
-        "tail). Return TWO arrays of `#N` indices: the crashes and the "
-        "discards. Every onset NOT in either array is treated as RIDE. "
-        "The two arrays must be disjoint. Return empty arrays when "
-        "appropriate (pure ride; nothing to discard). Never include an "
-        "index that wasn't shown to you."
+        "Report which detected cymbal onsets are NOT real hits and should "
+        "be DISCARDED. The ride-vs-crash split is already decided; your "
+        "only job is to flag artifacts: bleed (a weak onset that exists "
+        "only because a louder instrument in `others:` hit at the same "
+        "moment, with an off-voice fingerprint of its own), double- "
+        "triggers (two onsets implausibly close where the drummer struck "
+        "once), and sizzle re-triggers (weak bumps riding inside a real "
+        "crash's decay tail). Return a single array of `#N` indices to "
+        "discard; it should be the minority -- only clear artifacts. "
+        "Return an empty array when nothing is a clear artifact. Never "
+        "include an index that wasn't shown to you."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "crash_indices": {
-                "type": "array",
-                "items": {"type": "integer", "minimum": 0},
-                "description": (
-                    "The `#N` indices of onsets that are CRASH hits."
-                ),
-            },
             "discard_indices": {
                 "type": "array",
                 "items": {"type": "integer", "minimum": 0},
                 "description": (
                     "The `#N` indices of onsets that are NOT real hits "
                     "(bleed, double-triggers, sizzle re-triggers in a "
-                    "crash tail). These should be the minority; only "
-                    "clear artifacts."
+                    "crash tail). The minority; only clear artifacts."
                 ),
             },
         },
-        "required": ["crash_indices", "discard_indices"],
+        "required": ["discard_indices"],
         "additionalProperties": False,
     },
 }
@@ -132,17 +242,51 @@ _SPLIT_TOOL: dict[str, Any] = {
 
 class _Feat:
     """Per-onset measured features (kept off `OnsetCandidate` so the split
-    stays local and doesn't widen the pipeline-wide onset schema)."""
+    stays local and doesn't widen the pipeline-wide onset schema).
 
-    __slots__ = ("decay_s", "flatness", "centroid_hz", "gap_s")
+    `env_db` is the post-onset decay envelope (see `_envelope_db`): RMS at
+    fixed offsets past the peak, in dB below it, truncated at the next
+    onset (so it can be shorter than `_ENV_OFFSETS_S`, or empty).
+
+    `tonal_db` is the low-band spectral crest (see `_band_crest_db`): high
+    when a pitched partial dominates (ride), near 0 when the band is flat
+    noise (crash).
+
+    `sustain_db` / `decay_rate_db_s` are the intrinsic-decay measures (see
+    `_decay_metrics`); kept for debug / LLM context (they don't separate
+    ride from crash on their own).
+
+    `low_mid_db` is the low-band / mid-band energy ratio (see
+    `_low_mid_db`): high when a pitched fundamental fills the low band (a
+    ride), low for a mid-only "wash" (a crash). It drives accent recovery,
+    relative to the voice's stream median."""
+
+    __slots__ = (
+        "decay_s", "flatness", "centroid_hz", "gap_s", "env_db", "tonal_db",
+        "sustain_db", "decay_rate_db_s", "low_mid_db",
+    )
 
     def __init__(
-        self, decay_s: float, flatness: float, centroid_hz: float, gap_s: float
+        self,
+        decay_s: float,
+        flatness: float,
+        centroid_hz: float,
+        gap_s: float,
+        env_db: list[float] | None = None,
+        tonal_db: float = 0.0,
+        sustain_db: float = 0.0,
+        decay_rate_db_s: float = 0.0,
+        low_mid_db: float = 0.0,
     ) -> None:
         self.decay_s = decay_s
         self.flatness = flatness
         self.centroid_hz = centroid_hz
         self.gap_s = gap_s
+        self.env_db = env_db if env_db is not None else []
+        self.tonal_db = tonal_db
+        self.sustain_db = sustain_db
+        self.decay_rate_db_s = decay_rate_db_s
+        self.low_mid_db = low_mid_db
 
 
 def split_cymbal_onsets(
@@ -189,28 +333,47 @@ def split_cymbal_onsets(
         c.centroid_hz = f.centroid_hz
         c.gap_s = f.gap_s
 
-    llm_result = _classify_llm(in_range, feats, structure, onsets_by_pitch, llm_model=llm_model)
-    if llm_result is None:
-        crash_idx, discard_idx = _classify_fallback(in_range, feats)
-        source = "fallback"
+    # Deterministic ride/crash split: cluster onsets into cymbal voices by
+    # timbre, then label each voice by its intrinsic decay rate (crash by
+    # default). Rhythm/density does NOT decide ride vs crash.
+    voice_ids = _cluster_voices(feats)
+    voice_labels = _label_voices(feats, voice_ids)
+    prov_labels = [voice_labels[voice_ids[i]] for i in range(len(in_range))]
+    # Isolated, crash-timbred hits inside a ride voice are accent crashes.
+    prov_labels = _demote_ride_accents(prov_labels, feats, voice_ids)
+
+    # The LLM only prunes artifacts (bleed / double-trigger / sizzle).
+    discard_idx = _discard_llm(
+        in_range, feats, voice_ids, prov_labels, structure, onsets_by_pitch,
+        llm_model=llm_model,
+    )
+    if discard_idx is None:
+        discard_idx = _discard_fallback()
+        source = "deterministic"
     else:
-        crash_idx, discard_idx = llm_result
-        source = "llm"
+        source = "deterministic+llm_discard"
 
     ride = [
         c for i, c in enumerate(in_range)
-        if i not in crash_idx and i not in discard_idx
+        if prov_labels[i] == _RIDE_LABEL and i not in discard_idx
     ]
-    crash = [c for i, c in enumerate(in_range) if i in crash_idx]
+    crash = [
+        c for i, c in enumerate(in_range)
+        if prov_labels[i] == _CRASH_LABEL and i not in discard_idx
+    ]
     discarded = [c for i, c in enumerate(in_range) if i in discard_idx]
     # Out-of-range cymbal onsets are never consumed downstream (bar < 0);
     # park them on the crash lane so nothing is silently discarded.
     crash.extend(out_of_range)
 
+    n_voices = len(set(voice_ids))
     log.info(
-        "cymbal split (%s): %d onsets -> %d ride, %d crash, %d discard",
+        "cymbal split (%s): %d onsets, %d voice(s) %s -> %d ride, %d crash, "
+        "%d discard",
         source,
         len(in_range),
+        n_voices,
+        {v: voice_labels[v] for v in sorted(set(voice_ids))},
         len(ride),
         len(crash) - len(out_of_range),
         len(discarded),
@@ -223,6 +386,10 @@ def split_cymbal_onsets(
             {
                 "source": source,
                 "n_input": len(in_range),
+                "n_voices": n_voices,
+                "voice_labels": {
+                    str(v): voice_labels[v] for v in sorted(set(voice_ids))
+                },
                 "n_ride": len(ride),
                 "n_crash": len(crash) - len(out_of_range),
                 "n_discard": len(discarded),
@@ -232,14 +399,18 @@ def split_cymbal_onsets(
                         "bar": c.bar,
                         "beat_in_bar": round(c.beat_in_bar, 3),
                         "strength": round(c.strength, 3),
+                        "voice": voice_ids[i],
                         "decay_s": round(feats[i].decay_s, 3),
+                        "sustain_db": round(feats[i].sustain_db, 2),
+                        "decay_rate_db_s": round(feats[i].decay_rate_db_s, 1),
+                        "low_mid_db": round(feats[i].low_mid_db, 2),
+                        "tonal_db": round(feats[i].tonal_db, 2),
                         "flatness": round(feats[i].flatness, 4),
                         "centroid_hz": round(feats[i].centroid_hz, 1),
                         "gap_s": round(feats[i].gap_s, 3),
+                        "envelope_db": list(feats[i].env_db),
                         "label": (
-                            "discard" if i in discard_idx
-                            else "crash" if i in crash_idx
-                            else "ride"
+                            "discard" if i in discard_idx else prov_labels[i]
                         ),
                     }
                     for i, c in enumerate(in_range)
@@ -264,15 +435,153 @@ def split_cymbal_onsets(
     return out, discarded
 
 
+def _band_flatness(
+    power_spec: np.ndarray, freqs: np.ndarray, lo_hz: float, hi_hz: float
+) -> float:
+    """Spectral flatness (geometric mean / arithmetic mean of power)
+    restricted to the `[lo_hz, hi_hz]` band, averaged over frames.
+
+    Over the full 0-Nyquist range this metric collapses toward zero for
+    cymbals: the occupied band is only ~1.5-14 kHz and the many near-empty
+    bins outside it crush the geometric mean. Restricting to the occupied
+    band keeps the number meaningful. `power_spec` is `(n_freq, n_frames)`;
+    returns `0.0` when no FFT bin falls inside the band.
+    """
+    mask = (freqs >= lo_hz) & (freqs <= hi_hz)
+    if not np.any(mask):
+        return 0.0
+    band = power_spec[mask, :] + 1e-10
+    gmean = np.exp(np.mean(np.log(band), axis=0))
+    amean = np.mean(band, axis=0)
+    return float(np.mean(gmean / amean))
+
+
+def _band_crest_db(
+    power_spec: np.ndarray, freqs: np.ndarray, lo_hz: float, hi_hz: float
+) -> float:
+    """Spectral crest (peak-to-mean power, in dB) over `[lo_hz, hi_hz]`,
+    computed on the frame-averaged spectrum.
+
+    High when a narrow tonal partial dominates the band -- a ride's pitched
+    "ping" -- and near 0 dB for flat broadband noise -- a crash. Measured
+    low (~200-1500 Hz) because that is where the ride/crash distinction
+    lives; above ~2 kHz both classes are broadband and indistinguishable,
+    and the flatness band sits entirely above the pitched partial. Returns
+    `0.0` when no FFT bin falls inside the band or the band has no energy.
+    """
+    mask = (freqs >= lo_hz) & (freqs <= hi_hz)
+    if not np.any(mask):
+        return 0.0
+    band = power_spec[mask, :].mean(axis=1)
+    mean = float(np.mean(band))
+    if mean <= 0.0:
+        return 0.0
+    return float(10.0 * np.log10(float(np.max(band)) / mean))
+
+
+def _low_mid_db(
+    power_spec: np.ndarray,
+    freqs: np.ndarray,
+    fund: tuple[float, float],
+    wash: tuple[float, float],
+) -> float:
+    """Low-band ("fundamental") over mid-band ("wash") energy, in dB.
+
+    A ride's pitched tone fills the low band, so its ratio reads high; a
+    crash is a mid-band wash with little low-band energy, so it reads low.
+    The absolute level is NOT portable across kits, so it is consumed only
+    relative to a voice's own stream median (see `_demote_ride_accents`).
+    Returns `0.0` if the mid band has no energy.
+    """
+    lo = float(power_spec[(freqs >= fund[0]) & (freqs <= fund[1]), :].sum())
+    mid = float(power_spec[(freqs >= wash[0]) & (freqs <= wash[1]), :].sum())
+    if mid <= 0.0:
+        return 0.0
+    return float(10.0 * np.log10(max(lo, 1e-20) / mid))
+
+
+def _decay_metrics(
+    seg_rms: np.ndarray,
+    seg_t: np.ndarray,
+    peak_i: int,
+    peak: float,
+    horizon_end: float,
+) -> tuple[float, float]:
+    """Intrinsic decay over `[peak, horizon_end]`: returns
+    `(sustain_db, decay_rate_db_s)`.
+
+    `sustain_db` is the deepest the RMS fell after the peak, in dB below
+    it (<= 0). `decay_rate_db_s` is that fall divided by the time it took,
+    in dB/s -- a RATE, so a fast-articulate ride reads high and a washy
+    crash reads low *regardless of how soon the next onset truncates the
+    window*. That truncation-robustness is the whole point: `decay_s`
+    collapses to a near-constant short value in a dense stream, but the
+    rate still separates a crash wall (shallow) from a ride stream
+    (steep). Returns `(0.0, 0.0)` for a zero peak or a window too short to
+    measure.
+    """
+    if peak <= 0.0 or seg_rms.size < 2:
+        return 0.0, 0.0
+    pt = float(seg_t[peak_i])
+    sel = (seg_t >= pt) & (seg_t <= horizon_end)
+    rt = seg_t[sel]
+    rr = seg_rms[sel]
+    if rr.size < 2:
+        return 0.0, 0.0
+    vi = int(np.argmin(rr))
+    valley = float(rr[vi])
+    sustain_db = 20.0 * float(np.log10(max(valley, 1e-10) / peak))
+    elapsed = float(rt[vi] - rt[0])
+    rate = (-sustain_db / elapsed) if elapsed > 0.0 else 0.0
+    return sustain_db, rate
+
+
+def _envelope_db(
+    rms: np.ndarray,
+    rms_t: np.ndarray,
+    peak_time: float,
+    peak: float,
+    win_end: float,
+) -> list[float]:
+    """Post-onset decay envelope: RMS sampled at `_ENV_OFFSETS_S` past the
+    hit's peak, each expressed in dB below that peak and floored at
+    `_ENV_FLOOR_DB`.
+
+    Offsets landing past `win_end` (the next onset) are dropped, so a hit
+    crowded by the next onset returns a short list, the model reads "few
+    samples = tail cut short", same truncation `decay_s` suffers but with
+    the *shape* up to the cut preserved. Returns `[]` for a zero/empty
+    peak.
+    """
+    if peak <= 0.0 or rms_t.size == 0:
+        return []
+    out: list[float] = []
+    for off in _ENV_OFFSETS_S:
+        sample_t = peak_time + off
+        if sample_t > win_end:
+            break
+        idx = int(np.searchsorted(rms_t, sample_t))
+        if idx >= rms_t.size:
+            break
+        val = float(rms[idx])
+        db = 20.0 * float(np.log10(max(val, 1e-10) / peak))
+        out.append(round(max(db, _ENV_FLOOR_DB), 1))
+    return out
+
+
 def _measure(
     stem_path: Path, onsets: list[OnsetCandidate]
 ) -> list[_Feat]:
-    """Measure decay / flatness / centroid / neighbour-gap per onset.
+    """Measure decay / flatness / centroid / neighbour-gap / envelope per
+    onset.
 
     The cymbals stem is loaded once. Decay is the time for post-onset RMS
     to fall `_DECAY_DROP_DB` below its local peak, searched only up to the
-    next cymbal onset (capped at `_DECAY_MAX_S`) — so a ride ping in a
+    next cymbal onset (capped at `_DECAY_MAX_S`); so a ride ping in a
     dense stream measures short by construction, an isolated crash long.
+    Flatness is band-restricted (see `_band_flatness`); the envelope
+    captures the decay shape that the single `decay_s` scalar loses when
+    the window is truncated (see `_envelope_db`).
     """
     sr = 44100
     audio, sr = librosa.load(str(stem_path), sr=sr, mono=True)
@@ -313,40 +622,233 @@ def _measure(
         a1 = min(len(audio), int((t + _TIMBRE_WIN_S) * sr))
         clip = audio[a0:a1]
         if clip.size >= hop:
-            flat = float(np.mean(librosa.feature.spectral_flatness(y=clip)))
+            power = (
+                np.abs(
+                    librosa.stft(clip, n_fft=_TIMBRE_NFFT, hop_length=hop)
+                )
+                ** 2
+            )
+            band_freqs = librosa.fft_frequencies(sr=sr, n_fft=_TIMBRE_NFFT)
+            flat = _band_flatness(
+                power, band_freqs, _FLATNESS_LO_HZ, _FLATNESS_HI_HZ
+            )
+            tonal = _band_crest_db(
+                power, band_freqs, _TONAL_LO_HZ, _TONAL_HI_HZ
+            )
             cen = float(
                 np.mean(librosa.feature.spectral_centroid(y=clip, sr=sr))
             )
         else:
-            flat, cen = 0.0, 0.0
-        out.append(_Feat(decay_s, flat, cen, float(gap)))
+            flat, cen, tonal = 0.0, 0.0, 0.0
+        # low/mid on the post-attack "tone" window (see _LOWMID_WIN_*).
+        lm0 = int((t + _LOWMID_WIN_START_S) * sr)
+        lm1 = min(len(audio), int((t + _LOWMID_WIN_END_S) * sr))
+        lm_clip = audio[lm0:lm1]
+        if lm_clip.size >= hop:
+            lm_power = (
+                np.abs(librosa.stft(lm_clip, n_fft=_TIMBRE_NFFT, hop_length=hop))
+                ** 2
+            )
+            lm_freqs = librosa.fft_frequencies(sr=sr, n_fft=_TIMBRE_NFFT)
+            low_mid = _low_mid_db(
+                lm_power, lm_freqs,
+                (_FUND_LO_HZ, _FUND_HI_HZ), (_WASH_LO_HZ, _WASH_HI_HZ),
+            )
+        else:
+            low_mid = 0.0
+        env = _envelope_db(rms, rms_t, float(seg_t[peak_i]), peak, win_end)
+        horizon_end = min(win_end, float(seg_t[peak_i]) + _SUSTAIN_HORIZON_S)
+        sustain_db, decay_rate = _decay_metrics(
+            seg_rms, seg_t, peak_i, peak, horizon_end
+        )
+        out.append(
+            _Feat(
+                decay_s, flat, cen, float(gap), env, tonal,
+                sustain_db, decay_rate, low_mid,
+            )
+        )
     return out
 
 
-def _classify_llm(
+def _kmeans(z: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
+    """Deterministic Lloyd k-means on standardized rows `z`. Greedy
+    farthest-point seeding (first the point farthest from the global mean,
+    then each next point farthest from the chosen set), so no RNG is
+    needed. Returns `(labels, centroids)`.
+    """
+    centroids = [z[int(np.argmax(((z - z.mean(axis=0)) ** 2).sum(axis=1)))]]
+    for _ in range(k - 1):
+        d = np.min(
+            [((z - c) ** 2).sum(axis=1) for c in centroids], axis=0
+        )
+        centroids.append(z[int(np.argmax(d))])
+    c = np.array(centroids)
+    labels = np.zeros(len(z), dtype=int)
+    for it in range(_KMEANS_ITERS):
+        d2 = np.stack([((z - ci) ** 2).sum(axis=1) for ci in c])
+        new = d2.argmin(axis=0)
+        if it > 0 and np.array_equal(new, labels):
+            break
+        labels = new
+        for j in range(k):
+            if (labels == j).any():
+                c[j] = z[labels == j].mean(axis=0)
+    return labels, c
+
+
+def _cluster_separation(
+    z: np.ndarray, labels: np.ndarray, centroids: np.ndarray
+) -> float:
+    """Min pairwise centroid distance divided by mean within-cluster
+    spread. Higher = more clearly separated clusters; used to reject
+    splits that merely carve up a single cymbal's natural variation.
+    """
+    k = len(centroids)
+    within = [
+        float(np.sqrt(((z[labels == j] - centroids[j]) ** 2).sum(axis=1)).mean())
+        for j in range(k)
+        if (labels == j).any()
+    ]
+    spread = float(np.mean(within)) if within else 0.0
+    if spread <= 0.0:
+        return float("inf")
+    dmin = min(
+        float(np.sqrt(((centroids[a] - centroids[b]) ** 2).sum()))
+        for a in range(k)
+        for b in range(a + 1, k)
+    )
+    return dmin / spread
+
+
+def _cluster_voices(feats: list[_Feat]) -> list[int]:
+    """Group onsets into cymbal voices by timbre fingerprint (standardized
+    `[centroid, tonal, flatness]`). Returns a 0-based voice id per onset.
+
+    Tries `k = 2.._VOICE_MAX_K` and keeps the LARGEST split where every
+    cluster has at least `_VOICE_MIN_SIZE` onsets and the clusters are
+    separated by at least `_VOICE_SEPARATION_MIN`; otherwise falls back to
+    fewer voices, down to a single voice 0. The separation gate is what
+    keeps one cymbal's articulations from over-splitting into spurious
+    voices that could then be mislabelled.
+    """
+    n = len(feats)
+    if _VOICE_MAX_K < 2 or n < _VOICE_MIN_SIZE * 2:
+        return [0] * n
+    x = np.array(
+        [[f.centroid_hz, f.tonal_db, f.flatness] for f in feats], dtype=float
+    )
+    sd = x.std(axis=0)
+    sd[sd == 0.0] = 1.0
+    z = (x - x.mean(axis=0)) / sd
+    best = [0] * n
+    for k in range(2, _VOICE_MAX_K + 1):
+        if n < _VOICE_MIN_SIZE * k:
+            break
+        labels, centroids = _kmeans(z, k)
+        sizes = [int((labels == j).sum()) for j in range(k)]
+        if min(sizes) < _VOICE_MIN_SIZE:
+            continue
+        if _cluster_separation(z, labels, centroids) >= _VOICE_SEPARATION_MIN:
+            best = [int(v) for v in labels]
+    return best
+
+
+def _label_voices(
+    feats: list[_Feat], voice_ids: list[int]
+) -> dict[int, str]:
+    """Label each voice ride or crash by its GLOBAL stream fraction. Crash
+    is the default: a voice is `_RIDE_LABEL` only if it is big enough
+    (`_VOICE_MIN_SIZE`) and at least `_RIDE_STREAM_FRACTION` of its onsets
+    are in-stream (gap <= `_RIDE_STREAM_GAP_S`) -- i.e. the voice is
+    predominantly timekeeping across the whole song.
+
+    The statistic is per-voice and global, NOT per-onset: a crash played
+    as a fast stream in one section still belongs to a voice that is sparse
+    over the whole song, so its streamed hits stay crash. Only a genuine
+    timekeeping cymbal is dense everywhere.
+    """
+    labels: dict[int, str] = {}
+    for v in sorted(set(voice_ids)):
+        gaps = [
+            feats[i].gap_s for i, vi in enumerate(voice_ids) if vi == v
+        ]
+        in_stream = sum(1 for g in gaps if g <= _RIDE_STREAM_GAP_S)
+        frac = in_stream / len(gaps) if gaps else 0.0
+        if len(gaps) >= _VOICE_MIN_SIZE and frac >= _RIDE_STREAM_FRACTION:
+            labels[v] = _RIDE_LABEL
+        else:
+            labels[v] = _CRASH_LABEL
+    return labels
+
+
+def _demote_ride_accents(
+    prov_labels: list[str], feats: list[_Feat], voice_ids: list[int]
+) -> list[str]:
+    """Reclassify isolated, crash-timbred hits inside a ride voice as crash
+    accents.
+
+    A ride voice is the timekeeping cymbal, but clustering can sweep up
+    accent crashes that fall inside its timbre. A hit is demoted when its
+    `low_mid_db` sits at least `_RIDE_ACCENT_LOWMID_MARGIN_DB` below the
+    median for its voice's in-stream notes -- it lacks the ride's pitched
+    low fundamental, so it is timbrally a crash, not a sparse ride note.
+    Purely timbre-based (no rhythm/isolation test): a sparse ride note
+    keeps the fundamental and is spared, while a crash at any spacing
+    (even embedded at ride spacing) is caught. Crash voices have no ride
+    labels to demote. The reference is the median over IN-STREAM notes
+    (gap <= `_RIDE_STREAM_GAP_S`), which are the genuine timekeeping hits,
+    so a few swept-up crashes can't skew it.
+    """
+    ref_low_mid: dict[int, float] = {}
+    for v in set(voice_ids):
+        in_stream = [
+            feats[i].low_mid_db
+            for i in range(len(feats))
+            if voice_ids[i] == v
+            and prov_labels[i] == _RIDE_LABEL
+            and feats[i].gap_s <= _RIDE_STREAM_GAP_S
+        ]
+        if in_stream:
+            ref_low_mid[v] = float(np.median(in_stream))
+
+    out = list(prov_labels)
+    for i, lab in enumerate(prov_labels):
+        if lab != _RIDE_LABEL:
+            continue
+        ref = ref_low_mid.get(voice_ids[i])
+        if (
+            ref is not None
+            and feats[i].low_mid_db < ref - _RIDE_ACCENT_LOWMID_MARGIN_DB
+        ):
+            out[i] = _CRASH_LABEL
+    return out
+
+
+def _discard_llm(
     onsets: list[OnsetCandidate],
     feats: list[_Feat],
+    voice_ids: list[int],
+    prov_labels: list[str],
     structure: BeatStructure,
     onsets_by_pitch: dict[str, list[OnsetCandidate]],
     *,
     llm_model: str | None = None,
-) -> tuple[set[int], set[int]] | None:
-    """Ask the LLM to classify each onset crash / ride / discard.
+) -> set[int] | None:
+    """Ask the LLM which onsets are artifacts to DISCARD.
 
-    Returns `(crash_indices, discard_indices)`; everything not in either
-    set is implicitly ride. The two sets are guaranteed disjoint; overlapping entries resolve to **discard** (the safer error: a real
-    hit lost as discard is one missed note; a sizzle re-trigger
-    mislabelled as a crash creates a phantom accent that the rest of the
-    pipeline will treat as a section boundary).
-
-    Returns `None` to signal the caller to use the deterministic
-    fallback (no API key, call error, or malformed tool output).
+    The ride/crash split is already decided deterministically (voice
+    clustering + intrinsic decay); `voice_ids` / `prov_labels` are passed
+    only as context so the model can spot off-voice bleed. Returns the set
+    of indices to discard, or `None` to signal the caller to skip discards
+    (no API key, call error, or malformed tool output).
     """
     if not settings.anthropic_api_key:
-        log.info("cymbal split: no ANTHROPIC_API_KEY; using fallback")
+        log.info("cymbal split: no ANTHROPIC_API_KEY; skipping discard pass")
         return None
 
-    bar_blocks = _format_bars(onsets, feats, structure, onsets_by_pitch)
+    bar_blocks = _format_bars(
+        onsets, feats, voice_ids, prov_labels, structure, onsets_by_pitch
+    )
     initial_sig = structure.initial_time_signature
     prompt = (
         _load_prompt_template()
@@ -374,7 +876,7 @@ def _classify_llm(
         )
     except Exception as exc:
         log.warning(
-            "cymbal split: LLM call failed (%s); using fallback", exc
+            "cymbal split: LLM call failed (%s); skipping discard pass", exc
         )
         return None
 
@@ -384,18 +886,14 @@ def _classify_llm(
             continue
         if getattr(block, "name", None) != _SPLIT_TOOL["name"]:
             continue
-        crash_raw = block.input.get("crash_indices", [])
         discard_raw = block.input.get("discard_indices", [])
-        if not isinstance(crash_raw, list) or not isinstance(discard_raw, list):
+        if not isinstance(discard_raw, list):
             log.warning(
-                "cymbal split: non-list crash/discard indices; using fallback"
+                "cymbal split: non-list discard indices; skipping discards"
             )
             return None
-        discard_set = _coerce_index_set(discard_raw, n)
-        # Disjointness: discard wins on overlap (see docstring).
-        crash_set = _coerce_index_set(crash_raw, n) - discard_set
-        return crash_set, discard_set
-    log.warning("cymbal split: no tool_use block; using fallback")
+        return _coerce_index_set(discard_raw, n)
+    log.warning("cymbal split: no tool_use block; skipping discards")
     return None
 
 
@@ -413,33 +911,31 @@ def _coerce_index_set(raw: list[Any], n: int) -> set[int]:
     return out
 
 
-def _classify_fallback(
-    onsets: list[OnsetCandidate], feats: list[_Feat]
-) -> tuple[set[int], set[int]]:
-    """Coarse deterministic ride/crash split over the measured features.
+def _discard_fallback() -> set[int]:
+    """No-LLM discard pass: discard nothing.
 
-    Crash = rings long AND is isolated (not part of a tight stream).
-    Never discards; "do nothing about artifacts" is acceptable degraded
-    behaviour when the LLM is unavailable; the goal is "never drop the
-    lane", not accuracy parity with the model. Runs only when the LLM
-    is unavailable.
+    The ride/crash split is fully deterministic (voice clustering +
+    intrinsic decay), so when the LLM is unavailable we still produce
+    correct lanes; we just skip artifact removal. "Keep everything" is the
+    safe degraded behaviour -- the goal is "never drop a real hit", and a
+    few un-pruned bleed/sizzle artifacts are acceptable without the model.
     """
-    crash: set[int] = set()
-    for i, f in enumerate(feats):
-        if f.decay_s >= _FALLBACK_DECAY_S and f.gap_s >= _FALLBACK_ISOLATION_S:
-            crash.add(i)
-    return crash, set()
+    return set()
 
 
 def _format_bars(
     onsets: list[OnsetCandidate],
     feats: list[_Feat],
+    voice_ids: list[int],
+    prov_labels: list[str],
     structure: BeatStructure,
     onsets_by_pitch: dict[str, list[OnsetCandidate]],
 ) -> str:
     """Render per-bar blocks: indexed cymbal onsets with their measured
-    features, plus a compact one-line summary of every other instrument's
-    hits in that bar (so the model can spot kick-coincident accents)."""
+    features and the deterministic voice id + provisional ride/crash label,
+    plus a compact one-line summary of every other instrument's hits in
+    that bar (so the model can spot kick-coincident bleed). The label is
+    already decided; these rows let the model flag artifacts to discard."""
     if not structure.bars:
         return "(no bars detected)"
 
@@ -467,9 +963,13 @@ def _format_bars(
         entries = by_bar.get(bar.index, [])
         if entries:
             rendered = " ".join(
-                f"#{i}(b{c.beat_in_bar:.2f},str{c.strength:.2f},"
-                f"dec{ft.decay_s:.2f}s,flat{ft.flatness:.3f},"
-                f"cen{ft.centroid_hz/1000.0:.1f}k,gap{ft.gap_s:.2f}s)"
+                f"#{i}({prov_labels[i][0]}{voice_ids[i]},"
+                f"b{c.beat_in_bar:.2f},str{c.strength:.2f},"
+                f"dec{ft.decay_s:.2f}s,sus{ft.sustain_db:.0f}dB,"
+                f"rate{ft.decay_rate_db_s:.0f},tonal{ft.tonal_db:.0f}dB,"
+                f"flat{ft.flatness:.3f},cen{ft.centroid_hz/1000.0:.1f}k,"
+                f"gap{ft.gap_s:.2f}s,"
+                f"env[{','.join(f'{v:.0f}' for v in ft.env_db)}])"
                 for i, c, ft in entries
             )
             rows.append(f"  cymbals: {rendered}")

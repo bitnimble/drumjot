@@ -82,8 +82,11 @@ either author contact or replacement before commercial launch.
 
 - **adtof_pytorch Frame_RNN**[^adtof-pt] (xavriley/ADTOF-pytorch, weights
   bundled in the wheel at
-  `adtof_pytorch/data/adtof_frame_rnn_pytorch_weights.pth`); the **sole**
-  drum-onset detector across every stem. Loaded in
+  `adtof_pytorch/data/adtof_frame_rnn_pytorch_weights.pth`); the primary
+  drum-onset detector for kick/snare/toms/cymbals. The **hi-hat lane is a
+  hybrid**: ADTOF on the isolated stem PLUS a librosa onset-strength
+  audio-domain supplement (a meaningful share of hat onsets now come from
+  librosa, which is permissively licensed, not ADTOF). Loaded in
   `app/pipeline/adtof_onsets.py`.
   - **License: CC-BY-NC-SA 4.0**[^cc-by-nc-sa], inherited from upstream
     MZehren/ADTOF[^adtof]. The pytorch port ships no LICENSE of its own; the

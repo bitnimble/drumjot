@@ -111,6 +111,15 @@ _NEIGHBOR_GUARD_S = 0.02
 _MIN_WINDOW_S = 0.08
 _TIMBRE_WIN_S = 0.15
 _ATTACK_WIN_S = 0.06    # short window for 10-90% rise of post-onset envelope
+# Bleed discriminator bands. A real hi-hat is high-band noise with little
+# low-mid body; snare/kick bleed leaking into the hat stem dumps energy
+# into ~200-1500 Hz (drum bodies / fundamentals). `lowband_ratio` = the
+# fraction of OCCUPIED-band energy that sits in the low band. The occupied
+# band tops out at ~14 kHz because the MP3 source lowpasses there and the
+# separator doesn't restore it; measuring to Nyquist would divide by dead
+# air (the trap the cymbal-classifier work hit with spectral flatness).
+_LOWBAND_HZ = (200.0, 1500.0)
+_OCCUPIED_HZ = (200.0, 14000.0)
 
 # Coarse deterministic fallback: open if STILL RINGING 200-500ms after
 # the strike OR onset is sitting inside existing ring energy. Either
@@ -141,15 +150,74 @@ _TAIL_SMOOTH_S = 0.04
 _TAIL_MAX_S = 2.0
 _TAIL_MIN_S = 0.08
 # Open-within-open: an open hit inside a previous open's tail is dropped
-# IF it lacks a fresh-attack signature. The discriminator is `pre_rms`
-# (mean stem RMS just before the strike, normalized to the strike's
-# peak): a genuine repeated open strike spikes well above the ring
-# (pre_rms low, ~0.2-0.5); a sizzle bump's "peak" is barely above the
-# ring (pre_rms very high, often > 0.8). Threshold above this = sizzle
-# (drop); at or below = real strike (keep, extend the tail window).
-# Raise toward 0.75-0.85 if real fast open patterns get cut; lower
-# toward 0.55 if sizzle-train bumps keep surviving.
-_OPEN_IN_TAIL_MAX_PRE_RMS = 0.65
+# IF it lacks a fresh-attack signature. The discriminator is `attack_flux`
+# (peak onset-strength flux at the strike, normalized to the stem's median
+# flux): a real strike, even a soft one riding on a loud ring, produces a
+# fresh half-wave-rectified spectral-flux SPIKE; a sizzle re-trigger is just
+# ring wobble with no fresh transient, so its flux stays near the floor.
+# Below this = no fresh attack = sizzle (drop); at or above = real strike
+# (keep, extend the tail window).
+#
+# This REPLACES the earlier `pre_rms > 0.65` rule, which conflated
+# "consecutive open strikes" with "sizzle bumps": in a sustained open-hat
+# groove every strike rides the previous ring, so `pre_rms` is high (0.5-1.0)
+# for genuine strikes too, and the rule decimated real open passages
+# (validated on debug run 20260531_3acbcfa8 bars 73-80: 12 of 36 genuine
+# open strikes were dropped). `attack_flux` is level-relative, so it keeps a
+# real strike on top of a loud ring while still rejecting a flux-less sizzle.
+# Raise if sizzle-train bumps survive; lower if fast real open patterns get cut.
+_OPEN_IN_TAIL_MIN_FLUX = 3.0
+
+# --- Deterministic envelope guardrail (open vs closed) ---------------------
+# The RMS ring shape is a far more reliable open/closed signal than the LLM:
+# on the labeled debug run the LLM mislabeled an all-closed passage as
+# 13-open/10-discard and kept only 5 of 36 hits in an all-open passage,
+# despite per-onset features that separate the two classes at ~96% with a
+# single threshold. So after the LLM (or fallback) classifies, we OVERRIDE
+# its open/closed call whenever the envelope is DECISIVE; ambiguous onsets
+# (and every `discard`) are left to the LLM. The guardrail only re-routes
+# hits the classifier already accepted as real, it never creates or removes
+# onsets, so it cannot re-admit artifacts.
+#
+# OPEN if ANY of: ring lasts >= _VERDICT_OPEN_TAIL_S, still ringing
+# (`late_rms` >= ...), or riding on an existing ring (`pre_rms` >= ...).
+# CLOSED only if ALL of: short ring AND low late AND low pre. Anything else
+# is ambiguous -> trust the LLM.
+_VERDICT_OPEN_TAIL_S = 0.30
+_VERDICT_OPEN_LATE_RMS = 0.20
+_VERDICT_OPEN_PRE_RMS = 0.45
+# The `pre_rms` ("riding on an existing ring") open-signature must be
+# CORROBORATED by real sustain (`late_rms >= this`). `pre_rms` is a ratio to
+# the strike's local peak, so a near-zero peak (a phantom onset on the noise
+# floor / a previous hit's decay, no fresh transient) makes it explode to
+# 2-9 and falsely vote "open" even with zero tail and zero late. A genuine
+# open hit always rings (high tail and/or late), so requiring a little
+# measured ring after the strike rejects the degenerate case while costing
+# real opens nothing (they pass on the tail signature anyway). Validated on
+# Cold-Hard-Bitch: kills 88 phantom 8th-note opens, keeps 252 real opens.
+_VERDICT_OPEN_PRE_CORROB_LATE = 0.10
+_VERDICT_CLOSED_TAIL_S = 0.18
+_VERDICT_CLOSED_LATE_RMS = 0.12
+_VERDICT_CLOSED_PRE_RMS = 0.30
+
+# --- Discard-rescue (recall-positive overturn of LLM discards) -------------
+# The LLM sometimes discards real hits (on the labeled run it discarded ~24
+# genuine hats across two passages). We overturn a discard back to its
+# envelope verdict ONLY when every guard agrees it's a real hat:
+#   * the envelope is decisive (open or closed, not ambiguous), AND
+#   * it looks like a hat not bleed: `lowband_ratio <= _BLEED_LOWBAND_RATIO_MAX`
+#     (snare/kick bleed dumps energy into 200-1500 Hz; a hat doesn't; #     validated hat ratios ~0.01 vs snare/kick ~0.6), AND
+#   * a fresh transient (not sizzle): `attack_flux >= _RESCUE_MIN_FLUX`, AND
+#   * not a double-trigger: `gap_s >= _RESCUE_MIN_GAP_S`, AND
+#   * the LLM was UNSURE (`low_confidence_discards`) OR the envelope is
+#     OVERWHELMING (`_RESCUE_STRONG_*`), so a confident LLM discard is
+#     respected unless the signal is beyond doubt.
+# Recall-positive only: it moves discards into open/closed, never the reverse.
+_BLEED_LOWBAND_RATIO_MAX = 0.15
+_RESCUE_MIN_FLUX = 3.0
+_RESCUE_MIN_GAP_S = 0.03
+_RESCUE_STRONG_OPEN_TAIL_S = 0.50
+_RESCUE_STRONG_CLOSED_FLUX = 20.0
 
 _SPLIT_TOOL: dict[str, Any] = {
     "name": "report_hihat_classification",
@@ -182,8 +250,21 @@ _SPLIT_TOOL: dict[str, Any] = {
                 "description": (
                     "The `#N` indices of onsets that are NOT real hits "
                     "(sizzle bumps inside an open tail, bleed, double-"
-                    "triggers). These should be the minority — only "
+                    "triggers). These should be the minority, only "
                     "clear artifacts."
+                ),
+            },
+            "low_confidence_discards": {
+                "type": "array",
+                "items": {"type": "integer", "minimum": 0},
+                "description": (
+                    "The subset of `discard_indices` you are NOT confident "
+                    "about, borderline calls where the onset might be a "
+                    "real (soft / fast) hit rather than an artifact. "
+                    "Downstream acoustic checks may overturn these back to "
+                    "a real hit; leave a discard OUT of this list only when "
+                    "you are confident it is an artifact. Must be a subset "
+                    "of `discard_indices`."
                 ),
             },
         },
@@ -212,8 +293,10 @@ class _Feat:
         "late_rms",
         "pre_rms",
         "attack_s",
+        "attack_flux",
         "flatness",
         "centroid_hz",
+        "lowband_ratio",
         "gap_s",
         "tail_end_t",
     )
@@ -227,12 +310,22 @@ class _Feat:
         centroid_hz: float,
         gap_s: float,
         tail_end_t: float,
+        attack_flux: float = 0.0,
+        lowband_ratio: float = 0.0,
     ) -> None:
         self.late_rms = late_rms
         self.pre_rms = pre_rms
         self.attack_s = attack_s
+        # Peak onset-strength flux at the strike / stem-median flux. A fresh
+        # transient (real strike, even soft on a loud ring) spikes; a sizzle
+        # re-trigger inside a ring does not. Drives the open-within-open drop.
+        self.attack_flux = attack_flux
         self.flatness = flatness
         self.centroid_hz = centroid_hz
+        # Fraction of occupied-band energy in the low band (~200-1500 Hz).
+        # Hi-hat = low (high-band noise); snare/kick bleed = high (low-mid
+        # body). The bleed guard on the discard-rescue reads this.
+        self.lowband_ratio = lowband_ratio
         self.gap_s = gap_s
         # Absolute time at which this onset's ring is considered over (per
         # `_TAIL_END_FRAC` / `_TAIL_MIN_S`). Only consulted by the
@@ -285,17 +378,46 @@ def split_hihat_onsets(
         c.centroid_hz = f.centroid_hz
         c.gap_s = f.gap_s
         c.attack_s = f.attack_s
+        c.attack_flux = f.attack_flux
+        c.lowband_ratio = f.lowband_ratio
         c.late_rms = f.late_rms
         c.pre_rms = f.pre_rms
         c.tail_end_s = f.tail_end_t - c.time
 
     llm_result = _classify_llm(in_range, feats, structure, onsets_by_pitch, llm_model=llm_model)
     if llm_result is None:
-        open_idx, discard_idx = _classify_fallback(in_range, feats)
+        open_idx, discard_idx, low_conf_discards = _classify_fallback(in_range, feats)
         source = "fallback"
     else:
-        open_idx, discard_idx = llm_result
+        open_idx, discard_idx, low_conf_discards = llm_result
         source = "llm"
+
+    # Deterministic envelope guardrail: the RMS ring shape separates open
+    # from closed far more reliably than the LLM (which mislabeled whole
+    # passages on the labeled debug run). Override the classifier's
+    # open/closed call wherever the envelope is DECISIVE; leave ambiguous
+    # onsets and every `discard` to the LLM. Re-routes accepted hits only;
+    # never adds or removes onsets, so it can't re-admit artifacts.
+    forced_open: set[int] = set()
+    forced_closed: set[int] = set()
+    for i, (c, f) in enumerate(zip(in_range, feats, strict=True)):
+        if i in discard_idx:
+            continue
+        v = _envelope_open_verdict(f, c.time)
+        if v == "open" and i not in open_idx:
+            open_idx.add(i)
+            forced_open.add(i)
+        elif v == "closed" and i in open_idx:
+            open_idx.discard(i)
+            forced_closed.add(i)
+
+    # Discard-rescue (recall-positive): overturn an LLM discard back to a
+    # real hit when every guard agrees it isn't an artifact. Mutates
+    # open_idx / discard_idx in place; only ever moves discards into
+    # open/closed (see `_rescue_discards`).
+    rescued_open, rescued_closed = _rescue_discards(
+        in_range, feats, open_idx, discard_idx, low_conf_discards,
+    )
 
     # Deterministic backstop: a closed-labelled onset inside a confirmed
     # open tail is physically impossible; an open-labelled onset inside
@@ -327,7 +449,9 @@ def split_hihat_onsets(
 
     log.info(
         "hihat split (%s): %d onsets -> %d closed, %d open, %d discard "
-        "(LLM %d + tail-filter %d closed + %d open inside open tails)",
+        "(post-rescue discard %d + tail-filter %d closed + %d open inside "
+        "open tails; guardrail forced %d->open %d->closed; rescued "
+        "%d->open %d->closed)",
         source,
         len(in_range),
         len(closed) - len(out_of_range),
@@ -336,6 +460,10 @@ def split_hihat_onsets(
         len(discard_idx),
         len(closed_in_tail),
         len(open_in_tail),
+        len(forced_open),
+        len(forced_closed),
+        len(rescued_open),
+        len(rescued_closed),
     )
 
     sink = current_debug_sink()
@@ -348,9 +476,13 @@ def split_hihat_onsets(
                 "n_closed": len(closed) - len(out_of_range),
                 "n_open": len(opened),
                 "n_discard": len(discarded),
-                "n_discard_llm": len(discard_idx),
+                "n_discard_post_rescue": len(discard_idx),
                 "n_closed_in_tail": len(closed_in_tail),
                 "n_open_in_tail": len(open_in_tail),
+                "n_forced_open": len(forced_open),
+                "n_forced_closed": len(forced_closed),
+                "n_rescued_open": len(rescued_open),
+                "n_rescued_closed": len(rescued_closed),
                 "onsets": [
                     {
                         "index": i,
@@ -360,11 +492,23 @@ def split_hihat_onsets(
                         "late_rms": round(feats[i].late_rms, 3),
                         "pre_rms": round(feats[i].pre_rms, 3),
                         "attack_s": round(feats[i].attack_s, 4),
+                        "attack_flux": round(feats[i].attack_flux, 2),
+                        "lowband_ratio": round(feats[i].lowband_ratio, 3),
                         "flatness": round(feats[i].flatness, 4),
                         "centroid_hz": round(feats[i].centroid_hz, 1),
                         "gap_s": round(feats[i].gap_s, 3),
                         "tail_end_s": round(
                             feats[i].tail_end_t - c.time, 3
+                        ),
+                        "forced": (
+                            "open" if i in forced_open
+                            else "closed" if i in forced_closed
+                            else None
+                        ),
+                        "rescued": (
+                            "open" if i in rescued_open
+                            else "closed" if i in rescued_closed
+                            else None
                         ),
                         "label": _label_for(
                             i, open_idx, discard_idx,
@@ -435,12 +579,13 @@ def _open_tail_filter(
       * CLOSED inside an open tail -> dropped unconditionally. A
         struck-closed hi-hat needs the pedal down on a ringing cymbal,
         which is physically impossible in zero time.
-      * OPEN inside an open tail -> dropped IF its `pre_rms` exceeds
-        `_OPEN_IN_TAIL_MAX_PRE_RMS` (no fresh attack on top of the
-        ring; the "peak" is just sizzle the model picked up). Kept
-        otherwise, treated as a genuine repeated strike that
-        re-energizes the ring, and the tracked tail end extends to the
-        max of its own tail and the prior remainder.
+      * OPEN inside an open tail -> dropped IF its `attack_flux` is
+        below `_OPEN_IN_TAIL_MIN_FLUX` (no fresh transient, the "peak"
+        is just sizzle the model picked up on the existing ring). Kept
+        otherwise, treated as a genuine repeated strike (which produces
+        a fresh flux spike even riding on a loud ring), and the tracked
+        tail end extends to the max of its own tail and the prior
+        remainder.
       * Either kind OUTSIDE any tail -> always kept; an open here
         starts a new tracked tail.
 
@@ -459,9 +604,9 @@ def _open_tail_filter(
         t = onsets[i].time
         in_tail = t <= current_tail_end
         if i in open_idx:
-            if in_tail and feats[i].pre_rms > _OPEN_IN_TAIL_MAX_PRE_RMS:
+            if in_tail and feats[i].attack_flux < _OPEN_IN_TAIL_MIN_FLUX:
                 # Sizzle bump within previous open's ring (no fresh
-                # attack). Drop and DO NOT extend the tail.
+                # transient). Drop and DO NOT extend the tail.
                 open_dropped.add(i)
             else:
                 # Outside any tail, OR genuine repeated strike with a
@@ -473,10 +618,104 @@ def _open_tail_filter(
     return closed_dropped, open_dropped
 
 
+def _envelope_open_verdict(f: _Feat, onset_time: float) -> str | None:
+    """Deterministic open/closed verdict from the RMS ring envelope, or
+    `None` when the evidence is ambiguous (defer to the LLM).
+
+    OPEN when ANY signature is decisive: a long ring
+    (`tail_end_t - onset_time >= _VERDICT_OPEN_TAIL_S`), still ringing
+    200-500 ms later (`late_rms`), or riding on an existing ring
+    (`pre_rms`), the last only when CORROBORATED by measured sustain
+    (`late_rms >= _VERDICT_OPEN_PRE_CORROB_LATE`), since `pre_rms` explodes
+    on a degenerate (near-zero-peak) phantom onset and would otherwise vote
+    "open" with no tail and no late. CLOSED only when ALL three say "short
+    and dry". The asymmetry is deliberate: a hit needs just one strong open
+    signature to be open, but must look closed on every axis to be
+    force-closed, so a genuine open is never force-closed on a single soft
+    measurement.
+
+    `tail_end_t` is an absolute time on `_Feat`; the tail DURATION is
+    `tail_end_t - onset_time` (the same value the split stores as
+    `tail_end_s` on the candidate).
+    """
+    tail_s = f.tail_end_t - onset_time
+    if (
+        tail_s >= _VERDICT_OPEN_TAIL_S
+        or f.late_rms >= _VERDICT_OPEN_LATE_RMS
+        or (
+            f.pre_rms >= _VERDICT_OPEN_PRE_RMS
+            and f.late_rms >= _VERDICT_OPEN_PRE_CORROB_LATE
+        )
+    ):
+        return "open"
+    if (
+        tail_s <= _VERDICT_CLOSED_TAIL_S
+        and f.late_rms <= _VERDICT_CLOSED_LATE_RMS
+        and f.pre_rms <= _VERDICT_CLOSED_PRE_RMS
+    ):
+        return "closed"
+    return None
+
+
+def _rescue_discards(
+    onsets: list[OnsetCandidate],
+    feats: list[_Feat],
+    open_idx: set[int],
+    discard_idx: set[int],
+    low_conf_discards: set[int],
+) -> tuple[set[int], set[int]]:
+    """Overturn LLM discards that every guard says are real hits.
+
+    Mutates `open_idx` / `discard_idx` in place and returns
+    `(rescued_open, rescued_closed)`. Recall-positive only: a discard is
+    overturned to its envelope verdict (open/closed) iff ALL hold:
+
+      * the envelope verdict is decisive (not ambiguous), AND
+      * it isn't bleed: `lowband_ratio <= _BLEED_LOWBAND_RATIO_MAX`
+        (snare/kick bleed dumps energy into the low band; a hat doesn't),
+        AND
+      * a fresh transient: `attack_flux >= _RESCUE_MIN_FLUX` (not sizzle),
+        AND
+      * not a double-trigger: `gap_s >= _RESCUE_MIN_GAP_S`, AND
+      * the LLM was UNSURE (`low_conf_discards`) OR the envelope is
+        OVERWHELMING (`_RESCUE_STRONG_*`).
+
+    Never moves anything INTO discard, so it can't add artifacts.
+    """
+    rescued_open: set[int] = set()
+    rescued_closed: set[int] = set()
+    for i, (c, f) in enumerate(zip(onsets, feats, strict=True)):
+        if i not in discard_idx:
+            continue
+        v = _envelope_open_verdict(f, c.time)
+        if v is None:
+            continue  # ambiguous envelope: respect the LLM's discard
+        if (
+            f.lowband_ratio > _BLEED_LOWBAND_RATIO_MAX  # looks like bleed
+            or f.attack_flux < _RESCUE_MIN_FLUX          # no fresh strike
+            or f.gap_s < _RESCUE_MIN_GAP_S               # double-trigger
+        ):
+            continue
+        overwhelming = (
+            (v == "open"
+             and (f.tail_end_t - c.time) >= _RESCUE_STRONG_OPEN_TAIL_S)
+            or (v == "closed" and f.attack_flux >= _RESCUE_STRONG_CLOSED_FLUX)
+        )
+        if i not in low_conf_discards and not overwhelming:
+            continue
+        discard_idx.discard(i)
+        if v == "open":
+            open_idx.add(i)
+            rescued_open.add(i)
+        else:
+            rescued_closed.add(i)
+    return rescued_open, rescued_closed
+
+
 def _measure(
     stem_path: Path, onsets: list[OnsetCandidate]
 ) -> list[_Feat]:
-    """Measure late-RMS / pre-RMS / attack / flatness / centroid / gap per onset.
+    """Measure late-RMS / pre-RMS / attack / attack-flux / flatness / centroid / gap per onset.
 
     The hi-hat stem is loaded once. `late_rms` and `pre_rms` are the
     two discriminators for the "still ringing" / "riding on ring" open
@@ -513,6 +752,16 @@ def _measure(
         rms_smooth = np.convolve(rms, kernel, mode="same")
     else:
         rms_smooth = rms
+    # Onset-strength (half-wave-rectified spectral flux) envelope: responds
+    # to ENERGY INCREASES (a fresh strike) and ignores steady ring level, so
+    # a soft strike on top of a loud open-hat ring still shows a flux spike
+    # while a sizzle re-trigger does not. `attack_flux` below normalizes each
+    # onset's local flux peak to the stem's median flux, the fresh-attack
+    # signal the open-within-open drop and the LLM prompt both consume.
+    onset_env = librosa.onset.onset_strength(y=audio, sr=sr, hop_length=hop)
+    onset_env_t = librosa.times_like(onset_env, sr=sr, hop_length=hop)
+    pos = onset_env[onset_env > 0.0]
+    flux_med = float(np.median(pos)) if pos.size else float("inf")
     n = len(onsets)
     out: list[_Feat] = []
     for i, c in enumerate(onsets):
@@ -523,6 +772,19 @@ def _measure(
         if prev is not None:
             gap = min(gap, t - prev)
 
+        # --- fresh-attack flux: peak onset-strength in [t-0.02, t+0.04],
+        # normalized to the stem's median flux. A real strike spikes here
+        # regardless of how loud the surrounding ring is; a sizzle bump
+        # (ring wobble, no fresh transient) stays near the floor.
+        flux_mask = (
+            (onset_env_t >= t - 0.02) & (onset_env_t <= t + 0.04)
+        )
+        attack_flux = (
+            float(onset_env[flux_mask].max()) / flux_med
+            if np.any(flux_mask) and np.isfinite(flux_med) and flux_med > 0.0
+            else 0.0
+        )
+
         # --- local peak (search a short window around the onset) ---
         # See `_PEAK_BACK_S`: the search starts BEFORE `t` to absorb
         # onset-time jitter; otherwise an onset that lands one frame
@@ -531,7 +793,8 @@ def _measure(
         peak_mask = (rms_t >= t - _PEAK_BACK_S) & (rms_t <= t + _PEAK_WIN_S)
         if not np.any(peak_mask):
             out.append(
-                _Feat(0.0, 0.0, 0.0, 0.0, 0.0, float(gap), t + _TAIL_MIN_S)
+                _Feat(0.0, 0.0, 0.0, 0.0, 0.0, float(gap), t + _TAIL_MIN_S,
+                      attack_flux=attack_flux)
             )
             continue
         peak = float(rms[peak_mask].max())
@@ -615,7 +878,7 @@ def _measure(
                             float(above_hi[0] - above_lo[0]) / float(sr),
                         )
 
-        # --- timbre (flatness + centroid) ---------------------------
+        # --- timbre (flatness + centroid) + low-band bleed ratio -----
         t1 = min(len(audio), int((t + _TIMBRE_WIN_S) * sr))
         clip = audio[a0:t1]
         if clip.size >= hop:
@@ -623,12 +886,29 @@ def _measure(
             cen = float(
                 np.mean(librosa.feature.spectral_centroid(y=clip, sr=sr))
             )
+            lowband_ratio = _lowband_ratio(clip, sr)
         else:
-            flat, cen = 0.0, 0.0
+            flat, cen, lowband_ratio = 0.0, 0.0, 0.0
         out.append(
-            _Feat(late_rms, pre_rms, attack_s, flat, cen, float(gap), tail_end_t)
+            _Feat(late_rms, pre_rms, attack_s, flat, cen, float(gap),
+                  tail_end_t, attack_flux=attack_flux,
+                  lowband_ratio=lowband_ratio)
         )
     return out
+
+
+def _lowband_ratio(clip: np.ndarray, sr: int) -> float:
+    """Fraction of OCCUPIED-band energy (`_OCCUPIED_HZ`) that falls in the
+    low band (`_LOWBAND_HZ`). High for snare/kick bleed (low-mid body),
+    low for a hi-hat (high-band noise). Occupied band caps at ~14 kHz to
+    avoid dividing by the dead air above the MP3 lowpass."""
+    win = clip.astype(np.float64) * np.hanning(clip.size)
+    spec = np.abs(np.fft.rfft(win)) ** 2
+    freqs = np.fft.rfftfreq(clip.size, 1.0 / sr)
+    occ = (freqs >= _OCCUPIED_HZ[0]) & (freqs <= _OCCUPIED_HZ[1])
+    low = (freqs >= _LOWBAND_HZ[0]) & (freqs <= _LOWBAND_HZ[1])
+    occ_e = float(spec[occ].sum())
+    return float(spec[low].sum() / occ_e) if occ_e > 0.0 else 0.0
 
 
 def _classify_llm(
@@ -638,15 +918,17 @@ def _classify_llm(
     onsets_by_pitch: dict[str, list[OnsetCandidate]],
     *,
     llm_model: str | None = None,
-) -> tuple[set[int], set[int]] | None:
+) -> tuple[set[int], set[int], set[int]] | None:
     """Ask the LLM to classify each onset open / closed / discard.
 
-    Returns `(open_indices, discard_indices)`; everything not in either
-    set is implicitly closed. The two sets are guaranteed disjoint —
-    overlapping entries resolve to **discard** (the safer error: a real
-    hit lost as discard is one missed note; a sizzle bump mislabelled
-    as open creates a phantom note AND extends the open-tail backstop's
-    window, masking nearby closed hits too).
+    Returns `(open_indices, discard_indices, low_confidence_discards)`;
+    everything not in open or discard is implicitly closed. open/discard
+    are guaranteed disjoint; overlapping entries resolve to **discard**
+    (the safer error: a real hit lost as discard is one missed note; a
+    sizzle bump mislabelled as open creates a phantom note AND extends the
+    open-tail backstop's window, masking nearby closed hits too).
+    `low_confidence_discards` is the subset of discards the model was
+    unsure about; the discard-rescue overturns those readily.
 
     Returns `None` to signal the caller to use the deterministic
     fallback (no API key, call error, or malformed tool output).
@@ -695,6 +977,7 @@ def _classify_llm(
             continue
         open_raw = block.input.get("open_indices", [])
         discard_raw = block.input.get("discard_indices", [])
+        low_conf_raw = block.input.get("low_confidence_discards", [])
         if not isinstance(open_raw, list) or not isinstance(discard_raw, list):
             log.warning(
                 "hihat split: non-list open/discard indices; using fallback"
@@ -703,7 +986,12 @@ def _classify_llm(
         discard_set = _coerce_index_set(discard_raw, n)
         # Disjointness: discard wins on overlap (see docstring).
         open_set = _coerce_index_set(open_raw, n) - discard_set
-        return open_set, discard_set
+        # Low-confidence discards: keep only those actually in the discard
+        # set (the model is told it's a subset; enforce it defensively).
+        low_conf_set = _coerce_index_set(
+            low_conf_raw if isinstance(low_conf_raw, list) else [], n
+        ) & discard_set
+        return open_set, discard_set, low_conf_set
     log.warning("hihat split: no tool_use block; using fallback")
     return None
 
@@ -724,21 +1012,22 @@ def _coerce_index_set(raw: list[Any], n: int) -> set[int]:
 
 def _classify_fallback(
     onsets: list[OnsetCandidate], feats: list[_Feat]
-) -> tuple[set[int], set[int]]:
+) -> tuple[set[int], set[int], set[int]]:
     """Coarse deterministic open/closed split over the measured features.
 
     Open if STILL RINGING after the strike (high `late_rms`) OR riding
     on existing ring energy (high `pre_rms`). Either signature alone is
-    sufficient. Never discards — "do nothing about sizzle" is acceptable
+    sufficient. Never discards, "do nothing about sizzle" is acceptable
     degraded behaviour when the LLM is unavailable; the open-tail
     backstop still catches the most egregious cases. Runs only when the
-    LLM is unavailable.
+    LLM is unavailable. Returns an empty discard + low-confidence set to
+    match the `_classify_llm` contract.
     """
     opened: set[int] = set()
     for i, f in enumerate(feats):
         if f.late_rms >= _FALLBACK_LATE_RMS or f.pre_rms >= _FALLBACK_PRE_RMS:
             opened.add(i)
-    return opened, set()
+    return opened, set(), set()
 
 
 def _format_bars(
@@ -780,9 +1069,9 @@ def _format_bars(
             rendered = " ".join(
                 f"#{i}(b{c.beat_in_bar:.2f},str{c.strength:.2f},"
                 f"late{ft.late_rms:.2f},pre{ft.pre_rms:.2f},"
-                f"atk{ft.attack_s * 1000.0:.0f}ms,"
-                f"flat{ft.flatness:.3f},cen{ft.centroid_hz / 1000.0:.1f}k,"
-                f"gap{ft.gap_s:.2f}s)"
+                f"tail{ft.tail_end_t - c.time:.2f}s,"
+                f"atk{ft.attack_s * 1000.0:.0f}ms,flux{ft.attack_flux:.1f},"
+                f"lb{ft.lowband_ratio:.2f},gap{ft.gap_s:.2f}s)"
                 for i, c, ft in entries
             )
             rows.append(f"  hihat: {rendered}")

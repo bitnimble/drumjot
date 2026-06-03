@@ -127,12 +127,23 @@ class OnsetCandidate(BaseModel):
     # Set by both cymbal_split and hihat_split:
     #   decay_s, flatness, centroid_hz, gap_s
     # Set only by hihat_split (open/closed-discriminating envelope):
-    #   attack_s, late_rms, pre_rms, tail_end_s
+    #   attack_s, attack_flux, late_rms, pre_rms, tail_end_s
     decay_s: float | None = None
     flatness: float | None = None
     centroid_hz: float | None = None
     gap_s: float | None = None
     attack_s: float | None = None
+    # Hi-hat-only: peak onset-strength flux at the strike / stem-median
+    # flux. A real strike (even a soft one on a loud ring) produces a fresh
+    # spectral-flux spike; a sizzle re-trigger inside a ring does not.
+    # Drives the open-within-open drop in `hihat_split.py` and is shown to
+    # the split LLM; surfaced for the "Acoustic properties" popup.
+    attack_flux: float | None = None
+    # Hi-hat-only: fraction of occupied-band (~200 Hz-14 kHz) energy that
+    # sits in the low band (~200-1500 Hz). Low for a real hi-hat (high-band
+    # noise), high for snare/kick bleed (low-mid body). The discard-rescue's
+    # bleed guard reads this; surfaced for the "Acoustic properties" popup.
+    lowband_ratio: float | None = None
     late_rms: float | None = None
     pre_rms: float | None = None
     # Hi-hat-only: seconds from the onset to the point where its ring is

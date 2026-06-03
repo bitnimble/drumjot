@@ -3,6 +3,7 @@ import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { Point } from 'src/geom';
 import { RenderedJot } from 'src/jot';
+import { perfProbe } from 'src/perf_probe';
 import { BarTiming, buildTimeline, jotPlayer, timeToX } from 'src/playback';
 import { SelectionStore } from 'src/selection';
 import styles from './jot_view.module.css';
@@ -109,6 +110,27 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     store.setScrollBy((anchorBarsRowX - padLeft) * (factor - 1), 0);
   };
 
+  // Stable JotView callback identities. Each only ever delegates to the
+  // (stable) `store` / `selection` instances, so defining them once here
+  // (rather than as inline arrows in `View`'s render) keeps their
+  // reference identity constant across `View` re-renders. That's load-
+  // bearing: `JotView` is `observer`-wrapped (React.memo), and on a long
+  // song its subtree (mixer → every InstrumentRow → BarViews → NoteViews)
+  // is the expensive reconciliation. A fresh closure prop on any `View`
+  // re-render (e.g. the zoom slider writing `store.zoom`) would defeat
+  // that memo and reconcile the whole score; stable props let the memo
+  // hold so `View` can re-render without touching `JotView`. The
+  // observable VALUES JotView needs (jot, trackOrder, highlightedPattern,
+  // the mute/solo snapshots) still flow through props/memo below and stay
+  // reactive. Reads of `store.*` inside these bodies run at call time, not
+  // render time, so they don't subscribe createJotView to anything.
+  const onPatternClick = (name: string) => selection.togglePattern(name);
+  const onSeek = (x: number) => store.seekToX(x);
+  const onZoomBy = (factor: number) => store.setZoom(store.zoom * factor);
+  const onMoveTrack = (from: number, to: number) => store.moveTrack(from, to);
+  const getGutterWidth = () => store.gutterWidth;
+  const onSetGutterWidth = (px: number) => store.setGutterWidth(px);
+
   // Computed once per page load; AudioWorklet availability doesn't
   // change after boot, so capturing this outside the component (and
   // outside any observer) keeps it stable across renders without
@@ -180,6 +202,69 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
       [store.followPlayhead]
     );
 
+    // The mixer control bundles embed observable SNAPSHOT values (the
+    // master mute/solo/audible booleans) plus stable delegations + live
+    // Set references. Memoising each on exactly those snapshot inputs
+    // keeps the object's identity constant when none of them changed.
+    // Crucially that holds across a zoom tick, which re-renders `View` (it reads
+    // `store.zoom` for the toolbar slider) but must NOT churn `JotView`'s
+    // props. The mute/solo toggles still rebuild the bundle (deps change)
+    // so the mixer updates; per-row volume / audibility stays reactive
+    // because the consumer rows call `isPitchAudible` / `volumeFor`
+    // (which read the store) inside their own `observer` bodies, so they
+    // re-render regardless of the bundle's identity.
+    const voiceControls: VoiceControls = React.useMemo(
+      () => ({
+        mutedPitches: store.mutedPitches,
+        soloedPitches: store.soloedPitches,
+        isPitchAudible: store.isPitchAudible,
+        volumeFor: (pitch) => store.pitchVolume(pitch),
+        onSetVolume: (pitch, v) => store.setPitchVolume(pitch, v),
+        onToggleMute: (pitch) => store.toggleMute(pitch),
+        onToggleSolo: (pitch) => store.toggleSolo(pitch),
+        masterMuted: store.drumMasterMuted,
+        masterSoloed: store.drumMasterSoloed,
+        masterAudible: store.isDrumSectionAudible,
+        onToggleMasterMute: () => store.toggleDrumMasterMute(),
+        onToggleMasterSolo: () => store.toggleDrumMasterSolo(),
+      }),
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- observable snapshots; observer wrapper rebuilds when any of these change.
+      [
+        store.mutedPitches,
+        store.soloedPitches,
+        store.drumMasterMuted,
+        store.drumMasterSoloed,
+        store.isDrumSectionAudible,
+      ]
+    );
+    const audioTrackControls: AudioTrackControls = React.useMemo(
+      () => ({
+        mutedAudioTracks: store.mutedAudioTracks,
+        soloedAudioTracks: store.soloedAudioTracks,
+        isAudioTrackAudible: store.isAudioTrackAudible,
+        volumeFor: (id) => store.audioTrackVolume(id),
+        onSetVolume: (id, v) => store.setAudioTrackVolume(id, v),
+        onToggleMute: (id) => store.toggleAudioTrackMute(id),
+        onToggleSolo: (id) => store.toggleAudioTrackSolo(id),
+        onClear: (id) => store.clearAudioTrack(id),
+        onSplitFromMix: (id) => store.splitAudioTrackFromMix(id),
+        onSplitDrumPieces: (id) => store.splitAudioTrackDrumPieces(id),
+        masterMuted: store.audioMasterMuted,
+        masterSoloed: store.audioMasterSoloed,
+        masterAudible: store.isAudioSectionAudible,
+        onToggleMasterMute: () => store.toggleAudioMasterMute(),
+        onToggleMasterSolo: () => store.toggleAudioMasterSolo(),
+      }),
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- observable snapshots; observer wrapper rebuilds when any of these change.
+      [
+        store.mutedAudioTracks,
+        store.soloedAudioTracks,
+        store.audioMasterMuted,
+        store.audioMasterSoloed,
+        store.isAudioSectionAudible,
+      ]
+    );
+
     return (
       <JotViewStoreContext.Provider value={store}>
         <SelectionContext.Provider value={selection}>
@@ -211,7 +296,6 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       onSetLlmModel={(m) => store.setLlmModel(m)}
                       onSetQuantise={(v) => store.setQuantise(v)}
                       onSetQuantiseUseLlm={(v) => store.setQuantiseUseLlm(v)}
-                      zoom={store.zoom}
                       onSetZoom={setZoomCentered}
                       hasNoteProvenance={store.noteProvenance !== undefined}
                       showFilteredOnsets={store.showFilteredOnsets}
@@ -239,47 +323,18 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                         store={store}
                         jot={jot}
                         highlightedPattern={selection.selectedPattern}
-                        onPatternClick={(name) => selection.togglePattern(name)}
+                        onPatternClick={onPatternClick}
                         onMouseDown={onMouseDown}
                         onMouseMove={onMouseMove}
                         onMouseUp={selection.endSelection}
-                        onSeek={(x) => store.seekToX(x)}
-                        onZoomBy={(factor) => store.setZoom(store.zoom * factor)}
+                        onSeek={onSeek}
+                        onZoomBy={onZoomBy}
                         trackOrder={store.trackOrder}
-                        onMoveTrack={(from, to) => store.moveTrack(from, to)}
-                        voiceControls={{
-                          mutedPitches: store.mutedPitches,
-                          soloedPitches: store.soloedPitches,
-                          isPitchAudible: store.isPitchAudible,
-                          volumeFor: (pitch) => store.pitchVolume(pitch),
-                          onSetVolume: (pitch, v) => store.setPitchVolume(pitch, v),
-                          onToggleMute: (pitch) => store.toggleMute(pitch),
-                          onToggleSolo: (pitch) => store.toggleSolo(pitch),
-                          masterMuted: store.drumMasterMuted,
-                          masterSoloed: store.drumMasterSoloed,
-                          masterAudible: store.isDrumSectionAudible,
-                          onToggleMasterMute: () => store.toggleDrumMasterMute(),
-                          onToggleMasterSolo: () => store.toggleDrumMasterSolo(),
-                        }}
-                        audioTrackControls={{
-                          mutedAudioTracks: store.mutedAudioTracks,
-                          soloedAudioTracks: store.soloedAudioTracks,
-                          isAudioTrackAudible: store.isAudioTrackAudible,
-                          volumeFor: (id) => store.audioTrackVolume(id),
-                          onSetVolume: (id, v) => store.setAudioTrackVolume(id, v),
-                          onToggleMute: (id) => store.toggleAudioTrackMute(id),
-                          onToggleSolo: (id) => store.toggleAudioTrackSolo(id),
-                          onClear: (id) => store.clearAudioTrack(id),
-                          onSplitFromMix: (id) => store.splitAudioTrackFromMix(id),
-                          onSplitDrumPieces: (id) => store.splitAudioTrackDrumPieces(id),
-                          masterMuted: store.audioMasterMuted,
-                          masterSoloed: store.audioMasterSoloed,
-                          masterAudible: store.isAudioSectionAudible,
-                          onToggleMasterMute: () => store.toggleAudioMasterMute(),
-                          onToggleMasterSolo: () => store.toggleAudioMasterSolo(),
-                        }}
-                        getGutterWidth={() => store.gutterWidth}
-                        onSetGutterWidth={(px) => store.setGutterWidth(px)}
+                        onMoveTrack={onMoveTrack}
+                        voiceControls={voiceControls}
+                        audioTrackControls={audioTrackControls}
+                        getGutterWidth={getGutterWidth}
+                        onSetGutterWidth={onSetGutterWidth}
                       />
                     ) : (
                       <EmptyState store={store} />
@@ -383,7 +438,11 @@ const JotView = observer((props: JotViewProps) => {
     getGutterWidth,
     onSetGutterWidth,
   } = props;
-  // Intentionally NOT reading `jot.resolved` here — every observable
+  // Render-counter hook for `e2e/zoom-rerender.spec.ts` (no-op unless
+  // `window.__perf` is set). Guards the invariant that zoom never
+  // re-renders JotView; see `src/perf_probe.ts`.
+  perfProbe('JotView');
+  // Intentionally NOT reading `jot.resolved` here. Every observable
   // touched in this body triggers a JotView re-render on zoom, and the
   // title / subtitle / Legend / mixer subtree all derive from zoom-
   // invariant data via `jot.structure` / `jot.title` /

@@ -25,10 +25,15 @@ Accepts audio and runs a five-stage pipeline:
    `sparse` / `mixed`. Onsets are mapped to `(bar, beat_in_bar)` rather
    than a fixed 1/16 grid — so triplets, tempo changes and
    time-signature changes are all handled natively.
-4. **`onsets` — ADTOF Frame_RNN per stem.** The merged `cymbals` lane is
-   then split into ride (`d`) / crash (`c`), and the hi-hat lane into
-   closed (`h`) / open (`H`), each via deterministic features plus a
-   small LLM classification pass.
+4. **`onsets`, ADTOF Frame_RNN per stem.** The hi-hat lane is the
+   exception: ADTOF runs on its isolated stem with looser gates, an
+   audio-domain onset supplement, and an energy floor (the ~14 kHz
+   band-limit starves ADTOF of hat sizzle). The merged `cymbals` lane is
+   split into ride (`d`) / crash (`c`) via deterministic features plus a
+   small LLM pass; the hi-hat lane into closed (`h`) / open (`H`) /
+   discard via ring-envelope features + an LLM pass + a deterministic
+   envelope guardrail and discard-rescue (see the pipeline doc's "Hi-hat
+   lane").
 5. **`transcribe` — Claude filter (per instrument).** One small LLM call
    per drum pitch (run in parallel) rejects artifact onsets; the kept
    onsets render straight to a MIDI file (`prediction.mid`) with their

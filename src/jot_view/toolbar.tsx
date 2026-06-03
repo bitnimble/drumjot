@@ -34,6 +34,7 @@ import { Tabs } from './components/tabs';
 import { formatTranscriptionSummary, RecentTranscriptionsPicker } from './recent_transcriptions';
 import styles from './toolbar.module.css';
 import { GridLineSettings, JotViewStore, TranscribeOptions, TranscribeStatus } from './store';
+import { JotViewStoreContext } from './contexts';
 
 /** Stage labels in pipeline order, shown verbatim in the resume stage
  *  picker. Mirrors `Stage` in `transcriber/app/pipeline/runner.py`. */
@@ -104,6 +105,43 @@ function formatStageLabel(stage: TranscribeStage): string {
   }
 }
 
+/**
+ * Score-zoom slider, isolated as its own `observer` so the live
+ * `store.zoom` read lives here, not in the app-root `View` / `Toolbar`.
+ * Zoom ticks at up to display-refresh cadence during a wheel/pinch
+ * gesture; if `View` read `store.zoom` (to thread it through as a
+ * Toolbar prop) the whole shell + toolbar reconciled every tick. Reading
+ * it in this leaf instead means only this single control reacts, and it
+ * only mounts while the View dropdown is open anyway. Pairs with the
+ * stable-prop isolation that keeps `JotView` off the zoom path entirely.
+ */
+const ZoomControl = observer(({ onSetZoom }: { onSetZoom: (z: number) => void }) => {
+  const store = React.useContext(JotViewStoreContext);
+  const zoom = store?.zoom ?? 1;
+  return (
+    <label
+      className={styles.dropdownStepperRow}
+      title="Compress or expand the score horizontally. Has no effect on audio playback, only on how the notation is laid out."
+    >
+      <span>Zoom</span>
+      <span className={styles.dropdownStepperControl}>
+        <input
+          type="range"
+          min={0.1}
+          max={4.0}
+          step={0.05}
+          value={zoom}
+          onChange={(e) => onSetZoom(Number(e.target.value))}
+          className={styles.zoomSlider}
+          style={{ ['--value' as string]: (zoom - 0.1) / 3.9 } as React.CSSProperties}
+          aria-label="Score zoom"
+        />
+        <span className={styles.zoomValue}>{Math.round(zoom * 100)}%</span>
+      </span>
+    </label>
+  );
+});
+
 export const Toolbar = observer(
   ({
     examples,
@@ -128,7 +166,6 @@ export const Toolbar = observer(
     onSetLlmModel,
     onSetQuantise,
     onSetQuantiseUseLlm,
-    zoom,
     onSetZoom,
     hasNoteProvenance,
     showFilteredOnsets,
@@ -186,7 +223,6 @@ export const Toolbar = observer(
     onSetLlmModel: (model: LlmModel) => void;
     onSetQuantise: (enabled: boolean) => void;
     onSetQuantiseUseLlm: (enabled: boolean) => void;
-    zoom: number;
     onSetZoom: (z: number) => void;
     /** True iff a filter-mode debug bundle is loaded — gates the
      * `Show filtered` checkbox so it's only present when there's
@@ -744,26 +780,7 @@ export const Toolbar = observer(
         >
           {() => (
             <>
-              <label
-                className={styles.dropdownStepperRow}
-                title="Compress or expand the score horizontally. Has no effect on audio playback, only on how the notation is laid out."
-              >
-                <span>Zoom</span>
-                <span className={styles.dropdownStepperControl}>
-                  <input
-                    type="range"
-                    min={0.1}
-                    max={4.0}
-                    step={0.05}
-                    value={zoom}
-                    onChange={(e) => onSetZoom(Number(e.target.value))}
-                    className={styles.zoomSlider}
-                    style={{ ['--value' as string]: (zoom - 0.1) / 3.9 } as React.CSSProperties}
-                    aria-label="Score zoom"
-                  />
-                  <span className={styles.zoomValue}>{Math.round(zoom * 100)}%</span>
-                </span>
-              </label>
+              <ZoomControl onSetZoom={onSetZoom} />
               <DropdownSection label="Overlays">
                 <ToggleMenuItem
                   label="Show filtered"

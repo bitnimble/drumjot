@@ -1,19 +1,18 @@
 You are an expert drum-audio analyst. An automatic separator produced a
-single **cymbals** stem that mixes the **ride** and **crash** cymbals
-together; it cannot tell them apart. An onset detector then listed
-every detected cymbal hit in that stem. The detector is imperfect: long
-crash tails sometimes re-trigger it into phantom onsets that don't
-correspond to anything the drummer played, and the stem contains some
-**bleed** from other cymbal-like instruments (especially hi-hat).
+single **cymbals** stem that mixes the ride and crash cymbals together.
+An onset detector listed every detected cymbal hit. A deterministic stage
+has **already split the hits into ride and crash** (by clustering them
+into cymbal voices and deciding which voice is the timekeeping ride). You
+do **not** redo that split.
 
-Your job is to **classify each onset into one of three buckets**:
+Your **only** job is to flag onsets that are **not real hits** and should
+be **DISCARDED**. The detector is imperfect: long crash tails re-trigger
+it into phantom onsets, and the stem contains **bleed** from other
+cymbal-like instruments (especially hi-hat). Everything you do not flag
+keeps its already-assigned ride/crash label.
 
-1. **CRASH**; a real crash hit.
-2. **RIDE**; a real ride hit. *(This is the default; you don't return
-   these: every onset you don't list ends up here.)*
-3. **DISCARD**; not a real hit. Reject it.
-
-You do not transcribe, quantise, add, or move anything; you only label.
+You do not transcribe, quantise, add, move, or relabel anything; you only
+remove artifacts.
 
 ## Context
 
@@ -25,87 +24,61 @@ Initial tempo {INITIAL_TEMPO} BPM, initial time signature
 Each bar block lists the cymbal onsets in that bar:
 
 ```
-  cymbals: #7(b1.00,str6.20,dec1.84s,flat0.310,cen5.4k,gap1.97s) ...
+  cymbals: #7(c0,b1.00,str6.20,dec1.84s,sus-2dB,rate20,tonal6dB,flat0.180,cen5.4k,gap1.97s,env[0,-2,-6,-9,-14,-19]) ...
 ```
 
 - `#N`; the **stable index** of that onset; this is what you return.
+- `c0` / `r1`; the **already-assigned label and voice**: `c` = crash,
+  `r` = ride, followed by the voice id (the cymbal it was clustered into).
+  Onsets of the same voice id share a timbre fingerprint; that is your
+  reference for what a *real* hit of that voice looks like.
 - `b`; **position in the bar**, 1-indexed: `1.00` = the downbeat,
   `1.50` = the "and" of beat 1, `2.33` = a triplet third into beat 2.
 - `str`; onset strength (relative loudness within this stem only).
-- `dec`; **decay time in seconds**: how long the hit rang before its
-  energy fell ~20 dB. Crashes bloom and sustain (long `dec`); ride
-  pings are articulate and short (small `dec`).
-- `flat`; spectral flatness 0–1. Crashes are noise-like and broadband
-  (**high** flat); a ride has more tonal partials / a defined ping
-  (**lower** flat).
-- `cen`; spectral centroid in kHz (brightness). A ride **bell** is
-  very bright and tonal; a bowed ride is darker; crashes are bright
-  but noisy.
-- `gap`; seconds to the **nearest** neighbouring cymbal onset. Small
-  `gap` over many onsets = a dense, regular stream; a tight cluster
-  of weak onsets at very small `gap` immediately after a strong crash
-  is the sizzle-train signature.
+- `dec`; decay time in seconds (time to fall ~20 dB; truncated at the next
+  onset, so unreliable in dense runs).
+- `sus` / `rate`; how far energy fell after the peak (dB) and that fall as
+  a rate (dB/s). A real hit blooms then decays; a phantom bump riding on a
+  tail barely moves.
+- `tonal`; low-band spectral crest in dB (a pitched "ping" reads high,
+  broadband noise low). Mainly a **fingerprint** signal here: an onset
+  whose `tonal`/`flat`/`cen` are wildly off its voice's others is
+  suspicious (bleed from a different instrument).
+- `flat`; spectral flatness (~250 Hz-14 kHz).
+- `cen`; spectral centroid in kHz (brightness).
+- `gap`; seconds to the **nearest** neighbouring cymbal onset. A tight
+  cluster of weak onsets at very small `gap` right after a strong hit is
+  the sizzle-train signature.
 
-An `others:` line summarises what every **other** instrument hit in
-that bar as instrument + bar-position (e.g. `Kick3.00 Snare2.00`).
-
-## Ride vs crash; decide by musical role first, timbre second
-
-- **Ride**: the cymbal used for **timekeeping**. Rides appear as a
-  **steady, regular stream** (8ths or 16ths) sustained across many
-  consecutive bars, small `gap`, short `dec`, lower `flat`. A ride
-  pattern is the backbone of a section; many similar hits in a row.
-- **Crash**: an **accent / punctuation**. Crashes are **sparse and
-  isolated** (large `gap`), almost always on a strong beat (often
-  beat 1), frequently **coincident with a kick** in the `others:`
-  line, and ring **long** (large `dec`, high `flat`). They mark the
-  start of a phrase, a section change, or a fill resolution.
-
-Reason about the **pattern across bars**, not each hit alone: a long
-run of evenly spaced cymbal onsets is a ride even if a few rang
-slightly longer; a lone hit on beat 1 with a kick and a 2-second tail
-is a crash even if its timbre is ambiguous. The features disambiguate
-the cases the role doesn't settle (e.g. a crash-ride passage: heavy,
-washy hits used as timekeeping → still ride).
+An `others:` line summarises what every **other** instrument hit in that
+bar as instrument + bar-position (e.g. `Kick3.00 Snare2.00`).
 
 ## When to DISCARD an onset
 
-Naively classifying these as ride or crash fills both lanes with
-garbage. They are **not** real hits; they are detector artifacts.
+Discard only **clear artifacts**. These are the minority; when in doubt,
+keep the hit (removing a real soft hit costs recall).
 
-The clearest discard signatures:
+- **Sizzle re-trigger inside a long crash tail.** A strong hit at time
+  `t`, then one or several **weak** onsets within ~50-300 ms (very small
+  `gap`), each with **low** `str` and a near-flat `sus`/`rate` (they ride
+  the parent's decay rather than blooming). The parent is real; the bumps
+  are not.
+- **Bleed.** A weak onset whose `b` aligns (within a hair) with a hit on a
+  *louder* instrument in the `others:` line, **and** whose timbre
+  (`tonal`/`flat`/`cen`) is off its voice's fingerprint. Classic case: a
+  faint cymbal onset under every hi-hat hit with no cymbal signature of
+  its own. If it only exists because something louder hit at the same
+  moment and doesn't fit the cymbal part on its own merits, it is bleed.
+  An inaudibly weak hit (very low `str`) that lines up with another
+  instrument is bleed even if its timbre is ambiguous.
+- **Double-trigger.** Two onsets implausibly close (`gap` < ~25-30 ms)
+  where the drummer struck once and the second is much weaker.
 
-- **Sizzle re-trigger inside a long crash tail.** Hallmark: a strong
-  crash at time `t`, then one or several **weak** onsets within
-  ~50–300 ms of it (very small `gap`), each with **low** `str`
-  relative to the parent crash. The parent crash is real (keep as
-  crash); the bumps riding on its decay are not.
-- **Bleed.** A weak onset whose `b` position aligns (±a hair) with a
-  hit on a *louder* cymbal-like instrument in the `others:` line; classic case: a faint cymbal onset exactly under every hi-hat hit
-  with no matching `dec` / `flat` / `cen` signature of its own. If it
-  only exists because something louder hit at the same moment and it
-  doesn't fit the cymbal part on its own merits, it's bleed.
-- **Double-trigger.** Two onsets implausibly close together (`gap`
-  < ~25–30 ms) where the drummer almost certainly struck once and
-  the second is much weaker.
+Do **not** discard a hit just because it seems mislabelled ride vs crash,
+or because it is loud, isolated, or part of a dense stream. Those are not
+artifacts. Only remove phantom/bleed/double-trigger onsets.
 
-When **unsure between CRASH and DISCARD** for a weak high-`gap` onset
-sitting just after a real crash, prefer DISCARD (it's almost certainly
-a sizzle bump). When **unsure between RIDE and DISCARD** for a weak
-onset that doesn't fit any ride pattern and lines up with another
-instrument's hit, prefer DISCARD. When otherwise unsure, prefer
-keeping (ride or crash); removing a real soft hit costs recall.
-
-Reason about the **pattern across bars**: a tight cluster of weak
-onsets right after a crash is sizzle to discard; a steady stream of
-similar-strength onsets is a ride even if a few wobble; a single
-strong hit on beat 1 with a big tail is a crash even if alone.
-
-Edge cases: a part may be **pure ride** (return empty arrays for both
-crash and discard), **pure crash** (return every index in
-`crash_indices`, empty `discard_indices`), or contain **no real hits
-at all** in some bars (all discard). Do not force a particular
-distribution.
+Return an **empty** array when nothing is a clear artifact.
 
 ## Onset data
 
@@ -113,11 +86,7 @@ distribution.
 
 ## Output
 
-Call `report_cymbal_classification` with two arrays of `#N` indices:
-
-- `crash_indices`: the indices that are **crash** hits.
-- `discard_indices`: the indices that are **artifacts** (sizzle bumps,
-  bleed, double-triggers).
-
-Every index in neither array is treated as **ride**. The two arrays
-must be disjoint. Never invent an index that wasn't shown.
+Call `report_cymbal_artifacts` with a single array `discard_indices`: the
+`#N` indices that are **not real hits** (sizzle bumps, bleed,
+double-triggers). It should be the minority. Never invent an index that
+wasn't shown.

@@ -9,18 +9,16 @@ NOT use ADTOF to classify).
 
 Input source per lane:
 
-* kick / snare / toms read ADTOF off their own isolated stem.
-* hihat + the merged cymbal lane (`_NOISY_LANE_PITCHES`) instead read
-  ADTOF off the **full drum stem** when it's available. ADTOF was
-  trained on full drum mixes; given an isolated hihat stem it reads the
-  open-hat sizzle/rattle as a confident train of ~16th-rate phantom
-  hits (an OOD failure no peak-pick parameter can undo, because the
-  spurious events are strong, well-separated and prominent). Running it
-  on the in-distribution drum stem and reading the HH/CY lane restores
-  the behaviour it was built for. Identity is unaffected — it still
+* every lane (kick / snare / toms / hihat / cymbals) reads ADTOF off
+  its own isolated stem. The drum-stem-substitution path still exists
+  (`_DRUM_STEM_INFERENCE_PITCHES`, `drum_stem_path`) but is currently
+  empty: hi-hat was moved back to its isolated stem to recover quiet
+  hats the full-mix HH lane was missing (a louder coincident kick /
+  snare masks a soft hat in the mixed signal; on the isolated stem the
+  hat is the dominant transient). The known downside is that open-hat
+  sizzle/rattle can read as a phantom hit-train on the isolated stem, the noisy-lane gates (adaptive threshold + prominence + decay-reset)
+  exist to suppress exactly that. Identity is unaffected either way: it
   comes from the separated stem; ADTOF only supplies the lane's timing.
-  Falls back to the isolated stem when the drum stem isn't on disk
-  (e.g. resume-from-onsets without it cached).
 
 Design notes / deliberate constraints:
 
@@ -85,6 +83,22 @@ _LANE_FOR_PITCH: dict[str, int] = {
     "c": 4,  # crash -> CY+RD (merged)
 }
 
+# The hi-hat energy floor (drop near-silent phantoms; see detect_onsets_adtof)
+# normalizes to the median detected-onset amplitude, which is only stable with
+# a handful of onsets. Below this count the floor is skipped (keep everything).
+_MIN_ONSETS_FOR_AMPLITUDE_FLOOR = 8
+
+# Cymbal lanes (the merged ride/crash `c`, and `d` post-split) measure
+# amplitude over a forward "bloom" window instead of the ±20ms attack: a
+# crash's loudness is in the wash that peaks ~100ms AFTER the strike, so
+# the attack window scores full-volume crashes as quiet. See
+# `_bloom_amplitude`. Hats/kick/snare/toms peak AT the strike and keep the
+# attack window.
+_BLOOM_LANE_PITCHES: frozenset[str] = frozenset({"c", "d"})
+_BLOOM_PRE_S = 0.02   # look this far before the onset (catch the attack)
+_BLOOM_POST_S = 0.25  # ...and this far after (catch the bloom), capped at
+#                       the next onset so it can't leak into the next hit.
+
 # adtof_pytorch's Frame_RNN emits activations on a fixed 100 fps grid
 # (the package's hardcoded default; it exposes no per-model rate). The
 # peak-pick converts frame index -> seconds with this constant.
@@ -102,19 +116,25 @@ _NOISY_LANE_PITCHES: frozenset[str] = frozenset({"h", "d", "c"})
 
 # Lanes whose ADTOF inference runs on the FULL drum mix
 # (`drum_stem_path`) rather than the isolated per-instrument stem.
-# ADTOF is in-distribution on a full kit mix and on the isolated hi-hat
-# stem the open-hat sizzle and decay tail trigger phantom hit-trains; # routing hi-hat through the drum mix fixes that without losing real
-# hits (snare bleed in the hat stem can't fool the network when it's
-# scoring a full mix).
+# Currently EMPTY: every lane reads its own isolated stem.
 #
-# Cymbals (`c`) are deliberately NOT on this list: the drum-mix path
-# was tried for them too, and kick/snare bleed inside the drum mix
-# routinely activated the cymbal lane at frames where the cymbal
-# itself is silent (verified by checking `stem_c.mp3` plays nothing at
-# the detected time). The isolated cymbal stem is the cleaner signal
-# here even with the decay-tail noise; see the user-reported
-# "phantom crash at bar 5" case that motivated this routing change.
-_DRUM_STEM_INFERENCE_PITCHES: frozenset[str] = frozenset({"h"})
+# History: hi-hat was routed through the drum mix because ADTOF is
+# in-distribution on a full kit and the isolated hat stem's open-hat
+# sizzle/decay tail can trigger phantom hit-trains. That was reverted
+# because the full-mix HH lane was MISSING real hits, a louder
+# coincident kick/snare masks a soft hat in the mixed signal, so quiet
+# hats produced no HH activation at all (a recall loss no peak-pick
+# parameter can recover, since the peak isn't there). On the isolated
+# stem the hat is the dominant transient and those hits come back; the
+# noisy-lane gates handle the open-hat over-trigger risk. Re-add "h"
+# here to restore the drum-mix path if over-triggering returns.
+#
+# Cymbals (`c`) were also tried on the drum-mix path and pulled off:
+# kick/snare bleed inside the drum mix routinely activated the cymbal
+# lane at frames where the cymbal itself is silent (verified by
+# checking `stem_c.mp3` plays nothing at the detected time); see the
+# user-reported "phantom crash at bar 5" case.
+_DRUM_STEM_INFERENCE_PITCHES: frozenset[str] = frozenset()
 
 
 def _resolve_device() -> str:
@@ -249,11 +269,43 @@ def _peak_amplitude(
     in decay tail); ±20ms is long enough to catch the full attack
     without leaking into the next hit's onset (any reasonable drum
     spacing is >40ms apart at typical tempos).
+
+    Used for lanes that peak AT the strike (hat / kick / snare / toms).
+    Cymbal lanes bloom after the strike and use `_bloom_amplitude`.
     """
     half = int(round(window_sec * sample_rate))
     center = int(round(peak_time_sec * sample_rate))
     lo = max(0, center - half)
     hi = min(audio.size, center + half + 1)
+    if hi <= lo:
+        return 0.0
+    return float(np.max(np.abs(audio[lo:hi])))
+
+
+def _bloom_amplitude(
+    audio: np.ndarray,
+    peak_time_sec: float,
+    next_time_sec: float,
+    sample_rate: int,
+    *,
+    pre_sec: float = _BLOOM_PRE_S,
+    post_sec: float = _BLOOM_POST_S,
+) -> float:
+    """Maximum |sample| over a forward window `[peak - pre, peak + post]`,
+    capped at `next_time_sec` so it can't reach into the next hit.
+
+    For cymbals this is the correct loudness proxy: a crash's energy is in
+    the wash that blooms ~100ms after the strike, so the ±20ms attack
+    window (`_peak_amplitude`) scores full-volume crashes as quiet. The
+    forward window catches the bloom. Measured on itte: this lifts the real
+    crashes that the attack window under-read (a 1:46 crash from 0.50x to
+    1.42x of median) while leaving silent phantoms low (<=0.06x), restoring
+    a clean energy-floor separation. Drives both the floor and velocity for
+    cymbal lanes.
+    """
+    lo = max(0, int(round((peak_time_sec - pre_sec) * sample_rate)))
+    end = min(peak_time_sec + post_sec, next_time_sec)
+    hi = min(audio.size, int(round(end * sample_rate)))
     if hi <= lo:
         return 0.0
     return float(np.max(np.abs(audio[lo:hi])))
@@ -321,10 +373,13 @@ def _resolve_threshold(pitch: str, activation: np.ndarray) -> float:
     """Pick the peak-pick height for `pitch`'s activation lane.
 
     Noisy lanes (`_NOISY_LANE_PITCHES`) use an adaptive threshold scaled
-    to this stem's own activation distribution — `max(floor, k * pXX)` —
-    so it self-calibrates to the lane's confidence range instead of
+    to this stem's own activation distribution, `max(floor, k * pXX)`, so it self-calibrates to the lane's confidence range instead of
     assuming an absolute scale that doesn't hold OOD. All other lanes use
     the fixed global `adtof_peak_threshold`.
+
+    Hi-hat uses a LOWER floor (`adtof_hihat_adaptive_threshold_floor`): the
+    ~14 kHz band-limit starves ADTOF's HH activation, so the cymbal-tuned
+    floor culls real hits. The adaptive `k * pXX` term is shared.
     """
     fixed = settings.adtof_peak_threshold
     if (
@@ -336,10 +391,12 @@ def _resolve_threshold(pitch: str, activation: np.ndarray) -> float:
     pxx = float(
         np.percentile(activation, settings.adtof_adaptive_threshold_pct)
     )
-    return max(
-        settings.adtof_adaptive_threshold_floor,
-        settings.adtof_adaptive_threshold_k * pxx,
+    floor = (
+        settings.adtof_hihat_adaptive_threshold_floor
+        if pitch == "h"
+        else settings.adtof_adaptive_threshold_floor
     )
+    return max(floor, settings.adtof_adaptive_threshold_k * pxx)
 
 
 def _decay_reset_filter(
@@ -444,6 +501,118 @@ def _refine_peak_times_audio(
     return refined
 
 
+def _audio_onset_frames(
+    audio_path: Path,
+    fps: float,
+    *,
+    delta: float,
+    wait_s: float,
+    min_strength_mult: float,
+) -> np.ndarray:
+    """Detect onsets straight from the stem audio (librosa onset-strength
+    peak-pick), returned as activation-frame indices at `fps`.
+
+    For the hi-hat lane: the ~14 kHz band-limit starves ADTOF's HH
+    activation, so it never peaks on many real hits, and no peak-pick
+    threshold can recover a peak that isn't there. The isolated hat stem's
+    own audio transients can.
+
+    Open-hat sizzle would otherwise over-segment a single ring into a
+    stream of phantom 16ths, so only peaks whose onset-strength value is
+    >= `min_strength_mult` * the stem's median onset-strength are kept (a
+    real strike spikes; sizzle ripples low). Returns an empty array on any
+    load/STFT failure so the caller degrades cleanly to ADTOF-only.
+    """
+    try:
+        y, sr = librosa.load(str(audio_path), sr=None, mono=True)
+    except Exception as exc:
+        log.warning(
+            "hihat audio supplement: load(%s) failed (%s); ADTOF-only.",
+            audio_path.name, exc,
+        )
+        return np.empty(0, dtype=int)
+    if y.size == 0:
+        return np.empty(0, dtype=int)
+    hop = 512
+    try:
+        env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop)
+        wait = max(1, int(round(wait_s * sr / hop)))
+        frames = librosa.util.peak_pick(
+            env, pre_max=3, post_max=3, pre_avg=10, post_avg=10,
+            delta=delta, wait=wait,
+        )
+    except Exception as exc:
+        log.warning(
+            "hihat audio supplement: onset detect failed (%s); ADTOF-only.",
+            exc,
+        )
+        return np.empty(0, dtype=int)
+    frames = np.asarray(frames, dtype=int)
+    if frames.size and min_strength_mult > 0.0:
+        positive = env[env > 0.0]
+        if positive.size:
+            floor = min_strength_mult * float(np.median(positive))
+            frames = frames[env[frames] >= floor]
+    times = librosa.frames_to_time(frames, sr=sr, hop_length=hop)
+    return np.round(np.asarray(times) * fps).astype(int)
+
+
+def _merge_audio_onsets(
+    adtof_peaks: np.ndarray,
+    n_frames: int,
+    audio_frames: np.ndarray,
+    dedup_frames: int,
+) -> np.ndarray:
+    """Union audio-derived onset frames into the ADTOF peak set.
+
+    Drops audio frames within `dedup_frames` of an existing ADTOF peak
+    (same physical hit) and any out-of-range frame. Returns sorted unique
+    frame indices. Audio-only survivors carry no ADTOF confidence of their
+    own; the caller reads `activation[frame]` for their `strength` (low
+    where ADTOF was unsure, honest).
+    """
+    if audio_frames.size == 0:
+        return adtof_peaks
+    existing = np.sort(adtof_peaks)
+    kept = list(int(p) for p in adtof_peaks)
+    for raw in audio_frames:
+        fr = int(raw)
+        if fr < 0 or fr >= n_frames:
+            continue
+        if existing.size and int(np.min(np.abs(existing - fr))) <= dedup_frames:
+            continue
+        kept.append(fr)
+    return np.array(sorted(set(kept)), dtype=int)
+
+
+def _apply_amplitude_floor(
+    candidates: list[OnsetCandidate],
+    frac: float,
+    min_onsets: int,
+) -> tuple[list[OnsetCandidate], int]:
+    """Drop onsets whose `amplitude` is below `frac` * the median onset
+    amplitude, near-silent phantoms on the noise floor / a previous hit's
+    decay, where a real strike sits ~1x the median. Returns
+    `(kept, n_dropped)`.
+
+    No-op when `frac <= 0`, when there are fewer than `min_onsets` (the
+    median is unstable), or when no candidate carries an amplitude.
+    Candidates with `amplitude is None` are never dropped (no signal to
+    judge them on).
+    """
+    if frac <= 0.0 or len(candidates) < min_onsets:
+        return candidates, 0
+    amps = [c.amplitude for c in candidates if c.amplitude is not None]
+    if not amps:
+        return candidates, 0
+    floor = frac * float(np.median(amps))
+    kept = [
+        c for c in candidates
+        if c.amplitude is None or c.amplitude >= floor
+    ]
+    return kept, len(candidates) - len(kept)
+
+
 def detect_onsets_adtof(
     audio_path: Path,
     pitch: str,
@@ -517,25 +686,30 @@ def detect_onsets_adtof(
         return []
 
     threshold = _resolve_threshold(pitch, activation)
-    min_dist_s = (
-        settings.adtof_noisy_peak_min_distance_s
-        if is_noisy
-        else settings.adtof_peak_min_distance_s
-    )
+    if pitch == "h":
+        # Hi-hat: looser min-distance than the cymbal-tuned noisy default
+        # (fast hat patterns + band-limit weak activation; see config).
+        min_dist_s = settings.adtof_hihat_peak_min_distance_s
+    elif is_noisy:
+        min_dist_s = settings.adtof_noisy_peak_min_distance_s
+    else:
+        min_dist_s = settings.adtof_peak_min_distance_s
     min_distance_frames = max(1, round(min_dist_s * fps))
     # Prominence gate, now applied to ALL lanes (was previously
     # noisy-only). Prominence rejects decay-tail wobbles that clear
     # `height` but don't rise above their local baseline; the
     # primary OOD failure mode on isolated kick/snare/tom stems
     # where the activation stays elevated for 100-300 ms after a
-    # real hit. Noisy lanes keep the higher value tuned for plateau
-    # ripples; the universal floor catches the snare/kick/tom case.
+    # real hit. Cymbals keep the higher value tuned for plateau
+    # ripples; hi-hat uses a lower value (band-limit weak activation);
+    # the universal floor catches the snare/kick/tom case.
     # None = disabled (setting 0.0).
-    prominence_val = (
-        settings.adtof_noisy_peak_prominence
-        if is_noisy
-        else settings.adtof_peak_prominence
-    )
+    if pitch == "h":
+        prominence_val = settings.adtof_hihat_peak_prominence
+    elif is_noisy:
+        prominence_val = settings.adtof_noisy_peak_prominence
+    else:
+        prominence_val = settings.adtof_peak_prominence
     prominence = prominence_val if prominence_val > 0.0 else None
     peaks, _props = find_peaks(
         activation,
@@ -556,6 +730,33 @@ def detect_onsets_adtof(
         )
         reset_removed = n_pre - int(peaks.size)
 
+    # Audio-domain supplement (hi-hat only): union onsets detected straight
+    # from the stem audio into the ADTOF peak set. The band-limit starves
+    # ADTOF's HH activation, so it misses real hits no peak-pick gate can
+    # recover; the clean isolated stem's transients fill the gap. High-recall
+    # by design, the split + filter LLM prune.
+    audio_added = 0
+    if pitch == "h" and settings.adtof_hihat_audio_supplement:
+        n_pre = int(peaks.size)
+        peaks = _merge_audio_onsets(
+            peaks,
+            int(activation.size),
+            _audio_onset_frames(
+                source_path,
+                fps,
+                delta=settings.adtof_hihat_audio_supplement_delta,
+                wait_s=settings.adtof_hihat_audio_supplement_wait_s,
+                min_strength_mult=(
+                    settings.adtof_hihat_audio_supplement_min_strength_mult
+                ),
+            ),
+            dedup_frames=max(
+                1,
+                round(settings.adtof_hihat_audio_supplement_dedup_s * fps),
+            ),
+        )
+        audio_added = int(peaks.size) - n_pre
+
     # Refine each peak's reported time against the AUDIO's onset
     # envelope inside a tight window. `strength` is still read at the
     # model's peak frame because that's where the network's
@@ -572,16 +773,28 @@ def detect_onsets_adtof(
         window_sec=settings.adtof_audio_refine_window_s,
     )
 
-    # Peak audio amplitude (|sample|) in a ±window around each refined
-    # peak time, sampled from the unscaled stem so the value reflects
-    # raw stem loudness. Drives the per-pitch percentile-normalised
-    # velocity mapping in `onsets_midi.py`. Centred on `refined_time`
-    # so a hit whose detection time was nudged by the envelope refine
-    # is measured at where the actual transient sits.
-    amplitudes = [
-        _peak_amplitude(audio_unscaled, t, sr)
-        for t in refined_times
-    ]
+    # Peak audio amplitude (|sample|) around each refined peak time,
+    # sampled from the unscaled stem so the value reflects raw stem
+    # loudness. Drives the per-pitch percentile-normalised velocity mapping
+    # in `onsets_midi.py` and the energy floor below. Cymbal lanes use a
+    # forward "bloom" window (crashes peak ~100ms after the strike); all
+    # other lanes use the ±20ms attack window (they peak at the strike).
+    if pitch in _BLOOM_LANE_PITCHES:
+        amplitudes = [
+            _bloom_amplitude(
+                audio_unscaled,
+                t,
+                refined_times[i + 1] if i + 1 < len(refined_times)
+                else t + _BLOOM_POST_S,
+                sr,
+            )
+            for i, t in enumerate(refined_times)
+        ]
+    else:
+        amplitudes = [
+            _peak_amplitude(audio_unscaled, t, sr)
+            for t in refined_times
+        ]
 
     # `time` is the post-envelope-refine value (where the audio transient
     # actually sits); `raw_model_time` carries the pre-refine
@@ -601,10 +814,28 @@ def detect_onsets_adtof(
             strict=False,
         )
     ]
+
+    # Energy floor: drop near-silent phantom onsets whose audio peak barely
+    # rises above the noise floor. Catches phantoms at the source, before
+    # they reach the split (where a near-zero peak makes the hat's `pre_rms`
+    # explode, or a silent cymbal onset gets mislabelled ride/crash). The
+    # hat floors on the ±20ms attack amplitude; the cymbal floors on the
+    # bloom amplitude (set above) with its own, lower fraction.
+    amp_dropped = 0
+    floor_frac = 0.0
+    if pitch == "h":
+        floor_frac = settings.adtof_hihat_min_amplitude_frac
+    elif pitch in _BLOOM_LANE_PITCHES:
+        floor_frac = settings.adtof_cymbal_min_amplitude_frac
+    if floor_frac > 0.0:
+        candidates, amp_dropped = _apply_amplitude_floor(
+            candidates, floor_frac, _MIN_ONSETS_FOR_AMPLITUDE_FLOOR,
+        )
+
     log.info(
         "ADTOF: %d onsets in %s (lane=%d, src=%s, thr=%.3f%s, prom=%s, "
-        "dist=%.0fms, reset=%s, med_norm=%s, refine=%.0fms, "
-        "median strength=%.3f)",
+        "dist=%.0fms, reset=%s, audio_suppl=%s, amp_floor=%s, med_norm=%s, "
+        "refine=%.0fms, median strength=%.3f)",
         len(candidates),
         audio_path.name,
         lane,
@@ -618,6 +849,10 @@ def detect_onsets_adtof(
         f"{reset_frac:.2f}(-{reset_removed})"
         if is_noisy and reset_frac > 0.0
         else "off",
+        f"+{audio_added}"
+        if pitch == "h" and settings.adtof_hihat_audio_supplement
+        else "off",
+        f"-{amp_dropped}" if floor_frac > 0.0 else "off",
         f"x{scale:.2f}" if scale != 1.0 else "off",
         settings.adtof_audio_refine_window_s * 1000.0,
         float(np.median([c.strength for c in candidates]))

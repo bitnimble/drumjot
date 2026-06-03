@@ -42,6 +42,92 @@ def test_detect_all_lanes_adtof_maps_lanes_and_picks_peaks(monkeypatch) -> None:
     assert out["cy"] == pytest.approx([0.50])
 
 
+def test_merge_audio_onsets_dedupes_and_unions() -> None:
+    # ADTOF found frames 10, 50; audio supplement found 11 (dup of 10,
+    # within dedup), 30 (new), 52 (dup of 50), 200 (out of range), -1
+    # (out of range). Expect 10, 30, 50, 30 added, dups + OOR dropped.
+    adtof = np.array([10, 50], dtype=int)
+    audio = np.array([11, 30, 52, 200, -1], dtype=int)
+    out = ao._merge_audio_onsets(adtof, n_frames=100, audio_frames=audio, dedup_frames=3)
+    assert out.tolist() == [10, 30, 50]
+
+
+def test_merge_audio_onsets_empty_audio_is_noop() -> None:
+    adtof = np.array([5, 9], dtype=int)
+    out = ao._merge_audio_onsets(adtof, n_frames=100,
+                                 audio_frames=np.empty(0, dtype=int), dedup_frames=4)
+    assert out.tolist() == [5, 9]
+
+
+def _cand(amp):
+    from app.models import OnsetCandidate
+    return OnsetCandidate(time=0.0, strength=0.5, amplitude=amp)
+
+
+def test_amplitude_floor_drops_near_silent_phantoms() -> None:
+    # 8 real hits at ~1.0 + 2 phantoms at 0.1 -> median ~1.0, floor 0.25 drops
+    # the phantoms, keeps the real hits.
+    cands = [_cand(1.0) for _ in range(8)] + [_cand(0.1), _cand(0.1)]
+    kept, dropped = ao._apply_amplitude_floor(cands, frac=0.25, min_onsets=8)
+    assert dropped == 2
+    assert all(c.amplitude == 1.0 for c in kept)
+
+
+def test_amplitude_floor_skips_when_too_few_onsets() -> None:
+    # Below min_onsets the median is unstable -> keep everything.
+    cands = [_cand(1.0), _cand(0.01)]
+    kept, dropped = ao._apply_amplitude_floor(cands, frac=0.25, min_onsets=8)
+    assert dropped == 0 and len(kept) == 2
+
+
+def test_amplitude_floor_disabled_when_frac_zero() -> None:
+    cands = [_cand(1.0) for _ in range(8)] + [_cand(0.01)]
+    kept, dropped = ao._apply_amplitude_floor(cands, frac=0.0, min_onsets=8)
+    assert dropped == 0 and len(kept) == 9
+
+
+def test_amplitude_floor_never_drops_none_amplitude() -> None:
+    cands = [_cand(1.0) for _ in range(8)] + [_cand(None), _cand(0.01)]
+    kept, dropped = ao._apply_amplitude_floor(cands, frac=0.25, min_onsets=8)
+    # the 0.01 phantom drops; the None (no signal to judge) is kept.
+    assert dropped == 1
+    assert any(c.amplitude is None for c in kept)
+
+
+# --- _bloom_amplitude (cymbal loudness = the bloom, not the attack) -----
+
+def _crash_like(sr: int) -> np.ndarray:
+    # A crash: quiet stick attack at 0.5s, loud wash bloom 100ms later.
+    a = np.zeros(int(1.0 * sr), dtype=np.float32)
+    a[int(0.5 * sr)] = 0.2   # attack
+    a[int(0.6 * sr)] = 1.0   # bloom
+    return a
+
+
+def test_bloom_amplitude_catches_late_bloom() -> None:
+    sr = 44100
+    a = _crash_like(sr)
+    # The ±20ms attack window sees only the quiet strike; the forward
+    # bloom window catches the loud wash 100ms later.
+    assert ao._peak_amplitude(a, 0.5, sr) == pytest.approx(0.2)
+    assert ao._bloom_amplitude(a, 0.5, next_time_sec=2.0, sample_rate=sr) == pytest.approx(1.0)
+
+
+def test_bloom_amplitude_caps_at_next_onset() -> None:
+    sr = 44100
+    a = _crash_like(sr)
+    # A next onset at 0.55s caps the window before the 0.6s bloom, so the
+    # value stays at the attack level (can't borrow the next hit's energy).
+    assert ao._bloom_amplitude(a, 0.5, next_time_sec=0.55, sample_rate=sr) == pytest.approx(0.2)
+
+
+def test_bloom_amplitude_empty_window_is_zero() -> None:
+    sr = 44100
+    a = _crash_like(sr)
+    # Degenerate: next onset before the window start -> 0.0, no crash.
+    assert ao._bloom_amplitude(a, 0.5, next_time_sec=0.0, sample_rate=sr) == 0.0
+
+
 def test_reference_uses_drum_stem_directly_and_skips_separation(tmp_path) -> None:
     drum = tmp_path / "drums.wav"
     drum.write_bytes(b"x")

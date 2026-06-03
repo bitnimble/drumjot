@@ -331,7 +331,7 @@ export class JotViewStore {
     beatInput: 'full_mix',
     llmModel: 'claude-haiku-4-5-20251001',
     quantise: true,
-    quantiseUseLlm: true,
+    quantiseUseLlm: false,
   };
   /** Server-side picker of recent /transcribe runs that can be resumed.
    *  Populated by {@link refreshRecentTranscriptions}; an empty array

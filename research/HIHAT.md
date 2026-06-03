@@ -10,17 +10,30 @@ current heuristic+LLM open/closed split with a custom-trained model.
 
 ## 1. Context and the problem with today's pipeline
 
-Current transcribe path:
+> **Update (2026-06-03):** the heuristic hi-hat path described here was
+> substantially reworked after this doc was written, hi-hat ADTOF now runs
+> on the ISOLATED stem (not the drum mix), with looser gates, an
+> audio-domain onset supplement, and an energy floor; the split gained
+> `attack_flux` + `lowband_ratio` features (and dropped `flatness`/`centroid`
+> from the prompt), a deterministic envelope open/closed guardrail, a
+> flux-based open-within-open filter, and a discard-rescue. See
+> [../docs/transcriber-pipeline.md](../docs/transcriber-pipeline.md) "Hi-hat
+> lane". This raised the heuristic's accuracy, but open/closed remains
+> threshold-tuned on limited data and a trained model is still the goal.
+
+Current transcribe path (post-rework):
 
 ```
 full mix
   → BS-Roformer SW           (drum stem; preserves HF cymbal/hat transients, drums SDR ~14)
   → MDX23C DrumSep           (kick / snare / toms / hi-hat / cymbals stems)
-  → ADTOF Frame_RNN          (per-frame onset activations; run on the DRUM stem for the
-                              hat/cymbal lanes because the isolated hat stem is OOD)
-  → hihat_split.py           (hand-crafted DSP features [late_rms, pre_rms, attack,
-                              flatness, centroid] + LLM ternary classify open/closed/discard,
-                              + deterministic _open_tail_filter backstop)
+  → ADTOF Frame_RNN          (per-frame onset activations, per ISOLATED stem;
+                              hi-hat lane adds an audio-domain onset supplement
+                              + energy floor to counter the ~14kHz band-limit)
+  → hihat_split.py           (ring-envelope features [late_rms, pre_rms, tail_end_s,
+                              attack_flux, lowband_ratio] + ternary LLM classify
+                              open/closed/discard + deterministic envelope guardrail
+                              + _open_tail_filter + discard-rescue)
   → MIDI → frontend Jot
 ```
 

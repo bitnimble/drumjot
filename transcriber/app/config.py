@@ -135,6 +135,66 @@ class Settings(BaseSettings):
     adtof_noisy_decay_reset_frac: float = 0.6
     adtof_noisy_decay_reset_floor: float = 0.05
 
+    # --- Hi-hat lane recall (band-limit compensation) ---
+    # Hi-hat is the highest-frequency drum, and the MP3 source lowpasses
+    # ~14 kHz (the separator doesn't restore it), so ADTOF, trained on
+    # full-band audio, gets a weak/smeared HH activation and the standard
+    # noisy-lane gates (tuned for cymbals) cull a large fraction of real
+    # hits. The hi-hat lane (`h`) therefore uses its OWN, looser gates;
+    # cymbals (`d`/`c`) keep the stricter `adtof_noisy_*` /
+    # `adtof_adaptive_threshold_floor` values above. These override only
+    # the floor / prominence / min-distance for `h`; the adaptive `k * pXX`
+    # term and the decay-reset filter are shared.
+    adtof_hihat_adaptive_threshold_floor: float = 0.12
+    adtof_hihat_peak_prominence: float = 0.10
+    adtof_hihat_peak_min_distance_s: float = 0.050
+    # After ADTOF peak-picking the hi-hat lane, also detect onsets directly
+    # from the isolated hat-stem AUDIO (onset-strength peaks) and UNION them
+    # into the peak set. The band-limit starves ADTOF specifically on
+    # hi-hat; the clean isolated stem's audio transients recover hits ADTOF
+    # never activated on (no peak-pick threshold can recover a peak that
+    # isn't there). Audio onsets within `_dedup_s` of an existing ADTOF
+    # peak are dropped (same hit); audio-only onsets take the ADTOF
+    # activation at their frame as `strength` (honest: low where ADTOF was
+    # unsure). High-recall by design, the split + filter LLM prune. Set
+    # False to disable.
+    adtof_hihat_audio_supplement: bool = True
+    adtof_hihat_audio_supplement_dedup_s: float = 0.040
+    # Onset-strength peak-pick params for the audio supplement (librosa
+    # peak_pick over the hat stem's onset envelope, hop 512 -> ~11.6ms).
+    adtof_hihat_audio_supplement_delta: float = 0.06
+    adtof_hihat_audio_supplement_wait_s: float = 0.045
+    # Sizzle rejection at the source: keep only peaks whose onset-strength
+    # value is >= this multiple of the stem's median onset-strength. A real
+    # strike makes a tall flux spike; open-hat sizzle is low ripple. Without
+    # this floor the supplement over-segments a ring into a stream of phantom
+    # 16ths (raw peak-pick yields ~5x as many). Tuned to land near the count
+    # of clear audio transients (~4x median on the validation track). LOWER
+    # for more recall (risks sizzle the split must then prune); RAISE if
+    # sizzle survives.
+    adtof_hihat_audio_supplement_min_strength_mult: float = 4.0
+    # Energy floor for the hi-hat lane: drop any detected onset (ADTOF or
+    # supplement) whose |sample| amplitude is below this fraction of the
+    # median detected-onset amplitude. A real strike is ~1x the median;
+    # phantom onsets on the noise floor / a previous hit's decay sit <0.2x
+    # (validated on Cold-Hard-Bitch: real hats >=0.95x, phantom 8ths <=0.17x).
+    # Normalized to the song's own hits, so it's loudness/kit-invariant.
+    # Catches phantoms at the source, before a near-zero peak makes the
+    # split's `pre_rms` explode. RAISE for stricter culling (risks soft real
+    # hats); set 0 to disable. Only applied with >= 8 onsets (stable median).
+    adtof_hihat_min_amplitude_frac: float = 0.25
+    # Energy floor for the cymbal lane (`c`), same idea as the hi-hat one
+    # but with TWO cymbal-specific differences. (1) The amplitude is
+    # measured over a forward "bloom" window, not the ±20ms attack: a crash
+    # peaks ~100ms AFTER the strike, so the attack window scores full-volume
+    # crashes as quiet (see `_bloom_amplitude`). (2) The floor is lower:
+    # cymbals have a wide dynamic range so the median sits higher relative
+    # to soft hits. Validated on itte: real crashes read 1.3-2.0x the bloom
+    # median, silent phantoms <=0.06x, with a clean gap, so 0.10x drops the
+    # phantoms and keeps every real hit. RAISE for stricter culling; set 0
+    # to disable. Only applied with >= 8 onsets (stable median).
+    adtof_cymbal_min_amplitude_frac: float = 0.10
+
     # --- Filter-LLM double-trigger guardrail ---
     # The filter LLM may flag an onset as a `double_trigger` (the detector
     # firing twice for one physical strike). A real detector double-trigger

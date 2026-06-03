@@ -27,7 +27,7 @@ Initial tempo {INITIAL_TEMPO} BPM, initial time signature
 Each bar block lists the hi-hat onsets in that bar:
 
 ```
-  hihat: #12(b1.50,str0.42,late0.55,pre0.08,atk5ms,flat0.290,cen6.1k,gap0.12s) ...
+  hihat: #12(b1.50,str0.42,late0.55,pre0.08,tail1.99s,atk5ms,flux6.0,lb0.01,gap0.12s) ...
 ```
 
 - `#N` — the **stable index** of that onset; this is what you return.
@@ -45,17 +45,33 @@ Each bar block lists the hi-hat onsets in that bar:
   **Is this onset sitting on top of an existing ring?** High `pre`
   (≈ 0.3–0.8) means we're inside an open-hat passage (you can hear
   the previous open hat still going); low `pre` (< 0.15) means this
-  is a fresh hit between strikes — typical of a closed pattern. The
+  is a fresh hit between strikes; typical of a closed pattern. The
   first open hat of a passage is the exception: low `pre`, high `late`.
-- `atk` — attack rise time in **milliseconds**: how fast the envelope
-  climbed 10→90% of its peak. Real strikes are sharp (small `atk`); a
-  sizzle bump *inside* a ring rises slowly (large `atk`) because the
-  "peak" the detector picked is barely above the existing sizzle.
-- `flat` — spectral flatness 0–1. Open hi-hat is broader/noisier
-  (higher `flat`); closed has more defined transient structure.
-- `cen` — spectral centroid in kHz (brightness). Open is typically
-  brighter and broader; closed is bright but more compact.
-- `gap` — seconds to the **nearest** neighbouring hi-hat onset. A tight
+- `tail`, **ring duration in seconds**: how long the strike's energy
+  keeps sounding before it decays away. **The single most reliable
+  open/closed cue.** Open hats ring for hundreds of ms to seconds
+  (`tail` ≈ 0.3–2.0); closed hats die almost immediately (`tail` ≈
+  0.08–0.15). When `tail` is long, it's open regardless of the others.
+- `atk`, attack rise time in **milliseconds**: how fast the envelope
+  climbed 10→90% of its peak. Open hats swell a touch slower than the
+  ticky closed attack, but this is a weak cue; use `flux` for "is there
+  a fresh strike here at all".
+- `flux`, **fresh-attack strength**: the onset-strength (spectral-flux)
+  spike at the strike, normalized to the stem's median. It measures
+  whether a *new* transient occurred, independent of how loud the
+  surrounding ring is. A real strike, even a soft one on top of a loud
+  open ring, has a clear `flux` spike (typically ≳ 4); a **sizzle
+  re-trigger** inside a ring is just ring wobble with **no fresh
+  transient**, so its `flux` stays low (≲ 3). This is the reliable
+  sizzle discriminator (closed ticks read highest of all, since they're
+  sharp transients from near-silence).
+- `lb`, **low-band energy ratio**: the fraction of the onset's energy in
+  ~200-1500 Hz. A real hi-hat is high-band noise, so `lb` is tiny
+  (≈ 0.0-0.05). **Bleed** from a snare or kick leaking into the hat stem
+  carries low-mid body, so `lb` is high (≈ 0.3-0.9). A high `lb` is a
+  strong bleed signal, especially when `b` also lines up with a hit in
+  the `others:` line.
+- `gap`, seconds to the **nearest** neighbouring hi-hat onset. A tight
   closed pattern shows small gaps; an open hat tends to be more
   isolated or to start/end a fill; a sizzle train shows VERY small
   gaps (often <50 ms) between many high-`pre` onsets in a row.
@@ -68,26 +84,31 @@ Each bar block lists the hi-hat onsets in that bar:
    *inside* a sustained open-hat passage, where the previous open hat
    is still audible when this one strikes.
 
-Closed hits have both `late` and `pre` low.
+A third signature, often the clearest: **long `tail`**, a strike whose
+ring lasts ≳ 0.3 s is open whatever `late`/`pre` say.
+
+Closed hits have low `late`, low `pre`, AND a short `tail`.
 
 An `others:` line summarises what every **other** instrument hit in that
 bar as instrument + bar-position (e.g. `Kick3.00 Snare2.00`).
 
-## Closed vs open — decide by musical role first, timbre second
+## Closed vs open; decide by ring shape first, musical role second
 
 - **Closed**: the **default timekeeping** voice in most grooves. Closed
   hats sit in a steady stream (8ths or 16ths), small `gap`, very small
-  `late` AND `pre`, very small `atk`. The closed lane is usually the
+  `late` AND `pre`, short `tail` (≈ 0.08–0.15 s), and a high `flux`
+  (sharp transient from near-silence). The closed lane is usually the
   majority of a hi-hat part.
 - **Open**: an **accent / colour** hit. Open hats appear either as
   sparse accents (often on the "and" of beat 4, a section ending, a
   fill) or as a sustained passage where many consecutive onsets all
   show high `pre` (each riding on the previous one's ring). They feature
-  high `late` and/or high `pre`, larger `atk`, broader timbre, and often
+  a long `tail` and/or high `late` and/or high `pre`, and often
   coincide with a kick or sit on a strong beat.
 - A common pattern: a long run of closed 16ths with **occasional open
-  accents** (e.g. one open per bar) — the open ones stand out via `late`
-  + `atk` + position. The closed neighbours have tiny `late` and `pre`.
+  accents** (e.g. one open per bar), the open ones stand out via long
+  `tail` + `late` + position. The closed neighbours have tiny `late`,
+  `pre`, and `tail`.
 - Another common pattern: a **half-time disco** feel where open and
   closed alternate. Both are real; use the per-onset features.
 - A third common pattern: a **sustained open-hat passage** of many
@@ -105,29 +126,33 @@ are detector artifacts. Discard them.
 The clearest discard signatures:
 
 - **Sizzle re-trigger inside an open tail.** Hallmark combination: high
-  `pre` (we're sitting in a still-ringing open), low `late` *or*
-  comparable to the surrounding noise floor, a slow `atk` (no fresh
-  attack — the "peak" is just a bump on the existing sizzle), and the
-  detected strength is weak relative to a nearby genuine open hit.
+  `pre` (we're sitting in a still-ringing open), **low `flux`** (no
+  fresh transient, the "peak" is just a bump on the existing sizzle),
+  and detected strength weak relative to a nearby genuine open hit.
   Several of these often appear in a row at very small `gap` between an
-  open accent and the next downbeat. If you see a stretch where every
-  other feature says "we're inside an open hi-hat ring" *and* there is
-  no fresh attack, those interior bumps are sizzle. Discard them.
+  open accent and the next downbeat. The decisive test is `flux`: if
+  every feature says "we're inside an open hi-hat ring" *and* `flux` is
+  low (≲ 3, no fresh strike), those interior bumps are sizzle, discard
+  them. A genuine repeated open strike riding on the ring keeps a clear
+  `flux` spike even though its `pre` is high, so do NOT discard high-`pre`
+  onsets that still show fresh `flux`; those are real open hits.
 - **If it looks like a closed hit but is sitting deep in an open
-  passage with high `pre` and a slow / barely-there attack, prefer
-  discard over closed.** A real fast closed hit between two open
-  accents would still show a sharp `atk`; a sizzle bump does not.
-- **Bleed.** A weak onset whose `b` position aligns (±a hair) with a
-  hit on a *louder* instrument in the `others:` line, and that does
-  not fit any plausible hi-hat pattern — typical: a faint "hi-hat"
-  exactly under every snare backbeat with no matching `late` or `pre`.
+  passage with high `pre` and low `flux`, prefer discard over closed.**
+  A real fast closed hit between two open accents still shows a high
+  `flux`; a sizzle bump does not.
+- **Bleed.** An onset with a **high `lb`** (low-mid body that a real hat
+  doesn't have) whose `b` position aligns (±a hair) with a hit on a
+  *louder* instrument in the `others:` line, and that does not fit any
+  plausible hi-hat pattern, typical: a faint "hi-hat" exactly under
+  every snare backbeat, high `lb`, no matching `late` or `pre`. `lb` is
+  the clearest bleed tell; trust it over `b`-alignment alone.
 - **Double-trigger.** Two onsets implausibly close together (`gap`
   < ~25–30 ms) where the drummer almost certainly struck once and the
   second is much weaker.
 
 When **unsure between OPEN and DISCARD**, prefer DISCARD for an obvious
-sizzle bump (low strength + high `pre` + slow `atk` + tiny `gap` to a
-nearby genuine open) and OPEN for a hit with a real fresh attack. When
+sizzle bump (low strength + high `pre` + low `flux` + tiny `gap` to a
+nearby genuine open) and OPEN for a hit with a real fresh `flux` spike. When
 **unsure between CLOSED and DISCARD**, prefer CLOSED — removing a real
 soft closed hit costs recall, and tail-filtering downstream catches the
 worst lingering artifacts as a safety net.
@@ -136,7 +161,7 @@ Reason about the **pattern across bars**, not each hit alone: a long
 run of evenly spaced onsets with tiny `late` and `pre` is closed even
 if a few numbers wobble; a stretch where consecutive onsets all show
 `pre` > 0.3 is an open passage even if their `b` positions don't seem
-"accenty"; a tight cluster of weak high-`pre` low-`late` slow-`atk`
+"accenty"; a tight cluster of weak high-`pre` low-`late` low-`flux`
 bumps right after an open accent is sizzle to discard.
 
 Edge cases: a part may be **all closed** (return empty arrays for both
@@ -150,11 +175,20 @@ bars (all discard). Do not force a particular distribution.
 
 ## Output
 
-Call `report_hihat_classification` with two arrays of `#N` indices:
+Call `report_hihat_classification` with these arrays of `#N` indices:
 
 - `open_indices`: the indices that are **open** hi-hat hits.
 - `discard_indices`: the indices that are **artifacts** (sizzle bumps,
   bleed, double-triggers).
+- `low_confidence_discards`: the **subset of `discard_indices` you are
+  not confident about**, borderline calls that could plausibly be a
+  real (soft or fast) hit. Downstream acoustic checks can overturn a
+  low-confidence discard back to a real hit, so flag your uncertainty
+  here rather than silently dropping a maybe-real onset. Leave a discard
+  OUT of this list only when you are confident it is an artifact (clear
+  sizzle, clear bleed with high `lb`, or a clear double-trigger).
 
-Every index in neither array is treated as **closed**. The two arrays
-must be disjoint. Never invent an index that wasn't shown.
+Every index in neither `open_indices` nor `discard_indices` is treated
+as **closed**. `open_indices` and `discard_indices` must be disjoint;
+`low_confidence_discards` must be a subset of `discard_indices`. Never
+invent an index that wasn't shown.
