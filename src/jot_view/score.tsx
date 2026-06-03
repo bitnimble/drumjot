@@ -2,6 +2,7 @@ import classNames from 'classnames';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { NotePosition } from 'src/note_position';
 import { NoteProvenanceEntry } from 'src/debug_zip';
 import { Instrument, Modifier, Sticking } from 'src/dsl';
@@ -64,14 +65,71 @@ export function seekFromClick(
  * Falls back to below-placement when neither side fits; better to
  * partially clip the bottom of the label than to cover the notehead.
  */
-function usePopoverFlipAbove(
-  anchorRef: React.RefObject<HTMLElement>,
-  labelRef: React.RefObject<HTMLElement>,
-  enabled: boolean
-): boolean {
+/**
+ * Selection popover that escapes the `.jotContainer { overflow: hidden }`
+ * clip by rendering into `document.body` via `createPortal`. Without
+ * the portal the popover is clipped at the score's bottom edge and
+ * stops short of the minimap / playback bar below; with it the popover
+ * can extend over any sibling chrome (subject only to the window's own
+ * edge).
+ *
+ * Position is computed at render time from the anchor's
+ * `getBoundingClientRect()`, applied as inline `position: fixed`
+ * coords. Re-renders when the score scrolls or zooms, the wrapping
+ * `observer(...)` HOC subscribes to `store.scrollX` / `store.scrollY`
+ * / `store.zoom`, so MobX re-fires whenever the anchor's screen
+ * position changes under the (transform-driven) scroll. The bar's
+ * `bounding rect` returns the post-transform viewport coordinates, so
+ * one read per render is enough; no per-frame imperative updates.
+ *
+ * Above-flip is reused from the previous in-DOM implementation, with
+ * the only change being the bottom limit, now the window edge rather
+ * than the score-scroller bottom. The popover can extend through the
+ * minimap / playback area, so we flip only when it would overrun the
+ * window itself.
+ *
+ * Reading `getBoundingClientRect` at render time is the popover-
+ * anchoring exception called out in AGENTS.md §5.9: a single rect
+ * read per popover-open re-render, not a per-frame layout loop.
+ */
+const PopoverPortal = observer(function PopoverPortal({
+  anchorRef,
+  show,
+  className,
+  flippedClassName,
+  children,
+  extraProps,
+}: {
+  anchorRef: React.RefObject<HTMLElement>;
+  show: boolean;
+  className: string;
+  /** Class added on top of `className` when the popover flipped above
+   *  the anchor. Optional: positioning + transform are handled inline,
+   *  so consumers only pass a flipped class when there's *visual*
+   *  chrome that differs (e.g. a tail pointing the other way). */
+  flippedClassName?: string;
+  children: React.ReactNode;
+  /** Extra `<div>` props applied to the portaled wrapper (refs, mouse
+   *  handlers, etc.). The wrapper's `ref` is reserved for internal
+   *  measurement; consumers that need a label ref should pass it
+   *  through this prop. */
+  extraProps?: React.HTMLAttributes<HTMLDivElement> & {
+    ref?: React.Ref<HTMLDivElement>;
+  };
+}) {
+  const store = React.useContext(JotViewStoreContext);
+  // Read these for MobX reactivity even though we don't use the values
+  // directly, the bounding-rect read in the render below picks up the
+  // new post-transform position whenever the score scrolls or zooms.
+  void store?.scrollX;
+  void store?.scrollY;
+  void store?.zoom;
+
+  const labelRef = React.useRef<HTMLDivElement | null>(null);
   const [flip, setFlip] = React.useState(false);
+
   React.useLayoutEffect(() => {
-    if (!enabled) {
+    if (!show) {
       setFlip(false);
       return;
     }
@@ -82,16 +140,52 @@ function usePopoverFlipAbove(
     const lRect = label.getBoundingClientRect();
     const SAFE = 8;
     const GAP = 16;
-    const scroller = anchor.closest('[data-jot-scroller]') as HTMLElement | null;
-    const scRect = scroller?.getBoundingClientRect();
-    const bottomLimit = scRect?.bottom ?? window.innerHeight;
-    const topLimit = scRect?.top ?? 0;
-    const overflowsBelow = aRect.bottom + GAP + lRect.height > bottomLimit - SAFE;
-    const fitsAbove = aRect.top - GAP - lRect.height > topLimit + SAFE;
+    // Window bounds, the popover is portaled to `document.body` and
+    // sits above every app-shell sibling, so the only edge it can't
+    // cross is the viewport itself.
+    const overflowsBelow = aRect.bottom + GAP + lRect.height > window.innerHeight - SAFE;
+    const fitsAbove = aRect.top - GAP - lRect.height > SAFE;
     setFlip(overflowsBelow && fitsAbove);
-  }, [enabled, anchorRef, labelRef]);
-  return flip;
-}
+  }, [show, anchorRef, store?.scrollX, store?.scrollY, store?.zoom]);
+
+  if (!show) return null;
+  const anchor = anchorRef.current;
+  if (!anchor) return null;
+  const aRect = anchor.getBoundingClientRect();
+  const GAP = 16;
+  const top = flip ? aRect.top - GAP : aRect.bottom + GAP;
+  const left = aRect.left + aRect.width / 2;
+  const { ref: forwardedRef, style: extraStyle, ...restProps } = extraProps ?? {};
+  // Merge consumer ref + our own measurement ref so the layout effect
+  // can size against the same node the consumer holds onto.
+  const setRef = (node: HTMLDivElement | null) => {
+    labelRef.current = node;
+    if (typeof forwardedRef === 'function') forwardedRef(node);
+    else if (forwardedRef && typeof forwardedRef === 'object') {
+      (forwardedRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
+    }
+  };
+  return createPortal(
+    <div
+      {...restProps}
+      ref={setRef}
+      className={classNames(className, flip && flippedClassName)}
+      data-popover="note-label"
+      style={{
+        position: 'fixed',
+        top,
+        left,
+        transform: flip ? 'translate(-50%, -100%)' : 'translateX(-50%)',
+        margin: 0,
+        zIndex: 1100,
+        ...extraStyle,
+      }}
+    >
+      {children}
+    </div>,
+    document.body,
+  );
+});
 
 /**
  * True when `beat` falls inside any tuplet bracket on this bar. The
@@ -721,8 +815,6 @@ const NoteView = observer(
         : undefined;
 
     const noteRef = React.useRef<HTMLDivElement>(null);
-    const labelRef = React.useRef<HTMLDivElement>(null);
-    const flipAbove = usePopoverFlipAbove(noteRef, labelRef, showLabel);
 
     return (
       <div
@@ -759,7 +851,7 @@ const NoteView = observer(
             border: isCross ? `2px solid ${color}` : undefined,
           } as React.CSSProperties
         }
-        // Suppress the container's mousedown handler — it begins a
+        // Suppress the container's mousedown handler, it begins a
         // marquee selection that clears the existing state on every
         // press, which would wipe this note's selection before the
         // click ever fires.
@@ -770,12 +862,6 @@ const NoteView = observer(
         }}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
-        // Marks the row (via a `:has()` rule in mixer.module.css) as
-        // carrying an open label popover so its whole row can be lifted
-        // above the sibling rows the popover extends down into. A data
-        // attribute rather than a class because the row selector lives
-        // in a different CSS module's local scope.
-        data-note-label-open={showLabel || undefined}
       >
         {isFlam && <FlamGrace color={color} config={config} />}
         {isDrag && <DragGrace color={color} config={config} />}
@@ -783,21 +869,20 @@ const NoteView = observer(
         {note.sticking && (
           <span className={styles.stickingBadge}>{note.sticking.toUpperCase()}</span>
         )}
-        {showLabel && (
-          <div
-            ref={labelRef}
-            className={classNames(styles.noteLabel, flipAbove && styles.noteLabelAbove)}
-          >
-            <div className={styles.noteLabelText}>{description}</div>
-            {provenanceEntry && (
-              <NoteProvenanceDetails
-                entry={provenanceEntry}
-                rendered={{ note, bar, provenance: provenance! }}
-                startOpen
-              />
-            )}
-          </div>
-        )}
+        <PopoverPortal
+          anchorRef={noteRef}
+          show={showLabel}
+          className={styles.noteLabel}
+        >
+          <div className={styles.noteLabelText}>{description}</div>
+          {provenanceEntry && (
+            <NoteProvenanceDetails
+              entry={provenanceEntry}
+              rendered={{ note, bar, provenance: provenance! }}
+              startOpen
+            />
+          )}
+        </PopoverPortal>
       </div>
     );
   }
@@ -1411,6 +1496,11 @@ const NoteProvenanceDetails = observer(
     startOpen?: boolean;
   }) => {
     const [open, setOpen] = React.useState(startOpen);
+    // Subsection toggles. Both default open so opening the Debug
+    // details panel surfaces everything at once; collapse to focus
+    // on the other half.
+    const [timingOpen, setTimingOpen] = React.useState(true);
+    const [acousticOpen, setAcousticOpen] = React.useState(true);
     // Stop the container's mousedown handler so clicks on the toggle don't
     // begin a marquee selection (which would clear the surrounding note's
     // selection and immediately unmount this component).
@@ -1919,6 +2009,30 @@ const NoteProvenanceDetails = observer(
     // Format an integer slot count as a per-slot label like "+3/48".
     const formatSlots = (slots: number): string => formatSignedSlots(slots, gridDivision);
 
+    const hasAcoustic = entryHasAcousticFields(entry);
+    const renderSubsectionToggle = (
+      label: string,
+      isOpen: boolean,
+      onToggle: () => void,
+    ) => (
+      <button
+        type="button"
+        className={styles.debugDetailsToggle}
+        onClick={(e) => {
+          stop(e);
+          onToggle();
+        }}
+        onMouseDown={stop}
+        aria-expanded={isOpen}
+      >
+        {isOpen ? (
+          <ChevronDown size={12} aria-hidden="true" />
+        ) : (
+          <ChevronRight size={12} aria-hidden="true" />
+        )}
+        {label}
+      </button>
+    );
     return (
       <div className={styles.debugDetails} onMouseDown={stop}>
         <button
@@ -1938,60 +2052,142 @@ const NoteProvenanceDetails = observer(
           )}
           Debug details
         </button>
-        {open && rendered && (
-          <OnsetTimingVisualization
-            entry={entry}
-            rendered={rendered}
-            gridDivision={gridDivision}
-            stages={stages}
-            finalSec={finalSec}
-            displayedBarIndex={displayedBarIndex}
-          />
+        {open && (
+          <>
+            {renderSubsectionToggle(
+              'Timing',
+              timingOpen,
+              () => setTimingOpen((o) => !o),
+            )}
+            {timingOpen && rendered && (
+              <OnsetTimingVisualization
+                entry={entry}
+                rendered={rendered}
+                gridDivision={gridDivision}
+                stages={stages}
+                finalSec={finalSec}
+                displayedBarIndex={displayedBarIndex}
+              />
+            )}
+            {timingOpen &&
+              renderDebugStageSections({
+                entry,
+                rendered,
+                originalBar,
+                originalBarIndex,
+                originalQuantizedBeat,
+                originalQuantizedSec,
+                currentQuantizedBeat,
+                displayedBarIndex,
+                finalSec,
+                snapBeats,
+                snapMs,
+                envelopeRefineSec,
+                rawModelSec,
+                coarseAlignSec,
+                fineAlignSec,
+                combinedAlignSec,
+                hasAlignSplit,
+                quantisePasses,
+                hasPerPassQuantise,
+                fallbackQuantSec,
+                fallbackQuantSlots,
+                anchorDriftSec,
+                anchorDriftBeats,
+                drumOffsetSec,
+                drumOffsetBeats,
+                barGridFrameShiftSec,
+                unknownDriftSec,
+                unknownDriftBeats,
+                unknownDriftMs,
+                gridDivision,
+                slotsPerQuarterNote,
+                secToOrigBeats,
+                origBeatsToSlots,
+                renderSignedMs,
+                renderSignedBeats,
+                renderSignedSec,
+                formatSlots,
+              })}
+            {hasAcoustic && renderSubsectionToggle(
+              'Acoustic properties',
+              acousticOpen,
+              () => setAcousticOpen((o) => !o),
+            )}
+            {hasAcoustic && acousticOpen && renderAcousticSection(entry)}
+          </>
         )}
-        {open &&
-          renderDebugStageSections({
-            entry,
-            rendered,
-            originalBar,
-            originalBarIndex,
-            originalQuantizedBeat,
-            originalQuantizedSec,
-            currentQuantizedBeat,
-            displayedBarIndex,
-            finalSec,
-            snapBeats,
-            snapMs,
-            envelopeRefineSec,
-            rawModelSec,
-            coarseAlignSec,
-            fineAlignSec,
-            combinedAlignSec,
-            hasAlignSplit,
-            quantisePasses,
-            hasPerPassQuantise,
-            fallbackQuantSec,
-            fallbackQuantSlots,
-            anchorDriftSec,
-            anchorDriftBeats,
-            drumOffsetSec,
-            drumOffsetBeats,
-            barGridFrameShiftSec,
-            unknownDriftSec,
-            unknownDriftBeats,
-            unknownDriftMs,
-            gridDivision,
-            slotsPerQuarterNote,
-            secToOrigBeats,
-            origBeatsToSlots,
-            renderSignedMs,
-            renderSignedBeats,
-            renderSignedSec,
-            formatSlots,
-          })}
       </div>
     );
   }
 );
+
+/** Per-pitch acoustic measurements the cymbal_split + hihat_split
+ *  passes capture. `null`/`undefined` everywhere else (other pitches,
+ *  bundles predating v4). At least one populated field means the
+ *  "Acoustic properties" subsection is worth surfacing. */
+function entryHasAcousticFields(entry: NoteProvenanceEntry): boolean {
+  return (
+    entry.decay_s != null ||
+    entry.flatness != null ||
+    entry.centroid_hz != null ||
+    entry.gap_s != null ||
+    entry.attack_s != null ||
+    entry.late_rms != null ||
+    entry.pre_rms != null ||
+    entry.tail_end_s != null
+  );
+}
+
+/** Render the per-onset acoustic measurements the cymbal / hi-hat
+ *  classifiers saw. Only rows whose value is populated are emitted; the
+ *  caller is responsible for skipping the whole section when none are.
+ *  Reuses the `debugStageSections` grid + `debugDetailsList`
+ *  contents-flow pair so labels line up with the Timing subsection's
+ *  rows above. */
+function renderAcousticSection(entry: NoteProvenanceEntry): React.ReactNode {
+  const rows: React.ReactNode[] = [];
+  const row = (key: string, label: string, value: string) => {
+    rows.push(
+      <React.Fragment key={key}>
+        <dt>{label}</dt>
+        <dd>{value}</dd>
+      </React.Fragment>,
+    );
+  };
+  if (entry.attack_s != null) {
+    // ms reads better than fractional seconds for typical attacks
+    // (5-50ms range on hi-hats); ride / crash attacks fall in the
+    // same range so the unit choice is uniform.
+    row('attack', 'Attack rise', `${(entry.attack_s * 1000).toFixed(1)} ms`);
+  }
+  if (entry.decay_s != null) {
+    row('decay', 'Decay (-20 dB)', `${entry.decay_s.toFixed(3)} s`);
+  }
+  if (entry.tail_end_s != null) {
+    row('tail', 'Ring tail end', `${entry.tail_end_s.toFixed(3)} s`);
+  }
+  if (entry.late_rms != null) {
+    row('late', 'Late RMS ratio', entry.late_rms.toFixed(3));
+  }
+  if (entry.pre_rms != null) {
+    row('pre', 'Pre RMS ratio', entry.pre_rms.toFixed(3));
+  }
+  if (entry.flatness != null) {
+    row('flat', 'Spectral flatness', entry.flatness.toFixed(4));
+  }
+  if (entry.centroid_hz != null) {
+    row('cen', 'Spectral centroid', `${(entry.centroid_hz / 1000).toFixed(2)} kHz`);
+  }
+  if (entry.gap_s != null) {
+    row('gap', 'Gap to neighbour', `${entry.gap_s.toFixed(3)} s`);
+  }
+  return (
+    <div className={styles.debugStageSections}>
+      <dl className={styles.debugDetailsList}>{rows}</dl>
+    </div>
+  );
+}
 
 /**
  * Render the Debug details body as a vertical stack of per-stage
@@ -2425,8 +2621,7 @@ export const FilteredOnsetView = observer(({
   const show = hovered || clicked;
   const stop = (e: React.MouseEvent) => e.stopPropagation();
   const anchorRef = React.useRef<HTMLDivElement>(null);
-  const labelRef = React.useRef<HTMLDivElement>(null);
-  const flipAbove = usePopoverFlipAbove(anchorRef, labelRef, show);
+  const labelRef = React.useRef<HTMLDivElement | null>(null);
   // Click-outside to dismiss the stuck-open popover. Without this the
   // only way to close it is clicking the (small, easy-to-miss) dashed
   // ring again. We treat clicks anywhere outside the anchor OR its
@@ -2442,6 +2637,10 @@ export const FilteredOnsetView = observer(({
     const onClickCapture = (e: MouseEvent) => {
       const target = e.target as Node;
       if (anchorRef.current?.contains(target)) return;
+      // The label is portaled to `document.body`, so `target.contains`
+      // would walk a different subtree; keep the same "is this click
+      // inside the popover?" check by comparing against `labelRef`
+      // which still holds the portaled element.
       if (labelRef.current?.contains(target)) return;
       e.stopPropagation();
       store.setPinnedFilteredOnsetKey(undefined);
@@ -2455,14 +2654,6 @@ export const FilteredOnsetView = observer(({
       // Same opt-out as real notes so a click on the ghost doesn't move
       // the playhead via the bars-row seek handler.
       data-noseek="true"
-      // Mirror the real note (see NoteView): mark the row as carrying an
-      // open popover so the `:has([data-note-label-open])` rule in
-      // mixer.module.css lifts the whole instrument row above the sibling
-      // rows this detail popover extends down into. Without it the
-      // `.filteredOnsetLabel` stays trapped in `.barsRow`'s `z-index: 1`
-      // stacking context and is painted under the equal-z-index bars of
-      // the tracks below.
-      data-note-label-open={show || undefined}
       className={classNames(styles.filteredOnset, show && styles.filteredOnsetShowingLabel)}
       style={
         {
@@ -2480,17 +2671,14 @@ export const FilteredOnsetView = observer(({
       onMouseLeave={() => setHovered(false)}
       title={`Filtered onset · pitch ${entry.pitch} · bar ${entry.bar} beat ${entry.beat_in_bar.toFixed(2)}`}
     >
-      {show && (
-        <div
-          ref={labelRef}
-          className={classNames(
-            styles.filteredOnsetLabel,
-            flipAbove && styles.filteredOnsetLabelAbove
-          )}
-        >
-          <NoteProvenanceDetails entry={entry} startOpen />
-        </div>
-      )}
+      <PopoverPortal
+        anchorRef={anchorRef}
+        show={show}
+        className={styles.filteredOnsetLabel}
+        extraProps={{ ref: labelRef }}
+      >
+        <NoteProvenanceDetails entry={entry} startOpen />
+      </PopoverPortal>
     </div>
   );
 });

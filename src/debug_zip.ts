@@ -139,6 +139,42 @@ export type NoteProvenanceEntry = {
    * produced before this field existed; consumers fall back to
    * {@link strength} in that case. */
   amplitude?: number | null;
+  /** Time (s) for post-onset RMS to fall 20dB below its local peak.
+   * Sparse / sustained hits (a crash) measure long; dense / articulate
+   * streams (a ride) measure short. Populated only by `cymbal_split`;
+   * `null` everywhere else. */
+  decay_s?: number | null;
+  /** Spectral flatness (Wiener entropy) of the onset's early
+   * attack/decay window. High = noise-like (cymbal, snare wires,
+   * shaker); low = tonal (clean stick on bell, tom). Populated by the
+   * cymbal + hi-hat splits. */
+  flatness?: number | null;
+  /** Spectral centroid (Hz) of the onset's early attack/decay window, * a "brightness" proxy. Crash > ride; open hat > closed hat.
+   * Populated by the cymbal + hi-hat splits. */
+  centroid_hz?: number | null;
+  /** Time (s) to the nearest neighbouring onset in the same lane.
+   * Dense streams (a ride pattern, a hi-hat groove) have small gaps;
+   * isolated accents (a crash, an open-hat punctuation) have large
+   * ones. Populated by the cymbal + hi-hat splits. */
+  gap_s?: number | null;
+  /** 10-90% rise time (s) of the early post-onset envelope. A fresh
+   * strike has a sharp attack; a sizzle bump on top of a ringing tail
+   * has a soft / non-existent one. Populated only by `hihat_split`. */
+  attack_s?: number | null;
+  /** Mean RMS in the [+200, +500] ms window after the onset, normalised
+   * by the local peak. High = still ringing 200-500ms after the strike
+   * (open hat). Populated only by `hihat_split`. */
+  late_rms?: number | null;
+  /** Mean RMS in the [-300, -50] ms window before the onset, normalised
+   * by the local peak. High = riding on existing ring energy
+   * (in-passage open-hat sizzle-train signature). Populated only by
+   * `hihat_split`. */
+  pre_rms?: number | null;
+  /** Seconds from the onset to where its ring is considered over (per
+   * `_TAIL_END_FRAC` / `_TAIL_MIN_S`). Used by the open-tail
+   * post-filter and surfaced for visibility. Populated only by
+   * `hihat_split`. */
+  tail_end_s?: number | null;
   /** 0-indexed bar in the transcriber's BeatStructure (NOT the rendered
    * jot's bar index, see {@link NoteProvenanceFile.lead_bars}). */
   bar: number;

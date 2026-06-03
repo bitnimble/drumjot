@@ -115,30 +115,25 @@ test('captures the debug-details timing visualization', async ({ page }) => {
     const idx = Math.min(6, notes.length - 1);
     (notes[idx] as HTMLElement).click();
   });
-  await page.waitForSelector('[data-note-label-open]');
-
-  // The label panel is a descendant of the selected note (the one
-  // carrying `data-note-label-open`); its class includes the CSS-modules
-  // mangled `noteLabel` substring. Resolve to that element so the
-  // screenshot frames the popover itself, not the 14 px note marker.
+  // The popover is portaled to `document.body` by `PopoverPortal`
+  // (score.tsx) so it can escape `.jotContainer { overflow: hidden }`
+  // and paint over the minimap / playback chrome; selector targets the
+  // `data-popover` marker on the portaled wrapper rather than the
+  // (now no-op) old `data-note-label-open` attribute.
   // The Debug details toggle starts expanded for kept notes
   // (`<NoteProvenanceDetails … startOpen />`), so the timing-viz mounts
   // as soon as the popover opens; no extra click required.
-  await page.waitForSelector('[data-note-label-open] [class*="noteLabel"]');
+  await page.waitForSelector('[data-popover="note-label"]');
   // Wait until the off-thread waveform compute has painted something
   // into the timing-viz canvas; otherwise we race the screenshot.
   await page.waitForFunction(() => {
-    const label = document.querySelector(
-      '[data-note-label-open] [class*="noteLabel"]'
-    );
+    const label = document.querySelector('[data-popover="note-label"]');
     if (!label) return false;
     const canvas = label.querySelector('canvas') as HTMLCanvasElement | null;
     return !!canvas && canvas.width > 0 && canvas.height > 0;
   });
 
-  const popover = page
-    .locator('[data-note-label-open] [class*="noteLabel"]')
-    .first();
+  const popover = page.locator('[data-popover="note-label"]').first();
   await expect(popover).toBeVisible();
 
   // Real coverage for the redesigned timing-visualization:

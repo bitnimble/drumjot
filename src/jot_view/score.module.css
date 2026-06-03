@@ -195,20 +195,6 @@
     overflow-clip-margin: calc(var(--note-pad-px) + 12px);
 }
 
-/* A note's label popover (NoteView) and the filtered-onset popover extend
-   well beyond the bar's box, `top: 100%` plus margin, and arbitrarily far
-   when Debug details expand, far past `overflow-clip-margin`. The bar's
-   `content-visibility: auto` (which forces `contain: paint`) would clip
-   that overflow to the bar, and the clipped popover reads as the next
-   track painting over it. Drop paint-containment on just the bar that
-   currently owns an open popover, keyed off the same `data-note-label-open`
-   attribute the row-lift in mixer.module.css uses. That bar is on-screen
-   by definition (the user selected/hovered a note in it), so the
-   virtualization it forgoes for the moment costs nothing. */
-.bar:has([data-note-label-open]) {
-    content-visibility: visible;
-}
-
 .barAnacrusis {
     border-right: 1px dashed var(--color-border);
     background: var(--color-accent-overlay-faint);
@@ -762,12 +748,12 @@
    collapsible block opens. */
 .noteLabel {
     composes: bodySm from '../typography.module.css';
-    position: absolute;
-    top: 100%;
-    left: 50%;
-    transform: translateX(-50%);
-    margin-top: 16px;
-    z-index: 12;
+    /* Portaled to `document.body` by `PopoverPortal` (score.tsx); the
+       wrapper's `position: fixed` + `top` / `left` / `transform` /
+       `z-index` are all set inline at render time so the popover can
+       escape `.jotContainer { overflow: hidden }` and paint over the
+       minimap / playback chrome below the score. Visual chrome only
+       lives here. */
     background: var(--color-bg-base);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
@@ -777,14 +763,12 @@
     color: var(--color-text);
     box-shadow: var(--shadow-md);
     pointer-events: auto;
-    /* Re-enable text selection inside the label — `.jotContainer` sets
-       `user-select: none` to prevent marquee-drag from highlighting
-       score chrome, but the label's debug-details values (timestamps,
-       beat positions, MIDI numbers) are explicitly meant to be copied. */
+    /* `.jotContainer` disables text selection so marquee-drag doesn't
+       highlight score chrome; the popover is portaled to `body` so
+       it's outside that disable, but keep the explicit `text` here so
+       the debug-details values stay copyable even if the portal ever
+       moves back into `.jotContainer`. */
     user-select: text;
-    /* Override `.note`'s `cursor: pointer` (inherited because the label
-       is a descendant of the clickable note) — only the Debug-details
-       toggle inside should look clickable. */
     cursor: default;
     line-height: 1.2;
     display: flex;
@@ -796,19 +780,6 @@
        description (one line) and the widest Debug-details value row
        (also one line) without wrapping. */
     width: max-content;
-}
-
-/* Flip the label above the notehead instead of below. Applied by
-   NoteView when the default below-placement would extend past the
-   scroll viewport's bottom (which is flush with the playback bar's
-   top). The 16 px gap matches the default `margin-top` so the
-   notehead stays unobscured on either side; the horizontal centring
-   transform from `.noteLabel` is preserved. */
-.noteLabelAbove {
-    top: auto;
-    bottom: 100%;
-    margin-top: 0;
-    margin-bottom: 16px;
 }
 
 .noteLabelText {
@@ -1251,17 +1222,14 @@
     z-index: 25;
 }
 
-/* Inline popover for a filtered onset, anchored below the ghost circle
-   exactly like .noteLabel. Wraps the shared NoteProvenanceDetails block
-   so the debug data has the same visual treatment as on real notes. */
+/* Inline popover for a filtered onset, portaled to `document.body` by
+   `PopoverPortal` (score.tsx) so it can escape the score's clipping
+   and paint over the minimap / playback chrome. Wraps the shared
+   NoteProvenanceDetails block so the debug data has the same visual
+   treatment as on real notes; visual chrome only, all positioning is
+   set inline at the portal site. */
 .filteredOnsetLabel {
     composes: bodySm from '../typography.module.css';
-    position: absolute;
-    top: 100%;
-    left: 50%;
-    transform: translateX(-50%);
-    margin-top: 8px;
-    z-index: 13;
     background: var(--color-bg-base);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
@@ -1271,24 +1239,8 @@
     color: var(--color-text);
     box-shadow: var(--shadow-md);
     pointer-events: auto;
-    /* Match `.noteLabel`: re-enable text selection so debug values can
-       be copied (parent `.jotContainer` disables it globally). */
     user-select: text;
-    /* Match `.noteLabel`: reset the inherited pointer cursor — only the
-       Debug-details toggle inside should look clickable. */
     cursor: default;
     line-height: 1.2;
-    /* Match `.noteLabel`: size to the widest non-wrapping row inside. */
     width: max-content;
-}
-
-/* Flip the filtered-onset popover above its ghost circle when the
-   default below-placement would extend past the scroll viewport. Same
-   8 px gap as the below default; preserves the breathing room around
-   the ghost itself. */
-.filteredOnsetLabelAbove {
-    top: auto;
-    bottom: 100%;
-    margin-top: 0;
-    margin-bottom: 8px;
 }

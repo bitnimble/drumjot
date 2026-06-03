@@ -2,17 +2,13 @@ import { expect, test, type Page } from '@playwright/test';
 
 /**
  * Regression coverage for selection popovers being clipped / obscured by
- * the tracks below them.
+ * the tracks below them (or by the minimap / playback chrome).
  *
- * The score virtualizes bars with `content-visibility: auto` (→
- * `contain: paint`), which clips any descendant that overflows the bar's
- * box. A note's label popover (`.noteLabel`) hangs well below the note, * past the bar's `overflow-clip-margin` and into the next instrument
- * row, so without the `.bar:has([data-note-label-open])` opt-out
- * (score.module.css) it gets clipped and the row below shows through.
- * Separately the row carrying the popover is lifted above its siblings
- * via `:has([data-note-label-open])` (mixer.module.css) so it wins the
- * z-order. This spec asserts the end-to-end result: the popover is the
- * top, fully-painted element across its whole height, including the part
+ * The popover is portaled to `document.body` by `PopoverPortal`
+ * (score.tsx) so it escapes `.jotContainer { overflow: hidden }` and
+ * paints at `z-index: 1100` (above app-shell modal/toast layers). This
+ * spec asserts the end-to-end result: the popover is the top,
+ * fully-painted element across its whole height, including the part
  * that overlaps the track beneath it.
  *
  * Visibility is asserted with `document.elementFromPoint`: the popover
@@ -44,14 +40,13 @@ async function selectNoteAndProbe(page: Page, rowTestId: string) {
   }, rowTestId);
 
   await page.mouse.click(noteCenter.x, noteCenter.y);
-  await page.waitForSelector('[data-note-label-open]');
+  await page.waitForSelector('[data-popover="note-label"]');
 
   return page.evaluate((rid) => {
     const row = document.querySelector(`[data-testid="${rid}"]`)!;
-    const sel = document.querySelector('[data-note-label-open]')!;
-    const label = Array.from(sel.querySelectorAll('*')).find((e) =>
-      (e.getAttribute('class') ?? '').toLowerCase().includes('notelabel'),
-    )!;
+    // The popover is portaled to `document.body` by `PopoverPortal`
+    // (score.tsx), so it isn't a descendant of the note any more, // look it up directly by the portal's `data-popover` marker.
+    const label = document.querySelector('[data-popover="note-label"]')!;
     const lr = label.getBoundingClientRect();
     const rowRect = row.getBoundingClientRect();
 

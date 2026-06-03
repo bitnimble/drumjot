@@ -112,6 +112,35 @@ class OnsetCandidate(BaseModel):
     # `quantised_time = None` that merely means "no shift was needed".
     off_grid: bool = False
 
+    # --- Acoustic features (populated by the split passes) ---------------
+    #
+    # The cymbal / hi-hat split LLMs decide ride-vs-crash and
+    # closed-vs-open by reading these per-onset acoustic features off
+    # the stem audio. Each field is populated only by the pass(es) that
+    # measure it; `None` everywhere else (other pitches' candidates,
+    # bundles produced before this field existed, etc.). Surfaced
+    # through `note_provenance.json` so the per-note debug popup's
+    # "Acoustic properties" subsection can show the same numbers the
+    # classifier saw, useful when a crash is mis-labelled as ride, or
+    # an open hat as closed.
+    #
+    # Set by both cymbal_split and hihat_split:
+    #   decay_s, flatness, centroid_hz, gap_s
+    # Set only by hihat_split (open/closed-discriminating envelope):
+    #   attack_s, late_rms, pre_rms, tail_end_s
+    decay_s: float | None = None
+    flatness: float | None = None
+    centroid_hz: float | None = None
+    gap_s: float | None = None
+    attack_s: float | None = None
+    late_rms: float | None = None
+    pre_rms: float | None = None
+    # Hi-hat-only: seconds from the onset to the point where its ring is
+    # considered over (per the `_TAIL_END_FRAC` / `_TAIL_MIN_S` rule in
+    # `hihat_split.py`). Consulted by the open-tail post-filter; surfaced
+    # for visibility.
+    tail_end_s: float | None = None
+
 
 class TranscribeResponse(BaseModel):
     """Returned by POST /transcribe.

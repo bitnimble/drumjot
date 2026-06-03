@@ -52,7 +52,19 @@ from app.pipeline.onsets_midi import (
 #       `beat_align_coarse_offset_sec` + `beat_align_fine_offset_sec`
 #       (the previously-collapsed coarse/fine alignment split; their
 #       sum equals `beat_alignment_offset_sec`).
-FORMAT_VERSION = 3
+#   v4: surfaces the per-onset `amplitude` (raw audio peak driving
+#       MIDI velocity) and the acoustic features measured by the cymbal
+#       / hi-hat split passes (`decay_s`, `flatness`, `centroid_hz`,
+#       `gap_s`, `attack_s`, `late_rms`, `pre_rms`, `tail_end_s`);
+#       all nullable, only populated where the producing pass ran.
+FORMAT_VERSION = 4
+
+
+def _nf(v: float | None) -> float | None:
+    """Cast a possibly-`None` numeric field for JSON: `None` stays
+    `None`, anything else is coerced to `float`. Avoids the verbose
+    `float(x) if x is not None else None` litany on every field."""
+    return float(v) if v is not None else None
 
 
 def build_note_provenance(
@@ -195,6 +207,21 @@ def build_note_provenance(
                 "amplitude": (
                     float(c.amplitude) if c.amplitude is not None else None
                 ),
+                # Acoustic features measured by the split passes on
+                # the stem audio. Populated only for pitches that ran a
+                # split (`c` / `d` via cymbal_split, `h` / `H` via
+                # hihat_split); `null` everywhere else. Surfaced in the
+                # per-note "Acoustic properties" subsection so the same
+                # numbers the ride/crash or open/closed classifier saw
+                # are visible for debugging mis-classifications.
+                "decay_s": _nf(c.decay_s),
+                "flatness": _nf(c.flatness),
+                "centroid_hz": _nf(c.centroid_hz),
+                "gap_s": _nf(c.gap_s),
+                "attack_s": _nf(c.attack_s),
+                "late_rms": _nf(c.late_rms),
+                "pre_rms": _nf(c.pre_rms),
+                "tail_end_s": _nf(c.tail_end_s),
                 "bar": bar,
                 "beat_in_bar": float(c.beat_in_bar),
                 # In-range hits are the only ones the filter ever sees;

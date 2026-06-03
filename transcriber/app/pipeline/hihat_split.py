@@ -275,6 +275,19 @@ def split_hihat_onsets(
         return onsets_by_pitch, []
 
     feats = _measure(stem_path, in_range)
+    # Attach the per-onset measurements to the candidates so the UI's
+    # per-note "Acoustic properties" subsection can show the same
+    # numbers the classifier saw. Pure mutation; the split's downstream
+    # logic still reads from the local `feats` list for indexing.
+    for c, f in zip(in_range, feats, strict=True):
+        c.decay_s = None  # hi-hat split tracks rise/ring instead of a 20dB decay
+        c.flatness = f.flatness
+        c.centroid_hz = f.centroid_hz
+        c.gap_s = f.gap_s
+        c.attack_s = f.attack_s
+        c.late_rms = f.late_rms
+        c.pre_rms = f.pre_rms
+        c.tail_end_s = f.tail_end_t - c.time
 
     llm_result = _classify_llm(in_range, feats, structure, onsets_by_pitch, llm_model=llm_model)
     if llm_result is None:
