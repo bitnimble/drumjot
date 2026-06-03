@@ -99,6 +99,19 @@ _BLOOM_PRE_S = 0.02   # look this far before the onset (catch the attack)
 _BLOOM_POST_S = 0.25  # ...and this far after (catch the bloom), capped at
 #                       the next onset so it can't leak into the next hit.
 
+# Crash-shadow filter (see _crash_shadow_filter + config
+# adtof_cymbal_shadow_louder_mult): drop a cymbal onset that rides the
+# decay of a recent much-louder hit without injecting fresh energy.
+_SHADOW_WINDOW_S = 1.5       # look back this far for a louder hit
+_SHADOW_INJECT_MAX = 0.85    # drop only if RMS isn't rising (ratio < this)
+_SHADOW_RMS_HOP = 256        # hop for the injection RMS envelope (~6ms)
+# Energy-injection windows (seconds relative to the onset): peak RMS just
+# after vs the floor just before. A fresh strike jumps up (>1); a
+# re-trigger on a decay does not (<1).
+_SHADOW_INJ_POST_S = 0.060
+_SHADOW_INJ_PRE_LO_S = 0.070
+_SHADOW_INJ_PRE_HI_S = 0.015
+
 # adtof_pytorch's Frame_RNN emits activations on a fixed 100 fps grid
 # (the package's hardcoded default; it exposes no per-model rate). The
 # peak-pick converts frame index -> seconds with this constant.
@@ -613,6 +626,72 @@ def _apply_amplitude_floor(
     return kept, len(candidates) - len(kept)
 
 
+def _energy_injection(rms: np.ndarray, rms_t: np.ndarray, t: float) -> float:
+    """Ratio of peak RMS just after `t` to the RMS floor just before it.
+
+    A fresh drum strike injects energy: the post-onset peak jumps above the
+    pre-onset floor (ratio >> 1). An onset that merely rides a decaying tail
+    (a crash sustain re-triggering the detector) has no fresh energy, so the
+    RMS is flat or falling through it (ratio < 1). Returns `inf` for a
+    rise out of silence and `0.0` when there is no energy at all.
+    """
+    post = (rms_t >= t - 0.005) & (rms_t <= t + _SHADOW_INJ_POST_S)
+    pre = (rms_t >= t - _SHADOW_INJ_PRE_LO_S) & (rms_t <= t - _SHADOW_INJ_PRE_HI_S)
+    peak = float(rms[post].max()) if np.any(post) else 0.0
+    base = float(np.median(rms[pre])) if np.any(pre) else 0.0
+    if base <= 1e-6:
+        return float("inf") if peak > 1e-6 else 0.0
+    return peak / base
+
+
+def _crash_shadow_filter(
+    candidates: list[OnsetCandidate],
+    audio: np.ndarray,
+    sample_rate: int,
+    window_s: float,
+    louder_mult: float,
+    inject_max: float,
+) -> tuple[list[OnsetCandidate], int]:
+    """Drop onsets that ride the decay of a recent much-louder hit without
+    injecting fresh energy: a crash's sustain re-triggering the detector.
+
+    A candidate is dropped only when BOTH hold: an earlier onset within
+    `window_s` is at least `louder_mult` times louder (by `amplitude`), AND
+    its energy injection (`_energy_injection`) is below `inject_max` (the
+    RMS isn't rising, so it is not a fresh strike). Requiring both spares a
+    real soft hit (it injects energy) and a dense ride stream (its
+    neighbours are the same loudness, so nothing casts a shadow). `amplitude`
+    must be the bloom amplitude (cymbal lanes); candidates assumed
+    time-ordered. Returns `(kept, n_dropped)`.
+
+    No-op when disabled (`louder_mult <= 0`) or with fewer than 2 onsets.
+    """
+    if louder_mult <= 0.0 or len(candidates) < 2:
+        return candidates, 0
+    rms = librosa.feature.rms(y=audio, hop_length=_SHADOW_RMS_HOP)[0]
+    rms_t = librosa.times_like(rms, sr=sample_rate, hop_length=_SHADOW_RMS_HOP)
+    kept: list[OnsetCandidate] = []
+    dropped = 0
+    for i, c in enumerate(candidates):
+        if c.amplitude is None:
+            kept.append(c)
+            continue
+        if _energy_injection(rms, rms_t, float(c.time)) >= inject_max:
+            kept.append(c)
+            continue
+        in_shadow = any(
+            0.0 < c.time - p.time <= window_s
+            and p.amplitude is not None
+            and p.amplitude >= louder_mult * c.amplitude
+            for p in candidates[:i]
+        )
+        if in_shadow:
+            dropped += 1
+        else:
+            kept.append(c)
+    return kept, dropped
+
+
 def detect_onsets_adtof(
     audio_path: Path,
     pitch: str,
@@ -832,10 +911,24 @@ def detect_onsets_adtof(
             candidates, floor_frac, _MIN_ONSETS_FOR_AMPLITUDE_FLOOR,
         )
 
+    # Crash-shadow filter (cymbal lanes): drop sustain re-triggers riding a
+    # louder crash's decay. Real energy, so the amplitude floor misses them.
+    shadow_dropped = 0
+    shadow_mult = (
+        settings.adtof_cymbal_shadow_louder_mult
+        if pitch in _BLOOM_LANE_PITCHES
+        else 0.0
+    )
+    if shadow_mult > 0.0:
+        candidates, shadow_dropped = _crash_shadow_filter(
+            candidates, audio_unscaled, sr,
+            _SHADOW_WINDOW_S, shadow_mult, _SHADOW_INJECT_MAX,
+        )
+
     log.info(
         "ADTOF: %d onsets in %s (lane=%d, src=%s, thr=%.3f%s, prom=%s, "
-        "dist=%.0fms, reset=%s, audio_suppl=%s, amp_floor=%s, med_norm=%s, "
-        "refine=%.0fms, median strength=%.3f)",
+        "dist=%.0fms, reset=%s, audio_suppl=%s, amp_floor=%s, shadow=%s, "
+        "med_norm=%s, refine=%.0fms, median strength=%.3f)",
         len(candidates),
         audio_path.name,
         lane,
@@ -853,6 +946,7 @@ def detect_onsets_adtof(
         if pitch == "h" and settings.adtof_hihat_audio_supplement
         else "off",
         f"-{amp_dropped}" if floor_frac > 0.0 else "off",
+        f"-{shadow_dropped}" if shadow_mult > 0.0 else "off",
         f"x{scale:.2f}" if scale != 1.0 else "off",
         settings.adtof_audio_refine_window_s * 1000.0,
         float(np.median([c.strength for c in candidates]))

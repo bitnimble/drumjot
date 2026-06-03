@@ -194,6 +194,18 @@ class Settings(BaseSettings):
     # phantoms and keeps every real hit. RAISE for stricter culling; set 0
     # to disable. Only applied with >= 8 onsets (stable median).
     adtof_cymbal_min_amplitude_frac: float = 0.10
+    # Crash-shadow filter for the cymbal lane: drop an onset that rides the
+    # decay of a recent MUCH-louder hit without injecting fresh energy (a
+    # crash's sustain re-triggering the detector ~0.3-1.5s after the
+    # strike). Distinct from the amplitude floor, which can't catch these
+    # (they carry the crash-tail's real energy), and from the decay-reset
+    # (the crash decays enough to pass it). An onset is dropped only when
+    # BOTH hold: a prior onset within `_SHADOW_WINDOW_S` is at least this
+    # many times louder, AND the onset's RMS is not rising (energy injection
+    # < `_SHADOW_INJECT_MAX`). Both conditions spare real soft hits (they
+    # inject energy) and dense ride streams (uniform loudness, no shadow).
+    # Set 0 to disable.
+    adtof_cymbal_shadow_louder_mult: float = 3.0
 
     # --- Filter-LLM double-trigger guardrail ---
     # The filter LLM may flag an onset as a `double_trigger` (the detector

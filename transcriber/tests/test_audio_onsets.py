@@ -128,6 +128,71 @@ def test_bloom_amplitude_empty_window_is_zero() -> None:
     assert ao._bloom_amplitude(a, 0.5, next_time_sec=0.0, sample_rate=sr) == 0.0
 
 
+# --- _energy_injection / _crash_shadow_filter (sustain re-triggers) ------
+
+def test_energy_injection_rising_vs_falling() -> None:
+    sr, hop = 22050, ao._SHADOW_RMS_HOP
+    rt = np.arange(0.0, 1.0, hop / sr)
+    rising = np.where(rt < 0.5, 0.02, 0.5).astype(float)   # jumps up at 0.5
+    falling = np.exp(-rt / 0.2)                             # decays throughout
+    assert ao._energy_injection(rising, rt, 0.5) > 5.0
+    assert ao._energy_injection(falling, rt, 0.5) < 1.0
+
+
+def _decay_tone(sr: int, dur: float = 1.2) -> np.ndarray:
+    # A loud strike at t=0 whose energy decays (a crash tail). The time
+    # constant is short enough that the RMS is clearly falling across the
+    # injection window, so an onset on the tail reads as no-injection.
+    t = np.arange(int(dur * sr)) / sr
+    return (np.sin(2 * np.pi * 3000 * t) * np.exp(-t / 0.10)).astype(np.float32)
+
+
+def _oc(time: float, amp: float):
+    from app.models import OnsetCandidate
+    return OnsetCandidate(time=time, strength=0.5, amplitude=amp)
+
+
+def test_crash_shadow_drops_retrigger_on_decay() -> None:
+    sr = 22050
+    a = _decay_tone(sr)
+    # Loud strike at 0.02s; a much-quieter onset at 0.55s sits on its decay
+    # (no fresh energy) -> dropped as a re-trigger.
+    cands = [_oc(0.02, 1.0), _oc(0.55, 0.1)]
+    kept, dropped = ao._crash_shadow_filter(cands, a, sr, 1.5, 3.0, 0.85)
+    assert dropped == 1
+    assert [c.time for c in kept] == [0.02]
+
+
+def test_crash_shadow_keeps_fresh_strike() -> None:
+    sr = 22050
+    a = _decay_tone(sr)
+    s = int(0.55 * sr)
+    a[s:s + 600] += np.sin(
+        2 * np.pi * 3000 * np.arange(600) / sr
+    ).astype(np.float32)  # a fresh transient at 0.55s
+    cands = [_oc(0.02, 1.0), _oc(0.55, 0.1)]
+    kept, dropped = ao._crash_shadow_filter(cands, a, sr, 1.5, 3.0, 0.85)
+    assert dropped == 0  # it injects energy -> a real strike, kept
+
+
+def test_crash_shadow_keeps_without_louder_predecessor() -> None:
+    sr = 22050
+    a = _decay_tone(sr)
+    # Equal loudness: neither is >=3x the other, so no shadow -> kept even
+    # though the second sits on a decay.
+    cands = [_oc(0.02, 0.3), _oc(0.55, 0.3)]
+    kept, dropped = ao._crash_shadow_filter(cands, a, sr, 1.5, 3.0, 0.85)
+    assert dropped == 0
+
+
+def test_crash_shadow_disabled_when_mult_zero() -> None:
+    sr = 22050
+    a = _decay_tone(sr)
+    cands = [_oc(0.02, 1.0), _oc(0.55, 0.1)]
+    kept, dropped = ao._crash_shadow_filter(cands, a, sr, 1.5, 0.0, 0.85)
+    assert dropped == 0 and len(kept) == 2
+
+
 def test_reference_uses_drum_stem_directly_and_skips_separation(tmp_path) -> None:
     drum = tmp_path / "drums.wav"
     drum.write_bytes(b"x")

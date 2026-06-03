@@ -9,6 +9,7 @@
 - make a settings schema, move all persistent user settings into it, have it saved to localstorage
 
 ## Performance
+- Add test map + regression tests
 
 ## Refactoring
 - fix audioTrack.pitch - it shouldn't exist, it should be computed from the track group instead?
@@ -35,6 +36,7 @@
 - fix hihats:
   - stage 1: improve open/closed classification
   - stage 2: splash
+  - use energy injection filter from crashes to improve open/closed classification
 - fix snares:
   - stage 1: correctly do all onsets at high accuracy (deterministic, need to adjust thresholds)
   - stage 2: modifiers and grace notes (needs inference): roll, flam
@@ -42,6 +44,7 @@
   - stage 1: improve crash/ride classification
 
 ## Lyrics
- - test multi track
  - swap out non-en model for something commercial license friendly
  - do line-level language detection
+ - ruby text for japanese
+ - add support for import/export of word aligned lyrics with durations (WebVTT or Extended LRC)
