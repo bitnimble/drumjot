@@ -1,0 +1,1 @@
+sudo docker run -d --name drumjot-sandbox --gpus all -v /capsule/config/docker-volume/codebox/home/bitnimble/code/drumjot:/home/bitnimble/code/drumjot -v /codebox-workspace:/codebox-workspace drumjot-sandbox

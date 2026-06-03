@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# scripts/sandbox-run <command> [args...]
+#
+# Internal helper: ensure the drumjot sandbox container is running, then
+# exec a command inside it (working dir /sandbox). Used by sandbox-py and
+# sandbox-bun; not usually called directly, but
+# `scripts/sandbox-run nvidia-smi` works too.
+#
+# The container is built from sandbox/Dockerfile (see its header). This
+# script auto-starts it if it's merely stopped, but won't create it from
+# scratch, that needs the GPU/volume run flags, which it prints instead.
+
+set -euo pipefail
+
+CONTAINER=drumjot-sandbox
+
+# Use plain `docker` if this user can reach the daemon, else fall back to
+# `sudo docker` (the build steps for this image run under sudo on this
+# host). The sudo path may prompt for a password the first time.
+DOCKER=(docker)
+if ! docker info >/dev/null 2>&1; then
+    DOCKER=(sudo docker)
+fi
+
+# Ensure the container is up. Three cases: running (nothing to do),
+# exists-but-stopped (start it), or absent (guide the user to create it).
+running=$("${DOCKER[@]}" inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null || true)
+if [ "$running" != "true" ]; then
+    if [ -n "$running" ]; then
+        # inspect returned something ("false") -> container exists, stopped.
+        "${DOCKER[@]}" start "$CONTAINER" >/dev/null
+    else
+        echo "error: container '$CONTAINER' does not exist. Create it with:" >&2
+        echo >&2
+        echo "  ${DOCKER[*]} run -d --name $CONTAINER \\" >&2
+        echo "      --gpus all \\" >&2
+        echo "      -v /codebox-workspace:/codebox-workspace \\" >&2
+        echo "      drumjot-sandbox" >&2
+        echo >&2
+        echo "(drop --gpus all to run CPU-only; build the image first with:" >&2
+        echo "  ${DOCKER[*]} build -f sandbox/Dockerfile -t drumjot-sandbox .)" >&2
+        exit 1
+    fi
+fi
+
+exec "${DOCKER[@]}" exec --workdir /sandbox "$CONTAINER" "$@"

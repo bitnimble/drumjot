@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# scripts/sandbox-bun '<js/ts code>' [argv...]
+#
+# Run a JS/TS snippet inside the drumjot sandbox container, like
+# `bun -e "..."`. Any extra args after the code become Bun.argv[1:]
+# (the eval'd code takes no argv slot, same as `node -e`).
+#
+#   scripts/sandbox-bun 'console.log(process.versions.bun)'
+#   scripts/sandbox-bun 'console.log(Bun.argv.slice(1))' foo bar
+#
+# Reads code from stdin if no argument is given:
+#   scripts/sandbox-bun < some_script.ts
+#
+# Requires bun in the image (sandbox/Dockerfile copies it in). If you
+# built the image before bun was added, rebuild it first.
+
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [ $# -ge 1 ]; then
+    code=$1
+    shift
+else
+    code=$(cat)
+fi
+
+exec "$SCRIPT_DIR/sandbox-run" bun -e "$code" "$@"
