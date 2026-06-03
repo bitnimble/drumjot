@@ -197,9 +197,7 @@ def onsets_to_midi_bytes(
                 tick = bar_start_tick[bar] + int(round(
                     local * TICKS_PER_BEAT * midi_tempos[bar] / 60.0
                 ))
-                vel = velocity_lookup(
-                    pitch, float(getattr(c, "strength", 0.0) or 0.0)
-                )
+                vel = velocity_lookup(pitch, c)
                 timeline.append((tick, 2, midi_note, mido.Message(
                     "note_on", channel=DRUM_CHANNEL, note=midi_note,
                     velocity=vel, time=0)))
@@ -231,9 +229,7 @@ def onsets_to_midi_bytes(
                 t = float(q if q is not None else (getattr(c, "time", 0.0) or 0.0))
                 if t < 0:
                     continue
-                vel = velocity_lookup(
-                    pitch, float(getattr(c, "strength", 0.0) or 0.0)
-                )
+                vel = velocity_lookup(pitch, c)
                 tick = max(0, int(round(t * seconds_to_ticks)))
                 timeline.append((tick, 2, midi_note, mido.Message(
                     "note_on", channel=DRUM_CHANNEL, note=midi_note,
@@ -367,23 +363,35 @@ def _safe_denominator(den: int) -> int:
 def _build_velocity_lookup(
     onsets_by_pitch: dict[str, list[Any]],
 ):
-    """Return a `(pitch, strength) -> velocity` callable.
+    """Return a `(pitch, candidate) -> velocity` callable.
 
-    Pre-computes per-pitch p10 / p90 strength so the linear mapping
+    Pre-computes per-pitch p10 / p90 loudness so the linear mapping
     only does a comparison + interpolation per onset.
+
+    Loudness reads from `candidate.amplitude`, raw audio peak in a
+    small window around the onset, see `OnsetCandidate.amplitude` for
+    why. Falls back to `candidate.strength` (the ADTOF model confidence
+    in the lane's activation at the peak frame) for onsets without an
+    amplitude: non-ADTOF detection paths and re-loaded legacy debug
+    bundles produced before this field existed. The fallback keeps the
+    previous per-pitch-percentile semantics intact even when only
+    confidence is available.
     """
+    def loudness_of(c: Any) -> float:
+        a = getattr(c, "amplitude", None)
+        if a is not None:
+            return float(a)
+        return float(getattr(c, "strength", 0.0) or 0.0)
+
     per_pitch_range: dict[str, tuple[float, float]] = {}
     for pitch, cands in onsets_by_pitch.items():
-        strengths = [
-            float(getattr(c, "strength", 0.0) or 0.0) for c in cands
-        ]
-        per_pitch_range[pitch] = _percentile_range(strengths)
+        per_pitch_range[pitch] = _percentile_range(loudness_of(c) for c in cands)
 
-    def velocity_for(pitch: str, strength: float) -> int:
+    def velocity_for(pitch: str, c: Any) -> int:
         lo, hi = per_pitch_range.get(pitch, (0.0, 1.0))
         if hi <= lo:
             return (VEL_FLOOR + VEL_CEIL) // 2
-        t = (strength - lo) / (hi - lo)
+        t = (loudness_of(c) - lo) / (hi - lo)
         v = VEL_FLOOR + t * (VEL_CEIL - VEL_FLOOR)
         return max(1, min(127, int(round(v))))
 

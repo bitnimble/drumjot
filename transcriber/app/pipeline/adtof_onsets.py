@@ -235,6 +235,30 @@ def _load_mono_audio(audio_path: Path) -> np.ndarray:
     return y.astype(np.float32, copy=False)
 
 
+def _peak_amplitude(
+    audio: np.ndarray, peak_time_sec: float, sample_rate: int,
+    *, window_sec: float = 0.020,
+) -> float:
+    """Maximum |sample| in a ±`window_sec` window around `peak_time_sec`.
+
+    Returns the raw audio amplitude (in [0, 1] sample units) at the
+    onset, the loudness proxy that drives the per-pitch
+    percentile-normalised velocity mapping in `onsets_midi.py`. Peak
+    rather than RMS so the attack transient dominates the value
+    (drum hits are mostly transient energy, and RMS would average
+    in decay tail); ±20ms is long enough to catch the full attack
+    without leaking into the next hit's onset (any reasonable drum
+    spacing is >40ms apart at typical tempos).
+    """
+    half = int(round(window_sec * sample_rate))
+    center = int(round(peak_time_sec * sample_rate))
+    lo = max(0, center - half)
+    hi = min(audio.size, center + half + 1)
+    if hi <= lo:
+        return 0.0
+    return float(np.max(np.abs(audio[lo:hi])))
+
+
 def _median_scale_factor(audio: np.ndarray) -> float:
     """Per-track amplitude scale mirroring the frontend waveform's
     `computeTrackAmpScale`: stride ~10k samples, take the median of
@@ -473,6 +497,13 @@ def detect_onsets_adtof(
         used_drum_stem = True
 
     audio = _load_mono_audio(source_path)
+    sr = _audio_processor().sample_rate
+    # Keep a reference to the unscaled audio so per-onset amplitude
+    # reflects the source stem's raw loudness, not the model-input
+    # normalisation. The scaling factor below is uniform per stem so
+    # relative ordering would be preserved either way, but raw values
+    # are more meaningful in the per-note debug popup.
+    audio_unscaled = audio
     scale = 1.0
     if settings.adtof_median_normalize and audio.size:
         scale = _median_scale_factor(audio)
@@ -541,6 +572,17 @@ def detect_onsets_adtof(
         window_sec=settings.adtof_audio_refine_window_s,
     )
 
+    # Peak audio amplitude (|sample|) in a ±window around each refined
+    # peak time, sampled from the unscaled stem so the value reflects
+    # raw stem loudness. Drives the per-pitch percentile-normalised
+    # velocity mapping in `onsets_midi.py`. Centred on `refined_time`
+    # so a hit whose detection time was nudged by the envelope refine
+    # is measured at where the actual transient sits.
+    amplitudes = [
+        _peak_amplitude(audio_unscaled, t, sr)
+        for t in refined_times
+    ]
+
     # `time` is the post-envelope-refine value (where the audio transient
     # actually sits); `raw_model_time` carries the pre-refine
     # `peak_frame / fps` so the per-note debug popup can surface the
@@ -550,11 +592,13 @@ def detect_onsets_adtof(
             time=refined_time,
             raw_model_time=raw_time,
             strength=float(activation[peak_idx]),
+            amplitude=amplitude,
             bar=-1,
             beat_in_bar=-1.0,
         )
-        for peak_idx, raw_time, refined_time in zip(
-            peak_frames, peak_times_sec, refined_times, strict=False
+        for peak_idx, raw_time, refined_time, amplitude in zip(
+            peak_frames, peak_times_sec, refined_times, amplitudes,
+            strict=False,
         )
     ]
     log.info(

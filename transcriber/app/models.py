@@ -47,6 +47,25 @@ class OnsetCandidate(BaseModel):
 
     time: float
     strength: float
+    # Peak audio amplitude (|sample| in [0, 1]) in a small window around
+    # `time`, measured on the source stem before model-input normalisation.
+    # Drives MIDI velocity in `onsets_midi.py::_build_velocity_lookup`:
+    # per-pitch p10/p90 percentile-normalised so each lane's loudness
+    # spread maps cleanly to the [VEL_FLOOR, VEL_CEIL] range.
+    #
+    # Distinct from `strength`, which is the ADTOF model's per-frame
+    # confidence (in [0, 1]) at the peak, a "is this a hit?" signal.
+    # The two diverge often enough to matter: a quiet but clean snare
+    # attack reads as confident (high `strength`), while a louder hit
+    # with unusual spectral content (or bleed) can read as uncertain.
+    # `strength` continues to feed the filter LLM's `(beat_in_bar,
+    # strength)` prompt block, where confidence is what we want; only
+    # the velocity mapping switched to `amplitude`.
+    #
+    # `None` for non-ADTOF detection paths (none in production today)
+    # and for re-loaded legacy debug bundles; velocity_lookup falls back
+    # to `strength` in that case.
+    amplitude: float | None = None
     bar: int = -1
     beat_in_bar: float = -1.0
     # ADTOF's raw model peak time, BEFORE `_refine_peak_times_audio`'s

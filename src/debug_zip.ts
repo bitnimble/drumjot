@@ -127,9 +127,20 @@ export type NoteProvenanceEntry = {
    * leave it `undefined`; consumers fall back to inferring off-grid
    * from `quantised_time_sec === null`. */
   off_grid?: boolean | null;
+  /** ADTOF model confidence at the peak frame, in [0, 1]. Surfaced as
+   * "Onset confidence" in the per-note debug popup. Distinct from
+   * {@link amplitude}; see that field for the split. */
   strength: number;
+  /** Raw audio amplitude (|sample| in [0, 1]) in a ±20ms window around
+   * the onset, on the source stem. Drives the per-pitch
+   * percentile-normalised MIDI velocity mapping (so a quieter hit gets
+   * a lower velocity even if the model is confidently identifying the
+   * lane). `null` for non-ADTOF detection paths and re-loaded bundles
+   * produced before this field existed; consumers fall back to
+   * {@link strength} in that case. */
+  amplitude?: number | null;
   /** 0-indexed bar in the transcriber's BeatStructure (NOT the rendered
-   * jot's bar index — see {@link NoteProvenanceFile.lead_bars}). */
+   * jot's bar index, see {@link NoteProvenanceFile.lead_bars}). */
   bar: number;
   beat_in_bar: number;
   out_of_range: boolean;

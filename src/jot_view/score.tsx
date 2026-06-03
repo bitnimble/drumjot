@@ -2117,7 +2117,13 @@ function renderDebugStageSections(p: DebugStageSectionsProps): React.ReactNode {
               audioSec: entry.detected_time_sec,
             }).toString()}
           </dd>
-          <dt>Strength</dt>
+          {entry.amplitude !== null && entry.amplitude !== undefined && (
+            <>
+              <dt>Amplitude</dt>
+              <dd>{entry.amplitude.toFixed(3)}</dd>
+            </>
+          )}
+          <dt>Onset confidence</dt>
           <dd>{entry.strength.toFixed(3)}</dd>
           {entry.midi_note !== null && entry.midi_note !== undefined && (
             <>

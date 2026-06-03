@@ -180,7 +180,21 @@ def build_note_provenance(
                 # own field so the popup can distinguish "off-grid"
                 # from "stage didn't run / no shift needed".
                 "off_grid": bool(getattr(c, "off_grid", False)),
+                # ADTOF model confidence at the peak frame, in [0, 1].
+                # Surfaced as "Onset confidence" in the per-note debug
+                # popup. Distinct from `amplitude` (raw audio loudness)
+                # which drives velocity mapping; see
+                # `OnsetCandidate.amplitude` for the split.
                 "strength": float(c.strength),
+                # Raw audio amplitude (|sample| in [0, 1]) in a ±20ms
+                # window around the onset, on the source stem. Drives
+                # the per-pitch percentile-normalised velocity mapping.
+                # `null` for non-ADTOF detection paths and re-loaded
+                # legacy bundles produced before this field existed;
+                # consumers fall back to `strength` in that case.
+                "amplitude": (
+                    float(c.amplitude) if c.amplitude is not None else None
+                ),
                 "bar": bar,
                 "beat_in_bar": float(c.beat_in_bar),
                 # In-range hits are the only ones the filter ever sees;
