@@ -373,7 +373,13 @@ def _geometric_snap(
     # Without this pre-pass the per-bar DP clamps it to the last slot of
     # the original bar (musically wrong); with it, the onset is moved
     # into the next bar's slot frame and the DP places it there.
-    # Backward overflow can't arise (beat_in_bar >= 1.0 by construction).
+    # Backward overflow can't arise (beat_in_bar >= 1.0 by construction:
+    # the beat tracker only assigns an onset to a bar whose downbeat
+    # it's already crossed, and `_apply_llm_shifts`'s cross-bar moves
+    # always set `beat_in_bar = 1.0 + slot/slots_per_beat ≥ 1.0`).
+    # Unlike later passes, the geometric snap is a placement, not a
+    # shift, so it doesn't go through `_apply_llm_shifts`, this pre-
+    # pass is the only cross-bar logic it needs.
     for cands in kept_by_pitch.values():
         for c in cands:
             bar_idx = int(c.bar)
@@ -456,14 +462,20 @@ def _envelope_snap(
     For every (lane, bar) group, samples the lane's onset-strength envelope
     in each candidate slot's exclusive time-bin (±half a slot) within
     ±`_ENV_RESNAP_TOLERANCE` of the onset's current slot, and moves the
-    onset to the bin holding the strongest transient. A move is taken only
-    when that bin clearly dominates the current slot's bin
+    onset to the bin holding the strongest transient. Candidate slots
+    that fall outside the current bar's range are walked into the
+    adjacent bar via `_resolve_cross_bar_target` and sampled there (so a
+    boundary hit whose true transient sits on the next bar's downbeat
+    can be recovered), with the resulting cross-bar shift carried
+    through `_apply_llm_shifts`. A move is taken only when the target
+    bin clearly dominates the current slot's bin
     (`_ENV_RESNAP_DOMINANCE`) and clears an absolute floor
-    (`_ENV_RESNAP_FLOOR_FRAC × envelope ref`), so a note already on its hit
-    stays put and an ambiguous/sustained region isn't disturbed. Shifts are
-    applied through `_apply_llm_shifts`, whose monotonic-injective guard
-    keeps two onsets from being pulled onto the same transient. Returns the
-    applied `{(pitch, idx): shift}` map; mutates candidates in place.
+    (`_ENV_RESNAP_FLOOR_FRAC × envelope ref`), so a note already on its
+    hit stays put and an ambiguous/sustained region isn't disturbed.
+    Shifts are applied through `_apply_llm_shifts`, whose
+    monotonic-injective + cross-bar occupancy guards keep two onsets
+    from being pulled onto the same transient. Returns the applied
+    `{(pitch, idx): shift}` map; mutates candidates in place.
 
     This is the only quantise pass that consults the audio: it catches hits
     whose detected time locked onto the wrong (early) envelope max, which
@@ -494,26 +506,46 @@ def _envelope_snap(
             if slot_span <= 0:
                 continue
             max_slot = num_beats * slots_per_beat - 1
-            half = slot_span / 2.0
             for idx in idxs:
                 c = cands[idx]
                 base = c.quantised_time if c.quantised_time is not None else c.time
                 cur = max(0, min(max_slot, round((base - float(bar.start_time)) / slot_span)))
-                best_slot, best_e, cur_e = cur, -1.0, 0.0
-                for cand in range(cur - _ENV_RESNAP_TOLERANCE, cur + _ENV_RESNAP_TOLERANCE + 1):
-                    if cand < 0 or cand > max_slot:
-                        continue
-                    center = float(bar.start_time) + cand * slot_span
+                best_offset, best_e, cur_e = 0, -1.0, 0.0
+                for offset in range(-_ENV_RESNAP_TOLERANCE, _ENV_RESNAP_TOLERANCE + 1):
+                    cand_slot = cur + offset
+                    # Resolve the candidate slot's bar frame (may walk
+                    # into an adjacent bar; tolerance is ±2 so a single
+                    # boundary crossing is the worst case in practice).
+                    if 0 <= cand_slot <= max_slot:
+                        cand_bar = bar
+                        cand_in_slot = cand_slot
+                        cand_slot_span = slot_span
+                    else:
+                        dest = _resolve_cross_bar_target(
+                            bar_idx, cur, offset, structure, slots_per_beat
+                        )
+                        if dest is None:
+                            continue
+                        cand_bar = structure.bars[dest[0]]
+                        cand_in_slot = dest[1]
+                        cand_num_beats = max(int(cand_bar.time_signature[0]), 1)
+                        cand_slot_span = (
+                            float(cand_bar.end_time) - float(cand_bar.start_time)
+                        ) / (cand_num_beats * slots_per_beat)
+                        if cand_slot_span <= 0:
+                            continue
+                    half = cand_slot_span / 2.0
+                    center = float(cand_bar.start_time) + cand_in_slot * cand_slot_span
                     e = env.peak_in(center - half, center + half)
-                    if cand == cur:
+                    if offset == 0:
                         cur_e = e
                     if e > best_e:
-                        best_e, best_slot = e, cand
-                if best_slot == cur or best_e < floor:
+                        best_e, best_offset = e, offset
+                if best_offset == 0 or best_e < floor:
                     continue
                 if best_e < _ENV_RESNAP_DOMINANCE * max(cur_e, 1e-9):
                     continue
-                shifts[(pitch, idx)] = best_slot - cur
+                shifts[(pitch, idx)] = best_offset
 
     if shifts:
         _apply_llm_shifts(
@@ -767,24 +799,59 @@ def _apply_llm_shifts(
     *,
     slots_per_beat: int = SLOTS_PER_BEAT,
 ) -> None:
-    """Apply per-onset slot shifts atomically per (lane, bar).
+    """Apply per-onset slot shifts atomically per (lane, source bar).
 
-    Shared by the LLM residual pass and the deterministic musical-grid
-    pass; both produce a `{(pitch, idx): shift}` map and need the same
-    safety guard. The geometric snap leaves each lane+bar's on-grid onsets
-    on distinct, strictly-increasing slots. A pass proposes independent
-    ±shifts, which
-    applied naively could collide two onsets onto one slot or reorder them.
-    So a group's shifts are applied only if the resulting slots stay
-    strictly increasing and in-bar; otherwise the group keeps its geometric
-    placement (preserving the snap's monotonic-injective invariant).
+    Shared by the envelope re-snap, musical-grid snap, and LLM residual
+    pass; all three produce a `{(pitch, idx): shift}` map and need the
+    same safety guard.
+
+    Each shift's destination is resolved against the song's full bar
+    grid via `_resolve_cross_bar_target`, so a shift can move an onset
+    across one or more bar boundaries in either direction; the helper
+    honours per-bar time-signature changes. In-bar destinations (where
+    the source bar still owns the onset after the shift) are validated
+    by the original monotonic-injective guard: distinct, strictly
+    increasing slots in time-sorted order. Cross-bar destinations are
+    validated against a per-pitch `(bar_idx, slot)` occupancy snapshot
+    that's updated as each cross-bar move is applied, so two
+    simultaneous moves targeting the same destination, or a move into
+    a slot some other lane onset already holds, are rejected.
+    Whole-group atomicity is preserved: any failure for a (lane, source
+    bar) group keeps the entire group on its prior placement.
     Off-grid onsets are never shifted.
+
+    Sorting is by post-snap time (`quantised_time`, falling back to the
+    raw detected `time`) rather than the raw detected time alone: after
+    a cross-bar move, a candidate's `c.time` still points into the
+    source bar's audio window while its `quantised_time` reflects the
+    destination bar's frame. A future pass touching the destination
+    bar's lane then sees the moved candidate in its correct slot order
+    relative to non-moved onsets.
     """
     if not llm_shifts:
         return
 
+    def sort_time(c: OnsetCandidate) -> float:
+        return c.quantised_time if c.quantised_time is not None else c.time
+
+    # Per-pitch (bar_idx, slot) occupancy snapshot. Built once before
+    # any moves and updated as cross-bar moves apply, so a later move's
+    # destination check sees the post-move state.
+    occupied: dict[str, set[tuple[int, int]]] = {}
     for pitch, cands in kept_by_pitch.items():
-        # Group on-grid onsets by bar (same shape as `_geometric_snap`).
+        occ: set[tuple[int, int]] = set()
+        for c in cands:
+            if c.off_grid:
+                continue
+            bar_idx = int(c.bar)
+            if not (0 <= bar_idx < len(structure.bars)):
+                continue
+            slot = _current_slot(c, structure.bars[bar_idx], slots_per_beat)
+            if slot is not None:
+                occ.add((bar_idx, slot))
+        occupied[pitch] = occ
+
+    for pitch, cands in kept_by_pitch.items():
         by_bar: dict[int, list[int]] = defaultdict(list)
         for idx, c in enumerate(cands):
             if c.off_grid:
@@ -803,25 +870,64 @@ def _apply_llm_shifts(
                 continue
             max_slot = num_beats * slots_per_beat - 1
 
-            idxs.sort(key=lambda i, _c=cands: _c[i].time)
-            # Current geometric slot + the LLM's delta -> intended slot.
-            # `quantised_time` is set for every placed onset; fall back to
-            # the raw `time` snap defensively.
-            plan: list[tuple[int, int, int]] = []  # (idx, delta, intended_slot)
+            idxs.sort(key=lambda i, _c=cands: sort_time(_c[i]))
+            # plan[k] = (idx, delta, src_slot, dest_bar_idx, dest_slot).
+            # dest_bar_idx == bar_idx for in-bar moves; otherwise the
+            # shift walks across one or more bar boundaries.
+            plan: list[tuple[int, int, int, int, int]] = []
+            walk_failed = False
             for i in idxs:
                 c = cands[i]
                 base_time = c.quantised_time if c.quantised_time is not None else c.time
                 current_slot = round((base_time - float(bar.start_time)) / slot_span)
                 delta = llm_shifts.get((pitch, i), 0)
-                plan.append((i, delta, current_slot + delta))
+                target_abs = current_slot + delta
+                if 0 <= target_abs <= max_slot:
+                    plan.append((i, delta, current_slot, bar_idx, target_abs))
+                else:
+                    dest = _resolve_cross_bar_target(
+                        bar_idx, current_slot, delta, structure, slots_per_beat
+                    )
+                    if dest is None:
+                        # Walks off the song; reject the whole group so
+                        # we don't silently swallow part of it.
+                        walk_failed = True
+                        break
+                    plan.append((i, delta, current_slot, dest[0], dest[1]))
+            if walk_failed:
+                log.info(
+                    "quantise: shift for lane %r bar %d walks off the song "
+                    "end; keeping prior placement", pitch, bar_idx,
+                )
+                continue
 
-            intended = [p[2] for p in plan]
-            in_bounds = all(0 <= s <= max_slot for s in intended)
-            increasing = all(
-                intended[k] < intended[k + 1] for k in range(len(intended) - 1)
+            # In-bar invariant: among onsets that stay in this bar after
+            # the shift, slots must remain strictly increasing in the
+            # time-sorted order. Cross-bar moves vacate their source slot
+            # and are excluded from this check.
+            in_bar_intended = [p[4] for p in plan if p[3] == bar_idx]
+            in_bar_ok = all(
+                in_bar_intended[k] < in_bar_intended[k + 1]
+                for k in range(len(in_bar_intended) - 1)
             )
-            if not (in_bounds and increasing):
-                if any(delta for _, delta, _ in plan):
+
+            # Cross-bar invariant: each destination must be free in the
+            # per-pitch occupancy (which already accounts for moves
+            # applied earlier in this pass), and no two cross-bar moves
+            # within this group may target the same destination.
+            cross_bar_ok = True
+            seen_destinations: set[tuple[int, int]] = set()
+            for _i, _delta, _src_slot, dest_bar, dest_slot in plan:
+                if dest_bar == bar_idx:
+                    continue
+                key = (dest_bar, dest_slot)
+                if key in seen_destinations or key in occupied[pitch]:
+                    cross_bar_ok = False
+                    break
+                seen_destinations.add(key)
+
+            if not (in_bar_ok and cross_bar_ok):
+                if any(delta for _i, delta, _ss, _db, _ds in plan):
                     log.info(
                         "quantise: shifts for lane %r bar %d would break "
                         "slot order/injectivity; keeping prior placement",
@@ -829,11 +935,25 @@ def _apply_llm_shifts(
                     )
                 continue
 
-            for i, delta, new_slot in plan:
+            for i, delta, src_slot, dest_bar, dest_slot in plan:
                 if delta == 0:
                     continue
                 c = cands[i]
-                c.quantised_time = float(bar.start_time) + new_slot * slot_span
+                if dest_bar == bar_idx:
+                    c.quantised_time = float(bar.start_time) + dest_slot * slot_span
+                else:
+                    dest_bar_obj = structure.bars[dest_bar]
+                    dest_num_beats = max(int(dest_bar_obj.time_signature[0]), 1)
+                    dest_slot_span = (
+                        float(dest_bar_obj.end_time) - float(dest_bar_obj.start_time)
+                    ) / (dest_num_beats * slots_per_beat)
+                    c.bar = dest_bar
+                    c.beat_in_bar = 1.0 + dest_slot / slots_per_beat
+                    c.quantised_time = (
+                        float(dest_bar_obj.start_time) + dest_slot * dest_slot_span
+                    )
+                    occupied[pitch].discard((bar_idx, src_slot))
+                    occupied[pitch].add((dest_bar, dest_slot))
                 c.quantised_shift_slots = (c.quantised_shift_slots or 0) + delta
 
 
@@ -905,15 +1025,16 @@ def _musical_grid_snap(
         if grid is None:
             continue
         _name, positions = grid
-        bar = structure.bars[bar_idx]
-        max_slot = max(int(bar.time_signature[0]), 1) * slots_per_beat - 1
         for idx, slot in members:
             target = _nearest_grid_slot(slot, positions, slots_per_beat)
             shift = target - slot
             if shift == 0 or abs(shift) > _GRID_SNAP_TOLERANCE:
                 continue
-            if not (0 <= target <= max_slot):
-                continue
+            # `_apply_llm_shifts` resolves the destination bar/slot when
+            # `target` lies outside this bar's range, so cross-bar moves
+            # (e.g. an onset on the bar's last slot snapping forward to
+            # the next bar's downbeat) are emitted as ordinary shifts
+            # and gated by the shared occupancy check there.
             shifts[(pitch, idx)] = shift
 
     if shifts:
@@ -1014,6 +1135,52 @@ def _nearest_grid_slot(
             if best_d is None or d < best_d:
                 best_d, best_img = d, img
     return slot + (best_img - folded)
+
+
+def _resolve_cross_bar_target(
+    src_bar_idx: int,
+    src_slot: int,
+    shift: int,
+    structure: BeatStructure,
+    slots_per_beat: int,
+) -> tuple[int, int] | None:
+    """Walk an integer slot shift across bar boundaries.
+
+    Returns `(dest_bar_idx, dest_slot)` with `dest_slot` in
+    `[0, num_slots_in(dest_bar) - 1]`, or `None` if the shift walks off
+    the song (no further source/destination bar exists in the walked
+    direction). Multi-bar walks are supported so any pass can propose
+    an arbitrary shift; in practice all current passes bound their
+    output to ±2 slots so a single boundary crossing is the worst case.
+
+    Time-signature changes between bars are honoured: each iteration
+    reads the current bar's slot count and consumes/restores that many
+    slots when walking past its boundary.
+    """
+    if shift == 0:
+        return (src_bar_idx, src_slot)
+    bar_idx = src_bar_idx
+    abs_slot = src_slot + shift
+    while True:
+        if not (0 <= bar_idx < len(structure.bars)):
+            return None
+        bar = structure.bars[bar_idx]
+        num_slots = max(int(bar.time_signature[0]), 1) * slots_per_beat
+        if 0 <= abs_slot < num_slots:
+            return (bar_idx, abs_slot)
+        if abs_slot < 0:
+            prev_idx = bar_idx - 1
+            if prev_idx < 0:
+                return None
+            prev = structure.bars[prev_idx]
+            prev_num_slots = max(int(prev.time_signature[0]), 1) * slots_per_beat
+            abs_slot += prev_num_slots
+            bar_idx = prev_idx
+        else:
+            abs_slot -= num_slots
+            bar_idx += 1
+            if bar_idx >= len(structure.bars):
+                return None
 
 
 def _current_slot(
@@ -1161,7 +1328,11 @@ def _format_window(
                 )
             else:
                 rendered = " ".join(f"({e.pitch})" for _gid, e in slot_entries)
-            rows.append(f"  slot {slot:>2} {beat_label}: {rendered}")
+            # Display slot is 1-indexed (slot 1 = downbeat, matching the
+            # 1-indexed beats); the internal `slot` int stays 0-indexed
+            # everywhere else (geometric DP, envelope re-snap, grid snap)
+            # so this is purely a render-time convention for the prompt.
+            rows.append(f"  slot {slot + 1:>2} {beat_label}: {rendered}")
         blocks.append("\n".join(rows))
     return "\n\n".join(blocks)
 

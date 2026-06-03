@@ -136,7 +136,7 @@ def build_debug_zip(
         output_sink.save_mp3_from_wav,
         [(mp3_name, src) for _, src, mp3_name in encode_jobs],
     )
-    for (mapping_key, _src, _mp3_name), mp3 in zip(encode_jobs, encode_results):
+    for (mapping_key, _src, _mp3_name), mp3 in zip(encode_jobs, encode_results, strict=True):
         if mp3 is None:
             continue
         audio_entries.append((mp3.name, mp3))

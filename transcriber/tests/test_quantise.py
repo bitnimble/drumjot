@@ -33,6 +33,7 @@ from app.pipeline.quantise import (
     _LlmEntry,
     _musical_grid_snap,
     _nearest_grid_slot,
+    _resolve_cross_bar_target,
     _slot_label,
     quantise_kept_onsets,
 )
@@ -397,16 +398,26 @@ def test_format_window_tags_context_bars_and_drops_their_ids() -> None:
 _SLOT_SPAN = 2.0 / 48  # 4/4 @ 120 BPM, 12 slots/beat
 
 
+_BAR_DURATION = 48 * _SLOT_SPAN  # 4/4 @ 120 BPM, 48 slots → 2.0 s
+
+
 def _at_slots(slots, bar=0):
     """Candidates placed (post-geometric) at the given absolute slots.
 
     `quantised_time` is set directly so `_musical_grid_snap` sees a known
     current slot without us having to reverse-engineer `beat_in_bar`.
+    Times are offset by `bar * _BAR_DURATION` so a candidate's `bar`
+    index agrees with its `quantised_time` (lets `_current_slot` resolve
+    correctly without relying on bounds clamping).
     """
     cands = []
+    bar_start = bar * _BAR_DURATION
     for s in slots:
-        c = OnsetCandidate(time=s * _SLOT_SPAN, strength=5.0, bar=bar, beat_in_bar=1.0)
-        c.quantised_time = s * _SLOT_SPAN
+        c = OnsetCandidate(
+            time=bar_start + s * _SLOT_SPAN, strength=5.0, bar=bar,
+            beat_in_bar=1.0 + s / 12,
+        )
+        c.quantised_time = bar_start + s * _SLOT_SPAN
         c.off_grid = False
         cands.append(c)
     return cands
@@ -495,6 +506,51 @@ def test_nearest_grid_slot_wraps_to_the_next_downbeat() -> None:
     assert _nearest_grid_slot(4, (0, 3, 6, 9), 12) == 3
 
 
+def test_grid_snap_moves_a_last_slot_onset_to_next_bar_downbeat() -> None:
+    # 4/4 bar: kicks on the four downbeats plus a stray hit on slot 47
+    # (the very last 48th of the bar, 1/48 short of bar 1's downbeat).
+    # The lane votes straight-16 from the on-grid hits; the stray's
+    # nearest grid position is slot 48, which is bar 1's downbeat.
+    # Pre-fix the per-bar bounds check rejected the +1 shift, so the
+    # stray stayed on slot 47.
+    structure = _structure([_bar(0, 0.0, 2.0), _bar(1, 2.0, 4.0)])
+    cands = _at_slots([0, 12, 24, 36, 47])
+    kept = {"k": cands}
+    stray = cands[4]
+    _musical_grid_snap(kept, structure, slots_per_beat=12)  # type: ignore[arg-type]
+    assert stray.bar == 1
+    assert stray.beat_in_bar == 1.0
+    assert stray.quantised_time == 2.0  # bar 1's start_time
+    # The four downbeats stay put.
+    assert [_slot_of(c) for c in cands[:4]] == [0, 12, 24, 36]
+
+
+def test_grid_snap_skips_cross_bar_move_when_next_downbeat_is_occupied() -> None:
+    # Same setup but bar 1 already has a kick on slot 0, moving the
+    # stray would collide and break the per-bar injectivity invariant,
+    # so the grid pass leaves it on slot 47.
+    structure = _structure([_bar(0, 0.0, 2.0), _bar(1, 2.0, 4.0)])
+    bar0_cands = _at_slots([0, 12, 24, 36, 47])
+    bar1_cands = _at_slots([0, 12, 24, 36], bar=1)
+    kept = {"k": bar0_cands + bar1_cands}
+    stray = bar0_cands[4]
+    _musical_grid_snap(kept, structure, slots_per_beat=12)  # type: ignore[arg-type]
+    assert stray.bar == 0
+    assert _slot_of(stray) == 47
+
+
+def test_grid_snap_skips_cross_bar_move_when_no_next_bar() -> None:
+    # Last bar's last-slot stray can't cross-bar (no next bar) so it
+    # stays put rather than crashing on the out-of-range index.
+    structure = _structure([_bar(0, 0.0, 2.0)])
+    cands = _at_slots([0, 12, 24, 36, 47])
+    kept = {"k": cands}
+    stray = cands[4]
+    _musical_grid_snap(kept, structure, slots_per_beat=12)  # type: ignore[arg-type]
+    assert stray.bar == 0
+    assert _slot_of(stray) == 47
+
+
 def test_geometric_snap_records_the_sub_slot_residual() -> None:
     # A hit whose natural slot is 3.4 rounds to slot 3 with residual +0.4.
     structure = _structure([_bar(0, 0.0, 2.0)])
@@ -579,3 +635,190 @@ def test_envelope_snap_respects_the_injectivity_guard() -> None:
         {"s": cands}, structure, {"s": env}, slots_per_beat=12,  # type: ignore[arg-type]
     )
     assert [_slot_of(c) for c in cands] == [11, 13]  # unchanged
+
+
+# ---------- _resolve_cross_bar_target ----------
+
+def test_resolve_cross_bar_target_identity_for_zero_shift() -> None:
+    structure = _structure([_bar(0, 0.0, 2.0), _bar(1, 2.0, 4.0)])
+    assert _resolve_cross_bar_target(0, 12, 0, structure, 12) == (0, 12)  # type: ignore[arg-type]
+
+
+def test_resolve_cross_bar_target_keeps_in_bar_shifts_in_place() -> None:
+    structure = _structure([_bar(0, 0.0, 2.0), _bar(1, 2.0, 4.0)])
+    assert _resolve_cross_bar_target(0, 10, 2, structure, 12) == (0, 12)  # type: ignore[arg-type]
+    assert _resolve_cross_bar_target(0, 5, -3, structure, 12) == (0, 2)  # type: ignore[arg-type]
+
+
+def test_resolve_cross_bar_target_walks_forward_one_bar() -> None:
+    structure = _structure([_bar(0, 0.0, 2.0), _bar(1, 2.0, 4.0)])
+    # Slot 47 + 1 = first slot of bar 1.
+    assert _resolve_cross_bar_target(0, 47, 1, structure, 12) == (1, 0)  # type: ignore[arg-type]
+    # Slot 44 + 8 = bar 1 slot 4.
+    assert _resolve_cross_bar_target(0, 44, 8, structure, 12) == (1, 4)  # type: ignore[arg-type]
+
+
+def test_resolve_cross_bar_target_walks_backward_one_bar() -> None:
+    structure = _structure([_bar(0, 0.0, 2.0), _bar(1, 2.0, 4.0)])
+    # Slot 0 of bar 1 - 1 = last slot of bar 0.
+    assert _resolve_cross_bar_target(1, 0, -1, structure, 12) == (0, 47)  # type: ignore[arg-type]
+    # Slot 3 of bar 1 - 5 = bar 0 slot 46.
+    assert _resolve_cross_bar_target(1, 3, -5, structure, 12) == (0, 46)  # type: ignore[arg-type]
+
+
+def test_resolve_cross_bar_target_walks_through_multiple_bars() -> None:
+    bars = [_bar(i, i * 2.0, (i + 1) * 2.0) for i in range(4)]
+    structure = _structure(bars)
+    # Slot 0 of bar 0 + 100 = bar 2 slot 4 (skips bars 0 and 1 entirely).
+    assert _resolve_cross_bar_target(0, 0, 100, structure, 12) == (2, 4)  # type: ignore[arg-type]
+    # Slot 0 of bar 3 - 100 = bar 0 slot 44.
+    assert _resolve_cross_bar_target(3, 0, -100, structure, 12) == (0, 44)  # type: ignore[arg-type]
+
+
+def test_resolve_cross_bar_target_honours_time_signature_changes() -> None:
+    # bar 0 = 4/4 (48 slots), bar 1 = 3/4 (36 slots), bar 2 = 4/4.
+    bars = [
+        _bar(0, 0.0, 2.0, ts=(4, 4)),
+        _bar(1, 2.0, 3.5, ts=(3, 4)),
+        _bar(2, 3.5, 5.5, ts=(4, 4)),
+    ]
+    structure = _structure(bars)
+    # +1 from bar 0 slot 47 walks into bar 1's slot 0.
+    assert _resolve_cross_bar_target(0, 47, 1, structure, 12) == (1, 0)  # type: ignore[arg-type]
+    # +37 from bar 1 slot 0 walks past bar 1 (36 slots) into bar 2 slot 1.
+    assert _resolve_cross_bar_target(1, 0, 37, structure, 12) == (2, 1)  # type: ignore[arg-type]
+    # -1 from bar 2 slot 0 walks back to bar 1 slot 35 (last slot of 3/4).
+    assert _resolve_cross_bar_target(2, 0, -1, structure, 12) == (1, 35)  # type: ignore[arg-type]
+
+
+def test_resolve_cross_bar_target_returns_none_off_song_end() -> None:
+    structure = _structure([_bar(0, 0.0, 2.0), _bar(1, 2.0, 4.0)])
+    # Walking off the last bar forward.
+    assert _resolve_cross_bar_target(1, 47, 1, structure, 12) is None  # type: ignore[arg-type]
+    # Walking off the first bar backward.
+    assert _resolve_cross_bar_target(0, 0, -1, structure, 12) is None  # type: ignore[arg-type]
+
+
+# ---------- _apply_llm_shifts cross-bar ----------
+
+def test_apply_shifts_moves_onset_forward_across_bar_boundary() -> None:
+    structure = _structure([_bar(0, 0.0, 2.0), _bar(1, 2.0, 4.0)])
+    c = _at_slots([47])[0]
+    kept = {"k": [c]}
+    _apply_llm_shifts(kept, structure, {("k", 0): 1}, slots_per_beat=12)  # type: ignore[arg-type]
+    assert c.bar == 1
+    assert c.beat_in_bar == 1.0
+    assert abs(c.quantised_time - 2.0) < 1e-9
+    assert c.quantised_shift_slots == 1
+
+
+def test_apply_shifts_moves_onset_backward_across_bar_boundary() -> None:
+    structure = _structure([_bar(0, 0.0, 2.0), _bar(1, 2.0, 4.0)])
+    c = _at_slots([0], bar=1)[0]
+    kept = {"k": [c]}
+    _apply_llm_shifts(kept, structure, {("k", 0): -1}, slots_per_beat=12)  # type: ignore[arg-type]
+    assert c.bar == 0
+    assert abs(c.beat_in_bar - (1.0 + 47 / 12)) < 1e-9
+    assert abs(c.quantised_time - 47 * _SLOT_SPAN) < 1e-9
+    assert c.quantised_shift_slots == -1
+
+
+def test_apply_shifts_walks_multi_slot_cross_bar_forward() -> None:
+    # Shift +5 from slot 44 (4/4 bar) → bar 1 slot 1.
+    structure = _structure([_bar(0, 0.0, 2.0), _bar(1, 2.0, 4.0)])
+    c = _at_slots([44])[0]
+    kept = {"k": [c]}
+    _apply_llm_shifts(kept, structure, {("k", 0): 5}, slots_per_beat=12)  # type: ignore[arg-type]
+    assert c.bar == 1
+    assert abs(c.quantised_time - (2.0 + 1 * _SLOT_SPAN)) < 1e-9
+    assert c.quantised_shift_slots == 5
+
+
+def test_apply_shifts_rejects_cross_bar_move_when_destination_occupied() -> None:
+    # Bar 0 has stray on slot 47 wanting to move to bar 1 slot 0; bar 1
+    # already has a kick on slot 0 in the same lane, collision, whole
+    # group rejected, the stray stays put.
+    structure = _structure([_bar(0, 0.0, 2.0), _bar(1, 2.0, 4.0)])
+    bar0 = _at_slots([47])
+    bar1 = _at_slots([0], bar=1)
+    kept = {"k": bar0 + bar1}
+    _apply_llm_shifts(kept, structure, {("k", 0): 1}, slots_per_beat=12)  # type: ignore[arg-type]
+    assert bar0[0].bar == 0
+    assert _slot_of(bar0[0]) == 47
+
+
+def test_apply_shifts_rejects_when_walk_runs_off_the_song_end() -> None:
+    # Only one bar; shifting bar 0 slot 47 by +1 walks off the song end.
+    structure = _structure([_bar(0, 0.0, 2.0)])
+    c = _at_slots([47])[0]
+    kept = {"k": [c]}
+    _apply_llm_shifts(kept, structure, {("k", 0): 1}, slots_per_beat=12)  # type: ignore[arg-type]
+    assert c.bar == 0
+    assert _slot_of(c) == 47
+    # Shift was not applied, so quantised_shift_slots stays at its initial value.
+    assert c.quantised_shift_slots is None or c.quantised_shift_slots == 0
+
+
+def test_apply_shifts_mixes_in_bar_and_cross_bar_moves_in_one_group() -> None:
+    # Three onsets in bar 0: one stays put, one shifts in-bar, one crosses
+    # into bar 1's downbeat. All apply atomically.
+    structure = _structure([_bar(0, 0.0, 2.0), _bar(1, 2.0, 4.0)])
+    cands = _at_slots([5, 20, 47])
+    kept = {"k": cands}
+    _apply_llm_shifts(
+        kept, structure,  # type: ignore[arg-type]
+        {("k", 0): 0, ("k", 1): -1, ("k", 2): 1},
+        slots_per_beat=12,
+    )
+    assert cands[0].bar == 0 and _slot_of(cands[0]) == 5
+    assert cands[1].bar == 0 and _slot_of(cands[1]) == 19
+    # `_slot_of` is bar-0-relative (time / _SLOT_SPAN), so the cross-bar
+    # candidate at bar 1's downbeat reads as absolute slot 48.
+    assert cands[2].bar == 1 and cands[2].beat_in_bar == 1.0
+    assert abs(cands[2].quantised_time - 2.0) < 1e-9
+
+
+# ---------- _envelope_snap cross-bar ----------
+
+def _env_with_pulses_two_bars(slot_centers, *, height=10.0, width=0.004):
+    """`_env_with_pulses` extended to span bars 0 and 1 (0..4s).
+
+    `slot_centers` are absolute slot numbers in a continuous 0..96 frame
+    (48 slots/bar × 2 bars at 4/4 @ 120 BPM), so e.g. slot 48 is bar 1's
+    downbeat.
+    """
+    ft = np.arange(0.0, 4.0, 0.001)
+    env = np.zeros_like(ft)
+    for s in slot_centers:
+        env += height * np.exp(-((ft - s * _SLOT_SPAN) ** 2) / (2 * width**2))
+    ref = float(np.percentile(env, 99)) if np.any(env) else 0.0
+    return OnsetEnvelope(frame_times=ft, env=env, ref=ref)
+
+
+def test_envelope_snap_moves_a_note_across_a_bar_forward() -> None:
+    # Note geometrically placed on bar 0 slot 47; the real transient is on
+    # bar 1 slot 0 (just past the boundary). The cross-bar walk in the
+    # envelope re-snap finds it and migrates the note into bar 1.
+    structure = _structure([_bar(0, 0.0, 2.0), _bar(1, 2.0, 4.0)])
+    c = _at_slots([47])[0]
+    env = _env_with_pulses_two_bars([48])
+    _envelope_snap(
+        {"k": [c]}, structure, {"k": env}, slots_per_beat=12,  # type: ignore[arg-type]
+    )
+    assert c.bar == 1
+    assert c.beat_in_bar == 1.0
+    assert abs(c.quantised_time - 2.0) < 1e-9
+
+
+def test_envelope_snap_moves_a_note_across_a_bar_backward() -> None:
+    # Note geometrically on bar 1 slot 0; the real transient is on bar 0
+    # slot 47 (just before the boundary). Cross-bar walk pulls it back.
+    structure = _structure([_bar(0, 0.0, 2.0), _bar(1, 2.0, 4.0)])
+    c = _at_slots([0], bar=1)[0]
+    env = _env_with_pulses_two_bars([47])
+    _envelope_snap(
+        {"k": [c]}, structure, {"k": env}, slots_per_beat=12,  # type: ignore[arg-type]
+    )
+    assert c.bar == 0
+    assert abs(c.beat_in_bar - (1.0 + 47 / 12)) < 1e-9
+    assert abs(c.quantised_time - 47 * _SLOT_SPAN) < 1e-9

@@ -965,6 +965,16 @@ type StageShift = {
    * stages whose native unit is seconds (alignment, anchor drift, drum
    * offset). */
   deltaSlots?: number;
+  /** When set, render this stage as an independent bar anchored at the
+   * given audio-time position (extending by `deltaSec`) instead of
+   * cumulating into the chain. Used by frame-shift stages (envelope
+   * refine, beat-grid alignment): they don't move the onset's
+   * audio-time position, they shift the reference frame the chain is
+   * measured against, so they sit visually beside the chain rather
+   * than threading through it. See the `barGridFrameShiftSec` block
+   * in {@link NoteProvenanceDetails} for the full rationale on why
+   * these are kept out of `accountedSec`. */
+  anchorSec?: number;
 };
 
 const OnsetTimingVisualization = observer(
@@ -1005,8 +1015,15 @@ const OnsetTimingVisualization = observer(
     const stagePositions: number[] = [detectedSec];
     let chainAcc = detectedSec;
     for (const s of stages) {
-      chainAcc += s.deltaSec;
-      stagePositions.push(chainAcc);
+      if (s.anchorSec !== undefined) {
+        // Frame-shift stage: bar lives at a fixed audio-time position,
+        // doesn't advance the chain. Include both edges so the window
+        // expands to keep them visible.
+        stagePositions.push(s.anchorSec, s.anchorSec + s.deltaSec);
+      } else {
+        chainAcc += s.deltaSec;
+        stagePositions.push(chainAcc);
+      }
     }
     if (finalSec !== undefined) stagePositions.push(finalSec);
     const minPos = Math.min(...stagePositions);
@@ -1207,20 +1224,39 @@ const OnsetTimingVisualization = observer(
     let cursorPct = detectedPct;
     for (const s of stages) {
       if (Math.abs(s.deltaSec) < 1e-9) continue;
-      const nextSec = cursorSec + s.deltaSec;
-      const nextPct = timeToPct(nextSec);
+      let anchorSec: number;
+      let anchorPct: number;
+      let endSec: number;
+      if (s.anchorSec !== undefined) {
+        // Frame-shift bar: positioned at the stage's explicit anchor
+        // (env refine: raw model peak → detected; alignment: by
+        // convention from the detected line). Doesn't advance the
+        // chain cursor, the chain math (and the trailing
+        // unknown-drift residual) only sees genuine audio-time
+        // displacements.
+        anchorSec = s.anchorSec;
+        anchorPct = timeToPct(anchorSec);
+        endSec = anchorSec + s.deltaSec;
+      } else {
+        anchorSec = cursorSec;
+        anchorPct = cursorPct;
+        endSec = cursorSec + s.deltaSec;
+      }
+      const endPct = timeToPct(endSec);
       diffRows.push({
         key: s.key,
         label: s.label,
         deltaBeats: s.deltaBeats,
         deltaSlots: s.deltaSlots,
         deltaSec: s.deltaSec,
-        anchorPct: cursorPct,
-        endPct: nextPct,
+        anchorPct,
+        endPct,
         className: s.className,
       });
-      cursorSec = nextSec;
-      cursorPct = nextPct;
+      if (s.anchorSec === undefined) {
+        cursorSec = endSec;
+        cursorPct = endPct;
+      }
     }
     if (finalSec !== undefined && finalPct !== undefined) {
       const unknownSec = finalSec - cursorSec;
@@ -1768,6 +1804,58 @@ const NoteProvenanceDetails = observer(
     // coarse/fine), and their summed contribution is the "Bar-grid
     // frame shift" row.
     const stages: StageShift[] = [];
+    // Frame-shift stages first: they render at the top of the diff rows
+    // and are anchored to fixed audio-time positions (envelope refine
+    // literally spans `rawModelSec → detectedSec`; alignment shifts the
+    // grid without a literal "from" position, anchored at the detected
+    // line by convention). Excluded from `accountedSec` above, so the
+    // chain math and the trailing unknown-drift residual are unaffected.
+    if (
+      envelopeRefineSec !== undefined &&
+      Math.abs(envelopeRefineSec) > 1e-9 &&
+      rawModelSec !== null &&
+      rawModelSec !== undefined
+    ) {
+      stages.push({
+        key: 'env-refine',
+        label: 'Envelope refine',
+        className: styles.timingVizDiffBarEnvRefine,
+        deltaSec: envelopeRefineSec,
+        deltaBeats: secToOrigBeats(envelopeRefineSec),
+        anchorSec: rawModelSec,
+      });
+    }
+    if (hasAlignSplit) {
+      if (coarseAlignSec !== null && Math.abs(coarseAlignSec) > 1e-9) {
+        stages.push({
+          key: 'align-coarse',
+          label: 'Coarse · envelope phase',
+          className: styles.timingVizDiffBarAlignCoarse,
+          deltaSec: coarseAlignSec,
+          deltaBeats: secToOrigBeats(coarseAlignSec),
+          anchorSec: entry.detected_time_sec,
+        });
+      }
+      if (fineAlignSec !== null && Math.abs(fineAlignSec) > 1e-9) {
+        stages.push({
+          key: 'align-fine',
+          label: 'Fine · onset-snap',
+          className: styles.timingVizDiffBarAlignFine,
+          deltaSec: fineAlignSec,
+          deltaBeats: secToOrigBeats(fineAlignSec),
+          anchorSec: entry.detected_time_sec,
+        });
+      }
+    } else if (Math.abs(combinedAlignSec) > 1e-9) {
+      stages.push({
+        key: 'align-combined',
+        label: 'Beat alignment (combined)',
+        className: styles.timingVizDiffBarAlignCoarse,
+        deltaSec: combinedAlignSec,
+        deltaBeats: secToOrigBeats(combinedAlignSec),
+        anchorSec: entry.detected_time_sec,
+      });
+    }
     if (hasPerPassQuantise) {
       for (const p of quantisePasses) {
         if (p.slots === null || p.slots === undefined || p.slots === 0) continue;

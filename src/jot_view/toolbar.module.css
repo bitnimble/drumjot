@@ -52,6 +52,17 @@
     min-width: 80px;
 }
 
+/* Sub-option checkbox indented under its parent (e.g. "Include LLM
+   adjustment" sits under "Quantise"). When the parent toggle disables
+   this row, fade the label so the relationship reads visually. */
+.subCheckbox {
+    margin-left: 18px;
+}
+
+.subCheckbox:has(input:disabled) {
+    color: var(--color-text-faint);
+}
+
 .playButton {
     composes: secondary from './components/button.module.css';
 }
@@ -216,8 +227,11 @@
 }
 
 .debugPanelTitle {
-    composes: metaLabel from '../typography.module.css';
+    composes: bodySm from '../typography.module.css';
     color: var(--color-text-muted);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
 }
 
 .debugPanelStats {
@@ -348,6 +362,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    gap: 4px;
     padding: 4px;
     background: var(--color-bg-cream-warm);
     border-top: 1px solid var(--color-border-soft);

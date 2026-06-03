@@ -209,6 +209,8 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       lyricsAlignBusyPhase={store.lyricsAlignBusyPhase}
                       onSetBeatInput={(b) => store.setBeatInput(b)}
                       onSetLlmModel={(m) => store.setLlmModel(m)}
+                      onSetQuantise={(v) => store.setQuantise(v)}
+                      onSetQuantiseUseLlm={(v) => store.setQuantiseUseLlm(v)}
                       zoom={store.zoom}
                       onSetZoom={setZoomCentered}
                       hasNoteProvenance={store.noteProvenance !== undefined}

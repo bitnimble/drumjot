@@ -69,8 +69,7 @@ export type LyricsAlignStatus =
  *  exposes {@link beginAudioTrackSplit} / {@link endAudioTrackSplit} so
  *  the future server wiring just brackets its work with those calls
  *  and the per-row spinner picks it up automatically. */
-export type AudioTrackSplitStatus =
-  | { phase: 'splitting'; kind: 'mix' | 'pieces' };
+export type AudioTrackSplitStatus = { phase: 'splitting'; kind: 'mix' | 'pieces' };
 
 /** Long-running transcribe indicator. Only the in-flight `uploading`
  *  phase is modelled here; success and failure surface as toasts. */
@@ -94,6 +93,15 @@ export type TranscribeOptions = {
   beatInput: BeatInput;
   /** Model for the three Opus-by-default classification stages. */
   llmModel: LlmModel;
+  /** Run the optional `quantise` pipeline stage. False = no snap; every
+   *  onset keeps its raw detected time, the MIDI emitter writes it as
+   *  a near-grid tick + sub-slot offset, and the UI / playback honour
+   *  the offset so nothing re-snaps on load. */
+  quantise: boolean;
+  /** Run the LLM residual pass inside the quantise stage. Disables that
+   *  pass when false; geometric + envelope + grid still run. No-op
+   *  when `quantise` is false. */
+  quantiseUseLlm: boolean;
 };
 
 /**
@@ -168,7 +176,13 @@ export function clampVolume(v: number): number {
 // `MixerContext` interface they participate in. Re-exported here so
 // existing callers (and the JSDoc references below to
 // `JotViewStore.trackOrder`) keep working without an import churn.
-import { trackKeyEq, type TrackKey, InstrumentTrack, INSTRUMENT_FALLBACK_COLOR, type MixerContext } from 'src/tracks';
+import {
+  trackKeyEq,
+  type TrackKey,
+  InstrumentTrack,
+  INSTRUMENT_FALLBACK_COLOR,
+  type MixerContext,
+} from 'src/tracks';
 export type { TrackKey };
 export { trackKeyEq };
 
@@ -198,9 +212,7 @@ const DEFAULT_MIXER_KIND_ORDER: readonly DrumInstrumentKind[] = [
  * patterns mirror the names produced by the RLRR / MIDI / transcriber
  * loaders.
  */
-function inferKindFromInstrumentName(
-  name: string | undefined,
-): DrumInstrumentKind | undefined {
+function inferKindFromInstrumentName(name: string | undefined): DrumInstrumentKind | undefined {
   if (!name) return undefined;
   const n = name.toLowerCase();
   if (/\bkick\b|\bbass\s*drum\b/.test(n)) return 'kick';
@@ -233,7 +245,7 @@ function isFloorTom(instrument: Instrument | undefined, pitch: string): boolean 
  */
 function defaultMixerSortKey(
   pitch: string,
-  instrument: Instrument | undefined,
+  instrument: Instrument | undefined
 ): [number, number, string] {
   let kind: DrumInstrumentKind = instrument?.kind ?? 'custom';
   if (kind === 'custom') {
@@ -318,6 +330,8 @@ export class JotViewStore {
     debug: true,
     beatInput: 'full_mix',
     llmModel: 'claude-haiku-4-5-20251001',
+    quantise: true,
+    quantiseUseLlm: true,
   };
   /** Server-side picker of recent /transcribe runs that can be resumed.
    *  Populated by {@link refreshRecentTranscriptions}; an empty array
@@ -710,8 +724,7 @@ export class JotViewStore {
         pitches: this.jotPitches,
         lyricsIds: lyricsStore.trackIds.slice(),
       }),
-      ({ audioIds, pitches, lyricsIds }) =>
-        this.syncTrackOrder(audioIds, pitches, lyricsIds),
+      ({ audioIds, pitches, lyricsIds }) => this.syncTrackOrder(audioIds, pitches, lyricsIds),
       { fireImmediately: true }
     );
   }
@@ -737,7 +750,7 @@ export class JotViewStore {
   private syncTrackOrder(
     audioIds: AudioTrackId[],
     pitches: readonly string[],
-    lyricsIds: readonly LyricsTrackId[],
+    lyricsIds: readonly LyricsTrackId[]
   ): void {
     const wanted: TrackKey[] = [
       ...lyricsIds.map((id) => ({ kind: 'lyrics' as const, id })),
@@ -975,9 +988,7 @@ export class JotViewStore {
       // as a Map for ergonomic .get() lookups inside the per-onset
       // timing visualization. Empty when the current bundle didn't ship
       // a manifest (hand-authored jots, legacy bundles).
-      audioFilenameByPitch: new Map(
-        Object.entries(this.lastDebugBundle?.mapping ?? {}),
-      ),
+      audioFilenameByPitch: new Map(Object.entries(this.lastDebugBundle?.mapping ?? {})),
     };
   }
 
@@ -1086,7 +1097,7 @@ export class JotViewStore {
     if (track) return track;
     track = new InstrumentTrack(
       pitch,
-      () => this.currentJot?.defaultPaletteColorFor(pitch) ?? INSTRUMENT_FALLBACK_COLOR,
+      () => this.currentJot?.defaultPaletteColorFor(pitch) ?? INSTRUMENT_FALLBACK_COLOR
     );
     this.instrumentTracks.set(pitch, track);
     return track;
@@ -1103,7 +1114,7 @@ export class JotViewStore {
   async loadAudioTrack(
     file: File,
     pitch?: string,
-    role?: AudioTrackRole,
+    role?: AudioTrackRole
   ): Promise<AudioTrackId | undefined> {
     return this.withLoading(`Loading ${file.name}…`, async () => {
       try {
@@ -1165,9 +1176,7 @@ export class JotViewStore {
   splitAudioTrackFromMix(id: AudioTrackId): void {
     const track = jotPlayer.audioTracks.get(id);
     const name = track ? track.filename : id;
-    toastStore.showError(
-      `Split into drums + backing on "${name}" isn't wired up yet.`,
-    );
+    toastStore.showError(`Split into drums + backing on "${name}" isn't wired up yet.`);
   }
 
   /**
@@ -1178,9 +1187,7 @@ export class JotViewStore {
   splitAudioTrackDrumPieces(id: AudioTrackId): void {
     const track = jotPlayer.audioTracks.get(id);
     const name = track ? track.filename : id;
-    toastStore.showError(
-      `Split into drum pieces on "${name}" isn't wired up yet.`,
-    );
+    toastStore.showError(`Split into drum pieces on "${name}" isn't wired up yet.`);
   }
 
   /** Drop every loaded audio track. Used when a new source (e.g. a
@@ -1360,6 +1367,14 @@ export class JotViewStore {
     this.transcribeOptions.llmModel = model;
   }
 
+  setQuantise(enabled: boolean) {
+    this.transcribeOptions.quantise = enabled;
+  }
+
+  setQuantiseUseLlm(enabled: boolean) {
+    this.transcribeOptions.quantiseUseLlm = enabled;
+  }
+
   setSelectedResumeFolder(folder: string | undefined) {
     this.selectedResumeFolder = folder;
     // Clearing the folder (or picking a different one) invalidates any
@@ -1408,6 +1423,8 @@ export class JotViewStore {
         debug: this.transcribeOptions.debug,
         beatInput: this.transcribeOptions.beatInput,
         llmModel: this.transcribeOptions.llmModel,
+        quantise: this.transcribeOptions.quantise,
+        quantiseUseLlm: this.transcribeOptions.quantiseUseLlm,
         signal: controller.signal,
         onProgress: (event) => this.applyProgress(file.name, event),
       });
@@ -1449,6 +1466,8 @@ export class JotViewStore {
         resumeStage: stage,
         beatInput: this.transcribeOptions.beatInput,
         llmModel: this.transcribeOptions.llmModel,
+        quantise: this.transcribeOptions.quantise,
+        quantiseUseLlm: this.transcribeOptions.quantiseUseLlm,
         signal: controller.signal,
         onProgress: (event) => this.applyProgress(label, event),
       });
@@ -1513,7 +1532,7 @@ export class JotViewStore {
         title: response.debug_dir
           ? `Debug artifacts saved to ${response.debug_dir} (under ./debug/ on the host with the default docker-compose mount).`
           : undefined,
-      },
+      }
     );
   }
 
@@ -1843,7 +1862,7 @@ export class JotViewStore {
         map.audioTracks.map(async (track) => {
           const id = await this.loadAudioTrack(track.file, undefined, track.role);
           return { id, defaultMuted: track.defaultMuted };
-        }),
+        })
       );
       runInAction(() => {
         for (const { id, defaultMuted } of resolved) {
@@ -1869,7 +1888,7 @@ export class JotViewStore {
           `${file.name}: ${result.score_corrected}/100 corrected ` +
             `(raw ${result.score}) · offset ${offsetMs} ms · ` +
             `tempo ${result.tempo_ratio.toFixed(3)}× · ${result.audio_reference}`,
-          { title: 'See the browser console for the full per-lane breakdown.' },
+          { title: 'See the browser console for the full per-lane breakdown.' }
         );
         // eslint-disable-next-line no-console
         console.log('Alignment score', file.name, result);
@@ -1930,7 +1949,7 @@ export class JotViewStore {
    */
   private async applyDebugBundle(
     bundle: Awaited<ReturnType<typeof loadDebugZip>>,
-    fallbackName: string,
+    fallbackName: string
   ): Promise<boolean> {
     runInAction(() => {
       this.clearAllAudioTracks();
@@ -1945,7 +1964,6 @@ export class JotViewStore {
       // Reset the visibility toggle so a freshly loaded bundle reads
       // as just "the score"; operator opts into the ghost overlays.
       this.showFilteredOnsets = false;
-      this.debugPanelOpen = true;
       // Bundles come from the transcribe pipeline, which routinely
       // emits triplet subdivisions; the 48ths grid is the LCM of 16ths
       // + triplets so it visualises both. Override the store-wide 16ths
@@ -2293,16 +2311,15 @@ export class JotViewStore {
   applyLrclibResult(
     lines: readonly LyricLine[],
     match: { trackName: string; artistName: string },
-    opts: { wordLevel: boolean } = { wordLevel: false },
+    opts: { wordLevel: boolean } = { wordLevel: false }
   ): void {
     const trackId = lyricsStore.add(lines, {
       source: 'lrclib',
       sourceLabel: `LRCLIB · ${match.trackName} - ${match.artistName}`,
     });
-    toastStore.showSuccess(
-      `Loaded ${match.trackName} by ${match.artistName} from LRCLIB`,
-      { testId: 'lyrics-search-loaded' },
-    );
+    toastStore.showSuccess(`Loaded ${match.trackName} by ${match.artistName} from LRCLIB`, {
+      testId: 'lyrics-search-loaded',
+    });
     if (opts.wordLevel) {
       void this.runWordLevelAlignmentForLrclib(trackId, lines, match);
     }
@@ -2321,13 +2338,11 @@ export class JotViewStore {
   private async runWordLevelAlignmentForLrclib(
     targetTrackId: LyricsTrackId,
     lines: readonly LyricLine[],
-    match: { trackName: string; artistName: string },
+    match: { trackName: string; artistName: string }
   ): Promise<void> {
     const pick = this.pickAudioTrackForAlignment();
     if (!pick) {
-      toastStore.showError(
-        'Word-level alignment needs an audio track; load one first.',
-      );
+      toastStore.showError('Word-level alignment needs an audio track; load one first.');
       return;
     }
     const track = jotPlayer.audioTracks.get(pick.id);
@@ -2347,7 +2362,7 @@ export class JotViewStore {
       {
         source: 'lrclib',
         sourceLabel: `LRCLIB · ${match.trackName} - ${match.artistName}`,
-      },
+      }
     );
   }
 
@@ -2366,9 +2381,7 @@ export class JotViewStore {
    *
    * Returns undefined only when no audio tracks are loaded.
    */
-  private pickAudioTrackForAlignment():
-    | { id: AudioTrackId; kind: 'mix' | 'vocals' }
-    | undefined {
+  private pickAudioTrackForAlignment(): { id: AudioTrackId; kind: 'mix' | 'vocals' } | undefined {
     const tracks = Array.from(jotPlayer.audioTracks.values());
     if (tracks.length === 0) return undefined;
     for (const t of tracks) {
@@ -2411,10 +2424,7 @@ export class JotViewStore {
    * word-level path: the spread lines land immediately, then word-
    * timed versions replace them on success.
    */
-  applyPlainTextLyrics(
-    text: string,
-    opts: { wordLevel?: boolean } = {},
-  ): number {
+  applyPlainTextLyrics(text: string, opts: { wordLevel?: boolean } = {}): number {
     const cleaned: string[] = [];
     for (const raw of text.split(/\r?\n/)) {
       const trimmed = raw.trim();
@@ -2467,13 +2477,11 @@ export class JotViewStore {
    *  label stays "Plain text". */
   private async runWordLevelAlignmentForPlainText(
     targetTrackId: LyricsTrackId,
-    lines: readonly LyricLine[],
+    lines: readonly LyricLine[]
   ): Promise<void> {
     const pick = this.pickAudioTrackForAlignment();
     if (!pick) {
-      toastStore.showError(
-        'Word-level alignment needs an audio track; load one first.',
-      );
+      toastStore.showError('Word-level alignment needs an audio track; load one first.');
       return;
     }
     const track = jotPlayer.audioTracks.get(pick.id);
@@ -2489,7 +2497,7 @@ export class JotViewStore {
         },
       },
       'Plain text',
-      { source: 'plaintext', sourceLabel: 'Plain text' },
+      { source: 'plaintext', sourceLabel: 'Plain text' }
     );
   }
 
@@ -2568,7 +2576,7 @@ export class JotViewStore {
     targetTrackId: LyricsTrackId,
     req: AlignLyricsRequest,
     label: string,
-    opts: { source: LyricsSource; sourceLabel: string },
+    opts: { source: LyricsSource; sourceLabel: string }
   ): Promise<void> {
     const existing = this.lyricsAlignControllers.get(targetTrackId);
     if (existing) {
@@ -2624,9 +2632,7 @@ export class JotViewStore {
       runInAction(() => {
         this.lyricsAlignStatuses.delete(targetTrackId);
       });
-      toastStore.showError(
-        `No lyrics were aligned (the aligner found no speech in ${label}).`,
-      );
+      toastStore.showError(`No lyrics were aligned (the aligner found no speech in ${label}).`);
       return;
     }
     runInAction(() => {

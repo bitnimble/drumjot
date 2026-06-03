@@ -192,6 +192,21 @@ export type TranscribeOptions = {
    */
   llmModel?: LlmModel;
   /**
+   * Run the optional `quantise` pipeline stage. `false` skips it
+   * entirely, every onset keeps its raw detected time, the MIDI
+   * emitter writes it as a near-grid tick + sub-slot offset, and the
+   * frontend / playback honour the offset so nothing re-snaps on
+   * load. Omitted = server default (currently `true`).
+   */
+  quantise?: boolean;
+  /**
+   * Run the LLM residual pass inside the quantise stage. `false` skips
+   * that pass entirely (geometric + envelope + grid still run); `true`
+   * enables it. No-op when `quantise` is `false`. Omitted = server
+   * default (currently `true`).
+   */
+  quantiseUseLlm?: boolean;
+  /**
    * Persist all intermediate audio + JSON artifacts to the transcriber's
    * debug directory. Required for the run to be resumable later (the
    * resume endpoint reads from `/debug/<folder>/`). See
@@ -224,6 +239,10 @@ export type ResumeOptions = {
   beatInput?: BeatInput;
   /** Same semantics as {@link TranscribeOptions.llmModel}. */
   llmModel?: LlmModel;
+  /** Same semantics as {@link TranscribeOptions.quantise}. */
+  quantise?: boolean;
+  /** Same semantics as {@link TranscribeOptions.quantiseUseLlm}. */
+  quantiseUseLlm?: boolean;
   onProgress?: (event: TranscribeProgress) => void;
   signal?: AbortSignal;
 };
@@ -584,6 +603,14 @@ export class TranscriberClient {
     }
     if (options.llmModel !== undefined) {
       form.append('llm_model', options.llmModel);
+    }
+    if (options.quantise !== undefined) {
+      // Boolean flag with a server-side default of `true`, so always send
+      // when defined (truthy-only would lose the `false` case).
+      form.append('quantise', options.quantise ? 'true' : 'false');
+    }
+    if (options.quantiseUseLlm !== undefined) {
+      form.append('quantise_use_llm', options.quantiseUseLlm ? 'true' : 'false');
     }
   }
 }

@@ -68,15 +68,27 @@ filtering.
 ## How to read the data
 
 Each bar block lists every onset in that bar, grouped by their current
-slot. Slots are 0-indexed within the bar; slot 0 = the downbeat,
-slot 12 = beat 2 (in 4/4), and so on up to `num_beats × 12 - 1`.
+slot. Slots are 1-indexed within the bar (matching the 1-indexed beats):
+slot 1 = the downbeat, slot 13 = beat 2 (in 4/4), and so on up to
+`num_beats × 12`.
+
+Slot labels:
+
+- `(beat N)`, the downbeat of beat N.
+- `(e of N)`, the second 16th of beat N (1/4 of the way through).
+- `(& of N)`, the off-beat 8th of beat N (halfway through).
+- `(a of N)`, the fourth 16th of beat N (3/4 of the way through).
+- `(trip-2 of N)` / `(trip-3 of N)`, the second / third 8th-note triplet
+  of beat N (1/3 and 2/3 of the way through).
+- `(1/48 +K of N)`, generic fallback for any slot not on the named
+  grids above; K is the slot's offset in 48ths from beat N's downbeat.
 
 ```
 Bar 0 [4/4, 120.0 BPM, feel=straight16]:
-  slot  0 (beat 1): #0(k) #1(h)
-  slot  6 (& of 1): #2(h)
-  slot 11 (48th +11 of 1): #3(s r+0.45)
-  slot 12 (beat 2): #4(h)
+  slot  1 (beat 1): #0(k) #1(h)
+  slot  7 (& of 1): #2(h)
+  slot 12 (48th +11 of 1): #3(s r+0.45)
+  slot 13 (beat 2): #4(h)
 ```
 
 `#N` is the **stable id** you must reference in your response. `(k)` /
@@ -98,9 +110,9 @@ the edges of this window. Their onsets are listed WITHOUT a `#N` id and
 you cannot and must not shift them, only onsets that carry a `#N` id
 are yours to move.
 
-In the example above, the snare `#3` at slot 11 likely belongs on slot
-12 (beat 2) with the hi-hat; a one-slot earlier snap from jitter (and its
-`r+0.45` confirms the raw hit was nearly halfway to slot 12). The correct
+In the example above, the snare `#3` at slot 12 likely belongs on slot
+13 (beat 2) with the hi-hat; a one-slot earlier snap from jitter (and its
+`r+0.45` confirms the raw hit was nearly halfway to slot 13). The correct
 response is `{"shifts": [{"id": 3, "shift": 1}]}`, just the one snare
 entry; nothing for the other onsets.
 

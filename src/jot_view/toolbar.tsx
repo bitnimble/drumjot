@@ -1,5 +1,5 @@
 import classNames from 'classnames';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { ExampleJot } from 'src/fakes';
@@ -27,17 +27,13 @@ import {
   SubmenuItem,
   ToggleMenuItem,
 } from './components/dropdown';
+import { Checkbox } from './components/checkbox';
 import { Logo } from './components/logo';
 import { NumberStepper } from './components/number_stepper';
 import { Tabs } from './components/tabs';
 import { formatTranscriptionSummary, RecentTranscriptionsPicker } from './recent_transcriptions';
 import styles from './toolbar.module.css';
-import {
-  GridLineSettings,
-  JotViewStore,
-  TranscribeOptions,
-  TranscribeStatus,
-} from './store';
+import { GridLineSettings, JotViewStore, TranscribeOptions, TranscribeStatus } from './store';
 
 /** Stage labels in pipeline order, shown verbatim in the resume stage
  *  picker. Mirrors `Stage` in `transcriber/app/pipeline/runner.py`. */
@@ -130,6 +126,8 @@ export const Toolbar = observer(
     lyricsAlignBusyPhase,
     onSetBeatInput,
     onSetLlmModel,
+    onSetQuantise,
+    onSetQuantiseUseLlm,
     zoom,
     onSetZoom,
     hasNoteProvenance,
@@ -186,6 +184,8 @@ export const Toolbar = observer(
     lyricsAlignBusyPhase: 'idle' | 'queued' | 'aligning';
     onSetBeatInput: (input: BeatInput) => void;
     onSetLlmModel: (model: LlmModel) => void;
+    onSetQuantise: (enabled: boolean) => void;
+    onSetQuantiseUseLlm: (enabled: boolean) => void;
     zoom: number;
     onSetZoom: (z: number) => void;
     /** True iff a filter-mode debug bundle is loaded — gates the
@@ -533,6 +533,28 @@ export const Toolbar = observer(
                     ))}
                   </Select>
                 </label>
+                <label
+                  className={sharedStyles.toolbarCheckbox}
+                  title="Run the optional quantise stage. Off skips snapping entirely; every onset keeps its raw detected time, the MIDI emitter writes it as a near-grid tick + sub-slot offset, and the UI / playback honour the offset so nothing re-snaps on load. Applies to both New and Resume."
+                >
+                  <span>Quantise</span>
+                  <Checkbox
+                    checked={transcribeOptions.quantise}
+                    disabled={uploading}
+                    onChange={(e) => onSetQuantise(e.target.checked)}
+                  />
+                </label>
+                <label
+                  className={classNames(sharedStyles.toolbarCheckbox, styles.subCheckbox)}
+                  title="Run the LLM residual pass inside the quantise stage. Off skips that pass entirely; geometric + envelope + grid still run. No-op when Quantise is off."
+                >
+                  <span>Include LLM adjustment</span>
+                  <Checkbox
+                    checked={transcribeOptions.quantise && transcribeOptions.quantiseUseLlm}
+                    disabled={uploading || !transcribeOptions.quantise}
+                    onChange={(e) => onSetQuantiseUseLlm(e.target.checked)}
+                  />
+                </label>
                 <Tabs
                   ariaLabel="Transcribe mode"
                   value={effectiveMode}
@@ -806,15 +828,15 @@ export const Toolbar = observer(
         >
           {() => (
             <>
+              <PlaybackKitSubmenu />
+              <PlaybackSpeedItem />
+              <AudioLatencyItem />
               <ToggleMenuItem
                 label="Auto-enable follow on play"
                 active={autoFollowOnPlay}
                 onToggle={() => onSetAutoFollowOnPlay(!autoFollowOnPlay)}
                 title="When on, pressing Play (or resuming) re-enables Auto-follow if it was disabled mid-playback (pan, minimap drag, follow-button toggle while playing). Turning Auto-follow off while paused or stopped is treated as deliberate and survives the next play. Off = current Auto-follow state is always preserved across plays."
               />
-              <PlaybackKitSubmenu />
-              <PlaybackSpeedItem />
-              <AudioLatencyItem />
             </>
           )}
         </DropdownButton>
@@ -1028,26 +1050,24 @@ const DrumLoadingIndicator = observer(() => {
  * actually starts. Returns to nothing on completion; success is
  * signalled by the row's lines upgrading, failure by an error toast.
  */
-const LyricsAlignBusyPill = observer(
-  ({ phase }: { phase: 'idle' | 'queued' | 'aligning' }) => {
-    if (phase === 'idle') return null;
-    const queued = phase === 'queued';
-    return (
-      <span
-        className={classNames(sharedStyles.statusPill, sharedStyles.statusPillBusy)}
-        title={
-          queued
-            ? 'Waiting for the GPU (another job is running)…'
-            : 'Extracting vocals + aligning lyrics…'
-        }
-        data-testid="lyrics-align-busy"
-      >
-        <span className={styles.statusPillSpinner} aria-hidden="true" />
-        {queued ? 'Queued…' : 'Aligning lyrics…'}
-      </span>
-    );
-  },
-);
+const LyricsAlignBusyPill = observer(({ phase }: { phase: 'idle' | 'queued' | 'aligning' }) => {
+  if (phase === 'idle') return null;
+  const queued = phase === 'queued';
+  return (
+    <span
+      className={classNames(sharedStyles.statusPill, sharedStyles.statusPillBusy)}
+      title={
+        queued
+          ? 'Waiting for the GPU (another job is running)…'
+          : 'Extracting vocals + aligning lyrics…'
+      }
+      data-testid="lyrics-align-busy"
+    >
+      <span className={styles.statusPillSpinner} aria-hidden="true" />
+      {queued ? 'Queued…' : 'Aligning lyrics…'}
+    </span>
+  );
+});
 
 /**
  * Busy pill for an in-flight transcribe / resume call. Surfaces the
@@ -1097,7 +1117,8 @@ export const DebugPanel = observer(({ store }: { store: JotViewStore }) => {
         onClick={() => store.toggleDebugPanel()}
         title="Re-open the debug panel."
       >
-        ▴ Debug bundle loaded — show panel
+        <ChevronUp size={14} aria-hidden="true" />
+        Show debug logs
       </div>
     );
   }
@@ -1133,7 +1154,10 @@ export const DebugPanel = observer(({ store }: { store: JotViewStore }) => {
         title="Drag to resize the debug panel."
       />
       <div className={styles.debugPanelHeader} onClick={() => store.toggleDebugPanel()}>
-        <span className={styles.debugPanelTitle}>Debug bundle</span>
+        <span className={styles.debugPanelTitle}>
+          <ChevronDown size={14} aria-hidden="true" />
+          Hide debug logs
+        </span>
         <span className={styles.debugPanelStats}>
           {bundle.filename ? `${bundle.filename} · ` : ''}
           {stages.length} stage{stages.length === 1 ? '' : 's'} · {logs.length} log line
