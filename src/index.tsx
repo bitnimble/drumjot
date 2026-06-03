@@ -24,7 +24,11 @@ class Drumjot {
   }
 
   load(jot: Jot) {
-    this.store.setJot(new RenderedJot(jot));
+    // Pass the store's shared ViewConfig so `store.setZoom` (which mutates
+    // `viewConfig.barWidth`) actually drives this jot's `pxPerBeat`/layout.
+    // Every in-store loader (loadExample/transcribe/file) does the same;
+    // omitting it here left zoom a no-op for `window.drumjot.load`/`loadDsl`.
+    this.store.setJot(new RenderedJot(jot, this.store.viewConfig));
   }
 
   /** Parse a DSL source string (SPEC.md syntax) and load the resulting jot. */

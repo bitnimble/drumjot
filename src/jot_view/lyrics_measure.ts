@@ -44,15 +44,15 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 
 function computeLetterSpacingPx(pxPerBeat: number): number {
-  return clamp(((pxPerBeat - 224) * 0.6) / 179, -0.6, 0);
+  return clamp(((pxPerBeat - 224) * 0.7) / 179, -0.7, 0);
 }
 
 function computeWdth(pxPerBeat: number): number {
-  return clamp(75 + ((pxPerBeat - 45) * 25) / 179, 75, 100);
+  return clamp(75 + ((pxPerBeat - 80) * 25) / 179, 75, 120);
 }
 
 function computeWght(pxPerBeat: number): number {
-  return clamp(300 + ((pxPerBeat - 45) * 100) / 179, 300, 400);
+  return clamp(300 + ((pxPerBeat - 80) * 100) / 179, 300, 600);
 }
 
 /** Canvas + font-load state, exposed as a MobX-observable singleton so a
@@ -75,10 +75,7 @@ class LyricsMeasurer {
     }
   }
 
-  private ensureCtx():
-    | CanvasRenderingContext2D
-    | OffscreenCanvasRenderingContext2D
-    | undefined {
+  private ensureCtx(): CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | undefined {
     if (this.ctx) return this.ctx;
     if (typeof OffscreenCanvas !== 'undefined') {
       this.canvas = new OffscreenCanvas(1, 1);
@@ -148,7 +145,7 @@ export type LyricLineMeasureInput = {
  *  doesn't track it. */
 export function computeLyricShifts(
   lines: readonly LyricLineMeasureInput[],
-  pxPerBeat: number,
+  pxPerBeat: number
 ): Map<LyricShiftKey, number> {
   const out = new Map<LyricShiftKey, number>();
   if (!Number.isFinite(pxPerBeat) || pxPerBeat <= 0) return out;

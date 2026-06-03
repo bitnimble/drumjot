@@ -108,6 +108,10 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     const factor = j.pxPerBeat / pxPerBeatBefore;
     if (factor === 1) return;
     store.setScrollBy((anchorBarsRowX - padLeft) * (factor - 1), 0);
+    // Same-tick scale + scroll write (cache-free; this runs outside the
+    // component) so the slider never paints the post-zoom scroll offset at
+    // the pre-zoom scale; see applyZoomVarsSync.
+    applyZoomVarsSync(scroller, null, j.pxPerBeat, store.scrollX);
   };
 
   // Stable JotView callback identities. Each only ever delegates to the
@@ -583,6 +587,11 @@ const JotView = observer((props: JotViewProps) => {
           store.setScrollBy(delta, 0);
         }
       }
+
+      // Apply the new scale + scroll to the DOM in the same tick so no
+      // painted frame shows the post-zoom scroll offset at the pre-zoom
+      // scale; see applyZoomVarsSync.
+      applyZoomVarsSync(el, cacheRef.current, currentJot.pxPerBeat, store.scrollX);
     };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
@@ -839,6 +848,10 @@ const JotView = observer((props: JotViewProps) => {
                 (gesture.anchorBarsRowX - gesture.initPadLeft) * (actualFactor - 1)
             );
           }
+          // Same-tick scale + scroll write so the pinch never paints the
+          // post-zoom scroll offset at the pre-zoom scale; see
+          // applyZoomVarsSync.
+          applyZoomVarsSync(el, cacheRef.current, jotRef.current.pxPerBeat, store.scrollX);
         }
         e.preventDefault();
       }
@@ -1271,6 +1284,44 @@ function setScrollX(cache: DomTargetCache, x: number): void {
 
 function setScrollY(cache: DomTargetCache, y: number): void {
   if (cache.viewport) cache.viewport.style.setProperty('--scroll-y', String(y));
+}
+
+/**
+ * Apply a zoom step's new SCALE (`--px-per-beat`) and SCROLL (`--scroll-x`)
+ * to the DOM together, synchronously, from inside a zoom handler.
+ *
+ * The two vars otherwise land via separate mobx observers, ScoreZoomVar's
+ * passive `useEffect` (scale) and ScrollVar's `useLayoutEffect` (scroll),
+ * which mobx-react-lite can commit in different React passes. For ≥1
+ * painted frame the wrapper would then sit at the post-zoom scroll offset
+ * while the bars are still at the pre-zoom scale. Cursor anchoring keeps
+ * `scrollΔ ≈ scrollX·(factor−1)`, which is many screens deep in a long
+ * song, so that stale frame paints the viewport multiple screens off (a
+ * zoom-out renders an earlier section) and reads as a random jump.
+ * Writing both here closes that window; the observers re-apply identical
+ * values, so it's idempotent. Mirrors the `--scroll-x` + `--playhead-x`
+ * pairing in PlayheadPosVar.
+ *
+ * `cache` is passed by the in-component wheel/pinch handlers that own one;
+ * the zoom slider runs outside the component (no cache) and passes null,
+ * so we fall back to querying the same targets the cache would hold.
+ */
+function applyZoomVarsSync(
+  scroller: HTMLElement,
+  cache: DomTargetCache | null,
+  pxPerBeat: number,
+  scrollX: number
+): void {
+  scroller.style.setProperty('--px-per-beat', String(pxPerBeat));
+  if (cache) {
+    setScrollX(cache, scrollX);
+    return;
+  }
+  const xStr = String(scrollX);
+  scroller.querySelector<HTMLElement>('[data-jot-scroll-content]')?.style.setProperty('--scroll-x', xStr);
+  for (const el of scroller.querySelectorAll<HTMLElement>(`.${styles.scrollStickyHorizontal}`)) {
+    el.style.setProperty('--scroll-x', xStr);
+  }
 }
 
 /**
