@@ -1,7 +1,9 @@
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 
-const TONE_WAV = fileURLToPath(new URL('./fixtures/tone.wav', import.meta.url));
+const TONE_WAV = fileURLToPath(
+  new URL('../../../tests/fixtures/tone.wav', import.meta.url),
+);
 
 /**
  * Visual capture of the debug-details timing visualization. The
@@ -175,5 +177,5 @@ test('captures the debug-details timing visualization', async ({ page }) => {
     .count();
   expect(invertedCount).toBe(diffRowCount);
 
-  await popover.screenshot({ path: 'e2e/debug-details-popover.png' });
+  await popover.screenshot({ path: 'tests/debug-details-popover.png' });
 });

@@ -19,7 +19,7 @@ import {
   alignLyricsForced,
   lyricsStore,
   nameLooksLikeVocals,
-  parseLrc,
+  parseEnhancedLrc,
   stripLyricNoise,
 } from 'src/lyrics';
 import { fromMidi } from 'src/midi';
@@ -2281,16 +2281,21 @@ export class JotViewStore {
         toastStore.showError(`Could not read ${file.name}: ${message}`);
         return;
       }
-      const lines = parseLrc(text);
+      // Enhanced-LRC aware: word-tagged files load as word-aligned
+      // tracks (with per-word durations), plain line-level LRC parses
+      // exactly as before. A leading `[offset:±ms]` restores the saved
+      // offset nudge.
+      const { lines, offsetSec } = parseEnhancedLrc(text);
       if (lines.length === 0) {
         toastStore.showError(`No synced lyrics found in ${file.name}.`);
         return;
       }
       runInAction(() => {
-        lyricsStore.add(lines, {
+        const id = lyricsStore.add(lines, {
           source: 'file',
           sourceLabel: `File · ${file.name}`,
         });
+        if (offsetSec !== 0) lyricsStore.setOffsetSec(id, offsetSec);
       });
     });
   }

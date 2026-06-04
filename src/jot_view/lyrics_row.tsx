@@ -15,7 +15,9 @@ import {
   audioSecToBeat,
   furiganaAnnotator,
   lyricsStore,
+  serializeEnhancedLrc,
 } from 'src/lyrics';
+import { downloadTextFile } from 'src/download';
 import { JotTimeline, jotPlayer } from 'src/playback';
 import { JotViewStoreContext } from './contexts';
 import { DropdownButton, dropdownStyles } from './components/dropdown';
@@ -261,10 +263,33 @@ type LyricsRowDragProps = {
   onResizeGutterStart: (e: React.PointerEvent<HTMLDivElement>) => void;
 };
 
+/** Build a filesystem-friendly `.lrc` name from a track's source label.
+ *  Drops a leading `Source · ` prefix, strips an existing `.lrc`
+ *  extension, and replaces filename-hostile characters. */
+function lyricsExportFilename(sourceLabel: string): string {
+  let base = sourceLabel.replace(/^[^·]*·\s*/, '').trim() || sourceLabel;
+  base = base.replace(/\.lrc$/i, '');
+  base = base
+    .replace(/[^\p{L}\p{N}\-_. ]+/gu, '_')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return `${base || 'lyrics'}.lrc`;
+}
+
+/** Serialize a lyrics track to an enhanced-LRC file (with word-level
+ *  durations + the offset nudge) and trigger a download. No-op if the
+ *  track raced a removal. */
+function exportLyricsTrack(id: LyricsTrackId): void {
+  const track = lyricsStore.get(id);
+  if (!track) return;
+  const text = serializeEnhancedLrc(track.lines, { offsetSec: track.offsetSec });
+  downloadTextFile(lyricsExportFilename(track.sourceLabel), text);
+}
+
 /** Per-row overflow menu on lyrics tracks. Hosts the time-offset stepper
- *  (replacing the inline gutter control) and the "Remove lyrics" action;
- *  same trigger position as the audio-track row's overflow so the chrome
- *  reads identically across the mixer. */
+ *  (replacing the inline gutter control), the enhanced-LRC export, and
+ *  the "Remove lyrics" action; same trigger position as the audio-track
+ *  row's overflow so the chrome reads identically across the mixer. */
 const LyricsOverflowMenu = ({
   id,
   offsetSec,
@@ -303,6 +328,19 @@ const LyricsOverflowMenu = ({
           </span>
         </label>
         <span className={dropdownStyles.dropdownDivider} aria-hidden="true" />
+        <button
+          type="button"
+          className={dropdownStyles.dropdownItem}
+          role="menuitem"
+          onClick={() => {
+            exportLyricsTrack(id);
+            close();
+          }}
+          data-testid={`lyrics-export-${id}`}
+          title="Download this track as an enhanced LRC file (round-trips word timings)"
+        >
+          Export enhanced LRC
+        </button>
         <button
           type="button"
           className={dropdownStyles.dropdownItem}

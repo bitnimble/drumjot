@@ -1,9 +1,10 @@
-# Confine `bun test` to the unit-test tree. Playwright e2e specs live in
-# `e2e/` and are driven by `playwright test` (a different runner that
-# imports `@playwright/test`, which is not bun-test compatible). Without
-# this, `bun test` would scan `e2e/*.spec.ts`, import Playwright, and
-# fail. All existing unit tests live under `src/`, so scoping the root
-# here keeps `bun test` behaviour identical while isolating the two
-# runners cleanly.
+# Confine `bun test` to the unit-test tree (`root = "src"`). Playwright
+# e2e specs are co-located under `src/<feature>/tests/*.e2e.ts` and driven
+# by `playwright test` (a different runner that imports `@playwright/test`,
+# which is not bun-test compatible). Bun auto-discovers `*.test.ts` /
+# `*.spec.ts` and has no ignore config, so the e2e specs deliberately use
+# the `.e2e.ts` suffix (no `.test`/`.spec`) to stay invisible to `bun
+# test`; Playwright's `testMatch` (playwright.config.ts) likewise only
+# matches `*.e2e.ts`, so the two runners never overlap.
 [test]
 root = "src"

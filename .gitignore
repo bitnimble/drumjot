@@ -153,7 +153,7 @@ test-results/
 playwright-report/
 blob-report/
 .playwright/
-# Ad-hoc screenshots written by Playwright specs into `e2e/` (e.g.
-# `popover.screenshot({ path: 'e2e/foo.png' })`). Kept local for
+# Ad-hoc screenshots written by Playwright specs into `tests/` (e.g.
+# `popover.screenshot({ path: 'tests/foo.png' })`). Kept local for
 # eyeballing; not a snapshot baseline.
-e2e/*.png
+tests/*.png

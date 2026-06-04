@@ -86,8 +86,10 @@ drumjot/
 │   │   ├── to_midi.ts              toMidi(jot, opts). Channel 10, 480 PPQN.
 │   │   ├── gm.ts                   GM percussion mapping (note -> letter+mods).
 │   │   └── __tests__/              synthetic tests + fixture harness.
-│   └── rlrr/                       RLRR <-> {Jot, MIDI}.
-├── e2e/                            Playwright e2e (separate runner; see AGENTS.md §Build).
+│   ├── rlrr/                       RLRR <-> {Jot, MIDI}.
+│   └── */tests/*.e2e.ts            Playwright e2e specs, co-located per feature
+│                                   (separate runner; see AGENTS.md §Build).
+├── tests/fixtures/                 Shared e2e fixtures (tone.wav, song.jot, …).
 ├── playwright.config.ts            Headless Chromium; webServer = bun run dev.
 ├── bunfig.toml                     Scopes `bun test` to src/ (runner split).
 ├── .stylelintrc.json               Design-token lint config. See design-system.md.

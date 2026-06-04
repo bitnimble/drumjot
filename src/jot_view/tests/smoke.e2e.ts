@@ -4,8 +4,10 @@ import { expect, test } from '@playwright/test';
 // A small but non-trivial multi-bar chart (crash, hi-hat with accents +
 // open hits, backbeat snare, kick, a tom fill), enough to exercise the
 // real render path (multiple instrument rows, patterns, bars, modifiers)
-// rather than a one-bar toy. See e2e/fixtures/song.jot.
-const SONG_FIXTURE = fileURLToPath(new URL('./fixtures/song.jot', import.meta.url));
+// rather than a one-bar toy. See tests/fixtures/song.jot.
+const SONG_FIXTURE = fileURLToPath(
+  new URL('../../../tests/fixtures/song.jot', import.meta.url),
+);
 
 test('boots to the empty state with the probe surface wired', async ({ page }) => {
   await page.goto('/');

@@ -24,11 +24,18 @@ const E2E_URL = `http://localhost:${E2E_PORT}`;
  *     Inspector). `npm run e2e:report` serves the HTML report on
  *     0.0.0.0:9323 — port-forward it to view from your machine.
  *
- * Unit tests stay on `bun test` (scoped to `src/` via bunfig.toml);
- * this runner only owns `e2e/`.
+ * Unit tests stay on `bun test` (scoped to `src/` via bunfig.toml, which
+ * matches `*.test.ts`); this runner only owns the co-located
+ * `src/<feature>/tests/*.e2e.ts` specs.
  */
 export default defineConfig({
-  testDir: './e2e',
+  // E2E specs are co-located with the feature they cover, under
+  // `src/<feature>/tests/*.e2e.ts`. The `.e2e.ts` suffix (not `.spec.ts`)
+  // keeps them out of `bun test`'s auto-discovery, which matches
+  // `.test.ts` / `.spec.ts` and has no ignore config, while `testMatch`
+  // here keeps Playwright off the `.test.ts` unit tests living alongside.
+  testDir: './src',
+  testMatch: '**/*.e2e.ts',
   // One worker == one Chromium. Default locally; pinned low in CI since
   // the container's memory budget is shared with the transcriber image.
   fullyParallel: true,

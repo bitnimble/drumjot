@@ -27,6 +27,19 @@ request, and pull in the linked docs when a task touches that area.
 - **Don't run `bun run dev`**, it's a human-only long-running watch. For
   a "does it compile?" smoke test use **`bun run build`** (lint:design +
   tsc + Vite), which is agent-friendly.
+- **Any front-end change reruns the e2e suite.** After touching anything
+  under `src/**` (`.ts`/`.tsx`/`.css`) or `tests/**` (shared fixtures),
+  run **`bun run e2e`** (or a scoped `bun run e2e <spec>` while iterating,
+  but a full pass before you claim done) and confirm it's green,
+  `scripts/check-ts` (tsc + unit + lint) does **not** exercise real
+  browser behaviour, so it can't catch a broken interaction, selector, or
+  render. E2E specs live next to the feature they cover, at
+  **`src/<feature>/tests/*.e2e.ts`** (shared fixtures in `tests/fixtures/`).
+  The specs are coupled to the UI (toolbar menu structure, `data-testid`s,
+  the ⋯ overflow): if your change moves or renames those, **update the
+  affected specs in the same change** and rerun, don't leave them red.
+  Needs the one-time Playwright setup (`bunx playwright install chromium`
+  + `sudo bunx playwright install-deps chromium`).
 - **No naked color literals in CSS modules**, `bun run lint:design`
   fails on hex / `rgb()`/`rgba()`/`hsl()`/`hsla()` in `src/**/*.css`
   outside `src/design_tokens.css`. Typography goes through `composes:`
@@ -65,9 +78,11 @@ Frontend (`bun`, repo root):
 | `bun run build` | lint:design + tsc `--noEmit` + Vite build. Agent compile-check. |
 | `bun run e2e` | Playwright suite (auto-spawns dev server). See below. |
 
-`bun test` is scoped to `src/` via `bunfig.toml`; Playwright owns `e2e/`
-(separate runner, they never overlap). Go through `scripts/check-ts` for
-the post-change loop.
+`bun test` is scoped to `src/` via `bunfig.toml` and matches `*.test.ts`
+unit files; Playwright covers the co-located `src/**/tests/*.e2e.ts`
+specs (the distinct `.e2e.ts` suffix keeps the two runners from
+overlapping, see `bunfig.toml`). Go through `scripts/check-ts` for the
+post-change loop.
 
 Transcriber (Docker or the local venv): see
 [docs/transcriber-pipeline.md](docs/transcriber-pipeline.md#build--run).
@@ -103,9 +118,17 @@ headless box. Setup: `bunx playwright install chromium` + (one-time)
 `sudo bunx playwright install-deps chromium` for system libs. Debug via
 trace viewer (`bun run e2e:report` + port-forward 9323), no display for
 `--headed`. Probe JS state through `window.drumjot` / `window.jotPlayer`
-and `data-testid`s; the backend is stubbed via
-`e2e/helpers/transcriber-mock.ts`. Audio *scheduling* is assertable;
-audio *fidelity* still needs a human ear-check.
+and `data-testid`s; the backend is stubbed per-spec via Playwright
+`page.route` (e.g. the LRCLIB mock in `src/lyrics/tests/lyrics.e2e.ts`).
+Audio *scheduling* is assertable; audio *fidelity* still needs a human
+ear-check. Put **`E2E_DEBUG_BUNDLE`**=`/path/to/bundle.zip` in `.env` to
+enable the opt-in "complete viewer" smoke test
+(`src/playback/tests/debug_bundle.e2e.ts`, via
+`src/playback/tests/debug_bundle.helper.ts::loadDebugBundle`); skipped
+when unset, so
+the bundle stays machine-local and uncommitted. The `e2e` script loads
+`.env` via `bun --env-file` (bun's *implicit* load doesn't reach the node
+Playwright subprocess), so plain `bun run e2e` picks it up.
 
 ## Detailed docs (pull in when relevant)
 

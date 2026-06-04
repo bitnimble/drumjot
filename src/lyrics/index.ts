@@ -1,5 +1,10 @@
 export { parseLrc, activeLineIndexAt, activeWordIndexAt, stripLyricNoise } from './lrc';
 export type { LyricLine, LyricWord } from './lrc';
+export {
+  serializeEnhancedLrc,
+  parseEnhancedLrc,
+  secondsToStamp,
+} from './enhanced_lrc';
 export { furiganaAnnotator, hasKanji, toHiragana, fitFurigana } from './furigana';
 export type { RubySegment } from './furigana';
 export { searchLrclib, ciTrimEq } from './lrclib';

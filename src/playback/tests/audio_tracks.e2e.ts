@@ -1,7 +1,9 @@
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
 
-const TONE_WAV = fileURLToPath(new URL('./fixtures/tone.wav', import.meta.url));
+const TONE_WAV = fileURLToPath(
+  new URL('../../../tests/fixtures/tone.wav', import.meta.url),
+);
 
 /**
  * Coverage for the audio-track feature. Loading + decoding + waveform +
