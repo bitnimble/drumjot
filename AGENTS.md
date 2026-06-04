@@ -101,6 +101,19 @@ does `uv pip install -e .` against `transcriber/pyproject.toml`.
   `Bun.argv[1:]`, like `node -e`; reads stdin if no arg).
 - `scripts/sandbox-run <cmd…>`, exec any command (e.g. `nvidia-smi`).
 
+**Pass non-trivial code as a file, not inline.** Only a simple one-liner
+goes inline as `scripts/sandbox-py '<code>'`. For anything multi-line,
+`Write()` it to a temp file in this repo under a **random/unique name**
+(e.g. `tmp_a1b2c3.py`, not a fixed `tmp.py`; other agents may be running
+concurrently and would collide) and run
+`scripts/sandbox-py /abs/path/in/repo/tmp_a1b2c3.py`; the repo is
+volume-mounted at the **same path** inside the sandbox, so it resolves
+identically.
+Multi-line inline code trips the harness into a permission confirmation
+even though `scripts/sandbox-*` is allowlisted; a file argument doesn't.
+Same for `scripts/sandbox-bun` (write a `.ts`/`.js` temp file) and shell
+via `scripts/sandbox-run`. Delete the temp file when done.
+
 The scripts auto-start the `drumjot-sandbox` container if stopped and
 fall back to `sudo docker`; they print the build/run recipe if it
 doesn't exist yet. Build context is the repo root (needs
