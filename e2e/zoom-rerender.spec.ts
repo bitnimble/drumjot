@@ -70,3 +70,83 @@ test('zoom does not re-render JotView', async ({ page }) => {
   // The fix: zooming re-renders JotView zero times.
   expect(result.onZoom).toBe(0);
 });
+
+/**
+ * Regression guard for the per-note popover cascade.
+ *
+ * There is one `PopoverPortal` per note (NoteView) and per filtered-onset
+ * ghost. At most one is ever shown (the selected/hovered note's label).
+ * Before the fix every HIDDEN popover still subscribed to `store.zoom` /
+ * `store.scrollX`, so a single zoom tick woke one observer per note and
+ * synchronously reconciled thousands of (null-rendering) fibers, ~111ms on
+ * a real song. The fix gates the subscribing observer (`PopoverPortalShown`)
+ * behind a hookless `show` check so hidden popovers subscribe to nothing.
+ *
+ * Counts `PopoverPortal` renders via `window.__perf` (src/perf_probe.ts).
+ * POSITIVE CONTROL: with one note selected, its open popover must re-render
+ * on zoom (so it repositions), proving the counter is wired. REGRESSION:
+ * with nothing selected, a zoom sweep must re-render zero popovers.
+ */
+const DENSE_JOT = `{{ bpm: 120, time: "4/4", title: "Popover Zoom Regression",
+  instrumentMapping: { h: { name: "HiHat" }, s: { name: "Snare" }, k: { name: "Kick" },
+    r: { name: "Ride" }, c: { name: "Crash" }, t: { name: "Tom" }, f: { name: "Floor" } } }}
+${Array.from({ length: 40 }, () => '(k+h+r s+h+r k+h+t s+h+c) (k+f s+h k+h s+h)').join('\n')}
+`;
+
+test('zoom does not re-render hidden note popovers', async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate((src) => (window as any).drumjot.loadDsl(src), DENSE_JOT);
+  await page.waitForSelector('[data-testid^="instrument-row-"]');
+
+  const settle = async () => {
+    // Two RAFs to let MobX reactions + React commit flush.
+    await page.evaluate(
+      () =>
+        new Promise<void>((r) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => r()))
+        )
+    );
+  };
+  await settle();
+
+  // REGRESSION: nothing selected (no popover shown) → a zoom sweep must
+  // re-render zero popovers. This is the cascade the fix removes.
+  const onZoom = await page.evaluate(async () => {
+    const w = window as any;
+    const store = w.drumjot.store;
+    const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+    w.__perf = {};
+    for (const z of [0.4, 0.7, 1.1, 1.6, 2.2, 3.0]) {
+      store.setZoom(z);
+      await nextFrame();
+      await nextFrame();
+    }
+    const n = w.__perf.PopoverPortal ?? 0;
+    delete w.__perf;
+    return n;
+  });
+
+  // POSITIVE CONTROL: select a note so exactly one popover is shown, then a
+  // zoom tick must re-render it (it repositions against the moved anchor).
+  await page.locator('[data-noseek="true"]').first().click();
+  await settle();
+  const onControl = await page.evaluate(async () => {
+    const w = window as any;
+    const store = w.drumjot.store;
+    const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+    const popoverShown = !!document.querySelector('[data-popover="note-label"]');
+    w.__perf = {};
+    store.setZoom(store.zoom * 1.3);
+    await nextFrame();
+    await nextFrame();
+    const n = w.__perf.PopoverPortal ?? 0;
+    delete w.__perf;
+    return { n, popoverShown };
+  });
+
+  // Positive control: the probe is wired and the open popover reacts to zoom.
+  expect(onControl.popoverShown).toBe(true);
+  expect(onControl.n).toBeGreaterThan(0);
+  // The fix: zooming re-renders zero hidden popovers.
+  expect(onZoom).toBe(0);
+});

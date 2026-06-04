@@ -1,5 +1,7 @@
 export { parseLrc, activeLineIndexAt, activeWordIndexAt, stripLyricNoise } from './lrc';
 export type { LyricLine, LyricWord } from './lrc';
+export { furiganaAnnotator, hasKanji, toHiragana, fitFurigana } from './furigana';
+export type { RubySegment } from './furigana';
 export { searchLrclib, ciTrimEq } from './lrclib';
 export type { LrclibMatch, SearchOptions } from './lrclib';
 export { alignLyricsForced, pickVocalsTrack, nameLooksLikeVocals } from './forced_align';

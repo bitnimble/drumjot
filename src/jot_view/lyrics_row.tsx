@@ -9,9 +9,11 @@ import {
   LyricLine,
   LyricWord,
   LyricsTrackId,
+  RubySegment,
   activeLineIndexAt,
   activeWordIndexAt,
   audioSecToBeat,
+  furiganaAnnotator,
   lyricsStore,
 } from 'src/lyrics';
 import { JotTimeline, jotPlayer } from 'src/playback';
@@ -410,11 +412,41 @@ const LyricWordChip = observer(
         title={buildWordDebugTitle(word.source)}
         data-testid={`lyrics-word-${lineIdx}-${wordIdx}`}
       >
-        <span className={styles.lyricWordText}>{word.text}</span>
+        <span className={styles.lyricWordText}>
+          <WordText text={word.text} />
+        </span>
       </span>
     );
   },
 );
+
+/** Renders a word's glyphs, stacking hiragana furigana over kanji runs
+ *  when the annotator has a reading for the text. `segmentsFor` is
+ *  synchronous (bare text until the kuromoji dictionary resolves) and its
+ *  `revision` read makes this `observer` re-render in place once readings
+ *  arrive. Falls back to a plain text node when there's no ruby, so
+ *  non-Japanese words render exactly as before. */
+const WordText = observer(({ text }: { text: string }) => {
+  const segments = furiganaAnnotator.segmentsFor(text);
+  const hasRuby = segments.some((s) => s.reading !== undefined);
+  if (!hasRuby) return <>{text}</>;
+  return (
+    <ruby className={styles.ruby}>
+      {segments.map((seg: RubySegment, i) =>
+        seg.reading !== undefined ? (
+          <React.Fragment key={i}>
+            {seg.base}
+            <rt>{seg.reading}</rt>
+          </React.Fragment>
+        ) : (
+          // Bare run (okurigana / kana / punctuation): base on the
+          // baseline, no annotation column.
+          <React.Fragment key={i}>{seg.base}</React.Fragment>
+        ),
+      )}
+    </ruby>
+  );
+});
 
 /**
  * The time-aligned lyrics row in the unified mixer. Same gutter geometry
@@ -531,6 +563,11 @@ export const LyricsRow = observer(
     // loads; canvas measurement before that uses the fallback stack and
     // is off by a glyph or two on long words.
     const fontReady = lyricsMeasurer.fontReady;
+    // Re-derive shifts when furigana readings resolve: ruby widens a word
+    // whose reading outruns its kanji, so the collision walk must re-run
+    // once `segmentsFor` upgrades from bare text. Reading the counter here
+    // (this row is an `observer`) re-renders on each resolution burst.
+    const furiganaRevision = furiganaAnnotator.revision;
     // Deliberate decision: measure every word with `isActive=false`. The
     // active-word weight override (wght 600) only shifts canvas-measured
     // widths by sub-pixel amounts on the active line, well inside
@@ -548,13 +585,15 @@ export const LyricsRow = observer(
             sourceIdx: w.sourceIdx,
             text: w.text,
             beatOffset: w.beatOffset,
+            segments: furiganaAnnotator.segmentsFor(w.text),
           })),
         }));
       return computeLyricShifts(measureInputs, pxPerBeat);
-      // `fontReady` is intentionally in the deps so a font-load
-      // completion re-derives shifts against real glyph widths.
+      // `fontReady` and `furiganaRevision` are intentionally in the deps:
+      // a font-load completion or a furigana resolution re-derives shifts
+      // against real glyph widths.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [positioned, pxPerBeat, fontReady]);
+    }, [positioned, pxPerBeat, fontReady, furiganaRevision]);
 
     // Reactive active-line/word state. Reading `playhead.activeLineIdx`
     // here re-renders `LyricsRow` only when the active line index *flips*

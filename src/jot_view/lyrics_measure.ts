@@ -30,6 +30,7 @@
  * DOM walk during the font-load window.
  */
 import { makeAutoObservable, runInAction } from 'mobx';
+import { RubySegment } from 'src/lyrics';
 
 const FONT_FAMILY =
   "'Bricolage Grotesque', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
@@ -38,6 +39,14 @@ const FONT_FAMILY =
 const LYRIC_FONT_SIZE_PX = 18;
 const ACTIVE_FONT_WEIGHT = 800;
 const MIN_GAP_PX = 4;
+/** Furigana annotation font. Keep in lockstep with
+ *  `lyrics_row.module.css::.lyricWordText rt`: 0.5em of the 18px base =
+ *  9px, weight 400, default (100%) width, the `rt` rule re-declares
+ *  `font-variation-settings` to `wght 400`, which also resets `wdth` to
+ *  the font's 100 default. */
+const RT_FONT_SIZE_PX = 9;
+const RT_FONT_WEIGHT = 400;
+const RT_WDTH = 100;
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
@@ -87,24 +96,68 @@ class LyricsMeasurer {
     return this.ctx;
   }
 
-  /** Measure `text` as it would render under the row's variable-font
-   *  state for the given zoom. `isActive` picks the active-word weight
-   *  override (`wght: 800`). Returns 0 when canvas isn't available. */
-  measureWordPx(text: string, pxPerBeat: number, isActive: boolean): number {
+  /** Low-level glyph-width measure for an explicit font state. Shared by
+   *  the base-text and furigana paths. Returns 0 when canvas isn't
+   *  available. */
+  private measure(
+    text: string,
+    sizePx: number,
+    wght: number,
+    wdthPct: number,
+    letterSpacingPx: number,
+  ): number {
     const ctx = this.ensureCtx();
     if (!ctx) return 0;
-    const wdth = computeWdth(pxPerBeat);
-    const wght = isActive ? ACTIVE_FONT_WEIGHT : computeWght(pxPerBeat);
     // CSS font shorthand: <weight> <stretch%> <size>px <family>.
-    ctx.font = `${Math.round(wght)} ${wdth.toFixed(2)}% ${LYRIC_FONT_SIZE_PX}px ${FONT_FAMILY}`;
+    ctx.font = `${Math.round(wght)} ${wdthPct.toFixed(2)}% ${sizePx}px ${FONT_FAMILY}`;
     // `letterSpacing` is the CSS letter-spacing applied during measureText;
     // Chromium / Firefox honour it directly. Safari < 16 ignores; the
     // (sub-)pixel drift sits well inside MIN_GAP_PX.
     type WithSpacing = {
       letterSpacing?: string;
     } & (CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D);
-    (ctx as WithSpacing).letterSpacing = `${computeLetterSpacingPx(pxPerBeat).toFixed(3)}px`;
+    (ctx as WithSpacing).letterSpacing = `${letterSpacingPx.toFixed(3)}px`;
     return ctx.measureText(text).width;
+  }
+
+  /** Measure `text` as it would render under the row's variable-font
+   *  state for the given zoom. `isActive` picks the active-word weight
+   *  override (`wght: 800`). Returns 0 when canvas isn't available. */
+  measureWordPx(text: string, pxPerBeat: number, isActive: boolean): number {
+    const wght = isActive ? ACTIVE_FONT_WEIGHT : computeWght(pxPerBeat);
+    return this.measure(
+      text,
+      LYRIC_FONT_SIZE_PX,
+      wght,
+      computeWdth(pxPerBeat),
+      computeLetterSpacingPx(pxPerBeat),
+    );
+  }
+
+  /** Measure a ruby-annotated word. Native `<ruby>` lays each base/reading
+   *  pair as wide as the wider of the two, so a furigana reading that
+   *  outruns its kanji (志 → こころざし) widens the base, which the plain
+   *  `measureWordPx` (base glyphs only) would miss, letting the next word
+   *  overlap. Sum per-segment `max(baseWidth, readingWidth)` to match the
+   *  browser's pair sizing. Reading-less runs contribute their base width
+   *  only. The `rt` is measured at its own fixed font state (see the
+   *  RT_* constants), independent of zoom. */
+  measureRubyPx(
+    segments: readonly RubySegment[],
+    pxPerBeat: number,
+    isActive: boolean,
+  ): number {
+    let total = 0;
+    for (const seg of segments) {
+      const baseW = this.measureWordPx(seg.base, pxPerBeat, isActive);
+      if (seg.reading === undefined) {
+        total += baseW;
+        continue;
+      }
+      const rtW = this.measure(seg.reading, RT_FONT_SIZE_PX, RT_FONT_WEIGHT, RT_WDTH, 0);
+      total += Math.max(baseW, rtW);
+    }
+    return total;
   }
 }
 
@@ -124,6 +177,10 @@ export type LyricWordMeasureInput = {
   text: string;
   /** Beats from the line's start. Same units as `--lyric-word-beat-offset`. */
   beatOffset: number;
+  /** Furigana segmentation for this word, when it carries ruby. Present
+   *  drives the wider ruby-aware width measure; absent falls back to
+   *  plain base-text measurement. */
+  segments?: readonly RubySegment[];
 };
 
 export type LyricLineMeasureInput = {
@@ -154,7 +211,10 @@ export function computeLyricShifts(
     for (const w of line.words) {
       const natural = w.beatOffset * pxPerBeat;
       const isActive = line.activeWordSourceIdx === w.sourceIdx;
-      const textWidth = lyricsMeasurer.measureWordPx(w.text, pxPerBeat, isActive);
+      const hasRuby = w.segments?.some((s) => s.reading !== undefined) ?? false;
+      const textWidth = hasRuby
+        ? lyricsMeasurer.measureRubyPx(w.segments!, pxPerBeat, isActive)
+        : lyricsMeasurer.measureWordPx(w.text, pxPerBeat, isActive);
       const required = Math.max(natural, prevRight + MIN_GAP_PX);
       const shift = required - natural;
       if (shift > 0) {

@@ -4,6 +4,7 @@ import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { NotePosition } from 'src/note_position';
+import { perfProbe } from 'src/perf_probe';
 import { NoteProvenanceEntry } from 'src/debug_zip';
 import { Instrument, Modifier, Sticking } from 'src/dsl';
 import { DEFAULT_GRID_DIVISION, gridDivisionFor } from 'src/grid';
@@ -92,14 +93,7 @@ export function seekFromClick(
  * anchoring exception called out in AGENTS.md §5.9: a single rect
  * read per popover-open re-render, not a per-frame layout loop.
  */
-const PopoverPortal = observer(function PopoverPortal({
-  anchorRef,
-  show,
-  className,
-  flippedClassName,
-  children,
-  extraProps,
-}: {
+type PopoverPortalProps = {
   anchorRef: React.RefObject<HTMLElement>;
   show: boolean;
   className: string;
@@ -116,11 +110,42 @@ const PopoverPortal = observer(function PopoverPortal({
   extraProps?: React.HTMLAttributes<HTMLDivElement> & {
     ref?: React.Ref<HTMLDivElement>;
   };
-}) {
+};
+
+/**
+ * Hidden-state gate. There is one PopoverPortal per note (and per
+ * filtered-onset ghost), so on a large score the tree holds thousands of
+ * them, but at most one is ever `show`n at a time (the selected/hovered
+ * note's label). This wrapper reads NO observables and runs NO hooks when
+ * hidden, it just returns `null`, so a zoom / scroll tick (which mutates
+ * `store.zoom` / `store.scrollX`) does not wake one observer per note. The
+ * subscribing logic lives in {@link PopoverPortalShown}, which only mounts
+ * for the popover that's actually open. Re-rendered by its parent (NoteView
+ * etc.) when `show` flips, so it doesn't need to be an observer itself.
+ *
+ * This split is load-bearing for zoom performance: before it, every hidden
+ * popover subscribed to `store.zoom` and re-rendered on every wheel tick,
+ * turning a zoom into a multi-thousand-node synchronous reconciliation.
+ */
+function PopoverPortal(props: PopoverPortalProps) {
+  if (!props.show) return null;
+  return <PopoverPortalShown {...props} />;
+}
+
+const PopoverPortalShown = observer(function PopoverPortalShown({
+  anchorRef,
+  className,
+  flippedClassName,
+  children,
+  extraProps,
+}: PopoverPortalProps) {
+  perfProbe('PopoverPortal');
   const store = React.useContext(JotViewStoreContext);
   // Read these for MobX reactivity even though we don't use the values
   // directly, the bounding-rect read in the render below picks up the
   // new post-transform position whenever the score scrolls or zooms.
+  // Only the open popover is mounted, so this is one subscription, not one
+  // per note (see {@link PopoverPortal}).
   void store?.scrollX;
   void store?.scrollY;
   void store?.zoom;
@@ -129,10 +154,6 @@ const PopoverPortal = observer(function PopoverPortal({
   const [flip, setFlip] = React.useState(false);
 
   React.useLayoutEffect(() => {
-    if (!show) {
-      setFlip(false);
-      return;
-    }
     const anchor = anchorRef.current;
     const label = labelRef.current;
     if (!anchor || !label) return;
@@ -146,9 +167,8 @@ const PopoverPortal = observer(function PopoverPortal({
     const overflowsBelow = aRect.bottom + GAP + lRect.height > window.innerHeight - SAFE;
     const fitsAbove = aRect.top - GAP - lRect.height > SAFE;
     setFlip(overflowsBelow && fitsAbove);
-  }, [show, anchorRef, store?.scrollX, store?.scrollY, store?.zoom]);
+  }, [anchorRef, store?.scrollX, store?.scrollY, store?.zoom]);
 
-  if (!show) return null;
   const anchor = anchorRef.current;
   if (!anchor) return null;
   const aRect = anchor.getBoundingClientRect();

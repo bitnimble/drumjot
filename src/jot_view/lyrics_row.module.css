@@ -300,6 +300,32 @@
         font-variation-settings 100ms ease-in-out;
 }
 
+/* Furigana ruby. Kanji runs in Japanese lyrics carry a hiragana reading
+   stacked above them via the native <ruby>/<rt> element (see
+   lyrics_row.tsx::WordText). The base run inherits the row's variable-font
+   axes; the annotation column is fixed and small. */
+.ruby {
+    ruby-position: over;
+    ruby-align: center;
+}
+
+.lyricWordText rt {
+    /* 0.5em of the 18px base = 9px. Keep in lockstep with
+       lyrics_measure.ts::RT_FONT_SIZE_PX. */
+    /* stylelint-disable-next-line property-disallowed-list -- furigana ruby is a one-off annotation sized relative to the chip's one-off 18px. */
+    font-size: 0.5em;
+    line-height: 1;
+    /* Reset the variable axes off the row's zoom-driven wght/wdth so the
+       reading stays a steady, legible hairline. wght 400 also resets wdth
+       to the font's 100 default (font-variation-settings is all-or-
+       nothing); the measurer mirrors this (RT_FONT_WEIGHT / RT_WDTH). */
+    font-variation-settings: 'wght' 400;
+    /* stylelint-disable-next-line property-disallowed-list -- furigana reading opts out of the row's zoom-driven tracking ramp. */
+    letter-spacing: normal;
+    color: inherit;
+    user-select: none;
+}
+
 /* Trailing rule that fills the cell's slack space. `flex: 1 1 0` plus
    `min-width: 0` lets it shrink to nothing when the text consumes the
    cell, and grow to fill arbitrary slack on sustained words. The

@@ -127,6 +127,11 @@ __pycache__/
 .ruff_cache/
 .ipynb_checkpoints/
 
+# kuromoji dictionary, copied from node_modules into public/ by
+# scripts/copy-kuromoji-dict.mjs (postinstall). Lazy-fetched at runtime
+# for Japanese lyrics; a few MB of generated assets, not source.
+public/kuromoji-dict/
+
 # OS noise
 .DS_Store
 Thumbs.db
