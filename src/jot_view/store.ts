@@ -180,6 +180,7 @@ export function clampVolume(v: number): number {
 // existing callers (and the JSDoc references below to
 // `JotViewStore.trackOrder`) keep working without an import churn.
 import {
+  buildDebugBundleTrackOrder,
   trackKeyEq,
   type TrackKey,
   InstrumentTrack,
@@ -2076,114 +2077,19 @@ export class JotViewStore {
 
   /**
    * Re-order the mixer after a debug bundle is loaded so each per-pitch
-   * audio track sits immediately above its instrument row, with any
-   * unmatched audio (e.g. the `no_drums` backing) at the top.
+   * audio stem sits immediately above its instrument row, with any
+   * unmatched audio (e.g. the `no_drums` backing) at the top. The
+   * ordering itself is the pure {@link buildDebugBundleTrackOrder} (see
+   * there for the full layout + the shared-stem dedupe); this just feeds
+   * it the current jot's pitches.
    *
-   * Layout (top → bottom):
-   *
-   *   audio: <unmatched-key>   ← e.g. no_drums, or audio for a pitch the
-   *   ...                       loaded jot doesn't actually contain
-   *   ┌ audio: <pitch-1>       ┐
-   *   └ pitch: <pitch-1>       ┘ paired, share groupId `pair:<pitch>`
-   *   ┌ audio: <pitch-2>       ┐
-   *   └ pitch: <pitch-2>       ┘ paired, share groupId `pair:<pitch>`
-   *   ...
-   *
-   * Each paired (audio, pitch) gets a fresh `groupId` so the mixer
-   * draws them flush together with a small gap to the next pair —
-   * KickAudio + KickInstrument visually distinct from SnareAudio +
-   * SnareInstrument even though they're all in one flat list.
-   *
-   * Pitches in the jot that the bundle didn't provide audio for still
-   * appear as their normal instrument row (no audio above them, no group).
-   * The `syncTrackOrder` reaction won't reshuffle this — it only ever
-   * drops stale entries and appends new ones, both of which are no-ops
-   * after a fresh bundle load.
+   * The `syncTrackOrder` reaction won't reshuffle the result, it only
+   * ever drops stale entries and appends new ones, both of which are
+   * no-ops right after a fresh bundle load.
    */
   private applyDebugBundleTrackOrder(loadedByKey: ReadonlyMap<string, AudioTrackId>): void {
     const pitches = collectJotPitches(this.currentJot);
-    const pitchesWithAudio = new Set(pitches.filter((p) => loadedByKey.has(p)));
-
-    // A single audio track can serve multiple pitches when the manifest
-    // maps several pitch keys onto one stem file; e.g. the cymbal
-    // split emits a `c` (crash) AND `d` (ride) onset stream against the
-    // single combined `stem_c.mp3` and the bundle's manifest declares
-    // both `c → stem_c.mp3` and `d → stem_c.mp3`. The bundle loader
-    // dedupes by filename so both keys resolve to the same
-    // `AudioTrackId`; the grouping here picks one pitch as the "primary"
-    // (the one whose key matches the audio row's `key`) and slots the
-    // others as sibling instrument rows immediately after the pair, sharing
-    // the same `groupId`. That way the mixer renders the shared audio
-    // + all its pitches as one contiguous cluster.
-    const pitchesByAudioId = new Map<AudioTrackId, string[]>();
-    for (const pitch of pitches) {
-      const id = loadedByKey.get(pitch);
-      if (id === undefined) continue;
-      const list = pitchesByAudioId.get(id) ?? [];
-      list.push(pitch);
-      pitchesByAudioId.set(id, list);
-    }
-    // Primary pitch = the one whose manifest key matches this audio
-    // track's load key (so the audio row's `key` field still points at
-    // a real pitch in the jot). For an audio loaded under multiple
-    // keys, this picks the first-mentioned pitch in the jot's order.
-    const primaryByAudioId = new Map<AudioTrackId, string>();
-    for (const [id, pitchList] of pitchesByAudioId) {
-      primaryByAudioId.set(id, pitchList[0]);
-    }
-    // Pitches that aren't the primary for their audio track get folded
-    // into the primary's pair; skip them in the main pitch loop.
-    const folded = new Set<string>();
-    for (const [id, pitchList] of pitchesByAudioId) {
-      const primary = primaryByAudioId.get(id);
-      for (const p of pitchList) {
-        if (p !== primary) folded.add(p);
-      }
-    }
-
-    const next: TrackKey[] = [];
-
-    // 1) Audio tracks that don't correspond to any pitch in the loaded
-    //    jot (no_drums always; also any per-pitch stem the score didn't
-    //    end up using) sit at the top, in the manifest's mapping order.
-    //    These stay ungrouped; they're standalone backing tracks, not
-    //    half of an audio↔instrument pair. Dedupe by `id` so a shared
-    //    audio doesn't appear twice when it's mapped under multiple
-    //    keys but the jot uses none of them.
-    const seenAudioIds = new Set<AudioTrackId>();
-    for (const [key, id] of loadedByKey) {
-      if (seenAudioIds.has(id)) continue;
-      if (pitchesWithAudio.has(key)) continue;
-      next.push({ kind: 'audio', id });
-      seenAudioIds.add(id);
-    }
-
-    // 2) For each pitch in the jot, slot its audio (if any) directly
-    //    above the instrument row. Folded (non-primary) pitches are
-    //    skipped here and emitted inline alongside their primary; this
-    //    keeps the rows contiguous so the mixer's groupStart/end logic
-    //    doesn't split the cluster.
-    for (const pitch of pitches) {
-      if (folded.has(pitch)) continue;
-      const id = loadedByKey.get(pitch);
-      if (id !== undefined) {
-        const groupId = `pair:${pitch}`;
-        next.push({ kind: 'audio', id, groupId });
-        next.push({ kind: 'instrument', pitch, groupId });
-        // Any pitches that share this audio track (siblings via the
-        // manifest's many-keys-one-file mapping) ride here with the
-        // same `groupId`.
-        const sharing = pitchesByAudioId.get(id) ?? [];
-        for (const sibling of sharing) {
-          if (sibling === pitch) continue;
-          next.push({ kind: 'instrument', pitch: sibling, groupId });
-        }
-      } else {
-        next.push({ kind: 'instrument', pitch });
-      }
-    }
-
-    this.trackOrder = next;
+    this.trackOrder = buildDebugBundleTrackOrder(pitches, loadedByKey);
   }
 
   /** Toggle the {@link DebugPanel}'s open state without forgetting the bundle. */

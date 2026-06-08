@@ -91,6 +91,104 @@ export function trackKeyEq(a: TrackKey, b: TrackKey): boolean {
 }
 
 /**
+ * Build the mixer row order applied right after a debug bundle (or a
+ * transcribe with per-pitch stems) is loaded: each per-pitch audio stem
+ * sits immediately above its instrument row (sharing a `pair:<pitch>`
+ * groupId so the mixer draws them flush), with any audio that doesn't
+ * back a jot pitch (`no_drums`, or a stem for a pitch this song doesn't
+ * contain) as an ungrouped block on top.
+ *
+ * Pure (no store / observable / DOM access) so the ordering is unit-
+ * testable; the store wraps it with `collectJotPitches(currentJot)` and
+ * assigns the result to `trackOrder`.
+ *
+ * Layout (top → bottom):
+ *
+ *   audio: <unmatched-stem>   ← e.g. no_drums, or a stem for a pitch the
+ *   ...                          loaded jot doesn't actually contain
+ *   ┌ audio: <pitch-1>        ┐
+ *   └ instr: <pitch-1>        ┘ paired, share groupId `pair:<pitch-1>`
+ *   ...
+ */
+export function buildDebugBundleTrackOrder(
+  pitches: readonly string[],
+  loadedByKey: ReadonlyMap<string, AudioTrackId>,
+): TrackKey[] {
+  // A single audio track can serve multiple pitches when the manifest
+  // maps several pitch keys onto one stem file; e.g. the cymbal split
+  // emits a `c` (crash) AND `d` (ride) onset stream against the single
+  // combined `stem_c.mp3` and the bundle's manifest declares both
+  // `c → stem_c.mp3` and `d → stem_c.mp3`. The bundle loader dedupes by
+  // filename so both keys resolve to the same `AudioTrackId`; the
+  // grouping here picks one pitch as the "primary" (the first the jot
+  // mentions) and slots the others as sibling instrument rows
+  // immediately after the pair, sharing the same `groupId`, so the
+  // mixer renders the shared audio + all its pitches as one contiguous
+  // cluster.
+  const pitchesByAudioId = new Map<AudioTrackId, string[]>();
+  for (const pitch of pitches) {
+    const id = loadedByKey.get(pitch);
+    if (id === undefined) continue;
+    const list = pitchesByAudioId.get(id) ?? [];
+    list.push(pitch);
+    pitchesByAudioId.set(id, list);
+  }
+  // Primary pitch = the first jot pitch (in jot order) that maps to a
+  // given audio id; the rest are folded in as siblings of the pair.
+  const folded = new Set<string>();
+  for (const pitchList of pitchesByAudioId.values()) {
+    for (let i = 1; i < pitchList.length; i++) folded.add(pitchList[i]);
+  }
+
+  const next: TrackKey[] = [];
+
+  // 1) Audio that doesn't back any pitch in the loaded jot (`no_drums`
+  //    always; also any per-pitch stem the score didn't end up using)
+  //    sits at the top, in the manifest's mapping order, ungrouped.
+  //    Keyed on the audio *id*, not the manifest key: a stem can be
+  //    reachable through several keys (the shared cymbal stem under both
+  //    `c` and `d`), so a per-key "is this key a jot pitch?" test would
+  //    wrongly treat the stem as unmatched whenever ONE of its keys is
+  //    absent from the jot (crash present, ride absent) and emit it here
+  //    AND again paired in step 2, a duplicate `audio:<id>` row, which
+  //    collides on its React key so one of the two waveforms never
+  //    renders. Skipping any id a jot pitch maps to keeps each stem in
+  //    exactly one place.
+  const seenAudioIds = new Set<AudioTrackId>();
+  for (const id of loadedByKey.values()) {
+    if (seenAudioIds.has(id)) continue;
+    if (pitchesByAudioId.has(id)) continue;
+    next.push({ kind: 'audio', id });
+    seenAudioIds.add(id);
+  }
+
+  // 2) For each pitch in the jot, slot its audio (if any) directly above
+  //    the instrument row. Folded (non-primary) pitches are skipped here
+  //    and emitted inline alongside their primary so the cluster stays
+  //    contiguous for the mixer's groupStart/end logic.
+  for (const pitch of pitches) {
+    if (folded.has(pitch)) continue;
+    const id = loadedByKey.get(pitch);
+    if (id !== undefined) {
+      const groupId = `pair:${pitch}`;
+      next.push({ kind: 'audio', id, groupId });
+      next.push({ kind: 'instrument', pitch, groupId });
+      // Pitches that share this audio track (siblings via the manifest's
+      // many-keys-one-file mapping) ride here with the same `groupId`.
+      const sharing = pitchesByAudioId.get(id) ?? [];
+      for (const sibling of sharing) {
+        if (sibling === pitch) continue;
+        next.push({ kind: 'instrument', pitch: sibling, groupId });
+      }
+    } else {
+      next.push({ kind: 'instrument', pitch });
+    }
+  }
+
+  return next;
+}
+
+/**
  * Lookup surface the audio-track colour computation needs to walk
  * grouped instrument tracks. Implemented by the UI store
  * (`JotViewStore`) and handed to the player at startup so freshly-
