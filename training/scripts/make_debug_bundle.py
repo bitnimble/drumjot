@@ -81,6 +81,9 @@ def main():
     ap.add_argument("--out", required=True, help="output bundle .zip")
     ap.add_argument("--max-seconds", type=float, default=None)
     ap.add_argument("--window-seconds", type=float, default=30.0)
+    ap.add_argument("--full-drum", action="store_true",
+                    help="run once on the whole BS-Roformer drum stem (all lanes, one waveform) "
+                    "instead of the MDX23C per-instrument split")
     args = ap.parse_args()
 
     import torch
@@ -101,25 +104,41 @@ def main():
     encoder = embeddings.MertEncoder(name=meta["encoder"], layer=meta["encoder_layer"])  # share across stems
 
     cache = Path(args.stems_cache)
-    # stem pitch -> its cached flac; only those present
-    stem_files = {p: cache / f"{name}.{p}.flac" for p in STEM_TO_LANES}
-    stem_files = {p: f for p, f in stem_files.items() if f.exists()}
-    if not stem_files:
-        sys.exit(f"no cached stems for {name} in {cache} (run eval_paradb.py --stems-cache first)")
-
-    # run the model on each isolated stem; keep only matching lanes -> DSL pitches
     onsets_by_pitch: dict[str, list[float]] = {}
-    pitch_to_stem: dict[str, str] = {}  # DSL pitch -> stem pitch (for the audio mapping)
-    for spitch, flac in stem_files.items():
+    pitch_to_stem: dict[str, str] = {}  # DSL pitch -> stem key (for the audio mapping)
+    if args.full_drum:
+        # one model pass over the whole BS-Roformer drum stem; keep ALL lanes
+        # (no per-instrument isolation). The single drum waveform carries every
+        # note row.
+        drum_flac = cache / f"{name}.drum.flac"
+        if not drum_flac.exists():
+            sys.exit(f"no cached drum stem for {name} in {cache} (run eval_paradb.py --stems-cache first)")
+        stem_files = {"drum": drum_flac}
         est = inference.transcribe(
-            flac, model, meta, encoder, max_seconds=args.max_seconds, window_seconds=args.window_seconds,
+            drum_flac, model, meta, encoder, max_seconds=args.max_seconds, window_seconds=args.window_seconds,
         )
-        for lane in STEM_TO_LANES[spitch]:
+        for lane, ts in est.items():
             dsl = LANE_TO_PITCH[lane]
-            ts = est.get(lane, [])
             if ts:
                 onsets_by_pitch.setdefault(dsl, []).extend(ts)
-            pitch_to_stem[dsl] = spitch  # bind the lane's pitch to this stem's audio
+            pitch_to_stem[dsl] = "drum"
+    else:
+        # stem pitch -> its cached flac; run the model on each isolated stem,
+        # keeping only that stem's matching lanes.
+        stem_files = {p: cache / f"{name}.{p}.flac" for p in STEM_TO_LANES}
+        stem_files = {p: f for p, f in stem_files.items() if f.exists()}
+        if not stem_files:
+            sys.exit(f"no cached stems for {name} in {cache} (run eval_paradb.py --stems-cache first)")
+        for spitch, flac in stem_files.items():
+            est = inference.transcribe(
+                flac, model, meta, encoder, max_seconds=args.max_seconds, window_seconds=args.window_seconds,
+            )
+            for lane in STEM_TO_LANES[spitch]:
+                dsl = LANE_TO_PITCH[lane]
+                ts = est.get(lane, [])
+                if ts:
+                    onsets_by_pitch.setdefault(dsl, []).extend(ts)
+                pitch_to_stem[dsl] = spitch  # bind the lane's pitch to this stem's audio
     for ts in onsets_by_pitch.values():
         ts.sort()
 

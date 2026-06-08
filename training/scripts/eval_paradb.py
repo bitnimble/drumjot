@@ -198,6 +198,9 @@ def main():
                     "(biased high: when unsure we sum the drum track, which re-separation cleans up anyway)")
     ap.add_argument("--no-offset-correct", dest="offset_correct", action="store_false",
                     help="score against the raw chart times instead of shifting GT by the detected best offset")
+    ap.add_argument("--full-drum", action="store_true",
+                    help="run the model once on the whole BS-Roformer drum stem (all lanes) instead of the "
+                    "MDX23C per-instrument split; no cross-instrument isolation/leakage")
     args = ap.parse_args()
 
     import gc
@@ -244,31 +247,35 @@ def main():
             # only score sparse aux-perc lanes if the kit actually charts them
             aux_keep = {ln for ln in ("mp", "mc") if rlrr.has_lane_track(chart, ln)}
             drum_cached = stems_cache / f"{zp.stem}.drum.flac"
-            piece_cached = {p: stems_cache / f"{zp.stem}.{p}.flac" for p in STEM_TO_LANES}
-            if all(pp.exists() for pp in piece_cached.values()):
-                print("  using cached per-instrument stems", flush=True)
-                pieces = dict(piece_cached)
-            else:
-                if not drum_cached.exists():
-                    mix_wav = root / "_mix.wav"
-                    ok, case = build_mix(
-                        root, rlrr.song_tracks(chart), rlrr.drum_tracks(chart),
-                        SEP_SR, mix_wav, args.max_seconds, args.drum_corr_threshold,
-                    )
-                    if not ok:
-                        print("  no resolvable audio; skipping", flush=True)
-                        continue
-                    print(f"  mix: {case}", flush=True)
-                    drum_cached.write_bytes(Path(sep.run_stems_all(mix_wav, root).drum_stem).read_bytes())
-                else:
-                    print("  cached drum stem; running per-instrument split", flush=True)
-                per = sep.run_stems_per(drum_cached, root).per_instrument  # {pitch: path}
+            # the BS-Roformer drum stem is needed in both modes (full-drum scores
+            # it directly; the split mode also uses it for the alignment envelope)
+            if not drum_cached.exists():
+                mix_wav = root / "_mix.wav"
+                ok, case = build_mix(
+                    root, rlrr.song_tracks(chart), rlrr.drum_tracks(chart),
+                    SEP_SR, mix_wav, args.max_seconds, args.drum_corr_threshold,
+                )
+                if not ok:
+                    print("  no resolvable audio; skipping", flush=True)
+                    continue
+                print(f"  mix: {case}", flush=True)
+                drum_cached.write_bytes(Path(sep.run_stems_all(mix_wav, root).drum_stem).read_bytes())
+            if args.full_drum:
+                print("  full drum stem (no per-instrument split)", flush=True)
                 pieces = {}
-                for p, path in per.items():
-                    if p in STEM_TO_LANES:
-                        piece_cached[p].write_bytes(Path(path).read_bytes())
-                        pieces[p] = piece_cached[p]
-                print(f"  per-instrument stems: {sorted(pieces)}", flush=True)
+            else:
+                piece_cached = {p: stems_cache / f"{zp.stem}.{p}.flac" for p in STEM_TO_LANES}
+                if all(pp.exists() for pp in piece_cached.values()):
+                    print("  using cached per-instrument stems", flush=True)
+                    pieces = dict(piece_cached)
+                else:
+                    per = sep.run_stems_per(drum_cached, root).per_instrument  # {pitch: path}
+                    pieces = {}
+                    for p, path in per.items():
+                        if p in STEM_TO_LANES:
+                            piece_cached[p].write_bytes(Path(path).read_bytes())
+                            pieces[p] = piece_cached[p]
+                    print(f"  per-instrument stems: {sorted(pieces)}", flush=True)
             maps.append((zp, gt, drum_cached, pieces, aux_keep))
 
     # free the separator's GPU memory before loading MERT (no coexistence)
@@ -315,26 +322,42 @@ def main():
         # cymbals-only stem, hats on the hi-hat stem, etc.
         est: dict[str, list[float]] = {lane: [] for lane in meta["lanes"]}
         est_filt: dict[str, list[float]] = {lane: [] for lane in meta["lanes"]}
-        for pitch, stem_path in pieces.items():
-            matching = STEM_TO_LANES.get(pitch, ())
+        if args.full_drum:
+            # one model pass over the whole drum stem; keep ALL lanes (no
+            # per-instrument isolation, so no cross-instrument leakage). Filter
+            # against the same drum-stem envelope used for alignment.
             raw = inference.transcribe(
-                stem_path, model, meta, encoder,
+                drum_stem, model, meta, encoder,
                 max_seconds=args.max_seconds, window_seconds=args.window_seconds,
             )
-            senv, sfps = forced_align.onset_envelope(stem_path, max_seconds=args.max_seconds)
-            sfloor = postfilter.support_floor_from_env(senv, args.support_percentile)
             for lane, ts in raw.items():
                 if not ts:
                     continue
-                if lane in matching:
-                    est[lane].extend(ts)
-                    est_filt[lane].extend(
-                        postfilter.filter_lane(np.asarray(ts, dtype=float), senv, sfps, args.align_window, sfloor)
-                    )
-                    leak[pitch]["matched"] += len(ts)
-                else:  # cross-instrument hallucination: discard + count
-                    leak[pitch]["leaked"] += len(ts)
-                    leak[pitch]["to"][lane] += len(ts)
+                est[lane].extend(ts)
+                est_filt[lane].extend(
+                    postfilter.filter_lane(np.asarray(ts, dtype=float), env, env_fps, args.align_window, floor)
+                )
+        else:
+            for pitch, stem_path in pieces.items():
+                matching = STEM_TO_LANES.get(pitch, ())
+                raw = inference.transcribe(
+                    stem_path, model, meta, encoder,
+                    max_seconds=args.max_seconds, window_seconds=args.window_seconds,
+                )
+                senv, sfps = forced_align.onset_envelope(stem_path, max_seconds=args.max_seconds)
+                sfloor = postfilter.support_floor_from_env(senv, args.support_percentile)
+                for lane, ts in raw.items():
+                    if not ts:
+                        continue
+                    if lane in matching:
+                        est[lane].extend(ts)
+                        est_filt[lane].extend(
+                            postfilter.filter_lane(np.asarray(ts, dtype=float), senv, sfps, args.align_window, sfloor)
+                        )
+                        leak[pitch]["matched"] += len(ts)
+                    else:  # cross-instrument hallucination: discard + count
+                        leak[pitch]["leaked"] += len(ts)
+                        leak[pitch]["to"][lane] += len(ts)
         for d in (est, est_filt):
             for ts in d.values():
                 ts.sort()
