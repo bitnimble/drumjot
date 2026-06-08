@@ -1,0 +1,6 @@
+# Local dataset paths (owner fills in) and feature caches.
+data_paths.toml
+_cache_mert/
+*.npy
+__pycache__/
+.pytest_cache/

@@ -96,8 +96,11 @@ drumjot/
 ├── .mcp.json                       Project-scoped @playwright/mcp server.
 ├── docs/                           This folder (detailed docs).
 ├── research/                       Research notes (HIHAT, MODELS, alignment, lyrics).
-└── transcriber/                    Python backend (FastAPI + Docker). See
-                                    transcriber-pipeline.md for the full pipeline tree.
+├── transcriber/                    Python backend (FastAPI + Docker). See
+│                                   transcriber-pipeline.md for the full pipeline tree.
+└── training/                       Learned drum-onset model (frozen MERT encoder +
+                                    per-lane heads). Pure Python, offline, not in the
+                                    transcriber runtime. See training/README.md.
 ```
 
 ## Architectural decisions

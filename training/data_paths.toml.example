@@ -1,0 +1,8 @@
+# Copy to `training/data_paths.toml` (git-ignored) and fill in, or set the
+# matching env var (e.g. DRUMJOT_EGMD=...). Keys are dataset names; values
+# are absolute paths to where the dataset lives (e.g. under /codebox-workspace).
+#
+# egmd should point at the extracted E-GMD root (the dir containing
+# e-gmd-v1.0.0.csv). Use training/scripts/fetch_egmd.sh to download it.
+
+egmd = "/codebox-workspace/datasets/e-gmd-v1.0.0"

@@ -1,0 +1,69 @@
+"""Save / load a trained run: model weights + everything inference needs.
+
+A run produces two files in `out_dir`:
+  - `model.pt`   the `MultiLaneHeads` state_dict
+  - `meta.json`  the lane vocab, encoder name/layer/fps, head shape, and the
+                 tuned per-lane peak thresholds
+
+`meta.json` is the handoff contract for inference and for the eventual
+transcriber integration: it pins which encoder + layer produced the features
+and how to peak-pick each lane. `run_metadata` is pure (host-testable);
+`save`/`load` lazily import torch.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from drumjot_training.config import Config
+from drumjot_training.embeddings import MERT_DIM
+
+
+def run_metadata(cfg: Config, thresholds: dict[str, float], in_dim: int = MERT_DIM) -> dict:
+    """JSON-serializable description of a trained model (the bits not in the
+    weights). Thresholds are coerced to plain floats."""
+    return {
+        "lanes": list(cfg.lanes),
+        "encoder": cfg.encoder,
+        "encoder_layer": cfg.encoder_layer,
+        "encoder_fps": cfg.encoder_fps,
+        "sigma_frames": cfg.sigma_frames,
+        "peak_threshold": cfg.peak_threshold,
+        "peak_min_distance_s": cfg.peak_min_distance_s,
+        "onset_tolerance_s": cfg.onset_tolerance_s,
+        "head_hidden": cfg.head_hidden,
+        "head_layers": cfg.head_layers,
+        "in_dim": in_dim,
+        "thresholds": {k: float(v) for k, v in thresholds.items()},
+    }
+
+
+def save(out_dir: str | Path, model, cfg: Config, thresholds: dict[str, float],
+         in_dim: int = MERT_DIM) -> Path:
+    """Write `model.pt` + `meta.json` into `out_dir`; return the dir."""
+    import torch
+
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    torch.save(model.state_dict(), out / "model.pt")
+    (out / "meta.json").write_text(json.dumps(run_metadata(cfg, thresholds, in_dim), indent=2))
+    return out
+
+
+def load(out_dir: str | Path, device: str = "cpu"):
+    """Rebuild `MultiLaneHeads` from a saved run; returns `(model, meta)`."""
+    import torch
+
+    from drumjot_training.model import MultiLaneHeads
+
+    out = Path(out_dir)
+    meta = json.loads((out / "meta.json").read_text())
+    model = MultiLaneHeads(
+        in_dim=meta["in_dim"],
+        hidden=meta["head_hidden"],
+        num_layers=meta["head_layers"],
+        lane_names=tuple(meta["lanes"]),
+    )
+    model.load_state_dict(torch.load(out / "model.pt", map_location=device))
+    model.eval()
+    return model, meta

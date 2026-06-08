@@ -360,6 +360,19 @@ keeps the flexible tiers out of local minima):
    Rasterize the impulse trains to a grid of **≤ 10 ms** bins so the
    argmax reliably lands inside ±B; the search is cheap (a few thousand
    lags over ±2 bars).
+
+   > **Empirical note (from `training/scripts/eval_paradb.py`, drum-dense
+   > onsets).** On dense drum material the cross-correlation/overlap landscape
+   > is near-saturated, so its **argmax is a noisy offset estimator**, it
+   > overshot the true offset by tens of ms (e.g. argmax +40 ms where the real
+   > shift was +7 ms), chasing a handful of straggler onsets onto transients
+   > while dragging the already-aligned bulk off. The robust alternative that
+   > worked there is the **median signed distance from each onset to its
+   > nearest audio peak** within ±B (a true central-tendency, not an
+   > overlap-max). Worth preferring (or sanity-checking against) for Tier-0
+   > when the onset density is high. Caveat: the onset-strength envelope peaks
+   > slightly *after* the true transient, so the median carries a few-ms flux
+   > lag, fine for a coarse global offset, but it's a *late* reference.
 1. **Offset + affine tempo**; `t' = a·t + b`. With the current DTW
    correspondence, robust (Huber) least-squares fit on matched pairs.
    Recovers "MIDI authored at slightly wrong BPM, walks out of sync."

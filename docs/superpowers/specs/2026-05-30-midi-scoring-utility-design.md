@@ -224,7 +224,10 @@ tier against the frozen DP match):
 - **Tier 0, offset.** Cross-correlate summed per-lane onset impulse
   trains (chart vs audio), rasterized to ≤10 ms bins, over a ±2-bar bound;
   argmax lag = `b`. Threshold-free; pulls the chart inside the ±B band so
-  the soft score becomes a usable objective.
+  the soft score becomes a usable objective. **NB** for drum-dense onsets
+  the cross-correlation argmax is noisy and overshoots (see the empirical
+  note in research §8.0); prefer / cross-check against the **median
+  nearest-peak offset** there, as implemented in `training/scripts/eval_paradb.py`.
 - **Tier 1, affine tempo.** With the post-offset DP correspondence, a
   robust (Huber) least-squares fit `t' = a·t + b` on matched pairs.
   **Require ≥3 matched pairs and bound `a ∈ [0.5, 2.0]`**; otherwise

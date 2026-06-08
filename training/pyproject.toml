@@ -1,0 +1,66 @@
+# Drumjot drum-onset training subproject.
+#
+# For the in-repo dev loop the deps come from the transcriber's uv venv
+# (torch / transformers / librosa / mir_eval / mido are already there), so
+# `scripts/test-py ../training/tests` needs nothing here but the pytest +
+# ruff config below. The [project] dependencies exist for the standalone
+# **Docker image** (training/Dockerfile), which installs this package on
+# its own, a LEAN subset of the transcriber stack (no audio-separator /
+# madmom / adtof / ctc-forced-aligner / anthropic): the trainer only needs
+# a frozen MERT encoder + a small torch head.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drumjot-training"
+version = "0.1.0"
+description = "Frozen-MERT drum-onset model training for Drumjot."
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.8,<2.12",
+    "torchaudio>=2.8,<2.12",
+    "transformers>=4.40,<5",
+    "librosa>=0.10.2",
+    "soundfile>=0.12",
+    "scipy>=1.11",
+    "numpy>=1.26",
+    "mir_eval>=0.7",
+    "mido>=1.3",
+]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.6", "pytest>=8"]
+
+# torch/torchaudio from the cu128 wheel index (CUDA 12.8), matching the
+# transcriber/sandbox so the RTX 3080 (Ampere) gets GPU wheels.
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchaudio = { index = "pytorch-cu128" }
+
+[tool.setuptools.packages.find]
+include = ["drumjot_training*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM"]
+ignore = ["E501", "B008", "SIM117"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E", "F841"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["drumjot_training"]

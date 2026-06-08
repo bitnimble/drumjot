@@ -218,6 +218,22 @@ _VOCALS_DEFAULT_URL = (
     "all_public_uvr_models/UVR-MDX-NET-Voc_FT.onnx"
 )
 
+# LarsNet (opt-in Stage-2 separator). The upstream repo ships its weights
+# only on Google Drive (fragile for automated startup provisioning); we
+# pull from the `JosefKuchar/LarsNet` HF mirror instead, whose CDN
+# `resolve/` URLs stream cleanly and which correctly tags the weights
+# CC BY-NC 4.0. Layout under the mirror is `<stem>/pretrained_<stem>_unet.pth`,
+# mirrored locally under `<models_dir>/larsnet/` (see
+# `pipeline/larsnet.checkpoint_path`). LICENSING: these weights are
+# **CC BY-NC 4.0 (non-commercial)** - any deploy that ships them inherits
+# that constraint. Provisioning is gated on `settings.provision_larsnet`.
+_LARSNET_HF_BASE = "https://huggingface.co/JosefKuchar/LarsNet/resolve/main"
+_LARSNET_STEMS: tuple[str, ...] = ("kick", "snare", "toms", "hihat", "cymbals")
+# All five checkpoints are exactly this size on the mirror (verified
+# 2026-06). A cheap integrity pin against a truncated download or a
+# silently-swapped file on a third-party mirror.
+_LARSNET_CKPT_SIZE = 118037828
+
 
 def _provision_lyrics_assets(models_dir: Path) -> None:
     """Pre-fetch the vocals separator the /lyrics/align endpoint pulls
@@ -257,6 +273,41 @@ def _provision_lyrics_assets(models_dir: Path) -> None:
         )
 
 
+def _provision_larsnet(models_dir: Path) -> None:
+    """Fetch the five LarsNet U-Net checkpoints into `<models_dir>/larsnet/`.
+
+    Idempotent + size-pinned: a checkpoint already present at exactly
+    `_LARSNET_CKPT_SIZE` is left alone; a missing or wrong-sized file is
+    (re)downloaded. A post-download size mismatch raises (we refuse to
+    keep a corrupt / swapped checkpoint), but the *caller* treats LarsNet
+    provisioning as best-effort so a mirror blip can't break startup for
+    the default MDX23C path - selecting LarsNet then fails loud at use
+    time via `larsnet.load_models`.
+    """
+    base = models_dir / "larsnet"
+    for stem in _LARSNET_STEMS:
+        dest = base / stem / f"pretrained_{stem}_unet.pth"
+        if dest.exists() and dest.stat().st_size == _LARSNET_CKPT_SIZE:
+            log.info("provision: larsnet %s already present, skipping", stem)
+            continue
+        if dest.exists():
+            log.warning(
+                "provision: larsnet %s wrong size (%d != %d); refetching",
+                stem, dest.stat().st_size, _LARSNET_CKPT_SIZE,
+            )
+            dest.unlink()
+        _download(f"{_LARSNET_HF_BASE}/{stem}/pretrained_{stem}_unet.pth", dest)
+        size = dest.stat().st_size
+        if size != _LARSNET_CKPT_SIZE:
+            dest.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"larsnet {stem}: downloaded {size} bytes, expected "
+                f"{_LARSNET_CKPT_SIZE} (mirror changed?). Refusing a "
+                "checkpoint that fails the integrity pin."
+            )
+    log.info("provision: LarsNet checkpoints ready in %s", base)
+
+
 def provision_custom_models() -> None:
     """Make the BS-Roformer SW + jarredou DrumSep models loadable, and
     pre-stage the /lyrics/align assets so the first lyrics request
@@ -276,5 +327,20 @@ def provision_custom_models() -> None:
         _download(m.yaml_url, models_dir / m.yaml_local)
 
     _provision_lyrics_assets(models_dir)
+
+    # Opt-in LarsNet Stage-2 separator. Best-effort: a failure here must
+    # not break startup for the default MDX23C path (LarsNet is selected
+    # per-request), so log and continue - `larsnet.load_models` fails loud
+    # if the option is later used without the weights.
+    if settings.provision_larsnet:
+        try:
+            _provision_larsnet(models_dir)
+        except Exception as exc:
+            log.warning(
+                "provision: LarsNet provisioning failed (%s); the "
+                "drum_separator='larsnet' option will fail-loud until its "
+                "weights are present in %s/larsnet/.",
+                exc, models_dir,
+            )
 
     log.info("provision: custom separation models ready in %s", models_dir)

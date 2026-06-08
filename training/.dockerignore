@@ -1,0 +1,11 @@
+# Keep the build context lean; only pyproject + the package are COPY'd.
+tests/
+scripts/
+data_paths.toml
+data_paths.toml.example
+_cache_mert/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+*.npy
+README.md

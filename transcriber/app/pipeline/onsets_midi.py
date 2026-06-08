@@ -93,6 +93,15 @@ PITCH_TO_MIDI: dict[str, int] = {
     "f": 41,  # Low floor tom
     "p": 39,  # Hand clap
     "b": 56,  # Cowbell
+    # Pitches emitted by the learned onset model (training/, via
+    # inference.LANE_TO_PITCH) so every trained class keeps a distinct GM note
+    # instead of merging down. ss=side stick, hp=pedal hi-hat, mc=misc cymbals
+    # (splash/china/ride-bell -> splash), mp=misc percussion (cowbell/clap/
+    # tambourine -> cowbell).
+    "ss": 37,  # Side stick
+    "hp": 44,  # Pedal hi-hat
+    "mc": 55,  # Splash (misc cymbals)
+    "mp": 56,  # Cowbell (misc percussion)
 }
 
 # Velocity mapping anchors. p10 of strength -> VEL_FLOOR, p90 -> VEL_CEIL.

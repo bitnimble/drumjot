@@ -1,4 +1,4 @@
-"""Tests for the /lyrics/align vocals-cache key helpers.
+"""Tests for the /lyrics/align disk-cache key helpers (vocals + result).
 
 The helpers live in `app.main` as module-level private functions.
 Importing them is cheap because the lyrics_align module lazy-loads
@@ -12,6 +12,14 @@ import pytest
 
 import app.main as main
 from app.config import settings
+from app.pipeline.lyrics_align import InputLine
+
+
+def _lines() -> list[InputLine]:
+    return [
+        InputLine(start_sec=0.0, text="hello"),
+        InputLine(start_sec=1.5, text="world"),
+    ]
 
 
 def test_sanitize_id_replaces_unsafe_chars() -> None:
@@ -42,14 +50,92 @@ def test_vocals_cache_key_changes_with_separator_model(monkeypatch) -> None:
     assert a != b
 
 
+def test_alignment_cache_key_format() -> None:
+    """Key is `<audio_hash>__align-<version>-<lyrics_hash>.json`."""
+    h = "a" * 64
+    key = main._alignment_cache_key(_lines(), "en", h)
+    assert key.startswith(f"{h}__align-")
+    assert key.endswith(".json")
+
+
+def test_alignment_cache_key_stable_for_identical_input() -> None:
+    h = "a" * 64
+    assert main._alignment_cache_key(_lines(), "en", h) == main._alignment_cache_key(
+        _lines(), "en", h
+    )
+
+
+def test_alignment_cache_key_changes_with_lyrics_text() -> None:
+    h = "a" * 64
+    edited = [
+        InputLine(start_sec=0.0, text="HELLO"),
+        InputLine(start_sec=1.5, text="world"),
+    ]
+    assert main._alignment_cache_key(_lines(), "en", h) != main._alignment_cache_key(
+        edited, "en", h
+    )
+
+
+def test_alignment_cache_key_changes_with_start_time() -> None:
+    h = "a" * 64
+    nudged = [
+        InputLine(start_sec=0.0, text="hello"),
+        InputLine(start_sec=1.6, text="world"),
+    ]
+    assert main._alignment_cache_key(_lines(), "en", h) != main._alignment_cache_key(
+        nudged, "en", h
+    )
+
+
+def test_alignment_cache_key_changes_with_language() -> None:
+    h = "a" * 64
+    assert main._alignment_cache_key(_lines(), "en", h) != main._alignment_cache_key(
+        _lines(), "ja", h
+    )
+
+
+def test_alignment_cache_key_treats_none_and_empty_language_alike() -> None:
+    """`language or ""` folds the no-hint cases together so an empty form
+    field and an omitted one hit the same entry."""
+    h = "a" * 64
+    assert main._alignment_cache_key(_lines(), None, h) == main._alignment_cache_key(
+        _lines(), "", h
+    )
+
+
+def test_alignment_cache_key_changes_with_audio_hash() -> None:
+    assert main._alignment_cache_key(
+        _lines(), "en", "a" * 64
+    ) != main._alignment_cache_key(_lines(), "en", "b" * 64)
+
+
+def test_alignment_cache_key_changes_with_version(monkeypatch) -> None:
+    """An aligner-version bump auto-invalidates every cached result."""
+    h = "a" * 64
+    before = main._alignment_cache_key(_lines(), "en", h)
+    monkeypatch.setattr(main, "_ALIGN_CACHE_VERSION", "totally-different-v9")
+    assert before != main._alignment_cache_key(_lines(), "en", h)
+
+
+def test_alignment_cache_key_rounds_start_to_ms() -> None:
+    """Sub-millisecond jitter on a start time collapses to one key, so a
+    JSON round-trip's float noise doesn't fragment the cache."""
+    h = "a" * 64
+    a = main._alignment_cache_key([InputLine(start_sec=1.0, text="x")], "en", h)
+    b = main._alignment_cache_key([InputLine(start_sec=1.00004, text="x")], "en", h)
+    assert a == b
+
+
 @pytest.fixture
 def isolated_cache(tmp_path: Path, monkeypatch):
-    """Re-point the vocals-cache singleton at a per-test tmp dir so
-    writes don't leak across tests or into the dev box's real /cache."""
+    """Re-point the vocals + alignment cache singletons at a per-test tmp
+    dir so writes don't leak across tests or into the dev box's real
+    /cache."""
     monkeypatch.setattr(settings, "cache_dir", tmp_path)
     monkeypatch.setattr(main, "_vocals_cache", None)
+    monkeypatch.setattr(main, "_alignment_cache", None)
     yield tmp_path
-    # Singleton gets reset on the next test via the monkeypatch teardown.
+    # Singletons get reset on the next test via the monkeypatch teardown.
 
 
 def test_isolated_cache_singleton_uses_fresh_dir(isolated_cache) -> None:
@@ -59,3 +145,17 @@ def test_isolated_cache_singleton_uses_fresh_dir(isolated_cache) -> None:
     the dev box's real /cache)."""
     vc = main._vocals_cache_instance()
     assert isolated_cache in vc.dir.parents
+
+
+def test_alignment_cache_round_trip(isolated_cache) -> None:
+    """A miss returns None; after `put_bytes`, the same key returns the
+    stored payload byte-for-byte."""
+    cache = main._alignment_cache_instance()
+    assert isolated_cache in cache.dir.parents
+    key = main._alignment_cache_key(_lines(), "en", "f" * 64)
+    payload = b'[{"startSec":0.0,"text":"hello","words":[]}]'
+    assert cache.get(key) is None
+    cache.put_bytes(key, payload)
+    got = cache.get(key)
+    assert got is not None
+    assert got.read_bytes() == payload

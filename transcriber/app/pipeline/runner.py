@@ -130,6 +130,12 @@ class PipelineCancelled(Exception):
 
 
 BeatInput = Literal["full_mix", "drum_stem"]
+# Which Stage-2 (drum-stem -> per-instrument) separator to use.
+#   `mdx23c`  = jarredou 5-stem MDX23C DrumSep (default; cleaner, slower).
+#   `larsnet` = LarsNet five-U-Net separator (opt-in; ~20-40x faster,
+#               bleedier, CC-BY-NC weights). Same five output lanes, so the
+#               choice is invisible to every downstream stage.
+DrumSeparator = Literal["mdx23c", "larsnet"]
 
 
 # Progress event payload published by the pipeline as stages start/end
@@ -166,6 +172,10 @@ def _safe_progress(progress: ProgressCallback | None, event: ProgressEvent) -> N
 @dataclass
 class PipelineOptions:
     beat_input: BeatInput = "full_mix"
+    # Stage-2 separator selection. `mdx23c` (default) = jarredou MDX23C
+    # DrumSep; `larsnet` = the opt-in LarsNet five-U-Net separator. Both
+    # emit the same k/s/t/h/c lanes so only `_do_stems_per` branches on it.
+    drum_separator: DrumSeparator = "mdx23c"
     # Whether to run the optional `quantise` stage. Enabled by default;
     # set False to skip both the geometric snap and the LLM residual pass,
     # leaving `kept_by_pitch` as the filter stage produced it (raw seconds;
@@ -184,8 +194,15 @@ class PipelineOptions:
     # default constructor — keep working. The HTTP layer always populates
     # this from its `llm_model` form param (which itself defaults to
     # `settings.llm_model`). The `quantise` stage is deliberately NOT
-    # controlled here — it pins Haiku 4.5 in `pipeline/quantise.py`.
+    # controlled here, it pins Haiku 4.5 in `pipeline/quantise.py`.
     llm_model: str = ""
+    # Experimental: replace the ADTOF onset detector with the trained
+    # frozen-MERT model (training/, `learned_onsets.py`). It runs once on the
+    # drum stem and emits ALL trained classes as distinct pitches (no merge to
+    # 5), so the hihat/cymbal splitters and the filter LLM are skipped for it.
+    # `learned_onsets_checkpoint` is a run dir (model.pt + meta.json).
+    use_learned_onsets: bool = False
+    learned_onsets_checkpoint: str = ""
 
 
 @dataclass
@@ -329,7 +346,7 @@ def _run_stage(
     if stage is Stage.STEMS_ALL:
         _do_stems_all(ctx, separator, output_sink)
     elif stage is Stage.STEMS_PER:
-        _do_stems_per(ctx, separator, output_sink)
+        _do_stems_per(ctx, separator, options, output_sink)
     elif stage is Stage.BEATS:
         _do_beats(ctx, options, sink)
     elif stage is Stage.ONSETS:
@@ -362,14 +379,20 @@ def _do_stems_all(
 
 
 def _do_stems_per(
-    ctx: PipelineContext, separator: Separator, output_sink: OutputSink | None,
+    ctx: PipelineContext,
+    separator: Separator,
+    options: PipelineOptions,
+    output_sink: OutputSink | None,
 ) -> None:
     if ctx.drum_stem is None or not ctx.drum_stem.exists():
         raise RuntimeError(
             "stems_per: drum stem missing (expected stems_all/drum_stem.<ext> "
             "from a previous run, or resume_stage<=stems_all to regenerate)."
         )
-    result = separator.run_stems_per(ctx.drum_stem, ctx.work_dir)
+    if options.drum_separator == "larsnet":
+        result = separator.run_stems_per_larsnet(ctx.drum_stem, ctx.work_dir)
+    else:
+        result = separator.run_stems_per(ctx.drum_stem, ctx.work_dir)
     ctx.per_instrument_stems = result.per_instrument
     ctx.residual_stem = result.residual
     # Export the per-instrument stems as soon as splitting is done — they
@@ -445,6 +468,31 @@ def _do_beats(
         sink.write_json("beats.json", beats_dump(ctx.structure))
 
 
+def _learned_onsets(
+    ctx: PipelineContext, options: PipelineOptions,
+) -> dict[str, list[OnsetCandidate]]:
+    """Trained frozen-MERT onset model (training/, `learned_onsets.py`), run
+    once on the drum stem. Emits every trained class as its own pitch (no merge
+    to 5); the ADTOF hihat/cymbal splitters are skipped because the model
+    already separates them. NOTE: encodes the whole stem in one MERT pass, long
+    songs may need windowing (follow-up)."""
+    if not options.learned_onsets_checkpoint:
+        raise RuntimeError(
+            "onsets: use_learned_onsets is set but learned_onsets_checkpoint is empty"
+        )
+    assert ctx.structure is not None  # caller (_do_onsets) guards this
+    from pathlib import Path
+
+    from app.pipeline.learned_onsets import detect_all_pitches_learned
+
+    source = ctx.drum_stem or next(iter(ctx.per_instrument_stems.values()))
+    learned = detect_all_pitches_learned(Path(source), Path(options.learned_onsets_checkpoint))
+    return {
+        pitch: _attach_beat_positions(cands, ctx.structure)
+        for pitch, cands in learned.items()
+    }
+
+
 def _do_onsets(
     ctx: PipelineContext, options: PipelineOptions, sink: DebugSink | None,
 ) -> None:
@@ -462,16 +510,19 @@ def _do_onsets(
     # in-distribution drum stem; pass it through. None on a resume that
     # didn't cache it — `detect_onsets_adtof` falls back to the isolated
     # stem when the drum stem is absent.
-    raw_onsets = {
-        pitch: detect_onsets_adtof(
-            path, pitch, drum_stem_path=ctx.drum_stem
-        )
-        for pitch, path in ctx.per_instrument_stems.items()
-    }
-    ctx.onsets_by_pitch = {
-        pitch: _attach_beat_positions(cands, ctx.structure)
-        for pitch, cands in raw_onsets.items()
-    }
+    if options.use_learned_onsets:
+        ctx.onsets_by_pitch = _learned_onsets(ctx, options)
+    else:
+        raw_onsets = {
+            pitch: detect_onsets_adtof(
+                path, pitch, drum_stem_path=ctx.drum_stem
+            )
+            for pitch, path in ctx.per_instrument_stems.items()
+        }
+        ctx.onsets_by_pitch = {
+            pitch: _attach_beat_positions(cands, ctx.structure)
+            for pitch, cands in raw_onsets.items()
+        }
     # The Stage-2 separator merges ride + crash into one `cymbals` stem
     # (pitch `c`); split that lane into ride (`d`) / crash (`c`) AND a
     # discard set (sizzle re-triggers in long crash tails, bleed,
@@ -479,10 +530,13 @@ def _do_onsets(
     # upstream of the filter LLM. No-op when there is no cymbals stem /
     # onsets. The filter LLM is skipped for `c` / `d` in `_do_transcribe`
     # below for the same reason as the hi-hat lanes.
-    ctx.onsets_by_pitch, ctx.cymbal_discarded = split_cymbal_onsets(
-        ctx.onsets_by_pitch, ctx.per_instrument_stems, ctx.structure,
-        llm_model=options.llm_model,
-    )
+    # The learned model already separates ride/crash/misc and the hat
+    # articulations, so the ADTOF-only cymbal/hihat splitters are skipped for it.
+    if not options.use_learned_onsets:
+        ctx.onsets_by_pitch, ctx.cymbal_discarded = split_cymbal_onsets(
+            ctx.onsets_by_pitch, ctx.per_instrument_stems, ctx.structure,
+            llm_model=options.llm_model,
+        )
     # The hi-hat stem mixes closed and open hi-hat hits; classify each
     # onset and split into closed (`h`) and synthetic open (`H`) lanes
     # AND a discard set (sizzle re-triggers, bleed, double-triggers)
@@ -491,10 +545,11 @@ def _do_onsets(
     # docs for the `H` synthetic-pitch caveat (folded back into `h:o` is
     # a TODO) and for why the filter LLM is skipped for `h` / `H` in
     # `_do_transcribe` below.
-    ctx.onsets_by_pitch, ctx.hihat_discarded = split_hihat_onsets(
-        ctx.onsets_by_pitch, ctx.per_instrument_stems, ctx.structure,
-        llm_model=options.llm_model,
-    )
+    if not options.use_learned_onsets:
+        ctx.onsets_by_pitch, ctx.hihat_discarded = split_hihat_onsets(
+            ctx.onsets_by_pitch, ctx.per_instrument_stems, ctx.structure,
+            llm_model=options.llm_model,
+        )
     flat_times = [c.time for cs in ctx.onsets_by_pitch.values() for c in cs]
     detect_feel_for_bars(ctx.structure, flat_times)
     # Fallback duration probe (when the soundfile probe in run_pipeline
@@ -608,26 +663,37 @@ def _do_filter(
     # the per-instrument filter LLM here would duplicate work and risk
     # double-rejecting soft real hits, so we skip those pitches in the
     # pool and re-attach the pre-vetted lanes verbatim afterwards.
-    kept_by_pitch, reasons_by_pitch = filter_onsets_all_instruments(
-        ctx.onsets_by_pitch,
-        ctx.structure,
-        on_complete=on_instrument_done,
-        cancel_event=ctx.cancel_event,
-        skip_pitches={"h", "H", "c", "d"},
-        llm_model=options.llm_model,
-    )
-    if ctx.cancel_event.is_set():
-        # The pool exited early because the client disconnected. Surface
-        # this so the runner stops at the next stage boundary check (the
-        # filter pass may have partial results but persisting and
-        # advancing into `transcribe` would be wasted work).
-        raise PipelineCancelled(Stage.FILTER)
-    for p in ("h", "H", "c", "d"):
-        vetted = ctx.onsets_by_pitch.get(p)
-        if vetted:
-            in_range = [c for c in vetted if c.bar >= 0]
-            if in_range:
-                kept_by_pitch[p] = in_range
+    if options.use_learned_onsets:
+        # The learned model is itself the per-class classifier (tuned per-lane
+        # thresholds), so skip the per-instrument filter LLM and keep its
+        # in-range onsets verbatim across every class.
+        kept_by_pitch = {
+            p: keep
+            for p, cs in ctx.onsets_by_pitch.items()
+            if (keep := [c for c in cs if c.bar >= 0])
+        }
+        reasons_by_pitch = {}
+    else:
+        kept_by_pitch, reasons_by_pitch = filter_onsets_all_instruments(
+            ctx.onsets_by_pitch,
+            ctx.structure,
+            on_complete=on_instrument_done,
+            cancel_event=ctx.cancel_event,
+            skip_pitches={"h", "H", "c", "d"},
+            llm_model=options.llm_model,
+        )
+        if ctx.cancel_event.is_set():
+            # The pool exited early because the client disconnected. Surface
+            # this so the runner stops at the next stage boundary check (the
+            # filter pass may have partial results but persisting and
+            # advancing into `transcribe` would be wasted work).
+            raise PipelineCancelled(Stage.FILTER)
+        for p in ("h", "H", "c", "d"):
+            vetted = ctx.onsets_by_pitch.get(p)
+            if vetted:
+                in_range = [c for c in vetted if c.bar >= 0]
+                if in_range:
+                    kept_by_pitch[p] = in_range
     # An empty kept_by_pitch is a legitimate outcome (a song with no
     # detected drums; e.g. an a cappella file uploaded by mistake); it
     # should produce an empty MIDI, not an HTTP 502 (which is reserved

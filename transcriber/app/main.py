@@ -63,6 +63,7 @@ from app.pipeline.resume import (
 )
 from app.pipeline.runner import (
     BeatInput,
+    DrumSeparator,
     PipelineCancelled,
     PipelineContext,
     PipelineOptions,
@@ -308,6 +309,7 @@ async def transcribe(
     file: UploadFile = File(...),
     include_candidates: bool = Form(default=False),
     beat_input: BeatInput = Form(default=settings.beat_input_default),
+    drum_separator: DrumSeparator = Form(default="mdx23c"),
     quantise: bool = Form(default=True),
     quantise_use_llm: bool = Form(default=True),
     llm_model: str = Form(default=""),
@@ -337,8 +339,9 @@ async def transcribe(
     request_id = new_request_id()
     set_request_id(request_id)
     log.info(
-        "Transcribe request: %s (%s bytes) beat_input=%s quantise=%s llm_model=%s debug=%s",
-        file.filename, file.size, beat_input, quantise,
+        "Transcribe request: %s (%s bytes) beat_input=%s drum_separator=%s "
+        "quantise=%s llm_model=%s debug=%s",
+        file.filename, file.size, beat_input, drum_separator, quantise,
         llm_model or settings.llm_model, debug,
     )
 
@@ -361,6 +364,7 @@ async def transcribe(
     run_log = RunLog()
     request_options = {
         "beat_input": beat_input,
+        "drum_separator": drum_separator,
         "include_candidates": include_candidates,
         "quantise": quantise,
         "quantise_use_llm": quantise_use_llm,
@@ -382,6 +386,7 @@ async def transcribe(
     ctx = PipelineContext(audio_path=in_path, work_dir=work_dir)
     options = PipelineOptions(
         beat_input=beat_input,
+        drum_separator=drum_separator,
         quantise=quantise,
         quantise_use_llm=quantise_use_llm,
         llm_model=llm_model or settings.llm_model,
@@ -489,6 +494,7 @@ async def transcribe_resume(
     resume_stage: Stage = Form(...),
     include_candidates: bool = Form(default=False),
     beat_input: BeatInput = Form(default=settings.beat_input_default),
+    drum_separator: DrumSeparator = Form(default="mdx23c"),
     quantise: bool = Form(default=True),
     quantise_use_llm: bool = Form(default=True),
     llm_model: str = Form(default=""),
@@ -519,8 +525,10 @@ async def transcribe_resume(
     resume_dir = _resolve_resume_dir(resume_folder)
     resolved_model = llm_model or settings.llm_model
     log.info(
-        "Resume request from %s (resume_stage=%s beat_input=%s quantise=%s llm_model=%s)",
-        resume_dir, resume_stage.value, beat_input, quantise, resolved_model,
+        "Resume request from %s (resume_stage=%s beat_input=%s drum_separator=%s "
+        "quantise=%s llm_model=%s)",
+        resume_dir, resume_stage.value, beat_input, drum_separator, quantise,
+        resolved_model,
     )
 
     audio_path = find_input_audio(resume_dir) or (resume_dir / "input")
@@ -528,6 +536,7 @@ async def transcribe_resume(
     output_sink = make_output_sink(resume_dir.name, settings.outputs_dir)
     options = PipelineOptions(
         beat_input=beat_input,
+        drum_separator=drum_separator,
         quantise=quantise,
         quantise_use_llm=quantise_use_llm,
         llm_model=resolved_model,
@@ -536,6 +545,7 @@ async def transcribe_resume(
     run_log = RunLog()
     request_options = {
         "beat_input": beat_input,
+        "drum_separator": drum_separator,
         "include_candidates": include_candidates,
         "quantise": quantise,
         "quantise_use_llm": quantise_use_llm,
@@ -693,6 +703,7 @@ async def lyrics_align(
     # GPU steps (vocals separator + CTC aligner) run inside the streamed
     # generator under the process-wide lock.
     cleanup_dir = Path(tempfile.mkdtemp(prefix="drumjot_lyrics_"))
+    cached_align_bytes: bytes | None = None
     try:
         needs_separator = False
         vocals_key: str | None = None
@@ -702,6 +713,7 @@ async def lyrics_align(
             vocals_path = cleanup_dir / (vocals.filename or "vocals.wav")
             vocals_bytes = await vocals.read()
             vocals_path.write_bytes(vocals_bytes)
+            audio_hash = _hash_bytes(vocals_bytes)
         else:
             assert mix is not None
             mix_path = cleanup_dir / (mix.filename or "input.wav")
@@ -709,10 +721,32 @@ async def lyrics_align(
             mix_path.write_bytes(mix_bytes)
             audio_hash = _hash_bytes(mix_bytes)
 
-            # Vocals-cache check: hit means we skip the separator and feed
-            # the already-isolated opus straight to the CTC aligner (which
-            # decodes it through its own ffmpeg pipeline, so no manual
-            # decode here).
+        # Alignment-result cache check, before any GPU work. A hit serves
+        # the stored JSON straight back, skipping the separator AND the CTC
+        # aligner. The key folds in the lyrics + language, so a repeat call
+        # for the same audio with edited lyrics correctly misses.
+        align_key = _alignment_cache_key(input_lines, language or None, audio_hash)
+        cached_align = _alignment_cache_instance().get(align_key)
+        if cached_align is not None:
+            try:
+                cached_align_bytes = cached_align.read_bytes()
+                log.info("lyrics_align: alignment cache HIT (%s)", align_key)
+            except OSError as exc:
+                # The file vanished between the index lookup and the read
+                # (operator pruned it, or a concurrent eviction won the
+                # race). Treat it as a miss and fall through to the fresh
+                # pathway rather than 500ing the request.
+                log.info(
+                    "lyrics_align: alignment cache file vanished (%s): %s; "
+                    "recomputing",
+                    align_key,
+                    exc,
+                )
+        if cached_align_bytes is None and mix_path is not None:
+            # Vocals-cache check (mix flow only): hit means we skip the
+            # separator and feed the already-isolated opus straight to the
+            # CTC aligner (which decodes it through its own ffmpeg pipeline,
+            # so no manual decode here).
             vocals_key = _vocals_cache_key(audio_hash)
             cached_vocals = _vocals_cache_instance().get(vocals_key)
             if cached_vocals is not None:
@@ -726,6 +760,15 @@ async def lyrics_align(
         shutil.rmtree(cleanup_dir, ignore_errors=True)
         raise
 
+    if cached_align_bytes is not None:
+        # No GPU work needed: drop the temp dir now and emit the cached
+        # result directly (no queued/running/GPU-lock detour).
+        shutil.rmtree(cleanup_dir, ignore_errors=True)
+        return StreamingResponse(
+            _emit_cached_alignment(request_id, cached_align_bytes),
+            media_type="application/x-ndjson",
+        )
+
     return StreamingResponse(
         _stream_lyrics_align(
             request_id=request_id,
@@ -735,12 +778,26 @@ async def lyrics_align(
             language=language or None,
             needs_separator=needs_separator,
             vocals_key=vocals_key,
+            align_key=align_key,
             mix_path=mix_path,
             vocals_path=vocals_path,
             cleanup_dir=cleanup_dir,
         ),
         media_type="application/x-ndjson",
     )
+
+
+async def _emit_cached_alignment(
+    request_id: str, lines_json_bytes: bytes
+) -> AsyncIterator[bytes]:
+    """Emit a cached /lyrics/align result as a single NDJSON `result`
+    envelope. No GPU runs, so there are no `queued`/`running` envelopes;
+    the frontend treats those as optional status and acts on `result`."""
+    set_request_id(request_id)
+    lines = json.loads(lines_json_bytes)
+    yield (
+        json.dumps({"type": "result", "data": {"lines": lines}}) + "\n"
+    ).encode("utf-8")
 
 
 async def _stream_lyrics_align(
@@ -752,6 +809,7 @@ async def _stream_lyrics_align(
     language: str | None,
     needs_separator: bool,
     vocals_key: str | None,
+    align_key: str,
     mix_path: Path | None,
     vocals_path: Path | None,
     cleanup_dir: Path,
@@ -853,7 +911,26 @@ async def _stream_lyrics_align(
                 input_lines,
                 language,
             )
-            yield {"type": "result", "data": {"lines": lines_to_json(lines)}}
+            lines_json = lines_to_json(lines)
+            # Populate the alignment-result cache so an identical repeat
+            # request skips this whole GPU path. Best-effort: a write
+            # failure must not break the response (mirrors the vocals-cache
+            # write fallback above).
+            try:
+                _alignment_cache_instance().put_bytes(
+                    align_key,
+                    json.dumps(lines_json, ensure_ascii=False).encode("utf-8"),
+                )
+                log.info(
+                    "lyrics_align: alignment cache MISS, populated (%s)", align_key
+                )
+            except OSError as exc:
+                log.warning(
+                    "lyrics_align: alignment cache write failed (%s); "
+                    "serving result uncached",
+                    exc,
+                )
+            yield {"type": "result", "data": {"lines": lines_json}}
         except FileNotFoundError as exc:
             yield {"type": "error", "status_code": 404, "message": str(exc)}
         except Exception as exc:
@@ -1090,17 +1167,34 @@ def _extract_vocals_with_separator(
 
 
 # ---------------------------------------------------------------------------
-# /lyrics/align vocals cache
+# /lyrics/align disk caches
 # ---------------------------------------------------------------------------
 #
-# `settings.cache_dir/vocals/<sha256>__sep-<vocals_model_id>.opus`, # only the `mix` flow populates / reads it. Caching the separated
-# vocals stem lets repeat alignments against the same mix skip the
-# 5-10 s separation pass. The alignment result itself is not cached
-# since each call's output depends on caller-provided text + language.
+# Two content-addressed caches back the alignment pipeline:
+#
+#   - vocals (`settings.cache_dir/vocals/<sha256>__sep-<vocals_model_id>.
+#     opus`): only the `mix` flow populates / reads it. Caching the
+#     separated vocals stem lets repeat alignments against the same mix
+#     skip the 5-10 s separation pass.
+#   - alignment (`settings.cache_dir/alignment/<sha256>__align-<version>-
+#     <lyrics_hash>.json`): the forced-alignment result JSON, keyed on the
+#     input audio hash + the aligner version + a hash of the caller's
+#     lyrics text and language. A hit serves the stored result straight
+#     back, skipping the separator AND the GPU aligner. The composite key
+#     means same-audio-but-different-lyrics (a correction, a different
+#     LRCLIB pick, a different language hint) correctly misses and
+#     re-aligns; the lyrics+language hash also pins the per-language model
+#     `_pick_alignment_model` would choose.
 
 _KEY_SAFE_CHARS = re.compile(r"[^A-Za-z0-9._-]")
 
+# Bump when the aligner models or alignment logic change so stale
+# entries miss instead of serving a result the current code wouldn't
+# produce (the analogue of `_vocals_model_id()` for the result cache).
+_ALIGN_CACHE_VERSION = "wav2vec2robust+mms300m-v1"
+
 _vocals_cache: BlobCache | None = None
+_alignment_cache: BlobCache | None = None
 _cache_init_lock = threading.Lock()
 
 
@@ -1140,6 +1234,56 @@ def _vocals_cache_key(audio_hash: str) -> str:
 def _hash_bytes(data: bytes) -> str:
     """SHA-256 hex of `data`, matching `hashlib.sha256(bytes).hexdigest()`."""
     return hashlib.sha256(data).hexdigest()
+
+
+def _alignment_cache_instance() -> BlobCache:
+    """Lazy singleton for the forced-alignment result cache, a sibling of
+    the vocals cache under `settings.cache_dir/alignment`."""
+    global _alignment_cache
+    if _alignment_cache is not None:
+        return _alignment_cache
+    with _cache_init_lock:
+        if _alignment_cache is None:
+            _alignment_cache = BlobCache(
+                settings.cache_dir / "alignment",
+                cap_bytes=settings.cache_alignment_cap_bytes,
+            )
+        return _alignment_cache
+
+
+def _lyrics_input_hash(input_lines: list[InputLine], language: str | None) -> str:
+    """SHA-256 of the caller's alignment input: the line text + start
+    times (in order) plus the language hint. Two requests collide in the
+    cache only when this hash matches, so editing any line, reordering,
+    nudging a timestamp, or changing the language forces a re-align.
+
+    Start times round to the millisecond so float-repr noise from the
+    JSON round-trip doesn't fragment the key; that's finer than any real
+    LRC timestamp."""
+    canonical = json.dumps(
+        {
+            "language": language or "",
+            "lines": [
+                {"s": round(line.start_sec, 3), "t": line.text}
+                for line in input_lines
+            ],
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return _hash_bytes(canonical.encode("utf-8"))
+
+
+def _alignment_cache_key(
+    input_lines: list[InputLine], language: str | None, audio_hash: str
+) -> str:
+    """Cache filename for an alignment result. Encodes the input audio
+    hash, the aligner version, and the lyrics+language hash so a hit is
+    only possible when all three match (see `_ALIGN_CACHE_VERSION` and
+    `_lyrics_input_hash`)."""
+    version = _sanitize_id(_ALIGN_CACHE_VERSION)
+    lyrics_hash = _lyrics_input_hash(input_lines, language)
+    return f"{audio_hash}__align-{version}-{lyrics_hash}.json"
 
 
 def _encode_vocals_to_opus(src: Path, dest: Path) -> None:

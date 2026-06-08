@@ -62,6 +62,16 @@ class Settings(BaseSettings):
     # stems.
     vocals_model: str = "UVR-MDX-NET-Voc_FT.onnx"
 
+    # Provision the opt-in LarsNet Stage-2 separator's checkpoints at
+    # startup (alongside the BS-Roformer / MDX23C weights). When True,
+    # `provision.py` fetches the five U-Net checkpoints (~590 MB) from the
+    # `JosefKuchar/LarsNet` HF mirror into `<models_dir>/larsnet/`. LarsNet
+    # is selected per-request via the `drum_separator` form param (default
+    # is still MDX23C); set this False to skip the download on deploys that
+    # never use it. NOTE: the LarsNet weights are CC BY-NC 4.0
+    # (non-commercial) - see `app/pipeline/larsnet/__init__.py`.
+    provision_larsnet: bool = True
+
     # --- ADTOF onset detector tuning ---
     # ADTOF (xavriley/ADTOF-pytorch Frame_RNN) is a fixed pretrained
     # model whose weights ship inside the package — there is no model /
@@ -260,14 +270,22 @@ class Settings(BaseSettings):
     # /transcribe response so the caller can play them back in a browser.
     outputs_dir: Path = Path("/outputs")
 
-    # Content-addressed cache for the /lyrics/align pipeline. The
-    # `vocals/` subdir holds opus-encoded separated vocals keyed by
-    # SHA-256 of the input mix + the vocals-separator model id, so a
-    # repeat alignment of the same mix skips the separator. Bounded by
-    # `cache_vocals_cap_bytes` with LRU-by-last-access eviction; safe to
-    # nuke at any time, entries refill on demand. See `app/cache.py`.
+    # Content-addressed cache for the /lyrics/align pipeline, two subdirs:
+    #   - `vocals/`: opus-encoded separated vocals keyed by SHA-256 of the
+    #     input mix + the vocals-separator model id, so a repeat alignment
+    #     of the same mix skips the separator.
+    #   - `alignment/`: the forced-alignment result JSON keyed by SHA-256
+    #     of the input audio + the aligner version + a hash of the caller's
+    #     lyrics text + language, so an identical repeat request skips the
+    #     GPU entirely.
+    # Both are bounded by their `*_cap_bytes` with LRU-by-last-access
+    # eviction; safe to nuke at any time, entries refill on demand. See
+    # `app/cache.py`.
     cache_dir: Path = Path("/cache")
     cache_vocals_cap_bytes: int = 5 * 1024 * 1024 * 1024  # 5 GB
+    # Alignment JSON is small (KB per song); a modest cap holds many
+    # thousands of results.
+    cache_alignment_cap_bytes: int = 256 * 1024 * 1024  # 256 MB
 
     # --- Debug artifact persistence ---
     # If set, every /transcribe request persists its intermediate files

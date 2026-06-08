@@ -154,19 +154,20 @@ def test_evicted_file_disappears_from_disk(tmp_path: Path) -> None:
 
 def test_get_after_external_delete_returns_none(tmp_path: Path) -> None:
     """The cache file is gone (operator pruned it) but the in-memory
-    index still thinks it's there. `get()` should fail gracefully; currently it returns the path (`os.utime` may succeed on a missing
-    file via the open fd race? no; on a missing file, os.utime raises
-    FileNotFoundError, which we surface as None)."""
+    index still thinks it's there. `get()` must notice the missing file,
+    drop the stale entry, and report a miss so the caller recomputes down
+    its fresh pathway instead of being handed a dead path that 500s the
+    moment it's read."""
     cache = BlobCache(tmp_path, cap_bytes=1000)
     cache.put_bytes("k.bin", b"data")
+    assert cache.total_bytes == len(b"data")
     # Hidden delete behind the cache's back.
     (tmp_path / "k.bin").unlink()
-    # The current implementation returns the (now-missing) Path because
-    # we trust the in-memory index. Document that with a test so a
-    # future hardening pass doesn't regress without intent.
-    fetched = cache.get("k.bin")
-    if fetched is not None:
-        assert not fetched.exists()
+    assert cache.get("k.bin") is None
+    # The stale entry self-heals out of the index (size released), so a
+    # later re-put accounts cleanly rather than double-counting.
+    assert cache.total_bytes == 0
+    assert cache.get("k.bin") is None
 
 
 @pytest.mark.parametrize("data", [b"", b"a", b"\x00" * 4096])

@@ -164,5 +164,11 @@ Playwright subprocess), so plain `bun run e2e` picks it up.
   overlay/popover/badge that escapes its bar or row.**
 - `transcriber/docs/ai-midi-to-jot-notes.md`, techniques captured from
   the deleted DSL-output pathway, for future AI-assisted MIDI→Jot work.
+- [training/README.md](training/README.md), the learned drum-onset model
+  (frozen MERT encoder + per-lane heads): training loop, datasets
+  (E-GMD/STAR), the Docker trainer, the ParaDB `.rlrr` test harness +
+  per-instrument scoring, and current findings. Pure Python; not part of
+  the transcriber runtime (the spike that wires a checkpoint into the
+  pipeline is `transcriber/app/pipeline/learned_onsets.py`).
 - `research/`, HIHAT, MODELS (Path B training plan), MIDI↔audio
   alignment, lyrics alignment.

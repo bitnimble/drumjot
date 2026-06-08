@@ -27,6 +27,7 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import soundfile as sf
@@ -140,6 +141,12 @@ class Separator:
         self._stems_all = None
         self._stems_per = None
         self._vocals = None
+        # Opt-in LarsNet Stage-2 separator (the five U-Nets), lazily loaded
+        # on first `run_stems_per_larsnet` since most requests use the
+        # default MDX23C path and the five nets cost ~590 MB of VRAM. A
+        # dict {stem_name: UNetWaveform}; None until first use.
+        self._larsnet: dict[str, Any] | None = None
+        self._larsnet_device: str = "cpu"
 
     def load(self) -> None:
         """Idempotently load both separator models.
@@ -354,6 +361,118 @@ class Separator:
                 sink.copy_audio("stems_per/residual", residual_path)
         return StemsPerResult(per_instrument=per_instrument, residual=residual_path)
 
+    def _resolve_larsnet_device(self) -> str:
+        """Map `settings.device` onto LarsNet's torch device string.
+
+        Mirrors `adtof_onsets._resolve_device`: `cpu`/`mps` -> "cpu";
+        anything else asks for CUDA and falls back to "cpu" if torch
+        reports no GPU.
+        """
+        import torch
+
+        pref = (settings.device or "auto").lower()
+        if pref in ("cpu", "mps"):
+            return "cpu"
+        return "cuda" if torch.cuda.is_available() else "cpu"
+
+    def _load_larsnet(self) -> dict[str, Any]:
+        """Lazily build the five LarsNet U-Nets (or re-home them onto the
+        device if a prior park moved them to CPU) and return them.
+
+        Loaded on first use, not eagerly, since the default Stage-2 path is
+        MDX23C and the five nets cost ~590 MB of VRAM. Raises
+        `FileNotFoundError` (-> StageError -> HTTP 500) when the CC-BY-NC
+        checkpoints weren't provisioned (`settings.provision_larsnet`).
+        """
+        from app.pipeline import larsnet as larsnet_pkg
+        from app.pipeline.gpu_park import unpark_module
+
+        if self._larsnet is None:
+            self._larsnet_device = self._resolve_larsnet_device()
+            log.info("Loading LarsNet U-Nets (device=%s) ...", self._larsnet_device)
+            t0 = time.perf_counter()
+            self._larsnet = larsnet_pkg.load_models(
+                Path(settings.models_dir), self._larsnet_device
+            )
+            log.info("LarsNet ready in %.2fs", time.perf_counter() - t0)
+        else:
+            for stem, model in self._larsnet.items():
+                unpark_module(model, f"larsnet_{stem}")
+        assert self._larsnet is not None
+        return self._larsnet
+
+    def run_stems_per_larsnet(
+        self, drum_stem: Path, work_dir: Path
+    ) -> StemsPerResult:
+        """LarsNet variant of `run_stems_per`: split the drum stem into the
+        same five lanes (k/s/t/h/c) with identical debug / residual
+        handling, so it's a drop-in Stage-2 alternative selected by the
+        `drum_separator` request option.
+
+        Frees the audio-separator drum models first (Stage 1 is done, and
+        the MDX23C Stage-2 model is unused when LarsNet is selected) so the
+        five U-Nets fit alongside everything else on a 6 GB GPU.
+        """
+        # Park the BS-Roformer / MDX23C separators to CPU to make room. They
+        # come back at the next /transcribe entry via unpark_drum_models;
+        # nothing in-flight needs them once the drum stem exists.
+        self._park_audio_separators()
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        from app.pipeline import larsnet as larsnet_pkg
+
+        models = self._load_larsnet()
+        out_dir = work_dir / "stems_per"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        log.info("stems_per (LarsNet): splitting drum stem into pieces")
+        stems = larsnet_pkg.separate(models, drum_stem, self._larsnet_device)
+
+        # Write each lane at the drum stem's subtype so LarsNet's outputs
+        # sit at the same fidelity as the MDX23C path's per-instrument stems.
+        subtype_ref = sf.info(str(drum_stem)).subtype
+        per_instrument: dict[str, Path] = {}
+        for stem_name, waveform in stems.items():
+            pitch = larsnet_pkg.STEM_TO_PITCH.get(stem_name)
+            if pitch is None:
+                continue
+            path = out_dir / f"{pitch}.wav"
+            # waveform is [channels, samples]; soundfile wants [samples, channels].
+            sf.write(
+                str(path),
+                waveform.numpy().T,
+                larsnet_pkg.SAMPLE_RATE,
+                subtype=subtype_ref,
+            )
+            per_instrument.setdefault(pitch, path)
+
+        log.info("Recovered %d pitches: %s", len(per_instrument), sorted(per_instrument))
+
+        residual_path: Path | None = None
+        if per_instrument:
+            residual_path = out_dir / f"residual{drum_stem.suffix}"
+            try:
+                _residual_audio(
+                    drum_stem, list(per_instrument.values()), residual_path
+                )
+            except Exception as exc:
+                log.warning(
+                    "Failed to build per-instrument residual track (%s); skipping.",
+                    exc,
+                )
+                residual_path = None
+
+        sink = current_debug_sink()
+        if sink is not None:
+            for pitch, path in per_instrument.items():
+                sink.copy_audio(f"stems_per/{pitch}", path)
+            if residual_path is not None:
+                sink.copy_audio("stems_per/residual", residual_path)
+        return StemsPerResult(per_instrument=per_instrument, residual=residual_path)
+
     # ---- GPU residency control --------------------------------------
     # `park_*` / `unpark_*` move the wrapped nn.Module between CUDA
     # and CPU so the two endpoints can swap GPU ownership without
@@ -379,7 +498,10 @@ class Separator:
             inner = getattr(model_instance, "model", None)
         return inner
 
-    def park_drum_models(self) -> None:
+    def _park_audio_separators(self) -> None:
+        """Park ONLY the audio-separator drum models (BS-Roformer Stage 1 +
+        MDX23C Stage 2) to CPU. `run_stems_per_larsnet` uses this to free
+        VRAM for LarsNet without parking LarsNet itself."""
         from app.pipeline.gpu_park import park_module
 
         for sep, name in (
@@ -389,6 +511,17 @@ class Separator:
             if sep is None:
                 continue
             park_module(self._inner_module(sep), name)
+
+    def park_drum_models(self) -> None:
+        from app.pipeline.gpu_park import park_module
+
+        self._park_audio_separators()
+        # Also park the LarsNet U-Nets if they were ever loaded, so
+        # /lyrics/align reclaims their ~590 MB. They're unparked on demand
+        # in `run_stems_per_larsnet`, not by `unpark_drum_models`.
+        if self._larsnet is not None:
+            for stem, model in self._larsnet.items():
+                park_module(model, f"larsnet_{stem}")
 
     def unpark_drum_models(self) -> None:
         from app.pipeline.gpu_park import unpark_module
@@ -402,11 +535,49 @@ class Separator:
             unpark_module(self._inner_module(sep), name)
 
     def park_vocals(self) -> None:
-        from app.pipeline.gpu_park import park_module
+        """Free the vocals separator's GPU memory before the CTC aligner
+        loads.
 
+        The vocals model (`UVR-MDX-NET-Voc_FT.onnx`) is MDX/ONNX: its
+        `model_instance.model_run` is an ONNX Runtime inference-session
+        lambda, and ORT holds its CUDA arena (~2 GB) outside torch's
+        allocator. A host memcpy (`park_module` -> `.to("cpu")`) can't
+        reach that memory (and the lambda has no `.parameters()` to begin
+        with), so for the ORT path we release the whole separator; the
+        next `run_vocals` reloads it lazily (`_load_vocals`). A torch-
+        backed inner module (the onnx2torch fallback path) still parks to
+        CPU, which is cheaper than a reload.
+
+        Idempotent: a no-op when the vocals separator was never loaded
+        (e.g. a disk cache hit fed the aligner directly)."""
         if self._vocals is None:
             return
-        park_module(self._inner_module(self._vocals), "vocals")
+        inner = self._inner_module(self._vocals)
+        if inner is not None and callable(getattr(inner, "parameters", None)):
+            from app.pipeline.gpu_park import park_module
+
+            park_module(inner, "vocals")
+            return
+        self._release_vocals()
+
+    def _release_vocals(self) -> None:
+        """Drop the vocals separator so its ONNX Runtime CUDA arena is
+        returned to the driver. Idempotent. Runs under the process-wide
+        GPU lock (its only caller is `park_vocals`)."""
+        if self._vocals is None:
+            return
+        import gc
+
+        self._vocals = None
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+        log.info("gpu_park: released vocals separator (ONNX Runtime session)")
 
     def unpark_vocals(self) -> None:
         from app.pipeline.gpu_park import unpark_module

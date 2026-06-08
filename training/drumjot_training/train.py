@@ -1,0 +1,624 @@
+"""Phase-0 smoke test: does a frozen MERT + per-lane heads learn onsets?
+
+Per clip: frozen MERT features + per-lane Gaussian onset targets from the
+MIDI -> train `MultiLaneHeads` with per-frame BCE. Milestones (design spec
+§2): overfit one clip (wiring), then train loss over a few clips, then
+held-out onset-F1. Scored on onset-F1, never frame accuracy.
+
+Run in the CUDA sandbox (torch + MERT). The real-data path reads E-GMD via
+`paths.dataset_path("egmd")`; `--synthetic` runs a dataset-free self-test
+(random features + planted onsets) that verifies the training mechanics
+(loss drops, the eval/peak-pick pipeline runs) with no data present.
+"""
+from __future__ import annotations
+
+import time
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+
+from drumjot_training import (
+    checkpoint,
+    egmd,
+    embeddings,
+    forced_align,
+    metrics,
+    midi_labels,
+    paths,
+    postfilter,
+    runtime,
+    star,
+)
+from drumjot_training.config import Config
+from drumjot_training.model import MultiLaneHeads
+from drumjot_training.targets import onsets_to_target, pos_weights_from_targets
+
+
+@dataclass
+class Clip:
+    """A training example: frozen features, per-lane targets, and the raw
+    onset times (kept for onset-F1 eval, which scores against true onsets,
+    not the smoothed target)."""
+
+    features: np.ndarray  # (T, dim)
+    targets: np.ndarray  # (n_lanes, T)
+    onsets_by_lane: dict[str, list[float]]
+    audio_path: str | None = None  # source clip, for envelope post-filtering
+
+
+def build_targets(
+    onsets_by_lane: dict[str, list[float]], n_frames: int, cfg: Config
+) -> np.ndarray:
+    """Stack per-lane Gaussian target curves into (n_lanes, T)."""
+    return np.stack(
+        [
+            onsets_to_target(onsets_by_lane.get(lane, []), n_frames, cfg.encoder_fps, cfg.sigma_frames)
+            for lane in cfg.lanes
+        ]
+    )
+
+
+def _build_clip(
+    audio_path: Path,
+    onsets: dict[str, list[float]],
+    encoder: embeddings.MertEncoder,
+    cfg: Config,
+    cache_dir: Path | None = None,
+    max_seconds: float | None = None,
+) -> Clip:
+    """Embed `audio_path` and build per-lane targets from precomputed onsets.
+
+    `max_seconds` caps both the encoded audio (bounds MERT's sequence length
+    on long clips) and the kept onsets, so targets line up with the features.
+    Dataset-agnostic: callers supply onsets from MIDI (E-GMD) or .txt (STAR).
+    """
+    feat = embeddings.embed_clip(
+        audio_path, encoder, cache_dir=cache_dir, max_seconds=max_seconds, cache_dtype=cfg.cache_dtype
+    )
+    if max_seconds is not None:
+        onsets = {ln: [t for t in ts if t < max_seconds] for ln, ts in onsets.items()}
+    targets = build_targets(onsets, feat.shape[0], cfg)
+    return Clip(features=feat, targets=targets, onsets_by_lane=onsets, audio_path=str(audio_path))
+
+
+def build_clip(
+    audio_path: Path,
+    midi_path: Path,
+    encoder: embeddings.MertEncoder,
+    cfg: Config,
+    cache_dir: Path | None = None,
+    max_seconds: float | None = None,
+) -> Clip:
+    """E-GMD: embed `audio_path` + per-lane targets from `midi_path` (MIDI)."""
+    return _build_clip(
+        audio_path, midi_labels.onsets_from_path(midi_path), encoder, cfg, cache_dir, max_seconds
+    )
+
+
+def _clip_probs(model, clip: Clip) -> np.ndarray:
+    """Sigmoid activations (n_lanes, T) for one clip."""
+    import torch
+
+    model.eval()
+    device = next(model.parameters()).device
+    x = torch.as_tensor(clip.features, dtype=torch.float32, device=device).unsqueeze(0)
+    with torch.no_grad(), runtime.autocast():
+        return torch.sigmoid(model(x))[0].float().cpu().numpy()
+
+
+def evaluate_clip(
+    model, clip: Clip, cfg: Config, thresholds: dict[str, float] | None = None
+) -> dict[str, float]:
+    """Per-lane onset-F1 for one clip (peak-pick the sigmoid, match vs truth).
+
+    `thresholds` overrides the per-lane peak height; defaults to
+    `cfg.peak_threshold` for every lane."""
+    probs = _clip_probs(model, clip)
+    out: dict[str, float] = {}
+    for i, lane in enumerate(cfg.lanes):
+        thr = thresholds.get(lane, cfg.peak_threshold) if thresholds else cfg.peak_threshold
+        est = metrics.pick_onsets(probs[i], cfg.encoder_fps, thr, cfg.peak_min_distance_s)
+        ref = clip.onsets_by_lane.get(lane, [])
+        out[lane] = metrics.onset_f1(ref, est, cfg.onset_tolerance_s)["f"]
+    return out
+
+
+def mean_f1(model, clips: Sequence[Clip], cfg: Config) -> float:
+    """Macro onset-F1 across lanes, averaged over clips."""
+    if not clips:
+        return 0.0
+    per_clip = []
+    for clip in clips:
+        per_lane = evaluate_clip(model, clip, cfg)
+        per_clip.append(sum(per_lane.values()) / len(per_lane))
+    return sum(per_clip) / len(per_clip)
+
+
+def tune_thresholds(
+    model, val_clips: Sequence[Clip], cfg: Config, grid: Sequence[float] | None = None
+) -> dict[str, float]:
+    """Per-lane peak threshold maximizing mean held-out F1 on `val_clips`.
+
+    Thresholds are hyperparameters tuned on validation (not test). Lanes with
+    no val onsets keep `cfg.peak_threshold`."""
+    grid = grid or (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8)
+    # keep only probs + onsets per clip (not the feature-heavy Clip), so a
+    # streaming val set isn't fully resident at once
+    probs_onsets = [(_clip_probs(model, c), c.onsets_by_lane) for c in val_clips]
+    best: dict[str, float] = {}
+    for i, lane in enumerate(cfg.lanes):
+        best_thr, best_f1 = cfg.peak_threshold, -1.0
+        for thr in grid:
+            f1s = []
+            for probs, onsets in probs_onsets:
+                ref = onsets.get(lane, [])
+                if not ref:
+                    continue
+                est = metrics.pick_onsets(probs[i], cfg.encoder_fps, thr, cfg.peak_min_distance_s)
+                f1s.append(metrics.onset_f1(ref, est, cfg.onset_tolerance_s)["f"])
+            if f1s and (mean := sum(f1s) / len(f1s)) > best_f1:
+                best_f1, best_thr = mean, thr
+        best[lane] = best_thr
+    return best
+
+
+def collate_clips(clips: Sequence[Clip]):
+    """Pad a list of variable-length clips into batched CPU tensors + a frame
+    mask. Used as a DataLoader `collate_fn`, so it builds on CPU (workers can't
+    touch CUDA); `train_loop` moves the batch to the device.
+
+    Returns (X (B, T, dim), Y (B, n_lanes, T), mask (B, T)); padded frames are
+    zero in X/Y and 0 in mask so `masked_bce` ignores them. Clips are capped to
+    a uniform `max_seconds` upstream, so most are full length and padding waste
+    is small."""
+    import torch
+
+    dim = clips[0].features.shape[1]
+    n_lanes = clips[0].targets.shape[0]
+    lengths = [c.features.shape[0] for c in clips]
+    t_max = max(lengths)
+    b = len(clips)
+    X = torch.zeros(b, t_max, dim, dtype=torch.float32)
+    Y = torch.zeros(b, n_lanes, t_max, dtype=torch.float32)
+    mask = torch.zeros(b, t_max, dtype=torch.float32)
+    for i, clip in enumerate(clips):
+        t = lengths[i]
+        X[i, :t] = torch.as_tensor(clip.features, dtype=torch.float32)
+        Y[i, :, :t] = torch.as_tensor(clip.targets, dtype=torch.float32)
+        mask[i, :t] = 1.0
+    return X, Y, mask
+
+
+def masked_bce(logits, targets, mask, pos_weight):
+    """Per-frame BCE averaged over valid (unpadded) frames and lanes.
+
+    `pos_weight` is (n_lanes, 1), broadcasting over (B, n_lanes, T); `mask` is
+    (B, T) and is broadcast across lanes so padded frames contribute nothing."""
+    from torch.nn import functional as F
+
+    loss = F.binary_cross_entropy_with_logits(
+        logits, targets, pos_weight=pos_weight, reduction="none"
+    )  # (B, n_lanes, T)
+    m = mask.unsqueeze(1)  # (B, 1, T)
+    denom = (m.sum() * logits.shape[1]).clamp_min(1.0)
+    return (loss * m).sum() / denom
+
+
+def _cap_onsets(onsets: dict[str, list[float]], max_seconds: float | None) -> dict[str, list[float]]:
+    """Drop onsets past `max_seconds` so labels line up with the capped features."""
+    if max_seconds is None:
+        return onsets
+    return {ln: [t for t in ts if t < max_seconds] for ln, ts in onsets.items()}
+
+
+class CachedClips:
+    """Lazy, RAM-bounded clip source backed by the on-disk MERT feature cache.
+
+    Holds only lightweight specs (audio path, onset times, frame count) in RAM;
+    each `__getitem__` reads that clip's features from its `.npy` cache file, so
+    the full dataset never lives in memory at once (the whole point on a box
+    where the feature set is larger than RAM). Indexable + sized, so it drops
+    straight into a torch `DataLoader` (workers stream from the SSD in
+    parallel). Build via `materialize`, which populates the cache first."""
+
+    def __init__(self, specs: Sequence[tuple], cfg: Config, cache_dir, max_seconds: float | None):
+        # specs: (audio_path, onsets_by_lane, n_frames) for clips already cached
+        self._specs = list(specs)
+        self._cfg = cfg
+        self._cache_dir = Path(cache_dir)
+        self._max_seconds = max_seconds
+
+    def _path(self, audio_path) -> Path:
+        key = embeddings.cache_key(
+            audio_path, self._cfg.encoder, self._cfg.encoder_layer, self._max_seconds
+        )
+        return self._cache_dir / f"{key}.npy"
+
+    def __len__(self) -> int:
+        return len(self._specs)
+
+    def __getitem__(self, i: int) -> Clip:
+        audio_path, onsets, _ = self._specs[i]
+        feat = np.load(self._path(audio_path))
+        onsets = _cap_onsets(onsets, self._max_seconds)
+        targets = build_targets(onsets, feat.shape[0], self._cfg)
+        return Clip(features=feat, targets=targets, onsets_by_lane=onsets, audio_path=str(audio_path))
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield self[i]
+
+    def iter_targets(self):
+        """Yield per-clip targets WITHOUT loading features (uses the stored
+        frame count), so `pos_weights` needn't re-read the whole feature set."""
+        for _, onsets, n_frames in self._specs:
+            yield build_targets(_cap_onsets(onsets, self._max_seconds), n_frames, self._cfg)
+
+
+def materialize(
+    specs: Sequence[tuple],
+    encoder: embeddings.MertEncoder,
+    cfg: Config,
+    cache_dir,
+    max_seconds: float | None,
+    tag: str = "clips",
+    log: Callable[[str], None] = print,
+) -> CachedClips:
+    """One-time encode pass: ensure every spec's features are in the `.npy`
+    cache (encoded then discarded, never accumulated in RAM) and return a
+    `CachedClips` over the specs that succeeded. Replaces an all-in-RAM build,
+    so the train set can exceed available memory."""
+    cache_dir = Path(cache_dir)
+    ok: list[tuple] = []
+    for i, (audio, onsets) in enumerate(specs):
+        try:
+            feat = embeddings.embed_clip(
+                audio, encoder, cache_dir=cache_dir, max_seconds=max_seconds, cache_dtype=cfg.cache_dtype
+            )
+            ok.append((audio, onsets, int(feat.shape[0])))
+        except Exception as e:  # noqa: BLE001
+            log(f"  skip {Path(audio).name}: {e!r}")
+        if (i + 1) % 50 == 0:
+            log(f"  {tag}: {i + 1}/{len(specs)} cached")
+    log(f"{tag}: {len(ok)} clips")
+    return CachedClips(ok, cfg, cache_dir, max_seconds)
+
+
+def _fmt_eta(seconds: float) -> str:
+    s = max(0, int(seconds))
+    return f"{s // 3600}:{(s % 3600) // 60:02d}:{s % 60:02d}"
+
+
+def train_loop(
+    model,
+    clips,
+    cfg: Config,
+    *,
+    epochs: int,
+    pos_weight: float | np.ndarray = 1.0,
+    batch_size: int = 8,
+    num_workers: int = 0,
+    val_clips=None,
+    out_dir: str | None = None,
+    checkpoint_every: int = 0,
+    log: Callable[[str], None] = print,
+) -> dict:
+    """Train `model` on `clips` in padded mini-batches of `batch_size` (clips
+    are variable length; padded frames are masked out of the loss). Returns a
+    history dict with per-epoch train loss and (if `val_clips`) val F1.
+
+    `clips` is any indexable+sized clip source (an in-RAM `list[Clip]` or a
+    streaming `CachedClips`); `num_workers` > 0 lets the DataLoader prefetch
+    batches from the SSD in parallel with GPU compute. `pos_weight` may be a
+    scalar or a per-lane array (length n_lanes)."""
+    import torch
+    from torch.utils.data import DataLoader
+
+    device = next(model.parameters()).device
+    opt = torch.optim.Adam(model.parameters(), lr=cfg.lr)
+    pw = torch.as_tensor(pos_weight, dtype=torch.float32, device=device)
+    if pw.ndim == 1:
+        pw = pw.view(-1, 1)  # (n_lanes, 1) broadcasts over (B, n_lanes, T)
+    history: dict[str, list[float]] = {"train_loss": []}
+
+    gen = torch.Generator().manual_seed(0)  # reproducible per-epoch shuffle
+    loader = DataLoader(
+        clips,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=(device.type == "cuda"),
+        collate_fn=collate_clips,
+        persistent_workers=bool(num_workers),
+        generator=gen,
+    )
+    t0 = time.perf_counter()
+    expected_batches = (len(clips) + batch_size - 1) // batch_size
+    for epoch in range(epochs):
+        ep_start = time.perf_counter()
+        model.train()
+        total, n_batches = 0.0, 0
+        for bi, (X, Y, mask) in enumerate(loader):
+            X = X.to(device, non_blocking=True)
+            Y = Y.to(device, non_blocking=True)
+            mask = mask.to(device, non_blocking=True)
+            opt.zero_grad()
+            with runtime.autocast():  # bf16 fwd on Ampere+; FP32 no-op elsewhere
+                loss = masked_bce(model(X), Y, mask, pw)
+            loss.backward()  # bf16 keeps FP32 range, so no GradScaler needed
+            opt.step()
+            total += float(loss.detach())
+            n_batches += 1
+            # show movement within epoch 0 (before any epoch line prints), so a
+            # fresh run on new hardware confirms throughput immediately
+            if epoch == 0 and expected_batches >= 4 and (bi + 1) % (expected_batches // 4) == 0:
+                log(f"  epoch 0  batch {bi + 1}/{expected_batches}  ({time.perf_counter() - ep_start:.0f}s)")
+        avg = total / max(1, n_batches)
+        history["train_loss"].append(avg)
+        if val_clips:
+            history.setdefault("val_f1", []).append(mean_f1(model, val_clips, cfg))
+        dt = time.perf_counter() - ep_start
+        # print the first 3 epochs (immediate speed read), then every 10th + last
+        if epoch < 3 or (epoch + 1) % 10 == 0 or epoch == epochs - 1:
+            eta = (time.perf_counter() - t0) / (epoch + 1) * (epochs - epoch - 1)
+            msg = f"epoch {epoch:3d}  train_loss {avg:.4f}"
+            if val_clips:
+                msg += f"  val_macro_f1 {history['val_f1'][-1]:.3f}"
+            msg += f"  {dt:.1f}s/ep  eta {_fmt_eta(eta)}"
+            log(msg)
+        # periodic safety checkpoint (untuned thresholds) for long unattended
+        # runs; the final main() save overwrites this with tuned thresholds
+        if out_dir and checkpoint_every and (epoch + 1) % checkpoint_every == 0 and epoch != epochs - 1:
+            checkpoint.save(out_dir, model, cfg, {ln: cfg.peak_threshold for ln in cfg.lanes})
+            log(f"  checkpoint saved @ epoch {epoch} (untuned) -> {out_dir}")
+    return history
+
+
+# --- synthetic self-test (no dataset required) ---------------------------
+
+
+def synthetic_clip(n_frames: int = 300, dim: int = 32, fps: float = 100.0, seed: int = 0) -> Clip:
+    """Random features with a few planted onsets per lane, for a dataset-free
+    wiring/overfit check. Random features carry no real onset signal, so this
+    proves the head can *fit* (memorize) a fixed clip, exactly the spec's
+    'overfit one clip' wiring milestone."""
+    rng = np.random.default_rng(seed)
+    feat = rng.standard_normal((n_frames, dim)).astype(np.float32)
+    onsets = {
+        "k": [0.5, 1.0, 1.5, 2.0],
+        "s": [1.0, 2.0],
+        "hc": [0.25, 0.5, 0.75, 1.0, 1.25, 1.5],
+        "rd": [0.0, 0.5, 1.0],
+        "ss": [1.5],
+    }
+    cfg = Config(encoder_fps=fps)
+    targets = build_targets(onsets, n_frames, cfg)
+    return Clip(features=feat, targets=targets, onsets_by_lane=onsets)
+
+
+def synthetic_smoke(epochs: int = 80, log: Callable[[str], None] = print) -> dict:
+    """Overfit one synthetic clip; train loss should fall sharply."""
+    clip = synthetic_clip()
+    cfg = Config(encoder_fps=100.0)
+    model = MultiLaneHeads(in_dim=clip.features.shape[1], hidden=64, num_layers=1)
+    return train_loop(model, [clip], cfg, epochs=epochs, val_clips=[clip], log=log)
+
+
+# --- real-data entry point ----------------------------------------------
+
+
+def _report(model, val_clips: Sequence[Clip], cfg: Config, thresholds: dict[str, float]) -> None:
+    """Print held-out per-lane F1 (with tuned thresholds + onset counts)."""
+    from collections import defaultdict
+
+    lane_f1: dict[str, list[float]] = defaultdict(list)
+    lane_n: dict[str, int] = defaultdict(int)
+    for clip in val_clips:
+        f1 = evaluate_clip(model, clip, cfg, thresholds)
+        for lane, ts in clip.onsets_by_lane.items():
+            if ts:
+                lane_f1[lane].append(f1[lane])
+                lane_n[lane] += len(ts)
+    print("\nheld-out per-lane F1 (tuned thresholds):", flush=True)
+    for lane in cfg.lanes:
+        if lane_f1[lane]:
+            mean = sum(lane_f1[lane]) / len(lane_f1[lane])
+            print(
+                f"  {lane:3s} onsets={lane_n[lane]:6d} clips={len(lane_f1[lane]):3d} "
+                f"thr={thresholds.get(lane, cfg.peak_threshold):.2f} F1={mean:.3f}",
+                flush=True,
+            )
+        else:
+            print(f"  {lane:3s} (no onsets in val subset)", flush=True)
+
+
+def _report_compare(
+    model,
+    val_clips,
+    cfg: Config,
+    thresholds: dict[str, float],
+    *,
+    max_seconds: float | None = None,
+    align_window_s: float = 0.03,
+    support_percentile: float = 60.0,
+    hop_length: int = 64,
+) -> None:
+    """Per-lane raw-model vs +deterministic-filter onset metrics, side by side.
+
+    For each val clip with audio: peak-pick the model (raw), then apply the
+    envelope support gate + peak alignment (`postfilter`) and re-score. Prints
+    F_raw vs F_filt (+ the P/R shift) so it's clear whether the deterministic
+    stages add value on top of the raw predictions. Runs against the MIX
+    envelope (no stems here), so treat it as a lower bound on their value.
+    """
+    from collections import defaultdict
+
+    agg: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+    n_audio = 0
+    for clip in val_clips:
+        if not getattr(clip, "audio_path", None):
+            continue
+        n_audio += 1
+        probs = _clip_probs(model, clip)
+        env, env_fps = forced_align.onset_envelope(
+            clip.audio_path, hop_length=hop_length, max_seconds=max_seconds
+        )
+        floor = postfilter.support_floor_from_env(env, support_percentile)
+        for i, lane in enumerate(cfg.lanes):
+            ref = clip.onsets_by_lane.get(lane, [])
+            if not ref:
+                continue
+            thr = thresholds.get(lane, cfg.peak_threshold)
+            est = metrics.pick_onsets(probs[i], cfg.encoder_fps, thr, cfg.peak_min_distance_s)
+            raw = metrics.onset_f1(ref, est, cfg.onset_tolerance_s)
+            est_f = postfilter.filter_lane(est, env, env_fps, align_window_s, floor)
+            filt = metrics.onset_f1(ref, est_f, cfg.onset_tolerance_s)
+            for k, v in (("f_raw", raw["f"]), ("f_filt", filt["f"]),
+                         ("p_raw", raw["p"]), ("p_filt", filt["p"]),
+                         ("r_raw", raw["r"]), ("r_filt", filt["r"])):
+                agg[lane][k].append(v)
+
+    if not n_audio:
+        print("\n(no clip audio available; skipping filter comparison)", flush=True)
+        return
+    print(
+        f"\nraw vs +envelope filter  (align +/-{align_window_s}s, "
+        f"support p{support_percentile:g}, {n_audio} val clips):",
+        flush=True,
+    )
+    print("  lane   F_raw  F_filt     dF   P_raw>P_filt   R_raw>R_filt", flush=True)
+
+    def _m(vals: list[float]) -> float:
+        return sum(vals) / len(vals) if vals else 0.0
+
+    for lane in cfg.lanes:
+        a = agg[lane]
+        if not a["f_raw"]:
+            continue
+        fr, ff = _m(a["f_raw"]), _m(a["f_filt"])
+        print(
+            f"  {lane:4s} {fr:6.3f} {ff:6.3f} {ff - fr:+6.3f}   "
+            f"{_m(a['p_raw']):.3f}>{_m(a['p_filt']):.3f}   "
+            f"{_m(a['r_raw']):.3f}>{_m(a['r_filt']):.3f}",
+            flush=True,
+        )
+
+
+def _egmd_specs(args) -> tuple[list, list, Path]:
+    """(train_specs, val_specs, cache_dir) for E-GMD; specs = (audio, onsets)."""
+    root = paths.dataset_path("egmd")
+    meta = egmd.read_index(root / "e-gmd-v1.0.0.csv", root)
+    tr = egmd.take_duration(egmd.for_split(meta, "train"), args.train_min * 60)
+    va = egmd.take_duration(egmd.for_split(meta, "validation"), args.val_min * 60)
+    spec = lambda m: (m.audio_path, midi_labels.onsets_from_path(m.midi_path))  # noqa: E731
+    return [spec(m) for m in tr], [spec(m) for m in va], root / "_cache_mert"
+
+
+def _star_specs(args) -> tuple[list, list, Path]:
+    """(train_specs, val_specs, cache_dir) for STAR; specs = (audio, onsets)."""
+    root = paths.dataset_path("star")
+    clips = star.index(root)
+    tr = star.for_split(clips, "training")[: args.train_clips]
+    # eval on validation + test (both held out, song-disjoint from training):
+    # STAR's validation mix audio is sparse, so test supplements it.
+    held_out = star.for_split(clips, "validation") + star.for_split(clips, "test")
+    va = held_out[: args.val_clips]
+    spec = lambda c: (c.audio_path, star.onsets_by_lane(c.annotation_path))  # noqa: E731
+    return [spec(c) for c in tr], [spec(c) for c in va], root / "_cache_mert"
+
+
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+
+    ap = argparse.ArgumentParser(description="Drum-onset training (frozen MERT + per-lane heads)")
+    ap.add_argument("--dataset", choices=("egmd", "star"), default="egmd")
+    ap.add_argument("--synthetic", action="store_true", help="dataset-free self-test")
+    ap.add_argument("--overfit-one", action="store_true", help="train on a single clip")
+    ap.add_argument("--train-min", type=float, default=240.0, help="E-GMD train minutes")
+    ap.add_argument("--val-min", type=float, default=30.0, help="E-GMD val minutes")
+    ap.add_argument("--train-clips", type=int, default=400, help="STAR train clip count")
+    ap.add_argument("--val-clips", type=int, default=80, help="STAR val clip count")
+    ap.add_argument("--max-seconds", type=float, default=30.0, help="per-clip encode cap")
+    ap.add_argument("--epochs", type=int, default=80)
+    ap.add_argument("--batch-size", type=int, default=Config.batch_size, help="clips per step")
+    ap.add_argument(
+        "--num-workers", type=int, default=0,
+        help="DataLoader prefetch workers; >0 needs docker --shm-size=2g (else it hangs). "
+        "0 still streams from the SSD cache (RAM stays bounded), just no prefetch overlap.",
+    )
+    ap.add_argument("--layer", type=int, default=10, help="MERT hidden layer")
+    ap.add_argument(
+        "--cache-dtype", choices=("float16", "float32"), default=Config.cache_dtype,
+        help="on-disk feature cache precision (float16 halves size + I/O)",
+    )
+    ap.add_argument("--pos-weight-cap", type=float, default=50.0)
+    ap.add_argument("--lr", type=float, default=Config.lr, help="learning rate (lower for warm-start fine-tune)")
+    ap.add_argument("--align-window", type=float, default=0.03, help="post-filter peak-align window (s)")
+    ap.add_argument("--support-percentile", type=float, default=60.0, help="post-filter envelope support floor pctl")
+    ap.add_argument("--no-filter-report", action="store_true", help="skip the deterministic-filter F1 comparison")
+    ap.add_argument("--out", type=str, default=None, help="save model.pt + meta.json here")
+    ap.add_argument("--resume", type=str, default=None, help="checkpoint dir to warm-start weights from")
+    args = ap.parse_args(argv)
+
+    if args.synthetic:
+        synthetic_smoke(epochs=args.epochs)
+        return
+
+    import torch
+
+    runtime.configure_backends()  # TF32 + sets up the bf16 autocast path
+    cfg = Config(encoder_layer=args.layer, cache_dtype=args.cache_dtype, lr=args.lr)
+    train_specs, val_specs, cache = (
+        _star_specs(args) if args.dataset == "star" else _egmd_specs(args)
+    )
+    if args.overfit_one:
+        train_specs = train_specs[:1]
+
+    encoder = embeddings.MertEncoder(name=cfg.encoder, layer=cfg.encoder_layer)
+
+    print(
+        f"dataset={args.dataset}  {len(train_specs)} train / {len(val_specs)} val "
+        f"(cache {cache}) ...",
+        flush=True,
+    )
+    # Encode-once into the cache, then stream from disk: features are never all
+    # held in RAM, so the train set can exceed available memory.
+    log_p = lambda s: print(s, flush=True)  # noqa: E731
+    train_clips = materialize(train_specs, encoder, cfg, cache, args.max_seconds, "train", log_p)
+    val_clips = materialize(val_specs, encoder, cfg, cache, args.max_seconds, "val", log_p)
+
+    pos_w = pos_weights_from_targets(train_clips.iter_targets(), cap=args.pos_weight_cap)
+    print("pos_weights:", {ln: round(float(w), 1) for ln, w in zip(cfg.lanes, pos_w, strict=True)}, flush=True)
+
+    model = MultiLaneHeads(in_dim=embeddings.MERT_DIM, hidden=cfg.head_hidden, num_layers=cfg.head_layers)
+    if args.resume:
+        sd = torch.load(Path(args.resume) / "model.pt", map_location="cpu")
+        model.load_state_dict(sd)
+        print(f"resumed weights from {args.resume}", flush=True)
+    if torch.cuda.is_available():
+        model = model.cuda()
+        print("device: cuda", flush=True)
+
+    train_loop(
+        model, train_clips, cfg, epochs=args.epochs, pos_weight=pos_w,
+        batch_size=args.batch_size, num_workers=args.num_workers, val_clips=val_clips,
+        out_dir=args.out, checkpoint_every=10,
+        log=lambda s: print(s, flush=True),
+    )
+    thresholds = tune_thresholds(model, val_clips, cfg)
+    _report(model, val_clips, cfg, thresholds)
+    if not args.no_filter_report:
+        _report_compare(
+            model, val_clips, cfg, thresholds, max_seconds=args.max_seconds,
+            align_window_s=args.align_window, support_percentile=args.support_percentile,
+        )
+
+    if args.out:
+        saved = checkpoint.save(args.out, model, cfg, thresholds)
+        print(f"\nsaved model + meta to {saved}", flush=True)
+
+
+if __name__ == "__main__":
+    main()

@@ -89,6 +89,15 @@ class BlobCache:
                 entry = _Entry(name=key, size=size, atime=time.time())
                 self._entries[key] = entry
                 self._total_bytes += size
+            elif not path.is_file():
+                # Indexed but gone from disk (operator pruned the file, or
+                # another worker evicted it behind our back). Drop the stale
+                # entry and report a miss, so the caller recomputes down its
+                # fresh pathway instead of being handed a dead path that
+                # 500s the moment it's read.
+                self._total_bytes -= entry.size
+                del self._entries[key]
+                return None
             entry.atime = time.time()
         return path
 

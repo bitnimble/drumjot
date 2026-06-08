@@ -76,7 +76,12 @@ def park_module(module: Any, label: str) -> None:
     exception is swallowed and logged - parking is a memory-pressure
     optimisation, not a correctness primitive, so a torch oddity must
     never crash the request."""
-    if module is None:
+    if module is None or not callable(getattr(module, "parameters", None)):
+        # Not a torch nn.Module (e.g. an ONNX Runtime inference session,
+        # whose `model_run` is a plain lambda with no `.parameters()` and
+        # whose CUDA memory torch can't move host-side anyway). Nothing to
+        # park here; the caller frees that memory by other means (see
+        # Separator.park_vocals, which releases the ORT session instead).
         return
     try:
         first_param = next(module.parameters(), None)
@@ -92,6 +97,9 @@ def unpark_module(module: Any, label: str) -> None:
     """Move `module` back to CUDA. Idempotent and a no-op when CUDA
     isn't available or the module is already there."""
     if module is None or not _cuda_available():
+        return
+    if not callable(getattr(module, "parameters", None)):
+        # Non-torch module (ONNX Runtime session): nothing to move.
         return
     try:
         first_param = next(module.parameters(), None)
