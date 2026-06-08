@@ -18,11 +18,27 @@
  * `segmentsFor` returns the bare text, so the row renders normally and
  * upgrades in place once readings arrive.
  *
- * This module's pure helpers (`hasKanji`, `toHiragana`, `fitFurigana`)
- * carry the testable logic; the singleton wires them to kuromoji + MobX.
+ * Context matters: kuromoji's reading depends on the whole line, so
+ * {@link FuriganaAnnotator.segmentsForWords} tokenizes a line's chips
+ * *together* and slices the result back onto each chip (実 reads じつ
+ * inside 実は, not the lone-token み). When the forced aligner split a
+ * compound across chips (盲目 · 的) but kuromoji kept it as one token, the
+ * single fitted reading can't be cut; a second lazy asset, a trimmed
+ * JmdictFurigana per-kanji split table (see `jmdict_furigana_loader.ts` +
+ * `scripts/build-furigana-dict.mjs`), supplies the per-kanji division
+ * (盲/もう · 目/もく · 的/てき). Words it can't divide fall back to a
+ * standalone (chip-local) tokenize.
+ *
+ * This module's pure helpers (`hasKanji`, `toHiragana`, `fitFurigana`,
+ * `sliceLineSegments`, `expandCompounds`) carry the testable logic; the
+ * singleton wires them to kuromoji + the split table + MobX.
  */
 import type { IpadicFeatures, Tokenizer } from '@sglkc/kuromoji';
 import { makeAutoObservable, runInAction } from 'mobx';
+import {
+  loadFuriganaSplitMap,
+  type FuriganaSplitMap,
+} from './jmdict_furigana_loader';
 
 /** One run of base text with an optional reading. A reading is present
  *  only on kanji runs; okurigana / kana / punctuation runs carry just
@@ -149,6 +165,139 @@ export function fitFurigana(surface: string, reading: string): RubySegment[] {
   return mergeBareRuns(segs);
 }
 
+/**
+ * Slice a whole-line segmentation back onto its individual display words.
+ *
+ * Readings must be fit with sentence context (a single kanji can read
+ * very differently alone vs. inside a compound: 実 alone tokenizes to the
+ * noun み, but 実は is the adverb じつは), so {@link FuriganaAnnotator}
+ * tokenizes the words joined into one line and then this helper hands each
+ * word its contiguous span of the result. `words` concatenate (in order,
+ * no separators) to the same text the segments cover, so the spans are
+ * just the cumulative `base` lengths.
+ *
+ * Returns one entry per word: its sliced segments, or `null` when the word
+ * can't be cleanly sliced because a reading-bearing run straddles its
+ * boundary. That happens when kuromoji groups MORE characters into one
+ * fitted reading than the aligner gave to a single chip (盲目的 tokenizes
+ * as one モウモクテキ token, but the aligner split it into 盲目 · 的). A
+ * fitted reading can't be cut mid-run, so the caller re-tokenizes that
+ * word on its own instead (盲目 → もうもく, 的 → てき). Bare runs slice
+ * freely, including the single whole-line placeholder segment returned
+ * while the dictionary loads, so every word renders (bare) in the meantime
+ * without forcing a premature standalone tokenize.
+ */
+export function sliceLineSegments(
+  lineSegs: readonly RubySegment[],
+  words: readonly string[],
+): (RubySegment[] | null)[] {
+  const result: (RubySegment[] | null)[] = [];
+  let spanStart = 0;
+  for (const word of words) {
+    const spanEnd = spanStart + word.length;
+    result.push(sliceSpan(lineSegs, spanStart, spanEnd));
+    spanStart = spanEnd;
+  }
+  return result;
+}
+
+/** Cumulative UTF-16 offsets where one word ends and the next begins, for
+ *  a line built by joining `words`. Interior boundaries only (the line
+ *  start and end aren't included), so {@link expandCompounds} can ask "does
+ *  a chip boundary fall *inside* this reading run?". */
+export function wordBoundaries(words: readonly string[]): Set<number> {
+  const out = new Set<number>();
+  let acc = 0;
+  for (let i = 0; i < words.length - 1; i++) {
+    acc += words[i].length;
+    out.add(acc);
+  }
+  return out;
+}
+
+/**
+ * Split any reading run that a chip boundary cuts into finer per-kanji
+ * segments, using `lookup` (the JmdictFurigana split table).
+ *
+ * kuromoji groups a compound into one token with one reading (盲目的 →
+ * もうもくてき), which {@link fitFurigana} keeps as a single run. When the
+ * forced aligner split that compound across chips (盲目 · 的), the run
+ * straddles a chip boundary and can't be sliced. `lookup` supplies the
+ * precomputed per-kanji division (盲/もう · 目/もく · 的/てき) so the run
+ * becomes individually-sliceable. Runs not cut by a boundary are left
+ * whole (so a compound sitting on one chip keeps its single ruby), as are
+ * runs `lookup` can't divide (unknown word, or a jukujikun the table only
+ * has as one span), those fall through to the caller's standalone
+ * fallback. Returns a new segment list; `lineSegs` is unchanged.
+ */
+export function expandCompounds(
+  lineSegs: readonly RubySegment[],
+  boundaries: ReadonlySet<number>,
+  lookup: (base: string, reading: string) => RubySegment[] | null,
+): RubySegment[] {
+  const out: RubySegment[] = [];
+  let off = 0;
+  for (const seg of lineSegs) {
+    const start = off;
+    const end = off + seg.base.length;
+    off = end;
+    if (seg.reading === undefined || !hasInteriorBoundary(boundaries, start, end)) {
+      out.push(seg);
+      continue;
+    }
+    const split = lookup(seg.base, seg.reading);
+    if (split && split.reduce((n, s) => n + s.base.length, 0) === seg.base.length) {
+      out.push(...split);
+    } else {
+      out.push(seg);
+    }
+  }
+  return out;
+}
+
+/** True when some boundary `b` falls strictly inside `(start, end)`. */
+function hasInteriorBoundary(
+  boundaries: ReadonlySet<number>,
+  start: number,
+  end: number,
+): boolean {
+  for (let b = start + 1; b < end; b++) {
+    if (boundaries.has(b)) return true;
+  }
+  return false;
+}
+
+/** Segments overlapping the half-open char span `[start, end)` of a line
+ *  segmentation. Bare runs are sliced to the overlap; a reading run is
+ *  taken whole only when fully inside the span, otherwise the span
+ *  straddles a fitted reading and we return `null` (the caller re-
+ *  tokenizes the word standalone). `null` too when nothing overlaps (a
+ *  degenerate span past the segmentation). Char offsets are UTF-16 units,
+ *  consistent with the `word.length` spans in {@link sliceLineSegments}. */
+function sliceSpan(
+  lineSegs: readonly RubySegment[],
+  start: number,
+  end: number,
+): RubySegment[] | null {
+  const out: RubySegment[] = [];
+  let off = 0;
+  for (const seg of lineSegs) {
+    const segStart = off;
+    const segEnd = off + seg.base.length;
+    off = segEnd;
+    if (segEnd <= start || segStart >= end) continue; // no overlap
+    if (seg.reading !== undefined) {
+      if (segStart < start || segEnd > end) return null; // straddle
+      out.push({ base: seg.base, reading: seg.reading });
+    } else {
+      const a = Math.max(segStart, start) - segStart;
+      const b = Math.min(segEnd, end) - segStart;
+      out.push({ base: seg.base.slice(a, b) });
+    }
+  }
+  return out.length > 0 ? mergeBareRuns(out) : null;
+}
+
 /** Tokenize `text` and annotate every token, concatenating the per-token
  *  segments. Tokens with no usable reading (out-of-dictionary, `'*'`)
  *  fall through as bare text. */
@@ -169,22 +318,28 @@ function annotateText(
   return mergeBareRuns(segs);
 }
 
-/** Build the browser tokenizer. Dynamic-imported so kuromoji + its dict
- *  loader are code-split out of the main bundle and only fetched when a
- *  song actually has kanji. `dicPath` is served from `public/` (see
- *  `scripts/copy-kuromoji-dict.mjs`) and honours Vite's base URL. */
+/** Build the browser tokenizer. The loader module is dynamic-imported so
+ *  kuromoji + its dict code are code-split out of the main bundle and only
+ *  fetched when a song actually has kanji. `dicPath` is served from
+ *  `public/` (see `scripts/copy-kuromoji-dict.mjs`) and honours Vite's base
+ *  URL. We use our own loader rather than kuromoji's `builder()` because the
+ *  dev server serves the dict with `Content-Encoding: gzip` and kuromoji's
+ *  loader double-decodes it; see `kuromoji_loader.ts`. */
 async function buildTokenizer(): Promise<Tokenizer<IpadicFeatures>> {
-  const { builder } = await import('@sglkc/kuromoji');
+  const { buildBrowserTokenizer } = await import('./kuromoji_loader');
   const base =
     (import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ??
     '/';
-  const dicPath = `${base}kuromoji-dict`;
-  return new Promise<Tokenizer<IpadicFeatures>>((resolve, reject) => {
-    builder({ dicPath }).build((err, tokenizer) => {
-      if (err) reject(err);
-      else resolve(tokenizer);
-    });
-  });
+  return buildBrowserTokenizer(`${base}kuromoji-dict`);
+}
+
+/** URL of the per-kanji split table, served from `public/` and honouring
+ *  Vite's base URL (same pattern as the kuromoji dict path). */
+function furiganaSplitsUrl(): string {
+  const base =
+    (import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ??
+    '/';
+  return `${base}jmdict-furigana/furigana.txt.gz`;
 }
 
 /**
@@ -206,18 +361,29 @@ class FuriganaAnnotator {
   private cache = new Map<string, RubySegment[]>();
   private pending = new Set<string>();
   private tokenizerPromise: Promise<Tokenizer<IpadicFeatures>> | undefined;
+  /** Per-kanji split table (JmdictFurigana), loaded lazily the first time a
+   *  compound straddles a chip boundary. Absent until then. */
+  private furiganaSplits: FuriganaSplitMap | undefined;
+  private furiganaSplitsPromise: Promise<FuriganaSplitMap> | undefined;
 
   constructor() {
     // Private fields must be named in the generic so MobX leaves them
-    // unobserved (the cache + pending set + builder promise are plumbing,
-    // not reactive state; reactivity is the `revision` counter).
+    // unobserved (the cache + pending set + builder/loader promises +
+    // split table are plumbing, not reactive state; reactivity is the
+    // `revision` counter).
     makeAutoObservable<
       FuriganaAnnotator,
-      'cache' | 'pending' | 'tokenizerPromise'
+      | 'cache'
+      | 'pending'
+      | 'tokenizerPromise'
+      | 'furiganaSplits'
+      | 'furiganaSplitsPromise'
     >(this, {
       cache: false,
       pending: false,
       tokenizerPromise: false,
+      furiganaSplits: false,
+      furiganaSplitsPromise: false,
     });
   }
 
@@ -233,6 +399,74 @@ class FuriganaAnnotator {
     if (cached) return cached;
     this.schedule(text);
     return [{ base: text }];
+  }
+
+  /** Context-aware furigana for a run of display words that together form
+   *  one lyric line. The words are tokenized *as a single line* (joined,
+   *  no separators) so each reading disambiguates against its neighbours,
+   *  then the line's segmentation is sliced back onto each word; see
+   *  {@link sliceLineSegments}. Returns one segment list per input word,
+   *  in order. This is the path the word-aligned lyrics row uses: the
+   *  forced aligner may split a compound across chips (実 / は), and
+   *  tokenizing each chip alone reads 実 as the noun み instead of the
+   *  じつ of 実は. Reactivity rides on {@link segmentsFor}'s `revision`
+   *  read, so callers re-render in place when the dictionary resolves. */
+  segmentsForWords(words: readonly string[]): RubySegment[][] {
+    if (words.length === 0) return [];
+    const line = this.segmentsFor(words.join(''));
+    // Pre-split any compound run a chip boundary cuts, using the
+    // JmdictFurigana table, so the slice below finds clean per-kanji
+    // boundaries (盲目的 → 盲/もう · 目/もく · 的/てき).
+    const expanded = expandCompounds(line, wordBoundaries(words), (b, r) =>
+      this.lookupSplit(b, r),
+    );
+    const sliced = sliceLineSegments(expanded, words);
+    // A remaining `null` slice means a reading run still straddles this
+    // chip (the split table is unknown for this word, hasn't loaded yet, or
+    // it's an indivisible jukujikun). Fall back to tokenizing the chip on
+    // its own; for a real sub-word that reads correctly (盲目 → もうもく),
+    // and `segmentsFor` returns bare text when there's no fittable reading.
+    let straddled = false;
+    const out = sliced.map((segs, i) => {
+      if (segs) return segs;
+      straddled = true;
+      return this.segmentsFor(words[i]);
+    });
+    // Lazy-load the split table on first straddle so the next render can
+    // divide the compound instead of leaning on the standalone fallback.
+    if (straddled) this.ensureFuriganaSplitsLoaded();
+    return out;
+  }
+
+  /** Per-kanji division for an all-kanji compound `base` read `reading`,
+   *  or null when the split table is unloaded / lacks the word. A surface
+   *  with a single recorded reading is trusted even if kuromoji's reading
+   *  drifts in spelling (long vowels, small kana); homographs must match
+   *  the reading exactly. */
+  private lookupSplit(base: string, reading: string): RubySegment[] | null {
+    const entries = this.furiganaSplits?.get(base);
+    if (!entries || entries.length === 0) return null;
+    if (entries.length === 1) return entries[0].segs;
+    const hit = entries.find((e) => e.reading === reading);
+    return hit ? hit.segs : null;
+  }
+
+  /** Kick off the one-time fetch + parse of the split table. Idempotent; on
+   *  success bumps `revision` so in-place renders re-split. A failure clears
+   *  the promise so a later straddle can retry. */
+  private ensureFuriganaSplitsLoaded(): void {
+    if (this.furiganaSplitsPromise || this.furiganaSplits) return;
+    this.furiganaSplitsPromise = loadFuriganaSplitMap(furiganaSplitsUrl());
+    void this.furiganaSplitsPromise
+      .then((map) => {
+        runInAction(() => {
+          this.furiganaSplits = map;
+          this.revision++;
+        });
+      })
+      .catch(() => {
+        this.furiganaSplitsPromise = undefined;
+      });
   }
 
   private schedule(text: string): void {

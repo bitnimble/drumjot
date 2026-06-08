@@ -33,9 +33,12 @@ import styles from './lyrics_row.module.css';
 import mixerStyles from './mixer.module.css';
 import { Playhead } from './playback';
 import { seekFromClick } from './score';
+import { barsRowWidthSeed, intersectsBeatRange } from './windowing';
 
-/** Same fixed height as the audio-track row so adjacent rows align flush. */
-const LYRICS_ROW_HEIGHT = 56;
+/** Taller than the audio-track row (which is 56) to fit the enlarged 22px
+ *  karaoke text plus the furigana strip stacked above it. Rows stack
+ *  independently, so a taller lyrics row doesn't disturb the others. */
+const LYRICS_ROW_HEIGHT = 64;
 
 /** Treat sub-millisecond gaps between rendered and raw model times as
  *  noise (floating-point round-trip through JSON, tiny rounding inside
@@ -388,6 +391,14 @@ const LyricLineChip = observer(
     activeWordIdx: number | undefined;
   }) => {
     const wordAligned = wordPositions !== undefined;
+    // Surfaces of this line's words, joined for context-aware furigana.
+    // Memoised on `wordPositions` so each `LyricWordChip` receives a
+    // stable array reference and its memo still bails across playhead
+    // transitions (the word texts only change when the line re-positions).
+    const lineWordTexts = React.useMemo(
+      () => (wordPositions ? wordPositions.map((w) => w.text) : []),
+      [wordPositions],
+    );
     return (
       <span
         className={classNames(
@@ -405,7 +416,7 @@ const LyricLineChip = observer(
         data-testid={`lyrics-line-${lineIdx}`}
       >
         {wordAligned
-          ? wordPositions!.map((w) => (
+          ? wordPositions!.map((w, i) => (
               <LyricWordChip
                 key={w.sourceIdx}
                 lineIdx={lineIdx}
@@ -413,6 +424,8 @@ const LyricLineChip = observer(
                 word={w}
                 shift={shifts.get(lyricShiftKey(lineIdx, w.sourceIdx)) ?? 0}
                 isActive={activeWordIdx === w.sourceIdx}
+                lineWordTexts={lineWordTexts}
+                wordPosIndex={i}
               />
             ))
           : text}
@@ -428,12 +441,21 @@ const LyricWordChip = observer(
     word,
     shift,
     isActive,
+    lineWordTexts,
+    wordPosIndex,
   }: {
     lineIdx: number;
     wordIdx: number;
     word: PositionedWord;
     shift: number;
     isActive: boolean;
+    /** Surfaces of every (in-range) word on this line, in render order;
+     *  the furigana annotator tokenizes them together for context. Stable
+     *  identity (memoised by the parent) so this `observer`+memo chip
+     *  still bails on word/playhead transitions. */
+    lineWordTexts: readonly string[];
+    /** This word's position within {@link lineWordTexts}. */
+    wordPosIndex: number;
   }) => {
     const wordStyle: Record<string, string | number> = {
       '--lyric-word-beat-offset': word.beatOffset,
@@ -451,7 +473,7 @@ const LyricWordChip = observer(
         data-testid={`lyrics-word-${lineIdx}-${wordIdx}`}
       >
         <span className={styles.lyricWordText}>
-          <WordText text={word.text} />
+          <WordText words={lineWordTexts} index={wordPosIndex} />
         </span>
       </span>
     );
@@ -459,30 +481,88 @@ const LyricWordChip = observer(
 );
 
 /** Renders a word's glyphs, stacking hiragana furigana over kanji runs
- *  when the annotator has a reading for the text. `segmentsFor` is
- *  synchronous (bare text until the kuromoji dictionary resolves) and its
- *  `revision` read makes this `observer` re-render in place once readings
- *  arrive. Falls back to a plain text node when there's no ruby, so
- *  non-Japanese words render exactly as before. */
-const WordText = observer(({ text }: { text: string }) => {
-  const segments = furiganaAnnotator.segmentsFor(text);
-  const hasRuby = segments.some((s) => s.reading !== undefined);
-  if (!hasRuby) return <>{text}</>;
+ *  when the annotator has a reading for the text. Takes the whole line's
+ *  word surfaces plus this word's index (not the bare text) so the reading
+ *  is tokenized with sentence context: a chip the aligner split off a
+ *  compound (実 out of 実は) reads correctly (じつ) instead of its lone-
+ *  token reading (み). `segmentsForWords` is synchronous (bare text until
+ *  the kuromoji dictionary resolves) and its `revision` read makes this
+ *  `observer` re-render in place once readings arrive. Falls back to a
+ *  plain text node when there's no ruby, so non-Japanese words render
+ *  exactly as before. */
+const WordText = observer(
+  ({ words, index }: { words: readonly string[]; index: number }) => {
+    const segments =
+      furiganaAnnotator.segmentsForWords(words)[index] ??
+      ([{ base: words[index] ?? '' }] as RubySegment[]);
+    const hasRuby = segments.some((s) => s.reading !== undefined);
+    if (!hasRuby) return <>{words[index] ?? ''}</>;
+    return (
+      <ruby className={styles.ruby}>
+        {segments.map((seg: RubySegment, i) =>
+          seg.reading !== undefined ? (
+            <React.Fragment key={i}>
+              {seg.base}
+              <rt>{seg.reading}</rt>
+            </React.Fragment>
+          ) : (
+            // Bare run (okurigana / kana / punctuation): base on the
+            // baseline, no annotation column.
+            <React.Fragment key={i}>{seg.base}</React.Fragment>
+          ),
+        )}
+      </ruby>
+    );
+  },
+);
+
+/** The active-line/word state {@link WindowedLines} reads to mark its
+ *  chips. Subset of the row's local playhead observable. */
+type LyricsPlayhead = {
+  readonly activeLineIdx: number | undefined;
+  readonly activeWordIdx: number | undefined;
+};
+
+/**
+ * Windowed DOM for the lyric-line chips. Split out of {@link LyricsRow}
+ * so a scroll / zoom tick re-renders only this map, not the row gutter
+ * (label, controls, overflow menu). Renders only lines whose beat span
+ * intersects {@link JotViewStore.visibleBeatRange}. Reads the row's
+ * playhead observable for the active-line/word highlight, so it also
+ * re-renders on a line transition (a few times per second), the precise
+ * thing each child {@link LyricLineChip}'s memo then short-circuits.
+ */
+const WindowedLines = observer(function WindowedLines({
+  positioned,
+  shifts,
+  playhead,
+}: {
+  positioned: PositionedLine[];
+  shifts: Map<string, number>;
+  playhead: LyricsPlayhead;
+}) {
+  const store = React.useContext(JotViewStoreContext);
+  const range = store?.visibleBeatRange ?? null;
   return (
-    <ruby className={styles.ruby}>
-      {segments.map((seg: RubySegment, i) =>
-        seg.reading !== undefined ? (
-          <React.Fragment key={i}>
-            {seg.base}
-            <rt>{seg.reading}</rt>
-          </React.Fragment>
-        ) : (
-          // Bare run (okurigana / kana / punctuation): base on the
-          // baseline, no annotation column.
-          <React.Fragment key={i}>{seg.base}</React.Fragment>
-        ),
-      )}
-    </ruby>
+    <>
+      {positioned.map((p) => {
+        if (!intersectsBeatRange(range, p.startBeat, p.endBeat - p.startBeat)) return null;
+        const isActive = playhead.activeLineIdx === p.i;
+        return (
+          <LyricLineChip
+            key={p.i}
+            lineIdx={p.i}
+            startBeat={p.startBeat}
+            endBeat={p.endBeat}
+            text={p.text}
+            wordPositions={p.wordPositions}
+            shifts={shifts}
+            isActive={isActive}
+            activeWordIdx={isActive ? playhead.activeWordIdx : undefined}
+          />
+        );
+      })}
+    </>
   );
 });
 
@@ -616,22 +696,54 @@ export const LyricsRow = observer(
     const shifts = React.useMemo(() => {
       const measureInputs: LyricLineMeasureInput[] = positioned
         .filter((p) => p.wordPositions !== undefined)
-        .map((p) => ({
-          lineIdx: p.i,
-          activeWordSourceIdx: undefined,
-          words: p.wordPositions!.map((w) => ({
-            sourceIdx: w.sourceIdx,
-            text: w.text,
-            beatOffset: w.beatOffset,
-            segments: furiganaAnnotator.segmentsFor(w.text),
-          })),
-        }));
+        .map((p) => {
+          const wp = p.wordPositions!;
+          // Context-aware: tokenize the line's words together so the
+          // ruby widths the collision walk measures match what renders
+          // (実 in 実は widens to じつ, not the lone-token み).
+          const lineSegs = furiganaAnnotator.segmentsForWords(
+            wp.map((w) => w.text),
+          );
+          return {
+            lineIdx: p.i,
+            activeWordSourceIdx: undefined,
+            words: wp.map((w, j) => ({
+              sourceIdx: w.sourceIdx,
+              text: w.text,
+              beatOffset: w.beatOffset,
+              segments: lineSegs[j],
+            })),
+          };
+        });
       return computeLyricShifts(measureInputs, pxPerBeat);
       // `fontReady` and `furiganaRevision` are intentionally in the deps:
       // a font-load completion or a furigana resolution re-derives shifts
       // against real glyph widths.
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [positioned, pxPerBeat, fontReady, furiganaRevision]);
+
+    // True once any word in the track has a resolved furigana reading. Drives
+    // the `.lyricsBarsRowFurigana` modifier, which reserves the ruby
+    // annotation strip above the plain (no-ruby) words too, so every base
+    // sits on one line instead of the kanji dropping below its neighbours.
+    // Re-derives on `furiganaRevision` (readings resolve async).
+    const trackHasFurigana = React.useMemo(() => {
+      for (const p of positioned) {
+        if (!p.wordPositions) continue;
+        const lineSegs = furiganaAnnotator.segmentsForWords(
+          p.wordPositions.map((w) => w.text),
+        );
+        if (
+          lineSegs.some((wordSegs) =>
+            wordSegs.some((s) => s.reading !== undefined),
+          )
+        ) {
+          return true;
+        }
+      }
+      return false;
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [positioned, furiganaRevision]);
 
     // Reactive active-line/word state. Reading `playhead.activeLineIdx`
     // here re-renders `LyricsRow` only when the active line index *flips*
@@ -737,31 +849,25 @@ export const LyricsRow = observer(
           </div>
         </div>
         <div
-          className={styles.lyricsBarsRow}
+          className={classNames(
+            styles.lyricsBarsRow,
+            trackHasFurigana && styles.lyricsBarsRowFurigana,
+          )}
+          data-bars-row
+          // Lyrics rows alone keep a scoped `--px-per-beat` (written by
+          // `setBarsRowVars`) for their zoom-responsive font metrics +
+          // word-cell geometry, which can't be percentages.
+          data-lyrics-bars-row="1"
           style={
             {
               ['--voice-beats' as string]: voiceBeats,
+              ['--bars-row-width' as string]: barsRowWidthSeed(jot, voiceBeats),
               height: LYRICS_ROW_HEIGHT,
             } as React.CSSProperties
           }
           onClick={(e) => seekFromClick(e, onSeek)}
         >
-          {positioned.map((p) => {
-            const isActive = playhead.activeLineIdx === p.i;
-            return (
-              <LyricLineChip
-                key={p.i}
-                lineIdx={p.i}
-                startBeat={p.startBeat}
-                endBeat={p.endBeat}
-                text={p.text}
-                wordPositions={p.wordPositions}
-                shifts={shifts}
-                isActive={isActive}
-                activeWordIdx={isActive ? playhead.activeWordIdx : undefined}
-              />
-            );
-          })}
+          <WindowedLines positioned={positioned} shifts={shifts} playhead={playhead} />
           <Playhead onSeek={onSeek} />
         </div>
       </div>

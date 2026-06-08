@@ -35,16 +35,16 @@ import { RubySegment } from 'src/lyrics';
 const FONT_FAMILY =
   "'Bricolage Grotesque', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
 /** Font size inherited from `.lyricLine`. Keep in lockstep with
- *  `lyrics_row.module.css::.lyricLine { font-size: 18px }`. */
-const LYRIC_FONT_SIZE_PX = 18;
+ *  `lyrics_row.module.css::.lyricLine { font-size: 22px }`. */
+const LYRIC_FONT_SIZE_PX = 22;
 const ACTIVE_FONT_WEIGHT = 800;
 const MIN_GAP_PX = 4;
 /** Furigana annotation font. Keep in lockstep with
- *  `lyrics_row.module.css::.lyricWordText rt`: 0.5em of the 18px base =
- *  9px, weight 400, default (100%) width, the `rt` rule re-declares
- *  `font-variation-settings` to `wght 400`, which also resets `wdth` to
- *  the font's 100 default. */
-const RT_FONT_SIZE_PX = 9;
+ *  `lyrics_row.module.css::.lyricWordText rt`: 0.65em of the 22px base =
+ *  14.3px (the `--lyric-rt-size` var), weight 400, default (100%) width,
+ *  the `rt` rule re-declares `font-variation-settings` to `wght 400`, which
+ *  also resets `wdth` to the font's 100 default. */
+const RT_FONT_SIZE_PX = 14.3;
 const RT_FONT_WEIGHT = 400;
 const RT_WDTH = 100;
 

@@ -124,6 +124,22 @@
 
 .lyricsBarsRow {
     composes: barsRowBase from '../jot_view.module.css';
+    /* Lyrics rows keep a SCOPED `--px-per-beat`: the score-wide inherited
+       one was removed (zoom now drives per-row width + percentage
+       geometry), but the lyric chips' zoom-responsive font metrics
+       (letter-spacing / wdth / wght below) and the word-cell `left` /
+       `width` can't be expressed as percentages, so `setBarsRowVars`
+       (jot_view.tsx) writes `--px-per-beat` on this element only. The
+       cascade is confined to this row's (windowed) chips. `--note-pad-px`
+       (the engraving inset other rows now express as a percentage) is
+       rebuilt here from that scoped value; `--note-pad-beats` inherits
+       from the score container (zoom-invariant). */
+    --note-pad-px: calc(var(--note-pad-beats) * var(--px-per-beat) * 1px);
+    /* Furigana annotation font size, shared by the `rt` rule and the
+       plain-word reserve (`.lyricsBarsRowFurigana`) so the rt's line box
+       and the reserved strip stay in lockstep. 0.65em of the 22px base =
+       14.3px. Keep in lockstep with lyrics_measure.ts::RT_FONT_SIZE_PX. */
+    --lyric-rt-size: 0.65em;
     /* Tighten glyph tracking as zoom drops so lyric text packs into the
        narrower per-beat budget. Ramps from 0 at px-per-beat ≥ 224 to
        -0.7px around px-per-beat ≈ 45 (≈40% zoom at density 1). Max
@@ -196,8 +212,8 @@
         (var(--lyric-end-beat) - var(--lyric-start-beat)) * var(--px-per-beat) * 1px - 4px
     );
     padding: 6px 12px;
-    /* stylelint-disable-next-line property-disallowed-list -- lyric chips run at a one-off 18px so the karaoke text reads larger than UI body copy. */
-    font-size: 18px;
+    /* stylelint-disable-next-line property-disallowed-list -- lyric chips run at a one-off 22px so the karaoke text reads larger than UI body copy. */
+    font-size: 22px;
     line-height: 1.2;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -300,6 +316,23 @@
         font-variation-settings 100ms ease-in-out;
 }
 
+/* Furigana mode: at least one word in the track carries a hiragana reading
+   (toggled from lyrics_row.tsx). Native <ruby> places its reading in the
+   line's leading and only grows the line box if the leading can't contain
+   it - so with a normal line-height the annotated words get taller than the
+   plain ones beside them and their kanji drop off the shared baseline. Open
+   up the line box (a tall line-height) so the reading always fits in the
+   leading: every word - ruby or plain - then keeps the same box height and
+   the same baseline, and because the base glyphs sit centred in that box,
+   the trailing duration rule (centred too) lands on the base's optical
+   centre rather than floating up with the furigana. 2.2 leaves the reading
+   room at the 22px base while keeping the box inside the 64px row. Applies
+   to both the inline LRC line and the word-aligned children. */
+.lyricsBarsRowFurigana .lyricLine,
+.lyricsBarsRowFurigana .lyricWordText {
+    line-height: 2.2;
+}
+
 /* Furigana ruby. Kanji runs in Japanese lyrics carry a hiragana reading
    stacked above them via the native <ruby>/<rt> element (see
    lyrics_row.tsx::WordText). The base run inherits the row's variable-font
@@ -310,10 +343,10 @@
 }
 
 .lyricWordText rt {
-    /* 0.5em of the 18px base = 9px. Keep in lockstep with
+    /* 0.65em of the 22px base = 14.3px (shared var). Keep in lockstep with
        lyrics_measure.ts::RT_FONT_SIZE_PX. */
-    /* stylelint-disable-next-line property-disallowed-list -- furigana ruby is a one-off annotation sized relative to the chip's one-off 18px. */
-    font-size: 0.5em;
+    /* stylelint-disable-next-line property-disallowed-list -- furigana ruby is a one-off annotation sized relative to the chip's one-off base. */
+    font-size: var(--lyric-rt-size);
     line-height: 1;
     /* Reset the variable axes off the row's zoom-driven wght/wdth so the
        reading stays a steady, legible hairline. wght 400 also resets wdth

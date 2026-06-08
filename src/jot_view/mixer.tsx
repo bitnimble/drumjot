@@ -1,7 +1,7 @@
 import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
-import { RenderedJot, ViewConfig } from 'src/jot';
+import { RenderedJot, StructuralBar, ViewConfig } from 'src/jot';
 import { AudioTrack, AudioTrackId, AudioTrackRole, jotPlayer } from 'src/playback';
 import { waveformWorker, BarSlice } from 'src/playback/waveform_worker_client';
 import { InstrumentTrack, PICKER_PALETTE } from 'src/tracks';
@@ -24,7 +24,8 @@ import { LyricsRow } from './lyrics_row';
 import styles from './mixer.module.css';
 import { Playhead } from './playback';
 import { BarView, FilteredOnsetView, seekFromClick } from './score';
-import { TrackKey, VOLUME_STEP } from './store';
+import { JotViewStore, TrackKey, VOLUME_STEP } from './store';
+import { barsRowWidthSeed, intersectsBeatRange } from './windowing';
 
 export type VoiceControls = {
   mutedPitches: ReadonlySet<string>;
@@ -798,9 +799,11 @@ const AudioTrackRow = observer(
         </div>
         <div
           className={styles.musicTrackBarsRow}
+          data-bars-row
           style={
             {
               ['--voice-beats' as string]: voiceBeats,
+              ['--bars-row-width' as string]: barsRowWidthSeed(jot, voiceBeats),
               height: AUDIO_TRACK_HEIGHT,
             } as React.CSSProperties
           }
@@ -836,6 +839,79 @@ const AudioTrackRow = observer(
  * voices for this pitch, so the row works whether the pitch lives in
  * voice 0 or 1.
  */
+/**
+ * The windowed bar list for one instrument row. Split out of
+ * {@link InstrumentRow} so the only thing that re-renders on a scroll /
+ * zoom tick is this bar map, the row gutter (label, fader, M/S, overflow
+ * menu) reads no scroll observable and stays put. Mirrors the
+ * waveform-chunk visibility pattern ({@link AudioTrackWaveformCanvas}):
+ * read the visible beat window from the store and render only the bars
+ * whose span intersects it (plus the buffer baked into
+ * `visibleBeatRange`).
+ *
+ * Bars key on the clone-stable `bar.index` (not the array position) so
+ * the window sliding by one bar reuses every surviving bar's DOM instead
+ * of re-keying the whole list. The per-bar props handed to {@link
+ * BarView} are referentially stable across scroll (the caller memoises
+ * `pitches` / `colorForPitch`), so `BarView`'s `observer` memo holds and
+ * an unchanged visible bar pays nothing on a scroll tick that doesn't
+ * move the window, only newly-revealed bars mount.
+ */
+const WindowedBarList = observer(function WindowedBarList({
+  store,
+  pitchBars,
+  startBeats,
+  pitch,
+  config,
+  showBrackets,
+  pitchOrder,
+  highlightedPattern,
+  onPatternClick,
+  isPitchAudible,
+  pitches,
+  colorForPitch,
+}: {
+  store: JotViewStore | null;
+  pitchBars: readonly StructuralBar[];
+  startBeats: readonly number[];
+  pitch: string;
+  config: ViewConfig;
+  showBrackets: boolean;
+  pitchOrder: readonly string[];
+  highlightedPattern: string | undefined;
+  onPatternClick: (name: string) => void;
+  isPitchAudible: (pitch: string) => boolean;
+  pitches: string[];
+  colorForPitch: (pitch: string) => string | undefined;
+}) {
+  const range = store?.visibleBeatRange ?? null;
+  return (
+    <>
+      {pitchBars.map((bar, i) => {
+        const startBeat = startBeats[i];
+        if (!intersectsBeatRange(range, startBeat, bar.beats)) return null;
+        return (
+          <BarView
+            key={bar.index}
+            bar={bar}
+            barStartBeat={startBeat}
+            pitches={pitches}
+            config={config}
+            isAnacrusis={bar.index === 0}
+            highlightedPattern={highlightedPattern}
+            onPatternClick={onPatternClick}
+            isPitchAudible={isPitchAudible}
+            showBrackets={showBrackets}
+            rowPitch={pitch}
+            pitchOrder={pitchOrder}
+            colorForPitch={colorForPitch}
+          />
+        );
+      })}
+    </>
+  );
+});
+
 const InstrumentRow = observer(
   ({
     pitch,
@@ -917,6 +993,13 @@ const InstrumentRow = observer(
     });
     const isDragging = dragFromIdx === idx;
     const labelText = instrumentName ?? `Pitch ${pitch}`;
+    // Stable per-bar props so the windowed bar list's scroll re-renders
+    // don't bust `BarView`'s observer memo for bars that didn't move.
+    const pitchesMemo = React.useMemo(() => [pitch], [pitch]);
+    const colorForPitch = React.useCallback(
+      (p: string) => store?.getInstrumentTrack(p).color,
+      [store]
+    );
     return (
       <div
         className={classNames(
@@ -987,6 +1070,7 @@ const InstrumentRow = observer(
           style={
             {
               ['--voice-beats' as string]: voiceBeats,
+              ['--bars-row-width' as string]: barsRowWidthSeed(jot, voiceBeats),
             } as React.CSSProperties
           }
           onClick={(e) => seekFromClick(e, onSeek)}
@@ -1014,23 +1098,20 @@ const InstrumentRow = observer(
               `--bar-start-beat`; see `.bar` in score.module.css) is
               precomputed by `jot.barsForPitch(pitch)` as `startBeats`,
               so this map is just a render. */}
-          {pitchBars.map((bar, i) => (
-            <BarView
-              key={i}
-              bar={bar}
-              barStartBeat={startBeats[i]}
-              pitches={[pitch]}
-              config={config}
-              isAnacrusis={bar.index === 0}
-              highlightedPattern={highlightedPattern}
-              onPatternClick={onPatternClick}
-              isPitchAudible={voiceControls.isPitchAudible}
-              showBrackets={showBrackets}
-              rowPitch={pitch}
-              pitchOrder={pitchOrder}
-              colorForPitch={(p) => store?.getInstrumentTrack(p).color}
-            />
-          ))}
+          <WindowedBarList
+            store={store ?? null}
+            pitchBars={pitchBars}
+            startBeats={startBeats}
+            pitch={pitch}
+            config={config}
+            showBrackets={showBrackets}
+            pitchOrder={pitchOrder}
+            highlightedPattern={highlightedPattern}
+            onPatternClick={onPatternClick}
+            isPitchAudible={voiceControls.isPitchAudible}
+            pitches={pitchesMemo}
+            colorForPitch={colorForPitch}
+          />
           {rejectedForPitch.map((entry, i) => {
             // The MIDI lays `leadBars` empty bar-0-sized blocks before
             // struct bar 0, so the struct bar index maps to the

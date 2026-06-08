@@ -23,15 +23,26 @@ function trackIds(page: Page): Promise<string[]> {
   );
 }
 
+/** Load the built-in `Simple rock loop` example from the empty-state
+ *  picker and wait for the score to render. The toolbar (and thus the
+ *  File → Load submenu the audio-track loader lives in) only exists once a
+ *  jot is loaded. Mirrors `lyrics.e2e.ts::loadRockLoop`. */
+async function loadRockLoop(page: Page): Promise<void> {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Simple rock loop' }).click();
+  await page.waitForSelector('[data-testid^="instrument-row-"]');
+}
+
 /**
- * Open the header "Load" dropdown, click the single audio-track menu
- * item, feed the fixture into the file chooser, then wait for the async
- * decode to land a *new* track on the player and return its id. The
- * change handler is fire-and-forget (decode is async), so the track map
- * only grows a tick or two after `setFiles` resolves.
+ * Walk File → Load → "Load audio track(s)", feed the fixture into the file
+ * chooser, then wait for the async decode to land a *new* track on the
+ * player and return its id. The change handler is fire-and-forget (decode
+ * is async), so the track map only grows a tick or two after `setFiles`
+ * resolves.
  */
 async function loadAudioTrack(page: Page): Promise<string> {
   const before = new Set(await trackIds(page));
+  await page.getByRole('button', { name: 'File', exact: true }).click();
   await page.getByRole('button', { name: 'Load', exact: true }).click();
   const [chooser] = await Promise.all([
     page.waitForEvent('filechooser'),
@@ -53,8 +64,20 @@ async function loadAudioTrack(page: Page): Promise<string> {
   return id;
 }
 
+/** Open a track's ⋯ overflow menu and click "Remove track". The menu
+ *  panel is portaled out of the row, so the trigger is scoped to the
+ *  track's row (every `tone.wav` track shares the same label) while the
+ *  "Remove track" item is reached by its unique global testid. */
+async function removeTrack(page: Page, id: string): Promise<void> {
+  await page
+    .getByTestId(`audio-track-row-${id}`)
+    .locator('button[title^="More actions"]')
+    .click();
+  await page.getByTestId(`audio-track-clear-${id}`).click();
+}
+
 test('loads a track: row appears, buffer decodes, waveform renders', async ({ page }) => {
-  await page.goto('/');
+  await loadRockLoop(page);
   await expect(page.locator('h2')).toContainText('Simple rock loop');
 
   const id = await loadAudioTrack(page);
@@ -66,23 +89,49 @@ test('loads a track: row appears, buffer decodes, waveform renders', async ({ pa
   await expect(row.getByText('tone', { exact: true })).toBeVisible();
   await expect(row.getByText('tone.wav')).toBeVisible();
 
-  // Waveform canvas painted: some non-transparent pixels in the early
-  // portion where the 0.5s tone sits (rest of the 4s timeline is silent).
+  // Waveform painted. The chunk canvas transfers control to the waveform
+  // worker (`transferControlToOffscreen`), so the main thread can no
+  // longer `getContext` it, and `drawImage` of the placeholder canvas
+  // reads back blank. A Playwright element screenshot is compositor-level
+  // though, so it captures what the worker actually painted; decode that
+  // PNG through an `Image` (a normal bitmap, not a transferred canvas) and
+  // count pixels that differ from the uniform background. A blank/unpainted
+  // canvas would be uniform (~0 differing); a rendered waveform is not.
   const canvas = page.getByTestId(`audio-track-waveform-${id}`);
   await expect(canvas).toBeVisible();
-  const painted = await canvas.evaluate((el: HTMLCanvasElement) => {
-    const ctx = el.getContext('2d');
-    if (!ctx) return 0;
-    const { data } = ctx.getImageData(0, 0, el.width, el.height);
-    let nonTransparent = 0;
-    for (let i = 3; i < data.length; i += 4) if (data[i] !== 0) nonTransparent++;
-    return nonTransparent;
-  });
-  expect(painted).toBeGreaterThan(0);
+  const shot = await canvas.screenshot();
+  const dataUrl = `data:image/png;base64,${shot.toString('base64')}`;
+  const differing = await page.evaluate(async (url) => {
+    const img = new Image();
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error('waveform screenshot failed to decode'));
+      img.src = url;
+    });
+    const off = document.createElement('canvas');
+    off.width = img.naturalWidth;
+    off.height = img.naturalHeight;
+    const ctx = off.getContext('2d')!;
+    ctx.drawImage(img, 0, 0);
+    const { data } = ctx.getImageData(0, 0, off.width, off.height);
+    const [br, bg, bb] = [data[0], data[1], data[2]];
+    let count = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (
+        Math.abs(data[i] - br) > 16 ||
+        Math.abs(data[i + 1] - bg) > 16 ||
+        Math.abs(data[i + 2] - bb) > 16
+      ) {
+        count++;
+      }
+    }
+    return count;
+  }, dataUrl);
+  expect(differing).toBeGreaterThan(0);
 });
 
 test('mute/solo on a track flips audibility live', async ({ page }) => {
-  await page.goto('/');
+  await loadRockLoop(page);
   const a = await loadAudioTrack(page);
 
   // Assert via the store's public audibility API, not player internals.
@@ -103,7 +152,7 @@ test('mute/solo on a track flips audibility live', async ({ page }) => {
 });
 
 test('multiple tracks load independently and clear individually', async ({ page }) => {
-  await page.goto('/');
+  await loadRockLoop(page);
   const a = await loadAudioTrack(page);
   const b = await loadAudioTrack(page);
   const c = await loadAudioTrack(page);
@@ -113,17 +162,19 @@ test('multiple tracks load independently and clear individually', async ({ page 
   await expect(page.getByTestId(`audio-track-row-${b}`)).toBeVisible();
   await expect(page.getByTestId(`audio-track-row-${c}`)).toBeVisible();
 
-  await page.getByTestId(`audio-track-clear-${b}`).click();
+  await removeTrack(page, b);
   await expect(page.getByTestId(`audio-track-row-${b}`)).toHaveCount(0);
   await expect(page.getByTestId(`audio-track-row-${a}`)).toBeVisible();
   await expect(page.getByTestId(`audio-track-row-${c}`)).toBeVisible();
 });
 
 test('playback starts with a track loaded and stops cleanly', async ({ page }) => {
-  await page.goto('/');
+  await loadRockLoop(page);
   await loadAudioTrack(page);
 
-  await page.getByRole('button', { name: /Play/ }).click();
+  // `exact` so this doesn't also match the "Playback" toolbar menu button;
+  // the transport play/pause toggle is aria-labelled exactly "Play" when idle.
+  await page.getByRole('button', { name: 'Play', exact: true }).click();
 
   // Reaching 'playing' requires the smplr TR-808 samples to fetch from
   // smpldsnds.github.io (GitHub Pages). In a network-restricted box
@@ -141,7 +192,7 @@ test('playback starts with a track loaded and stops cleanly', async ({ page }) =
   const t2 = await page.evaluate(() => (window as any).jotPlayer.currentTime);
   expect(t2).toBeGreaterThanOrEqual(t1);
 
-  await page.getByRole('button', { name: /Stop/ }).click();
+  await page.getByRole('button', { name: 'Stop', exact: true }).click();
   await expect
     .poll(() => page.evaluate(() => (window as any).jotPlayer.state))
     .toBe('idle');

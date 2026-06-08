@@ -39,6 +39,7 @@ import { pickDominantBpmAndTime } from 'src/playback/timeline';
 import { loadParadbZip } from 'src/rlrr';
 import {
   BeatInput,
+  DrumSeparator,
   LlmModel,
   stemUrl,
   titleFromFilename,
@@ -91,6 +92,8 @@ export type TranscribeStatus =
 export type TranscribeOptions = {
   debug: boolean;
   beatInput: BeatInput;
+  /** Stage-2 separator: `mdx23c` (default) or the opt-in `larsnet`. */
+  drumSeparator: DrumSeparator;
   /** Model for the three Opus-by-default classification stages. */
   llmModel: LlmModel;
   /** Run the optional `quantise` pipeline stage. False = no snap; every
@@ -329,6 +332,7 @@ export class JotViewStore {
   transcribeOptions: TranscribeOptions = {
     debug: true,
     beatInput: 'full_mix',
+    drumSeparator: 'mdx23c',
     llmModel: 'claude-haiku-4-5-20251001',
     quantise: true,
     quantiseUseLlm: false,
@@ -1363,6 +1367,10 @@ export class JotViewStore {
     this.transcribeOptions.beatInput = input;
   }
 
+  setDrumSeparator(separator: DrumSeparator) {
+    this.transcribeOptions.drumSeparator = separator;
+  }
+
   setLlmModel(model: LlmModel) {
     this.transcribeOptions.llmModel = model;
   }
@@ -1422,6 +1430,7 @@ export class JotViewStore {
       const response = await transcriber.transcribe(file, {
         debug: this.transcribeOptions.debug,
         beatInput: this.transcribeOptions.beatInput,
+        drumSeparator: this.transcribeOptions.drumSeparator,
         llmModel: this.transcribeOptions.llmModel,
         quantise: this.transcribeOptions.quantise,
         quantiseUseLlm: this.transcribeOptions.quantiseUseLlm,
@@ -1465,6 +1474,7 @@ export class JotViewStore {
         resumeFolder: folder,
         resumeStage: stage,
         beatInput: this.transcribeOptions.beatInput,
+        drumSeparator: this.transcribeOptions.drumSeparator,
         llmModel: this.transcribeOptions.llmModel,
         quantise: this.transcribeOptions.quantise,
         quantiseUseLlm: this.transcribeOptions.quantiseUseLlm,
@@ -2263,6 +2273,39 @@ export class JotViewStore {
     if (!(y > 0)) return 0;
     if (y > max) return max;
     return y;
+  }
+
+  /**
+   * Quarter-note-beat window currently on screen (plus a one-viewport
+   * buffer on each side so a fast scroll doesn't outrun the rendered
+   * region before the next frame). Drives horizontal score
+   * virtualisation: each row renders only the bars / ticks / words whose
+   * beat span intersects this range, so a 5-minute song keeps a bounded
+   * DOM + CSSOM regardless of length.
+   *
+   * Derived purely from `JotViewStore` observables (`scrollX`,
+   * `_viewportWidth`) and the jot's zoom-driven `pxPerBeat`, so it
+   * re-derives on scroll / zoom / resize and nothing else, no DOM
+   * layout reads (AGENTS.md §5.9). The bars row is positioned in
+   * score-px where beat 0 sits at x=0 and the virtual scroll window is
+   * `[scrollX, scrollX + viewportWidth]` (the same convention the
+   * waveform-chunk visibility check uses); the sticky gutter's width is
+   * comfortably absorbed by the buffer, so it's omitted here.
+   *
+   * `null` means "windowing disabled, render everything": returned
+   * before the first ResizeObserver tick (viewport size unknown) and
+   * whenever `pxPerBeat` is degenerate, so initial paint / non-laid-out
+   * test environments still render the full score.
+   */
+  get visibleBeatRange(): { startBeat: number; endBeat: number } | null {
+    const ppb = this.currentJot?.pxPerBeat ?? 0;
+    const vw = this._viewportWidth;
+    if (ppb <= 0 || vw <= 0) return null;
+    const buffer = vw;
+    return {
+      startBeat: (this.scrollX - buffer) / ppb,
+      endBeat: (this.scrollX + vw + buffer) / ppb,
+    };
   }
 
   /**

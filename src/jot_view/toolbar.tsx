@@ -13,6 +13,9 @@ import {
 import { themeStore, ThemeMode } from 'src/theme';
 import {
   BeatInput,
+  DRUM_SEPARATOR_LABELS,
+  DRUM_SEPARATOR_ORDER,
+  DrumSeparator,
   LLM_MODEL_LABELS,
   LLM_MODEL_ORDER,
   LlmModel,
@@ -163,6 +166,7 @@ export const Toolbar = observer(
     onCancelTranscribe,
     lyricsAlignBusyPhase,
     onSetBeatInput,
+    onSetDrumSeparator,
     onSetLlmModel,
     onSetQuantise,
     onSetQuantiseUseLlm,
@@ -220,6 +224,7 @@ export const Toolbar = observer(
      *  running. See `JotViewStore.lyricsAlignBusyPhase`. */
     lyricsAlignBusyPhase: 'idle' | 'queued' | 'aligning';
     onSetBeatInput: (input: BeatInput) => void;
+    onSetDrumSeparator: (separator: DrumSeparator) => void;
     onSetLlmModel: (model: LlmModel) => void;
     onSetQuantise: (enabled: boolean) => void;
     onSetQuantiseUseLlm: (enabled: boolean) => void;
@@ -549,6 +554,24 @@ export const Toolbar = observer(
                   >
                     <option value="full_mix">full mix</option>
                     <option value="drum_stem">drum stem</option>
+                  </Select>
+                </label>
+                <label
+                  className={sharedStyles.toolbarCheckbox}
+                  title="Stage-2 drum-piece separator. MDX23C (default) is cleaner; LarsNet is ~20-40× faster but bleedier and its weights are CC BY-NC (non-commercial). Applies to both New and Resume."
+                >
+                  <span>Drum separator</span>
+                  <Select
+                    className={sharedStyles.samplesSelect}
+                    value={transcribeOptions.drumSeparator}
+                    disabled={uploading}
+                    onChange={(e) => onSetDrumSeparator(e.target.value as DrumSeparator)}
+                  >
+                    {DRUM_SEPARATOR_ORDER.map((s) => (
+                      <option key={s} value={s}>
+                        {DRUM_SEPARATOR_LABELS[s]}
+                      </option>
+                    ))}
                   </Select>
                 </label>
                 <label

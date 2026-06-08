@@ -232,13 +232,17 @@
    so they need:
      - `position: relative` so absolutely-positioned children (bars,
        waveform tiles, lyric words, ticks, the playhead) anchor inside.
-     - `flex: 0 0 auto` so the row keeps its natural calc-derived width
-       inside the parent flex (no shrinking when the gutter is wide).
-     - Explicit `width: --voice-beats × --px-per-beat × 1px` so the row
-       has a defined bounding box across the full song.
-   `--voice-beats` is set inline per row at render time;
-   `--px-per-beat` lives on the score root and is the one variable
-   zoom mutates.
+     - `flex: 0 0 auto` so the row keeps its natural width inside the
+       parent flex (no shrinking when the gutter is wide).
+     - Explicit `width: var(--bars-row-width)` (= `voiceBeats ×
+       pxPerBeat`, in px) so the row has a defined bounding box across
+       the full song. This per-row width is the ONE quantity zoom
+       mutates; `setBarsRowVars` (jot_view.tsx) writes it on each
+       bars-row imperatively (no React re-render). Every beat-anchored
+       child positions/sizes itself as a percentage of this width
+       (`--voice-beats` set inline per row drives the divisor), so a
+       zoom relayouts the row's children without a `--px-per-beat`
+       style-recalc cascade.
 
    No `will-change: transform` or `transform: translateZ(0)` here.
    `.scrollViewport` (the single ancestor that owns the scroll
@@ -263,7 +267,7 @@
 .barsRowBase {
     position: relative;
     flex: 0 0 auto;
-    width: calc(var(--voice-beats) * var(--px-per-beat) * 1px);
+    width: var(--bars-row-width);
 }
 
 /* Compose the counter-transform above so these blocks stay pinned at

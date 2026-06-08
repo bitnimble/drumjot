@@ -19,10 +19,7 @@
        case. An explicit `width: 100%` pins it to the parent's cross
        size unconditionally. */
     width: 100%;
-    /* 52 px canvas + 1 px top border == 53 px outer. No vertical
-       padding: absolute positioning of children gets messy when the
-       padding box and border box disagree. */
-    height: 53px;
+    height: 54px;
     background: var(--color-bg-overlay);
     border-top: 1px solid var(--color-border-soft);
     user-select: none;

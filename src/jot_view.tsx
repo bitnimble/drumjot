@@ -111,7 +111,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     // Same-tick scale + scroll write (cache-free; this runs outside the
     // component) so the slider never paints the post-zoom scroll offset at
     // the pre-zoom scale; see applyZoomVarsSync.
-    applyZoomVarsSync(scroller, null, j.pxPerBeat, store.scrollX);
+    applyZoomVarsSync(scroller, null, j.pxPerBeat, j.voiceBeats, store.scrollX);
   };
 
   // Stable JotView callback identities. Each only ever delegates to the
@@ -297,6 +297,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       onCancelTranscribe={() => store.cancelTranscribe()}
                       lyricsAlignBusyPhase={store.lyricsAlignBusyPhase}
                       onSetBeatInput={(b) => store.setBeatInput(b)}
+                      onSetDrumSeparator={(s) => store.setDrumSeparator(s)}
                       onSetLlmModel={(m) => store.setLlmModel(m)}
                       onSetQuantise={(v) => store.setQuantise(v)}
                       onSetQuantiseUseLlm={(v) => store.setQuantiseUseLlm(v)}
@@ -591,7 +592,7 @@ const JotView = observer((props: JotViewProps) => {
       // Apply the new scale + scroll to the DOM in the same tick so no
       // painted frame shows the post-zoom scroll offset at the pre-zoom
       // scale; see applyZoomVarsSync.
-      applyZoomVarsSync(el, cacheRef.current, currentJot.pxPerBeat, store.scrollX);
+      applyZoomVarsSync(el, cacheRef.current, currentJot.pxPerBeat, currentJot.voiceBeats, store.scrollX);
     };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
@@ -851,7 +852,7 @@ const JotView = observer((props: JotViewProps) => {
           // Same-tick scale + scroll write so the pinch never paints the
           // post-zoom scroll offset at the pre-zoom scale; see
           // applyZoomVarsSync.
-          applyZoomVarsSync(el, cacheRef.current, jotRef.current.pxPerBeat, store.scrollX);
+          applyZoomVarsSync(el, cacheRef.current, jotRef.current.pxPerBeat, jotRef.current.voiceBeats, store.scrollX);
         }
         e.preventDefault();
       }
@@ -921,23 +922,17 @@ const JotView = observer((props: JotViewProps) => {
     };
   }, [store]);
 
-  // `--note-pad-px` is the engraving inset every note's CSS `left`
-  // calc() reads. Its value is derived from `--note-pad-beats` (the
-  // zoom-invariant fraction-of-a-beat config) and `--px-per-beat`
-  // (zoom-driven), so the inset scales with the bar width; without
-  // this, zooming out leaves the inset fixed at 14px while a beat
-  // shrinks, and notes at the end of a bar overshoot into the next
-  // bar's space. `--note-pad-beats` is set inline once; `--px-per-beat`
-  // is updated at runtime by `ScoreZoomVar`. Because `--note-pad-px`
-  // is itself a calc reading `--px-per-beat`, every consumer reads the
-  // live scaled value without us touching the var on each zoom tick.
-  // `--gutter-width` is mutated at runtime too; both live on the same
-  // root so every descendant calc() chain reads from a single ancestor.
-  // `ScoreZoomVar` / `GutterWidthVar` are side-effect-only observers
-  // that write via `setProperty` on `containerRef.current` so the tick
-  // doesn't re-render JotView; only mutates one DOM attribute. With
+  // `--note-pad-beats` is the engraving inset (a zoom-invariant
+  // fraction of a beat) every note / grid / bracket reads in its
+  // percentage-of-bar `left` calc; set inline once here and inherited
+  // down the score. The bar width that those percentages resolve
+  // against is driven per row by `ScoreZoomVar` (see `setBarsRowVars`),
+  // so the inset scales with zoom without any var write on each tick.
+  // `--gutter-width` is mutated at runtime by `GutterWidthVar`, a
+  // side-effect-only observer that writes via `setProperty` on
+  // `containerRef.current` so the tick doesn't re-render JotView. With
   // many tracks loaded a JotView re-render is expensive enough to make
-  // a 120 Hz resize drag visibly laggy, so we keep both reads off the
+  // a 120 Hz resize drag visibly laggy, so we keep that read off the
   // render path.
   //
   // We do, however, seed the *initial* `--gutter-width` value inline
@@ -956,7 +951,6 @@ const JotView = observer((props: JotViewProps) => {
   );
   const containerStyle = {
     ['--note-pad-beats' as string]: String(config.barNotePaddingBeats),
-    ['--note-pad-px' as string]: 'calc(var(--note-pad-beats) * var(--px-per-beat) * 1px)',
     ['--gutter-width' as string]: `${initialGutterPx}px`,
   } as React.CSSProperties;
   // Eager bar-timings table for `BarTimingsContext`. Built once per jot
@@ -1055,27 +1049,37 @@ const JotView = observer((props: JotViewProps) => {
 });
 
 /**
- * Side-effect-only observer that writes `--px-per-beat` onto the score
- * container whenever the zoom-derived pixel-per-beat changes. Isolated
- * so reading `jot.pxPerBeat` (a zoom-dependent observable) doesn't
- * re-render JotView — the variable update happens via DOM
- * `setProperty` on the ref instead, then CSS `calc()` propagates the
- * new value to every bar / note / bracket without React touching the
- * subtree.
+ * Side-effect-only observer that writes each bars-row's pixel width (the
+ * one quantity zoom mutates) whenever the zoom-derived pixel-per-beat or
+ * the voice length changes. Isolated so reading `jot.pxPerBeat` (a
+ * zoom-dependent observable) doesn't re-render JotView, the writes go
+ * out via `setBarsRowVars` (DOM `setProperty` on the few `[data-bars-row]`
+ * elements), then CSS percentages reposition every bar / note / bracket
+ * within each row without React touching the subtree and without a
+ * `--px-per-beat` style-recalc cascade.
+ *
+ * `useLayoutEffect` (not `useEffect`) so the widths are set before paint:
+ * the rows' percentage children would otherwise resolve against the
+ * `--bars-row-width` initial value (0px) for one frame on mount. It runs
+ * with `containerRef.current` populated and the bars-row DOM committed
+ * (effects fire after the whole tree mounts), so the query finds every
+ * row on the first pass.
  */
 const ScoreZoomVar = observer(
   ({ jot, containerRef }: { jot: RenderedJot; containerRef: React.RefObject<HTMLDivElement> }) => {
     const pxPerBeat = jot.pxPerBeat;
-    React.useEffect(() => {
-      const el = containerRef.current;
+    const voiceBeats = jot.voiceBeats;
+    React.useLayoutEffect(() => {
+      // On the FIRST layout effect `containerRef.current` is still null:
+      // a child's layout effect (this) runs before the parent fiber
+      // (`.jotContainer`) attaches its ref. The committed DOM exists
+      // though, so fall back to resolving the scroller from it, that
+      // keeps the very first paint from rendering 0-width bars-rows
+      // (which also collapses the ResizeObserver's content-width read).
+      const el = containerRef.current ?? document.querySelector<HTMLElement>('[data-jot-scroller]');
       if (!el) return;
-      // Set as a unitless number, not a CSS length, so it can be
-      // divided in calc() (CSS forbids dividing length / length).
-      // Layout calcs multiply by `1px` to recover a length; the
-      // waveform's `transform: scaleX(...)` reads it directly against
-      // a unitless `--rendered-px-per-beat` for a clean number result.
-      el.style.setProperty('--px-per-beat', String(pxPerBeat));
-    }, [pxPerBeat, containerRef]);
+      setBarsRowVars(el, pxPerBeat, voiceBeats);
+    }, [pxPerBeat, voiceBeats, containerRef]);
     return null;
   }
 );
@@ -1287,11 +1291,40 @@ function setScrollY(cache: DomTargetCache, y: number): void {
 }
 
 /**
- * Apply a zoom step's new SCALE (`--px-per-beat`) and SCROLL (`--scroll-x`)
- * to the DOM together, synchronously, from inside a zoom handler.
+ * Write the one quantity zoom mutates - each bars-row's pixel width
+ * (`voiceBeats × pxPerBeat`) - onto every `[data-bars-row]` under `root`.
+ * Replaces the old single inherited `--px-per-beat` on the score
+ * container: every beat-anchored element now sizes/positions itself as a
+ * PERCENTAGE of its bars-row, so only the ~handful of row elements need
+ * touching (registered `inherits: false`, so each write invalidates only
+ * that row, not its subtree), and the percentage children relayout
+ * without a style-recalc cascade.
  *
- * The two vars otherwise land via separate mobx observers, ScoreZoomVar's
- * passive `useEffect` (scale) and ScrollVar's `useLayoutEffect` (scroll),
+ * Lyrics rows additionally get a scoped `--px-per-beat` (their font
+ * metrics can't be a percentage); only `[data-lyrics-bars-row]` elements
+ * receive it, keeping that small cascade off every other row.
+ *
+ * Queried per write rather than cached: zoom changes are gesture-rate
+ * (not the idle 120 fps that `--scroll-x` runs at), and the row count is
+ * tiny, so a `querySelectorAll` is cheap and sidesteps the
+ * mount-ordering between this and `DomTargetCache`.
+ */
+function setBarsRowVars(root: HTMLElement, pxPerBeat: number, voiceBeats: number): void {
+  const width = `${pxPerBeat * voiceBeats}px`;
+  const ppb = String(pxPerBeat);
+  for (const el of root.querySelectorAll<HTMLElement>('[data-bars-row]')) {
+    el.style.setProperty('--bars-row-width', width);
+    if (el.dataset.lyricsBarsRow === '1') el.style.setProperty('--px-per-beat', ppb);
+  }
+}
+
+/**
+ * Apply a zoom step's new SCALE (bars-row widths) and SCROLL
+ * (`--scroll-x`) to the DOM together, synchronously, from inside a zoom
+ * handler.
+ *
+ * The two otherwise land via separate mobx observers, ScoreZoomVar's
+ * `useLayoutEffect` (scale) and ScrollVar's `useLayoutEffect` (scroll),
  * which mobx-react-lite can commit in different React passes. For ≥1
  * painted frame the wrapper would then sit at the post-zoom scroll offset
  * while the bars are still at the pre-zoom scale. Cursor anchoring keeps
@@ -1310,9 +1343,10 @@ function applyZoomVarsSync(
   scroller: HTMLElement,
   cache: DomTargetCache | null,
   pxPerBeat: number,
+  voiceBeats: number,
   scrollX: number
 ): void {
-  scroller.style.setProperty('--px-per-beat', String(pxPerBeat));
+  setBarsRowVars(scroller, pxPerBeat, voiceBeats);
   if (cache) {
     setScrollX(cache, scrollX);
     return;

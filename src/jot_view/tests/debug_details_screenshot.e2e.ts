@@ -155,8 +155,13 @@ test('captures the debug-details timing visualization', async ({ page }) => {
   //    is what keeps the label legible where the colored bar paints
   //    over it; without this element the redesign's whole readability
   //    story is gone.
+  // The row container carries the `--bar-left` / `--bar-width` vars and
+  // wraps a colored `timingVizDiffBar` plus its two text layers. Substring
+  // class matching can't tell the row from its `…RowText` / `…RowTextInverted`
+  // children (the row's class name is their prefix), so isolate the
+  // containers by the bar child that only they own.
   const diffRows = popover.locator('[class*="timingVizDiffRow"]').filter({
-    hasNot: page.locator('[class*="timingVizDiffRowText"]'),
+    has: page.locator('[class*="timingVizDiffBar"]'),
   });
   const diffRowCount = await diffRows.count();
   expect(diffRowCount).toBeGreaterThanOrEqual(5);
