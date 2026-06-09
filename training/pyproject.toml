@@ -19,8 +19,8 @@ version = "0.1.0"
 description = "Frozen-MERT drum-onset model training for Drumjot."
 requires-python = ">=3.11"
 dependencies = [
-    "torch>=2.8,<2.12",
-    "torchaudio>=2.8,<2.12",
+    "torch>=2.9,<2.12",
+    "torchaudio>=2.9,<2.12",
     "transformers>=4.40,<5",
     "librosa>=0.10.2",
     "soundfile>=0.12",
@@ -28,21 +28,24 @@ dependencies = [
     "numpy>=1.26",
     "mir_eval>=0.7",
     "mido>=1.3",
+    "drumjot-dsp",  # shared peak-picker etc. (../dsp; see [tool.uv.sources])
 ]
 
 [project.optional-dependencies]
 dev = ["ruff>=0.6", "pytest>=8"]
 
-# torch/torchaudio from the cu128 wheel index (CUDA 12.8), matching the
-# transcriber/sandbox so the RTX 3080 (Ampere) gets GPU wheels.
+# torch/torchaudio from the cu130 wheel index (CUDA 13.x). The wheel's CUDA
+# major must match the host GPU driver: on a CUDA-13 driver a cu128 build fails
+# CUDA init with "named symbol not found" (notably through the WSL libcuda shim).
 [[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu128" }
-torchaudio = { index = "pytorch-cu128" }
+torch = { index = "pytorch-cu130" }
+torchaudio = { index = "pytorch-cu130" }
+drumjot-dsp = { path = "../dsp", editable = true }
 
 [tool.setuptools.packages.find]
 include = ["drumjot_training*"]

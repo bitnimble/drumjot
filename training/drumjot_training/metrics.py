@@ -10,7 +10,22 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import numpy as np
-from scipy.signal import find_peaks
+from drumjot_dsp import peakpick
+
+# Per-lane peak-pick params for the 11 training lanes (domain config; the shared
+# `drumjot_dsp.peakpick` is the algorithm only). min-distance matches the
+# transcriber (clean 20ms / hat 50ms / cymbal 70ms) and caps to humanly-playable
+# rates; hats + cymbals add prominence + decay-reset to kill sustained-ring
+# phantom streams.
+_CLEAN = {"min_distance_s": 0.020, "prominence": 0.10, "decay_reset_frac": 0.0, "decay_reset_floor": 0.0}
+_HAT = {"min_distance_s": 0.050, "prominence": 0.10, "decay_reset_frac": 0.6, "decay_reset_floor": 0.05}
+_CYM = {"min_distance_s": 0.070, "prominence": 0.20, "decay_reset_frac": 0.6, "decay_reset_floor": 0.05}
+DEFAULT_PEAK_PARAMS = dict(_CLEAN)
+LANE_PEAK_PARAMS: dict[str, dict[str, float]] = {
+    "k": dict(_CLEAN), "s": dict(_CLEAN), "ss": dict(_CLEAN), "t": dict(_CLEAN), "mp": dict(_CLEAN),
+    "hc": dict(_HAT), "hp": dict(_HAT), "ho": dict(_HAT),
+    "rd": dict(_CYM), "cr": dict(_CYM), "mc": dict(_CYM),
+}
 
 
 def pick_onsets(
@@ -18,18 +33,30 @@ def pick_onsets(
     fps: float,
     threshold: float,
     min_distance_s: float,
+    *,
+    prominence: float | None = None,
+    decay_reset_frac: float = 0.0,
+    decay_reset_floor: float = 0.0,
 ) -> np.ndarray:
     """Peak-pick `activation` into onset times (seconds, ascending).
 
-    Height `threshold` and a `min_distance_s` minimum spacing mirror the
-    transcriber's deterministic peak-pick (`adtof_onsets.py`); prominence
-    is left to callers that need it.
+    Thin wrapper over the shared `peakpick.pick_peaks` (height + min-distance +
+    optional prominence + decay-reset); see `peakpick` for the algorithm. Use
+    `pick_onsets_lane` to apply the per-lane parameter table.
     """
-    if activation.size == 0:
-        return np.empty(0, dtype=np.float64)
-    distance = max(1, round(min_distance_s * fps))
-    peaks, _ = find_peaks(activation, height=threshold, distance=distance)
-    return peaks.astype(np.float64) / fps
+    frames = peakpick.pick_peaks(
+        activation, fps, threshold=threshold, min_distance_s=min_distance_s,
+        prominence=prominence, decay_reset_frac=decay_reset_frac, decay_reset_floor=decay_reset_floor,
+    )
+    return frames.astype(np.float64) / fps
+
+
+def pick_onsets_lane(activation: np.ndarray, fps: float, lane: str, threshold: float) -> np.ndarray:
+    """Per-lane peak-pick using the shared `peakpick.LANE_PEAK_PARAMS` (the
+    transcriber-grade clean/hat/cymbal post-processing: per-lane min-distance,
+    prominence, and decay-reset). `threshold` is the lane's tuned peak height."""
+    p = LANE_PEAK_PARAMS.get(lane, DEFAULT_PEAK_PARAMS)
+    return pick_onsets(activation, fps, threshold, **p)
 
 
 def onset_f1(

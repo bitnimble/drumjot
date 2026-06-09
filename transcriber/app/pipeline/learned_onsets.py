@@ -50,7 +50,7 @@ def detect_all_pitches_learned(
         if pitch is None:
             continue
         thr = thresholds.get(lane, meta["peak_threshold"])
-        for t in metrics.pick_onsets(probs[i], fps, thr, meta["peak_min_distance_s"]):
+        for t in metrics.pick_onsets_lane(probs[i], fps, lane, thr):
             frame = min(int(round(float(t) * fps)), n_frames - 1)
             by_pitch.setdefault(pitch, []).append(
                 OnsetCandidate(

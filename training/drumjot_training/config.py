@@ -31,8 +31,12 @@ class Config:
     head_hidden: int = 128
     head_layers: int = 2
 
-    # Optimisation.
+    # Optimisation. AdamW (decoupled weight decay) + a warmup->cosine LR
+    # schedule; both are strict improvements over plain Adam/constant-LR for a
+    # fixed-epoch run (the cosine decay also lands the final, threshold-tuned
+    # epoch at the LR minimum). See train.train_loop.
     lr: float = 1e-3
+    weight_decay: float = 0.01
     # Padded mini-batch of full-length (~30s/2250-frame) clips. Measured peak
     # ~520 MiB/clip FP32 + ~226 MiB base, so 16 fits a 10GB card (~8.5GB) with
     # headroom; the 3080's bf16 path uses ~half, leaving room to push higher

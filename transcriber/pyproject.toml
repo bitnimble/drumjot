@@ -44,6 +44,7 @@ dependencies = [
     "soundfile>=0.12",
     "scipy>=1.11",
     "numpy>=1.26",
+    "drumjot-dsp",  # shared peak-picker etc. (../dsp; see [tool.uv.sources])
     # Beat tracking + downbeat detection (the rhythmic structure backbone)
     "madmom @ git+https://github.com/CPJKU/madmom.git@main",
     "cython>=3.0",
@@ -129,6 +130,7 @@ explicit = true
 torch = { index = "pytorch-cu128" }
 torchaudio = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
+drumjot-dsp = { path = "../dsp", editable = true }
 
 [tool.setuptools.packages.find]
 include = ["app*", "benchmarks*"]

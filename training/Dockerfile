@@ -21,7 +21,7 @@
 ARG UV_VERSION=latest
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -48,17 +48,19 @@ ENV VIRTUAL_ENV=/opt/venv \
     UV_HTTP_TIMEOUT=300
 RUN uv venv /opt/venv --python python3.11
 
-# Cacheable dep layers: numpy/cython, then the heavy torch cu128 fetch, then
-# the package + remaining deps. Mirrors the transcriber/sandbox so the GPU
-# wheels match.
+# Cacheable dep layers: numpy/cython, then the heavy torch fetch, then the
+# package + remaining deps. NOTE: cu130 (CUDA 13.x) torch, must match the host
+# driver's CUDA major. On WSL the driver is exposed as a forwarding `libcuda`
+# shim (via libdxcore); a cu128 torch on a CUDA-13 driver fails CUDA init with
+# `Error 500: named symbol not found`. Use the wheel matching the driver.
 RUN uv pip install 'numpy>=1.26' cython
-RUN uv pip install --index-url https://download.pytorch.org/whl/cu128 \
-        'torch>=2.8,<2.12' 'torchaudio>=2.8,<2.12'
+RUN uv pip install --index-url https://download.pytorch.org/whl/cu130 \
+        'torch>=2.9,<2.12' 'torchaudio>=2.9,<2.12'
 
 WORKDIR /app
 COPY pyproject.toml ./
 COPY drumjot_training ./drumjot_training
-RUN uv pip install --extra-index-url https://download.pytorch.org/whl/cu128 .
+RUN uv pip install --extra-index-url https://download.pytorch.org/whl/cu130 .
 
 # Bake the frozen MERT-v1-330M weights so the image runs offline and is fast
 # on first launch. --build-arg BAKE_MERT=0 skips it (then weights download at

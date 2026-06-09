@@ -124,7 +124,7 @@ def transcribe(
         t0 = s / enc.sr
         for i, lane in enumerate(meta["lanes"]):
             thr = thresholds.get(lane, meta["peak_threshold"])
-            for t in metrics.pick_onsets(probs[i], fps, thr, meta["peak_min_distance_s"]):
+            for t in metrics.pick_onsets_lane(probs[i], fps, lane, thr):
                 out[lane].append(t0 + float(t))
     for ts in out.values():
         ts.sort()

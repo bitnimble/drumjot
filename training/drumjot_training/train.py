@@ -119,7 +119,7 @@ def evaluate_clip(
     out: dict[str, float] = {}
     for i, lane in enumerate(cfg.lanes):
         thr = thresholds.get(lane, cfg.peak_threshold) if thresholds else cfg.peak_threshold
-        est = metrics.pick_onsets(probs[i], cfg.encoder_fps, thr, cfg.peak_min_distance_s)
+        est = metrics.pick_onsets_lane(probs[i], cfg.encoder_fps, lane, thr)
         ref = clip.onsets_by_lane.get(lane, [])
         out[lane] = metrics.onset_f1(ref, est, cfg.onset_tolerance_s)["f"]
     return out
@@ -156,7 +156,7 @@ def tune_thresholds(
                 ref = onsets.get(lane, [])
                 if not ref:
                     continue
-                est = metrics.pick_onsets(probs[i], cfg.encoder_fps, thr, cfg.peak_min_distance_s)
+                est = metrics.pick_onsets_lane(probs[i], cfg.encoder_fps, lane, thr)
                 f1s.append(metrics.onset_f1(ref, est, cfg.onset_tolerance_s)["f"])
             if f1s and (mean := sum(f1s) / len(f1s)) > best_f1:
                 best_f1, best_thr = mean, thr
@@ -204,6 +204,27 @@ def masked_bce(logits, targets, mask, pos_weight):
     m = mask.unsqueeze(1)  # (B, 1, T)
     denom = (m.sum() * logits.shape[1]).clamp_min(1.0)
     return (loss * m).sum() / denom
+
+
+def masked_focal(logits, targets, mask, alpha: float = 2.0, beta: float = 4.0):
+    """CenterNet-style penalty-reduced focal loss for soft Gaussian onset
+    targets (peak 1.0), averaged over valid frames' positives.
+
+    Positives are the exact peak frames (target == 1); elsewhere the negative
+    penalty is reduced by `(1 - target) ** beta` so the Gaussian skirt around a
+    peak is barely penalised, and `(.) ** alpha` focuses on hard frames. This
+    replaces `pos_weight` reweighting (it targets the rare/hard frames directly)
+    so no `pos_weight` is needed. Normalised by the positive count (CenterNet
+    convention). `mask` is (B, T), broadcast across lanes."""
+    import torch
+
+    p = torch.sigmoid(logits).clamp(1e-6, 1.0 - 1e-6)
+    pos = (targets >= 1.0).float()
+    pos_loss = -((1.0 - p) ** alpha) * torch.log(p) * pos
+    neg_loss = -((1.0 - targets) ** beta) * (p**alpha) * torch.log(1.0 - p) * (1.0 - pos)
+    m = mask.unsqueeze(1)  # (B, 1, T)
+    npos = (pos * m).sum().clamp_min(1.0)
+    return ((pos_loss + neg_loss) * m).sum() / npos
 
 
 def _cap_onsets(onsets: dict[str, list[float]], max_seconds: float | None) -> dict[str, list[float]]:
@@ -303,6 +324,9 @@ def train_loop(
     val_clips=None,
     out_dir: str | None = None,
     checkpoint_every: int = 0,
+    lr_schedule: str = "cosine",
+    warmup_steps: int = 0,
+    loss_fn: str = "bce",
     log: Callable[[str], None] = print,
 ) -> dict:
     """Train `model` on `clips` in padded mini-batches of `batch_size` (clips
@@ -313,11 +337,13 @@ def train_loop(
     streaming `CachedClips`); `num_workers` > 0 lets the DataLoader prefetch
     batches from the SSD in parallel with GPU compute. `pos_weight` may be a
     scalar or a per-lane array (length n_lanes)."""
+    import math
+
     import torch
     from torch.utils.data import DataLoader
 
     device = next(model.parameters()).device
-    opt = torch.optim.Adam(model.parameters(), lr=cfg.lr)
+    opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     pw = torch.as_tensor(pos_weight, dtype=torch.float32, device=device)
     if pw.ndim == 1:
         pw = pw.view(-1, 1)  # (n_lanes, 1) broadcasts over (B, n_lanes, T)
@@ -336,6 +362,21 @@ def train_loop(
     )
     t0 = time.perf_counter()
     expected_batches = (len(clips) + batch_size - 1) // batch_size
+    # warmup -> cosine LR schedule (stepped per optimizer step). Cosine decays to
+    # ~0 over the run so the final (saved + threshold-tuned) epoch settles at the
+    # LR minimum; warmup_steps>0 ramps in, which matters for large-batch/high-LR
+    # runs. lr_schedule="none" keeps a constant LR (legacy behaviour).
+    sched = None
+    if lr_schedule == "cosine":
+        total_steps = max(1, epochs * expected_batches)
+
+        def _lr_mult(step: int) -> float:
+            if warmup_steps > 0 and step < warmup_steps:
+                return (step + 1) / warmup_steps
+            prog = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+            return 0.5 * (1.0 + math.cos(math.pi * min(1.0, max(0.0, prog))))
+
+        sched = torch.optim.lr_scheduler.LambdaLR(opt, _lr_mult)
     for epoch in range(epochs):
         ep_start = time.perf_counter()
         model.train()
@@ -346,9 +387,16 @@ def train_loop(
             mask = mask.to(device, non_blocking=True)
             opt.zero_grad()
             with runtime.autocast():  # bf16 fwd on Ampere+; FP32 no-op elsewhere
-                loss = masked_bce(model(X), Y, mask, pw)
+                logits = model(X)
+                loss = (
+                    masked_focal(logits, Y, mask)
+                    if loss_fn == "focal"
+                    else masked_bce(logits, Y, mask, pw)
+                )
             loss.backward()  # bf16 keeps FP32 range, so no GradScaler needed
             opt.step()
+            if sched is not None:
+                sched.step()
             total += float(loss.detach())
             n_batches += 1
             # show movement within epoch 0 (before any epoch line prints), so a
@@ -398,12 +446,12 @@ def synthetic_clip(n_frames: int = 300, dim: int = 32, fps: float = 100.0, seed:
     return Clip(features=feat, targets=targets, onsets_by_lane=onsets)
 
 
-def synthetic_smoke(epochs: int = 80, log: Callable[[str], None] = print) -> dict:
+def synthetic_smoke(epochs: int = 80, loss_fn: str = "bce", log: Callable[[str], None] = print) -> dict:
     """Overfit one synthetic clip; train loss should fall sharply."""
     clip = synthetic_clip()
     cfg = Config(encoder_fps=100.0)
     model = MultiLaneHeads(in_dim=clip.features.shape[1], hidden=64, num_layers=1)
-    return train_loop(model, [clip], cfg, epochs=epochs, val_clips=[clip], log=log)
+    return train_loop(model, [clip], cfg, epochs=epochs, val_clips=[clip], loss_fn=loss_fn, log=log)
 
 
 # --- real-data entry point ----------------------------------------------
@@ -471,7 +519,7 @@ def _report_compare(
             if not ref:
                 continue
             thr = thresholds.get(lane, cfg.peak_threshold)
-            est = metrics.pick_onsets(probs[i], cfg.encoder_fps, thr, cfg.peak_min_distance_s)
+            est = metrics.pick_onsets_lane(probs[i], cfg.encoder_fps, lane, thr)
             raw = metrics.onset_f1(ref, est, cfg.onset_tolerance_s)
             est_f = postfilter.filter_lane(est, env, env_fps, align_window_s, floor)
             filt = metrics.onset_f1(ref, est_f, cfg.onset_tolerance_s)
@@ -555,6 +603,15 @@ def main(argv: list[str] | None = None) -> None:
     )
     ap.add_argument("--pos-weight-cap", type=float, default=50.0)
     ap.add_argument("--lr", type=float, default=Config.lr, help="learning rate (lower for warm-start fine-tune)")
+    ap.add_argument("--weight-decay", type=float, default=Config.weight_decay,
+                    help="AdamW decoupled weight decay")
+    ap.add_argument("--lr-schedule", choices=("cosine", "none"), default="cosine",
+                    help="warmup->cosine LR decay (default) or constant LR")
+    ap.add_argument("--warmup-steps", type=int, default=0,
+                    help="linear LR warmup steps before cosine (helps large-batch / high-LR runs)")
+    ap.add_argument("--loss", choices=("bce", "focal"), default="bce",
+                    help="pos-weighted BCE (default) or CenterNet penalty-reduced focal "
+                    "(focal ignores pos_weight; A/B it before committing)")
     ap.add_argument("--align-window", type=float, default=0.03, help="post-filter peak-align window (s)")
     ap.add_argument("--support-percentile", type=float, default=60.0, help="post-filter envelope support floor pctl")
     ap.add_argument("--no-filter-report", action="store_true", help="skip the deterministic-filter F1 comparison")
@@ -569,7 +626,10 @@ def main(argv: list[str] | None = None) -> None:
     import torch
 
     runtime.configure_backends()  # TF32 + sets up the bf16 autocast path
-    cfg = Config(encoder_layer=args.layer, cache_dtype=args.cache_dtype, lr=args.lr)
+    cfg = Config(
+        encoder_layer=args.layer, cache_dtype=args.cache_dtype,
+        lr=args.lr, weight_decay=args.weight_decay,
+    )
     train_specs, val_specs, cache = (
         _star_specs(args) if args.dataset == "star" else _egmd_specs(args)
     )
@@ -605,6 +665,7 @@ def main(argv: list[str] | None = None) -> None:
         model, train_clips, cfg, epochs=args.epochs, pos_weight=pos_w,
         batch_size=args.batch_size, num_workers=args.num_workers, val_clips=val_clips,
         out_dir=args.out, checkpoint_every=10,
+        lr_schedule=args.lr_schedule, warmup_steps=args.warmup_steps, loss_fn=args.loss,
         log=lambda s: print(s, flush=True),
     )
     thresholds = tune_thresholds(model, val_clips, cfg)

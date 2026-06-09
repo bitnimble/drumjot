@@ -62,6 +62,8 @@ import librosa
 import numpy as np
 from scipy.signal import find_peaks
 
+from drumjot_dsp import peakpick  # shared peak-pick algorithm (single source of truth)
+
 from app.config import settings
 from app.models import OnsetCandidate
 
@@ -431,21 +433,10 @@ def _decay_reset_filter(
     plunges between them) all survive. `peaks` is assumed time-ordered
     (find_peaks returns ascending indices).
     """
-    if peaks.size == 0:
-        return peaks
-    kept = [int(peaks[0])]
-    for raw in peaks[1:]:
-        cand = int(raw)
-        prev = kept[-1]
-        between = activation[prev + 1 : cand]
-        if between.size == 0:
-            # Adjacent (shouldn't occur post min-distance): same event.
-            continue
-        reset_level = max(reset_floor, reset_frac * float(activation[prev]))
-        if float(between.min()) < reset_level:
-            kept.append(cand)
-        # else: ring never decayed -> same sustained event, drop.
-    return np.asarray(kept, dtype=int)
+    # Delegates to the shared implementation (drumjot_dsp.peakpick) so the
+    # transcriber and the trainer can't drift; kept as a thin wrapper to
+    # preserve the call sites + the docstring above.
+    return peakpick.decay_reset_filter(activation, peaks, reset_frac, reset_floor)
 
 
 def _refine_peak_times_audio(
