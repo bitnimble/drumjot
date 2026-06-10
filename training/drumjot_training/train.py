@@ -776,15 +776,131 @@ def _enst_perstem_specs(args) -> tuple[list, list, Path]:
     return [spec(c) for c in tr], [spec(c) for c in va], root / "_cache_mert"
 
 
+def _cap_by_clip(perstem_clips, keyfn, cap: int):
+    """Keep all per-stem examples for the first `cap` distinct source clips
+    (songs/takes), in order. `cap<=0` keeps everything."""
+    if cap <= 0:
+        return list(perstem_clips)
+    keys: set = set()
+    out = []
+    for c in perstem_clips:
+        k = keyfn(c)
+        if k in keys:
+            out.append(c)
+        elif len(keys) < cap:
+            keys.add(k)
+            out.append(c)
+    return out
+
+
+def _pooled_specs(args) -> tuple[list, list, Path]:
+    """(train_specs, val_specs, cache_dir) pooling several SEPARATION-AWARE
+    per-stem trees into one training set.
+
+    All sources fold to the same 10-lane vocab and the same 5-stem (k/s/h/c/t)
+    routing, so each contributes `(audio, restricted_onsets, full_onsets)` tuples
+    exactly as its own `*_perstem` mode -- they pool directly.
+
+    Class coverage: absent lanes are treated as valid negatives. That is exact
+    for STAR (ADT) and E-GMD (GM MIDI), whose audio is derived FROM the labels so
+    nothing is unlabelled; ENST is hand-labelled real audio covering every lane
+    except pedal-hat (`hp`, 0 onsets) and misc-cymbal (`mc`, ~0), both supplied
+    richly by STAR+E-GMD, so ENST's negatives there are a minor, mostly-correct
+    signal. (If `hp`/`mc` regress, add per-source lane masking for ENST.)
+
+    `DRUMJOT_STAR/ENST/EGMD` must point at the sep trees (star_balanced_sep,
+    enst-sep, egmd-sep). `--pool-sources` selects which; `--pool-cap` caps clips
+    per source; `--pool-balance` oversamples smaller sources so none dominates.
+    """
+    import os
+
+    sources = [s.strip() for s in args.pool_sources.split(",") if s.strip()]
+    per_train: dict[str, list] = {}
+    per_val: dict[str, list] = {}
+    roots: list[str] = []
+    for name in sources:
+        root = paths.dataset_path(name)
+        roots.append(str(root))
+        if name == "star":
+            allper = star.perstem_index(root)
+            tr = [c for c in allper if c.split == "training"]
+            va = [c for c in allper if c.split in ("validation", "test")]
+            keyf = lambda c: c.annotation_path  # noqa: E731
+            spec = lambda c: (  # noqa: E731
+                c.audio_path,
+                star.restricted_onsets(c.annotation_path, c.pitch),
+                star.onsets_by_lane(c.annotation_path),
+            )
+        elif name == "enst":
+            allper = enst.perstem_index(root)
+            tr = enst.perstem_for_split(allper, "train")
+            va = enst.perstem_for_split(allper, "validation")
+            keyf = lambda c: c.annotation_path  # noqa: E731
+            spec = lambda c: (  # noqa: E731
+                c.audio_path,
+                enst.restricted_onsets(c.annotation_path, c.pitch),
+                enst.onsets_by_lane(c.annotation_path),
+            )
+        elif name == "egmd":
+            allper = egmd.perstem_index(root)
+            tr = [c for c in allper if c.split == "train"]
+            va = [c for c in allper if c.split == "validation"]
+            keyf = lambda c: c.midi_path  # noqa: E731
+            spec = lambda c: (  # noqa: E731
+                c.audio_path,
+                egmd.restricted_onsets(c.midi_path, c.pitch),
+                midi_labels.onsets_from_path(c.midi_path),
+            )
+        else:
+            raise SystemExit(f"--pool-sources: unknown source {name!r} (use star/enst/egmd)")
+        per_train[name] = [spec(c) for c in _cap_by_clip(tr, keyf, args.pool_cap)]
+        per_val[name] = [spec(c) for c in va]
+
+    # Oversample (repeat) smaller sources up to the largest so a big synthetic
+    # source can't drown the small real-acoustic one (ENST). Capped at 5x.
+    if args.pool_balance and per_train:
+        target = max((len(v) for v in per_train.values()), default=0)
+        for name, specs in per_train.items():
+            if specs and len(specs) < target:
+                per_train[name] = specs * min(5, max(1, round(target / len(specs))))
+
+    print("pooled (per-stem examples, absent lanes = negatives):", flush=True)
+    for name in sources:
+        print(f"  {name:5} train={len(per_train[name]):6d}  val={len(per_val[name]):5d}", flush=True)
+
+    train_specs = [s for name in sources for s in per_train[name]]
+    val_specs = [s for name in sources for s in per_val[name]]
+    # Feature cache: default beside the sep trees (NFS), but --pool-cache should
+    # point it at LOCAL NVMe -- the .npy features are re-encodable scratch (~50 GB
+    # for --pool-cap 1000) and local reads keep the GPU compute-bound instead of
+    # NFS-throttled, with no large-RAM/page-cache requirement.
+    cache = (
+        Path(args.pool_cache) if getattr(args, "pool_cache", None)
+        else Path(os.path.commonpath(roots)) / "_cache_mert_pooled"
+    )
+    return train_specs, val_specs, cache
+
+
 def main(argv: list[str] | None = None) -> None:
     import argparse
 
     ap = argparse.ArgumentParser(description="Drum-onset training (frozen MERT + per-lane heads)")
     ap.add_argument(
         "--dataset",
-        choices=("egmd", "egmd_perstem", "star", "star_perstem", "enst", "enst_perstem"),
+        choices=("egmd", "egmd_perstem", "star", "star_perstem", "enst", "enst_perstem", "pooled"),
         default="egmd",
     )
+    ap.add_argument("--pool-sources", default="star,enst,egmd",
+                    help="pooled mode: comma-list of sep-tree sources to combine (DRUMJOT_<SRC> "
+                    "must point at each sep tree, e.g. star_balanced_sep / enst-sep / egmd-sep)")
+    ap.add_argument("--pool-cap", type=int, default=0,
+                    help="pooled mode: max source-clips per dataset (0 = all); each expands to ~5 stems")
+    ap.add_argument("--pool-balance", action="store_true",
+                    help="pooled mode: oversample smaller sources up to the largest (<=5x) so the big "
+                    "synthetic sets don't drown the small real-acoustic one (ENST)")
+    ap.add_argument("--pool-cache", default=None,
+                    help="pooled mode: feature-cache dir; point at LOCAL NVMe (not the NFS sep trees) "
+                    "to keep training compute-bound. Default: <common parent of sources>/_cache_mert_pooled")
     ap.add_argument("--enst-mix", choices=("wet_mix", "dry_mix", "accompaniment", "sep_drum"),
                     default="wet_mix",
                     help="ENST-Drums audio variant (wet_mix = realistic isolated kit; default; "
@@ -850,6 +966,7 @@ def main(argv: list[str] | None = None) -> None:
         else _enst_perstem_specs(args) if args.dataset == "enst_perstem"
         else _enst_specs(args) if args.dataset == "enst"
         else _egmd_perstem_specs(args) if args.dataset == "egmd_perstem"
+        else _pooled_specs(args) if args.dataset == "pooled"
         else _egmd_specs(args)
     )
     if args.overfit_one:
