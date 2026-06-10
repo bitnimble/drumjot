@@ -572,6 +572,24 @@ wheels = [
 ]
 
 [[package]]
+name = "drumjot-dsp"
+version = "0.1.0"
+source = { editable = "../dsp" }
+dependencies = [
+    { name = "numpy" },
+    { name = "scipy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
+    { name = "scipy", specifier = ">=1.11" },
+]
+provides-extras = ["dev"]
+
+[[package]]
 name = "drumjot-transcriber"
 version = "0.1.0"
 source = { editable = "." }
@@ -582,6 +600,7 @@ dependencies = [
     { name = "ctc-forced-aligner" },
     { name = "cutlet" },
     { name = "cython" },
+    { name = "drumjot-dsp" },
     { name = "fastapi" },
     { name = "fugashi" },
     { name = "httpx" },
@@ -615,6 +634,7 @@ requires-dist = [
     { name = "ctc-forced-aligner", git = "https://github.com/MahmoudAshraf97/ctc-forced-aligner.git?rev=264e7a1f81bff9ff5e787a5537020c2ad0b0df02" },
     { name = "cutlet", specifier = ">=0.4" },
     { name = "cython", specifier = ">=3.0" },
+    { name = "drumjot-dsp", editable = "../dsp" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "fugashi", specifier = ">=1.3" },
     { name = "httpx", specifier = ">=0.27" },

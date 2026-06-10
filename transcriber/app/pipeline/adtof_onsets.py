@@ -60,9 +60,8 @@ from pathlib import Path
 
 import librosa
 import numpy as np
-from scipy.signal import find_peaks
-
 from drumjot_dsp import peakpick  # shared peak-pick algorithm (single source of truth)
+from scipy.signal import find_peaks
 
 from app.config import settings
 from app.models import OnsetCandidate
