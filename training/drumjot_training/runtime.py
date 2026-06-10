@@ -4,8 +4,15 @@ The frozen MERT encoder is a 24-layer transformer, so it dominates wall time
 and is almost pure matmul, exactly the workload tensor cores accelerate. On an
 Ampere+ card (e.g. RTX 3080) bf16 autocast is a large, low-risk speedup
 (bf16 has FP32's exponent range, so no loss scaling and no GradScaler). On a
-tensor-core-less card (e.g. GTX 1660 Super, no bf16 support) these helpers
-degrade to FP32 no-ops, so the same code path is correct on both machines.
+pre-Ampere card (e.g. GTX 1660 Super, compute capability < 8.0, no native bf16
+tensor cores) these helpers degrade to FP32 no-ops, so the same code path is
+correct on both machines.
+
+Native bf16 is gated on compute capability >= 8.0 (Ampere), NOT on
+`torch.cuda.is_bf16_supported()`: recent torch reports that True on Turing too
+because it counts *emulated* bf16, and emulated bf16 on a 1660 is far slower
+than plain FP32 (a MERT forward that should take seconds takes minutes). The
+capability check is also torch-version-independent.
 
 torch is imported lazily so the rest of the package stays importable on a host
 without a working CUDA torch.
@@ -29,10 +36,14 @@ def configure_backends() -> None:
 
 
 def amp_dtype():
-    """bf16 if the active CUDA device supports it, else None (stay FP32)."""
+    """bf16 if the active CUDA device has NATIVE bf16, else None (stay FP32).
+
+    Gated on compute capability >= 8.0 (Ampere+) rather than
+    `is_bf16_supported()`, which also returns True for *emulated* bf16 on
+    pre-Ampere cards (e.g. the 1660 Super) where emulation is slower than FP32."""
     import torch
 
-    if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+    if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
         return torch.bfloat16
     return None
 
