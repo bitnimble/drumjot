@@ -47,7 +47,13 @@ import json
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
+
+# Quiet the chatty separator stack for batch runs: WARNING+ only from
+# audio-separator, and no tqdm chunk bars. Set before importing the app/lib.
+os.environ.setdefault("DRUMJOT_SEP_LOG_LEVEL", "WARNING")
+os.environ.setdefault("TQDM_DISABLE", "1")
 
 import numpy as np
 import soundfile as sf
@@ -64,6 +70,11 @@ MIN_SEP_SECONDS = 30.0  # pad a buffer shorter than this (only the last small ba
 
 
 # --- pure helpers (unit-testable, no audio/GPU) ----------------------------
+
+
+def _fmt_eta(seconds: float) -> str:
+    s = max(0, int(seconds))
+    return f"{s // 3600}:{(s % 3600) // 60:02d}:{s % 60:02d}"
 
 
 def uid_for(audio_filename: str) -> str:
@@ -229,7 +240,9 @@ def process_batch(sep, batch, out: Path, gap_sec: float, log) -> int:
         mix = mixd / "mix.wav"  # NEUTRAL name (separator picks drum stem by "drum" in filename)
         sf.write(str(mix), buf, sr)
         drum = sep.run_stems_all(mix, tdp / "s1").drum_stem  # separate work dirs per stage
+        log(f"  roformer OK ({len(batch)} clips); splitting into 5 stems...")
         per = sep.run_stems_per(drum, tdp / "s2").per_instrument
+        log("  mdx23c per-stem OK")
         dy, dsr = sf.read(str(drum), always_2d=True)
         pys = {p: sf.read(str(src), always_2d=True) for p, src in per.items()}
 
@@ -333,12 +346,14 @@ def main():
 
     batches = plan_batches([float(e["row"]["duration"]) for e in pending],
                            args.buffer_sec, args.gap_sec)
-    log(f"{len(batches)} batches (~{args.buffer_sec:.0f}s buffers)")
+    log(f"{len(pending)} clips in {len(batches)} batches (~{args.buffer_sec:.0f}s buffers)")
     done = 0
-    for bi, idxs in enumerate(batches):
+    t0 = time.perf_counter()
+    for bi, idxs in enumerate(batches, 1):
+        eta = _fmt_eta((time.perf_counter() - t0) / done * (len(pending) - done)) if done else "?"
+        log(f"[{done}/{len(pending)} clips] batch {bi}/{len(batches)} ({len(idxs)} clips)  eta {eta}")
         done += process_batch(sep, [pending[i] for i in idxs], out, args.gap_sec, log)
         write_csv(out, selection)  # refresh after each batch so an interrupt leaves a usable CSV
-        log(f"  batch {bi + 1}/{len(batches)}: {done}/{len(pending)} clips done")
     n = write_csv(out, selection)
     log(f"DONE. {done} clips this run; CSV has {n} completed -> {out}")
 

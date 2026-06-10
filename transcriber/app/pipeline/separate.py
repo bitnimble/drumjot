@@ -24,6 +24,7 @@ so this is mostly a "log and let the user retry" path).
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -189,6 +190,13 @@ class Separator:
             output_dir=None,  # set per-call
             model_file_dir=str(settings.models_dir),
             use_autocast=False,  # fp16 autocast off, see the TF32 note above
+            # audio-separator is very chatty at INFO (per-stem "Saving …", pydub,
+            # bit-depth, per-call "Processing/Separation duration" lines). Default
+            # INFO for the transcriber; batch jobs set DRUMJOT_SEP_LOG_LEVEL=WARNING
+            # (+ TQDM_DISABLE=1 for the chunk bars) to get quiet, summarisable runs.
+            log_level=getattr(
+                logging, os.environ.get("DRUMJOT_SEP_LOG_LEVEL", "INFO").upper(), logging.INFO
+            ),
         )
 
         t0 = time.perf_counter()
