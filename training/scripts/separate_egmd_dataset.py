@@ -7,12 +7,13 @@ E-GMD is drums-only (Roland TD-17 module audio), so there's nothing to mix in
 first -- the audio goes straight to BS-Roformer -> MDX23C, like ENST's
 drums-only takes. Three things make E-GMD special and shape this script:
 
-1. BALANCED-FIRST. E-GMD is 444 h, dominated by kick/snare grooves. We select a
-   duration-capped subset by greedy marginal rare-lane coverage (same algorithm
-   as extract_star_balanced.py), so the rarest lanes (ride/crash/misc-cymbal,
-   the hat articulations, toms) are pulled in FIRST. The greedy order is
-   prefix-deterministic, so the first hours produce the most training-valuable
-   clips and raising --train-min/--val-min later is purely additive.
+1. BALANCED-FIRST. E-GMD is 444 h, dominated by kick/snare grooves. Clips are
+   ORDERED by greedy marginal rare-lane coverage (same algorithm as
+   extract_star_balanced.py), so the rarest lanes (ride/crash/misc-cymbal, the
+   hat articulations, toms) are pulled in FIRST. By default the whole dataset is
+   separated (train --train-min 0 = everything) in that priority order, so a
+   ctrl-C at any point still leaves the most training-valuable clips done; a
+   duration cap (--train-min/--val-min minutes) just truncates the same order.
 
 2. RESUMABLE. Two persisted states: a lane-count cache (`_lane_counts.json`, so
    the 45k MIDIs are scanned once) and per-clip output existence. A rerun
@@ -41,6 +42,7 @@ Usage: separate_egmd_dataset.py <egmd_root> <out_dir>
 """
 import argparse
 import csv
+import io
 import json
 import os
 import sys
@@ -147,9 +149,9 @@ def load_lane_counts(rows, root: Path, cache_path: Path, log) -> dict:
         out[key] = cache[key] = {"counts": counts, "dur": float(r["duration"])}
         scanned += 1
         if scanned % 2000 == 0:
-            cache_path.write_text(json.dumps(cache))
+            _atomic_bytes(json.dumps(cache).encode(), cache_path)  # atomic so an interrupted scan resumes
             log(f"  scanned {scanned} new MIDIs ({i + 1}/{len(rows)})")
-    cache_path.write_text(json.dumps(cache))
+    _atomic_bytes(json.dumps(cache).encode(), cache_path)
     return out
 
 
@@ -181,6 +183,15 @@ def is_done(paths) -> bool:
 def _write_flac(y, sr, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     sf.write(str(dst), y, sr, format="FLAC")
+
+
+def _atomic_bytes(data: bytes, dst: Path) -> None:
+    """Write `data` to `dst` atomically (tmp + os.replace), so a ctrl-C mid-write
+    can never leave a half-written file that resume/the loader would trust."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(dst.name + ".tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, dst)
 
 
 # --- batched separation -----------------------------------------------------
@@ -231,8 +242,9 @@ def process_batch(sep, batch, out: Path, gap_sec: float, log) -> int:
                 if p in pys:
                     yy, ss = pys[p]
                     _write_flac(slice_seconds(yy, ss, start_s, len_s), ss, paths["per"][p])
-            paths["midi"].parent.mkdir(parents=True, exist_ok=True)
-            paths["midi"].write_bytes(Path(e["midi"]).read_bytes())  # midi last = completion marker
+            # midi written LAST and atomically = the completion marker: is_done()
+            # is true only once all stems exist AND this rename has landed.
+            _atomic_bytes(Path(e["midi"]).read_bytes(), paths["midi"])
             done += 1
     return done
 
@@ -256,10 +268,11 @@ def write_csv(out: Path, selection: list[dict]) -> int:
         r["midi_filename"] = f"annotation/{e['uid']}.midi"
         r["audio_filename"] = f"audio/sep_drum/{e['uid']}.flac"
         rows_out.append({k: r.get(k, "") for k in fields})
-    with open(out / "e-gmd-v1.0.0.csv", "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fields)
-        w.writeheader()
-        w.writerows(rows_out)
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=fields)
+    w.writeheader()
+    w.writerows(rows_out)
+    _atomic_bytes(buf.getvalue().encode(), out / "e-gmd-v1.0.0.csv")  # atomic: loader never sees a half-write
     return len(rows_out)
 
 
@@ -267,8 +280,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("egmd_root", type=Path, help="extracted E-GMD root (with e-gmd-v1.0.0.csv)")
     ap.add_argument("out_dir", type=Path, help="output dir for the separation-aware tree")
-    ap.add_argument("--train-min", type=float, default=180.0, help="balanced train minutes to select")
-    ap.add_argument("--val-min", type=float, default=30.0, help="balanced val minutes (from validation+test)")
+    ap.add_argument("--train-min", type=float, default=0.0,
+                    help="balanced train minutes to select; 0 (default) = EVERYTHING, in balanced "
+                    "priority order, so a ctrl-C/resume always has the most valuable clips done first")
+    ap.add_argument("--val-min", type=float, default=30.0,
+                    help="balanced val minutes from validation+test (0 = everything); kept modest by "
+                    "default since eval rarely needs all ~10k held-out clips")
     ap.add_argument("--buffer-sec", type=float, default=300.0, help="separation buffer length per batch")
     ap.add_argument("--gap-sec", type=float, default=2.0, help="silence gap between concatenated clips")
     args = ap.parse_args()
@@ -284,14 +301,18 @@ def main():
 
     train_rows = [r for r in rows if r["split"].strip() == "train"]
     val_rows = [r for r in rows if r["split"].strip() in ("validation", "test")]
-    train_sel = select(train_rows, counts_by_key, args.train_min * 60)
-    val_sel = select(val_rows, counts_by_key, args.val_min * 60)
+    train_cap = float("inf") if args.train_min <= 0 else args.train_min * 60
+    val_cap = float("inf") if args.val_min <= 0 else args.val_min * 60
+    train_sel = select(train_rows, counts_by_key, train_cap)
+    val_sel = select(val_rows, counts_by_key, val_cap)
     log(f"selected (balanced): {len(train_sel)} train, {len(val_sel)} val clips")
 
-    # unified selection in priority order; val relabelled "validation" for the loader
+    # val FIRST so an early ctrl-C/resume always leaves a complete eval set, then
+    # train grinds in balanced priority order (most valuable clips first). val is
+    # relabelled "validation" for the loader.
     selection = (
-        [{"row": r, "split": "train"} for r in train_sel]
-        + [{"row": r, "split": "validation"} for r in val_sel]
+        [{"row": r, "split": "validation"} for r in val_sel]
+        + [{"row": r, "split": "train"} for r in train_sel]
     )
     for e in selection:
         e["uid"] = uid_for(e["row"]["audio_filename"])
