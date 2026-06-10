@@ -33,7 +33,6 @@ LANE_TO_PITCH: dict[str, str] = {
     "rd": "d",
     "cr": "c",
     "mc": "mc",
-    "mp": "mp",
 }
 
 assert set(LANE_TO_PITCH) == set(LANES), "LANE_TO_PITCH must map every lane"
@@ -77,17 +76,33 @@ def lane_probs(audio_path, model, meta: dict, encoder=None, max_seconds: float |
     if max_seconds is not None:
         y = y[: int(max_seconds * enc.sr)]
     feat = enc.encode(y, enc.sr)
+    if int(meta.get("in_dim", embeddings.MERT_DIM)) > embeddings.MERT_DIM:
+        import numpy as np
+
+        hb = embeddings.highband_features(audio_path, feat.shape[0], max_seconds)
+        feat = np.concatenate([feat, hb], axis=1)
     device = next(model.parameters()).device
     x = torch.as_tensor(feat, dtype=torch.float32, device=device).unsqueeze(0)
     with torch.no_grad(), runtime.autocast():
         return torch.sigmoid(model(x))[0].float().cpu().numpy(), meta["encoder_fps"]
 
 
-def _windowed_probs(audio_path, model, meta: dict, encoder, max_seconds, window_seconds):
-    """Yield `(t0_seconds, probs (n_lanes, T), fps)` for each ~`window_seconds`
-    chunk of `audio_path`. Windowing bounds MERT's O(n^2) attention / VRAM on long
-    audio; `t0` is the chunk's true start so callers offset onset times (no
-    frame-count drift across chunks). `max_seconds` caps the audio."""
+def stitched_probs(
+    audio_path, model, meta: dict, encoder=None,
+    max_seconds: float | None = None, window_seconds: float | None = 30.0,
+    overlap_seconds: float = 2.0,
+):
+    """One global `(probs (n_lanes, T_total), fps)` for the whole clip.
+
+    Long audio is encoded in overlapping ~`window_seconds` chunks (bounds MERT's
+    O(n^2) attention / VRAM) whose probability curves are STITCHED center-crop
+    into one timeline before any peak-picking: each interior chunk contributes
+    its middle (half the overlap trimmed from each edge), so no onset lands at a
+    window boundary where it can't be a local max and the decay-reset filter
+    never resets mid-ring. If the checkpoint was trained with the high-band
+    block (`meta["in_dim"] > MERT_DIM`), the 6-20 kHz features are computed from
+    the 44.1 kHz audio and appended per chunk."""
+    import numpy as np
     import torch
 
     from drumjot_training import embeddings
@@ -99,17 +114,47 @@ def _windowed_probs(audio_path, model, meta: dict, encoder, max_seconds, window_
     if max_seconds is not None:
         y = y[: int(max_seconds * enc.sr)]
     fps = meta["encoder_fps"]
+    use_hb = int(meta.get("in_dim", embeddings.MERT_DIM)) > embeddings.MERT_DIM
+    y44 = None
+    if use_hb:
+        import librosa
+
+        y44, _ = librosa.load(str(audio_path), sr=embeddings.HB_SR, mono=True)
+        if max_seconds is not None:
+            y44 = y44[: int(max_seconds * embeddings.HB_SR)]
+
     chunk = int(window_seconds * enc.sr) if window_seconds else 0
-    starts = list(range(0, len(y), chunk)) if (chunk and len(y) > chunk) else [0]
-    for s in starts:
+    if not chunk or len(y) <= chunk:
+        starts = [0]
+    else:
+        step = max(1, chunk - int(overlap_seconds * enc.sr))
+        starts = list(range(0, len(y) - int(overlap_seconds * enc.sr), step))
+    margin = int(round(overlap_seconds / 2.0 * fps))
+    total = int(np.ceil(len(y) / enc.sr * fps)) + 2
+    out = np.zeros((len(meta["lanes"]), total), dtype=np.float32)
+    written = 0
+    for si, s in enumerate(starts):
         seg = y[s : s + chunk] if chunk else y
         if chunk and len(seg) < enc.sr // 10:  # skip a <0.1s tail
             continue
         feat = enc.encode(seg, enc.sr)
+        if use_hb:
+            s44 = int(round(s / enc.sr * embeddings.HB_SR))
+            n44 = int(round(len(seg) / enc.sr * embeddings.HB_SR))
+            feat = np.concatenate(
+                [feat, embeddings.highband_from_wave(y44[s44 : s44 + n44], feat.shape[0])], axis=1
+            )
         x = torch.as_tensor(feat, dtype=torch.float32, device=device).unsqueeze(0)
         with torch.no_grad(), runtime.autocast():
-            probs = torch.sigmoid(model(x))[0].float().cpu().numpy()
-        yield s / enc.sr, probs, fps
+            probs = torch.sigmoid(model(x))[0].float().cpu().numpy()  # (L, Tc)
+        tc = probs.shape[1]
+        lo = 0 if si == 0 else margin
+        hi = tc if si == len(starts) - 1 else max(lo, tc - margin)
+        f0 = int(round(s / enc.sr * fps))
+        gh = min(total, f0 + hi)
+        out[:, f0 + lo : gh] = probs[:, lo : lo + (gh - f0 - lo)]
+        written = max(written, gh)
+    return out[:, :written], fps
 
 
 def transcribe(
@@ -117,19 +162,17 @@ def transcribe(
     max_seconds: float | None = None, window_seconds: float | None = 30.0,
 ) -> dict[str, list[float]]:
     """Per-lane onset times using the saved tuned thresholds + the shared per-lane
-    deterministic picker (`metrics.pick_onsets_lane`). Returns onsets keyed by
+    deterministic picker (`metrics.pick_onsets_lane`), over the globally stitched
+    probability curves (no window-boundary artifacts). Returns onsets keyed by
     training lane; pass through `to_pitch_onsets` for the transcriber's letters."""
     from drumjot_training import metrics
 
+    probs, fps = stitched_probs(audio_path, model, meta, encoder, max_seconds, window_seconds)
     thresholds = meta["thresholds"]
-    out: dict[str, list[float]] = {lane: [] for lane in meta["lanes"]}
-    for t0, probs, fps in _windowed_probs(audio_path, model, meta, encoder, max_seconds, window_seconds):
-        for i, lane in enumerate(meta["lanes"]):
-            thr = thresholds.get(lane, meta["peak_threshold"])
-            for t in metrics.pick_onsets_lane(probs[i], fps, lane, thr):
-                out[lane].append(t0 + float(t))
-    for ts in out.values():
-        ts.sort()
+    out: dict[str, list[float]] = {}
+    for i, lane in enumerate(meta["lanes"]):
+        thr = thresholds.get(lane, meta["peak_threshold"])
+        out[lane] = [float(t) for t in metrics.pick_onsets_lane(probs[i], fps, lane, thr)]
     return out
 
 
@@ -143,16 +186,13 @@ def transcribe_dual(
     decay-reset). `full` is what we deploy; `bare` is the ablation baseline."""
     from drumjot_training import metrics
 
+    probs, fps = stitched_probs(audio_path, model, meta, encoder, max_seconds, window_seconds)
     thresholds = meta["thresholds"]
     md = meta["peak_min_distance_s"]
-    bare: dict[str, list[float]] = {lane: [] for lane in meta["lanes"]}
-    full: dict[str, list[float]] = {lane: [] for lane in meta["lanes"]}
-    for t0, probs, fps in _windowed_probs(audio_path, model, meta, encoder, max_seconds, window_seconds):
-        for i, lane in enumerate(meta["lanes"]):
-            thr = thresholds.get(lane, meta["peak_threshold"])
-            bare[lane].extend(t0 + float(t) for t in metrics.pick_onsets(probs[i], fps, thr, md))
-            full[lane].extend(t0 + float(t) for t in metrics.pick_onsets_lane(probs[i], fps, lane, thr))
-    for d in (bare, full):
-        for ts in d.values():
-            ts.sort()
+    bare: dict[str, list[float]] = {}
+    full: dict[str, list[float]] = {}
+    for i, lane in enumerate(meta["lanes"]):
+        thr = thresholds.get(lane, meta["peak_threshold"])
+        bare[lane] = [float(t) for t in metrics.pick_onsets(probs[i], fps, thr, md)]
+        full[lane] = [float(t) for t in metrics.pick_onsets_lane(probs[i], fps, lane, thr)]
     return bare, full

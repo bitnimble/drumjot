@@ -31,14 +31,14 @@ def test_onsets_by_lane_maps_and_refines_hihat():
     assert o["mc"] == [2.5]  # china
     assert o["rd"] == [1.5]
     assert o["t"] == [1.1]  # floor tom
-    assert o["mp"] == [3.0]  # cowbell
+    assert "mp" not in o  # cowbell dropped (mp lane removed)
     assert o["ss"] == []  # no side-stick class in rlrr
 
 
 def test_aux_and_unknown_events_dropped():
     o = rlrr.onsets_by_lane(_CHART)
     # triangle (aux) + garbage (no class) contribute to no lane
-    assert sum(len(v) for v in o.values()) == 10
+    assert sum(len(v) for v in o.values()) == 9
 
 
 def test_audio_tracks_dedup_song_first():
@@ -133,7 +133,7 @@ def test_midi_extension_overrides_velocity_bimodal():
 
 def test_has_lane_track():
     chart = {"instruments": [{"class": "BP_Kick_C"}, {"class": "BP_Cowbell_C"}], "events": []}
-    assert rlrr.has_lane_track(chart, "mp") is True  # cowbell -> mp
+    assert rlrr.has_lane_track(chart, "mp") is False  # mp removed: cowbell unmapped
     assert rlrr.has_lane_track(chart, "mc") is False  # no china/splash/ride-bell
     assert rlrr.has_lane_track(chart, "k") is True
     assert rlrr.has_lane_track({"instruments": []}, "mp") is False

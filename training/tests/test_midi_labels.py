@@ -26,7 +26,7 @@ def test_all_lanes_present_even_when_empty():
     assert set(out) == set(lanes.LANES)
     assert out["t"] == []
     assert out["hc"] == []
-    assert out["mp"] == []
+    assert out["mc"] == []
 
 
 def test_note_on_with_zero_velocity_is_ignored():

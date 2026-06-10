@@ -33,7 +33,8 @@ _STAR_TO_LANE: dict[str, str] = {
     "RD": "rd", "RC": "rd",  # RC: defensive ride alias (some kit CSVs use it)
     "CRC": "cr",
     "SPC": "mc", "CHC": "mc", "RB": "mc",  # splash / china / ride bell
-    "CB": "mp", "CL": "mp", "CLP": "mp", "TB": "mp",  # cowbell / clap / tambourine
+    # CB/CL/CLP/TB (cowbell/clap/tambourine) deliberately unmapped: the `mp`
+    # lane was removed (see lanes.py); they drop like other out-of-kit classes.
 }
 
 

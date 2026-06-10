@@ -27,9 +27,10 @@ def test_misc_cymbals():
         assert star.lane_for_star_class(c) == "mc"
 
 
-def test_misc_percussion():
-    for c in ("CB", "CL", "CLP", "TB"):  # cowbell, clap (two spellings), tambourine
-        assert star.lane_for_star_class(c) == "mp"
+def test_misc_percussion_dropped():
+    # mp lane removed: cowbell / clap / tambourine are out-of-kit now
+    for c in ("CB", "CL", "CLP", "TB"):
+        assert star.lane_for_star_class(c) is None
 
 
 def test_unknown_unmapped():
@@ -47,7 +48,7 @@ def test_onsets_by_lane_parses_annotation(tmp_path):
     out = star.onsets_by_lane(f)
     assert out["k"] == [0.01]
     assert out["ss"] == [0.50]
-    assert out["mp"] == [0.50]
+    assert "mp" not in out  # CB dropped (mp removed)
     assert out["ho"] == [0.80]
 
 

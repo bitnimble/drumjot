@@ -1,4 +1,5 @@
 import numpy as np
+
 from drumjot_dsp import peakpick
 
 

@@ -15,7 +15,14 @@ from drumjot_training.lanes import LANES
 
 
 class OnsetHead(nn.Module):
-    """BiGRU + linear over (B, T, in_dim) frozen features -> (B, T) logits."""
+    """BiGRU + linear over (B, T, in_dim) frozen features -> (B, T) logits.
+
+    A second linear (`act`) emits an auxiliary frame-ACTIVITY logit ("is this
+    instrument still ringing?") off the same GRU states. Only the sustained
+    lanes' activity is supervised (Onsets-and-Frames-style dual objective; see
+    `targets.ring_spans`): open hi-hat / cymbals are *defined* by their tails,
+    which a pure onset target never shows the head. Inference uses only the
+    onset logits, so old checkpoints (no `act` weights) stay loadable."""
 
     def __init__(self, in_dim: int, hidden: int = 128, num_layers: int = 2):
         super().__init__()
@@ -27,10 +34,16 @@ class OnsetHead(nn.Module):
             bidirectional=True,
         )
         self.proj = nn.Linear(2 * hidden, 1)
+        self.act = nn.Linear(2 * hidden, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         h, _ = self.gru(x)
         return self.proj(h).squeeze(-1)
+
+    def forward_all(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """One GRU pass -> (onset logits (B, T), activity logits (B, T))."""
+        h, _ = self.gru(x)
+        return self.proj(h).squeeze(-1), self.act(h).squeeze(-1)
 
 
 class MultiLaneHeads(nn.Module):
@@ -52,3 +65,8 @@ class MultiLaneHeads(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         outs = [self.heads[lane](x) for lane in self.lane_names]
         return torch.stack(outs, dim=1)
+
+    def forward_all(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """(onset logits (B, n_lanes, T), activity logits (B, n_lanes, T))."""
+        pairs = [self.heads[lane].forward_all(x) for lane in self.lane_names]
+        return torch.stack([p[0] for p in pairs], dim=1), torch.stack([p[1] for p in pairs], dim=1)

@@ -16,10 +16,10 @@ import json
 from pathlib import Path
 
 from drumjot_training.config import Config
-from drumjot_training.embeddings import MERT_DIM
+from drumjot_training.embeddings import FEAT_DIM
 
 
-def run_metadata(cfg: Config, thresholds: dict[str, float], in_dim: int = MERT_DIM) -> dict:
+def run_metadata(cfg: Config, thresholds: dict[str, float], in_dim: int = FEAT_DIM) -> dict:
     """JSON-serializable description of a trained model (the bits not in the
     weights). Thresholds are coerced to plain floats."""
     return {
@@ -34,12 +34,13 @@ def run_metadata(cfg: Config, thresholds: dict[str, float], in_dim: int = MERT_D
         "head_hidden": cfg.head_hidden,
         "head_layers": cfg.head_layers,
         "in_dim": in_dim,
+        "aux_activity": True,  # heads carry the auxiliary ring-activity output
         "thresholds": {k: float(v) for k, v in thresholds.items()},
     }
 
 
 def save(out_dir: str | Path, model, cfg: Config, thresholds: dict[str, float],
-         in_dim: int = MERT_DIM) -> Path:
+         in_dim: int = FEAT_DIM) -> Path:
     """Write `model.pt` + `meta.json` into `out_dir`; return the dir."""
     import torch
 
@@ -64,6 +65,13 @@ def load(out_dir: str | Path, device: str = "cpu"):
         num_layers=meta["head_layers"],
         lane_names=tuple(meta["lanes"]),
     )
-    model.load_state_dict(torch.load(out / "model.pt", map_location=device))
+    sd = torch.load(out / "model.pt", map_location=device)
+    # Old checkpoints predate the auxiliary activity head (`.act` per lane);
+    # inference only uses the onset path, so missing act weights are fine,
+    # anything ELSE missing/unexpected is a real mismatch and must raise.
+    missing, unexpected = model.load_state_dict(sd, strict=False)
+    bad = [k for k in missing if ".act." not in k] + list(unexpected)
+    if bad:
+        raise RuntimeError(f"checkpoint mismatch in {out}: {bad}")
     model.eval()
     return model, meta

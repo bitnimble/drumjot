@@ -1,11 +1,15 @@
 """Drum lane vocabulary for the onset-detection training set.
 
-Expanded 11-lane set (was 5): kick, snare, side-stick, toms (merged),
-the three hi-hat articulations (closed / pedal / open), ride, crash, and two
-fold-up lanes for the sparse tail, misc cymbals (splash + china + ride-bell)
-and misc percussion (cowbell + hand-clap + tambourine). General-MIDI
-percussion notes fold into these lanes; anything outside the kit maps to None
-and is dropped by callers.
+10-lane set: kick, snare, side-stick, toms (merged), the three hi-hat
+articulations (closed / pedal / open), ride, crash, and misc cymbals
+(splash + china + ride-bell). General-MIDI percussion notes fold into these
+lanes; anything outside the kit maps to None and is dropped by callers.
+
+`mp` (misc percussion: cowbell / clap / tambourine) was REMOVED (2026-06): it
+has no per-instrument stem, scored ~noise on val, and was the top
+cross-instrument leak destination on four of five stems, a garbage-attractor
+lane that taught the model to fire on anything percussive. Its source classes
+now map to None.
 
 Side stick (`ss`) is trained as its own lane and emitted to MIDI on its own
 GM-37 track; the frontend folds it onto the snare track as an articulation at
@@ -14,7 +18,7 @@ Jot-load time (integration detail, not handled here).
 from __future__ import annotations
 
 LANES: tuple[str, ...] = (
-    "k", "s", "ss", "t", "hc", "hp", "ho", "rd", "cr", "mc", "mp",
+    "k", "s", "ss", "t", "hc", "hp", "ho", "rd", "cr", "mc",
 )
 
 LANE_NAMES: dict[str, str] = {
@@ -28,15 +32,14 @@ LANE_NAMES: dict[str, str] = {
     "rd": "ride",
     "cr": "crash",
     "mc": "misc cymbals (splash/china/ride-bell)",
-    "mp": "misc percussion (cowbell/clap/tambourine)",
 }
 
-# General-MIDI percussion note -> lane.
+# General-MIDI percussion note -> lane. Clap (39), tambourine (54) and cowbell
+# (56) are deliberately unmapped (the removed `mp` lane).
 _GM_NOTE_TO_LANE: dict[int, str] = {
     35: "k", 36: "k",
     37: "ss",                                  # side stick
     38: "s", 40: "s",
-    39: "mp",                                  # hand clap
     41: "t", 43: "t", 45: "t", 47: "t", 48: "t", 50: "t",
     42: "hc",                                  # closed hi-hat
     44: "hp",                                  # pedal hi-hat
@@ -44,7 +47,6 @@ _GM_NOTE_TO_LANE: dict[int, str] = {
     49: "cr", 57: "cr",                        # crash 1 / 2
     51: "rd", 59: "rd",                        # ride 1 / 2
     52: "mc", 53: "mc", 55: "mc",              # china / ride bell / splash
-    54: "mp", 56: "mp",                        # tambourine / cowbell
 }
 
 
@@ -52,3 +54,39 @@ def lane_for_gm_note(note: int) -> str | None:
     """Return the drum lane for a General-MIDI percussion `note`, or None if
     the note is outside the kit vocabulary."""
     return _GM_NOTE_TO_LANE.get(note)
+
+
+# Acoustically-confusable siblings, per lane: the lanes whose hits this lane's
+# head is empirically prone to firing on. SEEDED FROM MEASURED ParaDB leakage
+# (eval_paradb cross-instrument tables, 2026-06), not instrument taxonomy: e.g.
+# the hi-hat stem triggering the ride head was the single largest leak, so `rd`
+# lists the hats. Used by the loss to up-weight frames where a sibling is active
+# (hard negatives when this lane is silent there; harder-positive reward when it
+# genuinely co-occurs). Tunable as new leakage data comes in.
+CONFUSABLE: dict[str, tuple[str, ...]] = {
+    "k": ("t",),                                 # tom stem -> kick leak
+    "s": ("ss",),
+    "ss": ("s", "k"),
+    "t": ("k",),
+    "hc": ("ho", "hp", "cr", "rd", "mc"),
+    "hp": ("hc", "ho", "s", "k"),                # hp fired heavily on snare/kick stems
+    "ho": ("hc", "hp", "cr", "rd", "mc"),
+    "rd": ("hc", "ho", "hp", "cr", "mc"),        # hat->ride: the #1 measured leak
+    "cr": ("rd", "mc", "ho", "hc"),
+    "mc": ("cr", "rd", "hc", "ho"),
+}
+
+
+def sibling_matrix(lanes: tuple[str, ...] = LANES) -> list[list[bool]]:
+    """(n_lanes, n_lanes) boolean matrix: S[i][j] is True when `lanes[j]` is a
+    confusable sibling of `lanes[i]`. Row-major over `lanes` order; pure Python
+    so it stays importable without numpy/torch."""
+    idx = {ln: i for i, ln in enumerate(lanes)}
+    out = [[False] * len(lanes) for _ in lanes]
+    for ln, sibs in CONFUSABLE.items():
+        if ln not in idx:
+            continue
+        for s in sibs:
+            if s in idx:
+                out[idx[ln]][idx[s]] = True
+    return out

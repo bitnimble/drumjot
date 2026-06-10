@@ -2,6 +2,8 @@
 
 Tracks the learned drum-onset model (frozen MERT + per-lane heads) over time:
 each run's setup, the numbers, and *why* things changed. Newest entries on top.
+Code/architecture changes (and how to flip each one back) are tracked
+separately in [CHANGELOG.md](CHANGELOG.md).
 Two metrics matter, in order:
 
 - **ParaDB onset-F1**, real, hand-charted songs run through our *own* separation

@@ -31,8 +31,15 @@ from drumjot_training import (
     star,
 )
 from drumjot_training.config import Config
+from drumjot_training.lanes import sibling_matrix
 from drumjot_training.model import MultiLaneHeads
-from drumjot_training.targets import onsets_to_target, pos_weights_from_targets
+from drumjot_training.targets import (
+    SUSTAINED_LANES,
+    onsets_to_target,
+    pos_weights_from_targets,
+    ring_spans,
+    spans_to_activity,
+)
 
 
 @dataclass
@@ -45,6 +52,14 @@ class Clip:
     targets: np.ndarray  # (n_lanes, T)
     onsets_by_lane: dict[str, list[float]]
     audio_path: str | None = None  # source clip, for envelope post-filtering
+    # Targets used ONLY for sibling-aware loss weighting. None -> `targets`.
+    # Differs in per-stem mode: `targets` are restricted to the stem's lanes,
+    # but the weighting must still see the FULL kit's onsets so e.g. hat bleed
+    # on the cymbals stem counts as a hard negative for ride.
+    weight_targets: np.ndarray | None = None
+    # Auxiliary ring-activity targets (n_lanes, T), nonzero only on the
+    # sustained lanes (targets.SUSTAINED_LANES). None -> zeros.
+    activity_targets: np.ndarray | None = None
 
 
 def build_targets(
@@ -141,15 +156,23 @@ def tune_thresholds(
     """Per-lane peak threshold maximizing mean held-out F1 on `val_clips`.
 
     Thresholds are hyperparameters tuned on validation (not test). Lanes with
-    no val onsets keep `cfg.peak_threshold`."""
+    no val onsets keep `cfg.peak_threshold`. RARE lanes (fewer than
+    `cfg.rare_lane_min_onsets` val onsets) only consider thresholds >=
+    `cfg.rare_thr_floor`: tuning on a handful of clips once drove ride to 0.10
+    and flooded real audio with false positives (see RESULTS.md)."""
     grid = grid or (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8)
     # keep only probs + onsets per clip (not the feature-heavy Clip), so a
     # streaming val set isn't fully resident at once
     probs_onsets = [(_clip_probs(model, c), c.onsets_by_lane) for c in val_clips]
     best: dict[str, float] = {}
     for i, lane in enumerate(cfg.lanes):
-        best_thr, best_f1 = cfg.peak_threshold, -1.0
-        for thr in grid:
+        n_ref = sum(len(onsets.get(lane, [])) for _, onsets in probs_onsets)
+        lane_grid = (
+            grid if n_ref >= cfg.rare_lane_min_onsets
+            else tuple(t for t in grid if t >= cfg.rare_thr_floor)
+        )
+        best_thr, best_f1 = max(cfg.peak_threshold, lane_grid[0] if lane_grid else 0.0), -1.0
+        for thr in lane_grid:
             f1s = []
             for probs, onsets in probs_onsets:
                 ref = onsets.get(lane, [])
@@ -168,10 +191,12 @@ def collate_clips(clips: Sequence[Clip]):
     mask. Used as a DataLoader `collate_fn`, so it builds on CPU (workers can't
     touch CUDA); `train_loop` moves the batch to the device.
 
-    Returns (X (B, T, dim), Y (B, n_lanes, T), mask (B, T)); padded frames are
-    zero in X/Y and 0 in mask so `masked_bce` ignores them. Clips are capped to
-    a uniform `max_seconds` upstream, so most are full length and padding waste
-    is small."""
+    Returns (X (B, T, dim), Y (B, n_lanes, T), Yw (B, n_lanes, T),
+    A (B, n_lanes, T), mask (B, T)); padded frames are zero everywhere and 0 in
+    mask so the losses ignore them. `Yw` is the sibling-weighting target source
+    (`clip.weight_targets`, falling back to `targets`); `A` is the auxiliary
+    ring-activity target (zeros when absent). Clips are capped to a uniform
+    `max_seconds` upstream, so most are full length and padding waste is small."""
     import torch
 
     dim = clips[0].features.shape[1]
@@ -181,31 +206,52 @@ def collate_clips(clips: Sequence[Clip]):
     b = len(clips)
     X = torch.zeros(b, t_max, dim, dtype=torch.float32)
     Y = torch.zeros(b, n_lanes, t_max, dtype=torch.float32)
+    Yw = torch.zeros(b, n_lanes, t_max, dtype=torch.float32)
+    A = torch.zeros(b, n_lanes, t_max, dtype=torch.float32)
     mask = torch.zeros(b, t_max, dtype=torch.float32)
     for i, clip in enumerate(clips):
         t = lengths[i]
         X[i, :t] = torch.as_tensor(clip.features, dtype=torch.float32)
         Y[i, :, :t] = torch.as_tensor(clip.targets, dtype=torch.float32)
+        wt = clip.weight_targets if clip.weight_targets is not None else clip.targets
+        Yw[i, :, :t] = torch.as_tensor(wt, dtype=torch.float32)
+        if clip.activity_targets is not None:
+            A[i, :, :t] = torch.as_tensor(clip.activity_targets, dtype=torch.float32)
         mask[i, :t] = 1.0
-    return X, Y, mask
+    return X, Y, Yw, A, mask
 
 
-def masked_bce(logits, targets, mask, pos_weight):
+def sibling_weight(targets, sib_act, pos_w: float, neg_w: float):
+    """Per-frame loss multiplier from sibling activity (lanes.CONFUSABLE).
+
+    `sib_act` (B, n_lanes, T) is each lane's max confusable-sibling target.
+    Frames where a sibling fires are the discriminative ones, so their loss is
+    scaled up: negatives (this lane silent under sibling noise -> punish bleed
+    triggers) toward `neg_w`, positives (true co-occurrence, the harder
+    detection) toward `pos_w`. Smooth in both targets; 1 where no sibling is
+    active or both weights are 1."""
+    return 1.0 + sib_act * ((pos_w - 1.0) * targets + (neg_w - 1.0) * (1.0 - targets))
+
+
+def masked_bce(logits, targets, mask, pos_weight, frame_weight=None):
     """Per-frame BCE averaged over valid (unpadded) frames and lanes.
 
     `pos_weight` is (n_lanes, 1), broadcasting over (B, n_lanes, T); `mask` is
-    (B, T) and is broadcast across lanes so padded frames contribute nothing."""
+    (B, T) and is broadcast across lanes so padded frames contribute nothing.
+    `frame_weight` (B, n_lanes, T), e.g. `sibling_weight`, scales per-frame."""
     from torch.nn import functional as F
 
     loss = F.binary_cross_entropy_with_logits(
         logits, targets, pos_weight=pos_weight, reduction="none"
     )  # (B, n_lanes, T)
+    if frame_weight is not None:
+        loss = loss * frame_weight
     m = mask.unsqueeze(1)  # (B, 1, T)
     denom = (m.sum() * logits.shape[1]).clamp_min(1.0)
     return (loss * m).sum() / denom
 
 
-def masked_focal(logits, targets, mask, alpha: float = 2.0, beta: float = 4.0):
+def masked_focal(logits, targets, mask, alpha: float = 2.0, beta: float = 4.0, frame_weight=None):
     """CenterNet-style penalty-reduced focal loss for soft Gaussian onset
     targets (peak 1.0), averaged over valid frames' positives.
 
@@ -214,16 +260,20 @@ def masked_focal(logits, targets, mask, alpha: float = 2.0, beta: float = 4.0):
     peak is barely penalised, and `(.) ** alpha` focuses on hard frames. This
     replaces `pos_weight` reweighting (it targets the rare/hard frames directly)
     so no `pos_weight` is needed. Normalised by the positive count (CenterNet
-    convention). `mask` is (B, T), broadcast across lanes."""
+    convention). `mask` is (B, T), broadcast across lanes; `frame_weight`
+    (e.g. `sibling_weight`) scales per-frame."""
     import torch
 
     p = torch.sigmoid(logits).clamp(1e-6, 1.0 - 1e-6)
     pos = (targets >= 1.0).float()
     pos_loss = -((1.0 - p) ** alpha) * torch.log(p) * pos
     neg_loss = -((1.0 - targets) ** beta) * (p**alpha) * torch.log(1.0 - p) * (1.0 - pos)
+    loss = pos_loss + neg_loss
+    if frame_weight is not None:
+        loss = loss * frame_weight
     m = mask.unsqueeze(1)  # (B, 1, T)
     npos = (pos * m).sum().clamp_min(1.0)
-    return ((pos_loss + neg_loss) * m).sum() / npos
+    return (loss * m).sum() / npos
 
 
 def _cap_onsets(onsets: dict[str, list[float]], max_seconds: float | None) -> dict[str, list[float]]:
@@ -244,7 +294,9 @@ class CachedClips:
     parallel). Build via `materialize`, which populates the cache first."""
 
     def __init__(self, specs: Sequence[tuple], cfg: Config, cache_dir, max_seconds: float | None):
-        # specs: (audio_path, onsets_by_lane, n_frames) for clips already cached
+        # specs: (audio_path, onsets_by_lane, weight_onsets_or_None, n_frames)
+        # for clips already cached; weight_onsets is the FULL-kit onsets used
+        # only for sibling loss weighting (per-stem mode), None elsewhere.
         self._specs = list(specs)
         self._cfg = cfg
         self._cache_dir = Path(cache_dir)
@@ -260,11 +312,25 @@ class CachedClips:
         return len(self._specs)
 
     def __getitem__(self, i: int) -> Clip:
-        audio_path, onsets, _ = self._specs[i]
+        audio_path, onsets, weight_onsets, rings, _ = self._specs[i]
         feat = np.load(self._path(audio_path))
         onsets = _cap_onsets(onsets, self._max_seconds)
         targets = build_targets(onsets, feat.shape[0], self._cfg)
-        return Clip(features=feat, targets=targets, onsets_by_lane=onsets, audio_path=str(audio_path))
+        wt = None
+        if weight_onsets is not None:
+            wt = build_targets(
+                _cap_onsets(weight_onsets, self._max_seconds), feat.shape[0], self._cfg
+            )
+        act = None
+        if rings:
+            act = np.zeros_like(targets)
+            for li, lane in enumerate(self._cfg.lanes):
+                if rings.get(lane):
+                    act[li] = spans_to_activity(rings[lane], feat.shape[0], self._cfg.encoder_fps)
+        return Clip(
+            features=feat, targets=targets, onsets_by_lane=onsets,
+            audio_path=str(audio_path), weight_targets=wt, activity_targets=act,
+        )
 
     def __iter__(self):
         for i in range(len(self)):
@@ -273,8 +339,37 @@ class CachedClips:
     def iter_targets(self):
         """Yield per-clip targets WITHOUT loading features (uses the stored
         frame count), so `pos_weights` needn't re-read the whole feature set."""
-        for _, onsets, n_frames in self._specs:
+        for _, onsets, _w, _r, n_frames in self._specs:
             yield build_targets(_cap_onsets(onsets, self._max_seconds), n_frames, self._cfg)
+
+
+def _rings_for_clip(
+    audio_path, onsets: dict[str, list[float]], cfg: Config, cache_dir: Path,
+    max_seconds: float | None,
+) -> dict[str, list[tuple[float, float]]]:
+    """Ring spans for the sustained lanes (aux activity targets), with a JSON
+    side-cache next to the feature cache so re-runs never re-read audio.
+    Returns {} for clips with no sustained-lane onsets."""
+    import json
+
+    capped = _cap_onsets(onsets, max_seconds)
+    if not any(capped.get(ln) for ln in SUSTAINED_LANES):
+        return {}
+    key = embeddings.cache_key(audio_path, cfg.encoder, cfg.encoder_layer, max_seconds)
+    rf = Path(cache_dir) / f"{key}.rings.json"
+    if rf.exists():
+        loaded = json.loads(rf.read_text())
+        return {ln: [tuple(s) for s in spans] for ln, spans in loaded.items()}
+    y = embeddings.load_audio(audio_path, sr=embeddings.MERT_SR)
+    if max_seconds is not None:
+        y = y[: int(max_seconds * embeddings.MERT_SR)]
+    rings = {
+        ln: ring_spans(y, embeddings.MERT_SR, capped[ln], cfg.encoder_fps)
+        for ln in SUSTAINED_LANES
+        if capped.get(ln)
+    }
+    rf.write_text(json.dumps(rings))
+    return rings
 
 
 def materialize(
@@ -292,12 +387,17 @@ def materialize(
     so the train set can exceed available memory."""
     cache_dir = Path(cache_dir)
     ok: list[tuple] = []
-    for i, (audio, onsets) in enumerate(specs):
+    for i, spec in enumerate(specs):
+        # spec: (audio, onsets) or (audio, onsets, weight_onsets) -- the latter
+        # carries FULL-kit onsets for sibling loss weighting (per-stem mode).
+        audio, onsets = spec[0], spec[1]
+        weight_onsets = spec[2] if len(spec) > 2 else None
         try:
             feat = embeddings.embed_clip(
                 audio, encoder, cache_dir=cache_dir, max_seconds=max_seconds, cache_dtype=cfg.cache_dtype
             )
-            ok.append((audio, onsets, int(feat.shape[0])))
+            rings = _rings_for_clip(audio, onsets, cfg, cache_dir, max_seconds)
+            ok.append((audio, onsets, weight_onsets, rings, int(feat.shape[0])))
         except Exception as e:  # noqa: BLE001
             log(f"  skip {Path(audio).name}: {e!r}")
         if (i + 1) % 50 == 0:
@@ -346,6 +446,13 @@ def train_loop(
     pw = torch.as_tensor(pos_weight, dtype=torch.float32, device=device)
     if pw.ndim == 1:
         pw = pw.view(-1, 1)  # (n_lanes, 1) broadcasts over (B, n_lanes, T)
+    # sibling-aware weighting (lanes.CONFUSABLE): S (n_lanes, n_lanes) marks each
+    # lane's confusable siblings; per batch, sib_act = max sibling target.
+    sib_on = cfg.sib_neg_weight != 1.0 or cfg.sib_pos_weight != 1.0
+    S = torch.as_tensor(sibling_matrix(cfg.lanes), dtype=torch.bool, device=device)
+    # aux ring-activity rows + a unit pos_weight for the activity BCE
+    sus_idx = [i for i, ln in enumerate(cfg.lanes) if ln in SUSTAINED_LANES]
+    one_pw = torch.ones(len(sus_idx), 1, device=device)
     history: dict[str, list[float]] = {"train_loss": []}
 
     gen = torch.Generator().manual_seed(0)  # reproducible per-epoch shuffle
@@ -380,18 +487,37 @@ def train_loop(
         ep_start = time.perf_counter()
         model.train()
         total, n_batches = 0.0, 0
-        for bi, (X, Y, mask) in enumerate(loader):
+        for bi, (X, Y, Yw, A, mask) in enumerate(loader):
             X = X.to(device, non_blocking=True)
             Y = Y.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
+            fw = None
+            if sib_on:
+                Yw = Yw.to(device, non_blocking=True)
+                # per lane l: max over its siblings' weight-targets at each frame
+                sib_act = torch.stack(
+                    [
+                        Yw[:, S[li]].amax(dim=1) if bool(S[li].any()) else torch.zeros_like(Yw[:, 0])
+                        for li in range(len(cfg.lanes))
+                    ],
+                    dim=1,
+                )  # (B, n_lanes, T)
+                fw = sibling_weight(Y, sib_act, cfg.sib_pos_weight, cfg.sib_neg_weight)
             opt.zero_grad()
             with runtime.autocast():  # bf16 fwd on Ampere+; FP32 no-op elsewhere
-                logits = model(X)
+                logits, act_logits = model.forward_all(X)
                 loss = (
-                    masked_focal(logits, Y, mask)
+                    masked_focal(logits, Y, mask, frame_weight=fw)
                     if loss_fn == "focal"
-                    else masked_bce(logits, Y, mask, pw)
+                    else masked_bce(logits, Y, mask, pw, frame_weight=fw)
                 )
+                if cfg.aux_act_weight > 0.0:
+                    # auxiliary ring-activity BCE, sustained lanes only (the
+                    # open-hat/cymbal tail that defines those classes)
+                    A = A.to(device, non_blocking=True)
+                    loss = loss + cfg.aux_act_weight * masked_bce(
+                        act_logits[:, sus_idx], A[:, sus_idx], mask, one_pw
+                    )
             loss.backward()  # bf16 keeps FP32 range, so no GradScaler needed
             opt.step()
             if sched is not None:
@@ -548,6 +674,28 @@ def _egmd_specs(args) -> tuple[list, list, Path]:
     return [spec(m) for m in tr], [spec(m) for m in va], root / "_cache_mert"
 
 
+def _egmd_perstem_specs(args) -> tuple[list, list, Path]:
+    """(train_specs, val_specs, cache_dir) for E-GMD per-instrument stems.
+
+    One example per (clip, drum-piece stem), labelled with ONLY that stem's lanes
+    (matches the per-instrument eval/inference). Point `DRUMJOT_EGMD` at a
+    separation-aware tree built by scripts/separate_egmd_dataset.py -- that tree
+    is already a balanced, duration-capped subset, so every stem in it is used
+    (split by the tree's own train/validation labels)."""
+    root = paths.dataset_path("egmd")
+    per = egmd.perstem_index(root)
+    tr = [c for c in per if c.split == "train"]
+    va = [c for c in per if c.split == "validation"]
+    # targets = the stem's own lanes only; FULL onsets ride along as the
+    # sibling-weighting source (bleed from other instruments = a hard negative).
+    spec = lambda c: (  # noqa: E731
+        c.audio_path,
+        egmd.restricted_onsets(c.midi_path, c.pitch),
+        midi_labels.onsets_from_path(c.midi_path),
+    )
+    return [spec(c) for c in tr], [spec(c) for c in va], root / "_cache_mert"
+
+
 def _star_specs(args) -> tuple[list, list, Path]:
     """(train_specs, val_specs, cache_dir) for STAR; specs = (audio, onsets)."""
     root = paths.dataset_path("star")
@@ -577,7 +725,14 @@ def _star_perstem_specs(args) -> tuple[list, list, Path]:
     per = star.perstem_index(root)
     tr = [c for c in per if c.annotation_path in tr_songs]
     va = [c for c in per if c.annotation_path in va_songs]
-    spec = lambda c: (c.audio_path, star.restricted_onsets(c.annotation_path, c.pitch))  # noqa: E731
+    # targets = the stem's own lanes only; the FULL onsets ride along as the
+    # sibling-weighting source, so bleed from other instruments on this stem
+    # (e.g. hats on the cymbals stem) counts as a hard negative.
+    spec = lambda c: (  # noqa: E731
+        c.audio_path,
+        star.restricted_onsets(c.annotation_path, c.pitch),
+        star.onsets_by_lane(c.annotation_path),
+    )
     return [spec(c) for c in tr], [spec(c) for c in va], root / "_cache_mert"
 
 
@@ -594,13 +749,46 @@ def _enst_specs(args) -> tuple[list, list, Path]:
     return [spec(c) for c in tr], [spec(c) for c in va], root / "_cache_mert"
 
 
+def _enst_perstem_specs(args) -> tuple[list, list, Path]:
+    """(train_specs, val_specs, cache_dir) for ENST per-instrument stems.
+
+    One example per (take, drum-piece stem), labelled with ONLY that stem's lanes
+    so the model learns to ignore cross-instrument bleed (matches the
+    per-instrument eval/inference). Split holds out a whole drummer/kit;
+    `--train-clips`/`--val-clips` cap the number of TAKES (each expands to up to 5
+    stem examples). Point `DRUMJOT_ENST` at a separation-aware tree built by
+    scripts/separate_enst_dataset.py."""
+    root = paths.dataset_path("enst")
+    takes = enst.index(root, mix="sep_drum")  # one handle per separated take
+    tr_takes = {c.annotation_path for c in enst.for_split(takes, "train")[: args.train_clips]}
+    va_takes = {c.annotation_path for c in enst.for_split(takes, "validation")[: args.val_clips]}
+    per = enst.perstem_index(root)
+    tr = [c for c in per if c.annotation_path in tr_takes]
+    va = [c for c in per if c.annotation_path in va_takes]
+    # targets = the stem's own lanes only; the FULL onsets ride along as the
+    # sibling-weighting source, so bleed from other instruments on this stem
+    # (e.g. hats on the cymbals stem) counts as a hard negative.
+    spec = lambda c: (  # noqa: E731
+        c.audio_path,
+        enst.restricted_onsets(c.annotation_path, c.pitch),
+        enst.onsets_by_lane(c.annotation_path),
+    )
+    return [spec(c) for c in tr], [spec(c) for c in va], root / "_cache_mert"
+
+
 def main(argv: list[str] | None = None) -> None:
     import argparse
 
     ap = argparse.ArgumentParser(description="Drum-onset training (frozen MERT + per-lane heads)")
-    ap.add_argument("--dataset", choices=("egmd", "star", "star_perstem", "enst"), default="egmd")
-    ap.add_argument("--enst-mix", choices=("wet_mix", "dry_mix", "accompaniment"), default="wet_mix",
-                    help="ENST-Drums audio variant (wet_mix = realistic isolated kit; default)")
+    ap.add_argument(
+        "--dataset",
+        choices=("egmd", "egmd_perstem", "star", "star_perstem", "enst", "enst_perstem"),
+        default="egmd",
+    )
+    ap.add_argument("--enst-mix", choices=("wet_mix", "dry_mix", "accompaniment", "sep_drum"),
+                    default="wet_mix",
+                    help="ENST-Drums audio variant (wet_mix = realistic isolated kit; default; "
+                    "sep_drum = separated drum stem from separate_enst_dataset.py)")
     ap.add_argument("--synthetic", action="store_true", help="dataset-free self-test")
     ap.add_argument("--overfit-one", action="store_true", help="train on a single clip")
     ap.add_argument("--train-min", type=float, default=240.0, help="E-GMD train minutes")
@@ -631,6 +819,12 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--loss", choices=("bce", "focal"), default="bce",
                     help="pos-weighted BCE (default) or CenterNet penalty-reduced focal "
                     "(focal ignores pos_weight; A/B it before committing)")
+    ap.add_argument("--sib-neg-weight", type=float, default=Config.sib_neg_weight,
+                    help="loss multiplier on hard negatives (confusable sibling active, "
+                    "this lane silent); 1 disables")
+    ap.add_argument("--sib-pos-weight", type=float, default=Config.sib_pos_weight,
+                    help="loss multiplier on co-occurring positives (hit under sibling "
+                    "noise, the harder detection); 1 disables")
     ap.add_argument("--align-window", type=float, default=0.03, help="post-filter peak-align window (s)")
     ap.add_argument("--support-percentile", type=float, default=60.0, help="post-filter envelope support floor pctl")
     ap.add_argument("--no-filter-report", action="store_true", help="skip the deterministic-filter F1 comparison")
@@ -648,11 +842,14 @@ def main(argv: list[str] | None = None) -> None:
     cfg = Config(
         encoder_layer=args.layer, cache_dtype=args.cache_dtype,
         lr=args.lr, weight_decay=args.weight_decay,
+        sib_neg_weight=args.sib_neg_weight, sib_pos_weight=args.sib_pos_weight,
     )
     train_specs, val_specs, cache = (
         _star_specs(args) if args.dataset == "star"
         else _star_perstem_specs(args) if args.dataset == "star_perstem"
+        else _enst_perstem_specs(args) if args.dataset == "enst_perstem"
         else _enst_specs(args) if args.dataset == "enst"
+        else _egmd_perstem_specs(args) if args.dataset == "egmd_perstem"
         else _egmd_specs(args)
     )
     if args.overfit_one:
@@ -674,7 +871,7 @@ def main(argv: list[str] | None = None) -> None:
     pos_w = pos_weights_from_targets(train_clips.iter_targets(), cap=args.pos_weight_cap)
     print("pos_weights:", {ln: round(float(w), 1) for ln, w in zip(cfg.lanes, pos_w, strict=True)}, flush=True)
 
-    model = MultiLaneHeads(in_dim=embeddings.MERT_DIM, hidden=cfg.head_hidden, num_layers=cfg.head_layers)
+    model = MultiLaneHeads(in_dim=embeddings.FEAT_DIM, hidden=cfg.head_hidden, num_layers=cfg.head_layers)
     if args.resume:
         sd = torch.load(Path(args.resume) / "model.pt", map_location="cpu")
         model.load_state_dict(sd)

@@ -4,7 +4,7 @@ from drumjot_training.lanes import LANES
 
 def test_perstem_to_lanes_covers_all_but_mp_no_overlap():
     flat = [ln for lanes in star.PERSTEM_TO_LANES.values() for ln in lanes]
-    assert set(flat) == set(LANES) - {"mp"}   # every lane has a stem except mp
+    assert set(flat) == set(LANES)            # every lane has a stem (mp removed)
     assert len(flat) == len(set(flat))         # hard routing: no lane in two stems
 
 
@@ -17,7 +17,7 @@ def test_restricted_onsets_keeps_only_stem_lanes(tmp_path):
     o = star.restricted_onsets(ann, "c")
     assert set(o) == set(LANES)
     assert o["cr"] == [0.30] and o["rd"] == [0.40] and o["mc"] == [0.50]
-    assert o["k"] == [] and o["s"] == [] and o["mp"] == []
+    assert o["k"] == [] and o["s"] == []
     # kick stem -> only k
     ok = star.restricted_onsets(ann, "k")
     assert ok["k"] == [0.10] and sum(len(v) for v in ok.values()) == 1

@@ -2,7 +2,7 @@ import drumjot_training.lanes as lanes
 
 
 def test_lanes_are_the_expanded_set():
-    assert lanes.LANES == ("k", "s", "ss", "t", "hc", "hp", "ho", "rd", "cr", "mc", "mp")
+    assert lanes.LANES == ("k", "s", "ss", "t", "hc", "hp", "ho", "rd", "cr", "mc")
 
 
 def test_kick():
@@ -42,9 +42,10 @@ def test_misc_cymbals_folded():
         assert lanes.lane_for_gm_note(n) == "mc"
 
 
-def test_misc_percussion_folded():
-    for n in (39, 54, 56):  # hand clap, tambourine, cowbell
-        assert lanes.lane_for_gm_note(n) == "mp"
+def test_misc_percussion_dropped():
+    # mp lane removed: clap / tambourine / cowbell are out-of-kit now
+    for n in (39, 54, 56):
+        assert lanes.lane_for_gm_note(n) is None
 
 
 def test_unknown_note_is_none():

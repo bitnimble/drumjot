@@ -9,7 +9,10 @@ def test_run_metadata_has_inference_fields():
     assert meta["lanes"] == list(Config().lanes)
     assert meta["encoder"] == Config().encoder
     assert meta["encoder_layer"] == Config().encoder_layer
-    assert meta["in_dim"] == 1024  # MERT hidden dim
+    from drumjot_training import embeddings
+
+    assert meta["in_dim"] == embeddings.FEAT_DIM  # MERT hidden dim + high-band block
+    assert meta["aux_activity"] is True
     assert meta["head_hidden"] == Config().head_hidden
 
 

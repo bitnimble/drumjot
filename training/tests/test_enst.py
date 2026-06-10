@@ -12,7 +12,7 @@ def test_label_normalization_and_mapping():
     assert f("rc") == "rd" and f("rc2") == "rd"        # ride + numbered variant
     assert f("cr") == "cr" and f("c") == "cr" and f("c3") == "cr"
     assert f("ch") == "mc" and f("spl") == "mc"        # china / splash -> misc cymbal
-    assert f("cb") == "mp"                             # cowbell -> misc perc
+    assert f("cb") is None                             # cowbell dropped (mp removed)
     assert f("lt") == "t" and f("mt") == "t" and f("lft") == "t" and f("ltr") == "t"
     assert f("sd-") == "s"                             # rim/ghost punctuation stripped
     assert f("sticks") is None                         # count-in
@@ -27,7 +27,7 @@ def test_onsets_by_lane_parses_drops_and_sorts(tmp_path):
         "0.25 chh\n"
         "1.00 rc1\n"       # ride variant
         "1.10 c2\n"        # crash variant
-        "1.20 cb\n"        # cowbell -> mp
+        "1.20 cb\n"        # cowbell -> dropped (mp removed)
         "2.00 sticks\n"    # count-in -> dropped
         "2.10 xyz\n"       # out-of-kit -> dropped
         "garbage\n"        # malformed -> dropped
@@ -39,8 +39,7 @@ def test_onsets_by_lane_parses_drops_and_sorts(tmp_path):
     assert o["hc"] == [0.25]
     assert o["rd"] == [1.0]
     assert o["cr"] == [1.1]
-    assert o["mp"] == [1.2]
-    assert sum(len(v) for v in o.values()) == 6   # sticks/xyz/garbage dropped
+    assert sum(len(v) for v in o.values()) == 5   # cb/sticks/xyz/garbage dropped
 
 
 def test_index_pairing_and_drummer_split(tmp_path):

@@ -13,9 +13,11 @@ def _clip(t, dim=4, n_lanes=3, val=1.0):
 
 
 def test_collate_pads_and_masks():
-    X, Y, mask = collate_clips([_clip(5), _clip(3)])
+    X, Y, Yw, A, mask = collate_clips([_clip(5), _clip(3)])
     assert X.shape == (2, 5, 4)
     assert Y.shape == (2, 3, 5)
+    assert torch.equal(Yw, Y)  # no weight_targets set -> falls back to targets
+    assert float(A.sum()) == 0.0  # no activity targets set -> zeros
     assert mask.sum().item() == 8  # 5 + 3 valid frames
     assert mask[1, 3:].sum().item() == 0  # second clip padded after frame 3
     assert torch.all(X[1, 3:] == 0)  # padded feature region zeroed
@@ -28,7 +30,7 @@ def test_collate_upcasts_fp16_features():
         targets=np.zeros((2, 4), dtype=np.float32),
         onsets_by_lane={},
     )
-    X, _, _ = collate_clips([c])
+    X, *_ = collate_clips([c])
     assert X.dtype == torch.float32
 
 
@@ -38,11 +40,11 @@ def test_masked_bce_ignores_padding():
     c = _clip(6, val=0.5)
     pw = torch.ones(3, 1)
 
-    _, Ya, ma = collate_clips([c])
+    _, Ya, _, _, ma = collate_clips([c])
     logits_a = torch.randn_like(Ya)
     loss_a = masked_bce(logits_a, Ya, ma, pw)
 
-    _, Yb, _ = collate_clips([c, _clip(10)])
+    _, Yb, _, _, _ = collate_clips([c, _clip(10)])
     logits_b = torch.randn(2, 3, 10)
     logits_b[0, :, :6] = logits_a[0]
     only_clip0 = torch.zeros(2, 10)

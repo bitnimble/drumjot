@@ -55,7 +55,7 @@ _ENST_TO_LANE: dict[str, str] = {
     "rc": "rd",                                   # ride cymbal
     "cr": "cr", "c": "cr",                         # crash; bare/other cymbal -> crash
     "ch": "mc", "spl": "mc", "rb": "mc",           # china / splash / ride-bell -> misc cymbal
-    "cb": "mp",                                    # cowbell -> misc perc
+    # cb (cowbell) deliberately unmapped: the `mp` lane was removed (lanes.py).
 }
 
 _TRAIL = "0123456789-_ "
@@ -114,17 +114,31 @@ def _drummer_of(path: Path) -> str:
     return "unknown"
 
 
+def _find_audio(audio_dir: Path, stem: str) -> Path | None:
+    """Locate `<audio_dir>/<stem>.<ext>` for ext in flac then wav, or None.
+
+    flac first so the separation-aware tree (`sep_drum`/`perstem` written by
+    `separate_enst_dataset.py` as .flac) pairs, while the original ENST `.wav`
+    mixes still resolve."""
+    for ext in ("flac", "wav"):
+        p = audio_dir / f"{stem}.{ext}"
+        if p.exists():
+            return p
+    return None
+
+
 def index(root: str | Path, mix: str = "wet_mix") -> list[EnstClip]:
-    """Pair every `drummer_*/annotation/<take>.txt` with `audio/<mix>/<take>.wav`.
+    """Pair every `drummer_*/annotation/<take>.txt` with `audio/<mix>/<take>.{flac,wav}`.
 
     `mix`: "wet_mix" (default; realistic isolated kit), "dry_mix" (close mics
-    only), or "accompaniment" (drums + backing -- not for drum-only training).
+    only), "accompaniment" (backing only -- not for drum-only training), or
+    "sep_drum" (the separated drum stem written by `separate_enst_dataset.py`).
     Annotations with no matching audio file are skipped."""
     root = Path(root)
     clips: list[EnstClip] = []
     for ann in sorted(root.rglob("annotation/*.txt")):
-        audio = ann.parent.parent / "audio" / mix / f"{ann.stem}.wav"
-        if audio.exists():
+        audio = _find_audio(ann.parent.parent / "audio" / mix, ann.stem)
+        if audio is not None:
             clips.append(EnstClip(audio_path=audio, annotation_path=ann, drummer=_drummer_of(ann)))
     return clips
 
@@ -135,6 +149,66 @@ def for_split(
     """Drummer-held-out split (ENST has no official one): "train" = every drummer
     except `val_drummer`; "validation"/"test" = `val_drummer` only, so eval is on
     a genuinely unseen kit + player."""
+    if split == "train":
+        return [c for c in clips if c.drummer != val_drummer]
+    return [c for c in clips if c.drummer == val_drummer]
+
+
+# --- per-instrument (separation-aware) mode --------------------------------
+# Each MDX23C drum-piece stem (written by scripts/separate_enst_dataset.py) is
+# trained as its own example with ONLY the lanes that belong to it labelled; the
+# other lanes are empty so the model learns to stay silent on an isolated stem
+# (ignore cross-instrument bleed). Identical routing to STAR
+# (star.PERSTEM_TO_LANES) and the per-instrument eval (eval_paradb.STEM_TO_LANES):
+# side stick rides with the snare stem; the three hats share the hi-hat stem;
+# ride/crash/misc-cymbal share the cymbal stem.
+PERSTEM_TO_LANES: dict[str, tuple[str, ...]] = {
+    "k": ("k",),
+    "s": ("s", "ss"),
+    "h": ("hc", "hp", "ho"),
+    "c": ("rd", "cr", "mc"),
+    "t": ("t",),
+}
+
+
+@dataclass(frozen=True)
+class EnstPerstemClip:
+    audio_path: Path  # audio/perstem/<pitch>/<take>.flac
+    annotation_path: Path
+    pitch: str  # k / s / h / c / t
+    drummer: str
+
+
+def perstem_index(root: str | Path) -> list[EnstPerstemClip]:
+    """Index per-instrument stems: one entry per (take, drum-piece pitch).
+
+    Pairs each `audio/perstem/<pitch>/<take>.flac` (written by
+    `scripts/separate_enst_dataset.py`) with its `annotation/<take>.txt`. Stems
+    that weren't produced are skipped."""
+    root = Path(root)
+    clips: list[EnstPerstemClip] = []
+    for ann in sorted(root.rglob("annotation/*.txt")):
+        per_dir = ann.parent.parent / "audio" / "perstem"
+        for pitch in PERSTEM_TO_LANES:
+            audio = per_dir / pitch / f"{ann.stem}.flac"
+            if audio.exists():
+                clips.append(EnstPerstemClip(audio, ann, pitch, _drummer_of(ann)))
+    return clips
+
+
+def restricted_onsets(annotation_path: str | Path, pitch: str) -> dict[str, list[float]]:
+    """ENST onsets keeping ONLY the lanes that belong to `pitch`'s stem; all other
+    lanes are empty (so the isolated-stem example teaches bleed suppression).
+    Always returns all lanes."""
+    full = onsets_by_lane(annotation_path)
+    keep = set(PERSTEM_TO_LANES.get(pitch, ()))
+    return {lane: (full[lane] if lane in keep else []) for lane in LANES}
+
+
+def perstem_for_split(
+    clips: Iterable[EnstPerstemClip], split: str, val_drummer: str = DEFAULT_VAL_DRUMMER
+) -> list[EnstPerstemClip]:
+    """Drummer-held-out split for per-instrument clips (see `for_split`)."""
     if split == "train":
         return [c for c in clips if c.drummer != val_drummer]
     return [c for c in clips if c.drummer == val_drummer]

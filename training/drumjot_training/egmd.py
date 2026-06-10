@@ -17,6 +17,8 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from drumjot_training.lanes import LANES
+
 
 @dataclass(frozen=True)
 class EgmdClip:
@@ -69,3 +71,59 @@ def take_duration(clips: Sequence[EgmdClip], max_seconds: float) -> list[EgmdCli
             out.append(c)
             total += c.duration
     return out
+
+
+# --- per-instrument (separation-aware) mode --------------------------------
+# MDX23C drum-piece stems written by scripts/separate_egmd_dataset.py; each is
+# trained with ONLY its own lanes labelled so the model learns to ignore
+# cross-instrument bleed. Identical routing to STAR/ENST and the per-instrument
+# eval (eval_paradb.STEM_TO_LANES): side stick rides the snare stem, the three
+# hats share the hi-hat stem, ride/crash/misc-cymbal share the cymbal stem.
+PERSTEM_TO_LANES: dict[str, tuple[str, ...]] = {
+    "k": ("k",),
+    "s": ("s", "ss"),
+    "h": ("hc", "hp", "ho"),
+    "c": ("rd", "cr", "mc"),
+    "t": ("t",),
+}
+
+
+@dataclass(frozen=True)
+class EgmdPerstemClip:
+    audio_path: Path  # audio/perstem/<pitch>/<uid>.flac
+    midi_path: Path
+    pitch: str  # k / s / h / c / t
+    split: str
+    duration: float
+
+
+def perstem_index(
+    root: str | Path, csv_name: str = "e-gmd-v1.0.0.csv"
+) -> list[EgmdPerstemClip]:
+    """Index per-instrument stems written by `separate_egmd_dataset.py`.
+
+    Reads the sep tree's CSV (for split + MIDI label per clip) and, for each
+    clip, enumerates `audio/perstem/<pitch>/<uid>.flac` (uid = the drum-stem's
+    filename stem). Stems that weren't produced are skipped."""
+    root = Path(root)
+    clips: list[EgmdPerstemClip] = []
+    for clip in read_index(root / csv_name, root):
+        uid = clip.audio_path.stem
+        for pitch in PERSTEM_TO_LANES:
+            audio = root / "audio" / "perstem" / pitch / f"{uid}.flac"
+            if audio.exists():
+                clips.append(
+                    EgmdPerstemClip(audio, clip.midi_path, pitch, clip.split, clip.duration)
+                )
+    return clips
+
+
+def restricted_onsets(midi_path: str | Path, pitch: str) -> dict[str, list[float]]:
+    """E-GMD MIDI onsets keeping ONLY the lanes that belong to `pitch`'s stem;
+    all other lanes are empty (so the isolated-stem example teaches bleed
+    suppression). Always returns all lanes."""
+    from drumjot_training import midi_labels  # lazy: keeps egmd indexing mido-free
+
+    full = midi_labels.onsets_from_path(midi_path)
+    keep = set(PERSTEM_TO_LANES.get(pitch, ()))
+    return {lane: (full[lane] if lane in keep else []) for lane in LANES}

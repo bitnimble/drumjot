@@ -29,7 +29,8 @@ _CLASS_TO_LANE: dict[str, str] = {
     "BP_China15_C": "mc",
     "BP_FloorTom_C": "t", "BP_Tom1_C": "t", "BP_Tom2_C": "t",
     "BP_Ride17_C": "rd", "BP_Ride20_C": "rd",
-    "BP_Tambourine1_C": "mp", "BP_Tambourine2_C": "mp", "BP_Cowbell_C": "mp",
+    # Tambourine/Cowbell deliberately unmapped: the `mp` lane was removed
+    # (see lanes.py); they drop like the tuned/aux percussion classes.
 }
 _HIHAT_MIDI_TO_LANE = {42: "hc", 46: "ho", 44: "hp"}
 _INSTANCE_RE = re.compile(r"^(BP_.+_C)_\d+$")
@@ -139,7 +140,7 @@ _GROUPS: dict[str, tuple[str, ...]] = {
 _GROUPED = {s for subs in _GROUPS.values() for s in subs}
 
 # Stable order for aggregating/printing comparison labels (parents + subs).
-REPORT_ORDER = ("k", "s", "ss", "t", "mp", "h", "hc", "hp", "ho", "cym", "rd", "cr", "mc")
+REPORT_ORDER = ("k", "s", "ss", "t", "h", "hc", "hp", "ho", "cym", "rd", "cr", "mc")
 
 
 def has_lane_track(rlrr: object, lane: str) -> bool:

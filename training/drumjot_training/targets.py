@@ -46,6 +46,68 @@ def onsets_to_target(
     return target
 
 
+# Lanes whose identity lives in their SUSTAIN, not just the attack: the
+# auxiliary frame-activity objective is supervised for these only.
+SUSTAINED_LANES: tuple[str, ...] = ("ho", "rd", "cr", "mc")
+
+
+def ring_spans(
+    y: np.ndarray,
+    sr: int,
+    onset_times: Sequence[float],
+    fps: float,
+    decay_frac: float = 0.15,
+    max_ring_s: float = 3.0,
+    min_ring_s: float = 0.05,
+) -> list[tuple[float, float]]:
+    """Per-onset `(t, dur)` ring spans from the audio's RMS energy envelope.
+
+    For each labeled onset, the ring lasts until the RMS envelope first decays
+    below `decay_frac` x its local post-onset peak (or the next onset on the
+    same list, or `max_ring_s`). Open hi-hat / cymbal identity lives in this
+    tail; the spans become the auxiliary frame-activity target
+    (`spans_to_activity`). Heuristic by design: computed on the clean training
+    stem where the ring is the dominant energy after the hit."""
+    if not len(onset_times):
+        return []
+    hop = max(1, int(round(sr / fps)))
+    n = max(1, 1 + (len(y) - 1) // hop)
+    rms = np.empty(n, dtype=np.float32)
+    for i in range(n):
+        seg = y[i * hop : i * hop + hop]
+        rms[i] = np.sqrt(np.mean(seg * seg)) if seg.size else 0.0
+    spans: list[tuple[float, float]] = []
+    times = sorted(float(t) for t in onset_times)
+    for j, t in enumerate(times):
+        f0 = int(round(t * fps))
+        if f0 >= n:
+            continue
+        peak = float(rms[f0 : min(n, f0 + 4)].max(initial=0.0))
+        limit_t = min(t + max_ring_s, times[j + 1] if j + 1 < len(times) else np.inf)
+        f_lim = min(n, int(round(limit_t * fps)))
+        end = f_lim
+        floor = decay_frac * peak
+        for f in range(min(n, f0 + 2), f_lim):
+            if rms[f] < floor:
+                end = f
+                break
+        spans.append((t, max(min_ring_s, end / fps - t)))
+    return spans
+
+
+def spans_to_activity(
+    spans: Sequence[tuple[float, float]], n_frames: int, fps: float
+) -> np.ndarray:
+    """Render `(t, dur)` spans as a binary (n_frames,) activity curve."""
+    out = np.zeros(n_frames, dtype=np.float32)
+    for t, dur in spans:
+        lo = max(0, int(round(t * fps)))
+        hi = min(n_frames, int(round((t + dur) * fps)) + 1)
+        if lo < hi:
+            out[lo:hi] = 1.0
+    return out
+
+
 def pos_weights_from_targets(
     targets: Iterable[np.ndarray],
     threshold: float = 0.5,

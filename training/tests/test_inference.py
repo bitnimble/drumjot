@@ -24,7 +24,7 @@ def test_to_pitch_preserves_all_classes():
         "rd": [1.0],  # ride -> d
         "cr": [2.0],  # crash -> c
         "mc": [2.5],  # misc cymbals stays its own pitch
-        "mp": [9.0],  # misc percussion stays its own pitch (not dropped)
+        "mp": [9.0],  # legacy lane (old checkpoints): dropped from output
     }
     p = inference.to_pitch_onsets(lane_onsets)
     assert p["k"] == [0.5]
@@ -37,5 +37,5 @@ def test_to_pitch_preserves_all_classes():
     assert p["d"] == [1.0]
     assert p["c"] == [2.0]
     assert p["mc"] == [2.5]
-    assert p["mp"] == [9.0]
-    assert len(p) == 11  # all classes preserved
+    assert "mp" not in p  # mp removed: legacy-checkpoint output is dropped
+    assert len(p) == 10

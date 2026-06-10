@@ -10,16 +10,27 @@ class _StubEncoder:
         return np.ones((5, 4), dtype=np.float32)
 
 
+def _stub_hb(monkeypatch):
+    # the high-band block loads real 44.1k audio; stub it for fake-path tests
+    monkeypatch.setattr(
+        embeddings, "highband_features",
+        lambda p, n, max_seconds=None: np.zeros((n, embeddings.HB_BANDS), dtype=np.float32),
+    )
+
+
 def test_embed_clip_caches_fp16_by_default(tmp_path, monkeypatch):
     monkeypatch.setattr(embeddings, "load_audio", lambda p, sr=None: np.zeros(100, dtype=np.float32))
+    _stub_hb(monkeypatch)
     feat = embeddings.embed_clip("/x/a.flac", _StubEncoder(), cache_dir=tmp_path)
     assert feat.dtype == np.float16  # returned features are the cached precision
+    assert feat.shape[1] == 4 + embeddings.HB_BANDS  # encoder dims + high-band block
     saved = np.load(next(tmp_path.glob("*.npy")))
     assert saved.dtype == np.float16  # and the on-disk cache is fp16
 
 
 def test_embed_clip_cache_dtype_override_to_fp32(tmp_path, monkeypatch):
     monkeypatch.setattr(embeddings, "load_audio", lambda p, sr=None: np.zeros(100, dtype=np.float32))
+    _stub_hb(monkeypatch)
     feat = embeddings.embed_clip("/x/b.flac", _StubEncoder(), cache_dir=tmp_path, cache_dtype="float32")
     assert feat.dtype == np.float32
     assert np.load(next(tmp_path.glob("*.npy"))).dtype == np.float32

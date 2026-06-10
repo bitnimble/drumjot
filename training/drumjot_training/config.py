@@ -37,6 +37,24 @@ class Config:
     # epoch at the LR minimum). See train.train_loop.
     lr: float = 1e-3
     weight_decay: float = 0.01
+    # Sibling-aware loss weighting (lanes.CONFUSABLE): frames where a confusable
+    # sibling lane is active get their loss scaled, hard NEGATIVES (sibling hit,
+    # this lane silent -> punish false triggers on bleed) by `sib_neg_weight`,
+    # and co-occurring POSITIVES (genuinely simultaneous hits, the harder
+    # detection) by `sib_pos_weight`. 1.0 disables either term. On by default;
+    # values are starting guesses, not tuned.
+    sib_neg_weight: float = 8.0
+    sib_pos_weight: float = 3.0
+    # Auxiliary ring-activity objective (targets.SUSTAINED_LANES): joint BCE on
+    # "is this instrument still ringing" frames, weighted by this factor. The
+    # open-hat / cymbal tail is what defines those classes; the pure onset
+    # target never shows it to the head.
+    aux_act_weight: float = 0.5
+    # Threshold tuning: lanes with fewer than `rare_lane_min_onsets` val onsets
+    # get their tuned peak threshold floored at `rare_thr_floor` (a 4-clip val
+    # lane once tuned ride to 0.10 and flooded real audio; see RESULTS.md).
+    rare_lane_min_onsets: int = 50
+    rare_thr_floor: float = 0.3
     # Padded mini-batch of full-length (~30s/2250-frame) clips. Measured peak
     # ~520 MiB/clip FP32 + ~226 MiB base, so 16 fits a 10GB card (~8.5GB) with
     # headroom; the 3080's bf16 path uses ~half, leaving room to push higher

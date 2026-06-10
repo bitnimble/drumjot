@@ -18,8 +18,15 @@ request, and pull in the linked docs when a task touches that area.
   possible and exit non-zero on first failure.
   - `scripts/check`, both sides (py then ts); default after a
     cross-cutting change.
-  - `scripts/check-py [pytest args]`, ruff `--fix` + pytest. Needs
-    `transcriber/.venv`.
+  - `scripts/check-py [pytest args]`, ruff `--fix` + pytest across **all
+    first-party Python** (transcriber + `training/` + `dsp/`), all from
+    `transcriber/.venv` (`training`/`dsp` go on `PYTHONPATH`). A bare run
+    does the whole suite; pytest args target the transcriber tests only
+    (fast single-test iteration) and skip training/dsp. **Torch caveat:**
+    the training tests (and transcriber ADTOF tests) need a working CUDA
+    torch in that venv; on a host without one, run them in the sandbox
+    (`scripts/sandbox-run env PYTHONPATH=dsp:training python3 -m pytest
+    training/tests`).
   - `scripts/test-py [pytest args]`, pytest only (no ruff); for
     iterating on a failing test.
   - `scripts/check-ts [bun test args]`, stylelint `--fix` + tsc
