@@ -124,44 +124,6 @@ STEM_NAME_TO_PITCH: dict[str, str] = {
 }
 
 
-def _autocast_bf16():
-    """TEMP(bf16-trial): bf16 autocast ONLY on GPUs with native bf16 tensor cores
-    (Ampere+, compute capability >= 8.0, e.g. the 3080). A no-op everywhere else, CPU, and Turing cards like the GTX 1660 (CC 7.5) which have no bf16 (nor TF32); so those keep the unchanged, correct fp32 path. Wrapped around the
-    audio-separator model forward so matmul/conv/attention hit the tensor cores;
-    bf16 keeps fp32's exponent range, avoiding the fp16 overflow that NaN'd the
-    drum stem, and mdxc_separator.demix accumulates into an fp32 buffer so the
-    output upcasts and numpy conversion is unaffected."""
-    import contextlib
-
-    import torch
-
-    if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
-        return torch.autocast("cuda", dtype=torch.bfloat16)
-    return contextlib.nullcontext()
-
-
-def _TEST_check_stem(path: Path, *, require_audio: bool) -> None:
-    """TEMP(bf16-trial): assert a separated stem is sound; landed on disk,
-    decodes, has no NaN/Inf, and (if `require_audio`) isn't silent. Catches the
-    fp16-style failure (overflow -> NaN / silently-dropped file). REMOVE this and
-    its call sites once bf16 is validated."""
-    import numpy as np
-    import soundfile as sf
-
-    if not path.exists() or path.stat().st_size == 0:
-        raise RuntimeError(f"[bf16 check] stem missing or empty on disk: {path}")
-    y, _sr = sf.read(str(path), always_2d=True)
-    if y.size == 0:
-        raise RuntimeError(f"[bf16 check] stem decoded to 0 frames: {path}")
-    if not np.isfinite(y).all():
-        bad = int((~np.isfinite(y)).sum())
-        raise RuntimeError(f"[bf16 check] {bad} NaN/Inf samples in {path}")
-    if require_audio:
-        rms = float(np.sqrt(np.mean(y.astype(np.float64) ** 2)))
-        if rms < 1e-5:
-            raise RuntimeError(f"[bf16 check] stem is silent (rms={rms:.2e}): {path}")
-
-
 class Separator:
     """Two-stage drum separator. Models are loaded eagerly by `load()` at
     application startup so the first `/transcribe` call doesn't pay
@@ -212,15 +174,21 @@ class Separator:
         # re-benchmark mid-pass.
         torch.backends.cudnn.benchmark = True
 
+        # TF32: lets fp32 matmuls use the Ampere+ tensor-core path (≈2× on the
+        # 3080) WITHOUT changing any tensor dtype, so the models' complex STFT
+        # (view_as_complex) stays fp32 and there's no range/NaN risk. A harmless
+        # no-op on Turing (1660) / older cards, which simply don't have TF32.
+        # NB autocast is a dead end for these separators: fp16 overflowed and the
+        # drum stem NaN'd out / never landed on disk, and bf16 fails outright
+        # ("view_as_complex is only supported for half, float and double"). TF32
+        # is the only tensor-core path compatible with the complex-STFT models.
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
         common = dict(
             output_dir=None,  # set per-call
             model_file_dir=str(settings.models_dir),
-            # fp16 autocast: kept off. Re-enabling on BS-Roformer SW
-            # produced output that audio-separator logged as written but
-            # never landed on disk for the drum stem (sibling stems wrote
-            # fine), surfacing as the "reported … but it is not on disk"
-            # error downstream. fp32 is slower but correct.
-            use_autocast=False,
+            use_autocast=False,  # fp16 autocast off, see the TF32 note above
         )
 
         t0 = time.perf_counter()
@@ -300,8 +268,7 @@ class Separator:
         self._point_at(self._stems_all, out_dir)
 
         log.info("stems_all: extracting drum stem from %s", audio_path.name)
-        with _autocast_bf16():  # TEMP(bf16-trial)
-            raw = self._stems_all.separate(str(audio_path))
+        raw = self._stems_all.separate(str(audio_path))
         stems_paths = _resolve_outputs(raw, out_dir)
         drum_candidates = [p for p in stems_paths if "drum" in p.stem.lower()]
         if not drum_candidates:
@@ -315,7 +282,6 @@ class Separator:
                 f"it is not on disk (separate() returned {list(raw)!r}). "
                 "audio-separator wrote elsewhere or the write failed."
             )
-        _TEST_check_stem(drum_stem, require_audio=True)  # TEMP(bf16-trial)
         non_drum_stems = [p for p in stems_paths if p != drum_stem]
 
         # Sum bass + other + vocals into a single drumless mix so the
@@ -362,8 +328,7 @@ class Separator:
         self._point_at(self._stems_per, out_dir)
 
         log.info("stems_per: splitting drum stem into pieces")
-        with _autocast_bf16():  # TEMP(bf16-trial)
-            raw = self._stems_per.separate(str(drum_stem))
+        raw = self._stems_per.separate(str(drum_stem))
         piece_paths = _resolve_outputs(raw, out_dir)
 
         per_instrument: dict[str, Path] = {}
@@ -377,9 +342,6 @@ class Separator:
             per_instrument.setdefault(pitch, path)
 
         log.info("Recovered %d pitches: %s", len(per_instrument), sorted(per_instrument))
-
-        for _pitch, _p in per_instrument.items():  # TEMP(bf16-trial)
-            _TEST_check_stem(_p, require_audio=False)  # per-piece stems can be legitimately silent
 
         residual_path: Path | None = None
         if per_instrument:
