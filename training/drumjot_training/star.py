@@ -98,3 +98,52 @@ def index(root: str | Path) -> list[StarClip]:
 def for_split(clips: Iterable[StarClip], split: str) -> list[StarClip]:
     """Clips belonging to `split`."""
     return [c for c in clips if c.split == split]
+
+
+# --- per-instrument (separation-aware) mode --------------------------------
+# Each MDX23C drum-piece stem is trained as its own example with ONLY the lanes
+# that belong to it labelled; the other lanes are empty so the model learns to
+# stay silent on an isolated stem (i.e. ignore cross-instrument bleed). Matches
+# the per-instrument eval (eval_paradb.STEM_TO_LANES) and the inference path.
+# `mp` has no stem, so it is not trained in this mode.
+PERSTEM_TO_LANES: dict[str, tuple[str, ...]] = {
+    "k": ("k",),
+    "s": ("s", "ss"),
+    "h": ("hc", "hp", "ho"),
+    "c": ("rd", "cr", "mc"),
+    "t": ("t",),
+}
+
+
+@dataclass(frozen=True)
+class StarPerstemClip:
+    audio_path: Path  # audio/perstem/<pitch>/<name>.flac
+    annotation_path: Path
+    pitch: str  # k / s / h / c / t
+    split: str
+
+
+def perstem_index(root: str | Path) -> list[StarPerstemClip]:
+    """Index per-instrument stems: one entry per (song, drum-piece pitch).
+
+    Pairs each `audio/perstem/<pitch>/<name>.flac` (written by
+    `scripts/separate_star_dataset.py`) with its `annotation/<name>.txt`. Stems
+    that weren't produced are skipped."""
+    root = Path(root)
+    clips: list[StarPerstemClip] = []
+    for ann in sorted(root.rglob("annotation/*.txt")):
+        per_dir = ann.parent.parent / "audio" / "perstem"
+        for pitch in PERSTEM_TO_LANES:
+            audio = per_dir / pitch / f"{ann.stem}.flac"
+            if audio.exists():
+                clips.append(StarPerstemClip(audio, ann, pitch, _split_from(ann)))
+    return clips
+
+
+def restricted_onsets(annotation_path: str | Path, pitch: str) -> dict[str, list[float]]:
+    """STAR onsets keeping ONLY the lanes that belong to `pitch`'s stem; all other
+    lanes are empty (so the isolated-stem example teaches bleed suppression).
+    Always returns all 11 lanes."""
+    full = onsets_by_lane(annotation_path)
+    keep = set(PERSTEM_TO_LANES.get(pitch, ()))
+    return {lane: (full[lane] if lane in keep else []) for lane in LANES}

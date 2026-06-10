@@ -316,82 +316,75 @@ def main():
             flush=True,
         )
 
-        # run the model on each isolated stem; trust only matching lanes. Also
-        # gate each kept lane through ITS OWN stem's onset-strength envelope
-        # (the deterministic filter) -> est_filt, so ride is gated on the
-        # cymbals-only stem, hats on the hi-hat stem, etc.
+        # run the model on each isolated stem; keep only matching lanes (count the
+        # rest as cross-instrument leakage). Two picks from the SAME model output,
+        # for an ablation: `est` = the shared per-lane deterministic picker
+        # (per-lane min-distance + prominence + decay-reset; what we deploy) and
+        # `est_bare` = a bare height+min-distance pick (baseline). The picker's
+        # value shows as F_pick - F_bare per lane. (Replaces the old onset-envelope
+        # support gate, which was a measured no-op.)
         est: dict[str, list[float]] = {lane: [] for lane in meta["lanes"]}
-        est_filt: dict[str, list[float]] = {lane: [] for lane in meta["lanes"]}
+        est_bare: dict[str, list[float]] = {lane: [] for lane in meta["lanes"]}
         if args.full_drum:
             # one model pass over the whole drum stem; keep ALL lanes (no
-            # per-instrument isolation, so no cross-instrument leakage). Filter
-            # against the same drum-stem envelope used for alignment.
-            raw = inference.transcribe(
+            # per-instrument isolation, so no cross-instrument leakage).
+            bare, full = inference.transcribe_dual(
                 drum_stem, model, meta, encoder,
                 max_seconds=args.max_seconds, window_seconds=args.window_seconds,
             )
-            for lane, ts in raw.items():
-                if not ts:
-                    continue
-                est[lane].extend(ts)
-                est_filt[lane].extend(
-                    postfilter.filter_lane(np.asarray(ts, dtype=float), env, env_fps, args.align_window, floor)
-                )
+            for lane in meta["lanes"]:
+                est[lane].extend(full[lane])
+                est_bare[lane].extend(bare[lane])
         else:
             for pitch, stem_path in pieces.items():
                 matching = STEM_TO_LANES.get(pitch, ())
-                raw = inference.transcribe(
+                bare, full = inference.transcribe_dual(
                     stem_path, model, meta, encoder,
                     max_seconds=args.max_seconds, window_seconds=args.window_seconds,
                 )
-                senv, sfps = forced_align.onset_envelope(stem_path, max_seconds=args.max_seconds)
-                sfloor = postfilter.support_floor_from_env(senv, args.support_percentile)
-                for lane, ts in raw.items():
-                    if not ts:
-                        continue
+                for lane in meta["lanes"]:
+                    ft = full[lane]
                     if lane in matching:
-                        est[lane].extend(ts)
-                        est_filt[lane].extend(
-                            postfilter.filter_lane(np.asarray(ts, dtype=float), senv, sfps, args.align_window, sfloor)
-                        )
-                        leak[pitch]["matched"] += len(ts)
-                    else:  # cross-instrument hallucination: discard + count
-                        leak[pitch]["leaked"] += len(ts)
-                        leak[pitch]["to"][lane] += len(ts)
-        for d in (est, est_filt):
+                        est[lane].extend(ft)
+                        est_bare[lane].extend(bare[lane])
+                        leak[pitch]["matched"] += len(ft)
+                    elif ft:  # cross-instrument hallucination: discard + count
+                        leak[pitch]["leaked"] += len(ft)
+                        leak[pitch]["to"][lane] += len(ft)
+        for d in (est, est_bare):
             for ts in d.values():
                 ts.sort()
 
-        filt_pairs = {lbl: el for lbl, _r, el in rlrr.comparison_pairs(gt_scored, est_filt)}
+        bare_pairs = {lbl: el for lbl, _r, el in rlrr.comparison_pairs(gt_scored, est_bare)}
         for label, ref, est_l in rlrr.comparison_pairs(gt_scored, est):
             if not ref:
                 continue
             if label in ("mp", "mc") and label not in aux_keep:
                 continue  # no charted percussion track for this lane -> don't score it
             mr = metrics.onset_f1(ref, np.asarray(est_l, dtype=float), meta["onset_tolerance_s"])
-            mf = metrics.onset_f1(ref, np.asarray(filt_pairs.get(label, []), dtype=float), meta["onset_tolerance_s"])
-            agg[label]["f"].append(mr["f"])
-            agg[label]["ff"].append(mf["f"])
+            mb = metrics.onset_f1(ref, np.asarray(bare_pairs.get(label, []), dtype=float), meta["onset_tolerance_s"])
+            agg[label]["f"].append(mr["f"])  # full picker (deployed, headline = past F_raw)
+            agg[label]["fb"].append(mb["f"])  # bare baseline
             agg[label]["p"].append(mr["p"])
             agg[label]["r"].append(mr["r"])
-            agg[label]["pf"].append(mf["p"])
-            agg[label]["rf"].append(mf["r"])
+            agg[label]["pb"].append(mb["p"])
+            agg[label]["rb"].append(mb["r"])
 
     # ---- reports ----
     def _m(v):
         return sum(v) / len(v) if v else 0.0
 
-    print("\n==== ParaDB per-lane onset-F1: raw model vs +per-stem envelope filter ====", flush=True)
-    print("  label  F_raw  F_filt    dF    P_raw>P_filt  R_raw>R_filt  maps", flush=True)
-    print("  (h/cym = chart lumped the group; hc/ho/rd/cr = chart split it)", flush=True)
+    print("\n==== ParaDB per-lane onset-F1: bare peak-pick vs +shared deterministic picker ====", flush=True)
+    print("  label  F_bare F_pick   dF    P_bare>P_pick  R_bare>R_pick  maps", flush=True)
+    print("  (F_pick = deployed picker = the headline number; h/cym folded, hc/ho/rd/cr split)", flush=True)
     for label in rlrr.REPORT_ORDER:
         a = agg[label]
         if not a["f"]:
             continue
-        fr, ff = _m(a["f"]), _m(a["ff"])
+        fb, fp = _m(a["fb"]), _m(a["f"])
         print(
-            f"  {label:4s} {fr:6.3f} {ff:6.3f} {ff - fr:+6.3f}   {_m(a['p']):.3f}>{_m(a['pf']):.3f}  "
-            f"{_m(a['r']):.3f}>{_m(a['rf']):.3f}  {len(a['f'])}",
+            f"  {label:4s} {fb:6.3f} {fp:6.3f} {fp - fb:+6.3f}   {_m(a['pb']):.3f}>{_m(a['p']):.3f}  "
+            f"{_m(a['rb']):.3f}>{_m(a['r']):.3f}  {len(a['f'])}",
             flush=True,
         )
 

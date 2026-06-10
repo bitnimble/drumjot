@@ -83,24 +83,14 @@ def lane_probs(audio_path, model, meta: dict, encoder=None, max_seconds: float |
         return torch.sigmoid(model(x))[0].float().cpu().numpy(), meta["encoder_fps"]
 
 
-def transcribe(
-    audio_path, model, meta: dict, encoder=None,
-    max_seconds: float | None = None, window_seconds: float | None = 30.0,
-) -> dict[str, list[float]]:
-    """Per-lane onset times for `audio_path` using a loaded model + its meta.
-
-    Encodes with the meta's encoder/layer, peak-picks each lane with the saved
-    tuned thresholds. Returns onsets keyed by training lane; pass through
-    `to_pitch_onsets` for the transcriber's pitch letters.
-
-    `window_seconds` chunks long audio (full songs would otherwise blow up
-    MERT's O(n^2) attention / VRAM): each chunk is encoded + peak-picked
-    independently and its onsets are offset by the chunk's true start time, so
-    there is no frame-count drift across chunks. `max_seconds` caps the audio.
-    """
+def _windowed_probs(audio_path, model, meta: dict, encoder, max_seconds, window_seconds):
+    """Yield `(t0_seconds, probs (n_lanes, T), fps)` for each ~`window_seconds`
+    chunk of `audio_path`. Windowing bounds MERT's O(n^2) attention / VRAM on long
+    audio; `t0` is the chunk's true start so callers offset onset times (no
+    frame-count drift across chunks). `max_seconds` caps the audio."""
     import torch
 
-    from drumjot_training import embeddings, metrics
+    from drumjot_training import embeddings
 
     runtime.configure_backends()
     enc = encoder or embeddings.MertEncoder(name=meta["encoder"], layer=meta["encoder_layer"])
@@ -108,11 +98,9 @@ def transcribe(
     y = embeddings.load_audio(audio_path, sr=enc.sr)
     if max_seconds is not None:
         y = y[: int(max_seconds * enc.sr)]
-    fps, thresholds = meta["encoder_fps"], meta["thresholds"]
+    fps = meta["encoder_fps"]
     chunk = int(window_seconds * enc.sr) if window_seconds else 0
     starts = list(range(0, len(y), chunk)) if (chunk and len(y) > chunk) else [0]
-
-    out: dict[str, list[float]] = {lane: [] for lane in meta["lanes"]}
     for s in starts:
         seg = y[s : s + chunk] if chunk else y
         if chunk and len(seg) < enc.sr // 10:  # skip a <0.1s tail
@@ -121,7 +109,21 @@ def transcribe(
         x = torch.as_tensor(feat, dtype=torch.float32, device=device).unsqueeze(0)
         with torch.no_grad(), runtime.autocast():
             probs = torch.sigmoid(model(x))[0].float().cpu().numpy()
-        t0 = s / enc.sr
+        yield s / enc.sr, probs, fps
+
+
+def transcribe(
+    audio_path, model, meta: dict, encoder=None,
+    max_seconds: float | None = None, window_seconds: float | None = 30.0,
+) -> dict[str, list[float]]:
+    """Per-lane onset times using the saved tuned thresholds + the shared per-lane
+    deterministic picker (`metrics.pick_onsets_lane`). Returns onsets keyed by
+    training lane; pass through `to_pitch_onsets` for the transcriber's letters."""
+    from drumjot_training import metrics
+
+    thresholds = meta["thresholds"]
+    out: dict[str, list[float]] = {lane: [] for lane in meta["lanes"]}
+    for t0, probs, fps in _windowed_probs(audio_path, model, meta, encoder, max_seconds, window_seconds):
         for i, lane in enumerate(meta["lanes"]):
             thr = thresholds.get(lane, meta["peak_threshold"])
             for t in metrics.pick_onsets_lane(probs[i], fps, lane, thr):
@@ -129,3 +131,28 @@ def transcribe(
     for ts in out.values():
         ts.sort()
     return out
+
+
+def transcribe_dual(
+    audio_path, model, meta: dict, encoder=None,
+    max_seconds: float | None = None, window_seconds: float | None = 30.0,
+) -> tuple[dict[str, list[float]], dict[str, list[float]]]:
+    """One encode pass -> `(bare, full)` per-lane onset times for A/B comparison:
+    `bare` = height + flat `peak_min_distance_s` only (raw model peaks); `full` =
+    the shared per-lane deterministic picker (per-lane min-distance + prominence +
+    decay-reset). `full` is what we deploy; `bare` is the ablation baseline."""
+    from drumjot_training import metrics
+
+    thresholds = meta["thresholds"]
+    md = meta["peak_min_distance_s"]
+    bare: dict[str, list[float]] = {lane: [] for lane in meta["lanes"]}
+    full: dict[str, list[float]] = {lane: [] for lane in meta["lanes"]}
+    for t0, probs, fps in _windowed_probs(audio_path, model, meta, encoder, max_seconds, window_seconds):
+        for i, lane in enumerate(meta["lanes"]):
+            thr = thresholds.get(lane, meta["peak_threshold"])
+            bare[lane].extend(t0 + float(t) for t in metrics.pick_onsets(probs[i], fps, thr, md))
+            full[lane].extend(t0 + float(t) for t in metrics.pick_onsets_lane(probs[i], fps, lane, thr))
+    for d in (bare, full):
+        for ts in d.values():
+            ts.sort()
+    return bare, full

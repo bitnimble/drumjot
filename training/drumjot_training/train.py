@@ -23,11 +23,10 @@ from drumjot_training import (
     checkpoint,
     egmd,
     embeddings,
-    forced_align,
+    enst,
     metrics,
     midi_labels,
     paths,
-    postfilter,
     runtime,
     star,
 )
@@ -469,87 +468,72 @@ def _report(model, val_clips: Sequence[Clip], cfg: Config, thresholds: dict[str,
             if ts:
                 lane_f1[lane].append(f1[lane])
                 lane_n[lane] += len(ts)
-    print("\nheld-out per-lane F1 (tuned thresholds):", flush=True)
-    for lane in cfg.lanes:
+    def _mean_f1(lane: str) -> float:  # no-onset lanes sort to the bottom
+        return sum(lane_f1[lane]) / len(lane_f1[lane]) if lane_f1[lane] else -1.0
+
+    print("\nheld-out per-lane F1 (tuned thresholds, sorted by F1):", flush=True)
+    for lane in sorted(cfg.lanes, key=_mean_f1, reverse=True):
         if lane_f1[lane]:
-            mean = sum(lane_f1[lane]) / len(lane_f1[lane])
             print(
                 f"  {lane:3s} onsets={lane_n[lane]:6d} clips={len(lane_f1[lane]):3d} "
-                f"thr={thresholds.get(lane, cfg.peak_threshold):.2f} F1={mean:.3f}",
+                f"thr={thresholds.get(lane, cfg.peak_threshold):.2f} F1={_mean_f1(lane):.3f}",
                 flush=True,
             )
         else:
             print(f"  {lane:3s} (no onsets in val subset)", flush=True)
 
 
-def _report_compare(
-    model,
-    val_clips,
-    cfg: Config,
-    thresholds: dict[str, float],
-    *,
-    max_seconds: float | None = None,
-    align_window_s: float = 0.03,
-    support_percentile: float = 60.0,
-    hop_length: int = 64,
-) -> None:
-    """Per-lane raw-model vs +deterministic-filter onset metrics, side by side.
+def _report_compare(model, val_clips, cfg: Config, thresholds: dict[str, float]) -> None:
+    """Per-lane bare peak-pick vs the shared per-lane deterministic picker.
 
-    For each val clip with audio: peak-pick the model (raw), then apply the
-    envelope support gate + peak alignment (`postfilter`) and re-score. Prints
-    F_raw vs F_filt (+ the P/R shift) so it's clear whether the deterministic
-    stages add value on top of the raw predictions. Runs against the MIX
-    envelope (no stems here), so treat it as a lower bound on their value.
-    """
+    Shows whether the shared picker (`drumjot_dsp.peakpick` via
+    `metrics.pick_onsets_lane`: per-lane min-distance + prominence + decay-reset)
+    earns its place over a bare height+min-distance pick. Replaces the old
+    onset-envelope support gate, which was a measured no-op (dF ~ 0). Needs only
+    cached features, so it runs on every val clip."""
     from collections import defaultdict
 
     agg: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
-    n_audio = 0
+    n = 0
     for clip in val_clips:
-        if not getattr(clip, "audio_path", None):
-            continue
-        n_audio += 1
         probs = _clip_probs(model, clip)
-        env, env_fps = forced_align.onset_envelope(
-            clip.audio_path, hop_length=hop_length, max_seconds=max_seconds
-        )
-        floor = postfilter.support_floor_from_env(env, support_percentile)
+        n += 1
         for i, lane in enumerate(cfg.lanes):
             ref = clip.onsets_by_lane.get(lane, [])
             if not ref:
                 continue
             thr = thresholds.get(lane, cfg.peak_threshold)
-            est = metrics.pick_onsets_lane(probs[i], cfg.encoder_fps, lane, thr)
-            raw = metrics.onset_f1(ref, est, cfg.onset_tolerance_s)
-            est_f = postfilter.filter_lane(est, env, env_fps, align_window_s, floor)
-            filt = metrics.onset_f1(ref, est_f, cfg.onset_tolerance_s)
-            for k, v in (("f_raw", raw["f"]), ("f_filt", filt["f"]),
-                         ("p_raw", raw["p"]), ("p_filt", filt["p"]),
-                         ("r_raw", raw["r"]), ("r_filt", filt["r"])):
+            bare = metrics.onset_f1(
+                ref, metrics.pick_onsets(probs[i], cfg.encoder_fps, thr, cfg.peak_min_distance_s),
+                cfg.onset_tolerance_s,
+            )
+            pick = metrics.onset_f1(
+                ref, metrics.pick_onsets_lane(probs[i], cfg.encoder_fps, lane, thr),
+                cfg.onset_tolerance_s,
+            )
+            for k, v in (("f_bare", bare["f"]), ("f_pick", pick["f"]),
+                         ("p_bare", bare["p"]), ("p_pick", pick["p"]),
+                         ("r_bare", bare["r"]), ("r_pick", pick["r"])):
                 agg[lane][k].append(v)
 
-    if not n_audio:
-        print("\n(no clip audio available; skipping filter comparison)", flush=True)
+    if not n:
+        print("\n(no val clips; skipping picker comparison)", flush=True)
         return
-    print(
-        f"\nraw vs +envelope filter  (align +/-{align_window_s}s, "
-        f"support p{support_percentile:g}, {n_audio} val clips):",
-        flush=True,
-    )
-    print("  lane   F_raw  F_filt     dF   P_raw>P_filt   R_raw>R_filt", flush=True)
+    print(f"\nbare peak-pick vs +shared deterministic picker  ({n} val clips):", flush=True)
+    print("  lane  F_bare F_pick    dF   P_bare>P_pick  R_bare>R_pick", flush=True)
 
     def _m(vals: list[float]) -> float:
         return sum(vals) / len(vals) if vals else 0.0
 
-    for lane in cfg.lanes:
+    for lane in sorted(cfg.lanes, key=lambda ln: _m(agg[ln]["f_pick"]), reverse=True):
         a = agg[lane]
-        if not a["f_raw"]:
+        if not a["f_bare"]:
             continue
-        fr, ff = _m(a["f_raw"]), _m(a["f_filt"])
+        fb, fp = _m(a["f_bare"]), _m(a["f_pick"])
         print(
-            f"  {lane:4s} {fr:6.3f} {ff:6.3f} {ff - fr:+6.3f}   "
-            f"{_m(a['p_raw']):.3f}>{_m(a['p_filt']):.3f}   "
-            f"{_m(a['r_raw']):.3f}>{_m(a['r_filt']):.3f}",
+            f"  {lane:4s} {fb:6.3f} {fp:6.3f} {fp - fb:+6.3f}   "
+            f"{_m(a['p_bare']):.3f}>{_m(a['p_pick']):.3f}   "
+            f"{_m(a['r_bare']):.3f}>{_m(a['r_pick']):.3f}",
             flush=True,
         )
 
@@ -577,11 +561,46 @@ def _star_specs(args) -> tuple[list, list, Path]:
     return [spec(c) for c in tr], [spec(c) for c in va], root / "_cache_mert"
 
 
+def _star_perstem_specs(args) -> tuple[list, list, Path]:
+    """(train_specs, val_specs, cache_dir) for STAR per-instrument stems.
+
+    One example per (song, drum-piece stem), labelled with ONLY that stem's lanes
+    so the model learns to ignore cross-instrument bleed (matches the
+    per-instrument eval/inference). `--train-clips`/`--val-clips` cap the number
+    of SONGS (each expands to up to 5 stem examples). Point `DRUMJOT_STAR` at a
+    separation-aware dataset built by scripts/separate_star_dataset.py."""
+    root = paths.dataset_path("star")
+    songs = star.index(root)
+    tr_songs = {c.annotation_path for c in star.for_split(songs, "training")[: args.train_clips]}
+    held = star.for_split(songs, "validation") + star.for_split(songs, "test")
+    va_songs = {c.annotation_path for c in held[: args.val_clips]}
+    per = star.perstem_index(root)
+    tr = [c for c in per if c.annotation_path in tr_songs]
+    va = [c for c in per if c.annotation_path in va_songs]
+    spec = lambda c: (c.audio_path, star.restricted_onsets(c.annotation_path, c.pitch))  # noqa: E731
+    return [spec(c) for c in tr], [spec(c) for c in va], root / "_cache_mert"
+
+
+def _enst_specs(args) -> tuple[list, list, Path]:
+    """(train_specs, val_specs, cache_dir) for ENST-Drums; specs = (audio, onsets).
+
+    Real acoustic-drum recordings; split holds out a whole drummer/kit (so eval
+    is on an unseen player+kit). `--enst-mix` picks the audio variant."""
+    root = paths.dataset_path("enst")
+    clips = enst.index(root, mix=args.enst_mix)
+    tr = enst.for_split(clips, "train")[: args.train_clips]
+    va = enst.for_split(clips, "validation")[: args.val_clips]
+    spec = lambda c: (c.audio_path, enst.onsets_by_lane(c.annotation_path))  # noqa: E731
+    return [spec(c) for c in tr], [spec(c) for c in va], root / "_cache_mert"
+
+
 def main(argv: list[str] | None = None) -> None:
     import argparse
 
     ap = argparse.ArgumentParser(description="Drum-onset training (frozen MERT + per-lane heads)")
-    ap.add_argument("--dataset", choices=("egmd", "star"), default="egmd")
+    ap.add_argument("--dataset", choices=("egmd", "star", "star_perstem", "enst"), default="egmd")
+    ap.add_argument("--enst-mix", choices=("wet_mix", "dry_mix", "accompaniment"), default="wet_mix",
+                    help="ENST-Drums audio variant (wet_mix = realistic isolated kit; default)")
     ap.add_argument("--synthetic", action="store_true", help="dataset-free self-test")
     ap.add_argument("--overfit-one", action="store_true", help="train on a single clip")
     ap.add_argument("--train-min", type=float, default=240.0, help="E-GMD train minutes")
@@ -631,7 +650,10 @@ def main(argv: list[str] | None = None) -> None:
         lr=args.lr, weight_decay=args.weight_decay,
     )
     train_specs, val_specs, cache = (
-        _star_specs(args) if args.dataset == "star" else _egmd_specs(args)
+        _star_specs(args) if args.dataset == "star"
+        else _star_perstem_specs(args) if args.dataset == "star_perstem"
+        else _enst_specs(args) if args.dataset == "enst"
+        else _egmd_specs(args)
     )
     if args.overfit_one:
         train_specs = train_specs[:1]
@@ -671,10 +693,7 @@ def main(argv: list[str] | None = None) -> None:
     thresholds = tune_thresholds(model, val_clips, cfg)
     _report(model, val_clips, cfg, thresholds)
     if not args.no_filter_report:
-        _report_compare(
-            model, val_clips, cfg, thresholds, max_seconds=args.max_seconds,
-            align_window_s=args.align_window, support_percentile=args.support_percentile,
-        )
+        _report_compare(model, val_clips, cfg, thresholds)
 
     if args.out:
         saved = checkpoint.save(args.out, model, cfg, thresholds)
