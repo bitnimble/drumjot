@@ -50,6 +50,20 @@ def main():
     ap.add_argument("--batch-size", type=int, default=8)
     ap.add_argument("--max-seconds", type=float, default=30.0)
     ap.add_argument("--cache-dir", default=None, help="probe feature cache (default <root>/_cache_sweep)")
+    ap.add_argument(
+        "--high-band-modes", default="none",
+        help="comma list of high-band feature variants to compare, each trained at every "
+        "--layer x --seed. Modes: 'none' (raw MERT), 'energy' (append the 6-20 kHz log-mel "
+        "energy block, embeddings.highband_features), 'flux' (append its positive temporal "
+        "difference -- onset-sharpened). All reuse the raw-MERT encode cache (no re-encode); "
+        "the high-band block is layer-independent so it's computed once per clip and cached.",
+    )
+    ap.add_argument(
+        "--seeds", default="0",
+        help="comma list of torch init seeds; each (mode,layer) is trained once per seed and "
+        "reported as mean+/-std, so a high-band delta is only believed if it clears the seed "
+        "noise band. The DataLoader shuffle is separately fixed (train_loop seeds it).",
+    )
     args = ap.parse_args()
 
     import torch
@@ -92,60 +106,101 @@ def main():
             torch.cuda.empty_cache()
     print("encode pass done (cached)", flush=True)
 
-    # ---- per-layer: short train + tune + per-lane F1 ----
-    results: dict[int, dict[str, float]] = {}
+    modes = [m.strip() for m in args.high_band_modes.split(",") if m.strip()]
+    seeds = [int(s) for s in args.seeds.split(",")]
+    print(f"modes={modes}  seeds={seeds}", flush=True)
+
+    # The high-band block is layer- and seed-independent (it's derived from the
+    # raw audio), so compute the 6-20 kHz log-mel energy ONCE per clip and reuse
+    # it across every mode/layer/seed. 'flux' is just its positive time-diff.
+    hb_energy: dict = {}
+
+    def _hb(c, n_frames, mode):
+        if mode == "none":
+            return None
+        e = hb_energy.get(c.audio_path)
+        if e is None or e.shape[0] != n_frames:
+            e = embeddings.highband_features(c.audio_path, n_frames, args.max_seconds)
+            hb_energy[c.audio_path] = e
+        if mode == "flux":  # positive temporal difference per band (onset-sharpened)
+            return np.diff(e, axis=0, prepend=e[:1]).clip(min=0).astype(e.dtype, copy=False)
+        return e  # 'energy'
+
+    def _clip(c, li, cfg, mode):
+        feat = np.load(_cache_path(c.audio_path, li))
+        hb = _hb(c, feat.shape[0], mode)
+        if hb is not None:
+            feat = np.concatenate([feat, hb], axis=1).astype(feat.dtype, copy=False)
+        onsets = {
+            ln: [t for t in ts if t < args.max_seconds]
+            for ln, ts in star.onsets_by_lane(c.annotation_path).items()
+        }
+        return Clip(
+            features=feat,
+            targets=build_targets(onsets, feat.shape[0], cfg),
+            onsets_by_lane=onsets,
+        )
+
+    # ---- (mode, layer, seed): short train + tune + per-lane F1 ----
+    # results[(mode, li)][lane] = [f1 per seed]
+    results: dict[tuple[str, int], dict[str, list[float]]] = {}
     for li in layers:
         cfg = Config(encoder_layer=li)
-
-        def _clip(c, li=li, cfg=cfg):
-            feat = np.load(_cache_path(c.audio_path, li))
-            onsets = {
-                ln: [t for t in ts if t < args.max_seconds]
-                for ln, ts in star.onsets_by_lane(c.annotation_path).items()
-            }
-            return Clip(
-                features=feat,
-                targets=build_targets(onsets, feat.shape[0], cfg),
-                onsets_by_lane=onsets,
+        for mode in modes:
+            tr_clips = [_clip(c, li, cfg, mode) for c in tr]
+            va_clips = [_clip(c, li, cfg, mode) for c in va]
+            pos_w = pos_weights_from_targets(c.targets for c in tr_clips)
+            per_lane: dict[str, list[float]] = defaultdict(list)
+            for seed in seeds:
+                torch.manual_seed(seed)
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed_all(seed)
+                model = MultiLaneHeads(in_dim=tr_clips[0].features.shape[1],
+                                       hidden=cfg.head_hidden, num_layers=cfg.head_layers)
+                if torch.cuda.is_available():
+                    model = model.cuda()
+                train_loop(
+                    model, tr_clips, cfg, epochs=args.epochs, pos_weight=pos_w,
+                    batch_size=args.batch_size, log=lambda s: None,
+                )
+                thresholds = tune_thresholds(model, va_clips, cfg)
+                lane_f1: dict[str, list[float]] = defaultdict(list)
+                for c in va_clips:
+                    f1 = evaluate_clip(model, c, cfg, thresholds)
+                    for ln, ts in c.onsets_by_lane.items():
+                        if ts:
+                            lane_f1[ln].append(f1[ln])
+                for ln, v in lane_f1.items():
+                    per_lane[ln].append(sum(v) / len(v))  # this seed's mean-over-clips
+                del model
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            results[(mode, li)] = dict(per_lane)
+            summ = " ".join(
+                f"{ln}={np.mean(per_lane[ln]):.2f}" for ln in cfg.lanes if per_lane.get(ln)
             )
+            print(f"L{li:<2d} {mode:6s} done ({len(seeds)} seeds): {summ}", flush=True)
+            del tr_clips, va_clips
 
-        tr_clips = [_clip(c) for c in tr]
-        va_clips = [_clip(c) for c in va]
-        pos_w = pos_weights_from_targets(c.targets for c in tr_clips)
-        model = MultiLaneHeads(in_dim=embeddings.MERT_DIM, hidden=cfg.head_hidden,
-                               num_layers=cfg.head_layers)
-        if torch.cuda.is_available():
-            model = model.cuda()
-        train_loop(
-            model, tr_clips, cfg, epochs=args.epochs, pos_weight=pos_w,
-            batch_size=args.batch_size, log=lambda s: None,
-        )
-        thresholds = tune_thresholds(model, va_clips, cfg)
-        per_lane: dict[str, list[float]] = defaultdict(list)
-        for c in va_clips:
-            f1 = evaluate_clip(model, c, cfg, thresholds)
-            for ln, ts in c.onsets_by_lane.items():
-                if ts:
-                    per_lane[ln].append(f1[ln])
-        results[li] = {ln: sum(v) / len(v) for ln, v in per_lane.items()}
-        print(f"layer {li:2d} done: " + " ".join(
-            f"{ln}={results[li].get(ln, float('nan')):.2f}" for ln in cfg.lanes
-        ), flush=True)
-        del model, tr_clips, va_clips
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+    # ---- report: per lane, per layer, mode comparison as mean+/-std over seeds ----
+    def _ms(vals):
+        return (float(np.mean(vals)), float(np.std(vals))) if vals else (float("nan"), 0.0)
 
-    # ---- report: lanes x layers matrix + best layer per lane ----
-    print("\n==== per-lane F1 by MERT layer (val) ====", flush=True)
-    print("  lane " + "".join(f"  L{li:<4d}" for li in layers), flush=True)
+    print(f"\n==== per-lane F1: mean+/-std over {len(seeds)} seeds ====", flush=True)
+    head = "  lane  layer  " + "".join(f"{m:>16s}" for m in modes)
+    print(head, flush=True)
     for ln in cfg0.lanes:
-        row = [results[li].get(ln) for li in layers]
-        if all(v is None for v in row):
+        rows = [(li, [results[(m, li)].get(ln, []) for m in modes]) for li in layers]
+        if all(not any(cols) for _li, cols in rows):
             continue
-        cells = "".join(f"  {v:.3f}" if v is not None else "      -" for v in row)
-        best_li = max((li for li in layers if results[li].get(ln) is not None),
-                      key=lambda li: results[li][ln])
-        print(f"  {ln:4s}{cells}   best=L{best_li}", flush=True)
+        for li, cols in rows:
+            if not any(cols):
+                continue
+            cells = ""
+            for v in cols:
+                mu, sd = _ms(v)
+                cells += f"   {mu:.3f}+/-{sd:.3f}"
+            print(f"  {ln:4s}  L{li:<4d}{cells}", flush=True)
 
 
 if __name__ == "__main__":
