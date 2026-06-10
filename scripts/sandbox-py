@@ -7,6 +7,12 @@
 #   scripts/sandbox-py 'import torch; print(torch.cuda.is_available())'
 #   scripts/sandbox-py 'import sys; print(sys.argv[1:])' foo bar
 #
+# A single `.py` FILE argument is run as a script instead of as a code
+# string (the repo is mounted at the same path in the container, so a temp
+# file Write()n in the repo resolves identically). Extra args still become
+# sys.argv[1:]:
+#   scripts/sandbox-py /abs/path/in/repo/tmp_a1b2c3.py foo bar
+#
 # Reads code from stdin if no argument is given:
 #   scripts/sandbox-py < some_script.py
 #
@@ -17,6 +23,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ $# -ge 1 ]; then
+    if [[ "$1" == *.py && -f "$1" ]]; then
+        # file path -> run as a script (argv after it -> sys.argv[1:])
+        exec "$SCRIPT_DIR/sandbox-run" python3 "$@"
+    fi
     code=$1
     shift
 else

@@ -1,28 +1,63 @@
 #!/usr/bin/env bash
 # scripts/check-py [pytest-args...]
 #
-# Python post-change checks: ruff (with --fix) + pytest. Any args are
-# passed through to pytest, so `scripts/check-py tests/test_foo.py::test_bar`
-# works for fast iteration on a single test.
+# Python post-change checks across ALL first-party Python, transcriber +
+# training + dsp: ruff (with --fix) on every project, then pytest. A bare
+# `scripts/check-py` runs the whole suite; any args are passed through to the
+# TRANSCRIBER pytest only (fast single-test iteration, e.g.
+# `scripts/check-py tests/test_foo.py::test_bar`) and the training/dsp suites
+# are skipped.
 #
-# Requires transcriber/.venv (uv-managed). Does NOT install deps — see
-# transcriber/Dockerfile / the project's Python env notes for the install
-# recipe.
+# Requires transcriber/.venv (uv-managed). It also supplies the deps for the
+# training + dsp tests (torch / transformers / librosa / numpy / scipy), with
+# the two first-party packages made importable via PYTHONPATH, so this needs no
+# second venv. Does NOT install deps, see transcriber/Dockerfile / the project's
+# Python env notes for the install recipe (and run `uv sync` once after the
+# drumjot-dsp path dep was added).
+#
+# Torch caveat: the training tests (and the transcriber ADTOF tests) need a
+# WORKING CUDA torch in transcriber/.venv. On a host without one (e.g. the
+# codebox host, where libcusparseLt is missing), run those in the sandbox
+# instead: `scripts/sandbox-run env PYTHONPATH=dsp:training python3 -m pytest
+# training/tests`.
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
-cd "$REPO/transcriber"
+VENV="$REPO/transcriber/.venv"
 
-if [ ! -d .venv ]; then
+if [ ! -d "$VENV" ]; then
     echo "error: transcriber/.venv not found." >&2
     echo "       create it with: cd transcriber && uv venv (then install deps per AGENTS.md §3)" >&2
     exit 1
 fi
 
-echo "== ruff check --fix =="
-.venv/bin/ruff check --fix .
+# ruff + pytest live in the `dev` OPTIONAL-EXTRA. A plain `uv sync` drops
+# optional extras, so the dev tooling silently disappears; sync WITH the extra.
+if [ ! -x "$VENV/bin/ruff" ] || [ ! -x "$VENV/bin/pytest" ]; then
+    echo "error: transcriber/.venv is missing the dev extra (ruff/pytest)." >&2
+    echo "       plain 'uv sync' drops optional extras; re-sync WITH it:" >&2
+    echo "           cd transcriber && uv sync --extra dev" >&2
+    exit 1
+fi
+
+echo "== ruff check --fix (transcriber + training + dsp) =="
+# ruff resolves each project's own pyproject config per-file as it walks the
+# tree, so one invocation lints all three with the right rules each.
+"$VENV/bin/ruff" check --fix "$REPO/transcriber" "$REPO/training" "$REPO/dsp"
 
 echo
-echo "== pytest =="
-.venv/bin/pytest "$@"
+echo "== pytest: transcriber =="
+( cd "$REPO/transcriber" && "$VENV/bin/pytest" "$@" )
+
+# With explicit pytest args the caller is iterating on a single transcriber
+# test; skip the (slower, torch-heavy) training/dsp suites. A bare run does all.
+if [ $# -eq 0 ]; then
+    echo
+    echo "== pytest: dsp =="
+    PYTHONPATH="$REPO/dsp" "$VENV/bin/pytest" "$REPO/dsp/tests"
+
+    echo
+    echo "== pytest: training =="
+    PYTHONPATH="$REPO/dsp:$REPO/training" "$VENV/bin/pytest" "$REPO/training/tests"
+fi

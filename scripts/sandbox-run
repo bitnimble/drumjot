@@ -13,6 +13,9 @@
 set -euo pipefail
 
 CONTAINER=drumjot-sandbox
+# The repo is bind-mounted into the container at the SAME absolute path, so
+# temp files Write()n in the repo (and `sandbox-py FILE.py`) resolve there.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Use plain `docker` if this user can reach the daemon, else fall back to
 # `sudo docker` (the build steps for this image run under sudo on this
@@ -35,6 +38,7 @@ if [ "$running" != "true" ]; then
         echo "  ${DOCKER[*]} run -d --name $CONTAINER \\" >&2
         echo "      --gpus all \\" >&2
         echo "      -v /codebox-workspace:/codebox-workspace \\" >&2
+        echo "      -v $REPO:$REPO \\" >&2
         echo "      drumjot-sandbox" >&2
         echo >&2
         echo "(drop --gpus all to run CPU-only; build the image first with:" >&2
@@ -43,4 +47,7 @@ if [ "$running" != "true" ]; then
     fi
 fi
 
-exec "${DOCKER[@]}" exec --workdir /sandbox "$CONTAINER" "$@"
+# -i forwards stdin so `sandbox-run python3 - <<'EOF'` (and other stdin-fed
+# commands) work; without it docker exec silently feeds the command an empty
+# stdin, which no-ops with no error. No -t: these are non-interactive.
+exec "${DOCKER[@]}" exec -i --workdir /sandbox "$CONTAINER" "$@"

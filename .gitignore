@@ -105,23 +105,27 @@ dist
 # TernJS port file
 .tern-port
 
-# Transcriber service (Python backend, see transcriber/)
+# Transcriber service (Python backend, see transcriber/). Service-specific
+# paths only; generic Python artifacts (venv / egg-info / caches) are ignored
+# globally below so they're covered for every subproject (transcriber,
+# training/, dsp/), not just this one.
 transcriber/.env
-transcriber/.venv
-transcriber/venv
 transcriber/data
 transcriber/models
 transcriber/debug
 transcriber/build
-transcriber/*.egg-info
 
-# Python tooling (general). The transcriber service is the main producer
-# of these, but list them globally so a `python` invocation from the
-# repo root doesn't leak caches into git.
+# Python tooling (general). Listed globally, the repo has three Python
+# subprojects (transcriber, training/, dsp/), each with its own venv +
+# editable-install egg-info, plus any `python` run from the repo root leaks
+# caches here.
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.egg-info/
+.venv/
+venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

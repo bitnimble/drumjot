@@ -8,6 +8,11 @@
 #   scripts/sandbox-bun 'console.log(process.versions.bun)'
 #   scripts/sandbox-bun 'console.log(Bun.argv.slice(1))' foo bar
 #
+# A single `.ts`/`.js` FILE argument is run as a script instead of as a
+# code string (the repo is mounted at the same path in the container, so a
+# temp file Write()n in the repo resolves identically). Extra args follow:
+#   scripts/sandbox-bun /abs/path/in/repo/tmp_a1b2c3.ts foo bar
+#
 # Reads code from stdin if no argument is given:
 #   scripts/sandbox-bun < some_script.ts
 #
@@ -18,6 +23,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ $# -ge 1 ]; then
+    if [[ "$1" == *.ts || "$1" == *.js ]] && [ -f "$1" ]; then
+        # file path -> run as a script (extra args follow as Bun.argv)
+        exec "$SCRIPT_DIR/sandbox-run" bun "$@"
+    fi
     code=$1
     shift
 else
