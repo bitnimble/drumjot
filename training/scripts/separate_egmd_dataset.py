@@ -239,12 +239,22 @@ def process_batch(sep, batch, out: Path, gap_sec: float, log) -> int:
         mixd.mkdir()
         mix = mixd / "mix.wav"  # NEUTRAL name (separator picks drum stem by "drum" in filename)
         sf.write(str(mix), buf, sr)
-        drum = sep.run_stems_all(mix, tdp / "s1").drum_stem  # separate work dirs per stage
+        drum = sep.run_stems_all(mix, tdp / "s1", build_no_drums=False).drum_stem  # separate work dirs
         log(f"  roformer OK ({len(batch)} clips); splitting into 5 stems...")
         per = sep.run_stems_per(drum, tdp / "s2").per_instrument
         log("  mdx23c per-stem OK")
         dy, dsr = sf.read(str(drum), always_2d=True)
-        pys = {p: sf.read(str(src), always_2d=True) for p, src in per.items()}
+        # The separator skips writing empty/near-silent stems (e.g. kick on a
+        # cymbal-heavy buffer), so a pitch may be missing or its file unreadable;
+        # load defensively and silence-fill below so every clip gets all 5 stems.
+        pys = {}
+        for p, src in per.items():
+            try:
+                arr, ss = sf.read(str(src), always_2d=True)
+                if arr.size:
+                    pys[p] = (arr, ss)
+            except Exception:  # noqa: BLE001  (missing/empty/corrupt stem)
+                pass
 
         done = 0
         for k, e in enumerate(batch):
@@ -255,6 +265,8 @@ def process_batch(sep, batch, out: Path, gap_sec: float, log) -> int:
                 if p in pys:
                     yy, ss = pys[p]
                     _write_flac(slice_seconds(yy, ss, start_s, len_s), ss, paths["per"][p])
+                else:  # instrument absent in this buffer -> a silent stem (accurate)
+                    _write_flac(np.zeros((int(round(len_s * dsr)), 1), dtype="float32"), dsr, paths["per"][p])
             # midi written LAST and atomically = the completion marker: is_done()
             # is true only once all stems exist AND this rename has landed.
             _atomic_bytes(Path(e["midi"]).read_bytes(), paths["midi"])
@@ -352,7 +364,10 @@ def main():
     for bi, idxs in enumerate(batches, 1):
         eta = _fmt_eta((time.perf_counter() - t0) / done * (len(pending) - done)) if done else "?"
         log(f"[{done}/{len(pending)} clips] batch {bi}/{len(batches)} ({len(idxs)} clips)  eta {eta}")
-        done += process_batch(sep, [pending[i] for i in idxs], out, args.gap_sec, log)
+        try:
+            done += process_batch(sep, [pending[i] for i in idxs], out, args.gap_sec, log)
+        except Exception as e:  # noqa: BLE001  keep the unattended run alive; clips retried on resume
+            log(f"  !! batch {bi} FAILED: {e!r} (its clips retried on resume)")
         write_csv(out, selection)  # refresh after each batch so an interrupt leaves a usable CSV
     n = write_csv(out, selection)
     log(f"DONE. {done} clips this run; CSV has {n} completed -> {out}")

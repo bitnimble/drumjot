@@ -259,7 +259,9 @@ class Separator:
                 out,
             )
 
-    def run_stems_all(self, audio_path: Path, work_dir: Path) -> StemsAllResult:
+    def run_stems_all(
+        self, audio_path: Path, work_dir: Path, *, build_no_drums: bool = True
+    ) -> StemsAllResult:
         """Extract a drum stem from the full mix, plus a drumless mix.
 
         Returns a `StemsAllResult` with absolute paths to both. Also
@@ -267,6 +269,12 @@ class Separator:
         Demucs emits (bass / other / vocals) into the current debug sink
         under `stems_all/`, so the operator can listen back to
         intermediates while later stages are still running.
+
+        `build_no_drums=False` skips summing the non-drum stems into the
+        "music minus drums" track (returns `no_drums=None`). Batch callers that
+        only want the drum stem pass this to avoid the wasted sum and, on
+        drums-only input, the noisy "Failed to build drumless mix" warning the
+        empty piano/guitar stems otherwise trigger.
         """
         self.load()
         assert self._stems_all is not None
@@ -297,7 +305,7 @@ class Separator:
         # ready-to-play "music minus drums" track without having to mix
         # the three Demucs sub-stems themselves.
         no_drums_path: Path | None = None
-        if non_drum_stems:
+        if build_no_drums and non_drum_stems:
             no_drums_path = out_dir / f"no_drums{drum_stem.suffix}"
             try:
                 _sum_audio(non_drum_stems, no_drums_path)

@@ -112,24 +112,35 @@ def main():
         dst.parent.mkdir(parents=True, exist_ok=True)
         sf.write(str(dst), y, sr, format="FLAC")
 
-    def _copy_flac_trim(src, dst: Path, keep_seconds: float) -> None:
-        """Copy a separated stem to `dst` as FLAC, trimmed to `keep_seconds` (drops
-        the trailing silence padded on for the separator). Trim is by duration so
-        it's correct whatever the stem's own sample rate."""
-        y, sr = sf.read(str(src), always_2d=True)
-        _write_flac(y[: int(round(keep_seconds * sr))], sr, dst)
+    def _write_perstem(src, dst: Path, keep_seconds: float, fb_sr: int, fb_n: int) -> None:
+        """Trim-copy a per-instrument stem; if the separator left it empty/near-
+        silent/unwritable (e.g. kick on a cowbell-only take, where it logs
+        "stem_source array is near-silent or empty" and skips the file), write
+        silence instead -- that instrument genuinely isn't in the take, and the
+        take still gets all 5 perstems so it counts as complete."""
+        if src is not None:
+            try:
+                y, sr = sf.read(str(src), always_2d=True)
+                if y.size:
+                    _write_flac(y[: int(round(keep_seconds * sr))], sr, dst)
+                    return
+            except Exception:  # noqa: BLE001  (missing/empty/corrupt -> fall through to silence)
+                pass
+        _write_flac(np.zeros((fb_n, 1), dtype="float32"), fb_sr, dst)
 
     # Precompute the takes that actually need work so the counter + ETA reflect
-    # real progress (already-done takes are skipped instantly on resume).
+    # real progress (already-done takes are skipped instantly on resume). A take is
+    # done only when the drum stem, all 5 perstems, AND the copied annotation exist.
     todo = []
     for clip in clips:
         stem = clip.annotation_path.stem
         audio_root = out / clip.annotation_path.parent.parent.relative_to(ref) / "audio"
         out_drum = audio_root / "sep_drum" / f"{stem}.flac"
         per_targets = {p: audio_root / "perstem" / p / f"{stem}.flac" for p in _PERSTEM_PITCHES}
-        if out_drum.exists() and all(pt.exists() for pt in per_targets.values()):
+        out_ann = out / clip.annotation_path.relative_to(ref)
+        if out_drum.exists() and out_ann.exists() and all(pt.exists() for pt in per_targets.values()):
             continue
-        todo.append((clip, stem, out_drum, per_targets))
+        todo.append((clip, stem, out_drum, per_targets, out_ann))
     n_skip = len(clips) - len(todo)
     print(f"{len(todo)} takes to process, {n_skip} already done -> {out}", flush=True)
     if not todo:
@@ -141,43 +152,48 @@ def main():
     sep.load()
 
     t0 = time.perf_counter()
-    for k, (clip, stem, out_drum, per_targets) in enumerate(todo, 1):
+    done = failed = 0
+    for k, (clip, stem, out_drum, per_targets, out_ann) in enumerate(todo, 1):
         eta = _fmt_eta((time.perf_counter() - t0) / (k - 1) * (len(todo) - (k - 1))) if k > 1 else "?"
         print(f"[{k}/{len(todo)}] {stem}  eta {eta}", flush=True)
-        acc_path = clip.audio_path.parent.parent / "accompaniment" / f"{stem}.wav"
-        with tempfile.TemporaryDirectory() as td:
-            tdp = Path(td)
-            mix_y, mix_sr = combine_mix(clip.audio_path, acc_path)
-            keep_seconds = mix_y.shape[0] / mix_sr
-            need = int(MIN_SEP_SECONDS * mix_sr)
-            if mix_y.shape[0] < need:  # pad short takes so BS-Roformer doesn't choke
-                pad = np.zeros((need - mix_y.shape[0], mix_y.shape[1]), dtype=mix_y.dtype)
-                mix_y = np.concatenate([mix_y, pad], axis=0)
-            mix_dir = tdp / "_mixin"  # keep the combined mix out of the separator work_dir
-            mix_dir.mkdir()
-            # NEUTRAL input filename: the separator picks its drum stem by
-            # `"drum" in filename`, and ENST take names contain "drum"
-            # ("snare-drum", "bass-drum"), which would make EVERY stem match. "mix" is safe.
-            mix_path = mix_dir / "mix.wav"
-            sf.write(str(mix_path), mix_y, mix_sr)
-            # stage 1: BS-Roformer combined mix -> drum stem (kept padded for stage 2).
-            # each stage gets its OWN work dir so stage 2 doesn't pick up stage 1's siblings.
-            drum_tmp = sep.run_stems_all(mix_path, tdp / "stage1").drum_stem
-            print(f"  roformer OK -> {out_drum}; splitting into 5 stems...", flush=True)
-            # stage 2: MDX23C drum stem -> 5 per-instrument stems
-            per = sep.run_stems_per(drum_tmp, tdp / "stage2").per_instrument  # {pitch: path}
-            # write drum + per-instrument together (all-or-nothing): if stage 2 fails,
-            # nothing persists, so a resume cleanly redoes both stages rather than
-            # finding a lone drum stem and re-running stage 1 anyway.
-            _copy_flac_trim(drum_tmp, out_drum, keep_seconds)
-            for p, src in per.items():
-                if p in per_targets:
-                    _copy_flac_trim(src, per_targets[p], keep_seconds)
-            print("  mdx23c per-stem OK", flush=True)
-        out_ann = out / clip.annotation_path.relative_to(ref)
-        out_ann.parent.mkdir(parents=True, exist_ok=True)
-        out_ann.write_text(clip.annotation_path.read_text())
-    print(f"DONE. processed {len(todo)}, skipped {n_skip} -> {out}", flush=True)
+        try:
+            acc_path = clip.audio_path.parent.parent / "accompaniment" / f"{stem}.wav"
+            with tempfile.TemporaryDirectory() as td:
+                tdp = Path(td)
+                mix_y, mix_sr = combine_mix(clip.audio_path, acc_path)
+                keep_seconds = mix_y.shape[0] / mix_sr
+                need = int(MIN_SEP_SECONDS * mix_sr)
+                if mix_y.shape[0] < need:  # pad short takes so BS-Roformer doesn't choke
+                    pad = np.zeros((need - mix_y.shape[0], mix_y.shape[1]), dtype=mix_y.dtype)
+                    mix_y = np.concatenate([mix_y, pad], axis=0)
+                mix_dir = tdp / "_mixin"  # keep the combined mix out of the separator work_dir
+                mix_dir.mkdir()
+                # NEUTRAL input filename: the separator picks its drum stem by
+                # `"drum" in filename`, and ENST take names contain "drum"
+                # ("snare-drum", "bass-drum"), which would make EVERY stem match. "mix" is safe.
+                mix_path = mix_dir / "mix.wav"
+                sf.write(str(mix_path), mix_y, mix_sr)
+                # stage 1: BS-Roformer combined mix -> drum stem (kept padded for stage 2).
+                # each stage gets its OWN work dir so stage 2 doesn't pick up stage 1's siblings.
+                drum_tmp = sep.run_stems_all(mix_path, tdp / "stage1", build_no_drums=False).drum_stem
+                print(f"  roformer OK -> {out_drum}; splitting into 5 stems...", flush=True)
+                # stage 2: MDX23C drum stem -> 5 per-instrument stems
+                per = sep.run_stems_per(drum_tmp, tdp / "stage2").per_instrument  # {pitch: path}
+                # write drum + per-instrument together (all-or-nothing): if stage 2
+                # fails, nothing persists, so a resume cleanly redoes both stages.
+                drum_y, dsr = sf.read(str(drum_tmp), always_2d=True)
+                keep_n = int(round(keep_seconds * dsr))
+                _write_flac(drum_y[:keep_n], dsr, out_drum)
+                for p in _PERSTEM_PITCHES:
+                    _write_perstem(per.get(p), per_targets[p], keep_seconds, dsr, keep_n)
+                print("  mdx23c per-stem OK", flush=True)
+            out_ann.parent.mkdir(parents=True, exist_ok=True)
+            out_ann.write_text(clip.annotation_path.read_text())  # written last = completion marker
+            done += 1
+        except Exception as e:  # noqa: BLE001  keep the unattended run alive; retried on resume
+            failed += 1
+            print(f"  !! FAILED {stem}: {e!r} (skipped; will retry on resume)", flush=True)
+    print(f"DONE. {done} processed, {failed} failed, {n_skip} already done -> {out}", flush=True)
 
 
 if __name__ == "__main__":
