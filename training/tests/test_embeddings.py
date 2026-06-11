@@ -36,6 +36,28 @@ def test_embed_clip_cache_dtype_override_to_fp32(tmp_path, monkeypatch):
     assert np.load(next(tmp_path.glob("*.npy"))).dtype == np.float32
 
 
+def test_embed_clip_no_high_band_is_raw_mert(tmp_path, monkeypatch):
+    monkeypatch.setattr(embeddings, "load_audio", lambda p, sr=None: np.zeros(100, dtype=np.float32))
+    _stub_hb(monkeypatch)  # would add HB_BANDS cols if (wrongly) called
+    feat = embeddings.embed_clip("/x/c.flac", _StubEncoder(), cache_dir=tmp_path, high_band=False)
+    assert feat.shape[1] == 4  # encoder dims only, no high-band block appended
+
+
+def test_embed_clip_high_band_on_off_caches_dont_collide(tmp_path, monkeypatch):
+    monkeypatch.setattr(embeddings, "load_audio", lambda p, sr=None: np.zeros(100, dtype=np.float32))
+    _stub_hb(monkeypatch)
+    on = embeddings.embed_clip("/x/d.flac", _StubEncoder(), cache_dir=tmp_path, high_band=True)
+    off = embeddings.embed_clip("/x/d.flac", _StubEncoder(), cache_dir=tmp_path, high_band=False)
+    assert on.shape[1] == 4 + embeddings.HB_BANDS and off.shape[1] == 4  # distinct widths
+    assert len(list(tmp_path.glob("*.npy"))) == 2  # separate cache files (variant in key)
+
+
+def test_cache_key_depends_on_variant(tmp_path):
+    f = tmp_path / "a.wav"
+    f.write_bytes(b"x")
+    assert embeddings.cache_key(f, "enc", 10, variant="") != embeddings.cache_key(f, "enc", 10)
+
+
 def test_cache_key_is_stable(tmp_path):
     f = tmp_path / "a.wav"
     f.write_bytes(b"x")

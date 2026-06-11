@@ -95,3 +95,52 @@ def test_slice_seconds():
     y = np.arange(100).reshape(100, 1)
     s = sed.slice_seconds(y, sr=10, start_s=2.0, len_s=3.0)
     assert s.shape == (30, 1) and int(s[0, 0]) == 20 and int(s[-1, 0]) == 49
+
+
+def test_build_buffer_offsets_and_pad(tmp_path):
+    sed = _load_sep()
+    import soundfile as sf
+
+    sr = 8000
+    pa, pb = tmp_path / "a.wav", tmp_path / "b.wav"
+    sf.write(str(pa), np.ones((sr, 1), dtype="float32"), sr)          # 1.0 s
+    sf.write(str(pb), np.full((sr // 2, 1), 0.5, dtype="float32"), sr)  # 0.5 s
+    batch = [{"uid": "a", "src_audio": pa, "midi": pa}, {"uid": "b", "src_audio": pb, "midi": pb}]
+    valid, buf, bsr, offsets = sed.build_buffer(batch, gap_sec=0.25, log=lambda s: None)
+    assert bsr == sr and [e["uid"] for e in valid] == ["a", "b"]
+    assert offsets[0] == (0.0, 1.0)
+    assert offsets[1] == (1.25, 0.5)  # clip a (1.0) + gap (0.25)
+    assert buf.shape[0] == int(sed.MIN_SEP_SECONDS * sr)  # undersized buffer padded
+
+
+def test_build_buffer_skips_sr_mismatch_without_desync(tmp_path):
+    sed = _load_sep()
+    import soundfile as sf
+
+    pa, pb = tmp_path / "a.wav", tmp_path / "b.wav"
+    sf.write(str(pa), np.ones((8000, 1), dtype="float32"), 8000)
+    sf.write(str(pb), np.ones((4000, 1), dtype="float32"), 16000)  # different sr -> dropped
+    batch = [{"uid": "a", "src_audio": pa, "midi": pa}, {"uid": "b", "src_audio": pb, "midi": pb}]
+    valid, _buf, sr, offsets = sed.build_buffer(batch, gap_sec=0.0, log=lambda s: None)
+    assert sr == 8000 and [e["uid"] for e in valid] == ["a"] and len(offsets) == 1  # aligned 1:1
+
+
+def test_write_outputs_slices_all_five_stems_silence_filling_absent(tmp_path):
+    sed = _load_sep()
+    import soundfile as sf
+
+    out = tmp_path / "out"
+    dsr = 100
+    dy = np.ones((5 * dsr, 1), dtype="float32") * 0.3   # 5 s drum stem
+    pys = {"k": (np.ones((5 * dsr, 1), dtype="float32") * 0.2, dsr)}  # only kick present
+    midi = tmp_path / "x.midi"
+    midi.write_bytes(b"MThd-fake")
+    valid = [{"uid": "clip1", "midi": midi}]
+    n = sed.write_outputs(valid, [(1.0, 2.0)], dy, dsr, pys, out)  # slice [1s, 3s)
+    assert n == 1
+    p = sed.out_paths(out, "clip1")
+    assert sed.is_done(p)  # drum + all 5 perstem + midi all landed
+    drum, _ = sf.read(str(p["drum"]), always_2d=True)
+    assert drum.shape[0] == int(round(2.0 * dsr))  # sliced to len_s
+    silent, _ = sf.read(str(p["per"]["s"]), always_2d=True)  # snare absent -> silence
+    assert silent.shape[0] == int(round(2.0 * dsr)) and float(np.abs(silent).max()) == 0.0

@@ -52,11 +52,13 @@ def main():
     ap.add_argument("--cache-dir", default=None, help="probe feature cache (default <root>/_cache_sweep)")
     ap.add_argument(
         "--high-band-modes", default="none",
-        help="comma list of high-band feature variants to compare, each trained at every "
-        "--layer x --seed. Modes: 'none' (raw MERT), 'energy' (append the 6-20 kHz log-mel "
-        "energy block, embeddings.highband_features), 'flux' (append its positive temporal "
-        "difference -- onset-sharpened). All reuse the raw-MERT encode cache (no re-encode); "
-        "the high-band block is layer-independent so it's computed once per clip and cached.",
+        help="comma list of feature variants to compare, each trained at every --layer x "
+        "--seed. A variant is 'none' (raw MERT) or a '+'-composed set of blocks appended to "
+        "MERT: 'energy' (6-20 kHz log-mel, embeddings.highband_features), 'flux' (its "
+        "positive temporal difference), 'cym' (sub-6 kHz ride/crash discriminator channels "
+        "mirroring transcriber cymbal_split.py: low/mid ratio, low-band crest, flatness + "
+        "smoothed low/mid). E.g. 'none,energy,energy+cym'. All reuse the raw-MERT encode "
+        "cache (no re-encode); blocks are layer-independent, computed once per clip.",
     )
     ap.add_argument(
         "--seeds", default="0",
@@ -110,25 +112,102 @@ def main():
     seeds = [int(s) for s in args.seeds.split(",")]
     print(f"modes={modes}  seeds={seeds}", flush=True)
 
-    # The high-band block is layer- and seed-independent (it's derived from the
-    # raw audio), so compute the 6-20 kHz log-mel energy ONCE per clip and reuse
-    # it across every mode/layer/seed. 'flux' is just its positive time-diff.
+    # Feature blocks are layer- and seed-independent (derived from raw audio),
+    # so each is computed ONCE per clip and reused across every mode/layer/seed.
+    # A mode is "none" or a "+"-joined composition of blocks, e.g.
+    # "energy+cym": energy = 6-20 kHz log-mel; flux = its positive time-diff;
+    # cym = the sub-6 kHz ride/crash discriminator block (see _cym_block).
     hb_energy: dict = {}
+    cym_cache: dict = {}
 
-    def _hb(c, n_frames, mode):
-        if mode == "none":
-            return None
+    def _cym_block(audio_path, n_frames):
+        """Frame-level (75 fps) translation of the deterministic ride/crash
+        features the transcriber's cymbal_split.py measures per onset:
+
+          low_mid : fundamental band (250-800 Hz) over wash band (1.5-5 kHz)
+                    energy, in dB -- a ride's pitched ping fills the low band
+                    (reads high), a crash is mid wash (reads low). The split's
+                    ear-confirmed winner (zero ride/crash overlap there,
+                    measured on the post-attack window).
+          crest   : spectral crest 200-1500 Hz, dB peak-to-mean -- tall narrow
+                    partial (ride ping) vs flat noise (crash).
+          flat    : spectral flatness 250 Hz-14 kHz (band-restricted exactly
+                    like the split: full-range flatness collapses on the dead
+                    >14 kHz bins).
+          + low_mid smoothed at ~250 ms and ~1 s: the split measured low_mid
+            on a POST-attack window (0.08-0.35 s) because the attack transient
+            blurs the ratio; the smoothed copies hand the (bi)GRU that
+            post-attack tone directly.
+
+        All channels squashed to ~[0,1] deterministically (no per-clip norm,
+        same rationale as the high-band block)."""
+        import librosa
+
+        key = audio_path
+        f = cym_cache.get(key)
+        if f is not None and f.shape[0] >= n_frames:
+            return f[:n_frames]
+        y, _ = librosa.load(str(audio_path), sr=44100, mono=True)
+        if args.max_seconds is not None:
+            y = y[: int(args.max_seconds * 44100)]
+        hop, n_fft = 588, 2048  # 44100/75 -> exact 75 fps frames
+        if y.size < n_fft:
+            y = np.pad(y, (0, n_fft - y.size))
+        S = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=hop)) ** 2
+        freqs = librosa.fft_frequencies(sr=44100, n_fft=n_fft)
+
+        def band(lo, hi):
+            return S[(freqs >= lo) & (freqs <= hi), :]
+
+        fund = band(250.0, 800.0).sum(axis=0)
+        wash = band(1500.0, 5000.0).sum(axis=0)
+        low_mid_db = 10.0 * np.log10(np.maximum(fund, 1e-20) / np.maximum(wash, 1e-20))
+        low_mid = np.clip((low_mid_db + 40.0) / 80.0, 0.0, 1.0)  # [-40,+40] dB -> [0,1]
+        tb = band(200.0, 1500.0)
+        crest_db = 10.0 * np.log10(
+            np.maximum(tb.max(axis=0), 1e-20) / np.maximum(tb.mean(axis=0), 1e-20)
+        )
+        crest = np.clip(crest_db / 30.0, 0.0, 1.0)  # 0..30 dB -> [0,1]
+        fb = band(250.0, 14000.0) + 1e-10
+        flat = np.exp(np.mean(np.log(fb), axis=0)) / np.mean(fb, axis=0)  # already [0,1]
+
+        def smooth(x, win):
+            return np.convolve(x, np.ones(win) / win, mode="same")
+
+        f = np.stack(
+            [low_mid, crest, flat, smooth(low_mid, 19), smooth(low_mid, 75)], axis=1
+        ).astype(np.float32)  # (T', 5); 19/75 frames ~ 250 ms / 1 s
+        if f.shape[0] < n_frames:
+            f = np.pad(f, ((0, n_frames - f.shape[0]), (0, 0)))
+        cym_cache[key] = f
+        return f[:n_frames]
+
+    def _hb_energy(c, n_frames):
         e = hb_energy.get(c.audio_path)
         if e is None or e.shape[0] != n_frames:
             e = embeddings.highband_features(c.audio_path, n_frames, args.max_seconds)
             hb_energy[c.audio_path] = e
-        if mode == "flux":  # positive temporal difference per band (onset-sharpened)
-            return np.diff(e, axis=0, prepend=e[:1]).clip(min=0).astype(e.dtype, copy=False)
-        return e  # 'energy'
+        return e
+
+    def _blocks(c, n_frames, mode):
+        if mode == "none":
+            return None
+        parts = []
+        for p in mode.split("+"):
+            if p == "energy":
+                parts.append(_hb_energy(c, n_frames))
+            elif p == "flux":  # positive temporal difference per band (onset-sharpened)
+                e = _hb_energy(c, n_frames)
+                parts.append(np.diff(e, axis=0, prepend=e[:1]).clip(min=0))
+            elif p == "cym":
+                parts.append(_cym_block(c.audio_path, n_frames))
+            else:
+                raise SystemExit(f"unknown feature block {p!r} in mode {mode!r}")
+        return np.concatenate(parts, axis=1)
 
     def _clip(c, li, cfg, mode):
         feat = np.load(_cache_path(c.audio_path, li))
-        hb = _hb(c, feat.shape[0], mode)
+        hb = _blocks(c, feat.shape[0], mode)
         if hb is not None:
             feat = np.concatenate([feat, hb], axis=1).astype(feat.dtype, copy=False)
         onsets = {

@@ -89,7 +89,8 @@ def _build_clip(
     Dataset-agnostic: callers supply onsets from MIDI (E-GMD) or .txt (STAR).
     """
     feat = embeddings.embed_clip(
-        audio_path, encoder, cache_dir=cache_dir, max_seconds=max_seconds, cache_dtype=cfg.cache_dtype
+        audio_path, encoder, cache_dir=cache_dir, max_seconds=max_seconds,
+        cache_dtype=cfg.cache_dtype, high_band=cfg.high_band,
     )
     if max_seconds is not None:
         onsets = {ln: [t for t in ts if t < max_seconds] for ln, ts in onsets.items()}
@@ -303,8 +304,9 @@ class CachedClips:
         self._max_seconds = max_seconds
 
     def _path(self, audio_path) -> Path:
+        variant = embeddings.FEAT_VARIANT if self._cfg.high_band else ""
         key = embeddings.cache_key(
-            audio_path, self._cfg.encoder, self._cfg.encoder_layer, self._max_seconds
+            audio_path, self._cfg.encoder, self._cfg.encoder_layer, self._max_seconds, variant
         )
         return self._cache_dir / f"{key}.npy"
 
@@ -394,7 +396,8 @@ def materialize(
         weight_onsets = spec[2] if len(spec) > 2 else None
         try:
             feat = embeddings.embed_clip(
-                audio, encoder, cache_dir=cache_dir, max_seconds=max_seconds, cache_dtype=cfg.cache_dtype
+                audio, encoder, cache_dir=cache_dir, max_seconds=max_seconds,
+                cache_dtype=cfg.cache_dtype, high_band=cfg.high_band,
             )
             rings = _rings_for_clip(audio, onsets, cfg, cache_dir, max_seconds)
             ok.append((audio, onsets, weight_onsets, rings, int(feat.shape[0])))
@@ -920,6 +923,13 @@ def main(argv: list[str] | None = None) -> None:
         "0 still streams from the SSD cache (RAM stays bounded), just no prefetch overlap.",
     )
     ap.add_argument("--layer", type=int, default=10, help="MERT hidden layer")
+    ap.add_argument("--seed", type=int, default=0,
+                    help="torch init seed for reproducible head weights (multi-seed ablations)")
+    ap.add_argument(
+        "--high-band", default=True, action=argparse.BooleanOptionalAction,
+        help="append the 6-20 kHz high-band block to MERT features (default on); "
+        "--no-high-band trains on raw MERT only (high-band ablation). Separate cache key.",
+    )
     ap.add_argument(
         "--cache-dtype", choices=("float16", "float32"), default=Config.cache_dtype,
         help="on-disk feature cache precision (float16 halves size + I/O)",
@@ -956,7 +966,7 @@ def main(argv: list[str] | None = None) -> None:
 
     runtime.configure_backends()  # TF32 + sets up the bf16 autocast path
     cfg = Config(
-        encoder_layer=args.layer, cache_dtype=args.cache_dtype,
+        encoder_layer=args.layer, cache_dtype=args.cache_dtype, high_band=args.high_band,
         lr=args.lr, weight_decay=args.weight_decay,
         sib_neg_weight=args.sib_neg_weight, sib_pos_weight=args.sib_pos_weight,
     )
@@ -988,7 +998,11 @@ def main(argv: list[str] | None = None) -> None:
     pos_w = pos_weights_from_targets(train_clips.iter_targets(), cap=args.pos_weight_cap)
     print("pos_weights:", {ln: round(float(w), 1) for ln, w in zip(cfg.lanes, pos_w, strict=True)}, flush=True)
 
-    model = MultiLaneHeads(in_dim=embeddings.FEAT_DIM, hidden=cfg.head_hidden, num_layers=cfg.head_layers)
+    torch.manual_seed(args.seed)  # reproducible head init (multi-seed ablations)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
+    in_dim = embeddings.FEAT_DIM if cfg.high_band else embeddings.MERT_DIM
+    model = MultiLaneHeads(in_dim=in_dim, hidden=cfg.head_hidden, num_layers=cfg.head_layers)
     if args.resume:
         sd = torch.load(Path(args.resume) / "model.pt", map_location="cpu")
         model.load_state_dict(sd)
@@ -1010,7 +1024,7 @@ def main(argv: list[str] | None = None) -> None:
         _report_compare(model, val_clips, cfg, thresholds)
 
     if args.out:
-        saved = checkpoint.save(args.out, model, cfg, thresholds)
+        saved = checkpoint.save(args.out, model, cfg, thresholds, in_dim=in_dim)
         print(f"\nsaved model + meta to {saved}", flush=True)
 
 

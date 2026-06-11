@@ -17,6 +17,11 @@ class Config:
     # read bandwidth (so it fits the OS page cache) at no real cost; fp32 path
     # autocasts to bf16 anyway. See embeddings.embed_clip.
     cache_dtype: str = "float16"
+    # Append the 6-20 kHz high-band block (embeddings.highband_features) to the
+    # MERT features (model input width = FEAT_DIM 1040 vs MERT_DIM 1024). On by
+    # default; --no-high-band trains on raw MERT only, for the high-band ablation.
+    # Part of the feature-cache key (variant), so on/off caches don't collide.
+    high_band: bool = True
 
     # Targets (Gaussian onset bumps).
     lanes: tuple[str, ...] = LANES

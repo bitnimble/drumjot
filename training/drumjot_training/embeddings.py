@@ -155,6 +155,7 @@ def embed_clip(
     cache_dir: str | Path | None = None,
     max_seconds: float | None = None,
     cache_dtype: str = "float16",
+    high_band: bool = True,
 ) -> np.ndarray:
     """Features for one clip, reading/writing `cache_dir` when given.
 
@@ -169,12 +170,17 @@ def embed_clip(
     full-precision cache. The dtype is not part of the cache key, so an
     existing cache is reused as-is (loaded at whatever precision it was
     written); delete `_cache_mert` to re-encode at a new precision.
+
+    `high_band` (default True) appends the 6-20 kHz block -> (T, FEAT_DIM); when
+    False, returns raw MERT (T, MERT_DIM) and keys the cache under variant "" so
+    the two never collide (for the high-band on/off ablation).
     """
+    variant = FEAT_VARIANT if high_band else ""  # raw MERT cache must not collide
     cache_file: Path | None = None
     if cache_dir is not None:
         cache_dir = Path(cache_dir)
         cache_dir.mkdir(parents=True, exist_ok=True)
-        key = cache_key(audio_path, encoder.name, encoder.layer, max_seconds)
+        key = cache_key(audio_path, encoder.name, encoder.layer, max_seconds, variant)
         cache_file = cache_dir / f"{key}.npy"
         if cache_file.exists():
             return np.load(cache_file)
@@ -182,10 +188,12 @@ def embed_clip(
     if max_seconds is not None:
         y = y[: int(max_seconds * encoder.sr)]
     feat = encoder.encode(y, encoder.sr)
-    # append the high-band block (the 6-20 kHz sizzle MERT's 24 kHz input
-    # discards), frame-aligned; cached together as one (T, FEAT_DIM) array
-    hb = highband_features(audio_path, feat.shape[0], max_seconds)
-    feat = np.concatenate([feat, hb], axis=1).astype(cache_dtype, copy=False)
+    if high_band:
+        # append the high-band block (the 6-20 kHz sizzle MERT's 24 kHz input
+        # discards), frame-aligned; cached together as one (T, FEAT_DIM) array
+        hb = highband_features(audio_path, feat.shape[0], max_seconds)
+        feat = np.concatenate([feat, hb], axis=1)
+    feat = feat.astype(cache_dtype, copy=False)
     if cache_file is not None:
         np.save(cache_file, feat)
     return feat

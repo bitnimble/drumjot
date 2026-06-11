@@ -208,11 +208,23 @@ def _atomic_bytes(data: bytes, dst: Path) -> None:
 # --- batched separation -----------------------------------------------------
 
 
-def process_batch(sep, batch, out: Path, gap_sec: float, log) -> int:
-    """Concatenate `batch` clips (silence gaps), separate once, slice each clip's
-    stems back. `batch` entries: dicts with uid, src_audio (abs), midi (abs)."""
+# The batch lifecycle is split into three stages so a prefetch pipeline can run
+# them on different threads and keep the GPU fed (the GPU otherwise idles through
+# the NFS-bound build + writeback, the big flat gaps in `nvidia-smi`):
+#   build_buffer  -- CPU/NFS: read clips, concatenate into one buffer  (producer)
+#   gpu_separate  -- GPU: roformer -> mdx23c, read stems back into RAM (main)
+#   write_outputs -- CPU/NFS: slice + write per-clip stems + midi      (writer)
+# build_buffer returns the clips it actually packed (valid_batch), aligned 1:1
+# with `offsets`, so a dropped clip (sr mismatch) can't desync the writeback.
+
+
+def build_buffer(batch, gap_sec: float, log):
+    """Read + concatenate `batch` clips (silence gaps between them) into one
+    buffer. Returns (valid_batch, buf, sr, offsets) or None if nothing packed.
+    `batch` entries: dicts with uid, src_audio (abs), midi (abs)."""
     pieces: list[np.ndarray] = []
-    offsets: list[tuple[float, float]] = []  # (start_s, len_s) per clip
+    offsets: list[tuple[float, float]] = []  # (start_s, len_s) per kept clip
+    valid: list[dict] = []                   # clips actually packed, aligned to offsets
     sr = None
     pos = 0.0
     for e in batch:
@@ -228,11 +240,20 @@ def process_batch(sep, batch, out: Path, gap_sec: float, log) -> int:
         offsets.append((pos, y.shape[0] / sr))
         pieces.append(y.astype(np.float32))
         pos += y.shape[0] / sr
+        valid.append(e)
+    if not pieces or sr is None:
+        return None
     buf = np.concatenate(pieces, axis=0)
     need = int(MIN_SEP_SECONDS * sr)
     if buf.shape[0] < need:  # pad only an undersized final batch
         buf = np.concatenate([buf, np.zeros((need - buf.shape[0], buf.shape[1]), dtype=buf.dtype)], axis=0)
+    return valid, buf, sr, offsets
 
+
+def gpu_separate(sep, buf: np.ndarray, sr: int, n_clips: int, log):
+    """Separate one buffer: roformer -> mdx23c. Reads every stem back INTO RAM
+    (dy, pys) before the temp dir is torn down, so the writer needs no temp
+    files. Returns (dy, dsr, pys) where pys = {pitch: (array, sr)}."""
     with tempfile.TemporaryDirectory() as td:
         tdp = Path(td)
         mixd = tdp / "_mixin"
@@ -240,14 +261,14 @@ def process_batch(sep, batch, out: Path, gap_sec: float, log) -> int:
         mix = mixd / "mix.wav"  # NEUTRAL name (separator picks drum stem by "drum" in filename)
         sf.write(str(mix), buf, sr)
         drum = sep.run_stems_all(mix, tdp / "s1", build_no_drums=False).drum_stem  # separate work dirs
-        log(f"  roformer OK ({len(batch)} clips); splitting into 5 stems...")
+        log(f"  roformer OK ({n_clips} clips); splitting into 5 stems...")
         per = sep.run_stems_per(drum, tdp / "s2").per_instrument
         log("  mdx23c per-stem OK")
         dy, dsr = sf.read(str(drum), always_2d=True)
         # The separator skips writing empty/near-silent stems (e.g. kick on a
         # cymbal-heavy buffer), so a pitch may be missing or its file unreadable;
-        # load defensively and silence-fill below so every clip gets all 5 stems.
-        pys = {}
+        # load defensively and silence-fill in write_outputs so every clip gets 5.
+        pys: dict = {}
         for p, src in per.items():
             try:
                 arr, ss = sf.read(str(src), always_2d=True)
@@ -255,22 +276,27 @@ def process_batch(sep, batch, out: Path, gap_sec: float, log) -> int:
                     pys[p] = (arr, ss)
             except Exception:  # noqa: BLE001  (missing/empty/corrupt stem)
                 pass
+    return dy, dsr, pys
 
-        done = 0
-        for k, e in enumerate(batch):
-            start_s, len_s = offsets[k]
-            paths = out_paths(out, e["uid"])
-            _write_flac(slice_seconds(dy, dsr, start_s, len_s), dsr, paths["drum"])
-            for p in PITCHES:
-                if p in pys:
-                    yy, ss = pys[p]
-                    _write_flac(slice_seconds(yy, ss, start_s, len_s), ss, paths["per"][p])
-                else:  # instrument absent in this buffer -> a silent stem (accurate)
-                    _write_flac(np.zeros((int(round(len_s * dsr)), 1), dtype="float32"), dsr, paths["per"][p])
-            # midi written LAST and atomically = the completion marker: is_done()
-            # is true only once all stems exist AND this rename has landed.
-            _atomic_bytes(Path(e["midi"]).read_bytes(), paths["midi"])
-            done += 1
+
+def write_outputs(valid_batch, offsets, dy, dsr, pys, out: Path) -> int:
+    """Slice each clip's stems out of the separated buffer and write them, midi
+    last (the atomic completion marker). `valid_batch` is aligned 1:1 to `offsets`."""
+    done = 0
+    for k, e in enumerate(valid_batch):
+        start_s, len_s = offsets[k]
+        paths = out_paths(out, e["uid"])
+        _write_flac(slice_seconds(dy, dsr, start_s, len_s), dsr, paths["drum"])
+        for p in PITCHES:
+            if p in pys:
+                yy, ss = pys[p]
+                _write_flac(slice_seconds(yy, ss, start_s, len_s), ss, paths["per"][p])
+            else:  # instrument absent in this buffer -> a silent stem (accurate)
+                _write_flac(np.zeros((int(round(len_s * dsr)), 1), dtype="float32"), dsr, paths["per"][p])
+        # midi written LAST and atomically = the completion marker: is_done()
+        # is true only once all stems exist AND this rename has landed.
+        _atomic_bytes(Path(e["midi"]).read_bytes(), paths["midi"])
+        done += 1
     return done
 
 
@@ -358,19 +384,75 @@ def main():
 
     batches = plan_batches([float(e["row"]["duration"]) for e in pending],
                            args.buffer_sec, args.gap_sec)
-    log(f"{len(pending)} clips in {len(batches)} batches (~{args.buffer_sec:.0f}s buffers)")
-    done = 0
-    t0 = time.perf_counter()
-    for bi, idxs in enumerate(batches, 1):
-        eta = _fmt_eta((time.perf_counter() - t0) / done * (len(pending) - done)) if done else "?"
-        log(f"[{done}/{len(pending)} clips] batch {bi}/{len(batches)} ({len(idxs)} clips)  eta {eta}")
+    nb = len(batches)
+    batch_clips = [[pending[i] for i in idxs] for idxs in batches]
+    log(f"{len(pending)} clips in {nb} batches (~{args.buffer_sec:.0f}s buffers); pipelined "
+        f"(build || GPU || write) to keep the GPU fed")
+
+    # Prefetch pipeline: a producer thread builds the next buffer and a writer
+    # thread writes the previous batch's stems WHILE the GPU separates the
+    # current one, so the GPU isn't stalled on NFS reads/writes between batches.
+    # Only the main thread touches the GPU/`sep` (single CUDA context); the other
+    # two stages are pure CPU/IO (soundfile + numpy release the GIL, so they
+    # genuinely overlap). Bounded queues cap how many buffers/stem-sets sit in RAM.
+    import queue
+    import threading
+
+    ready_q: queue.Queue = queue.Queue(maxsize=2)  # built input buffers (producer -> GPU)
+    write_q: queue.Queue = queue.Queue(maxsize=1)  # separated stems in RAM (GPU -> writer)
+    stats = {"done": 0}
+
+    def produce():
+        for bi, batch in enumerate(batch_clips, 1):
+            try:
+                built = build_buffer(batch, args.gap_sec, log)
+            except Exception as e:  # noqa: BLE001  bad clip -> skip batch, retried on resume
+                log(f"  !! batch {bi} build FAILED: {e!r} (its clips retried on resume)")
+                built = None
+            ready_q.put((bi, built))
+        ready_q.put(None)  # sentinel
+
+    def consume_writes():
+        t0 = time.perf_counter()
+        while True:
+            item = write_q.get()
+            if item is None:
+                break
+            bi, res = item
+            valid_batch, offsets, dy, dsr, pys = res
+            try:
+                stats["done"] += write_outputs(valid_batch, offsets, dy, dsr, pys, out)
+            except Exception as e:  # noqa: BLE001  partial writes lack the midi marker -> retried
+                log(f"  !! batch {bi} write FAILED: {e!r} (its clips retried on resume)")
+            write_csv(out, selection)  # refresh after each batch so an interrupt leaves a usable CSV
+            d = stats["done"]
+            eta = _fmt_eta((time.perf_counter() - t0) / d * (len(pending) - d)) if d else "?"
+            log(f"[{d}/{len(pending)} clips] batch {bi}/{nb} written  eta {eta}")
+
+    producer = threading.Thread(target=produce, daemon=True)
+    writer = threading.Thread(target=consume_writes, daemon=True)
+    producer.start()
+    writer.start()
+
+    while True:
+        item = ready_q.get()
+        if item is None:
+            break
+        bi, built = item
+        if built is None:
+            continue  # build failed/empty
+        valid_batch, buf, sr, offsets = built
+        log(f"[{stats['done']}/{len(pending)} clips] batch {bi}/{nb} ({len(valid_batch)} clips) separating...")
         try:
-            done += process_batch(sep, [pending[i] for i in idxs], out, args.gap_sec, log)
+            dy, dsr, pys = gpu_separate(sep, buf, sr, len(valid_batch), log)
+            write_q.put((bi, (valid_batch, offsets, dy, dsr, pys)))
         except Exception as e:  # noqa: BLE001  keep the unattended run alive; clips retried on resume
-            log(f"  !! batch {bi} FAILED: {e!r} (its clips retried on resume)")
-        write_csv(out, selection)  # refresh after each batch so an interrupt leaves a usable CSV
+            log(f"  !! batch {bi} GPU FAILED: {e!r} (its clips retried on resume)")
+    write_q.put(None)  # sentinel after the last GPU result
+    writer.join()
+
     n = write_csv(out, selection)
-    log(f"DONE. {done} clips this run; CSV has {n} completed -> {out}")
+    log(f"DONE. {stats['done']} clips this run; CSV has {n} completed -> {out}")
 
 
 if __name__ == "__main__":
