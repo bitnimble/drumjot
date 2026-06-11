@@ -253,20 +253,26 @@ def build_buffer(batch, gap_sec: float, log):
 
 def gpu_separate(sep, mix_path: Path, work_dir: Path, n_clips: int, log):
     """Separate one pre-built mix (written by the PRODUCER thread, so the GPU
-    thread never waits on that ~100MB disk write): roformer -> mdx23c. Reads
-    every stem back INTO RAM (dy, pys) so the writer needs no temp files.
-    Returns (dy, dsr, pys) where pys = {pitch: (array, sr)}. The caller owns
-    `work_dir` cleanup (rmtree in its finally)."""
+    thread never waits on that ~100MB disk write): roformer -> mdx23c. Returns
+    the on-disk stem PATHS (drum_path, {pitch: path}) WITHOUT reading them back;
+    the writer thread does the read+slice so those ~6 large decodes stay off the
+    GPU thread's critical path (they were a big inter-batch gap). build_residual
+    is off: that diagnostic re-reads all 6 stems and we never consume it."""
     drum = sep.run_stems_all(mix_path, work_dir / "s1", build_no_drums=False).drum_stem  # separate work dirs
     log(f"  roformer OK ({n_clips} clips); splitting into 5 stems...")
-    per = sep.run_stems_per(drum, work_dir / "s2").per_instrument
+    per = sep.run_stems_per(drum, work_dir / "s2", build_residual=False).per_instrument
     log("  mdx23c per-stem OK")
-    dy, dsr = sf.read(str(drum), always_2d=True)
-    # The separator skips writing empty/near-silent stems (e.g. kick on a
-    # cymbal-heavy buffer), so a pitch may be missing or its file unreadable;
-    # load defensively and silence-fill in write_outputs so every clip gets 5.
+    return drum, dict(per)
+
+
+def read_stems(drum_path: Path, per_paths: dict):
+    """Read the separated stems off disk into RAM (writer thread). The separator
+    skips writing empty/near-silent stems (e.g. kick on a cymbal-heavy buffer),
+    so a pitch may be missing/unreadable; load defensively and let write_outputs
+    silence-fill so every clip still gets all 5 stems."""
+    dy, dsr = sf.read(str(drum_path), always_2d=True)
     pys: dict = {}
-    for p, src in per.items():
+    for p, src in per_paths.items():
         try:
             arr, ss = sf.read(str(src), always_2d=True)
             if arr.size:
@@ -346,10 +352,19 @@ def main():
                     "default since eval rarely needs all ~10k held-out clips")
     ap.add_argument("--buffer-sec", type=float, default=300.0, help="separation buffer length per batch")
     ap.add_argument("--gap-sec", type=float, default=2.0, help="silence gap between concatenated clips")
+    ap.add_argument(
+        "--scratch-dir", type=Path, default=None,
+        help="dir for per-batch intermediates (mix + separator stems). MUST be fast LOCAL "
+        "storage -- the GPU thread reads/writes it between the two separator stages. Default: "
+        "the system temp dir (usually /tmp; often tmpfs/RAM = already optimal). Set this to a "
+        "local NVMe path if your /tmp is small (a 5-min buffer's intermediates are ~0.6-1GB) or "
+        "is not local. NEVER point it at the NAS -- that puts NFS I/O back on the GPU thread.")
     args = ap.parse_args()
 
     root, out = args.egmd_root, args.out_dir
     out.mkdir(parents=True, exist_ok=True)
+    if args.scratch_dir is not None:
+        args.scratch_dir.mkdir(parents=True, exist_ok=True)
     log = lambda s: print(s, flush=True)  # noqa: E731
 
     with open(root / "e-gmd-v1.0.0.csv", newline="") as f:
@@ -397,12 +412,28 @@ def main():
     sep = Separator()
     sep.load()
 
+    # audio-separator runs gc.collect() + torch.cuda.empty_cache() after EVERY
+    # separate() (CommonSeparator.clear_gpu_cache). Across a long batch run that
+    # fires at every stage transition AND batch boundary -- empty_cache hands all
+    # cached blocks back to the driver so the next stage re-cudaMallocs everything
+    # (slow) and forces a device sync, and gc.collect is a full pass. With stable
+    # chunk sizes on a 10GB card the caching allocator reuses freed blocks fine,
+    # so this per-call clear is pure GPU-idle overhead (a big part of the inter-
+    # stage / inter-batch dip). Disable it for the batch job (this process only).
+    try:
+        from audio_separator.separator.common_separator import CommonSeparator
+        CommonSeparator.clear_gpu_cache = lambda self: None  # type: ignore[method-assign]
+        log("disabled audio-separator per-call gc.collect()+empty_cache() (batch perf)")
+    except Exception as e:  # noqa: BLE001  keep running if the lib internals moved
+        log(f"  (could not disable per-call cache clear: {e!r}; harmless, just slower)")
+
     batches = plan_batches([float(e["row"]["duration"]) for e in pending],
                            args.buffer_sec, args.gap_sec)
     nb = len(batches)
     batch_clips = [[pending[i] for i in idxs] for idxs in batches]
+    scratch_desc = str(args.scratch_dir) if args.scratch_dir is not None else f"{tempfile.gettempdir()} (system temp)"
     log(f"{len(pending)} clips in {nb} batches (~{args.buffer_sec:.0f}s buffers); pipelined "
-        f"(build || GPU || write) to keep the GPU fed")
+        f"(build || GPU || write) to keep the GPU fed; intermediates -> {scratch_desc}")
 
     # Prefetch pipeline: a producer thread builds the next buffer and a writer
     # thread writes the previous batch's stems WHILE the GPU separates the
@@ -414,7 +445,10 @@ def main():
     import threading
 
     ready_q: queue.Queue = queue.Queue(maxsize=2)  # built input buffers (producer -> GPU)
-    write_q: queue.Queue = queue.Queue(maxsize=1)  # separated stems in RAM (GPU -> writer)
+    # write_q items are tiny (stem PATHS, not arrays) so we can buffer more,
+    # decoupling the writer from the GPU; each holds one temp tree (~600MB on
+    # local disk) the writer rmtrees after reading.
+    write_q: queue.Queue = queue.Queue(maxsize=2)  # separated stem paths (GPU -> writer)
     stats = {"done": 0}
 
     def produce():
@@ -428,7 +462,8 @@ def main():
                     # Write the mix here (producer thread) so the GPU thread
                     # starts separating immediately on dequeue. NEUTRAL name:
                     # the separator picks its drum stem by "drum" in filename.
-                    td = Path(tempfile.mkdtemp(prefix="egmdsep_"))
+                    sdir = str(args.scratch_dir) if args.scratch_dir is not None else None
+                    td = Path(tempfile.mkdtemp(prefix="egmdsep_", dir=sdir))  # LOCAL scratch
                     mixd = td / "_mixin"
                     mixd.mkdir()
                     mix = mixd / "mix.wav"
@@ -448,13 +483,15 @@ def main():
             item = write_q.get()
             if item is None:
                 break
-            bi, res = item
-            valid_batch, offsets, dy, dsr, pys = res
+            bi, valid_batch, offsets, drum_path, per_paths, td = item
             try:
+                dy, dsr, pys = read_stems(drum_path, per_paths)  # decode off the GPU thread
                 uids = write_outputs(valid_batch, offsets, dy, dsr, pys, out)
             except Exception as e:  # noqa: BLE001  partial writes lack the midi marker -> retried
                 log(f"  !! batch {bi} write FAILED: {e!r} (its clips retried on resume)")
                 uids = []
+            finally:
+                shutil.rmtree(td, ignore_errors=True)  # temp stems consumed
             stats["done"] += len(uids)
             completed.update(uids)  # only this thread mutates after the startup scan
             write_csv(out, selection, completed)  # cheap now: membership, no NFS re-scan
@@ -477,12 +514,12 @@ def main():
         valid_batch, offsets, td, mix = item
         log(f"[{stats['done']}/{len(pending)} clips] batch {bi}/{nb} ({len(valid_batch)} clips) separating...")
         try:
-            dy, dsr, pys = gpu_separate(sep, mix, td, len(valid_batch), log)
-            write_q.put((bi, (valid_batch, offsets, dy, dsr, pys)))
+            drum_path, per_paths = gpu_separate(sep, mix, td, len(valid_batch), log)
+            # hand the temp tree to the writer; it reads the stems then rmtrees it
+            write_q.put((bi, valid_batch, offsets, drum_path, per_paths, td))
         except Exception as e:  # noqa: BLE001  keep the unattended run alive; clips retried on resume
             log(f"  !! batch {bi} GPU FAILED: {e!r} (its clips retried on resume)")
-        finally:
-            shutil.rmtree(td, ignore_errors=True)  # stems are in RAM; temp tree no longer needed
+            shutil.rmtree(td, ignore_errors=True)  # writer won't get it; clean up here
     write_q.put(None)  # sentinel after the last GPU result
     writer.join()
 

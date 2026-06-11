@@ -325,10 +325,18 @@ class Separator:
                 sink.copy_audio(f"stems_all/{path.stem}", path)
         return StemsAllResult(drum_stem=drum_stem, no_drums=no_drums_path)
 
-    def run_stems_per(self, drum_stem: Path, work_dir: Path) -> StemsPerResult:
+    def run_stems_per(
+        self, drum_stem: Path, work_dir: Path, *, build_residual: bool = True
+    ) -> StemsPerResult:
         """Split the drum stem into per-instrument stems keyed by pitch.
 
-        Also computes a `residual` track: `drum_stem − sum(per_instrument)`.
+        `build_residual=False` skips the diagnostic residual track (returns
+        `residual=None`). That track re-reads the drum stem + all 5 per-stems
+        and writes a file -- pure overhead for callers that don't consume it
+        (e.g. the batch training-data generator), where it otherwise sits on
+        the GPU thread's critical path between batches.
+
+        When built, computes a `residual` track: `drum_stem − sum(per_instrument)`.
         MDX23C is approximately source-additive on the kit classes it was
         trained on, so the residual captures (a) energy from instruments
         the 5-class model has no lane for — cowbell, tambourine, shaker,
@@ -360,7 +368,7 @@ class Separator:
         log.info("Recovered %d pitches: %s", len(per_instrument), sorted(per_instrument))
 
         residual_path: Path | None = None
-        if per_instrument:
+        if build_residual and per_instrument:
             residual_path = out_dir / f"residual{drum_stem.suffix}"
             try:
                 _residual_audio(

@@ -146,6 +146,20 @@ def test_write_outputs_slices_all_five_stems_silence_filling_absent(tmp_path):
     assert silent.shape[0] == int(round(2.0 * dsr)) and float(np.abs(silent).max()) == 0.0
 
 
+def test_read_stems_loads_present_skips_missing(tmp_path):
+    sed = _load_sep()
+    import soundfile as sf
+
+    drum = tmp_path / "drum.flac"
+    sf.write(str(drum), np.ones((1000, 1), dtype="float32") * 0.4, 1000)
+    kpath = tmp_path / "k.flac"
+    sf.write(str(kpath), np.ones((1000, 1), dtype="float32") * 0.2, 1000)
+    per_paths = {"k": kpath, "s": tmp_path / "missing_s.flac"}  # snare never written
+    dy, dsr, pys = sed.read_stems(drum, per_paths)
+    assert dy.shape[0] == 1000 and dsr == 1000
+    assert set(pys) == {"k"}  # present loaded, missing skipped (write_outputs silence-fills)
+
+
 def test_write_csv_uses_completed_set_not_disk(tmp_path):
     """write_csv lists exactly the in-memory `completed` uids -- it must NOT
     re-stat outputs (the per-batch disk re-scan was the pipeline bottleneck)."""
