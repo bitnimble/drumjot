@@ -121,65 +121,13 @@ def main():
     cym_cache: dict = {}
 
     def _cym_block(audio_path, n_frames):
-        """Frame-level (75 fps) translation of the deterministic ride/crash
-        features the transcriber's cymbal_split.py measures per onset:
-
-          low_mid : fundamental band (250-800 Hz) over wash band (1.5-5 kHz)
-                    energy, in dB -- a ride's pitched ping fills the low band
-                    (reads high), a crash is mid wash (reads low). The split's
-                    ear-confirmed winner (zero ride/crash overlap there,
-                    measured on the post-attack window).
-          crest   : spectral crest 200-1500 Hz, dB peak-to-mean -- tall narrow
-                    partial (ride ping) vs flat noise (crash).
-          flat    : spectral flatness 250 Hz-14 kHz (band-restricted exactly
-                    like the split: full-range flatness collapses on the dead
-                    >14 kHz bins).
-          + low_mid smoothed at ~250 ms and ~1 s: the split measured low_mid
-            on a POST-attack window (0.08-0.35 s) because the attack transient
-            blurs the ratio; the smoothed copies hand the (bi)GRU that
-            post-attack tone directly.
-
-        All channels squashed to ~[0,1] deterministically (no per-clip norm,
-        same rationale as the high-band block)."""
-        import librosa
-
-        key = audio_path
-        f = cym_cache.get(key)
-        if f is not None and f.shape[0] >= n_frames:
-            return f[:n_frames]
-        y, _ = librosa.load(str(audio_path), sr=44100, mono=True)
-        if args.max_seconds is not None:
-            y = y[: int(args.max_seconds * 44100)]
-        hop, n_fft = 588, 2048  # 44100/75 -> exact 75 fps frames
-        if y.size < n_fft:
-            y = np.pad(y, (0, n_fft - y.size))
-        S = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=hop)) ** 2
-        freqs = librosa.fft_frequencies(sr=44100, n_fft=n_fft)
-
-        def band(lo, hi):
-            return S[(freqs >= lo) & (freqs <= hi), :]
-
-        fund = band(250.0, 800.0).sum(axis=0)
-        wash = band(1500.0, 5000.0).sum(axis=0)
-        low_mid_db = 10.0 * np.log10(np.maximum(fund, 1e-20) / np.maximum(wash, 1e-20))
-        low_mid = np.clip((low_mid_db + 40.0) / 80.0, 0.0, 1.0)  # [-40,+40] dB -> [0,1]
-        tb = band(200.0, 1500.0)
-        crest_db = 10.0 * np.log10(
-            np.maximum(tb.max(axis=0), 1e-20) / np.maximum(tb.mean(axis=0), 1e-20)
-        )
-        crest = np.clip(crest_db / 30.0, 0.0, 1.0)  # 0..30 dB -> [0,1]
-        fb = band(250.0, 14000.0) + 1e-10
-        flat = np.exp(np.mean(np.log(fb), axis=0)) / np.mean(fb, axis=0)  # already [0,1]
-
-        def smooth(x, win):
-            return np.convolve(x, np.ones(win) / win, mode="same")
-
-        f = np.stack(
-            [low_mid, crest, flat, smooth(low_mid, 19), smooth(low_mid, 75)], axis=1
-        ).astype(np.float32)  # (T', 5); 19/75 frames ~ 250 ms / 1 s
-        if f.shape[0] < n_frames:
-            f = np.pad(f, ((0, n_frames - f.shape[0]), (0, 0)))
-        cym_cache[key] = f
+        """Sub-6 kHz ride/crash discriminator block (embeddings.cym_features),
+        cached per clip. Canonical impl lives in embeddings so the probe and the
+        full training pipeline share ONE recipe."""
+        f = cym_cache.get(audio_path)
+        if f is None or f.shape[0] < n_frames:
+            f = embeddings.cym_features(audio_path, n_frames, args.max_seconds)
+            cym_cache[audio_path] = f
         return f[:n_frames]
 
     def _hb_energy(c, n_frames):
