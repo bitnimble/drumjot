@@ -64,7 +64,7 @@ class _StubEncoder:
 def test_materialize_and_cached_clips_stream_from_disk(tmp_path):
     from drumjot_training import embeddings
     from drumjot_training.config import Config
-    from drumjot_training.train import CachedClips, materialize
+    from drumjot_training.train import CachedClips, _window_specs, materialize
 
     cfg = Config()
     audio, T = "/fake/song.flac", 200
@@ -75,7 +75,8 @@ def test_materialize_and_cached_clips_stream_from_disk(tmp_path):
     cache.mkdir()
     np.save(cache / f"{key}.npy", np.zeros((T, embeddings.MERT_DIM), dtype=np.float32))
 
-    ds = materialize([(audio, onsets)], _StubEncoder(cfg), cfg, cache, 30.0, "t", log=lambda s: None)
+    specs = _window_specs([(audio, onsets)], 30.0, 3.0, 1)  # legacy single window
+    ds = materialize(specs, _StubEncoder(cfg), cfg, cache, 30.0, "t", log=lambda s: None)
     assert isinstance(ds, CachedClips)
     assert len(ds) == 1
 

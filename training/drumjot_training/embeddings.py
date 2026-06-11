@@ -39,7 +39,30 @@ HB_FMIN = 6000.0
 HB_FMAX = 20000.0
 HB_NFFT = 2048
 FEAT_VARIANT = "hb16"  # cache-key token; bump when the feature recipe changes
-FEAT_DIM = MERT_DIM + HB_BANDS  # model input width (1040)
+FEAT_DIM = MERT_DIM + HB_BANDS  # model input width (1040) -- default (hb on, cym off)
+
+# Sub-6 kHz ride/crash/hi-hat timbre pathway: a frame-wise (75 fps) port of the
+# deterministic cymbal_split.py features the transcriber measures per onset. The
+# high band tells cymbals apart from non-cymbals; THIS band tells cymbals apart
+# from each OTHER (ride ping vs crash wash), which the high band can't.
+CYM_BANDS = 5
+CYM_VARIANT = "cym5"
+
+
+def feat_variant(high_band: bool = True, cym: bool = False) -> str:
+    """Cache-key token for a feature recipe, e.g. "hb16", "cym5", "hb16+cym5",
+    or "" (raw MERT). Order is fixed so keys are stable."""
+    parts = []
+    if high_band:
+        parts.append(FEAT_VARIANT)
+    if cym:
+        parts.append(CYM_VARIANT)
+    return "+".join(parts)
+
+
+def feat_dim(high_band: bool = True, cym: bool = False) -> int:
+    """Model input width for a feature recipe: MERT + optional appended blocks."""
+    return MERT_DIM + (HB_BANDS if high_band else 0) + (CYM_BANDS if cym else 0)
 
 
 def cache_key(
@@ -48,13 +71,20 @@ def cache_key(
     layer: int,
     window: float | None = None,
     variant: str = FEAT_VARIANT,
+    start: float = 0.0,
 ) -> str:
     """Stable cache key for a clip's features under encoder+layer (+window cap).
 
     `variant` names the feature recipe (e.g. the appended high-band block);
     changing the recipe invalidates old caches by changing the key. Pass "" for
-    raw MERT-only features (the layer-sweep probe)."""
+    raw MERT-only features (the layer-sweep probe).
+
+    `start` is the window offset (seconds) for multi-window clips; it's appended
+    to the key ONLY when non-zero, so the default (whole-clip-from-0) keys are
+    byte-identical to pre-windowing caches and existing features are reused."""
     raw = f"{Path(audio_path).expanduser().absolute()}|{encoder}|{layer}|{window}|{variant}"
+    if start:
+        raw += f"|s{start:g}"
     return hashlib.sha1(raw.encode()).hexdigest()
 
 
@@ -82,16 +112,80 @@ def highband_from_wave(y44: np.ndarray, n_frames: int) -> np.ndarray:
 
 
 def highband_features(
-    audio_path: str | Path, n_frames: int, max_seconds: float | None = None
+    audio_path: str | Path, n_frames: int, max_seconds: float | None = None,
+    start_seconds: float = 0.0,
 ) -> np.ndarray:
     """`highband_from_wave` for a file: loads at HB_SR (resampling if needed;
-    sources at <=24 kHz simply yield near-zero bands, degrading gracefully)."""
+    sources at <=24 kHz simply yield near-zero bands, degrading gracefully).
+    `start_seconds`/`max_seconds` select the [start, start+max] window."""
     import librosa
 
     y44, _ = librosa.load(str(audio_path), sr=HB_SR, mono=True)
-    if max_seconds is not None:
-        y44 = y44[: int(max_seconds * HB_SR)]
+    a = int(start_seconds * HB_SR)
+    b = a + int(max_seconds * HB_SR) if max_seconds is not None else None
+    y44 = y44[a:b]
     return highband_from_wave(y44, n_frames)
+
+
+def cym_features(
+    audio_path: str | Path, n_frames: int, max_seconds: float | None = None,
+    start_seconds: float = 0.0,
+) -> np.ndarray:
+    """(n_frames, CYM_BANDS) sub-6 kHz ride/crash/hi-hat timbre channels at 75 fps,
+    frame-aligned to MERT. A frame-wise port of the deterministic per-onset
+    features in the transcriber's `cymbal_split.py` (the ear-confirmed ride/crash
+    discriminators), so the model gets the cue MERT abstracts away and the high
+    band can't carry (it separates cymbals from non-cymbals, not from each other):
+
+      low_mid : fundamental band (250-800 Hz) over wash band (1.5-5 kHz), dB --
+                a ride's pitched ping fills the low band (high), a crash is mid
+                wash (low). cymbal_split's ear-confirmed winner.
+      crest   : low-band (200-1500 Hz) spectral crest, dB -- tall narrow partial
+                (ride) vs flat noise (crash).
+      flat    : spectral flatness 250 Hz-14 kHz (band-restricted exactly as the
+                split does; full-range collapses on the dead >14 kHz bins).
+      + low_mid smoothed at ~250 ms and ~1 s: the split measured low_mid on a
+        POST-attack window (the attack transient blurs the ratio); the smoothed
+        copies hand the GRU that post-attack tone directly.
+
+    Deterministic [0,1] scaling (no per-clip norm), so absolute level survives.
+    Computed at HB_SR (44.1 kHz), hop 588 -> exact 75 fps."""
+    import librosa
+
+    y, _ = librosa.load(str(audio_path), sr=HB_SR, mono=True)
+    a = int(start_seconds * HB_SR)
+    b = a + int(max_seconds * HB_SR) if max_seconds is not None else None
+    y = y[a:b]
+    hop = int(round(HB_SR / MERT_FPS))  # 588 (exact at 44100/75)
+    if y.size < HB_NFFT:
+        y = np.pad(y, (0, HB_NFFT - y.size))
+    S = np.abs(librosa.stft(y, n_fft=HB_NFFT, hop_length=hop)) ** 2
+    freqs = librosa.fft_frequencies(sr=HB_SR, n_fft=HB_NFFT)
+
+    def band(lo: float, hi: float) -> np.ndarray:
+        return S[(freqs >= lo) & (freqs <= hi), :]
+
+    fund = band(250.0, 800.0).sum(axis=0)
+    wash = band(1500.0, 5000.0).sum(axis=0)
+    low_mid_db = 10.0 * np.log10(np.maximum(fund, 1e-20) / np.maximum(wash, 1e-20))
+    low_mid = np.clip((low_mid_db + 40.0) / 80.0, 0.0, 1.0)  # [-40,+40] dB -> [0,1]
+    tb = band(200.0, 1500.0)
+    crest_db = 10.0 * np.log10(
+        np.maximum(tb.max(axis=0), 1e-20) / np.maximum(tb.mean(axis=0), 1e-20)
+    )
+    crest = np.clip(crest_db / 30.0, 0.0, 1.0)  # 0..30 dB -> [0,1]
+    fb = band(250.0, 14000.0) + 1e-10
+    flat = np.exp(np.mean(np.log(fb), axis=0)) / np.mean(fb, axis=0)  # already [0,1]
+
+    def smooth(x: np.ndarray, win: int) -> np.ndarray:
+        return np.convolve(x, np.ones(win) / win, mode="same")
+
+    feat = np.stack(  # 19/75 frames ~ 250 ms / 1 s post-attack windows
+        [low_mid, crest, flat, smooth(low_mid, 19), smooth(low_mid, 75)], axis=1
+    ).astype(np.float32)
+    if feat.shape[0] < n_frames:
+        feat = np.pad(feat, ((0, n_frames - feat.shape[0]), (0, 0)))
+    return feat[:n_frames]
 
 
 def load_audio(path: str | Path, sr: int = MERT_SR) -> np.ndarray:
@@ -112,8 +206,19 @@ class MertEncoder:
         self.name = name
         self.layer = layer
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self._fe = Wav2Vec2FeatureExtractor.from_pretrained(name, trust_remote_code=True)
-        self._model = AutoModel.from_pretrained(name, trust_remote_code=True).to(self.device)
+        try:
+            self._fe = Wav2Vec2FeatureExtractor.from_pretrained(name, trust_remote_code=True)
+            self._model = AutoModel.from_pretrained(name, trust_remote_code=True).to(self.device)
+        except Exception as e:  # noqa: BLE001
+            # The package forces HF offline (see __init__), so this means the
+            # model isn't in the local cache -- never a network hiccup. Point at
+            # the one-time fetch step instead of leaking a cryptic HF OSError.
+            raise RuntimeError(
+                f"MERT model {name!r} is not available offline (HF_HUB_OFFLINE is on by "
+                f"default). Fetch it ONCE with:\n"
+                f"    python training/scripts/fetch_models.py\n"
+                f"then re-run. (underlying error: {type(e).__name__}: {e})"
+            ) from e
         self._model.eval()
         self.sr = int(self._fe.sampling_rate)
 
@@ -156,6 +261,8 @@ def embed_clip(
     max_seconds: float | None = None,
     cache_dtype: str = "float16",
     high_band: bool = True,
+    cym: bool = False,
+    start_seconds: float = 0.0,
 ) -> np.ndarray:
     """Features for one clip, reading/writing `cache_dir` when given.
 
@@ -171,28 +278,33 @@ def embed_clip(
     existing cache is reused as-is (loaded at whatever precision it was
     written); delete `_cache_mert` to re-encode at a new precision.
 
-    `high_band` (default True) appends the 6-20 kHz block -> (T, FEAT_DIM); when
-    False, returns raw MERT (T, MERT_DIM) and keys the cache under variant "" so
-    the two never collide (for the high-band on/off ablation).
+    `high_band` (default True) appends the 6-20 kHz block; `cym` (default False)
+    appends the sub-6 kHz ride/crash block. The model width is
+    `feat_dim(high_band, cym)` and the cache key carries `feat_variant(...)` so
+    every recipe (raw / hb / cym / hb+cym) lands in its own cache, never colliding.
     """
-    variant = FEAT_VARIANT if high_band else ""  # raw MERT cache must not collide
+    variant = feat_variant(high_band, cym)  # distinct cache per recipe
     cache_file: Path | None = None
     if cache_dir is not None:
         cache_dir = Path(cache_dir)
         cache_dir.mkdir(parents=True, exist_ok=True)
-        key = cache_key(audio_path, encoder.name, encoder.layer, max_seconds, variant)
+        key = cache_key(audio_path, encoder.name, encoder.layer, max_seconds, variant, start_seconds)
         cache_file = cache_dir / f"{key}.npy"
         if cache_file.exists():
             return np.load(cache_file)
     y = load_audio(audio_path, sr=encoder.sr)
-    if max_seconds is not None:
-        y = y[: int(max_seconds * encoder.sr)]
+    a = int(start_seconds * encoder.sr)
+    b = a + int(max_seconds * encoder.sr) if max_seconds is not None else None
+    y = y[a:b]  # the [start, start+max] window (one MERT forward, always <= max)
     feat = encoder.encode(y, encoder.sr)
+    blocks = [feat]
     if high_band:
-        # append the high-band block (the 6-20 kHz sizzle MERT's 24 kHz input
-        # discards), frame-aligned; cached together as one (T, FEAT_DIM) array
-        hb = highband_features(audio_path, feat.shape[0], max_seconds)
-        feat = np.concatenate([feat, hb], axis=1)
+        # the 6-20 kHz sizzle MERT's 24 kHz input discards (cymbal vs non-cymbal)
+        blocks.append(highband_features(audio_path, feat.shape[0], max_seconds, start_seconds))
+    if cym:
+        # sub-6 kHz ride/crash timbre (cymbal vs cymbal); frame-aligned
+        blocks.append(cym_features(audio_path, feat.shape[0], max_seconds, start_seconds))
+    feat = np.concatenate(blocks, axis=1) if len(blocks) > 1 else feat
     feat = feat.astype(cache_dtype, copy=False)
     if cache_file is not None:
         np.save(cache_file, feat)

@@ -90,7 +90,7 @@ def _build_clip(
     """
     feat = embeddings.embed_clip(
         audio_path, encoder, cache_dir=cache_dir, max_seconds=max_seconds,
-        cache_dtype=cfg.cache_dtype, high_band=cfg.high_band,
+        cache_dtype=cfg.cache_dtype, high_band=cfg.high_band, cym=cfg.cym,
     )
     if max_seconds is not None:
         onsets = {ln: [t for t in ts if t < max_seconds] for ln, ts in onsets.items()}
@@ -295,18 +295,21 @@ class CachedClips:
     parallel). Build via `materialize`, which populates the cache first."""
 
     def __init__(self, specs: Sequence[tuple], cfg: Config, cache_dir, max_seconds: float | None):
-        # specs: (audio_path, onsets_by_lane, weight_onsets_or_None, n_frames)
-        # for clips already cached; weight_onsets is the FULL-kit onsets used
-        # only for sibling loss weighting (per-stem mode), None elsewhere.
+        # specs: (audio_path, onsets_by_lane, weight_onsets_or_None, rings,
+        # n_frames, start, length) -- one per WINDOW. onsets are already
+        # window-relative ([0, length)). weight_onsets is the FULL-kit onsets
+        # for sibling loss weighting (per-stem mode), None elsewhere. (start,
+        # length) select the clip window; legacy single-window clips are (0,
+        # max_seconds). See _window_specs / materialize.
         self._specs = list(specs)
         self._cfg = cfg
         self._cache_dir = Path(cache_dir)
         self._max_seconds = max_seconds
 
-    def _path(self, audio_path) -> Path:
-        variant = embeddings.FEAT_VARIANT if self._cfg.high_band else ""
+    def _path(self, audio_path, start: float, length: float | None) -> Path:
+        variant = embeddings.feat_variant(self._cfg.high_band, self._cfg.cym)
         key = embeddings.cache_key(
-            audio_path, self._cfg.encoder, self._cfg.encoder_layer, self._max_seconds, variant
+            audio_path, self._cfg.encoder, self._cfg.encoder_layer, length, variant, start
         )
         return self._cache_dir / f"{key}.npy"
 
@@ -314,15 +317,13 @@ class CachedClips:
         return len(self._specs)
 
     def __getitem__(self, i: int) -> Clip:
-        audio_path, onsets, weight_onsets, rings, _ = self._specs[i]
-        feat = np.load(self._path(audio_path))
-        onsets = _cap_onsets(onsets, self._max_seconds)
+        audio_path, onsets, weight_onsets, rings, _n, start, length = self._specs[i]
+        feat = np.load(self._path(audio_path, start, length))
+        onsets = _cap_onsets(onsets, length)  # no-op (onsets pre-windowed); defensive
         targets = build_targets(onsets, feat.shape[0], self._cfg)
         wt = None
         if weight_onsets is not None:
-            wt = build_targets(
-                _cap_onsets(weight_onsets, self._max_seconds), feat.shape[0], self._cfg
-            )
+            wt = build_targets(_cap_onsets(weight_onsets, length), feat.shape[0], self._cfg)
         act = None
         if rings:
             act = np.zeros_like(targets)
@@ -339,32 +340,35 @@ class CachedClips:
             yield self[i]
 
     def iter_targets(self):
-        """Yield per-clip targets WITHOUT loading features (uses the stored
+        """Yield per-window targets WITHOUT loading features (uses the stored
         frame count), so `pos_weights` needn't re-read the whole feature set."""
-        for _, onsets, _w, _r, n_frames in self._specs:
-            yield build_targets(_cap_onsets(onsets, self._max_seconds), n_frames, self._cfg)
+        for _a, onsets, _w, _r, n_frames, _s, length in self._specs:
+            yield build_targets(_cap_onsets(onsets, length), n_frames, self._cfg)
 
 
 def _rings_for_clip(
     audio_path, onsets: dict[str, list[float]], cfg: Config, cache_dir: Path,
-    max_seconds: float | None,
+    max_seconds: float | None, start_seconds: float = 0.0,
 ) -> dict[str, list[tuple[float, float]]]:
     """Ring spans for the sustained lanes (aux activity targets), with a JSON
     side-cache next to the feature cache so re-runs never re-read audio.
-    Returns {} for clips with no sustained-lane onsets."""
+    `onsets` are window-relative; (start_seconds, max_seconds) select the audio
+    window so the ring envelope matches. Returns {} when no sustained-lane onset."""
     import json
 
     capped = _cap_onsets(onsets, max_seconds)
     if not any(capped.get(ln) for ln in SUSTAINED_LANES):
         return {}
-    key = embeddings.cache_key(audio_path, cfg.encoder, cfg.encoder_layer, max_seconds)
+    key = embeddings.cache_key(audio_path, cfg.encoder, cfg.encoder_layer, max_seconds,
+                               start=start_seconds)
     rf = Path(cache_dir) / f"{key}.rings.json"
     if rf.exists():
         loaded = json.loads(rf.read_text())
         return {ln: [tuple(s) for s in spans] for ln, spans in loaded.items()}
     y = embeddings.load_audio(audio_path, sr=embeddings.MERT_SR)
-    if max_seconds is not None:
-        y = y[: int(max_seconds * embeddings.MERT_SR)]
+    a = int(start_seconds * embeddings.MERT_SR)
+    b = a + int(max_seconds * embeddings.MERT_SR) if max_seconds is not None else None
+    y = y[a:b]
     rings = {
         ln: ring_spans(y, embeddings.MERT_SR, capped[ln], cfg.encoder_fps)
         for ln in SUSTAINED_LANES
@@ -372,6 +376,59 @@ def _rings_for_clip(
     }
     rf.write_text(json.dumps(rings))
     return rings
+
+
+def plan_windows(
+    audio_path, window: float, search: float, max_windows: int,
+) -> list[tuple[float, float]]:
+    """Split a clip into ~`window`-second pieces as [(start, length), ...].
+
+    Each interior cut is nudged to the lowest-RMS point within +/- `search`
+    seconds of the nominal `k*window` boundary, so a window edge lands in a quiet
+    gap rather than bisecting a hit. Clips <= `window` return a single
+    (0, window) window with NO audio read (uses sf.info duration). `max_windows`
+    > 0 caps the count (drops the tail); 0 = cover the whole clip."""
+    import soundfile as sf
+
+    dur = float(sf.info(str(audio_path)).duration)
+    if dur <= window:
+        return [(0.0, window)]
+    import librosa
+
+    full_n = int(np.ceil(dur / window))
+    y, sr = librosa.load(str(audio_path), sr=embeddings.MERT_SR, mono=True)
+    hop = 512
+    rms = librosa.feature.rms(y=y, hop_length=hop)[0]
+    t = librosa.times_like(rms, sr=sr, hop_length=hop)
+    cuts = [0.0]
+    for k in range(1, full_n):
+        b = k * window
+        sel = np.where((t >= b - search) & (t <= b + search))[0]
+        cuts.append(float(t[sel[np.argmin(rms[sel])]]) if sel.size else b)
+    cuts.append(dur)
+    wins = [(cuts[i], cuts[i + 1] - cuts[i]) for i in range(full_n)]
+    return wins[:max_windows] if max_windows else wins
+
+
+def _window_specs(specs, window: float, search: float, max_windows: int) -> list[tuple]:
+    """Expand (audio, onsets[, weight_onsets]) specs into per-window specs
+    (audio, onsets_rel, weight_rel_or_None, start, length): onsets sliced to each
+    window and shifted to window-relative time. `max_windows == 1` keeps the
+    legacy single window (first `window`s only) with no audio read for planning."""
+    out: list[tuple] = []
+
+    def _slice(onsets, start, length):
+        return {ln: [t - start for t in ts if start <= t < start + length]
+                for ln, ts in onsets.items()}
+
+    for spec in specs:
+        audio, onsets = spec[0], spec[1]
+        weight = spec[2] if len(spec) > 2 else None
+        wins = [(0.0, window)] if max_windows == 1 else plan_windows(audio, window, search, max_windows)
+        for start, length in wins:
+            w = None if weight is None else _slice(weight, start, length)
+            out.append((audio, _slice(onsets, start, length), w, start, length))
+    return out
 
 
 def materialize(
@@ -390,22 +447,23 @@ def materialize(
     cache_dir = Path(cache_dir)
     ok: list[tuple] = []
     for i, spec in enumerate(specs):
-        # spec: (audio, onsets) or (audio, onsets, weight_onsets) -- the latter
+        # spec: (audio, onsets_rel, weight_onsets_or_None, start, length) -- one
+        # per WINDOW (see _window_specs). onsets already window-relative; weight
         # carries FULL-kit onsets for sibling loss weighting (per-stem mode).
-        audio, onsets = spec[0], spec[1]
-        weight_onsets = spec[2] if len(spec) > 2 else None
+        audio, onsets, weight_onsets, start, length = spec
         try:
             feat = embeddings.embed_clip(
-                audio, encoder, cache_dir=cache_dir, max_seconds=max_seconds,
-                cache_dtype=cfg.cache_dtype, high_band=cfg.high_band,
+                audio, encoder, cache_dir=cache_dir, max_seconds=length,
+                cache_dtype=cfg.cache_dtype, high_band=cfg.high_band, cym=cfg.cym,
+                start_seconds=start,
             )
-            rings = _rings_for_clip(audio, onsets, cfg, cache_dir, max_seconds)
-            ok.append((audio, onsets, weight_onsets, rings, int(feat.shape[0])))
+            rings = _rings_for_clip(audio, onsets, cfg, cache_dir, length, start)
+            ok.append((audio, onsets, weight_onsets, rings, int(feat.shape[0]), start, length))
         except Exception as e:  # noqa: BLE001
-            log(f"  skip {Path(audio).name}: {e!r}")
+            log(f"  skip {Path(audio).name}@{start:.0f}s: {e!r}")
         if (i + 1) % 50 == 0:
-            log(f"  {tag}: {i + 1}/{len(specs)} cached")
-    log(f"{tag}: {len(ok)} clips")
+            log(f"  {tag}: {i + 1}/{len(specs)} windows cached")
+    log(f"{tag}: {len(ok)} windows")
     return CachedClips(ok, cfg, cache_dir, max_seconds)
 
 
@@ -931,6 +989,26 @@ def main(argv: list[str] | None = None) -> None:
         "--no-high-band trains on raw MERT only (high-band ablation). Separate cache key.",
     )
     ap.add_argument(
+        "--cym", default=False, action=argparse.BooleanOptionalAction,
+        help="append the sub-6 kHz ride/crash/hi-hat timbre block (embeddings.cym_features); "
+        "default off. Compose with --high-band for the cymbal ablation. Separate cache key.",
+    )
+    ap.add_argument(
+        "--max-windows", type=int, default=1,
+        help="split each clip (train AND val) into up to N non-overlapping ~max-seconds "
+        "windows (each its own cached example), instead of using only the first max-seconds. "
+        "1 (default) = legacy first-window-only (reproduces prior runs); >1 segments long "
+        "clips (recovers the separated audio we'd otherwise discard, and multiplies val "
+        "onsets so rare-lane F1 is less noisy); 0 = unlimited. Cuts are nudged to a "
+        "low-energy gap (--window-search). Windowed val is deterministic, so runs stay "
+        "comparable to each other (but not to single-window-val runs).",
+    )
+    ap.add_argument(
+        "--window-search", type=float, default=3.0,
+        help="when segmenting (--max-windows != 1), nudge each window cut to the lowest-RMS "
+        "point within +/- this many seconds of the nominal boundary, to avoid bisecting a hit.",
+    )
+    ap.add_argument(
         "--cache-dtype", choices=("float16", "float32"), default=Config.cache_dtype,
         help="on-disk feature cache precision (float16 halves size + I/O)",
     )
@@ -966,7 +1044,8 @@ def main(argv: list[str] | None = None) -> None:
 
     runtime.configure_backends()  # TF32 + sets up the bf16 autocast path
     cfg = Config(
-        encoder_layer=args.layer, cache_dtype=args.cache_dtype, high_band=args.high_band,
+        encoder_layer=args.layer, cache_dtype=args.cache_dtype,
+        high_band=args.high_band, cym=args.cym,
         lr=args.lr, weight_decay=args.weight_decay,
         sib_neg_weight=args.sib_neg_weight, sib_pos_weight=args.sib_pos_weight,
     )
@@ -984,16 +1063,27 @@ def main(argv: list[str] | None = None) -> None:
 
     encoder = embeddings.MertEncoder(name=cfg.encoder, layer=cfg.encoder_layer)
 
+    # Expand into per-window specs. Both train and val segment long clips into up
+    # to --max-windows windows (recovering audio past the first --max-seconds).
+    # Windowing val is deterministic (same split every run -> comparable across
+    # future runs) and multiplies eval onsets, which tightens the noisy rare-lane
+    # F1. Default --max-windows 1 keeps BOTH single-window (legacy: first
+    # --max-seconds only), so prior single-window runs stay reproducible.
+    win = args.max_seconds or 30.0
+    train_wspecs = _window_specs(train_specs, win, args.window_search, args.max_windows)
+    val_wspecs = _window_specs(val_specs, win, args.window_search, args.max_windows)
+    extra = len(train_wspecs) - len(train_specs)
     print(
-        f"dataset={args.dataset}  {len(train_specs)} train / {len(val_specs)} val "
-        f"(cache {cache}) ...",
+        f"dataset={args.dataset}  {len(train_specs)} train clips -> {len(train_wspecs)} windows "
+        f"(+{extra} from segmenting, max-windows={args.max_windows}) / "
+        f"{len(val_specs)} val -> {len(val_wspecs)} windows  (cache {cache}) ...",
         flush=True,
     )
     # Encode-once into the cache, then stream from disk: features are never all
     # held in RAM, so the train set can exceed available memory.
     log_p = lambda s: print(s, flush=True)  # noqa: E731
-    train_clips = materialize(train_specs, encoder, cfg, cache, args.max_seconds, "train", log_p)
-    val_clips = materialize(val_specs, encoder, cfg, cache, args.max_seconds, "val", log_p)
+    train_clips = materialize(train_wspecs, encoder, cfg, cache, args.max_seconds, "train", log_p)
+    val_clips = materialize(val_wspecs, encoder, cfg, cache, args.max_seconds, "val", log_p)
 
     pos_w = pos_weights_from_targets(train_clips.iter_targets(), cap=args.pos_weight_cap)
     print("pos_weights:", {ln: round(float(w), 1) for ln, w in zip(cfg.lanes, pos_w, strict=True)}, flush=True)
@@ -1001,7 +1091,7 @@ def main(argv: list[str] | None = None) -> None:
     torch.manual_seed(args.seed)  # reproducible head init (multi-seed ablations)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
-    in_dim = embeddings.FEAT_DIM if cfg.high_band else embeddings.MERT_DIM
+    in_dim = embeddings.feat_dim(cfg.high_band, cfg.cym)
     model = MultiLaneHeads(in_dim=in_dim, hidden=cfg.head_hidden, num_layers=cfg.head_layers)
     if args.resume:
         sd = torch.load(Path(args.resume) / "model.pt", map_location="cpu")
