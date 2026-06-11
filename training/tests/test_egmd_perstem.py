@@ -136,11 +136,32 @@ def test_write_outputs_slices_all_five_stems_silence_filling_absent(tmp_path):
     midi = tmp_path / "x.midi"
     midi.write_bytes(b"MThd-fake")
     valid = [{"uid": "clip1", "midi": midi}]
-    n = sed.write_outputs(valid, [(1.0, 2.0)], dy, dsr, pys, out)  # slice [1s, 3s)
-    assert n == 1
+    done = sed.write_outputs(valid, [(1.0, 2.0)], dy, dsr, pys, out)  # slice [1s, 3s)
+    assert done == ["clip1"]  # uids returned only after the midi marker lands
     p = sed.out_paths(out, "clip1")
     assert sed.is_done(p)  # drum + all 5 perstem + midi all landed
     drum, _ = sf.read(str(p["drum"]), always_2d=True)
     assert drum.shape[0] == int(round(2.0 * dsr))  # sliced to len_s
     silent, _ = sf.read(str(p["per"]["s"]), always_2d=True)  # snare absent -> silence
     assert silent.shape[0] == int(round(2.0 * dsr)) and float(np.abs(silent).max()) == 0.0
+
+
+def test_write_csv_uses_completed_set_not_disk(tmp_path):
+    """write_csv lists exactly the in-memory `completed` uids -- it must NOT
+    re-stat outputs (the per-batch disk re-scan was the pipeline bottleneck)."""
+    sed = _load_sep()
+    row = {
+        "drummer": "d1", "session": "s", "id": "1", "style": "funk", "bpm": "120",
+        "beat_type": "beat", "time_signature": "4-4", "duration": "3.0",
+        "split": "train", "midi_filename": "m.midi", "audio_filename": "a.wav",
+        "kit_name": "kit",
+    }
+    selection = [
+        {"row": dict(row), "split": "train", "uid": "u1"},
+        {"row": dict(row), "split": "train", "uid": "u2"},
+    ]
+    # nothing exists on disk; membership alone decides
+    n = sed.write_csv(tmp_path, selection, {"u2"})
+    assert n == 1
+    text = (tmp_path / "e-gmd-v1.0.0.csv").read_text()
+    assert "u2" in text and "u1" not in text

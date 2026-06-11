@@ -45,6 +45,7 @@ import csv
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -250,39 +251,38 @@ def build_buffer(batch, gap_sec: float, log):
     return valid, buf, sr, offsets
 
 
-def gpu_separate(sep, buf: np.ndarray, sr: int, n_clips: int, log):
-    """Separate one buffer: roformer -> mdx23c. Reads every stem back INTO RAM
-    (dy, pys) before the temp dir is torn down, so the writer needs no temp
-    files. Returns (dy, dsr, pys) where pys = {pitch: (array, sr)}."""
-    with tempfile.TemporaryDirectory() as td:
-        tdp = Path(td)
-        mixd = tdp / "_mixin"
-        mixd.mkdir()
-        mix = mixd / "mix.wav"  # NEUTRAL name (separator picks drum stem by "drum" in filename)
-        sf.write(str(mix), buf, sr)
-        drum = sep.run_stems_all(mix, tdp / "s1", build_no_drums=False).drum_stem  # separate work dirs
-        log(f"  roformer OK ({n_clips} clips); splitting into 5 stems...")
-        per = sep.run_stems_per(drum, tdp / "s2").per_instrument
-        log("  mdx23c per-stem OK")
-        dy, dsr = sf.read(str(drum), always_2d=True)
-        # The separator skips writing empty/near-silent stems (e.g. kick on a
-        # cymbal-heavy buffer), so a pitch may be missing or its file unreadable;
-        # load defensively and silence-fill in write_outputs so every clip gets 5.
-        pys: dict = {}
-        for p, src in per.items():
-            try:
-                arr, ss = sf.read(str(src), always_2d=True)
-                if arr.size:
-                    pys[p] = (arr, ss)
-            except Exception:  # noqa: BLE001  (missing/empty/corrupt stem)
-                pass
+def gpu_separate(sep, mix_path: Path, work_dir: Path, n_clips: int, log):
+    """Separate one pre-built mix (written by the PRODUCER thread, so the GPU
+    thread never waits on that ~100MB disk write): roformer -> mdx23c. Reads
+    every stem back INTO RAM (dy, pys) so the writer needs no temp files.
+    Returns (dy, dsr, pys) where pys = {pitch: (array, sr)}. The caller owns
+    `work_dir` cleanup (rmtree in its finally)."""
+    drum = sep.run_stems_all(mix_path, work_dir / "s1", build_no_drums=False).drum_stem  # separate work dirs
+    log(f"  roformer OK ({n_clips} clips); splitting into 5 stems...")
+    per = sep.run_stems_per(drum, work_dir / "s2").per_instrument
+    log("  mdx23c per-stem OK")
+    dy, dsr = sf.read(str(drum), always_2d=True)
+    # The separator skips writing empty/near-silent stems (e.g. kick on a
+    # cymbal-heavy buffer), so a pitch may be missing or its file unreadable;
+    # load defensively and silence-fill in write_outputs so every clip gets 5.
+    pys: dict = {}
+    for p, src in per.items():
+        try:
+            arr, ss = sf.read(str(src), always_2d=True)
+            if arr.size:
+                pys[p] = (arr, ss)
+        except Exception:  # noqa: BLE001  (missing/empty/corrupt stem)
+            pass
     return dy, dsr, pys
 
 
-def write_outputs(valid_batch, offsets, dy, dsr, pys, out: Path) -> int:
+def write_outputs(valid_batch, offsets, dy, dsr, pys, out: Path) -> list[str]:
     """Slice each clip's stems out of the separated buffer and write them, midi
-    last (the atomic completion marker). `valid_batch` is aligned 1:1 to `offsets`."""
-    done = 0
+    last (the atomic completion marker). `valid_batch` is aligned 1:1 to
+    `offsets`. Returns the uids completed (appended only after each clip's midi
+    marker lands, so a mid-batch crash reports exactly the clips that are
+    actually resumable-as-done)."""
+    done: list[str] = []
     for k, e in enumerate(valid_batch):
         start_s, len_s = offsets[k]
         paths = out_paths(out, e["uid"])
@@ -296,23 +296,30 @@ def write_outputs(valid_batch, offsets, dy, dsr, pys, out: Path) -> int:
         # midi written LAST and atomically = the completion marker: is_done()
         # is true only once all stems exist AND this rename has landed.
         _atomic_bytes(Path(e["midi"]).read_bytes(), paths["midi"])
-        done += 1
+        done.append(e["uid"])
     return done
 
 
 # --- CSV (rebuilt from completed clips) -------------------------------------
 
 
-def write_csv(out: Path, selection: list[dict]) -> int:
-    """(Re)write the sep-tree CSV from selected clips whose outputs are on disk,
-    so `egmd.read_index` / `--dataset egmd` see exactly the completed set."""
+def write_csv(out: Path, selection: list[dict], completed: set[str]) -> int:
+    """(Re)write the sep-tree CSV from selected clips in `completed`, so
+    `egmd.read_index` / `--dataset egmd` see exactly the completed set.
+
+    `completed` is the in-memory uid set (startup is_done scan + uids written
+    this run). Membership is used INSTEAD of re-statting outputs: re-checking
+    `is_done` here costs 7 NFS stats x the whole selection (~300k round-trips
+    per batch on a full E-GMD run, minutes of wall time) and was the hidden
+    stage that kept the GPU pipeline starved -- the writer thread must stay
+    faster than the GPU stage."""
     fields = [
         "drummer", "session", "id", "style", "bpm", "beat_type", "time_signature",
         "duration", "split", "midi_filename", "audio_filename", "kit_name",
     ]
     rows_out = []
     for e in selection:
-        if not is_done(out_paths(out, e["uid"])):
+        if e["uid"] not in completed:
             continue
         r = dict(e["row"])
         r["split"] = e["split"]
@@ -370,10 +377,18 @@ def main():
         e["src_audio"] = root / e["row"]["audio_filename"]
         e["midi"] = root / e["row"]["midi_filename"]
 
-    pending = [e for e in selection if not is_done(out_paths(out, e["uid"]))]
-    log(f"{len(selection) - len(pending)} already done, {len(pending)} pending")
+    # ONE full is_done scan at startup; from here on completion is tracked in
+    # memory (write_csv consumes the set -- see its docstring for why).
+    completed: set[str] = set()
+    pending: list[dict] = []
+    for e in selection:
+        if is_done(out_paths(out, e["uid"])):
+            completed.add(e["uid"])
+        else:
+            pending.append(e)
+    log(f"{len(completed)} already done, {len(pending)} pending")
     if not pending:
-        n = write_csv(out, selection)
+        n = write_csv(out, selection, completed)
         log(f"nothing to do; CSV has {n} clips -> {out}")
         return
 
@@ -404,12 +419,27 @@ def main():
 
     def produce():
         for bi, batch in enumerate(batch_clips, 1):
+            item = None
+            td = None
             try:
                 built = build_buffer(batch, args.gap_sec, log)
+                if built is not None:
+                    valid, buf, sr, offsets = built
+                    # Write the mix here (producer thread) so the GPU thread
+                    # starts separating immediately on dequeue. NEUTRAL name:
+                    # the separator picks its drum stem by "drum" in filename.
+                    td = Path(tempfile.mkdtemp(prefix="egmdsep_"))
+                    mixd = td / "_mixin"
+                    mixd.mkdir()
+                    mix = mixd / "mix.wav"
+                    sf.write(str(mix), buf, sr)
+                    item = (valid, offsets, td, mix)
             except Exception as e:  # noqa: BLE001  bad clip -> skip batch, retried on resume
                 log(f"  !! batch {bi} build FAILED: {e!r} (its clips retried on resume)")
-                built = None
-            ready_q.put((bi, built))
+                if td is not None:
+                    shutil.rmtree(td, ignore_errors=True)
+                item = None
+            ready_q.put((bi, item))
         ready_q.put(None)  # sentinel
 
     def consume_writes():
@@ -421,10 +451,13 @@ def main():
             bi, res = item
             valid_batch, offsets, dy, dsr, pys = res
             try:
-                stats["done"] += write_outputs(valid_batch, offsets, dy, dsr, pys, out)
+                uids = write_outputs(valid_batch, offsets, dy, dsr, pys, out)
             except Exception as e:  # noqa: BLE001  partial writes lack the midi marker -> retried
                 log(f"  !! batch {bi} write FAILED: {e!r} (its clips retried on resume)")
-            write_csv(out, selection)  # refresh after each batch so an interrupt leaves a usable CSV
+                uids = []
+            stats["done"] += len(uids)
+            completed.update(uids)  # only this thread mutates after the startup scan
+            write_csv(out, selection, completed)  # cheap now: membership, no NFS re-scan
             d = stats["done"]
             eta = _fmt_eta((time.perf_counter() - t0) / d * (len(pending) - d)) if d else "?"
             log(f"[{d}/{len(pending)} clips] batch {bi}/{nb} written  eta {eta}")
@@ -435,23 +468,25 @@ def main():
     writer.start()
 
     while True:
-        item = ready_q.get()
-        if item is None:
+        got = ready_q.get()
+        if got is None:
             break
-        bi, built = item
-        if built is None:
+        bi, item = got
+        if item is None:
             continue  # build failed/empty
-        valid_batch, buf, sr, offsets = built
+        valid_batch, offsets, td, mix = item
         log(f"[{stats['done']}/{len(pending)} clips] batch {bi}/{nb} ({len(valid_batch)} clips) separating...")
         try:
-            dy, dsr, pys = gpu_separate(sep, buf, sr, len(valid_batch), log)
+            dy, dsr, pys = gpu_separate(sep, mix, td, len(valid_batch), log)
             write_q.put((bi, (valid_batch, offsets, dy, dsr, pys)))
         except Exception as e:  # noqa: BLE001  keep the unattended run alive; clips retried on resume
             log(f"  !! batch {bi} GPU FAILED: {e!r} (its clips retried on resume)")
+        finally:
+            shutil.rmtree(td, ignore_errors=True)  # stems are in RAM; temp tree no longer needed
     write_q.put(None)  # sentinel after the last GPU result
     writer.join()
 
-    n = write_csv(out, selection)
+    n = write_csv(out, selection, completed)
     log(f"DONE. {stats['done']} clips this run; CSV has {n} completed -> {out}")
 
 
