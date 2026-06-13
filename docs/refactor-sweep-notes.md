@@ -124,3 +124,42 @@ Remaining (not done): stories for the bigger feature components (audio-track
 row, instrument/note row, toolbar menus, full mixer), these depend on the
 `mixer.tsx`/`score.tsx` sub-components being exported, which ties into the
 flagged breakups above.
+
+---
+
+## Broader src/ review (bullet 25, non-jot_view libraries)
+
+Reviewed all of `src/` outside `jot_view` (parser, dsl, jot, midi, rlrr,
+playback engine, lyrics, tempo, selection, etc.). Verdict: generally
+well-factored. Large files are large because their domain is genuinely complex
+(player.ts, jot.ts, the converters), not because concerns are conflated. The
+parser/formatter pipeline, MIDI/RLRR round-trip pairs, tempo math (centralised
+in `tempo.ts`), drum mappings (gm/drums/instruments are distinct domains, not
+dupes), and the lyrics module are all clean. No edits made (review-only; the
+candidates below carry behaviour risk).
+
+### F5. Velocity/dynamics constants duplicated across converters (POSSIBLE BUG)
+The accent/ghost/default velocity mapping is redefined in three places:
+- `src/playback/events.ts` (~L35-45): DEFAULT_VELOCITY / ACCENT_BOOST / GHOST_REDUCTION / VOLUME_TO_VELOCITY
+- `src/midi/to_midi.ts` (~L58-67): `DEFAULTS` with **accentBoost: 36**
+- `src/rlrr/jot_to_rlrr.ts` (~L62-76): `DEFAULTS` with **accentBoost: 24**
+
+Playback (`events.ts`) and RLRR export use accentBoost 24; MIDI export
+(`to_midi.ts`) uses 36 (its comment says 36 was chosen for MIDI round-trip
+fidelity). So an accent plays back at +24 but exports to MIDI at +36, i.e. a
+play to export to re-import round-trip changes velocity. This MAY be
+intentional (playback feel vs. export fidelity), which is exactly why I did
+NOT unify them: extracting to one shared `dynamics.ts` forces a single value
+and would change behaviour for at least one consumer. **Action for you:**
+decide whether the 24/36 split is intentional; if yes, document it at both
+sites; if no, pick the canonical value, consolidate, and re-check the MIDI
+round-trip tests. Until then it's a real drift risk.
+
+### F6. `src/jot.ts` (~1490 lines), splittable, low priority
+Three separable responsibilities: `ViewConfig` (layout config), the resolved
+data model (`ResolvedNote`/`ResolvedTrack`/`RenderedJot` structure), and the
+pattern-expansion tree-rewriting. Could split into `view_config.ts` /
+`resolved_jot.ts` / `pattern_expansion.ts` re-exported from `jot.ts`. Pure
+mechanical move, low risk if import contracts are preserved, but it's a
+load-bearing core file touched by nearly everything, so worth doing
+deliberately with the full suite rather than blind. Not done.
