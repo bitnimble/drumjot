@@ -66,6 +66,48 @@ request, and pull in the linked docs when a task touches that area.
   `python3`. **Don't install/upgrade deps unprompted**, install ordering
   is fragile; flag dep changes and let the user run them.
 - **Don't read skill files with Read**, use the `Skill` tool.
+- **Prefer built-in tools over ad-hoc bash.** Reach for `Read` / `Edit` /
+  `Write` for files, the `LSP` tool for symbol-level questions
+  (definition / references / hover), and the `Skill` tool for skills, before shelling out. Avoid ad-hoc shell scripting (`echo`/`printf`/`cat`/
+  `sed`/`grep`/`find`/`for`-loops); the permission hook denies many of
+  them outright and trips a confirmation on multi-line inline code. When
+  you genuinely need a text search, a single clean `git grep` is fine, but
+  default to the dedicated tools and the project's `scripts/*` wrappers.
+
+### Frontend store / presenter / component architecture
+
+The frontend is mid-migration to a strict three-layer split (the
+`JotViewStore` carve-up; see `src/jot_view/stores/*` +
+`src/jot_view/jot_viewer_presenter.ts`). When adding or moving frontend
+state/logic, follow it:
+
+- **Stores = data only.** A store holds MobX `observable`s and
+  `computed`s and nothing else: no actions, no setters/toggles, no
+  clamping, no reactions, no `AbortController`s, no orchestration. Simple
+  read accessors that just reshape store data are fine (a memoised lazy
+  cache like `getInstrumentTrack` is a deliberate exception). Red/green
+  flag: **stores have only observables + computeds; presenters may have
+  reactions, autoruns, computeds, local observables, and actions.**
+- **Presenters mutate stores.** Every mutation lives on a presenter, down to trivial `setX`/`toggleX`/clamp, plus all `reaction`/`autorun`,
+  cross-store orchestration, and non-view bookkeeping (the in-flight
+  `AbortController`s, etc.). Presenters are the only writers.
+- **Components bind presenter methods to UI callbacks and derive store
+  state into JSX.** They read stores (via per-store React contexts or
+  props) and call `presenter.X` for actions.
+- **No single top-level store.** Construct the peer stores where the view
+  is created and pass each down independently (`viewportStore.foo`,
+  `mixerStore.foo`), never through one aggregate `store`.
+- **Acyclic dependencies.** A store may take a one-way reference to a
+  peer it reads (e.g. most stores read `DocumentStore.currentJot`); the
+  presenter depends on all stores; no store depends on a presenter. If two
+  stores would form a cycle, extract the shared state into a third store
+  both depend on.
+- **Why:** this lets business logic be unit-tested against mocked stores,
+  and components be rendered (tests / Storybook) with mocked stores +
+  presenter, each concern swappable in isolation.
+- `jot_viewer_presenter.ts` is a **temporary catch-all** for orchestration
+  pulled off `JotViewStore`; it gets split into per-feature presenters
+  once the carve-up finishes.
 
 ### Workflow
 
