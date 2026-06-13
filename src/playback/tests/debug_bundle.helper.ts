@@ -53,7 +53,9 @@ export async function loadDebugBundle(page: Page): Promise<void> {
   // Wait for the manifest to mount and at least one audio track to come
   // online before handing control back to the test.
   await page.waitForFunction(
-    () => !!(window as unknown as { drumjot: { store: { lastDebugBundle: unknown } } }).drumjot.store.lastDebugBundle,
+    () =>
+      !!(window as unknown as { drumjot: { provenance: { lastDebugBundle: unknown } } }).drumjot
+        .provenance.lastDebugBundle,
     null,
     { timeout: 90_000 },
   );
