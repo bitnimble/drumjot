@@ -79,18 +79,20 @@ architectural and flagged).
 | viewport | not started | `vertical_scrollbar` + store/presenter already small/clean; nothing obvious to extract. |
 | transcribe | not started | `recent_transcriptions` is small; toolbar holds the transcribe form (see toolbar). |
 | minimap | not started | `minimap.tsx` (~530) has pure peak/tick canvas-prep logic that could move to a tested helper. Perf-adjacent (canvas paint), review before splitting. |
-| mixer | **FLAGGED** | `mixer.tsx` (~1600), InstrumentRow / AudioTrackRow / waveform canvas / gutter rows. Perf-critical (per-frame waveform + windowed rows). Mechanical sub-component splits are safe in principle but high-blast-radius; recommend doing as its own reviewed slice. |
+| mixer | **partial** | `mixer.tsx` 1605 → **1084 lines**, every slice perf-gated (all 26 e2e incl. 3×120fps specs green). Extracted leaf clusters: `overflow_menus.tsx` (audio + instrument overflow menus + split-state, which mixer.test.ts covers), `gutter_controls.tsx` (GutterMasterRow + RowVolumeSlider), `mixer_drag.tsx` (MixerRowDragProps + useMixerRowDropTarget + drop zones + drag handle). Also extracted `reorderTrackOrder` → `src/tracks.ts` + 7 unit tests (drag-reorder logic). **Remaining (the bulk + perf-critical, prereqs now all in place):** the two big row components still in mixer.tsx, `AudioTrackRow` (+ its waveform canvas: AudioTrackWaveformCanvas/Chunk, useLiveJotPxPerBeat) and `InstrumentRow` (+ WindowedBarList). MixerView (composition root) + the control types stay. These are clean follow-up slices now that menus/gutter/drag are leaves. |
 | toolbar | partial | `DebugPanel` extracted. The menu code (~1130 lines) remains; could split leaf pieces (busy pills, ThemeSection, PlaybackKitSubmenu, sample-progress helpers), lower risk, not yet done. |
 | score | **done** | `score.tsx` 2825 → **123 lines**, split into 6 focused files, every slice perf-gated (E2E_DEBUG_BUNDLE live; all 26 e2e incl. 3×120fps perf specs green): `note_provenance_details.tsx` (debug-details, 1671), `bar_view.tsx` (BarView/NoteView/brackets/grace + note-desc helpers, 599, per-frame hot path, no perf regression), `popover_portal.tsx` (160), `timeline_header.tsx` (+WindowedTicks/TickDescriptor, 226), `filtered_onset_view.tsx` (119). score.tsx is now a 123-line leaf (seekFromClick + title/subtitle helpers + Legend). `WAVEFORM_PAINT_COLOR` → `utils/waveform_color.ts`. No import cycles. |
 | contexts.ts split | not started | Splitting each React context next to its feature is low-risk but high import-churn (every context consumer). Cross-cutting contexts (NoteProvenance, BarTimings, RenderedJot, GridLineSettings, UniformWaveforms, FollowPlayhead, Selection) have no single feature home. Deferred; recommend a dedicated mechanical pass.
 
 **Summary:** the safe behaviour-preserving extractions were done (playback,
 provenance/DebugPanel, lyrics layout). `score.tsx` was then fully broken up
-(2825 → 123 lines across 6 files), every slice verified against the now-live
-perf gate (E2E_DEBUG_BUNDLE) including the 3×120fps specs. Still flagged for a
-reviewed pass: `mixer.tsx` (1600 lines, same perf-sensitive shape, the
-waveform canvas + windowed rows) and the contexts split (low-risk but
-high import-churn). Both mechanically splittable with the same gated approach.
+(2825 → 123 lines across 6 files). `mixer.tsx` is in progress (1605 → 1084):
+its leaf clusters (overflow menus, gutter controls, drag primitives) +
+`reorderTrackOrder` are extracted; the two big row components (AudioTrackRow +
+waveform, InstrumentRow) remain. Every slice verified against the live perf
+gate (E2E_DEBUG_BUNDLE) including the 3×120fps specs. Remaining flagged work:
+the two mixer rows, and the contexts split (low-risk but high import-churn).
+Both mechanically splittable with the same gated approach.
 
 ---
 
