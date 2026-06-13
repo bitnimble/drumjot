@@ -46,6 +46,7 @@ import { ViewportStore } from './stores/viewport_store';
 import { MixerStore } from './stores/mixer_store';
 
 import { MixerPresenter } from './presenters/mixer_presenter';
+import { ProvenancePresenter } from './presenters/provenance_presenter';
 
 /**
  * Dependencies the presenter orchestrates over. Every store is a plain
@@ -64,9 +65,10 @@ export type JotViewerPresenterDeps = {
   playback: PlaybackStore;
   viewport: ViewportStore;
   mixer: MixerStore;
-  /** Sibling presenter: song-load orchestration here calls into the mixer
-   *  presenter (reset / clear / debug-bundle row order). */
+  /** Sibling presenters: song-load orchestration here calls into them
+   *  (mixer reset/clear/order; provenance clear). */
   mixerPresenter: MixerPresenter;
+  provenancePresenter: ProvenancePresenter;
 };
 
 /**
@@ -129,6 +131,7 @@ export class JotViewerPresenter {
   readonly viewport: ViewportStore;
   readonly mixer: MixerStore;
   readonly mixerPresenter: MixerPresenter;
+  readonly provenancePresenter: ProvenancePresenter;
 
   constructor(deps: JotViewerPresenterDeps) {
     this.document = deps.document;
@@ -140,6 +143,7 @@ export class JotViewerPresenter {
     this.viewport = deps.viewport;
     this.mixer = deps.mixer;
     this.mixerPresenter = deps.mixerPresenter;
+    this.provenancePresenter = deps.provenancePresenter;
     makeAutoObservable(this, {
       transcribeController: false,
       lyricsAlignControllers: false,
@@ -151,6 +155,7 @@ export class JotViewerPresenter {
       playback: false,
       viewport: false,
       mixerPresenter: false,
+      provenancePresenter: false,
       mixer: false,
     });
     // Seed the player's live drum↔audio offset from each loaded jot's
@@ -200,7 +205,7 @@ export class JotViewerPresenter {
     // previously-loaded debug provenance (provenance is per-bundle and
     // doesn't survive a wholesale jot replacement).
     this.document.currentExampleId = undefined;
-    this.clearNoteProvenance();
+    this.provenancePresenter.clearNoteProvenance();
     // Lyrics are tied to a specific recording; a new jot means they no
     // longer apply. See `src/lyrics/store.ts` for the lifecycle rationale.
     this.clearLyrics();
@@ -208,15 +213,6 @@ export class JotViewerPresenter {
     // playhead, scheduled drum events, and idle cue from the previous
     // jot don't leak onto the new one.
     jotPlayer.stop();
-  }
-
-  /** Drop the debug bundle's per-note provenance + reset the toolbar
-   * visibility toggle. Called from every loader that replaces the
-   * current song outside the bundle path so stale debug info from a
-   * previous bundle doesn't leak onto the new score. */
-  private clearNoteProvenance() {
-    this.provenance.noteProvenance = undefined;
-    this.provenance.showFilteredOnsets = false;
   }
 
   toggleFollowPlayhead() {
@@ -245,7 +241,7 @@ export class JotViewerPresenter {
     if (!example) return;
     this.document.currentJot = new RenderedJot(example.jot, this.document.viewConfig);
     this.document.currentExampleId = id;
-    this.clearNoteProvenance();
+    this.provenancePresenter.clearNoteProvenance();
     this.clearLyrics();
     jotPlayer.stop();
   }
@@ -605,7 +601,7 @@ export class JotViewerPresenter {
           // A bare jot file has no provenance; drop whatever the
           // previous bundle put there so the selection label doesn't
           // surface stale debug data on the new song's notes.
-          this.clearNoteProvenance();
+          this.provenancePresenter.clearNoteProvenance();
           this.clearLyrics();
           jotPlayer.stop();
         });
@@ -648,7 +644,7 @@ export class JotViewerPresenter {
           this.document.currentExampleId = undefined;
           // Same reasoning as in loadJotFile: a bare MIDI load shouldn't
           // surface stale provenance from a previous debug bundle.
-          this.clearNoteProvenance();
+          this.provenancePresenter.clearNoteProvenance();
           this.clearLyrics();
           jotPlayer.stop();
         });
@@ -693,7 +689,7 @@ export class JotViewerPresenter {
         this.mixerPresenter.resetPitchMixer();
         this.document.currentJot = new RenderedJot(jot, this.document.viewConfig);
         this.document.currentExampleId = undefined;
-        this.clearNoteProvenance();
+        this.provenancePresenter.clearNoteProvenance();
         this.clearLyrics();
         jotPlayer.stop();
       });
@@ -920,15 +916,6 @@ export class JotViewerPresenter {
     return scoreLoaded;
   }
 
-  /** Resize the {@link DebugPanel}. Clamped so it can't shrink past the
-   * header or grow past the viewport (with headroom for the toolbar).
-   * Stays here transitionally because the clamp reads `_viewportHeight`
-   * (viewport state not yet extracted); moves to the presenter with the
-   * viewport slice. */
-  setDebugPanelHeight(px: number): void {
-    const max = Math.max(120, this.viewport._viewportHeight - 160);
-    this.provenance.debugPanelHeight = Math.min(max, Math.max(80, px));
-  }
 
   // Viewport actions (setZoom, scroll setters + clamps, viewport/content
   // size, setGutterWidth) and the visibleBeatRange computed moved to
@@ -1457,22 +1444,6 @@ export class JotViewerPresenter {
 
   setTranscribeMode(mode: 'new' | 'resume') {
     this.transcribe.transcribeMode = mode;
-  }
-
-  // --- provenance / debug panel ---
-
-  /** Replace the toolbar's `Show filtered` checkbox state. */
-  setShowFilteredOnsets(show: boolean) {
-    this.provenance.showFilteredOnsets = show;
-  }
-
-  setPinnedFilteredOnsetKey(key: string | undefined) {
-    this.provenance.pinnedFilteredOnsetKey = key;
-  }
-
-  /** Toggle the DebugPanel's open state without forgetting the bundle. */
-  toggleDebugPanel() {
-    this.provenance.debugPanelOpen = !this.provenance.debugPanelOpen;
   }
 
   // --- lyrics (modal visibility) ---

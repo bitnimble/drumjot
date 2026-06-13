@@ -9,6 +9,7 @@ import { LyricsAlignStore } from './stores/lyrics_align_store';
 import { ViewportStore } from './stores/viewport_store';
 import { MixerStore } from './stores/mixer_store';
 import { JotViewerPresenter } from './jot_viewer_presenter';
+import { ProvenancePresenter } from './presenters/provenance_presenter';
 
 /**
  * Routes the active {@link SelectionStore} to deep score chrome (today:
@@ -52,6 +53,15 @@ export const MixerStoreContext = React.createContext<MixerStore | null>(null);
  * outside the view; consumers no-op when absent.
  */
 export const JotViewerPresenterContext = React.createContext<JotViewerPresenter | null>(null);
+
+/**
+ * Routes the {@link ProvenancePresenter} to deep consumers that mutate
+ * debug-bundle / provenance state (today: `FilteredOnsetView` pinning a
+ * popover via `setPinnedFilteredOnsetKey`). `null` outside the view;
+ * consumers no-op when absent.
+ */
+export const ProvenancePresenterContext =
+  React.createContext<ProvenancePresenter | null>(null);
 
 /**
  * Routes the loaded debug bundle's per-note provenance to two deep

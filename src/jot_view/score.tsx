@@ -24,9 +24,9 @@ import sharedStyles from '../jot_view.module.css';
 import { GutterResizeHandle } from './components/gutter_resize_handle';
 import {
   BarTimingsContext,
-  JotViewerPresenterContext,
   NoteProvenanceContext,
   NoteProvenanceContextValue,
+  ProvenancePresenterContext,
   ProvenanceStoreContext,
   RenderedJotContext,
   SelectionContext,
@@ -2692,7 +2692,7 @@ export const FilteredOnsetView = observer(({
   trackHeight: number;
 }) => {
   const provenance = React.useContext(ProvenanceStoreContext);
-  const presenter = React.useContext(JotViewerPresenterContext);
+  const presenter = React.useContext(ProvenancePresenterContext);
   const pinnedKey = `${entry.pitch}:${entry.detected_time_sec}`;
   const clicked = provenance?.pinnedFilteredOnsetKey === pinnedKey;
   const [hovered, setHovered] = React.useState(false);

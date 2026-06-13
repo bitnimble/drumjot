@@ -38,7 +38,7 @@ import { formatTranscriptionSummary, RecentTranscriptionsPicker } from './recent
 import styles from './toolbar.module.css';
 import { GridLineSettings, TranscribeOptions, TranscribeStatus } from './store';
 import { ProvenanceStore } from './stores/provenance_store';
-import { JotViewerPresenter } from './jot_viewer_presenter';
+import { ProvenancePresenter } from './presenters/provenance_presenter';
 import { ViewportStoreContext } from './contexts';
 
 /** Stage labels in pipeline order, shown verbatim in the resume stage
@@ -1154,7 +1154,7 @@ export const DebugPanel = observer(
     presenter,
   }: {
     provenance: ProvenanceStore;
-    presenter: JotViewerPresenter;
+    presenter: ProvenancePresenter;
   }) => {
   const bundle = provenance.lastDebugBundle;
   if (!bundle) return null;

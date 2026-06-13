@@ -21,6 +21,7 @@ import {
   LyricsAlignStoreContext,
   MixerStoreContext,
   NoteProvenanceContext,
+  ProvenancePresenterContext,
   ProvenanceStoreContext,
   ViewportStoreContext,
   RenderedJotContext,
@@ -52,6 +53,7 @@ import { JotViewerPresenter } from './jot_view/jot_viewer_presenter';
 import { SettingsPresenter } from './jot_view/presenters/settings_presenter';
 import { ViewportPresenter } from './jot_view/presenters/viewport_presenter';
 import { MixerPresenter } from './jot_view/presenters/mixer_presenter';
+import { ProvenancePresenter } from './jot_view/presenters/provenance_presenter';
 import { RecentTranscriptionsPicker } from './jot_view/recent_transcriptions';
 import { ToastContainer } from './jot_view/toast_container';
 import { DebugPanel, Toolbar } from './jot_view/toolbar';
@@ -80,6 +82,7 @@ type CreateJotViewResult = {
    *  console / e2e. */
   viewportPresenter: ViewportPresenter;
   mixerPresenter: MixerPresenter;
+  provenancePresenter: ProvenancePresenter;
   /** Catch-all presenter holding the orchestration not yet split into a
    *  per-domain presenter. */
   presenter: JotViewerPresenter;
@@ -98,6 +101,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   const settingsPresenter = new SettingsPresenter(settings);
   const viewportPresenter = new ViewportPresenter(viewport, documentStore);
   const mixerPresenter = new MixerPresenter(mixer, documentStore);
+  const provenancePresenter = new ProvenancePresenter(provenance, viewport);
   const presenter = new JotViewerPresenter({
     document: documentStore,
     settings,
@@ -108,6 +112,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     viewport,
     mixer,
     mixerPresenter,
+    provenancePresenter,
   });
   if (options.examples) presenter.setExamples(options.examples);
   const selection = new SelectionStore(documentStore);
@@ -328,6 +333,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
 
     return (
         <JotViewerPresenterContext.Provider value={presenter}>
+        <ProvenancePresenterContext.Provider value={provenancePresenter}>
         <ProvenanceStoreContext.Provider value={provenance}>
         <LyricsAlignStoreContext.Provider value={lyricsAlign}>
         <ViewportStoreContext.Provider value={viewport}>
@@ -365,7 +371,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       onSetZoom={setZoomCentered}
                       hasNoteProvenance={provenance.noteProvenance !== undefined}
                       showFilteredOnsets={provenance.showFilteredOnsets}
-                      onSetShowFilteredOnsets={(v) => presenter.setShowFilteredOnsets(v)}
+                      onSetShowFilteredOnsets={(v) => provenancePresenter.setShowFilteredOnsets(v)}
                       gridLines={settings.gridLines}
                       onToggleGridLine={(k) => settingsPresenter.toggleGridLine(k)}
                       uniformWaveforms={settings.uniformWaveforms}
@@ -425,7 +431,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                         presenter={presenter}
                       />
                     )}
-                    <DebugPanel provenance={provenance} presenter={presenter} />
+                    <DebugPanel provenance={provenance} presenter={provenancePresenter} />
                     <LyricsSearchModal
                       open={lyricsAlign.lyricsSearchOpen}
                       initialTitle={lyricsInitialTitle}
@@ -455,6 +461,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
         </ViewportStoreContext.Provider>
         </LyricsAlignStoreContext.Provider>
         </ProvenanceStoreContext.Provider>
+        </ProvenancePresenterContext.Provider>
         </JotViewerPresenterContext.Provider>
     );
   });
@@ -470,6 +477,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     mixer,
     viewportPresenter,
     mixerPresenter,
+    provenancePresenter,
     presenter,
     View,
   };
