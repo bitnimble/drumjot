@@ -281,6 +281,40 @@ separation to lift the recall ceiling. (Caveat: cap 60; a cap-150+ re-test could
 check if two-stage scales differently, but the burden of proof is on it and it's
 currently losing.)
 
+**cap-300 (5x data) confirmation -- two-stage still loses (2026-06-14).** Re-ran the
+realistic test at `--pool-cap 300` (802 train / 173 val per stem; val identical to
+cap-60 so directly comparable) with ALL fixes: cross-stem sib live, F1 counts
+zero-candidate clips as misses, baseline keep_best + 2 seeds, single-pass
+preallocated stage-2 arrays (the cap-300 OOM fix). Per-lane onset-F1:
+
+| lane | per-frame | 2stage | real Δ | cap-60 Δ |
+|---|---|---|---|---|
+| rd | 0.597 | 0.602 | +0.005 (tie) | −0.045 |
+| cr | 0.696 | 0.600 | **−0.096 (lose)** | −0.120 |
+| mc | 0.405 | 0.479 | +0.073 (noisy) | +0.149 |
+| hc | 0.741 | 0.750 | +0.009 (tie) | +0.136 |
+| hp | 0.414 | 0.373 | **−0.041 (lose)** | +0.167 |
+| ho | 0.763 | 0.735 | **−0.028 (lose)** | +0.138 |
+
+Proposer val recall: cymbals 0.860, hats 0.919 (barely up from cap-60's 0.826/0.904).
+**Verdict holds and hardens: two-stage does NOT beat per-frame at 5x.** It ties on
+the easy lanes (ride, hc) and LOSES on crash, hp, ho; only noisy mc favors it. The
+cap-60 hat "wins" (hc/ho +0.13) were the F1-inflation bug + an under-trained
+final-epoch baseline -- with the fair keep_best baseline, **more data helped
+per-frame MORE than two-stage** (per-frame hc 0.65->0.74, ho 0.71->0.76), widening
+the gap in per-frame's favor. Two-stage is decisively not worth the added pipeline.
+**Drop it; stay single-stage per-frame.**
+
+**High-band frame-alignment check -- center=True is fine (2026-06-14).** A review
+flagged that the 6-20 kHz high-band block (librosa `center=True`) might sit ~1-2
+frames off the MERT conv frames it's concatenated to. Measured directly (synthetic
+clicks through `highband_from_wave` + `MertEncoder.encode`, cross-correlated vs the
+`round(t*fps)` label grid): **MERT-minus-HB offset = -0.43 frames (-5.8 ms)**, below
+the ~0.5-frame "aligned" bar. An A/B training the cymbal detector on center=True vs
+center=False high-band confirmed no gain (rd −0.013, cr −0.011, mc −0.004, all within
+noise -- center=False marginally *worse*). **Non-issue; keep center=True, no cache
+bump.** (`tmp_hb_align_check_v5k.py` / `tmp_cym_center_ab.py`.)
+
 ## Per-stem pooled MERT layer sweep (2026-06-12)
 
 **Setup.** `scripts/perstem_layer_sweep.py` over pooled per-stem examples from all
