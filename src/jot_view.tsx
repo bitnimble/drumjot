@@ -22,6 +22,7 @@ import {
   LyricsAlignStoreContext,
   NoteProvenanceContext,
   ProvenanceStoreContext,
+  ViewportStoreContext,
   RenderedJotContext,
   SelectionContext,
   UniformWaveformsContext,
@@ -45,6 +46,7 @@ import { TranscribeStore } from './jot_view/stores/transcribe_store';
 import { ProvenanceStore } from './jot_view/stores/provenance_store';
 import { LyricsAlignStore } from './jot_view/stores/lyrics_align_store';
 import { PlaybackStore } from './jot_view/stores/playback_store';
+import { ViewportStore } from './jot_view/stores/viewport_store';
 import { JotViewerPresenter } from './jot_view/jot_viewer_presenter';
 import { RecentTranscriptionsPicker } from './jot_view/recent_transcriptions';
 import { ToastContainer } from './jot_view/toast_container';
@@ -69,6 +71,7 @@ type CreateJotViewResult = {
   provenance: ProvenanceStore;
   lyricsAlign: LyricsAlignStore;
   playback: PlaybackStore;
+  viewport: ViewportStore;
   /** Catch-all presenter holding the actions/orchestration over the
    *  data-only stores. */
   presenter: JotViewerPresenter;
@@ -82,12 +85,15 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   const provenance = new ProvenanceStore();
   const lyricsAlign = new LyricsAlignStore();
   const playback = new PlaybackStore(documentStore);
+  const viewport = new ViewportStore(documentStore);
   const presenter = new JotViewerPresenter({
     settings,
     transcribe,
     provenance,
     lyricsAlign,
     playback,
+    document: documentStore,
+    viewport,
   });
   const store = new JotViewStore(
     documentStore,
@@ -95,7 +101,8 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     transcribe,
     provenance,
     lyricsAlign,
-    playback
+    playback,
+    viewport
   );
   if (options.examples) store.setExamples(options.examples);
   const selection = new SelectionStore(store);
@@ -113,7 +120,10 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   const containerPoint = (e: React.MouseEvent<HTMLDivElement>): Point => {
     const el = e.currentTarget;
     const rect = el.getBoundingClientRect();
-    return new Point(e.clientX - rect.left + store.scrollX, e.clientY - rect.top + store.scrollY);
+    return new Point(
+      e.clientX - rect.left + viewport.scrollX,
+      e.clientY - rect.top + viewport.scrollY
+    );
   };
   const onMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
@@ -137,7 +147,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     const barsRow = scroller?.querySelector<HTMLElement>('[data-bars-row]');
     const j = documentStore.currentJot;
     if (!scroller || !barsRow || !j) {
-      store.setZoom(z);
+      presenter.setZoom(z);
       return;
     }
     const pxPerBeatBefore = j.pxPerBeat;
@@ -145,15 +155,15 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     const scrollerRect = scroller.getBoundingClientRect();
     const barsRowRect = barsRow.getBoundingClientRect();
     const anchorBarsRowX = scrollerRect.left + scrollerRect.width / 2 - barsRowRect.left;
-    store.setZoom(z);
+    presenter.setZoom(z);
     if (pxPerBeatBefore <= 0) return;
     const factor = j.pxPerBeat / pxPerBeatBefore;
     if (factor === 1) return;
-    store.setScrollBy((anchorBarsRowX - padLeft) * (factor - 1), 0);
+    presenter.setScrollBy((anchorBarsRowX - padLeft) * (factor - 1), 0);
     // Same-tick scale + scroll write (cache-free; this runs outside the
     // component) so the slider never paints the post-zoom scroll offset at
     // the pre-zoom scale; see applyZoomVarsSync.
-    applyZoomVarsSync(scroller, null, j.pxPerBeat, j.voiceBeats, store.scrollX);
+    applyZoomVarsSync(scroller, null, j.pxPerBeat, j.voiceBeats, viewport.scrollX);
   };
 
   // Stable JotView callback identities. Each only ever delegates to the
@@ -172,10 +182,10 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   // render time, so they don't subscribe createJotView to anything.
   const onPatternClick = (name: string) => selection.togglePattern(name);
   const onSeek = (x: number) => store.seekToX(x);
-  const onZoomBy = (factor: number) => store.setZoom(store.zoom * factor);
+  const onZoomBy = (factor: number) => presenter.setZoom(viewport.zoom * factor);
   const onMoveTrack = (from: number, to: number) => store.moveTrack(from, to);
-  const getGutterWidth = () => store.gutterWidth;
-  const onSetGutterWidth = (px: number) => store.setGutterWidth(px);
+  const getGutterWidth = () => viewport.gutterWidth;
+  const onSetGutterWidth = (px: number) => presenter.setGutterWidth(px);
 
   // Computed once per page load; AudioWorklet availability doesn't
   // change after boot, so capturing this outside the component (and
@@ -316,6 +326,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
         <JotViewerPresenterContext.Provider value={presenter}>
         <ProvenanceStoreContext.Provider value={provenance}>
         <LyricsAlignStoreContext.Provider value={lyricsAlign}>
+        <ViewportStoreContext.Provider value={viewport}>
         <SelectionContext.Provider value={selection}>
           <NoteProvenanceContext.Provider value={provenanceContextValue}>
             <GridLineSettingsContext.Provider value={settings.gridLines}>
@@ -371,6 +382,8 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                     {jot ? (
                       <JotView
                         store={store}
+                        viewport={viewport}
+                        presenter={presenter}
                         jot={jot}
                         highlightedPattern={selection.selectedPattern}
                         onPatternClick={onPatternClick}
@@ -393,7 +406,12 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                         transcribe={transcribe}
                       />
                     )}
-                    <Minimap store={store} documentStore={documentStore} />
+                    <Minimap
+                      store={store}
+                      documentStore={documentStore}
+                      viewport={viewport}
+                      presenter={presenter}
+                    />
                     {jot && (
                       <PlaybackBar store={store} documentStore={documentStore} playback={playback} />
                     )}
@@ -423,6 +441,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
             </GridLineSettingsContext.Provider>
           </NoteProvenanceContext.Provider>
         </SelectionContext.Provider>
+        </ViewportStoreContext.Provider>
         </LyricsAlignStoreContext.Provider>
         </ProvenanceStoreContext.Provider>
         </JotViewerPresenterContext.Provider>
@@ -438,6 +457,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     provenance,
     lyricsAlign,
     playback,
+    viewport,
     presenter,
     View,
   };
@@ -454,6 +474,10 @@ type JotViewProps = {
    * / `setScrollY` / `setScrollBy` / `resetScroll`.
    */
   store: JotViewStore;
+  /** Score viewport state (scroll offsets, extents, zoom, gutter). */
+  viewport: ViewportStore;
+  /** Presenter for viewport mutations (scroll / zoom / size) + transport. */
+  presenter: JotViewerPresenter;
   jot: RenderedJot;
   highlightedPattern: string | undefined;
   onPatternClick: (name: string) => void;
@@ -492,6 +516,8 @@ type JotViewProps = {
 const JotView = observer((props: JotViewProps) => {
   const {
     store,
+    viewport,
+    presenter,
     jot,
     highlightedPattern,
     onPatternClick,
@@ -535,7 +561,7 @@ const JotView = observer((props: JotViewProps) => {
     const container = containerRef.current;
     if (!container) return;
     const cache = new DomTargetCache();
-    cache.attach(container, styles.scrollStickyHorizontal, store);
+    cache.attach(container, styles.scrollStickyHorizontal, viewport);
     cacheRef.current = cache;
     return () => {
       cache.detach();
@@ -547,10 +573,10 @@ const JotView = observer((props: JotViewProps) => {
     const viewport = viewportRef.current;
     if (!container || !viewport) return;
     const updateContainer = () => {
-      store.setViewportSize(container.clientWidth, container.clientHeight);
+      presenter.setViewportSize(container.clientWidth, container.clientHeight);
     };
     const updateViewport = () => {
-      store.setContentSize(viewport.offsetWidth, viewport.offsetHeight);
+      presenter.setContentSize(viewport.offsetWidth, viewport.offsetHeight);
     };
     updateContainer();
     updateViewport();
@@ -604,7 +630,7 @@ const JotView = observer((props: JotViewProps) => {
       pendingDelta = 0;
       pendingScrollX = 0;
       pendingClientX = undefined;
-      if (scrollDx !== 0) store.setScrollBy(scrollDx, 0);
+      if (scrollDx !== 0) presenter.setScrollBy(scrollDx, 0);
       if (delta === 0) return;
       const factor = Math.exp(-delta * 0.0015);
 
@@ -649,14 +675,20 @@ const JotView = observer((props: JotViewProps) => {
           // async); for zoom-in this is conservative-safe (smaller
           // max), for zoom-out the next observer tick re-clamps within
           // a frame, so a one-frame overshoot is the worst case.
-          store.setScrollBy(delta, 0);
+          presenter.setScrollBy(delta, 0);
         }
       }
 
       // Apply the new scale + scroll to the DOM in the same tick so no
       // painted frame shows the post-zoom scroll offset at the pre-zoom
       // scale; see applyZoomVarsSync.
-      applyZoomVarsSync(el, cacheRef.current, currentJot.pxPerBeat, currentJot.voiceBeats, store.scrollX);
+      applyZoomVarsSync(
+        el,
+        cacheRef.current,
+        currentJot.pxPerBeat,
+        currentJot.voiceBeats,
+        viewport.scrollX
+      );
     };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
@@ -726,7 +758,7 @@ const JotView = observer((props: JotViewProps) => {
       // both axes of the store. Replaces the previous native
       // `el.scrollLeft -= dx` / `el.scrollTop -= dy` since the
       // container is now `overflow: hidden`.
-      store.setScrollBy(-dx, -dy);
+      presenter.setScrollBy(-dx, -dy);
     };
     const stop = () => {
       if (!panning) return;
@@ -839,8 +871,8 @@ const JotView = observer((props: JotViewProps) => {
       gesture = {
         kind: 'pinch',
         initDistance: touchDistance(a, b),
-        initZoom: store.zoom,
-        initScrollX: store.scrollX,
+        initZoom: viewport.zoom,
+        initScrollX: viewport.scrollX,
         initPxPerBeat,
         initPadLeft,
         anchorBarsRowX,
@@ -898,17 +930,17 @@ const JotView = observer((props: JotViewProps) => {
         const dy = t.clientY - gesture.lastY;
         gesture.lastX = t.clientX;
         gesture.lastY = t.clientY;
-        store.setScrollBy(-dx, -dy);
+        presenter.setScrollBy(-dx, -dy);
         e.preventDefault();
       } else if (gesture.kind === 'pinch' && e.touches.length >= 2) {
         const a = e.touches[0];
         const b = e.touches[1];
         const dist = touchDistance(a, b);
         if (gesture.initDistance > 0 && gesture.initPxPerBeat > 0) {
-          store.setZoom(gesture.initZoom * (dist / gesture.initDistance));
+          presenter.setZoom(gesture.initZoom * (dist / gesture.initDistance));
           const actualFactor = jotRef.current.pxPerBeat / gesture.initPxPerBeat;
           if (actualFactor !== 1) {
-            store.setScrollX(
+            presenter.setScrollX(
               gesture.initScrollX +
                 (gesture.anchorBarsRowX - gesture.initPadLeft) * (actualFactor - 1)
             );
@@ -916,7 +948,13 @@ const JotView = observer((props: JotViewProps) => {
           // Same-tick scale + scroll write so the pinch never paints the
           // post-zoom scroll offset at the pre-zoom scale; see
           // applyZoomVarsSync.
-          applyZoomVarsSync(el, cacheRef.current, jotRef.current.pxPerBeat, jotRef.current.voiceBeats, store.scrollX);
+          applyZoomVarsSync(
+            el,
+            cacheRef.current,
+            jotRef.current.pxPerBeat,
+            jotRef.current.voiceBeats,
+            viewport.scrollX
+          );
         }
         e.preventDefault();
       }
@@ -1077,8 +1115,13 @@ const JotView = observer((props: JotViewProps) => {
           <ScoreZoomVar jot={jot} containerRef={containerRef} />
           <GutterWidthVar getGutterWidth={getGutterWidth} containerRef={containerRef} />
           <GridLineVars containerRef={containerRef} />
-          <ScrollVar cacheRef={cacheRef} store={store} />
-          <PlayheadPosVar cacheRef={cacheRef} getGutterWidth={getGutterWidth} store={store} />
+          <ScrollVar cacheRef={cacheRef} viewport={viewport} />
+          <PlayheadPosVar
+            cacheRef={cacheRef}
+            getGutterWidth={getGutterWidth}
+            viewport={viewport}
+            presenter={presenter}
+          />
           <div
             ref={viewportRef}
             className={styles.scrollViewport}
@@ -1105,7 +1148,7 @@ const JotView = observer((props: JotViewProps) => {
             />
             <MarqueeOverlay />
           </div>
-          <VerticalScrollbar store={store} />
+          <VerticalScrollbar viewport={viewport} presenter={presenter} />
         </div>
       </BarTimingsContext.Provider>
     </RenderedJotContext.Provider>
@@ -1236,7 +1279,7 @@ class DomTargetCache {
   playheads: Set<HTMLElement> = new Set();
   private observer?: MutationObserver;
 
-  attach(root: HTMLElement, stickyClass: string, store: JotViewStore): void {
+  attach(root: HTMLElement, stickyClass: string, viewportStore: ViewportStore): void {
     this.viewport = root.querySelector<HTMLElement>('[data-jot-scroll-content]');
     for (const el of root.querySelectorAll<HTMLElement>('.' + stickyClass)) {
       this.sticky.add(el);
@@ -1245,7 +1288,7 @@ class DomTargetCache {
       this.playheads.add(el);
     }
     this.observer = new MutationObserver((records) => {
-      const seedX = String(store.scrollX);
+      const seedX = String(viewportStore.scrollX);
       for (const r of records) {
         for (const node of r.addedNodes) {
           if (!(node instanceof HTMLElement)) continue;
@@ -1311,13 +1354,13 @@ class DomTargetCache {
 const ScrollVar = observer(
   ({
     cacheRef,
-    store,
+    viewport,
   }: {
     cacheRef: React.RefObject<DomTargetCache | null>;
-    store: JotViewStore;
+    viewport: ViewportStore;
   }) => {
-    const x = store.scrollX;
-    const y = store.scrollY;
+    const x = viewport.scrollX;
+    const y = viewport.scrollY;
     React.useLayoutEffect(() => {
       const cache = cacheRef.current;
       if (!cache) return;
@@ -1458,11 +1501,13 @@ const PlayheadPosVar = observer(
   ({
     cacheRef,
     getGutterWidth,
-    store,
+    viewport,
+    presenter,
   }: {
     cacheRef: React.RefObject<DomTargetCache | null>;
     getGutterWidth: () => number;
-    store: JotViewStore;
+    viewport: ViewportStore;
+    presenter: JotViewerPresenter;
   }) => {
     const t = jotPlayer.currentTime;
     const state = jotPlayer.state;
@@ -1490,7 +1535,7 @@ const PlayheadPosVar = observer(
       // keeps its scroll; initial mount is idle→idle so this is a
       // no-op until the first play has happened.
       if (wasActive && state === 'idle') {
-        store.resetScrollX();
+        presenter.resetScrollX();
         clearPlayheadVar(cache);
         return;
       }
@@ -1530,14 +1575,14 @@ const PlayheadPosVar = observer(
       // eliminates a possible one-frame lag of the score behind the
       // playhead during auto-follow.
       if (follow && state === 'playing') {
-        const clientWidth = store._viewportWidth;
+        const clientWidth = viewport._viewportWidth;
         if (clientWidth > 0) {
-          store.setScrollX(getGutterWidth() + x - clientWidth / 2);
-          setScrollX(cache, store.scrollX);
+          presenter.setScrollX(getGutterWidth() + x - clientWidth / 2);
+          setScrollX(cache, viewport.scrollX);
         }
       }
       setPlayheadVar(cache, x);
-    }, [t, state, cued, timeline, pxPerBeat, follow, cacheRef, getGutterWidth, store]);
+    }, [t, state, cued, timeline, pxPerBeat, follow, cacheRef, getGutterWidth, viewport, presenter]);
     return null;
   }
 );

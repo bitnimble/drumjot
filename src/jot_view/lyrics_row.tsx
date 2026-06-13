@@ -19,7 +19,7 @@ import {
 } from 'src/lyrics';
 import { downloadTextFile } from 'src/download';
 import { JotTimeline, jotPlayer } from 'src/playback';
-import { JotViewStoreContext, LyricsAlignStoreContext } from './contexts';
+import { JotViewStoreContext, LyricsAlignStoreContext, ViewportStoreContext } from './contexts';
 import { DropdownButton, dropdownStyles } from './components/dropdown';
 import { GutterResizeHandle } from './components/gutter_resize_handle';
 import { NumberStepper } from './components/number_stepper';
@@ -541,8 +541,8 @@ const WindowedLines = observer(function WindowedLines({
   shifts: Map<string, number>;
   playhead: LyricsPlayhead;
 }) {
-  const store = React.useContext(JotViewStoreContext);
-  const range = store?.visibleBeatRange ?? null;
+  const viewport = React.useContext(ViewportStoreContext);
+  const range = viewport?.visibleBeatRange ?? null;
   return (
     <>
       {positioned.map((p) => {

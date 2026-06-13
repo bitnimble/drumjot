@@ -1,10 +1,21 @@
 import { makeAutoObservable } from 'mobx';
+import { px } from 'src/jot';
 import { BeatInput, DrumSeparator, LlmModel, TranscribeStage } from 'src/transcriber';
+import { DocumentStore } from './stores/document_store';
 import { GridLineSettings, SettingsStore } from './stores/settings_store';
 import { TranscribeStore } from './stores/transcribe_store';
 import { ProvenanceStore } from './stores/provenance_store';
 import { LyricsAlignStore } from './stores/lyrics_align_store';
 import { PlaybackStore } from './stores/playback_store';
+import {
+  BASE_BAR_WIDTH,
+  MAX_GUTTER_WIDTH,
+  MAX_ZOOM,
+  MIN_GUTTER_WIDTH,
+  MIN_ZOOM,
+  snapToDevicePx,
+  ViewportStore,
+} from './stores/viewport_store';
 
 /**
  * Dependencies the presenter orchestrates over. Every store is a plain
@@ -22,6 +33,8 @@ export type JotViewerPresenterDeps = {
   provenance: ProvenanceStore;
   lyricsAlign: LyricsAlignStore;
   playback: PlaybackStore;
+  document: DocumentStore;
+  viewport: ViewportStore;
 };
 
 /**
@@ -46,6 +59,8 @@ export class JotViewerPresenter {
   readonly provenance: ProvenanceStore;
   readonly lyricsAlign: LyricsAlignStore;
   readonly playback: PlaybackStore;
+  readonly document: DocumentStore;
+  readonly viewport: ViewportStore;
 
   constructor(deps: JotViewerPresenterDeps) {
     this.settings = deps.settings;
@@ -53,6 +68,8 @@ export class JotViewerPresenter {
     this.provenance = deps.provenance;
     this.lyricsAlign = deps.lyricsAlign;
     this.playback = deps.playback;
+    this.document = deps.document;
+    this.viewport = deps.viewport;
     makeAutoObservable(
       this,
       {
@@ -61,6 +78,8 @@ export class JotViewerPresenter {
         provenance: false,
         lyricsAlign: false,
         playback: false,
+        document: false,
+        viewport: false,
       },
       { autoBind: true }
     );
@@ -151,5 +170,76 @@ export class JotViewerPresenter {
 
   setAutoFollowOnPlay(on: boolean) {
     this.playback.autoFollowOnPlay = on;
+  }
+
+  // --- viewport (zoom / scroll / gutter) ---
+
+  setZoom(z: number) {
+    const clamped = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
+    this.viewport.zoom = clamped;
+    this.document.viewConfig.barWidth = px(BASE_BAR_WIDTH * clamped);
+  }
+
+  /** Cache the score viewport's pixel dimensions. Fed by a ResizeObserver
+   * on `.jotContainer`. Re-clamps scroll so a resize that shrinks the
+   * viewport (or grows it past the content) doesn't leave scroll parked
+   * off the new end. */
+  setViewportSize(width: number, height: number): void {
+    this.viewport._viewportWidth = width;
+    this.viewport._viewportHeight = height;
+    this.viewport.scrollX = this.clampScrollX(this.viewport.scrollX);
+    this.viewport.scrollY = this.clampScrollY(this.viewport.scrollY);
+  }
+
+  /** Cache the scroll-content's pixel dimensions (the inner
+   * `.scrollViewport` wrapper's offset size). Re-clamps as above. */
+  setContentSize(width: number, height: number): void {
+    this.viewport._contentWidth = width;
+    this.viewport._contentHeight = height;
+    this.viewport.scrollX = this.clampScrollX(this.viewport.scrollX);
+    this.viewport.scrollY = this.clampScrollY(this.viewport.scrollY);
+  }
+
+  setScrollX(x: number): void {
+    this.viewport.scrollX = this.clampScrollX(snapToDevicePx(x));
+  }
+
+  setScrollY(y: number): void {
+    this.viewport.scrollY = this.clampScrollY(snapToDevicePx(y));
+  }
+
+  setScrollBy(dx: number, dy: number): void {
+    this.viewport.scrollX = this.clampScrollX(snapToDevicePx(this.viewport.scrollX + dx));
+    this.viewport.scrollY = this.clampScrollY(snapToDevicePx(this.viewport.scrollY + dy));
+  }
+
+  /** Reset the horizontal scroll to the score's start (Stop transitions).
+   * Deliberately does NOT touch scrollY, the user's vertical view
+   * shouldn't snap back on Stop, only the playhead-tracking axis. */
+  resetScrollX(): void {
+    this.viewport.scrollX = 0;
+  }
+
+  /** Clamp a tentative target to `[0, contentSize - viewportSize]`. */
+  clampScrollX(x: number): number {
+    const max = Math.max(0, this.viewport._contentWidth - this.viewport._viewportWidth);
+    if (!(x > 0)) return 0;
+    if (x > max) return max;
+    return x;
+  }
+
+  clampScrollY(y: number): number {
+    const max = Math.max(0, this.viewport._contentHeight - this.viewport._viewportHeight);
+    if (!(y > 0)) return 0;
+    if (y > max) return max;
+    return y;
+  }
+
+  /** Resize the sticky gutter column, clamped to a sensible range so a
+   * runaway drag can't collapse the controls or push the bars row off
+   * screen. */
+  setGutterWidth(width: number): void {
+    if (!Number.isFinite(width)) return;
+    this.viewport.gutterWidth = Math.min(MAX_GUTTER_WIDTH, Math.max(MIN_GUTTER_WIDTH, width));
   }
 }

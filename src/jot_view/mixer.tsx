@@ -19,12 +19,14 @@ import {
   NoteProvenanceContext,
   RenderedJotContext,
   UniformWaveformsContext,
+  ViewportStoreContext,
 } from './contexts';
 import { LyricsRow } from './lyrics_row';
 import styles from './mixer.module.css';
 import { Playhead } from './playback';
 import { BarView, FilteredOnsetView, seekFromClick } from './score';
-import { JotViewStore, TrackKey, VOLUME_STEP } from './store';
+import { TrackKey, VOLUME_STEP } from './store';
+import { ViewportStore } from './stores/viewport_store';
 import { barsRowWidthSeed, intersectsBeatRange } from './windowing';
 
 export type VoiceControls = {
@@ -858,7 +860,7 @@ const AudioTrackRow = observer(
  * move the window, only newly-revealed bars mount.
  */
 const WindowedBarList = observer(function WindowedBarList({
-  store,
+  viewport,
   pitchBars,
   startBeats,
   pitch,
@@ -871,7 +873,7 @@ const WindowedBarList = observer(function WindowedBarList({
   pitches,
   colorForPitch,
 }: {
-  store: JotViewStore | null;
+  viewport: ViewportStore | null;
   pitchBars: readonly StructuralBar[];
   startBeats: readonly number[];
   pitch: string;
@@ -884,7 +886,7 @@ const WindowedBarList = observer(function WindowedBarList({
   pitches: string[];
   colorForPitch: (pitch: string) => string | undefined;
 }) {
-  const range = store?.visibleBeatRange ?? null;
+  const range = viewport?.visibleBeatRange ?? null;
   return (
     <>
       {pitchBars.map((bar, i) => {
@@ -971,6 +973,7 @@ const InstrumentRow = observer(
     // observer is the dependency that drives a row re-render when the
     // user picks a new colour.
     const store = React.useContext(JotViewStoreContext);
+    const viewport = React.useContext(ViewportStoreContext);
     const instrumentTrack = store?.getInstrumentTrack(pitch);
     const pitchColor = instrumentTrack?.color ?? 'var(--color-text-faint-strong)';
 
@@ -1099,7 +1102,7 @@ const InstrumentRow = observer(
               precomputed by `jot.barsForPitch(pitch)` as `startBeats`,
               so this map is just a render. */}
           <WindowedBarList
-            store={store ?? null}
+            viewport={viewport ?? null}
             pitchBars={pitchBars}
             startBeats={startBeats}
             pitch={pitch}
@@ -1196,7 +1199,7 @@ const AudioTrackWaveformCanvas = observer(
     dim: boolean;
     testId?: string;
   }) => {
-    const store = React.useContext(JotViewStoreContext);
+    const viewport = React.useContext(ViewportStoreContext);
     const uniformWaveforms = React.useContext(UniformWaveformsContext);
     const padBeats = React.useContext(RenderedJotContext)?.config.barNotePaddingBeats ?? 0.125;
     // Waveform tint reads straight off the AudioTrack instance; the
@@ -1211,7 +1214,7 @@ const AudioTrackWaveformCanvas = observer(
     const layout = React.useMemo(() => buildChunkLayout(jot), [jot]);
     const livePxPerBeat = useLiveJotPxPerBeat();
 
-    if (!store || layout.chunks.length === 0) return null;
+    if (!viewport || layout.chunks.length === 0) return null;
 
     // Visibility: derive the score-px x-range currently on screen
     // from `JotViewStore` observables. The score uses a virtualised
@@ -1222,8 +1225,8 @@ const AudioTrackWaveformCanvas = observer(
     // (`chunk.startBeat * livePxPerBeat + padBeats * livePxPerBeat`);
     // any chunk whose box intersects the viewport plus prefetch
     // margin is mounted, anything else is unmounted.
-    const scrollX = store.scrollX;
-    const viewportWidth = store._viewportWidth;
+    const scrollX = viewport.scrollX;
+    const viewportWidth = viewport._viewportWidth;
     if (viewportWidth <= 0 || livePxPerBeat <= 0) return null;
     const visibleLeft = scrollX - CHUNK_VIEWPORT_MARGIN_PX;
     const visibleRight = scrollX + viewportWidth + CHUNK_VIEWPORT_MARGIN_PX;

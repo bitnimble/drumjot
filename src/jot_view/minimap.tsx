@@ -35,6 +35,8 @@ import styles from './minimap.module.css';
 import { WAVEFORM_PAINT_COLOR } from './score';
 import { JotViewStore } from './store';
 import { DocumentStore } from './stores/document_store';
+import { ViewportStore } from './stores/viewport_store';
+import { JotViewerPresenter } from './jot_viewer_presenter';
 
 const NOTE_STRIP_H = 16;
 const WAVEFORM_H = 36;
@@ -67,7 +69,17 @@ function noteMarksEqual(a: readonly NoteMark[], b: readonly NoteMark[]): boolean
 }
 
 export const Minimap = observer(
-  ({ store, documentStore }: { store: JotViewStore; documentStore: DocumentStore }) => {
+  ({
+    store,
+    documentStore,
+    viewport,
+    presenter,
+  }: {
+    store: JotViewStore;
+    documentStore: DocumentStore;
+    viewport: ViewportStore;
+    presenter: JotViewerPresenter;
+  }) => {
     const jot = documentStore.currentJot;
   const containerRef = React.useRef<HTMLDivElement>(null);
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
@@ -322,8 +334,8 @@ export const Minimap = observer(
   // the viewport-box rendering is its own observer.
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 || !hasContent) return;
-    const sw = store._contentWidth;
-    const cw = store._viewportWidth;
+    const sw = viewport._contentWidth;
+    const cw = viewport._viewportWidth;
     if (sw <= 0 || width <= 0) return;
     e.preventDefault();
     // Clicking or dragging the minimap is an explicit "scroll the score
@@ -333,17 +345,17 @@ export const Minimap = observer(
     const rect = e.currentTarget.getBoundingClientRect();
     const scale = sw / width;
 
-    const boxLeftAtDown = (store.scrollX / sw) * width;
+    const boxLeftAtDown = (viewport.scrollX / sw) * width;
     const boxWidthAtDown = Math.max(2, (cw / sw) * width);
     const originX = e.clientX;
     const localXAtDown = originX - rect.left;
     const onBox = localXAtDown >= boxLeftAtDown && localXAtDown <= boxLeftAtDown + boxWidthAtDown;
-    let startScroll = store.scrollX;
+    let startScroll = viewport.scrollX;
     if (!onBox) {
       // Centre the box on the click; the drag continues from there.
       const target = (localXAtDown / width) * sw - cw / 2;
-      store.setScrollX(target);
-      startScroll = store.scrollX;
+      presenter.setScrollX(target);
+      startScroll = viewport.scrollX;
     }
 
     let pendingClientX = originX;
@@ -351,7 +363,7 @@ export const Minimap = observer(
     const flush = () => {
       rafId = 0;
       const dx = pendingClientX - originX;
-      store.setScrollX(startScroll + dx * scale);
+      presenter.setScrollX(startScroll + dx * scale);
     };
     const onMove = (ev: PointerEvent) => {
       pendingClientX = ev.clientX;
@@ -383,7 +395,7 @@ export const Minimap = observer(
       aria-label="Song minimap and horizontal scroller"
     >
       <canvas ref={canvasRef} className={styles.canvas} />
-      <MinimapViewportBox store={store} width={width} hasContent={hasContent} />
+      <MinimapViewportBox viewport={viewport} width={width} hasContent={hasContent} />
       <MinimapPlayhead
         totalDuration={totalDuration}
         firstStartSec={firstStartSec}
@@ -417,10 +429,18 @@ export const Minimap = observer(
  * these two in sync if either changes.
  */
 const MinimapViewportBox = observer(
-  ({ store, width, hasContent }: { store: JotViewStore; width: number; hasContent: boolean }) => {
-    const scrollX = store.scrollX;
-    const sw = store._contentWidth;
-    const cw = store._viewportWidth;
+  ({
+    viewport,
+    width,
+    hasContent,
+  }: {
+    viewport: ViewportStore;
+    width: number;
+    hasContent: boolean;
+  }) => {
+    const scrollX = viewport.scrollX;
+    const sw = viewport._contentWidth;
+    const cw = viewport._viewportWidth;
     let boxLeft = 0;
     let boxWidth = 0;
     let dimLeftScaleX = 0;

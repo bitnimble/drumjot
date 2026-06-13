@@ -71,7 +71,8 @@ async function measureFrameBusyMs(
 ): Promise<BusyResult> {
   return page.evaluate(
     async ({ driver, frames, warmup }) => {
-      const store = (window as any).drumjot.store;
+      const viewport = (window as any).drumjot.viewport;
+      const presenter = (window as any).drumjot.presenter;
       const player = (window as any).jotPlayer;
       const busy: number[] = [];
       const mc = new MessageChannel();
@@ -80,8 +81,8 @@ async function measureFrameBusyMs(
       let frameStart = 0;
       let i = 0;
       const startTime = driver === 'playback' ? player.currentTime : 0;
-      const startZoom = driver === 'zoom' ? store.zoom : 0;
-      const startScroll = driver === 'scroll' ? store.scrollX : 0;
+      const startZoom = driver === 'zoom' ? viewport.zoom : 0;
+      const startScroll = driver === 'scroll' ? viewport.scrollX : 0;
 
       // A message posted during the rAF callback runs as a task once the
       // frame's render steps have completed, so it brackets the frame's
@@ -99,10 +100,10 @@ async function measureFrameBusyMs(
         // zoom-out in one frame), which mounts every newly-revealed bar
         // at once - a discrete slider jump, not the 120fps gesture this
         // budget is for.
-        if (driver === 'zoom') store.setZoom(0.5 + Math.abs((i % 40) - 20) * 0.1);
+        if (driver === 'zoom') presenter.setZoom(0.5 + Math.abs((i % 40) - 20) * 0.1);
         // Triangle pan 0 <-> ~12000px (200px/frame), a brisk continuous
         // horizontal scroll that repeatedly crosses bar/window boundaries.
-        else if (driver === 'scroll') store.setScrollX(Math.abs((i % 120) - 60) * 200);
+        else if (driver === 'scroll') presenter.setScrollX(Math.abs((i % 120) - 60) * 200);
         i++;
         frameStart = performance.now();
         mc.port2.postMessage(null);
@@ -112,9 +113,9 @@ async function measureFrameBusyMs(
 
       const active =
         driver === 'zoom'
-          ? store.zoom !== startZoom // setZoom is wired and the sweep took effect
+          ? viewport.zoom !== startZoom // setZoom is wired and the sweep took effect
           : driver === 'scroll'
-            ? store.scrollX !== startScroll
+            ? viewport.scrollX !== startScroll
             : player.state === 'playing' && player.currentTime > startTime;
       return { steady: busy.slice(warmup), active };
     },
@@ -180,7 +181,7 @@ test.describe('per-frame performance', () => {
   test('scrolling the score holds 120fps', async ({ page }) => {
     test.setTimeout(180_000);
     await loadDebugBundle(page);
-    await page.evaluate(() => (window as any).drumjot.store.setZoom(1));
+    await page.evaluate(() => (window as any).drumjot.presenter.setZoom(1));
 
     // 120 frames of continuous horizontal panning; drop the first 20 for
     // warm-up. With windowing, each tick re-runs the visible-range filter
@@ -195,7 +196,7 @@ test.describe('per-frame performance', () => {
     test.setTimeout(180_000); // bundle load + ~30MB SoundFont fetch on first play
 
     await loadDebugBundle(page);
-    await page.evaluate(() => (window as any).drumjot.store.setZoom(1));
+    await page.evaluate(() => (window as any).drumjot.presenter.setZoom(1));
 
     // Start playback and wait for it to actually run. Reaching 'playing'
     // downloads the TR-808 SoundFont from the smplr CDN on a cold cache, so

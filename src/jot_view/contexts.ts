@@ -6,6 +6,7 @@ import { SelectionStore } from 'src/selection';
 import { GridLineSettings, JotViewStore } from './store';
 import { ProvenanceStore } from './stores/provenance_store';
 import { LyricsAlignStore } from './stores/lyrics_align_store';
+import { ViewportStore } from './stores/viewport_store';
 import { JotViewerPresenter } from './jot_viewer_presenter';
 
 /**
@@ -37,6 +38,13 @@ export const ProvenanceStoreContext = React.createContext<ProvenanceStore | null
  * outside the view.
  */
 export const LyricsAlignStoreContext = React.createContext<LyricsAlignStore | null>(null);
+
+/**
+ * Routes the {@link ViewportStore} to deep consumers that read scroll /
+ * zoom / visible-range state (today: score `WindowedTicks` / `PopoverPortal`
+ * and `WindowedLyricLines`). `null` outside the view.
+ */
+export const ViewportStoreContext = React.createContext<ViewportStore | null>(null);
 
 /**
  * Routes the {@link JotViewerPresenter} to deep consumers that need to

@@ -34,6 +34,8 @@ test('zoom does not re-render JotView', async ({ page }) => {
   const result = await page.evaluate(async () => {
     const w = window as any;
     const store = w.drumjot.store;
+    const viewport = w.drumjot.viewport;
+    const presenter = w.drumjot.presenter;
     const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
     const settle = async () => {
       await nextFrame();
@@ -54,11 +56,11 @@ test('zoom does not re-render JotView', async ({ page }) => {
     w.__perf = {};
     const zooms = [0.3, 0.5, 0.8, 1.2, 1.7, 2.3, 3.0];
     for (const z of zooms) {
-      store.setZoom(z);
+      presenter.setZoom(z);
       await settle();
     }
     const onZoom = w.__perf.JotView ?? 0;
-    const finalZoom = store.zoom;
+    const finalZoom = viewport.zoom;
     delete w.__perf;
     return { onControl, onZoom, zoomTicks: zooms.length, finalZoom };
   });
@@ -113,11 +115,11 @@ test('zoom does not re-render hidden note popovers', async ({ page }) => {
   // re-render zero popovers. This is the cascade the fix removes.
   const onZoom = await page.evaluate(async () => {
     const w = window as any;
-    const store = w.drumjot.store;
+    const presenter = w.drumjot.presenter;
     const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
     w.__perf = {};
     for (const z of [0.4, 0.7, 1.1, 1.6, 2.2, 3.0]) {
-      store.setZoom(z);
+      presenter.setZoom(z);
       await nextFrame();
       await nextFrame();
     }
@@ -132,11 +134,12 @@ test('zoom does not re-render hidden note popovers', async ({ page }) => {
   await settle();
   const onControl = await page.evaluate(async () => {
     const w = window as any;
-    const store = w.drumjot.store;
+    const presenter = w.drumjot.presenter;
+    const viewport = w.drumjot.viewport;
     const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
     const popoverShown = !!document.querySelector('[data-popover="note-label"]');
     w.__perf = {};
-    store.setZoom(store.zoom * 1.3);
+    presenter.setZoom(viewport.zoom * 1.3);
     await nextFrame();
     await nextFrame();
     const n = w.__perf.PopoverPortal ?? 0;

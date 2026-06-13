@@ -30,7 +30,8 @@ test('cursor-anchored zoom keeps the anchor pinned, scale+scroll in lockstep', a
 
   const result = await page.evaluate(async () => {
     const w = window as any;
-    const store = w.drumjot.store;
+    const viewportStore = w.drumjot.viewport;
+    const presenter = w.drumjot.presenter;
     const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
     const settle = async () => {
       await nextFrame();
@@ -46,7 +47,9 @@ test('cursor-anchored zoom keeps the anchor pinned, scale+scroll in lockstep', a
 
     // Scroll most of the way into the song so the per-tick scroll delta is
     // large (this is where a desync paints multiple screens off).
-    store.setScrollX(Math.max(0, store._contentWidth - store._viewportWidth) * 0.8);
+    presenter.setScrollX(
+      Math.max(0, viewportStore._contentWidth - viewportStore._viewportWidth) * 0.8
+    );
     await settle();
 
     const clientX = scrollerRect.left + scrollerRect.width * 0.7;
@@ -68,7 +71,7 @@ test('cursor-anchored zoom keeps the anchor pinned, scale+scroll in lockstep', a
       const ppb = ppbDom();
       const trackedScreenX = barsRow.getBoundingClientRect().left + ppb / 24 + trackedBeat * ppb;
       maxDrift = Math.max(maxDrift, Math.abs(trackedScreenX - clientX));
-      maxDesync = Math.max(maxDesync, Math.abs(store.scrollX - scrollDom()));
+      maxDesync = Math.max(maxDesync, Math.abs(viewportStore.scrollX - scrollDom()));
     };
 
     const fireWheel = (dir: number) =>
@@ -85,14 +88,14 @@ test('cursor-anchored zoom keeps the anchor pinned, scale+scroll in lockstep', a
 
     // Rapid zoom IN then OUT, 3 coalesced notches per frame, single-frame
     // yields (no settling) to stress the effect-phase race.
-    for (let i = 0; i < 10 && store.zoom < 3.99; i++) {
+    for (let i = 0; i < 10 && viewportStore.zoom < 3.99; i++) {
       fireWheel(-1);
       fireWheel(-1);
       fireWheel(-1);
       await nextFrame();
       sample();
     }
-    for (let i = 0; i < 16 && store.zoom > 0.11; i++) {
+    for (let i = 0; i < 16 && viewportStore.zoom > 0.11; i++) {
       fireWheel(+1);
       fireWheel(+1);
       fireWheel(+1);

@@ -39,7 +39,7 @@ import styles from './toolbar.module.css';
 import { GridLineSettings, JotViewStore, TranscribeOptions, TranscribeStatus } from './store';
 import { ProvenanceStore } from './stores/provenance_store';
 import { JotViewerPresenter } from './jot_viewer_presenter';
-import { JotViewStoreContext } from './contexts';
+import { ViewportStoreContext } from './contexts';
 
 /** Stage labels in pipeline order, shown verbatim in the resume stage
  *  picker. Mirrors `Stage` in `transcriber/app/pipeline/runner.py`. */
@@ -121,8 +121,8 @@ function formatStageLabel(stage: TranscribeStage): string {
  * stable-prop isolation that keeps `JotView` off the zoom path entirely.
  */
 const ZoomControl = observer(({ onSetZoom }: { onSetZoom: (z: number) => void }) => {
-  const store = React.useContext(JotViewStoreContext);
-  const zoom = store?.zoom ?? 1;
+  const viewport = React.useContext(ViewportStoreContext);
+  const zoom = viewport?.zoom ?? 1;
   return (
     <label
       className={styles.dropdownStepperRow}

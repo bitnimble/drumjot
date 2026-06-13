@@ -25,12 +25,12 @@ import { GutterResizeHandle } from './components/gutter_resize_handle';
 import {
   BarTimingsContext,
   JotViewerPresenterContext,
-  JotViewStoreContext,
   NoteProvenanceContext,
   NoteProvenanceContextValue,
   ProvenanceStoreContext,
   RenderedJotContext,
   SelectionContext,
+  ViewportStoreContext,
 } from './contexts';
 import { Playhead } from './playback';
 import styles from './score.module.css';
@@ -143,15 +143,15 @@ const PopoverPortalShown = observer(function PopoverPortalShown({
   extraProps,
 }: PopoverPortalProps) {
   perfProbe('PopoverPortal');
-  const store = React.useContext(JotViewStoreContext);
+  const viewport = React.useContext(ViewportStoreContext);
   // Read these for MobX reactivity even though we don't use the values
   // directly, the bounding-rect read in the render below picks up the
   // new post-transform position whenever the score scrolls or zooms.
   // Only the open popover is mounted, so this is one subscription, not one
   // per note (see {@link PopoverPortal}).
-  void store?.scrollX;
-  void store?.scrollY;
-  void store?.zoom;
+  void viewport?.scrollX;
+  void viewport?.scrollY;
+  void viewport?.zoom;
 
   const labelRef = React.useRef<HTMLDivElement | null>(null);
   const [flip, setFlip] = React.useState(false);
@@ -170,7 +170,7 @@ const PopoverPortalShown = observer(function PopoverPortalShown({
     const overflowsBelow = aRect.bottom + GAP + lRect.height > window.innerHeight - SAFE;
     const fitsAbove = aRect.top - GAP - lRect.height > SAFE;
     setFlip(overflowsBelow && fitsAbove);
-  }, [anchorRef, store?.scrollX, store?.scrollY, store?.zoom]);
+  }, [anchorRef, viewport?.scrollX, viewport?.scrollY, viewport?.zoom]);
 
   const anchor = anchorRef.current;
   if (!anchor) return null;
@@ -446,8 +446,8 @@ type TickDescriptor = {
  * is precomputed and stable, so the parent doesn't re-render on scroll.
  */
 const WindowedTicks = observer(function WindowedTicks({ ticks }: { ticks: TickDescriptor[] }) {
-  const store = React.useContext(JotViewStoreContext);
-  const range = store?.visibleBeatRange ?? null;
+  const viewport = React.useContext(ViewportStoreContext);
+  const range = viewport?.visibleBeatRange ?? null;
   return (
     <>
       {ticks.map((t) => {

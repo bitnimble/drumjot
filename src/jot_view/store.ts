@@ -4,7 +4,7 @@ import { loadDebugZip, NO_DRUMS_KEY } from 'src/debug_zip';
 import { Instrument } from 'src/dsl';
 import { ExampleJot } from 'src/fakes';
 import { DrumInstrumentKind, defaultKindForPitch } from 'src/instruments';
-import { RenderedJot, px } from 'src/jot';
+import { RenderedJot } from 'src/jot';
 import {
   AlignLyricsRequest,
   LyricLine,
@@ -46,6 +46,7 @@ import { TranscribeStore } from './stores/transcribe_store';
 import { ProvenanceStore } from './stores/provenance_store';
 import { LyricsAlignStore } from './stores/lyrics_align_store';
 import { PlaybackStore } from './stores/playback_store';
+import { ViewportStore } from './stores/viewport_store';
 
 // `LyricsAlignStatus` + lyrics-align UI state moved to `LyricsAlignStore`.
 // Re-exported so existing type imports from `./store` keep working.
@@ -71,47 +72,21 @@ export type { TranscribeStatus, TranscribeOptions } from './stores/transcribe_st
 // `./store` keep working during the carve-up.
 export type { GridLineSettings } from './stores/settings_store';
 
-/**
- * Pixels-per-bar at zoom = 1. Same numeric value as `ViewConfig.barWidth`'s
- * own default so existing layouts are unchanged for users who never touch
- * the slider.
- */
-export const BASE_BAR_WIDTH = 448;
-export const MIN_ZOOM = 0.1;
-export const MAX_ZOOM = 4.0;
+// Viewport constants + `snapToDevicePx` moved to `ViewportStore`.
+// Re-exported so existing imports from `./store` keep working.
+export {
+  BASE_BAR_WIDTH,
+  MIN_ZOOM,
+  MAX_ZOOM,
+  DEFAULT_GUTTER_WIDTH,
+  MIN_GUTTER_WIDTH,
+  MAX_GUTTER_WIDTH,
+  snapToDevicePx,
+} from './stores/viewport_store';
 
-/** Snap a CSS-pixel value to the nearest 1/dpr boundary. The
- *  `.scrollViewport`'s `transform: translate3d(--scroll-x × -1px, ...)`
- *  is composited at device-pixel resolution; if scroll values are
- *  sub-device-pixel (e.g. 100.3 CSS px on a 2x display = 200.6 device
- *  px), the compositor bilinearly interpolates the bitmap each frame
- *  and the interpolation distribution shifts as scroll advances,
- *  producing a visible ~1px back-and-forth wobble during auto-follow.
- *  Snapping keeps every scroll value on the device grid: at dpr=2
- *  that's 0.5 CSS-px steps, fine enough that 120-fps auto-follow at
- *  120 BPM still advances smoothly (~3-4 device pixels per frame at
- *  pxPerBeat 112, more at higher zoom).
- *  Also used to lock `--playhead-x` to the same grid as `scrollX` in
- *  `PlayheadPosVar` so the centred playhead doesn't drift sub-pixel
- *  against the bars below it. */
-export function snapToDevicePx(x: number): number {
-  if (typeof window === 'undefined') return x;
-  const dpr = window.devicePixelRatio || 1;
-  return Math.round(x * dpr) / dpr;
-}
 // Row volume faders are pure attenuation (0 = silent, 1 = unscaled).
 // The kit's overall loudness is handled by the drum master gain.
 export const VOLUME_STEP = 0.05;
-
-// Sticky gutter column width (px). Default matches the legacy
-// hardcoded 132px so existing layouts are unchanged; the user can drag
-// the gutter's right edge to widen it when long track names are clipped
-// with `…` and `fit-content` would be too jumpy.
-export const DEFAULT_GUTTER_WIDTH = 132;
-// Floor at the width needed to fit the row gutter's minimum content:
-// padding + drag handle + a short volume slider + the M/S button pair.
-export const MIN_GUTTER_WIDTH = 128;
-export const MAX_GUTTER_WIDTH = 480;
 
 export function clampVolume(v: number): number {
   if (!Number.isFinite(v)) return 1;
@@ -319,53 +294,8 @@ export class JotViewStore {
   // DebugPanel open/height moved to `ProvenanceStore` (this.provenance).
   // Lyrics modal visibility + per-track align status moved to
   // `LyricsAlignStore` (this.lyricsAlign).
-  /** Width (px) of the sticky mixer/score gutter column; user-resizable
-   * by dragging the gutter's right edge. Propagated to every gutter
-   * element through the `--gutter-width` CSS variable set on the JotView
-   * container. */
-  gutterWidth: number = DEFAULT_GUTTER_WIDTH;
-  /**
-   * Virtual horizontal scroll offset (px) for the score viewport.
-   *
-   * The score doesn't use native overflow scrolling: `.jotContainer` is
-   * `overflow: hidden`, and an inner `.scrollViewport` wrapper translates
-   * by `(-scrollX, -scrollY)` via CSS `transform`. Driving scroll
-   * through this observable instead of `el.scrollLeft` gives subpixel
-   * precision (browsers integer-snap `scrollLeft`, which made the
-   * playhead wobble ~1px against the bars during auto-follow), and
-   * makes scroll position reactive so observers (the minimap viewport
-   * box) just `observer()` it and re-render with no `scroll` event hookup.
-   *
-   * Clamped to `[0, contentWidth - viewportWidth]` inside `setScrollX`.
-   * The bounds come from `_viewportWidth` / `_contentWidth` which
-   * JotView's ResizeObservers feed via `setViewportSize` /
-   * `setContentSize`.
-   */
-  scrollX: number = 0;
-  /** Virtual vertical scroll offset (px). See `scrollX`. */
-  scrollY: number = 0;
-  /**
-   * Cached viewport (jotContainer clientWidth/Height) and content
-   * (scrollViewport offsetWidth/Height) dimensions, fed by a
-   * ResizeObserver in JotView via `setViewportSize` / `setContentSize`.
-   * Used internally to clamp `scrollX` / `scrollY` to `[0, content -
-   * viewport]`, and also read by per-frame observers that derive what
-   * to paint from the visible viewport (e.g. the waveform-chunk
-   * visibility slice in `mixer.tsx`; see AGENTS.md §5.9 on the no-DOM-
-   * layout-reads rule).
-   *
-   * MobX-observable (the constructor's `makeAutoObservable` only marks
-   * `transcribeController` / `lyricsAlignControllers` as non-observable;
-   * everything else defaults to observable). The underscore prefix is
-   * historical and signals "consumers should generally go through the
-   * dedicated setters" rather than "non-reactive"; an observer that
-   * reads any of these will re-run when its specific field changes,
-   * and only that observer (MobX tracks per-field).
-   */
-  _viewportWidth: number = 0;
-  _viewportHeight: number = 0;
-  _contentWidth: number = 0;
-  _contentHeight: number = 0;
+  // Zoom / scroll offsets / viewport+content extents / gutter width
+  // moved to `ViewportStore` (this.viewport).
   /**
    * Controller for the in-flight `/transcribe` request, if any. The
    * "Stop" toolbar button calls `.abort()` here; the request's
@@ -406,6 +336,7 @@ export class JotViewStore {
   readonly provenance: ProvenanceStore;
   readonly lyricsAlign: LyricsAlignStore;
   readonly playback: PlaybackStore;
+  readonly viewport: ViewportStore;
 
   constructor(
     document: DocumentStore,
@@ -413,7 +344,8 @@ export class JotViewStore {
     transcribe: TranscribeStore,
     provenance: ProvenanceStore,
     lyricsAlign: LyricsAlignStore,
-    playback: PlaybackStore
+    playback: PlaybackStore,
+    viewport: ViewportStore
   ) {
     this.document = document;
     this.settings = settings;
@@ -421,6 +353,7 @@ export class JotViewStore {
     this.provenance = provenance;
     this.lyricsAlign = lyricsAlign;
     this.playback = playback;
+    this.viewport = viewport;
     makeAutoObservable(this, {
       transcribeController: false,
       lyricsAlignControllers: false,
@@ -430,6 +363,7 @@ export class JotViewStore {
       provenance: false,
       lyricsAlign: false,
       playback: false,
+      viewport: false,
     });
     // Wire ourselves in as the player's mixer context so freshly-
     // constructed AudioTracks can resolve grouped-instrument colour
@@ -1051,11 +985,6 @@ export class JotViewStore {
     jotPlayer.stop();
   }
 
-  setZoom(z: number) {
-    const clamped = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
-    this.zoom = clamped;
-    this.document.viewConfig.barWidth = px(BASE_BAR_WIDTH * clamped);
-  }
 
   /**
    * Upload an audio file to the transcriber service, parse the returned
@@ -1749,119 +1678,13 @@ export class JotViewStore {
    * (viewport state not yet extracted); moves to the presenter with the
    * viewport slice. */
   setDebugPanelHeight(px: number): void {
-    const max = Math.max(120, this._viewportHeight - 160);
+    const max = Math.max(120, this.viewport._viewportHeight - 160);
     this.provenance.debugPanelHeight = Math.min(max, Math.max(80, px));
   }
 
-  /** Resize the sticky gutter column. Clamped to a sensible range so a
-   * runaway drag can't collapse the controls or push the bars row off
-   * screen. */
-  setGutterWidth(px: number): void {
-    if (!Number.isFinite(px)) return;
-    this.gutterWidth = Math.min(MAX_GUTTER_WIDTH, Math.max(MIN_GUTTER_WIDTH, px));
-  }
-
-  /**
-   * Cache the score viewport's pixel dimensions. Fed by a ResizeObserver
-   * on `.jotContainer` in JotView. Re-clamps `scrollX` / `scrollY` so a
-   * resize that shrinks the viewport (or grows it past the content's
-   * extent) doesn't leave the scroll parked off the new end.
-   */
-  setViewportSize(width: number, height: number): void {
-    this._viewportWidth = width;
-    this._viewportHeight = height;
-    this.scrollX = this.clampScrollX(this.scrollX);
-    this.scrollY = this.clampScrollY(this.scrollY);
-  }
-
-  /**
-   * Cache the scroll-content's pixel dimensions (the inner
-   * `.scrollViewport` wrapper's offset width / height, fed by a
-   * ResizeObserver in JotView). Re-clamps as above: zooming out shrinks
-   * the content and the user might land past the new max.
-   */
-  setContentSize(width: number, height: number): void {
-    this._contentWidth = width;
-    this._contentHeight = height;
-    this.scrollX = this.clampScrollX(this.scrollX);
-    this.scrollY = this.clampScrollY(this.scrollY);
-  }
-
-  setScrollX(x: number): void {
-    this.scrollX = this.clampScrollX(snapToDevicePx(x));
-  }
-
-  setScrollY(y: number): void {
-    this.scrollY = this.clampScrollY(snapToDevicePx(y));
-  }
-
-  setScrollBy(dx: number, dy: number): void {
-    this.scrollX = this.clampScrollX(snapToDevicePx(this.scrollX + dx));
-    this.scrollY = this.clampScrollY(snapToDevicePx(this.scrollY + dy));
-  }
-
-  /**
-   * Reset the horizontal scroll to the score's start. Used on Stop
-   * transitions so a fresh Play shows the lead-in. Deliberately does
-   * NOT touch `scrollY`: the user might have scrolled down to see
-   * lower tracks; their vertical view shouldn't snap back just because
-   * they pressed Stop, only the horizontal playhead-tracking axis.
-   */
-  resetScrollX(): void {
-    this.scrollX = 0;
-  }
-
-  /**
-   * Clamp a tentative target to `[0, contentSize - viewportSize]`. Public
-   * so callers (zoom anchor) can sequence "compute target → setScrollX"
-   * deterministically; setScrollX itself goes through this.
-   */
-  clampScrollX(x: number): number {
-    const max = Math.max(0, this._contentWidth - this._viewportWidth);
-    if (!(x > 0)) return 0;
-    if (x > max) return max;
-    return x;
-  }
-
-  clampScrollY(y: number): number {
-    const max = Math.max(0, this._contentHeight - this._viewportHeight);
-    if (!(y > 0)) return 0;
-    if (y > max) return max;
-    return y;
-  }
-
-  /**
-   * Quarter-note-beat window currently on screen (plus a one-viewport
-   * buffer on each side so a fast scroll doesn't outrun the rendered
-   * region before the next frame). Drives horizontal score
-   * virtualisation: each row renders only the bars / ticks / words whose
-   * beat span intersects this range, so a 5-minute song keeps a bounded
-   * DOM + CSSOM regardless of length.
-   *
-   * Derived purely from `JotViewStore` observables (`scrollX`,
-   * `_viewportWidth`) and the jot's zoom-driven `pxPerBeat`, so it
-   * re-derives on scroll / zoom / resize and nothing else, no DOM
-   * layout reads (AGENTS.md §5.9). The bars row is positioned in
-   * score-px where beat 0 sits at x=0 and the virtual scroll window is
-   * `[scrollX, scrollX + viewportWidth]` (the same convention the
-   * waveform-chunk visibility check uses); the sticky gutter's width is
-   * comfortably absorbed by the buffer, so it's omitted here.
-   *
-   * `null` means "windowing disabled, render everything": returned
-   * before the first ResizeObserver tick (viewport size unknown) and
-   * whenever `pxPerBeat` is degenerate, so initial paint / non-laid-out
-   * test environments still render the full score.
-   */
-  get visibleBeatRange(): { startBeat: number; endBeat: number } | null {
-    const ppb = this.document.currentJot?.pxPerBeat ?? 0;
-    const vw = this._viewportWidth;
-    if (ppb <= 0 || vw <= 0) return null;
-    const buffer = vw;
-    return {
-      startBeat: (this.scrollX - buffer) / ppb,
-      endBeat: (this.scrollX + vw + buffer) / ppb,
-    };
-  }
+  // Viewport actions (setZoom, scroll setters + clamps, viewport/content
+  // size, setGutterWidth) and the visibleBeatRange computed moved to
+  // `ViewportStore` (data) + the presenter (actions).
 
   /**
    * Read a synced-lyrics file (LRC, or a text file in LRC format) from
