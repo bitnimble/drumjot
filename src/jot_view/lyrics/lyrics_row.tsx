@@ -35,7 +35,7 @@ import {
 } from './lyrics_measure';
 import styles from './lyrics_row.module.css';
 import mixerStyles from '../mixer/mixer.module.css';
-import { Playhead } from '../playback/playback';
+import { Playhead } from '../playback/playhead';
 import { seekFromClick } from '../score/score';
 import { barsRowWidthSeed, intersectsBeatRange } from '../utils/windowing';
 

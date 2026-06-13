@@ -3,7 +3,7 @@ import { AlertTriangle, Loader, Pause, Play, Square } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { DEFAULT_GRID_DIVISION, gridDivisionFor } from 'src/grid';
-import { JotTimeline, jotPlayer, PlayerState } from 'src/playback';
+import { jotPlayer, PlayerState } from 'src/playback';
 import sharedStyles from '../../jot_view.module.css';
 import { NumberStepper } from '../components/number_stepper';
 import { FollowPlayheadContext } from '../contexts';
@@ -236,94 +236,6 @@ export const PlaybackBar = observer(
 ));
 
 /**
- * Travelling playback marker. Rendered in three places (timeline header,
- * each audio-track row, each instrument row) so the playhead line is
- * visible across the whole vertical stack.
- *
- * Position is NOT driven from this component; it's read from the
- * `--playhead-x` CSS custom property that `PlayheadPosVar` writes once
- * per frame on each `[data-playhead="1"]` element (see jot_view.tsx).
- * The var is registered `inherits: false`, so the per-tick `setProperty`
- * has to be made per-playhead; `PlayheadPosVar` iterates a cached
- * `DomTargetCache.playheads` Set (maintained via a single
- * `MutationObserver` on the JotView root) instead of `querySelectorAll`-ing
- * every frame. The shell only re-renders when `state` / `cued` / `timeline`
- * change (i.e. transport events, not per-frame playback) so a debug bundle
- * with many tracks doesn't pay N × (reconciliation + new style object +
- * new closure) every frame the way it used to.
- *
- * Drag-to-scrub still works because the mousedown handler measures
- * against the parent bars-row's bounding rect, which is unaffected by
- * this element's own transform.
- */
-export const Playhead = observer(
-  ({
-    showLabel = false,
-    onSeek,
-  }: {
-    showLabel?: boolean;
-    onSeek: (x: number) => void;
-  }) => {
-    const timeline = jotPlayer.timeline;
-    const active =
-      jotPlayer.state === 'playing' ||
-      jotPlayer.state === 'paused' ||
-      // Idle but the user clicked to position the playhead before
-      // pressing Play; show it parked at the cued spot.
-      jotPlayer.cued;
-    if (!active || timeline.bars.length === 0) return null;
-
-    const onMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-      if (e.button !== 0) return;
-      e.stopPropagation();
-      e.preventDefault();
-      const parent = e.currentTarget.parentElement;
-      if (!parent) return;
-      const rect = parent.getBoundingClientRect();
-      onSeek(e.clientX - rect.left);
-      const onMove = (ev: MouseEvent) => {
-        onSeek(ev.clientX - rect.left);
-      };
-      const onUp = () => {
-        window.removeEventListener('mousemove', onMove);
-        window.removeEventListener('mouseup', onUp);
-      };
-      window.addEventListener('mousemove', onMove);
-      window.addEventListener('mouseup', onUp);
-    };
-
-    return (
-      <div
-        className={styles.playhead}
-        onMouseDown={onMouseDown}
-        data-noseek
-        data-playhead="1"
-      >
-        {showLabel && <PlayheadLabel timeline={timeline} />}
-      </div>
-    );
-  }
-);
-
-/**
- * Time / bar-beat readout shown on top of the timeline-header playhead.
- * Only ONE instance ever mounts (the per-row playheads pass
- * `showLabel={false}`), so reading `jotPlayer.currentTime` here gives
- * us a per-frame re-render of a tiny tree (two text nodes) and nothing
- * else, no shell rerenders, no per-row label rerenders.
- */
-const PlayheadLabel = observer(({ timeline }: { timeline: JotTimeline }) => {
-  const t = jotPlayer.currentTime;
-  const pos = playheadBarBeat(timeline, t);
-  return (
-    <div className={styles.playheadLabel}>
-      <div>{formatPlayheadTime(t)}</div>
-      {pos && <div className={styles.playheadLabelBarBeat}>{pos}</div>}
-    </div>
-  );
-});
-
-/**
  * Bottom-bar toggle that flips `FollowPlayheadContext.follow`. On (the
  * default) keeps the score scrolled to the centred playhead during
  * playback; off lets the user pan to other sections while playing.
@@ -366,46 +278,6 @@ const FollowToggle = () => {
     </button>
   );
 };
-
-function formatPlayheadTime(seconds: number): string {
-  const negative = seconds < 0;
-  const abs = Math.abs(seconds);
-  const totalSec = Math.floor(abs);
-  const min = Math.floor(totalSec / 60);
-  const sec = totalSec % 60;
-  const cs = Math.floor((abs - totalSec) * 100);
-  return `${negative ? '-' : ''}${min}:${String(sec).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
-}
-
-/**
- * Convert the playhead's jot-time position to `Bar N, X.XXb` for the
- * second line of the label. Walks the timeline's per-bar timings to
- * find the bar containing `jotTime`, then computes beat-in-bar in the
- * bar's time-signature beats (1-indexed at the downbeat). Returns
- * `null` when no bar can be resolved (empty timeline / no rendered
- * voice).
- */
-function playheadBarBeat(timeline: JotTimeline, jotTime: number): string | null {
-  const renderedBars = timeline.rendered?.structure.voices[0]?.bars ?? [];
-  if (renderedBars.length === 0 || timeline.bars.length === 0) return null;
-  for (let i = 0; i < timeline.bars.length; i++) {
-    const t = timeline.bars[i]!;
-    if (jotTime < t.startSec + t.durationSec) {
-      const rb = renderedBars[i];
-      if (!rb || t.durationSec <= 0) return null;
-      const beatInBar = 1 + ((jotTime - t.startSec) / t.durationSec) * rb.time.count;
-      // Truncate (not round) so the tail of a bar never rounds up to the
-      // next bar's downbeat, e.g. 4/4 must go 4.99 → 1.00, never 5.00.
-      const beatDisplay = (Math.floor(beatInBar * 100) / 100).toFixed(2);
-      return `Bar ${rb.index}, ${beatDisplay}b`;
-    }
-  }
-  // Past the end of the last bar; pin to its final beat so the label
-  // doesn't blank out when scrubbing slightly past the score's tail.
-  const last = renderedBars[renderedBars.length - 1];
-  if (!last) return null;
-  return `Bar ${last.index}, ${(last.time.count + 0.99).toFixed(2)}b`;
-}
 
 /**
  * One labelled master fader in the transport bar. Pure attenuation

@@ -23,7 +23,7 @@ import {
 } from '../contexts';
 import { LyricsRow } from '../lyrics/lyrics_row';
 import styles from './mixer.module.css';
-import { Playhead } from '../playback/playback';
+import { Playhead } from '../playback/playhead';
 import { BarView, FilteredOnsetView, seekFromClick } from '../score/score';
 import { TrackKey, VOLUME_STEP } from '../store';
 import { ViewportStore } from '../viewport/viewport_store';

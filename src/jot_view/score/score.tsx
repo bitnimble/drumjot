@@ -32,7 +32,7 @@ import {
   SelectionContext,
   ViewportStoreContext,
 } from '../contexts';
-import { Playhead } from '../playback/playback';
+import { Playhead } from '../playback/playhead';
 import styles from './score.module.css';
 import { barsRowWidthSeed, intersectsBeatRange } from '../utils/windowing';
 
