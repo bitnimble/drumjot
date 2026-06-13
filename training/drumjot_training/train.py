@@ -1148,8 +1148,6 @@ def main(argv: list[str] | None = None) -> None:
                     help="treat dropped, non-output percussion (the removed mp + non-kit "
                     "aux perc) as hard negatives for every output lane, reusing the sib "
                     "weighting; --no-dropped-neg ablates (default on)")
-    ap.add_argument("--align-window", type=float, default=0.03, help="post-filter peak-align window (s)")
-    ap.add_argument("--support-percentile", type=float, default=60.0, help="post-filter envelope support floor pctl")
     ap.add_argument("--no-filter-report", action="store_true", help="skip the deterministic-filter F1 comparison")
     ap.add_argument("--out", type=str, default=None, help="save model.pt + meta.json here")
     ap.add_argument("--resume", type=str, default=None, help="checkpoint dir to warm-start weights from")

@@ -2,16 +2,16 @@
 
 Python port of the class mapping in `src/rlrr/drums.ts`. A chart `event` carries
 an absolute-seconds `time` and an instrument-instance `name` (e.g. `BP_Snare_C_1`);
-the class (`BP_Snare_C`) maps to one of our 11 lanes.
+the class (`BP_Snare_C`) maps to one of our 10 lanes.
 
 Two source-of-truth quirks (see src/rlrr/drums.ts):
   - Hi-hat open/closed/pedal is NOT encoded in the class (Paradiddle uses one
     `BP_HiHat_C`). The only disambiguator is the optional `event.midi` extension
     (42=closed, 46=open, 44=pedal); absent -> assume closed.
   - There is no side-stick class in rlrr, so the `ss` lane stays empty.
-China -> misc-cymbal (`mc`), all toms -> `t`, cowbell/tambourine -> misc-perc
-(`mp`); tuned/aux percussion (timpani, triangle, bongo, mallets, gong) is not in
-the drum-kit vocab and is dropped.
+China -> misc-cymbal (`mc`), all toms -> `t`; cowbell/tambourine are dropped
+(the `mp` lane was removed), as is tuned/aux percussion (timpani, triangle,
+bongo, mallets, gong) outside the drum-kit vocab.
 """
 from __future__ import annotations
 
@@ -81,7 +81,7 @@ def _bimodal_hihat_open_vel(events):
 
 
 def onsets_by_lane(rlrr: object) -> dict[str, list[float]]:
-    """Per-lane sorted onset times (seconds). Always returns all 11 lanes.
+    """Per-lane sorted onset times (seconds). Always returns all 10 lanes.
 
     Hi-hat openness: `event.midi` (46/44) wins; otherwise, if the whole hi-hat
     track uses exactly two velocities, the quieter ones are taken as open (`ho`),
@@ -146,7 +146,7 @@ REPORT_ORDER = ("k", "s", "ss", "t", "h", "hc", "hp", "ho", "cym", "rd", "cr", "
 def has_lane_track(rlrr: object, lane: str) -> bool:
     """True if the chart's kit (`instruments[]`) defines a dedicated instrument
     mapping to `lane`. Used to decide whether to score the sparse aux-percussion
-    lanes (mp/mc): only if the map actually charts that percussion."""
+    lane (mc): only if the map actually charts that percussion."""
     for inst in load(rlrr).get("instruments", []):
         cls = inst.get("class")
         if cls and _CLASS_TO_LANE.get(cls) == lane:
@@ -164,7 +164,7 @@ def comparison_pairs(
     both ride AND crash), score each present subclass on its own. Otherwise
     fold the whole group, on BOTH the model and chart sides, to the parent
     label, so the model isn't penalised for a subclass distinction the mapper
-    never charted. Ungrouped lanes (k/s/ss/t/mp) pass through unchanged. Pairs
+    never charted. Ungrouped lanes (k/s/ss/t) pass through unchanged. Pairs
     whose chart side is empty are still returned (caller skips empty refs)."""
     pairs: list[tuple[str, list[float], list[float]]] = []
     for lane in LANES:

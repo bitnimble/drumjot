@@ -2,10 +2,11 @@
 
 STAR (Zenodo 15690078, BSD-3) annotates drums as plain text:
 `time<TAB>CLASS<TAB>velocity`, one onset per line, over an 18-class
-vocabulary. We fold to our expanded 11-lane set: kick, snare, side-stick,
-toms, the three hat articulations, ride, crash, and the two fold-up lanes
-(misc cymbals = splash/china/ride-bell; misc percussion = cowbell/clap/
-tambourine). Out-of-kit classes map to None and are dropped.
+vocabulary. We fold to our 10-lane set: kick, snare, side-stick, toms, the
+three hat articulations, ride, crash, and misc cymbals (= splash/china/
+ride-bell). Non-kit percussion (cowbell/clap/tambourine, ...) folds into the
+catch-all `x` negative lane (a hard negative for every output lane, never
+predicted); anything else maps to None and is dropped.
 
 STAR's labels are accurate by construction (the audio is re-synthesized from
 these annotations), so there's no timing-offset / mislabel cleanup needed,
@@ -157,7 +158,7 @@ def perstem_index(root: str | Path) -> list[StarPerstemClip]:
 def restricted_onsets(annotation_path: str | Path, pitch: str) -> dict[str, list[float]]:
     """STAR onsets keeping ONLY the lanes that belong to `pitch`'s stem; all other
     lanes are empty (so the isolated-stem example teaches bleed suppression).
-    Always returns all 11 lanes."""
+    Always returns all 10 lanes."""
     full = onsets_by_lane(annotation_path)
     keep = set(PERSTEM_TO_LANES.get(pitch, ()))
     return {lane: (full[lane] if lane in keep else []) for lane in LANES}

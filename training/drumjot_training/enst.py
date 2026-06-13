@@ -28,7 +28,7 @@ genuinely song- and kit-disjoint eval.
 
 Label vocabulary: ENST uses its own abbreviations (bd/sd/chh/ohh/rc/cr/...)
 with numbered and rim variants (rc1, c3, ltr, sd-). We normalise (strip
-trailing digits/punctuation) and fold to our 11 lanes. NOTE: ENST has
+trailing digits/punctuation) and fold to our 10 lanes. NOTE: ENST has
 per-drummer label quirks and this table is assembled from the paper + secondary
 sources -- VERIFY it against the real annotation files when the data lands
 (unmapped labels, incl. the `sticks` count-in, drop to None like STAR's
