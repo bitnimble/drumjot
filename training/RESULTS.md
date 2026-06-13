@@ -252,6 +252,13 @@ ceiling run's overfit/single-seed confounds. Same split/features/metric.
 
 Proposer op points (val): cymbals recall 0.83 / prec 0.70; hats recall 0.90 / 0.82.
 
+> Erratum: in this cap-60 realistic run the cymbal classifier's sibling vector was
+> a silent no-op (fed `onsets_by_lane`, which carries only the stem's own lanes, so
+> the cross-stem vec was all-zeros), i.e. the cymbal arm was effectively no-sib.
+> Per the ceiling run, real sib adds ~+0.02–0.04 to cymbals -- not enough to flip
+> the crash deficit (−0.12). Fixed for the cap-300 re-run (use the full-kit
+> `weight_onsets`); conclusion unchanged.
+
 **Verdict: two-stage does NOT beat per-frame at this scale.** It loses on ride,
 crash, hp; the only wins are marginal (hc +0.03, ho +0.05, within seed noise) plus
 noisy mc. The ceiling's huge gap was a mirage, two causes now exposed:
