@@ -36,6 +36,8 @@ import {
   formatSubtitle,
 } from './jot_view/score';
 import { GridLineSettings, JotViewStore, TrackKey, snapToDevicePx } from './jot_view/store';
+import { SettingsStore } from './jot_view/stores/settings_store';
+import { JotViewerPresenter } from './jot_view/jot_viewer_presenter';
 import { RecentTranscriptionsPicker } from './jot_view/recent_transcriptions';
 import { ToastContainer } from './jot_view/toast_container';
 import { DebugPanel, Toolbar } from './jot_view/toolbar';
@@ -50,11 +52,20 @@ type CreateJotViewOptions = {
 
 type CreateJotViewResult = {
   store: JotViewStore;
+  /** Data-only stores carved out of {@link JotViewStore}. Grows as the
+   *  carve-up proceeds; exposed so the app shell (and e2e) can reach the
+   *  specific store rather than a single top-level one. */
+  settings: SettingsStore;
+  /** Catch-all presenter holding the actions/orchestration over the
+   *  data-only stores. */
+  presenter: JotViewerPresenter;
   View: React.FC;
 };
 
 export function createJotView(options: CreateJotViewOptions = {}): CreateJotViewResult {
-  const store = new JotViewStore();
+  const settings = new SettingsStore();
+  const presenter = new JotViewerPresenter({ settings });
+  const store = new JotViewStore(settings);
   if (options.examples) store.setExamples(options.examples);
   const selection = new SelectionStore(store);
 
@@ -273,8 +284,8 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
       <JotViewStoreContext.Provider value={store}>
         <SelectionContext.Provider value={selection}>
           <NoteProvenanceContext.Provider value={provenanceContextValue}>
-            <GridLineSettingsContext.Provider value={store.gridLines}>
-              <UniformWaveformsContext.Provider value={store.uniformWaveforms}>
+            <GridLineSettingsContext.Provider value={settings.gridLines}>
+              <UniformWaveformsContext.Provider value={settings.uniformWaveforms}>
                 <FollowPlayheadContext.Provider value={followPlayheadContextValue}>
                   <div className={styles.appContainer}>
                     <Toolbar
@@ -305,10 +316,10 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       hasNoteProvenance={store.noteProvenance !== undefined}
                       showFilteredOnsets={store.showFilteredOnsets}
                       onSetShowFilteredOnsets={(v) => store.setShowFilteredOnsets(v)}
-                      gridLines={store.gridLines}
-                      onToggleGridLine={(k) => store.toggleGridLine(k)}
-                      uniformWaveforms={store.uniformWaveforms}
-                      onSetUniformWaveforms={(v) => store.setUniformWaveforms(v)}
+                      gridLines={settings.gridLines}
+                      onToggleGridLine={(k) => presenter.toggleGridLine(k)}
+                      uniformWaveforms={settings.uniformWaveforms}
+                      onSetUniformWaveforms={(v) => presenter.setUniformWaveforms(v)}
                       autoFollowOnPlay={store.autoFollowOnPlay}
                       onSetAutoFollowOnPlay={(v) => store.setAutoFollowOnPlay(v)}
                       recentTranscriptions={store.recentTranscriptions}
@@ -376,7 +387,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     );
   });
 
-  return { store, View };
+  return { store, settings, presenter, View };
 }
 
 type JotViewProps = {

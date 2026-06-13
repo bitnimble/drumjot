@@ -5,6 +5,8 @@ import { Jot } from 'src/dsl';
 import { EXAMPLE_JOTS, ExampleJot, rockJot, tripletJot } from 'src/fakes';
 import { RenderedJot } from 'src/jot';
 import { JotViewStore, createJotView } from 'src/jot_view';
+import { JotViewerPresenter } from 'src/jot_view/jot_viewer_presenter';
+import { SettingsStore } from 'src/jot_view/stores/settings_store';
 import { parse } from 'src/parser';
 import { jotPlayer } from 'src/playback';
 // Side-effect import: instantiates the theme controller so the
@@ -16,10 +18,17 @@ import 'src/theme';
 
 class Drumjot {
   readonly store: JotViewStore;
+  // Data-only stores + presenter carved out of `JotViewStore`. Exposed
+  // (via `window.drumjot`) so console / e2e can reach the specific store
+  // rather than a single top-level one.
+  readonly settings: SettingsStore;
+  readonly presenter: JotViewerPresenter;
 
   constructor(root: HTMLElement, examples: readonly ExampleJot[] = EXAMPLE_JOTS) {
-    const { store, View } = createJotView({ examples });
+    const { store, settings, presenter, View } = createJotView({ examples });
     this.store = store;
+    this.settings = settings;
+    this.presenter = presenter;
     createRoot(root).render(<View />);
   }
 

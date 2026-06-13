@@ -51,6 +51,7 @@ import {
 import type { NoteProvenanceContextValue } from './contexts';
 import { transcribeSuccessToastMessage } from './toasts_messages';
 import { toastStore } from './toasts';
+import { SettingsStore } from './stores/settings_store';
 
 /** Long-running lyric-alignment indicator. `queued` is the wait state
  *  while the request sits behind another in-flight GPU job (a transcribe
@@ -107,26 +108,10 @@ export type TranscribeOptions = {
   quantiseUseLlm: boolean;
 };
 
-/**
- * Toggleable grid lines drawn behind the notes in every bar. `mainBeat`
- * is on by default to match the score's classic look; the sub-beat
- * variants are off by default; they're practise aids the user can flip
- * on from the View menu when they want a denser reference grid.
- *
- * The four sub-beat families are orthogonal:
- *   - 16ths               (4 per beat, duple)
- *   - quarter triplets    (1.5 per beat = 3 per 2 beats, duple-pair triplet)
- *   - 8th triplets        (3 per beat)
- *   - 48ths               (12 per beat; LCM of 16ths + 8th-triplets)
- * Each can be toggled independently.
- */
-export type GridLineSettings = {
-  mainBeat: boolean;
-  subBeat16: boolean;
-  subBeatQuarterTriplet: boolean;
-  subBeatTriplet: boolean;
-  subBeat48: boolean;
-};
+// `GridLineSettings` + the grid-line / uniform-waveform display state
+// moved to `SettingsStore`. Re-exported so existing type imports from
+// `./store` keep working during the carve-up.
+export type { GridLineSettings } from './stores/settings_store';
 
 /**
  * Pixels-per-bar at zoom = 1. Same numeric value as `ViewConfig.barWidth`'s
@@ -468,30 +453,6 @@ export class JotViewStore {
    */
   showFilteredOnsets: boolean = false;
   /**
-   * Toggleable grid lines drawn behind notes in each bar. Default is
-   * main beats + 16ths on for hand-authored / MIDI / example loads;
-   * loading a debug bundle flips this to main beats + 48ths in
-   * {@link applyDebugBundle} since transcribed scores frequently land
-   * on triplet subdivisions the 16th grid alone can't visualise. The
-   * View dropdown surfaces the toggles for manual override.
-   */
-  gridLines: GridLineSettings = {
-    mainBeat: true,
-    subBeat16: true,
-    subBeatQuarterTriplet: false,
-    subBeatTriplet: false,
-    subBeat48: false,
-  };
-  /**
-   * When true, each audio-track waveform is rendered with a per-track
-   * normalisation factor so the median non-silent peak lands near the
-   * top of the row regardless of the source recording's amplitude.
-   * Silence still renders as silence; only the visual gain changes.
-   * Default on so quiet recordings stay readable; toggle off via the
-   * View dropdown to see accurate (un-normalised) signal levels.
-   */
-  uniformWaveforms: boolean = true;
-  /**
    * When true, the score auto-scrolls horizontally during playback to
    * keep the playhead pinned to the viewport's centre
    * (`PlayheadAutoScroller` in `jot_view.tsx`). Toggle off via the
@@ -618,10 +579,18 @@ export class JotViewStore {
     }
   }
 
-  constructor() {
+  /** Persistent user settings (grid lines, waveform display, …). Owned
+   * by `SettingsStore`; held here only so the transitional orchestration
+   * still on this store (e.g. {@link applyDebugBundle}) can write it.
+   * Excluded from observability, it's an already-observable store ref. */
+  readonly settings: SettingsStore;
+
+  constructor(settings: SettingsStore) {
+    this.settings = settings;
     makeAutoObservable(this, {
       transcribeController: false,
       lyricsAlignControllers: false,
+      settings: false,
     });
     // Wire ourselves in as the player's mixer context so freshly-
     // constructed AudioTracks can resolve grouped-instrument colour
@@ -1260,14 +1229,6 @@ export class JotViewStore {
 
   setPinnedFilteredOnsetKey(key: string | undefined) {
     this.pinnedFilteredOnsetKey = key;
-  }
-
-  toggleGridLine(key: keyof GridLineSettings) {
-    this.gridLines = { ...this.gridLines, [key]: !this.gridLines[key] };
-  }
-
-  setUniformWaveforms(on: boolean) {
-    this.uniformWaveforms = on;
   }
 
   toggleFollowPlayhead() {
@@ -1979,7 +1940,7 @@ export class JotViewStore {
       // emits triplet subdivisions; the 48ths grid is the LCM of 16ths
       // + triplets so it visualises both. Override the store-wide 16ths
       // default for this load specifically.
-      this.gridLines = {
+      this.settings.gridLines = {
         mainBeat: true,
         subBeat16: false,
         subBeatQuarterTriplet: false,
