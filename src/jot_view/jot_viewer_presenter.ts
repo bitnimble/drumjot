@@ -4,6 +4,7 @@ import { GridLineSettings, SettingsStore } from './stores/settings_store';
 import { TranscribeStore } from './stores/transcribe_store';
 import { ProvenanceStore } from './stores/provenance_store';
 import { LyricsAlignStore } from './stores/lyrics_align_store';
+import { PlaybackStore } from './stores/playback_store';
 
 /**
  * Dependencies the presenter orchestrates over. Every store is a plain
@@ -20,6 +21,7 @@ export type JotViewerPresenterDeps = {
   transcribe: TranscribeStore;
   provenance: ProvenanceStore;
   lyricsAlign: LyricsAlignStore;
+  playback: PlaybackStore;
 };
 
 /**
@@ -43,15 +45,23 @@ export class JotViewerPresenter {
   readonly transcribe: TranscribeStore;
   readonly provenance: ProvenanceStore;
   readonly lyricsAlign: LyricsAlignStore;
+  readonly playback: PlaybackStore;
 
   constructor(deps: JotViewerPresenterDeps) {
     this.settings = deps.settings;
     this.transcribe = deps.transcribe;
     this.provenance = deps.provenance;
     this.lyricsAlign = deps.lyricsAlign;
+    this.playback = deps.playback;
     makeAutoObservable(
       this,
-      { settings: false, transcribe: false, provenance: false, lyricsAlign: false },
+      {
+        settings: false,
+        transcribe: false,
+        provenance: false,
+        lyricsAlign: false,
+        playback: false,
+      },
       { autoBind: true }
     );
   }
@@ -135,5 +145,11 @@ export class JotViewerPresenter {
 
   setLyricsTextOpen(open: boolean) {
     this.lyricsAlign.lyricsTextOpen = open;
+  }
+
+  // --- playback / transport ---
+
+  setAutoFollowOnPlay(on: boolean) {
+    this.playback.autoFollowOnPlay = on;
   }
 }

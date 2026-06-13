@@ -10,6 +10,7 @@ import { FollowPlayheadContext } from './contexts';
 import styles from './playback.module.css';
 import { JotViewStore, VOLUME_STEP } from './store';
 import { DocumentStore } from './stores/document_store';
+import { PlaybackStore } from './stores/playback_store';
 
 function truncate(s: string, n: number): string {
   return s.length <= n ? s : `${s.slice(0, n - 1)}…`;
@@ -205,7 +206,15 @@ const PlaybackControls = observer(
  * `View` and re-rendering the score on every transport change.
  */
 export const PlaybackBar = observer(
-  ({ store, documentStore }: { store: JotViewStore; documentStore: DocumentStore }) => (
+  ({
+    store,
+    documentStore,
+    playback,
+  }: {
+    store: JotViewStore;
+    documentStore: DocumentStore;
+    playback: PlaybackStore;
+  }) => (
   <div className={styles.playbackBar}>
     <PlaybackControls
       hasJot={!!documentStore.currentJot}
@@ -213,7 +222,7 @@ export const PlaybackBar = observer(
       playerError={jotPlayer.errorMessage}
       hasAudioTracks={jotPlayer.audioTracks.size > 0}
       audioOffsetSec={jotPlayer.drumsT0Sec}
-      drumOffsetBeats={store.drumOffsetBeats}
+      drumOffsetBeats={playback.drumOffsetBeats}
       gridDivision={
         documentStore.currentJot ? gridDivisionFor(documentStore.currentJot) : DEFAULT_GRID_DIVISION
       }

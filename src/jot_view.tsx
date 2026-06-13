@@ -44,6 +44,7 @@ import { DocumentStore } from './jot_view/stores/document_store';
 import { TranscribeStore } from './jot_view/stores/transcribe_store';
 import { ProvenanceStore } from './jot_view/stores/provenance_store';
 import { LyricsAlignStore } from './jot_view/stores/lyrics_align_store';
+import { PlaybackStore } from './jot_view/stores/playback_store';
 import { JotViewerPresenter } from './jot_view/jot_viewer_presenter';
 import { RecentTranscriptionsPicker } from './jot_view/recent_transcriptions';
 import { ToastContainer } from './jot_view/toast_container';
@@ -67,6 +68,7 @@ type CreateJotViewResult = {
   transcribe: TranscribeStore;
   provenance: ProvenanceStore;
   lyricsAlign: LyricsAlignStore;
+  playback: PlaybackStore;
   /** Catch-all presenter holding the actions/orchestration over the
    *  data-only stores. */
   presenter: JotViewerPresenter;
@@ -79,8 +81,22 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   const transcribe = new TranscribeStore();
   const provenance = new ProvenanceStore();
   const lyricsAlign = new LyricsAlignStore();
-  const presenter = new JotViewerPresenter({ settings, transcribe, provenance, lyricsAlign });
-  const store = new JotViewStore(documentStore, settings, transcribe, provenance, lyricsAlign);
+  const playback = new PlaybackStore(documentStore);
+  const presenter = new JotViewerPresenter({
+    settings,
+    transcribe,
+    provenance,
+    lyricsAlign,
+    playback,
+  });
+  const store = new JotViewStore(
+    documentStore,
+    settings,
+    transcribe,
+    provenance,
+    lyricsAlign,
+    playback
+  );
   if (options.examples) store.setExamples(options.examples);
   const selection = new SelectionStore(store);
 
@@ -225,11 +241,11 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
 
     const followPlayheadContextValue = React.useMemo(
       () => ({
-        follow: store.followPlayhead,
+        follow: playback.followPlayhead,
         toggle: () => store.toggleFollowPlayhead(),
       }),
       // eslint-disable-next-line react-hooks/exhaustive-deps -- observable read; observer wrapper rebuilds the memo when followPlayhead flips.
-      [store.followPlayhead]
+      [playback.followPlayhead]
     );
 
     // The mixer control bundles embed observable SNAPSHOT values (the
@@ -338,8 +354,8 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       onToggleGridLine={(k) => presenter.toggleGridLine(k)}
                       uniformWaveforms={settings.uniformWaveforms}
                       onSetUniformWaveforms={(v) => presenter.setUniformWaveforms(v)}
-                      autoFollowOnPlay={store.autoFollowOnPlay}
-                      onSetAutoFollowOnPlay={(v) => store.setAutoFollowOnPlay(v)}
+                      autoFollowOnPlay={playback.autoFollowOnPlay}
+                      onSetAutoFollowOnPlay={(v) => presenter.setAutoFollowOnPlay(v)}
                       recentTranscriptions={transcribe.recentTranscriptions}
                       recentTranscriptionsLoaded={transcribe.recentTranscriptionsLoaded}
                       recentTranscriptionsLoading={transcribe.recentTranscriptionsLoading}
@@ -378,7 +394,9 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       />
                     )}
                     <Minimap store={store} documentStore={documentStore} />
-                    {jot && <PlaybackBar store={store} documentStore={documentStore} />}
+                    {jot && (
+                      <PlaybackBar store={store} documentStore={documentStore} playback={playback} />
+                    )}
                     <DebugPanel store={store} provenance={provenance} presenter={presenter} />
                     <LyricsSearchModal
                       open={lyricsAlign.lyricsSearchOpen}
@@ -419,6 +437,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     transcribe,
     provenance,
     lyricsAlign,
+    playback,
     presenter,
     View,
   };

@@ -45,6 +45,7 @@ import { DocumentStore } from './stores/document_store';
 import { TranscribeStore } from './stores/transcribe_store';
 import { ProvenanceStore } from './stores/provenance_store';
 import { LyricsAlignStore } from './stores/lyrics_align_store';
+import { PlaybackStore } from './stores/playback_store';
 
 // `LyricsAlignStatus` + lyrics-align UI state moved to `LyricsAlignStore`.
 // Re-exported so existing type imports from `./store` keep working.
@@ -313,30 +314,8 @@ export class JotViewStore {
   trackOrder: TrackKey[] = [];
   // Debug-bundle + per-note provenance + DebugPanel chrome moved to
   // `ProvenanceStore` (this.provenance).
-  /**
-   * When true, the score auto-scrolls horizontally during playback to
-   * keep the playhead pinned to the viewport's centre
-   * (`PlayheadAutoScroller` in `jot_view.tsx`). Toggle off via the
-   * button above the playhead label to scroll freely while playing
-   *; useful for previewing an upcoming section without pausing.
-   * Session-only; resets to true on reload.
-   */
-  followPlayhead: boolean = true;
-  /**
-   * When true, transitioning to the playing state re-enables
-   * {@link followPlayhead} if the user disabled it *during* the previous
-   * playback session (pan, minimap drag, or the follow-button toggle
-   * while playing). An off-state set while idle/paused is treated as
-   * deliberate and survives the play press. Session-only, defaults on.
-   */
-  autoFollowOnPlay: boolean = true;
-  /**
-   * Internal: was the current `followPlayhead === false` set during
-   * playback (transient, eligible for auto-re-enable on next play) or
-   * during idle/paused (deliberate, must survive). Always false while
-   * `followPlayhead` is true. See {@link setFollowPlayhead}.
-   */
-  private followDisabledIsTransient: boolean = false;
+  // Playhead-follow + transport state moved to `PlaybackStore`
+  // (this.playback).
   // DebugPanel open/height moved to `ProvenanceStore` (this.provenance).
   // Lyrics modal visibility + per-track align status moved to
   // `LyricsAlignStore` (this.lyricsAlign).
@@ -426,19 +405,22 @@ export class JotViewStore {
   readonly transcribe: TranscribeStore;
   readonly provenance: ProvenanceStore;
   readonly lyricsAlign: LyricsAlignStore;
+  readonly playback: PlaybackStore;
 
   constructor(
     document: DocumentStore,
     settings: SettingsStore,
     transcribe: TranscribeStore,
     provenance: ProvenanceStore,
-    lyricsAlign: LyricsAlignStore
+    lyricsAlign: LyricsAlignStore,
+    playback: PlaybackStore
   ) {
     this.document = document;
     this.settings = settings;
     this.transcribe = transcribe;
     this.provenance = provenance;
     this.lyricsAlign = lyricsAlign;
+    this.playback = playback;
     makeAutoObservable(this, {
       transcribeController: false,
       lyricsAlignControllers: false,
@@ -447,6 +429,7 @@ export class JotViewStore {
       transcribe: false,
       provenance: false,
       lyricsAlign: false,
+      playback: false,
     });
     // Wire ourselves in as the player's mixer context so freshly-
     // constructed AudioTracks can resolve grouped-instrument colour
@@ -1038,7 +1021,7 @@ export class JotViewStore {
   }
 
   toggleFollowPlayhead() {
-    this.setFollowPlayhead(!this.followPlayhead);
+    this.setFollowPlayhead(!this.playback.followPlayhead);
   }
 
   /**
@@ -1049,13 +1032,9 @@ export class JotViewStore {
    * into a transient one.
    */
   setFollowPlayhead(on: boolean) {
-    if (on === this.followPlayhead) return;
-    this.followPlayhead = on;
-    this.followDisabledIsTransient = on ? false : jotPlayer.state === 'playing';
-  }
-
-  setAutoFollowOnPlay(on: boolean) {
-    this.autoFollowOnPlay = on;
+    if (on === this.playback.followPlayhead) return;
+    this.playback.followPlayhead = on;
+    this.playback.followDisabledIsTransient = on ? false : jotPlayer.state === 'playing';
   }
 
   setExamples(examples: readonly ExampleJot[]) {
@@ -2280,11 +2259,6 @@ export class JotViewStore {
     jotPlayer.stop();
   }
 
-  /** Current beat-grid offset (quarter-note beats) on the loaded jot. */
-  get drumOffsetBeats(): number {
-    return this.document.currentJot?.drumOffsetBeats ?? 0;
-  }
-
   /**
    * Slide every drum note across the bar grid by `beats` quarter-note
    * beats to realign a consistently mis-detected groove (see
@@ -2366,9 +2340,9 @@ export class JotViewStore {
    * on, or when the user deliberately disabled it while idle/paused.
    */
   private maybeReenableFollowOnPlay() {
-    if (!this.autoFollowOnPlay) return;
-    if (this.followPlayhead) return;
-    if (!this.followDisabledIsTransient) return;
+    if (!this.playback.autoFollowOnPlay) return;
+    if (this.playback.followPlayhead) return;
+    if (!this.playback.followDisabledIsTransient) return;
     this.setFollowPlayhead(true);
   }
 }
