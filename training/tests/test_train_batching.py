@@ -112,36 +112,39 @@ def test_train_loop_runs_batched_over_variable_lengths():
     assert "eta" in epoch_lines[-1]
 
 
-def test_train_loop_keep_best_restores_peak_epoch(monkeypatch):
-    # keep_best must snapshot the highest-val-F1 epoch and restore those exact
-    # weights at the end (so an overfitting run is scored at its peak, not last).
+def test_train_loop_keep_best_restores_per_lane_peak(monkeypatch):
+    # keep_best is PER-LANE: each head is restored from the epoch where THAT lane's
+    # val F1 peaked (lanes overfit at different times -- here k peaks @1, s @3).
     from drumjot_training import train
     from drumjot_training.config import Config
     from drumjot_training.model import MultiLaneHeads
 
-    cfg = Config(encoder_fps=100.0)
-    nl = len(cfg.lanes)
-    clips = [_clip(20, dim=8, n_lanes=nl) for _ in range(4)]
-    val = [_clip(20, dim=8, n_lanes=nl)]
-    model = MultiLaneHeads(in_dim=8, hidden=8, num_layers=1, lane_names=cfg.lanes)
+    cfg = Config(encoder_fps=100.0, lanes=("k", "s"), aux_act_weight=0.0)
+    clips = [_clip(20, dim=8, n_lanes=2) for _ in range(4)]
+    val = [train.Clip(
+        features=np.zeros((20, 8), dtype=np.float32),
+        targets=np.zeros((2, 20), dtype=np.float32),
+        onsets_by_lane={"k": [0.1], "s": [0.2]},  # both lanes present every epoch
+    )]
+    model = MultiLaneHeads(in_dim=8, hidden=8, num_layers=1, lane_names=("k", "s"))
 
-    scores = iter([0.1, 0.5, 0.3, 0.2])  # peak at epoch 1
+    sched = iter([{"k": 0.1, "s": 0.1}, {"k": 0.9, "s": 0.3},   # k peaks @ epoch 1
+                  {"k": 0.5, "s": 0.5}, {"k": 0.4, "s": 0.9}])   # s peaks @ epoch 3
     snaps: list[dict] = []
 
-    def fake_mean_f1(m, c, cf):
+    def fake_eval(m, c, cf, th=None):  # 1 val clip -> called once per epoch
         snaps.append({k: v.detach().clone() for k, v in m.state_dict().items()})
-        return next(scores)
+        return next(sched)
 
-    monkeypatch.setattr(train, "mean_f1", fake_mean_f1)
-    hist = train.train_loop(
-        model, clips, cfg, epochs=4, batch_size=2, val_clips=val,
-        keep_best=True, log=lambda s: None,
-    )
-    assert hist["val_f1"] == [0.1, 0.5, 0.3, 0.2]
-    assert hist["best_epoch"] == [1.0]
-    # final weights must equal the epoch-1 (peak) snapshot, not the last epoch's
-    for k, v in model.state_dict().items():
-        assert torch.equal(v, snaps[1][k])
+    monkeypatch.setattr(train, "evaluate_clip", fake_eval)
+    hist = train.train_loop(model, clips, cfg, epochs=4, batch_size=2, val_clips=val,
+                            keep_best=True, log=lambda s: None)
+    assert hist["best_epoch_by_lane"] == [1.0, 3.0]  # k@1, s@3 (cfg.lanes order)
+    # each head restored from its OWN best epoch: k's params from ep1, s's from ep3
+    sd = model.state_dict()
+    for k in sd:
+        src = snaps[1] if k.startswith("heads.k.") else snaps[3]
+        assert torch.equal(sd[k], src[k])
 
 
 def test_train_loop_writes_periodic_checkpoint(tmp_path):

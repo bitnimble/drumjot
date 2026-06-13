@@ -563,10 +563,14 @@ def train_loop(
     sus_idx = [i for i, ln in enumerate(cfg.lanes) if ln in SUSTAINED_LANES]
     one_pw = torch.ones(len(sus_idx), 1, device=device)
     history: dict[str, list[float]] = {"train_loss": []}
-    # keep_best: snapshot the weights at the highest val macro-F1 and restore them
-    # at the end, so an overfitting run (val peaks early then decays) is scored at
-    # its peak rather than its final epoch. CPU copy to avoid holding a 2nd GPU set.
-    best_f1, best_state, best_epoch = -1.0, None, -1
+    # keep_best: PER-LANE early stopping. Each lane's head is an independent
+    # OnsetHead, so we snapshot each lane's head params at the epoch where THAT
+    # lane's val F1 peaks and restore every head from its own best epoch. Lanes
+    # overfit at different times (cymbals early, hats late), so a single global
+    # best-epoch underserves some lanes. CPU clones avoid a 2nd GPU copy.
+    best_lane_f1 = {ln: -1.0 for ln in cfg.lanes}
+    best_lane_epoch = {ln: -1 for ln in cfg.lanes}
+    best_lane_state: dict = {}
 
     gen = torch.Generator().manual_seed(0)  # reproducible per-epoch shuffle
     loader = DataLoader(
@@ -653,11 +657,31 @@ def train_loop(
         avg = total / max(1, n_batches)
         history["train_loss"].append(avg)
         if val_clips:
-            vf1 = mean_f1(model, val_clips, cfg)
+            if keep_best:
+                # one eval pass -> per-clip per-lane F1; derive the clip-macro (for
+                # the log, matching mean_f1) AND track each lane's own best epoch.
+                per = [evaluate_clip(model, c, cfg) for c in val_clips]
+                clip_macros = []
+                for c, pl in zip(val_clips, per):
+                    present = [pl[ln] for ln in cfg.lanes if c.onsets_by_lane.get(ln)]
+                    if present:
+                        clip_macros.append(sum(present) / len(present))
+                vf1 = sum(clip_macros) / len(clip_macros) if clip_macros else 0.0
+                sd = model.state_dict()
+                for lane in cfg.lanes:
+                    vals = [per[i][lane] for i, c in enumerate(val_clips) if c.onsets_by_lane.get(lane)]
+                    if not vals:
+                        continue
+                    lf = sum(vals) / len(vals)
+                    if lf > best_lane_f1[lane]:
+                        best_lane_f1[lane], best_lane_epoch[lane] = lf, epoch
+                        pref = f"heads.{lane}."
+                        for k, v in sd.items():
+                            if k.startswith(pref):
+                                best_lane_state[k] = v.detach().cpu().clone()
+            else:
+                vf1 = mean_f1(model, val_clips, cfg)
             history.setdefault("val_f1", []).append(vf1)
-            if keep_best and vf1 > best_f1:
-                best_f1, best_epoch = vf1, epoch
-                best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
         dt = time.perf_counter() - ep_start
         # print the first 3 epochs (immediate speed read), then every 10th + last
         if epoch < 3 or (epoch + 1) % 10 == 0 or epoch == epochs - 1:
@@ -673,10 +697,16 @@ def train_loop(
             checkpoint.save(out_dir, model, cfg, {ln: cfg.peak_threshold for ln in cfg.lanes},
                             in_dim=embeddings.feat_dim(cfg.high_band, cfg.cym))
             log(f"  checkpoint saved @ epoch {epoch} (untuned) -> {out_dir}")
-    if keep_best and best_state is not None:
-        model.load_state_dict(best_state)
-        history["best_epoch"] = [float(best_epoch)]
-        log(f"  keep_best: restored epoch {best_epoch} (val_macro_f1 {best_f1:.3f})")
+    if keep_best and best_lane_state:
+        # load each lane's head from its own best epoch (strict=False: lanes with no
+        # val onsets aren't in best_lane_state and keep their final-epoch weights).
+        model.load_state_dict(best_lane_state, strict=False)
+        history["best_epoch_by_lane"] = [float(best_lane_epoch[ln]) for ln in cfg.lanes]
+        restored = ", ".join(
+            f"{ln}@{best_lane_epoch[ln]}({best_lane_f1[ln]:.2f})"
+            for ln in cfg.lanes if best_lane_epoch[ln] >= 0
+        )
+        log(f"  keep_best: restored per-lane best epochs -> {restored}")
     return history
 
 
@@ -1131,9 +1161,9 @@ def main(argv: list[str] | None = None) -> None:
                     help="pos-weighted BCE (default) or CenterNet penalty-reduced focal "
                     "(focal ignores pos_weight; A/B it before committing)")
     ap.add_argument("--keep-best", default=True, action=argparse.BooleanOptionalAction,
-                    help="restore the weights from the best val-macro-F1 epoch at the end "
-                    "(guards against late-epoch overfit; the per-frame model peaks early then "
-                    "decays); --no-keep-best keeps the final epoch (legacy behaviour)")
+                    help="restore each lane's head from the epoch where THAT lane's val F1 "
+                    "peaked (per-lane early stopping; lanes overfit at different times -- "
+                    "cymbals early, hats late); --no-keep-best keeps the final epoch (legacy)")
     ap.add_argument("--sib-neg-weight", type=float, default=Config.sib_neg_weight,
                     help="loss multiplier on hard negatives (confusable sibling active, "
                     "this lane silent); 1 disables")
