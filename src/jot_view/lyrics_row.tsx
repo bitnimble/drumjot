@@ -19,7 +19,11 @@ import {
 } from 'src/lyrics';
 import { downloadTextFile } from 'src/download';
 import { JotTimeline, jotPlayer } from 'src/playback';
-import { JotViewStoreContext, LyricsAlignStoreContext, ViewportStoreContext } from './contexts';
+import {
+  JotViewerPresenterContext,
+  LyricsAlignStoreContext,
+  ViewportStoreContext,
+} from './contexts';
 import { DropdownButton, dropdownStyles } from './components/dropdown';
 import { GutterResizeHandle } from './components/gutter_resize_handle';
 import { NumberStepper } from './components/number_stepper';
@@ -601,7 +605,7 @@ export const LyricsRow = observer(
     jot: RenderedJot;
     onSeek: (x: number) => void;
   } & LyricsRowDragProps) => {
-    const store = React.useContext(JotViewStoreContext);
+    const presenter = React.useContext(JotViewerPresenterContext);
     const lyricsAlign = React.useContext(LyricsAlignStoreContext);
     const track = lyricsStore.get(id);
     // Guard: the reaction in JotViewStore drops dead lyrics ids on the
@@ -844,7 +848,7 @@ export const LyricsRow = observer(
                 id={id}
                 offsetSec={offsetSec}
                 onSetOffset={(v) => lyricsStore.setOffsetSec(id, v)}
-                onRemove={() => store?.removeLyricsTrack(id)}
+                onRemove={() => presenter?.removeLyricsTrack(id)}
               />
             </div>
           </div>

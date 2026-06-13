@@ -1,7 +1,7 @@
 import { makeAutoObservable, observable } from 'mobx';
 import { Box, Point } from 'src/geom';
 import { StructuralBar, StructuralNote, StructuralVoice } from 'src/jot';
-import { JotViewStore } from 'src/jot_view';
+import { DocumentStore } from 'src/jot_view/stores/document_store';
 
 export type SelectionState =
   | { type: 'notes'; notes: Set<StructuralNote> }
@@ -32,7 +32,7 @@ export class SelectionStore {
   private mousedownPoint: Point | undefined = undefined;
   marquee: Box | undefined = undefined;
 
-  constructor(private readonly jotStore: JotViewStore) {
+  constructor(private readonly documentStore: DocumentStore) {
     // `observable.ref` (not `.deep`) for state: every transition replaces
     // the whole state object — we never mutate the inner Set/array — so a
     // ref-equality reaction is enough, and crucially it stops MobX from
@@ -110,7 +110,7 @@ export class SelectionStore {
     // TODO: project the marquee Box into the resolved jot's coordinate space
     // and pick notes / bars / voices it encloses. Returning undefined is fine
     // until that is implemented; the marquee still renders.
-    void this.jotStore;
+    void this.documentStore;
     return undefined;
   }
 }

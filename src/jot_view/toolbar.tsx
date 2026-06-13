@@ -36,7 +36,7 @@ import { NumberStepper } from './components/number_stepper';
 import { Tabs } from './components/tabs';
 import { formatTranscriptionSummary, RecentTranscriptionsPicker } from './recent_transcriptions';
 import styles from './toolbar.module.css';
-import { GridLineSettings, JotViewStore, TranscribeOptions, TranscribeStatus } from './store';
+import { GridLineSettings, TranscribeOptions, TranscribeStatus } from './store';
 import { ProvenanceStore } from './stores/provenance_store';
 import { JotViewerPresenter } from './jot_viewer_presenter';
 import { ViewportStoreContext } from './contexts';
@@ -1150,11 +1150,9 @@ const TranscribeBusyPill = observer(({ status }: { status: TranscribeStatus }) =
  */
 export const DebugPanel = observer(
   ({
-    store,
     provenance,
     presenter,
   }: {
-    store: JotViewStore;
     provenance: ProvenanceStore;
     presenter: JotViewerPresenter;
   }) => {
@@ -1185,7 +1183,7 @@ export const DebugPanel = observer(
     target.setPointerCapture(e.pointerId);
     const onMove = (ev: PointerEvent) => {
       // Drag up = grow the panel (top edge moves up).
-      store.setDebugPanelHeight(startHeight + (startY - ev.clientY));
+      presenter.setDebugPanelHeight(startHeight + (startY - ev.clientY));
     };
     const onUp = (ev: PointerEvent) => {
       target.releasePointerCapture(ev.pointerId);

@@ -33,7 +33,6 @@ test('zoom does not re-render JotView', async ({ page }) => {
 
   const result = await page.evaluate(async () => {
     const w = window as any;
-    const store = w.drumjot.store;
     const viewport = w.drumjot.viewport;
     const presenter = w.drumjot.presenter;
     const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
@@ -46,10 +45,10 @@ test('zoom does not re-render JotView', async ({ page }) => {
     // POSITIVE CONTROL: a master-mute toggle changes a voiceControls memo
     // dep, so it must re-render JotView; proving the counter is live.
     w.__perf = {};
-    store.toggleDrumMasterMute();
+    presenter.toggleDrumMasterMute();
     await settle();
     const onControl = w.__perf.JotView ?? 0;
-    store.toggleDrumMasterMute(); // restore
+    presenter.toggleDrumMasterMute(); // restore
     await settle();
 
     // REGRESSION ASSERTION: a sweep of zoom levels must NOT re-render it.

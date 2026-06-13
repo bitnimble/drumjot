@@ -29,8 +29,8 @@ test('full debug bundle loads and renders the complete viewer', async ({
   const hasManifest = await page.evaluate(
     () =>
       !!(
-        window as unknown as { drumjot: { store: { lastDebugBundle: unknown } } }
-      ).drumjot.store.lastDebugBundle,
+        window as unknown as { drumjot: { provenance: { lastDebugBundle: unknown } } }
+      ).drumjot.provenance.lastDebugBundle,
   );
   expect(hasManifest).toBe(true);
 });

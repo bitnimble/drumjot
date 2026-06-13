@@ -33,7 +33,6 @@ import { jotPlayer } from 'src/playback';
 import { type BarSlice, waveformWorker } from 'src/playback/waveform_worker_client';
 import styles from './minimap.module.css';
 import { WAVEFORM_PAINT_COLOR } from './score';
-import { JotViewStore } from './store';
 import { DocumentStore } from './stores/document_store';
 import { ViewportStore } from './stores/viewport_store';
 import { MixerStore } from './stores/mixer_store';
@@ -71,13 +70,11 @@ function noteMarksEqual(a: readonly NoteMark[], b: readonly NoteMark[]): boolean
 
 export const Minimap = observer(
   ({
-    store,
     documentStore,
     viewport,
     mixer,
     presenter,
   }: {
-    store: JotViewStore;
     documentStore: DocumentStore;
     viewport: ViewportStore;
     mixer: MixerStore;
@@ -253,7 +250,7 @@ export const Minimap = observer(
       (next) => setNoteMarks(next),
       { fireImmediately: true, equals: noteMarksEqual }
     );
-  }, [jot, bars, width, hasContent, store]);
+  }, [jot, bars, width, hasContent, mixer]);
 
   // ─── Canvas paint (waveform + note ticks in one bitmap) ─────────────
   // Waveform and per-color note ticks are batched through a `Path2D` so
@@ -344,7 +341,7 @@ export const Minimap = observer(
     // Clicking or dragging the minimap is an explicit "scroll the score
     // somewhere else" intent; auto-follow would re-pin the playhead on
     // the next frame and visually undo the user's nudge.
-    store.setFollowPlayhead(false);
+    presenter.setFollowPlayhead(false);
     const rect = e.currentTarget.getBoundingClientRect();
     const scale = sw / width;
 

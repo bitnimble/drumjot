@@ -3,7 +3,7 @@ import { NoteProvenanceEntry } from 'src/debug_zip';
 import { RenderedJot } from 'src/jot';
 import { BarTiming } from 'src/playback';
 import { SelectionStore } from 'src/selection';
-import { GridLineSettings, JotViewStore } from './store';
+import { GridLineSettings } from './store';
 import { ProvenanceStore } from './stores/provenance_store';
 import { LyricsAlignStore } from './stores/lyrics_align_store';
 import { ViewportStore } from './stores/viewport_store';
@@ -17,14 +17,6 @@ import { JotViewerPresenter } from './jot_viewer_presenter';
  * in isolation just no-ops the click-to-select interaction.
  */
 export const SelectionContext = React.createContext<SelectionStore | null>(null);
-
-/**
- * Routes the active {@link JotViewStore} to deep consumers that need to
- * read or drive view-level state (today: `FilteredOnsetView`'s pinned-
- * popover identity). `null` outside the view; consumers should no-op or
- * fall back to local state.
- */
-export const JotViewStoreContext = React.createContext<JotViewStore | null>(null);
 
 /**
  * Routes the {@link ProvenanceStore} to deep consumers that read debug-

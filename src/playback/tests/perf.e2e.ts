@@ -201,7 +201,7 @@ test.describe('per-frame performance', () => {
     // Start playback and wait for it to actually run. Reaching 'playing'
     // downloads the TR-808 SoundFont from the smplr CDN on a cold cache, so
     // give it a generous budget (same signal the audio-track e2e relies on).
-    await page.evaluate(() => (window as any).drumjot.store.togglePlayPause());
+    await page.evaluate(() => (window as any).drumjot.presenter.togglePlayPause());
     await page.waitForFunction(
       () => (window as any).jotPlayer.state === 'playing',
       null,
@@ -217,6 +217,6 @@ test.describe('per-frame performance', () => {
     expect(steady.length).toBeGreaterThan(50);
     expectSmooth('playback', steady);
 
-    await page.evaluate(() => (window as any).drumjot.store.stopPlayback());
+    await page.evaluate(() => (window as any).drumjot.presenter.stopPlayback());
   });
 });

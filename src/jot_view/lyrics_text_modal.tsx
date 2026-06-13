@@ -5,7 +5,7 @@ import React from 'react';
 import { jotPlayer } from 'src/playback';
 import { Checkbox } from './components/checkbox';
 import styles from './lyrics_text_modal.module.css';
-import { JotViewStore } from './store';
+import { JotViewerPresenter } from './jot_viewer_presenter';
 
 /**
  * Plain-text lyrics loader. Paste or type lyrics into a textarea, or
@@ -26,11 +26,11 @@ export const LyricsTextLoadModal = observer(
   ({
     open,
     onClose,
-    store,
+    presenter,
   }: {
     open: boolean;
     onClose: () => void;
-    store: JotViewStore;
+    presenter: JotViewerPresenter;
   }) => {
     const [text, setText] = React.useState('');
     const [error, setError] = React.useState<string | undefined>(undefined);
@@ -56,7 +56,7 @@ export const LyricsTextLoadModal = observer(
     const effectiveWordLevel = wordLevel && hasAudioTracks;
 
     const onLoad = () => {
-      const count = store.applyPlainTextLyrics(text, {
+      const count = presenter.applyPlainTextLyrics(text, {
         wordLevel: effectiveWordLevel,
       });
       if (count === 0) {

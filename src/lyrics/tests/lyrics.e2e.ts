@@ -219,11 +219,11 @@ test('Loading a new jot drops previously-loaded lyrics', async ({ page }) => {
 
   // A wholesale song change (loading a different example) clears them.
   await page.evaluate(() => {
-    const store = (window as any).drumjot.store;
+    const presenter = (window as any).drumjot.presenter;
     const doc = (window as any).drumjot.document;
     const examples: Array<{ id: string }> = doc.examples;
     const other = examples.find((e) => e.id !== doc.currentExampleId);
-    if (other) store.loadExample(other.id);
+    if (other) presenter.loadExample(other.id);
   });
   await expect(page.getByTestId('lyrics-row')).toHaveCount(0);
 });

@@ -8,9 +8,10 @@ import sharedStyles from '../jot_view.module.css';
 import { NumberStepper } from './components/number_stepper';
 import { FollowPlayheadContext } from './contexts';
 import styles from './playback.module.css';
-import { JotViewStore, VOLUME_STEP } from './store';
+import { VOLUME_STEP } from './store';
 import { DocumentStore } from './stores/document_store';
 import { PlaybackStore } from './stores/playback_store';
+import { JotViewerPresenter } from './jot_viewer_presenter';
 
 function truncate(s: string, n: number): string {
   return s.length <= n ? s : `${s.slice(0, n - 1)}…`;
@@ -207,13 +208,13 @@ const PlaybackControls = observer(
  */
 export const PlaybackBar = observer(
   ({
-    store,
     documentStore,
     playback,
+    presenter,
   }: {
-    store: JotViewStore;
     documentStore: DocumentStore;
     playback: PlaybackStore;
+    presenter: JotViewerPresenter;
   }) => (
   <div className={styles.playbackBar}>
     <PlaybackControls
@@ -226,10 +227,10 @@ export const PlaybackBar = observer(
       gridDivision={
         documentStore.currentJot ? gridDivisionFor(documentStore.currentJot) : DEFAULT_GRID_DIVISION
       }
-      onTogglePlayPause={() => store.togglePlayPause()}
-      onStop={() => store.stopPlayback()}
+      onTogglePlayPause={() => presenter.togglePlayPause()}
+      onStop={() => presenter.stopPlayback()}
       onSetAudioOffset={(sec) => jotPlayer.setDrumsT0Sec(sec)}
-      onSetDrumOffset={(beats) => store.setDrumOffset(beats)}
+      onSetDrumOffset={(beats) => presenter.setDrumOffset(beats)}
     />
   </div>
 ));

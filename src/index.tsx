@@ -4,7 +4,7 @@ import 'src/design_tokens.css';
 import { Jot } from 'src/dsl';
 import { EXAMPLE_JOTS, ExampleJot, rockJot, tripletJot } from 'src/fakes';
 import { RenderedJot } from 'src/jot';
-import { JotViewStore, createJotView } from 'src/jot_view';
+import { createJotView } from 'src/jot_view';
 import { JotViewerPresenter } from 'src/jot_view/jot_viewer_presenter';
 import { DocumentStore } from 'src/jot_view/stores/document_store';
 import { SettingsStore } from 'src/jot_view/stores/settings_store';
@@ -24,10 +24,9 @@ import { jotPlayer } from 'src/playback';
 import 'src/theme';
 
 class Drumjot {
-  readonly store: JotViewStore;
-  // Data-only stores + presenter carved out of `JotViewStore`. Exposed
-  // (via `window.drumjot`) so console / e2e can reach the specific store
-  // rather than a single top-level one.
+  // Data-only stores + presenter. Exposed (via `window.drumjot`) so
+  // console / e2e can reach each peer directly; there is no single
+  // top-level store.
   readonly document: DocumentStore;
   readonly settings: SettingsStore;
   readonly transcribe: TranscribeStore;
@@ -40,7 +39,6 @@ class Drumjot {
 
   constructor(root: HTMLElement, examples: readonly ExampleJot[] = EXAMPLE_JOTS) {
     const {
-      store,
       document,
       settings,
       transcribe,
@@ -52,7 +50,6 @@ class Drumjot {
       presenter,
       View,
     } = createJotView({ examples });
-    this.store = store;
     this.document = document;
     this.settings = settings;
     this.transcribe = transcribe;
@@ -70,7 +67,7 @@ class Drumjot {
     // `viewConfig.barWidth`) actually drives this jot's `pxPerBeat`/layout.
     // Every loader (loadExample/transcribe/file) does the same; omitting it
     // here left zoom a no-op for `window.drumjot.load`/`loadDsl`.
-    this.store.setJot(new RenderedJot(jot, this.document.viewConfig));
+    this.presenter.setJot(new RenderedJot(jot, this.document.viewConfig));
   }
 
   /** Parse a DSL source string (SPEC.md syntax) and load the resulting jot. */
@@ -80,7 +77,7 @@ class Drumjot {
 
   /** Load one of the registered example jots by id. */
   loadExample(id: string) {
-    this.store.loadExample(id);
+    this.presenter.loadExample(id);
   }
 
   loadTestJot() {

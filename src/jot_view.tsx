@@ -17,7 +17,6 @@ import {
   BarTimingsContext,
   FollowPlayheadContext,
   GridLineSettingsContext,
-  JotViewStoreContext,
   JotViewerPresenterContext,
   LyricsAlignStoreContext,
   MixerStoreContext,
@@ -40,7 +39,7 @@ import {
   formatDisplayTitle,
   formatSubtitle,
 } from './jot_view/score';
-import { GridLineSettings, JotViewStore, TrackKey, snapToDevicePx } from './jot_view/store';
+import { GridLineSettings, TrackKey, snapToDevicePx } from './jot_view/store';
 import { SettingsStore } from './jot_view/stores/settings_store';
 import { DocumentStore } from './jot_view/stores/document_store';
 import { TranscribeStore } from './jot_view/stores/transcribe_store';
@@ -55,7 +54,7 @@ import { ToastContainer } from './jot_view/toast_container';
 import { DebugPanel, Toolbar } from './jot_view/toolbar';
 import { ExampleJot } from 'src/fakes';
 
-export { JotViewStore } from './jot_view/store';
+export { JotViewerPresenter } from './jot_view/jot_viewer_presenter';
 export type { TrackKey, TranscribeOptions, TranscribeStatus } from './jot_view/store';
 
 type CreateJotViewOptions = {
@@ -63,10 +62,9 @@ type CreateJotViewOptions = {
 };
 
 type CreateJotViewResult = {
-  store: JotViewStore;
-  /** Data-only stores carved out of {@link JotViewStore}. Grows as the
-   *  carve-up proceeds; exposed so the app shell (and e2e) can reach the
-   *  specific store rather than a single top-level one. */
+  /** Data-only stores + the presenter. Exposed so the app shell (and
+   *  e2e) can reach each peer directly; there is no single top-level
+   *  store. */
   document: DocumentStore;
   settings: SettingsStore;
   transcribe: TranscribeStore;
@@ -91,26 +89,17 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   const viewport = new ViewportStore(documentStore);
   const mixer = new MixerStore(documentStore);
   const presenter = new JotViewerPresenter({
-    settings,
-    transcribe,
-    provenance,
-    lyricsAlign,
-    playback,
     document: documentStore,
-    viewport,
-  });
-  const store = new JotViewStore(
-    documentStore,
     settings,
     transcribe,
     provenance,
     lyricsAlign,
     playback,
     viewport,
-    mixer
-  );
-  if (options.examples) store.setExamples(options.examples);
-  const selection = new SelectionStore(store);
+    mixer,
+  });
+  if (options.examples) presenter.setExamples(options.examples);
+  const selection = new SelectionStore(documentStore);
 
   // Translate a click on `.jotContainer` into the marquee's coordinate
   // space (the inner `.scrollViewport` wrapper, which is where the
@@ -186,9 +175,9 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   // reactive. Reads of `store.*` inside these bodies run at call time, not
   // render time, so they don't subscribe createJotView to anything.
   const onPatternClick = (name: string) => selection.togglePattern(name);
-  const onSeek = (x: number) => store.seekToX(x);
+  const onSeek = (x: number) => presenter.seekToX(x);
   const onZoomBy = (factor: number) => presenter.setZoom(viewport.zoom * factor);
-  const onMoveTrack = (from: number, to: number) => store.moveTrack(from, to);
+  const onMoveTrack = (from: number, to: number) => presenter.moveTrack(from, to);
   const getGutterWidth = () => viewport.gutterWidth;
   const onSetGutterWidth = (px: number) => presenter.setGutterWidth(px);
 
@@ -240,7 +229,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
           return;
         }
         e.preventDefault();
-        void store.togglePlayPause();
+        void presenter.togglePlayPause();
       };
       window.addEventListener('keydown', onKeyDown);
       return () => window.removeEventListener('keydown', onKeyDown);
@@ -257,7 +246,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     const followPlayheadContextValue = React.useMemo(
       () => ({
         follow: playback.followPlayhead,
-        toggle: () => store.toggleFollowPlayhead(),
+        toggle: () => presenter.toggleFollowPlayhead(),
       }),
       // eslint-disable-next-line react-hooks/exhaustive-deps -- observable read; observer wrapper rebuilds the memo when followPlayhead flips.
       [playback.followPlayhead]
@@ -280,14 +269,14 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
         soloedPitches: mixer.soloedPitches,
         isPitchAudible: mixer.isPitchAudible,
         volumeFor: (pitch) => mixer.pitchVolume(pitch),
-        onSetVolume: (pitch, v) => store.setPitchVolume(pitch, v),
-        onToggleMute: (pitch) => store.toggleMute(pitch),
-        onToggleSolo: (pitch) => store.toggleSolo(pitch),
+        onSetVolume: (pitch, v) => presenter.setPitchVolume(pitch, v),
+        onToggleMute: (pitch) => presenter.toggleMute(pitch),
+        onToggleSolo: (pitch) => presenter.toggleSolo(pitch),
         masterMuted: mixer.drumMasterMuted,
         masterSoloed: mixer.drumMasterSoloed,
         masterAudible: mixer.isDrumSectionAudible,
-        onToggleMasterMute: () => store.toggleDrumMasterMute(),
-        onToggleMasterSolo: () => store.toggleDrumMasterSolo(),
+        onToggleMasterMute: () => presenter.toggleDrumMasterMute(),
+        onToggleMasterSolo: () => presenter.toggleDrumMasterSolo(),
       }),
       // eslint-disable-next-line react-hooks/exhaustive-deps -- observable snapshots; observer wrapper rebuilds when any of these change.
       [
@@ -304,17 +293,17 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
         soloedAudioTracks: mixer.soloedAudioTracks,
         isAudioTrackAudible: mixer.isAudioTrackAudible,
         volumeFor: (id) => mixer.audioTrackVolume(id),
-        onSetVolume: (id, v) => store.setAudioTrackVolume(id, v),
-        onToggleMute: (id) => store.toggleAudioTrackMute(id),
-        onToggleSolo: (id) => store.toggleAudioTrackSolo(id),
-        onClear: (id) => store.clearAudioTrack(id),
-        onSplitFromMix: (id) => store.splitAudioTrackFromMix(id),
-        onSplitDrumPieces: (id) => store.splitAudioTrackDrumPieces(id),
+        onSetVolume: (id, v) => presenter.setAudioTrackVolume(id, v),
+        onToggleMute: (id) => presenter.toggleAudioTrackMute(id),
+        onToggleSolo: (id) => presenter.toggleAudioTrackSolo(id),
+        onClear: (id) => presenter.clearAudioTrack(id),
+        onSplitFromMix: (id) => presenter.splitAudioTrackFromMix(id),
+        onSplitDrumPieces: (id) => presenter.splitAudioTrackDrumPieces(id),
         masterMuted: mixer.audioMasterMuted,
         masterSoloed: mixer.audioMasterSoloed,
         masterAudible: mixer.isAudioSectionAudible,
-        onToggleMasterMute: () => store.toggleAudioMasterMute(),
-        onToggleMasterSolo: () => store.toggleAudioMasterSolo(),
+        onToggleMasterMute: () => presenter.toggleAudioMasterMute(),
+        onToggleMasterSolo: () => presenter.toggleAudioMasterSolo(),
       }),
       // eslint-disable-next-line react-hooks/exhaustive-deps -- observable snapshots; observer wrapper rebuilds when any of these change.
       [
@@ -327,7 +316,6 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     );
 
     return (
-      <JotViewStoreContext.Provider value={store}>
         <JotViewerPresenterContext.Provider value={presenter}>
         <ProvenanceStoreContext.Provider value={provenance}>
         <LyricsAlignStoreContext.Provider value={lyricsAlign}>
@@ -342,21 +330,21 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                     <Toolbar
                       examples={documentStore.examples}
                       currentId={documentStore.currentExampleId}
-                      onSelect={(id) => store.loadExample(id)}
+                      onSelect={(id) => presenter.loadExample(id)}
                       transcribeStatus={transcribe.transcribeStatus}
                       transcribeOptions={transcribe.transcribeOptions}
-                      onTranscribe={(file) => store.transcribeAudio(file)}
-                      onResumeTranscribe={(folder, stage) => store.resumeTranscribe(folder, stage)}
-                      onLoadJot={(file) => store.loadJotFile(file)}
-                      onLoadMidi={(file) => store.loadMidiFile(file)}
-                      onLoadParadb={(file) => store.loadParadbMap(file)}
-                      onScoreParadb={(file) => store.scoreParadbMap(file)}
-                      onLoadDebugBundle={(file) => store.loadDebugBundleFile(file)}
-                      onLoadAudioTrack={(file) => store.loadAudioTrack(file)}
-                      onLoadLyricsFile={(file) => store.loadLyricsFile(file)}
+                      onTranscribe={(file) => presenter.transcribeAudio(file)}
+                      onResumeTranscribe={(folder, stage) => presenter.resumeTranscribe(folder, stage)}
+                      onLoadJot={(file) => presenter.loadJotFile(file)}
+                      onLoadMidi={(file) => presenter.loadMidiFile(file)}
+                      onLoadParadb={(file) => presenter.loadParadbMap(file)}
+                      onScoreParadb={(file) => presenter.scoreParadbMap(file)}
+                      onLoadDebugBundle={(file) => presenter.loadDebugBundleFile(file)}
+                      onLoadAudioTrack={(file) => presenter.loadAudioTrack(file)}
+                      onLoadLyricsFile={(file) => presenter.loadLyricsFile(file)}
                       onOpenLyricsTextLoad={() => presenter.setLyricsTextOpen(true)}
                       onOpenLyricsSearch={() => presenter.setLyricsSearchOpen(true)}
-                      onCancelTranscribe={() => store.cancelTranscribe()}
+                      onCancelTranscribe={() => presenter.cancelTranscribe()}
                       lyricsAlignBusyPhase={lyricsAlign.lyricsAlignBusyPhase}
                       onSetBeatInput={(b) => presenter.setBeatInput(b)}
                       onSetDrumSeparator={(s) => presenter.setDrumSeparator(s)}
@@ -380,14 +368,13 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       selectedResumeStage={transcribe.selectedResumeStage}
                       onSetSelectedResumeFolder={(f) => presenter.setSelectedResumeFolder(f)}
                       onSetSelectedResumeStage={(s) => presenter.setSelectedResumeStage(s)}
-                      onRefreshRecentTranscriptions={() => store.refreshRecentTranscriptions()}
-                      onLoadRecentTranscription={(folder) => store.loadRecentTranscription(folder)}
+                      onRefreshRecentTranscriptions={() => presenter.refreshRecentTranscriptions()}
+                      onLoadRecentTranscription={(folder) => presenter.loadRecentTranscription(folder)}
                       transcribeMode={transcribe.transcribeMode}
                       onSetTranscribeMode={(m) => presenter.setTranscribeMode(m)}
                     />
                     {jot ? (
                       <JotView
-                        store={store}
                         viewport={viewport}
                         presenter={presenter}
                         jot={jot}
@@ -407,33 +394,36 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       />
                     ) : (
                       <EmptyState
-                        store={store}
+                        presenter={presenter}
                         documentStore={documentStore}
                         transcribe={transcribe}
                       />
                     )}
                     <Minimap
-                      store={store}
                       documentStore={documentStore}
                       viewport={viewport}
                       mixer={mixer}
                       presenter={presenter}
                     />
                     {jot && (
-                      <PlaybackBar store={store} documentStore={documentStore} playback={playback} />
+                      <PlaybackBar
+                        documentStore={documentStore}
+                        playback={playback}
+                        presenter={presenter}
+                      />
                     )}
-                    <DebugPanel store={store} provenance={provenance} presenter={presenter} />
+                    <DebugPanel provenance={provenance} presenter={presenter} />
                     <LyricsSearchModal
                       open={lyricsAlign.lyricsSearchOpen}
                       initialTitle={lyricsInitialTitle}
                       initialArtist={lyricsInitialArtist}
                       onClose={() => presenter.setLyricsSearchOpen(false)}
-                      store={store}
+                      presenter={presenter}
                     />
                     <LyricsTextLoadModal
                       open={lyricsAlign.lyricsTextOpen}
                       onClose={() => presenter.setLyricsTextOpen(false)}
-                      store={store}
+                      presenter={presenter}
                     />
                     <AudioWorkletWarningModal
                       state={audioWorkletState}
@@ -453,12 +443,10 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
         </LyricsAlignStoreContext.Provider>
         </ProvenanceStoreContext.Provider>
         </JotViewerPresenterContext.Provider>
-      </JotViewStoreContext.Provider>
     );
   });
 
   return {
-    store,
     document: documentStore,
     settings,
     transcribe,
@@ -473,17 +461,13 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
 }
 
 type JotViewProps = {
-  /**
-   * View-state store. Threaded down because the scroll viewport's
-   * native `overflow: auto` has been replaced by a CSS `transform` on
-   * `.scrollViewport`, and `store.scrollX` / `store.scrollY` are the
-   * canonical source of scroll position. JotView's ResizeObservers feed
-   * `store.setViewportSize` / `setContentSize`; auto-follow / zoom-
-   * anchor / middle-click pan / Stop reset all drive `store.setScrollX`
-   * / `setScrollY` / `setScrollBy` / `resetScroll`.
-   */
-  store: JotViewStore;
-  /** Score viewport state (scroll offsets, extents, zoom, gutter). */
+  /** Score viewport state (scroll offsets, extents, zoom, gutter). The
+   * scroll viewport's native `overflow: auto` is replaced by a CSS
+   * `transform` on `.scrollViewport`; `viewport.scrollX`/`scrollY` are
+   * the canonical source of scroll position, fed by JotView's
+   * ResizeObservers (via `presenter.setViewportSize`/`setContentSize`)
+   * and driven by auto-follow / zoom-anchor / pan / Stop (via
+   * `presenter.setScrollX`/`setScrollBy`/`resetScrollX`). */
   viewport: ViewportStore;
   /** Presenter for viewport mutations (scroll / zoom / size) + transport. */
   presenter: JotViewerPresenter;
@@ -524,7 +508,6 @@ type JotViewProps = {
 
 const JotView = observer((props: JotViewProps) => {
   const {
-    store,
     viewport,
     presenter,
     jot,
@@ -576,7 +559,7 @@ const JotView = observer((props: JotViewProps) => {
       cache.detach();
       cacheRef.current = null;
     };
-  }, [store]);
+  }, [presenter]);
   React.useEffect(() => {
     const container = containerRef.current;
     const viewport = viewportRef.current;
@@ -597,7 +580,7 @@ const JotView = observer((props: JotViewProps) => {
       containerRo.disconnect();
       viewportRo.disconnect();
     };
-  }, [store]);
+  }, [presenter]);
 
   // Wheel zooms the score (mirrors the Zoom slider), no modifier
   // required, and Ctrl/Cmd + wheel still works (also covers the macOS
@@ -731,7 +714,7 @@ const JotView = observer((props: JotViewProps) => {
     };
     // `store` is a stable singleton from `createJotView`; included for
     // exhaustive-deps correctness even though it never changes in practice.
-  }, [store]);
+  }, [presenter]);
 
   // Middle-mouse + drag pans the scroller in both axes. The mousedown
   // listener is on the container so preventDefault can suppress the
@@ -755,7 +738,7 @@ const JotView = observer((props: JotViewProps) => {
       el.style.cursor = 'grabbing';
       // Middle-mouse pan is an explicit "I want to look somewhere else"
       // gesture; auto-follow would just fight it on the next frame.
-      store.setFollowPlayhead(false);
+      presenter.setFollowPlayhead(false);
     };
     const onMouseMove = (e: MouseEvent) => {
       if (!panning) return;
@@ -784,7 +767,7 @@ const JotView = observer((props: JotViewProps) => {
       window.removeEventListener('mouseup', stop);
       window.removeEventListener('blur', stop);
     };
-  }, [store]);
+  }, [presenter]);
 
   // Touch gestures on the score: one finger pans (analogue of the
   // middle-mouse drag above), two fingers pinch the score-zoom slider
@@ -847,7 +830,7 @@ const JotView = observer((props: JotViewProps) => {
       // A tap-only touch should NOT disengage follow, so this is only
       // called once the gesture has been confirmed as a pan/pinch
       // (movement threshold crossed, or a second finger landed).
-      store.setFollowPlayhead(false);
+      presenter.setFollowPlayhead(false);
     };
 
     // Start tracking pan state without yet committing to "this is a
@@ -886,7 +869,7 @@ const JotView = observer((props: JotViewProps) => {
         initPadLeft,
         anchorBarsRowX,
       };
-      store.setFollowPlayhead(false);
+      presenter.setFollowPlayhead(false);
     };
 
     const onTouchStart = (e: TouchEvent) => {
@@ -1031,7 +1014,7 @@ const JotView = observer((props: JotViewProps) => {
       el.removeEventListener('touchend', onTouchEnd);
       el.removeEventListener('touchcancel', onTouchCancel);
     };
-  }, [store]);
+  }, [presenter]);
 
   // `--note-pad-beats` is the engraving inset (a zoom-invariant
   // fraction of a beat) every note / grid / bracket reads in its
@@ -1630,11 +1613,11 @@ const MarqueeOverlay = observer(() => {
  */
 const EmptyState = observer(
   ({
-    store,
+    presenter,
     documentStore,
     transcribe,
   }: {
-    store: JotViewStore;
+    presenter: JotViewerPresenter;
     documentStore: DocumentStore;
     transcribe: TranscribeStore;
   }) => {
@@ -1642,12 +1625,12 @@ const EmptyState = observer(
   const paradbInputRef = React.useRef<HTMLInputElement>(null);
   const handleJotFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) store.loadJotFile(file);
+    if (file) presenter.loadJotFile(file);
     e.target.value = '';
   };
   const handleParadbFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) store.loadParadbMap(file);
+    if (file) presenter.loadParadbMap(file);
     e.target.value = '';
   };
   return (
@@ -1685,8 +1668,8 @@ const EmptyState = observer(
               items={transcribe.recentTranscriptions}
               loaded={transcribe.recentTranscriptionsLoaded}
               loading={transcribe.recentTranscriptionsLoading}
-              onRefresh={() => store.refreshRecentTranscriptions()}
-              onPick={(folder) => store.loadRecentTranscription(folder)}
+              onRefresh={() => presenter.refreshRecentTranscriptions()}
+              onPick={(folder) => presenter.loadRecentTranscription(folder)}
             />
           </div>
         </div>
@@ -1702,7 +1685,7 @@ const EmptyState = observer(
                   key={ex.id}
                   type="button"
                   className={styles.emptyStateExampleButton}
-                  onClick={() => store.loadExample(ex.id)}
+                  onClick={() => presenter.loadExample(ex.id)}
                 >
                   {ex.label}
                 </button>
