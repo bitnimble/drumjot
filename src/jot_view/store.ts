@@ -38,21 +38,18 @@ import {
 import { pickDominantBpmAndTime } from 'src/playback/timeline';
 import { loadParadbZip } from 'src/rlrr';
 import {
-  BeatInput,
-  DrumSeparator,
-  LlmModel,
   stemUrl,
   titleFromFilename,
   transcriber,
   TranscribeProgress,
   TranscribeStage,
-  TranscriptionSummary,
 } from 'src/transcriber';
 import type { NoteProvenanceContextValue } from './contexts';
 import { transcribeSuccessToastMessage } from './toasts_messages';
 import { toastStore } from './toasts';
 import { SettingsStore } from './stores/settings_store';
 import { DocumentStore } from './stores/document_store';
+import { TranscribeStore } from './stores/transcribe_store';
 
 /** Long-running lyric-alignment indicator. `queued` is the wait state
  *  while the request sits behind another in-flight GPU job (a transcribe
@@ -74,40 +71,10 @@ export type LyricsAlignStatus =
  *  and the per-row spinner picks it up automatically. */
 export type AudioTrackSplitStatus = { phase: 'splitting'; kind: 'mix' | 'pieces' };
 
-/** Long-running transcribe indicator. Only the in-flight `uploading`
- *  phase is modelled here; success and failure surface as toasts. */
-export type TranscribeStatus =
-  | { phase: 'idle' }
-  | {
-      phase: 'uploading';
-      filename: string;
-      /** Current pipeline stage (`stems_all`, `beats`, `transcribe`, …)
-       *  reported by the server's NDJSON progress stream. `undefined`
-       *  until the first stage event arrives; the initial "uploading"
-       *  read covers everything before the first stage starts. */
-      stage?: TranscribeStage;
-      /** Optional in-stage detail, e.g. "filtering 3/5 instruments
-       *  (latest: snare)". Cleared whenever the stage advances. */
-      substage?: string;
-    };
-
-export type TranscribeOptions = {
-  debug: boolean;
-  beatInput: BeatInput;
-  /** Stage-2 separator: `mdx23c` (default) or the opt-in `larsnet`. */
-  drumSeparator: DrumSeparator;
-  /** Model for the three Opus-by-default classification stages. */
-  llmModel: LlmModel;
-  /** Run the optional `quantise` pipeline stage. False = no snap; every
-   *  onset keeps its raw detected time, the MIDI emitter writes it as
-   *  a near-grid tick + sub-slot offset, and the UI / playback honour
-   *  the offset so nothing re-snaps on load. */
-  quantise: boolean;
-  /** Run the LLM residual pass inside the quantise stage. Disables that
-   *  pass when false; geometric + envelope + grid still run. No-op
-   *  when `quantise` is false. */
-  quantiseUseLlm: boolean;
-};
+// `TranscribeStatus` + `TranscribeOptions` + the transcribe/resume UI
+// state moved to `TranscribeStore`. Re-exported so existing type imports
+// from `./store` keep working during the carve-up.
+export type { TranscribeStatus, TranscribeOptions } from './stores/transcribe_store';
 
 // `GridLineSettings` + the grid-line / uniform-waveform display state
 // moved to `SettingsStore`. Re-exported so existing type imports from
@@ -310,49 +277,6 @@ export function collectJotPitches(jot: RenderedJot | undefined): string[] {
 }
 
 export class JotViewStore {
-  transcribeStatus: TranscribeStatus = { phase: 'idle' };
-  /** UI-controlled options for the next transcribe call. `debug=true`
-   *  so the run is resumable. */
-  transcribeOptions: TranscribeOptions = {
-    debug: true,
-    beatInput: 'full_mix',
-    drumSeparator: 'mdx23c',
-    llmModel: 'claude-haiku-4-5-20251001',
-    quantise: true,
-    quantiseUseLlm: false,
-  };
-  /** Server-side picker of recent /transcribe runs that can be resumed.
-   *  Populated by {@link refreshRecentTranscriptions}; an empty array
-   *  before the first fetch (the picker shows "Loading…" in that state).
-   *  Refreshed lazily whenever the toolbar opens the Transcribe dropdown
-   *  so the operator sees their just-completed run without needing to
-   *  reload the page. */
-  recentTranscriptions: TranscriptionSummary[] = [];
-  /** True once {@link refreshRecentTranscriptions} has completed at least
-   *  one fetch (success or empty). The Load → Recent submenu uses this to
-   *  decide whether to issue the initial fetch on first open or use the
-   *  cache; the Transcribe dropdown refreshes eagerly on each open so it
-   *  doesn't read this flag. */
-  recentTranscriptionsLoaded: boolean = false;
-  /** True while an in-flight {@link refreshRecentTranscriptions} is
-   *  resolving. Drives the spinner inside the Load → Recent submenu. */
-  recentTranscriptionsLoading: boolean = false;
-  /** Folder name of the currently-selected recent transcription, or
-   *  `undefined` when nothing is selected. Drives the stage picker (we
-   *  read `resumable_stages` off the matching summary). */
-  selectedResumeFolder: string | undefined = undefined;
-  /** Stage the user has picked to resume from. `undefined` until they
-   *  pick one; reset whenever {@link selectedResumeFolder} changes so
-   *  stale picks from one folder can't leak into another folder's
-   *  request. */
-  selectedResumeStage: TranscribeStage | undefined = undefined;
-  /** Which flow the Transcribe dropdown is showing: a fresh upload
-   *  (`new`) or resume-from-debug-folder (`resume`). Defaults to `new`
-   *  since that's the only flow available before any runs exist; the
-   *  toolbar coerces the rendered mode back to `new` whenever the
-   *  recent-runs list is empty so a stale `resume` selection can't
-   *  surface an empty form. */
-  transcribeMode: 'new' | 'resume' = 'new';
   /** Horizontal zoom multiplier; 1.0 = `BASE_BAR_WIDTH` pixels per bar. */
   zoom: number = 1;
   /** DSL pitches the user has muted via the row-gutter M button. */
@@ -560,15 +484,18 @@ export class JotViewStore {
    * excluded from observability (they're already-observable stores). */
   readonly document: DocumentStore;
   readonly settings: SettingsStore;
+  readonly transcribe: TranscribeStore;
 
-  constructor(document: DocumentStore, settings: SettingsStore) {
+  constructor(document: DocumentStore, settings: SettingsStore, transcribe: TranscribeStore) {
     this.document = document;
     this.settings = settings;
+    this.transcribe = transcribe;
     makeAutoObservable(this, {
       transcribeController: false,
       lyricsAlignControllers: false,
       document: false,
       settings: false,
+      transcribe: false,
     });
     // Wire ourselves in as the player's mixer context so freshly-
     // constructed AudioTracks can resolve grouped-instrument colour
@@ -1299,46 +1226,6 @@ export class JotViewStore {
     jotPlayer.stop();
   }
 
-  setDebug(enabled: boolean) {
-    this.transcribeOptions.debug = enabled;
-  }
-
-  setBeatInput(input: BeatInput) {
-    this.transcribeOptions.beatInput = input;
-  }
-
-  setDrumSeparator(separator: DrumSeparator) {
-    this.transcribeOptions.drumSeparator = separator;
-  }
-
-  setLlmModel(model: LlmModel) {
-    this.transcribeOptions.llmModel = model;
-  }
-
-  setQuantise(enabled: boolean) {
-    this.transcribeOptions.quantise = enabled;
-  }
-
-  setQuantiseUseLlm(enabled: boolean) {
-    this.transcribeOptions.quantiseUseLlm = enabled;
-  }
-
-  setSelectedResumeFolder(folder: string | undefined) {
-    this.selectedResumeFolder = folder;
-    // Clearing the folder (or picking a different one) invalidates any
-    // stage selection — different folders have different `resumable_stages`,
-    // so a stale pick could land on a stage missing its prerequisites.
-    this.selectedResumeStage = undefined;
-  }
-
-  setSelectedResumeStage(stage: TranscribeStage | undefined) {
-    this.selectedResumeStage = stage;
-  }
-
-  setTranscribeMode(mode: 'new' | 'resume') {
-    this.transcribeMode = mode;
-  }
-
   setZoom(z: number) {
     const clamped = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
     this.zoom = clamped;
@@ -1364,16 +1251,16 @@ export class JotViewStore {
     const controller = new AbortController();
     this.transcribeController = controller;
     runInAction(() => {
-      this.transcribeStatus = { phase: 'uploading', filename: file.name };
+      this.transcribe.transcribeStatus = { phase: 'uploading', filename: file.name };
     });
     try {
       const response = await transcriber.transcribe(file, {
-        debug: this.transcribeOptions.debug,
-        beatInput: this.transcribeOptions.beatInput,
-        drumSeparator: this.transcribeOptions.drumSeparator,
-        llmModel: this.transcribeOptions.llmModel,
-        quantise: this.transcribeOptions.quantise,
-        quantiseUseLlm: this.transcribeOptions.quantiseUseLlm,
+        debug: this.transcribe.transcribeOptions.debug,
+        beatInput: this.transcribe.transcribeOptions.beatInput,
+        drumSeparator: this.transcribe.transcribeOptions.drumSeparator,
+        llmModel: this.transcribe.transcribeOptions.llmModel,
+        quantise: this.transcribe.transcribeOptions.quantise,
+        quantiseUseLlm: this.transcribe.transcribeOptions.quantiseUseLlm,
         signal: controller.signal,
         onProgress: (event) => this.applyProgress(file.name, event),
       });
@@ -1407,17 +1294,17 @@ export class JotViewStore {
     this.transcribeController = controller;
     const label = `${folder} from ${stage}`;
     runInAction(() => {
-      this.transcribeStatus = { phase: 'uploading', filename: label };
+      this.transcribe.transcribeStatus = { phase: 'uploading', filename: label };
     });
     try {
       const response = await transcriber.resume({
         resumeFolder: folder,
         resumeStage: stage,
-        beatInput: this.transcribeOptions.beatInput,
-        drumSeparator: this.transcribeOptions.drumSeparator,
-        llmModel: this.transcribeOptions.llmModel,
-        quantise: this.transcribeOptions.quantise,
-        quantiseUseLlm: this.transcribeOptions.quantiseUseLlm,
+        beatInput: this.transcribe.transcribeOptions.beatInput,
+        drumSeparator: this.transcribe.transcribeOptions.drumSeparator,
+        llmModel: this.transcribe.transcribeOptions.llmModel,
+        quantise: this.transcribe.transcribeOptions.quantise,
+        quantiseUseLlm: this.transcribe.transcribeOptions.quantiseUseLlm,
         signal: controller.signal,
         onProgress: (event) => this.applyProgress(label, event),
       });
@@ -1425,7 +1312,7 @@ export class JotViewStore {
       // upload filename is the most informative pill label — fall back
       // to the resume folder name when the server doesn't know it.
       const fallbackName =
-        this.recentTranscriptions.find((t) => t.folder === folder)?.original_filename ?? folder;
+        this.transcribe.recentTranscriptions.find((t) => t.folder === folder)?.original_filename ?? folder;
       await this.applyTranscribeResponse(response, fallbackName, controller.signal);
     } catch (err) {
       this.handleTranscribeError(err, controller, 'Resume');
@@ -1451,7 +1338,7 @@ export class JotViewStore {
     const bundleUrl = stemUrl(response.debug_zip_url ?? null);
     if (!bundleUrl) {
       runInAction(() => {
-        this.transcribeStatus = { phase: 'idle' };
+        this.transcribe.transcribeStatus = { phase: 'idle' };
       });
       toastStore.showError('Transcriber returned no debug bundle.');
       return;
@@ -1461,12 +1348,12 @@ export class JotViewStore {
       // The auto-loader already surfaced the specific failure as an
       // error toast; clear the busy pill back to idle and bail.
       runInAction(() => {
-        this.transcribeStatus = { phase: 'idle' };
+        this.transcribe.transcribeStatus = { phase: 'idle' };
       });
       return;
     }
     runInAction(() => {
-      this.transcribeStatus = { phase: 'idle' };
+      this.transcribe.transcribeStatus = { phase: 'idle' };
     });
     toastStore.showSuccess(
       transcribeSuccessToastMessage({
@@ -1542,19 +1429,19 @@ export class JotViewStore {
    */
   private applyProgress(filename: string, event: TranscribeProgress): void {
     runInAction(() => {
-      const status = this.transcribeStatus;
+      const status = this.transcribe.transcribeStatus;
       // If the request was aborted or already terminal (success/error)
       // before this late event fires, ignore — late progress shouldn't
       // resurrect the spinner over an idle/success/error pill.
       if (status.phase !== 'uploading') return;
       if (event.kind === 'stage' && event.phase === 'start') {
-        this.transcribeStatus = {
+        this.transcribe.transcribeStatus = {
           phase: 'uploading',
           filename,
           stage: event.stage,
         };
       } else if (event.kind === 'substage') {
-        this.transcribeStatus = {
+        this.transcribe.transcribeStatus = {
           phase: 'uploading',
           filename,
           stage: event.stage,
@@ -1573,7 +1460,7 @@ export class JotViewStore {
       controller.signal.aborted || (err instanceof DOMException && err.name === 'AbortError');
     if (isAbort) {
       runInAction(() => {
-        this.transcribeStatus = { phase: 'idle' };
+        this.transcribe.transcribeStatus = { phase: 'idle' };
       });
       return;
     }
@@ -1584,7 +1471,7 @@ export class JotViewStore {
           ? err.message
           : String(err);
     runInAction(() => {
-      this.transcribeStatus = { phase: 'idle' };
+      this.transcribe.transcribeStatus = { phase: 'idle' };
     });
     toastStore.showError(`${verb} failed: ${message}`);
   }
@@ -1597,21 +1484,21 @@ export class JotViewStore {
    */
   async refreshRecentTranscriptions(): Promise<void> {
     runInAction(() => {
-      this.recentTranscriptionsLoading = true;
+      this.transcribe.recentTranscriptionsLoading = true;
     });
     try {
       const list = await transcriber.listTranscriptions();
       runInAction(() => {
-        this.recentTranscriptions = list;
-        this.recentTranscriptionsLoaded = true;
+        this.transcribe.recentTranscriptions = list;
+        this.transcribe.recentTranscriptionsLoaded = true;
         // Drop the selection if its target folder vanished server-side
         // (e.g. operator pruned the debug dir between dropdown opens).
         if (
-          this.selectedResumeFolder !== undefined &&
-          !list.some((s) => s.folder === this.selectedResumeFolder)
+          this.transcribe.selectedResumeFolder !== undefined &&
+          !list.some((s) => s.folder === this.transcribe.selectedResumeFolder)
         ) {
-          this.selectedResumeFolder = undefined;
-          this.selectedResumeStage = undefined;
+          this.transcribe.selectedResumeFolder = undefined;
+          this.transcribe.selectedResumeStage = undefined;
         }
       });
     } catch (err) {
@@ -1619,7 +1506,7 @@ export class JotViewStore {
       console.warn('Could not refresh recent transcriptions:', err);
     } finally {
       runInAction(() => {
-        this.recentTranscriptionsLoading = false;
+        this.transcribe.recentTranscriptionsLoading = false;
       });
     }
   }
@@ -1639,7 +1526,7 @@ export class JotViewStore {
   async loadRecentTranscription(folder: string): Promise<void> {
     const url = stemUrl(`/outputs/${encodeURIComponent(folder)}/debug.zip`);
     if (!url) return;
-    const summary = this.recentTranscriptions.find((s) => s.folder === folder);
+    const summary = this.transcribe.recentTranscriptions.find((s) => s.folder === folder);
     const fallbackName = summary?.original_filename ?? folder;
     return this.withLoading(`Loading ${fallbackName}…`, async () => {
       try {

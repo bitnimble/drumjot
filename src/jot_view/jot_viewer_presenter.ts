@@ -1,5 +1,7 @@
 import { makeAutoObservable } from 'mobx';
+import { BeatInput, DrumSeparator, LlmModel, TranscribeStage } from 'src/transcriber';
 import { GridLineSettings, SettingsStore } from './stores/settings_store';
+import { TranscribeStore } from './stores/transcribe_store';
 
 /**
  * Dependencies the presenter orchestrates over. Every store is a plain
@@ -13,6 +15,7 @@ import { GridLineSettings, SettingsStore } from './stores/settings_store';
  */
 export type JotViewerPresenterDeps = {
   settings: SettingsStore;
+  transcribe: TranscribeStore;
 };
 
 /**
@@ -33,10 +36,12 @@ export class JotViewerPresenter {
   // non-observable (they're already-observable stores; the presenter
   // only holds references, it doesn't own their reactivity).
   readonly settings: SettingsStore;
+  readonly transcribe: TranscribeStore;
 
   constructor(deps: JotViewerPresenterDeps) {
     this.settings = deps.settings;
-    makeAutoObservable(this, { settings: false }, { autoBind: true });
+    this.transcribe = deps.transcribe;
+    makeAutoObservable(this, { settings: false, transcribe: false }, { autoBind: true });
   }
 
   // --- settings ---
@@ -50,5 +55,47 @@ export class JotViewerPresenter {
 
   setUniformWaveforms(on: boolean) {
     this.settings.uniformWaveforms = on;
+  }
+
+  // --- transcribe (form options + resume picker) ---
+
+  setDebug(enabled: boolean) {
+    this.transcribe.transcribeOptions.debug = enabled;
+  }
+
+  setBeatInput(input: BeatInput) {
+    this.transcribe.transcribeOptions.beatInput = input;
+  }
+
+  setDrumSeparator(separator: DrumSeparator) {
+    this.transcribe.transcribeOptions.drumSeparator = separator;
+  }
+
+  setLlmModel(model: LlmModel) {
+    this.transcribe.transcribeOptions.llmModel = model;
+  }
+
+  setQuantise(enabled: boolean) {
+    this.transcribe.transcribeOptions.quantise = enabled;
+  }
+
+  setQuantiseUseLlm(enabled: boolean) {
+    this.transcribe.transcribeOptions.quantiseUseLlm = enabled;
+  }
+
+  setSelectedResumeFolder(folder: string | undefined) {
+    this.transcribe.selectedResumeFolder = folder;
+    // Clearing the folder (or picking a different one) invalidates any
+    // stage selection, different folders have different `resumable_stages`,
+    // so a stale pick could land on a stage missing its prerequisites.
+    this.transcribe.selectedResumeStage = undefined;
+  }
+
+  setSelectedResumeStage(stage: TranscribeStage | undefined) {
+    this.transcribe.selectedResumeStage = stage;
+  }
+
+  setTranscribeMode(mode: 'new' | 'resume') {
+    this.transcribe.transcribeMode = mode;
   }
 }

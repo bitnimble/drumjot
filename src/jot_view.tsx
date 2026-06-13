@@ -38,6 +38,7 @@ import {
 import { GridLineSettings, JotViewStore, TrackKey, snapToDevicePx } from './jot_view/store';
 import { SettingsStore } from './jot_view/stores/settings_store';
 import { DocumentStore } from './jot_view/stores/document_store';
+import { TranscribeStore } from './jot_view/stores/transcribe_store';
 import { JotViewerPresenter } from './jot_view/jot_viewer_presenter';
 import { RecentTranscriptionsPicker } from './jot_view/recent_transcriptions';
 import { ToastContainer } from './jot_view/toast_container';
@@ -58,6 +59,7 @@ type CreateJotViewResult = {
    *  specific store rather than a single top-level one. */
   document: DocumentStore;
   settings: SettingsStore;
+  transcribe: TranscribeStore;
   /** Catch-all presenter holding the actions/orchestration over the
    *  data-only stores. */
   presenter: JotViewerPresenter;
@@ -67,8 +69,9 @@ type CreateJotViewResult = {
 export function createJotView(options: CreateJotViewOptions = {}): CreateJotViewResult {
   const documentStore = new DocumentStore();
   const settings = new SettingsStore();
-  const presenter = new JotViewerPresenter({ settings });
-  const store = new JotViewStore(documentStore, settings);
+  const transcribe = new TranscribeStore();
+  const presenter = new JotViewerPresenter({ settings, transcribe });
+  const store = new JotViewStore(documentStore, settings, transcribe);
   if (options.examples) store.setExamples(options.examples);
   const selection = new SelectionStore(store);
 
@@ -295,8 +298,8 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       examples={documentStore.examples}
                       currentId={documentStore.currentExampleId}
                       onSelect={(id) => store.loadExample(id)}
-                      transcribeStatus={store.transcribeStatus}
-                      transcribeOptions={store.transcribeOptions}
+                      transcribeStatus={transcribe.transcribeStatus}
+                      transcribeOptions={transcribe.transcribeOptions}
                       onTranscribe={(file) => store.transcribeAudio(file)}
                       onResumeTranscribe={(folder, stage) => store.resumeTranscribe(folder, stage)}
                       onLoadJot={(file) => store.loadJotFile(file)}
@@ -310,11 +313,11 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       onOpenLyricsSearch={() => store.setLyricsSearchOpen(true)}
                       onCancelTranscribe={() => store.cancelTranscribe()}
                       lyricsAlignBusyPhase={store.lyricsAlignBusyPhase}
-                      onSetBeatInput={(b) => store.setBeatInput(b)}
-                      onSetDrumSeparator={(s) => store.setDrumSeparator(s)}
-                      onSetLlmModel={(m) => store.setLlmModel(m)}
-                      onSetQuantise={(v) => store.setQuantise(v)}
-                      onSetQuantiseUseLlm={(v) => store.setQuantiseUseLlm(v)}
+                      onSetBeatInput={(b) => presenter.setBeatInput(b)}
+                      onSetDrumSeparator={(s) => presenter.setDrumSeparator(s)}
+                      onSetLlmModel={(m) => presenter.setLlmModel(m)}
+                      onSetQuantise={(v) => presenter.setQuantise(v)}
+                      onSetQuantiseUseLlm={(v) => presenter.setQuantiseUseLlm(v)}
                       onSetZoom={setZoomCentered}
                       hasNoteProvenance={store.noteProvenance !== undefined}
                       showFilteredOnsets={store.showFilteredOnsets}
@@ -325,17 +328,17 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       onSetUniformWaveforms={(v) => presenter.setUniformWaveforms(v)}
                       autoFollowOnPlay={store.autoFollowOnPlay}
                       onSetAutoFollowOnPlay={(v) => store.setAutoFollowOnPlay(v)}
-                      recentTranscriptions={store.recentTranscriptions}
-                      recentTranscriptionsLoaded={store.recentTranscriptionsLoaded}
-                      recentTranscriptionsLoading={store.recentTranscriptionsLoading}
-                      selectedResumeFolder={store.selectedResumeFolder}
-                      selectedResumeStage={store.selectedResumeStage}
-                      onSetSelectedResumeFolder={(f) => store.setSelectedResumeFolder(f)}
-                      onSetSelectedResumeStage={(s) => store.setSelectedResumeStage(s)}
+                      recentTranscriptions={transcribe.recentTranscriptions}
+                      recentTranscriptionsLoaded={transcribe.recentTranscriptionsLoaded}
+                      recentTranscriptionsLoading={transcribe.recentTranscriptionsLoading}
+                      selectedResumeFolder={transcribe.selectedResumeFolder}
+                      selectedResumeStage={transcribe.selectedResumeStage}
+                      onSetSelectedResumeFolder={(f) => presenter.setSelectedResumeFolder(f)}
+                      onSetSelectedResumeStage={(s) => presenter.setSelectedResumeStage(s)}
                       onRefreshRecentTranscriptions={() => store.refreshRecentTranscriptions()}
                       onLoadRecentTranscription={(folder) => store.loadRecentTranscription(folder)}
-                      transcribeMode={store.transcribeMode}
-                      onSetTranscribeMode={(m) => store.setTranscribeMode(m)}
+                      transcribeMode={transcribe.transcribeMode}
+                      onSetTranscribeMode={(m) => presenter.setTranscribeMode(m)}
                     />
                     {jot ? (
                       <JotView
@@ -356,7 +359,11 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                         onSetGutterWidth={onSetGutterWidth}
                       />
                     ) : (
-                      <EmptyState store={store} documentStore={documentStore} />
+                      <EmptyState
+                        store={store}
+                        documentStore={documentStore}
+                        transcribe={transcribe}
+                      />
                     )}
                     <Minimap store={store} documentStore={documentStore} />
                     {jot && <PlaybackBar store={store} documentStore={documentStore} />}
@@ -390,7 +397,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     );
   });
 
-  return { store, document: documentStore, settings, presenter, View };
+  return { store, document: documentStore, settings, transcribe, presenter, View };
 }
 
 type JotViewProps = {
@@ -1525,7 +1532,15 @@ const MarqueeOverlay = observer(() => {
  * surface here.
  */
 const EmptyState = observer(
-  ({ store, documentStore }: { store: JotViewStore; documentStore: DocumentStore }) => {
+  ({
+    store,
+    documentStore,
+    transcribe,
+  }: {
+    store: JotViewStore;
+    documentStore: DocumentStore;
+    transcribe: TranscribeStore;
+  }) => {
   const jotInputRef = React.useRef<HTMLInputElement>(null);
   const paradbInputRef = React.useRef<HTMLInputElement>(null);
   const handleJotFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1570,9 +1585,9 @@ const EmptyState = observer(
               variant="cta"
               triggerLabel="Open recent"
               triggerTitle="Open a previously transcribed audio file from the server's recent runs."
-              items={store.recentTranscriptions}
-              loaded={store.recentTranscriptionsLoaded}
-              loading={store.recentTranscriptionsLoading}
+              items={transcribe.recentTranscriptions}
+              loaded={transcribe.recentTranscriptionsLoaded}
+              loading={transcribe.recentTranscriptionsLoading}
               onRefresh={() => store.refreshRecentTranscriptions()}
               onPick={(folder) => store.loadRecentTranscription(folder)}
             />

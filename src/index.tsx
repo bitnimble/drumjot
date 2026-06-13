@@ -8,6 +8,7 @@ import { JotViewStore, createJotView } from 'src/jot_view';
 import { JotViewerPresenter } from 'src/jot_view/jot_viewer_presenter';
 import { DocumentStore } from 'src/jot_view/stores/document_store';
 import { SettingsStore } from 'src/jot_view/stores/settings_store';
+import { TranscribeStore } from 'src/jot_view/stores/transcribe_store';
 import { parse } from 'src/parser';
 import { jotPlayer } from 'src/playback';
 // Side-effect import: instantiates the theme controller so the
@@ -24,13 +25,15 @@ class Drumjot {
   // rather than a single top-level one.
   readonly document: DocumentStore;
   readonly settings: SettingsStore;
+  readonly transcribe: TranscribeStore;
   readonly presenter: JotViewerPresenter;
 
   constructor(root: HTMLElement, examples: readonly ExampleJot[] = EXAMPLE_JOTS) {
-    const { store, document, settings, presenter, View } = createJotView({ examples });
+    const { store, document, settings, transcribe, presenter, View } = createJotView({ examples });
     this.store = store;
     this.document = document;
     this.settings = settings;
+    this.transcribe = transcribe;
     this.presenter = presenter;
     createRoot(root).render(<View />);
   }
@@ -117,7 +120,7 @@ if (mount) {
   // in flight. Browsers no longer honour custom messages here; setting
   // returnValue just triggers the native "Leave site?" confirm.
   window.addEventListener('beforeunload', (event) => {
-    if (app.store.transcribeStatus.phase === 'uploading') {
+    if (app.transcribe.transcribeStatus.phase === 'uploading') {
       event.preventDefault();
       event.returnValue = '';
     }
