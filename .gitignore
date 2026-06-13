@@ -136,6 +136,9 @@ venv/
 # for Japanese lyrics; a few MB of generated assets, not source.
 public/kuromoji-dict/
 
+# Storybook static build output (`bun run build-storybook`).
+storybook-static/
+
 # OS noise
 .DS_Store
 Thumbs.db
