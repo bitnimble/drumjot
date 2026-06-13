@@ -37,7 +37,7 @@ import { DocumentStore } from './stores/document_store';
 import { ViewportStore } from './stores/viewport_store';
 import { MixerStore } from './stores/mixer_store';
 import { ViewportPresenter } from './presenters/viewport_presenter';
-import { JotViewerPresenter } from './jot_viewer_presenter';
+import { PlaybackPresenter } from './presenters/playback_presenter';
 
 const NOTE_STRIP_H = 16;
 const WAVEFORM_H = 36;
@@ -75,13 +75,13 @@ export const Minimap = observer(
     viewport,
     viewportPresenter,
     mixer,
-    presenter,
+    playbackPresenter,
   }: {
     documentStore: DocumentStore;
     viewport: ViewportStore;
     viewportPresenter: ViewportPresenter;
     mixer: MixerStore;
-    presenter: JotViewerPresenter;
+    playbackPresenter: PlaybackPresenter;
   }) => {
     const jot = documentStore.currentJot;
   const containerRef = React.useRef<HTMLDivElement>(null);
@@ -344,7 +344,7 @@ export const Minimap = observer(
     // Clicking or dragging the minimap is an explicit "scroll the score
     // somewhere else" intent; auto-follow would re-pin the playhead on
     // the next frame and visually undo the user's nudge.
-    presenter.setFollowPlayhead(false);
+    playbackPresenter.setFollowPlayhead(false);
     const rect = e.currentTarget.getBoundingClientRect();
     const scale = sw / width;
 

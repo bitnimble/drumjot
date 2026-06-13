@@ -53,6 +53,7 @@ import { JotViewerPresenter } from './jot_view/jot_viewer_presenter';
 import { SettingsPresenter } from './jot_view/presenters/settings_presenter';
 import { ViewportPresenter } from './jot_view/presenters/viewport_presenter';
 import { MixerPresenter } from './jot_view/presenters/mixer_presenter';
+import { PlaybackPresenter } from './jot_view/presenters/playback_presenter';
 import { ProvenancePresenter } from './jot_view/presenters/provenance_presenter';
 import { RecentTranscriptionsPicker } from './jot_view/recent_transcriptions';
 import { ToastContainer } from './jot_view/toast_container';
@@ -83,6 +84,7 @@ type CreateJotViewResult = {
   viewportPresenter: ViewportPresenter;
   mixerPresenter: MixerPresenter;
   provenancePresenter: ProvenancePresenter;
+  playbackPresenter: PlaybackPresenter;
   /** Catch-all presenter holding the orchestration not yet split into a
    *  per-domain presenter. */
   presenter: JotViewerPresenter;
@@ -102,6 +104,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   const viewportPresenter = new ViewportPresenter(viewport, documentStore);
   const mixerPresenter = new MixerPresenter(mixer, documentStore);
   const provenancePresenter = new ProvenancePresenter(provenance, viewport);
+  const playbackPresenter = new PlaybackPresenter(playback, documentStore);
   const presenter = new JotViewerPresenter({
     document: documentStore,
     settings,
@@ -191,7 +194,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   // reactive. Reads of `store.*` inside these bodies run at call time, not
   // render time, so they don't subscribe createJotView to anything.
   const onPatternClick = (name: string) => selection.togglePattern(name);
-  const onSeek = (x: number) => presenter.seekToX(x);
+  const onSeek = (x: number) => playbackPresenter.seekToX(x);
   const onZoomBy = (factor: number) => viewportPresenter.setZoom(viewport.zoom * factor);
   const onMoveTrack = (from: number, to: number) => mixerPresenter.moveTrack(from, to);
   const getGutterWidth = () => viewport.gutterWidth;
@@ -245,7 +248,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
           return;
         }
         e.preventDefault();
-        void presenter.togglePlayPause();
+        void playbackPresenter.togglePlayPause();
       };
       window.addEventListener('keydown', onKeyDown);
       return () => window.removeEventListener('keydown', onKeyDown);
@@ -262,7 +265,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     const followPlayheadContextValue = React.useMemo(
       () => ({
         follow: playback.followPlayhead,
-        toggle: () => presenter.toggleFollowPlayhead(),
+        toggle: () => playbackPresenter.toggleFollowPlayhead(),
       }),
       // eslint-disable-next-line react-hooks/exhaustive-deps -- observable read; observer wrapper rebuilds the memo when followPlayhead flips.
       [playback.followPlayhead]
@@ -377,7 +380,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       uniformWaveforms={settings.uniformWaveforms}
                       onSetUniformWaveforms={(v) => settingsPresenter.setUniformWaveforms(v)}
                       autoFollowOnPlay={playback.autoFollowOnPlay}
-                      onSetAutoFollowOnPlay={(v) => presenter.setAutoFollowOnPlay(v)}
+                      onSetAutoFollowOnPlay={(v) => playbackPresenter.setAutoFollowOnPlay(v)}
                       recentTranscriptions={transcribe.recentTranscriptions}
                       recentTranscriptionsLoaded={transcribe.recentTranscriptionsLoaded}
                       recentTranscriptionsLoading={transcribe.recentTranscriptionsLoading}
@@ -394,7 +397,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       <JotView
                         viewport={viewport}
                         viewportPresenter={viewportPresenter}
-                        presenter={presenter}
+                        playbackPresenter={playbackPresenter}
                         jot={jot}
                         highlightedPattern={selection.selectedPattern}
                         onPatternClick={onPatternClick}
@@ -422,13 +425,13 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       viewport={viewport}
                       viewportPresenter={viewportPresenter}
                       mixer={mixer}
-                      presenter={presenter}
+                      playbackPresenter={playbackPresenter}
                     />
                     {jot && (
                       <PlaybackBar
                         documentStore={documentStore}
                         playback={playback}
-                        presenter={presenter}
+                        presenter={playbackPresenter}
                       />
                     )}
                     <DebugPanel provenance={provenance} presenter={provenancePresenter} />
@@ -478,6 +481,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     viewportPresenter,
     mixerPresenter,
     provenancePresenter,
+    playbackPresenter,
     presenter,
     View,
   };
@@ -494,8 +498,9 @@ type JotViewProps = {
   viewport: ViewportStore;
   /** Viewport mutations (scroll / zoom / size / gutter). */
   viewportPresenter: ViewportPresenter;
-  /** Catch-all presenter (transport / follow + remaining orchestration). */
-  presenter: JotViewerPresenter;
+  /** Transport / follow-playhead mutations. JotView disengages follow on
+   * pan / pinch gestures. */
+  playbackPresenter: PlaybackPresenter;
   jot: RenderedJot;
   highlightedPattern: string | undefined;
   onPatternClick: (name: string) => void;
@@ -535,7 +540,7 @@ const JotView = observer((props: JotViewProps) => {
   const {
     viewport,
     viewportPresenter,
-    presenter,
+    playbackPresenter,
     jot,
     highlightedPattern,
     onPatternClick,
@@ -585,7 +590,7 @@ const JotView = observer((props: JotViewProps) => {
       cache.detach();
       cacheRef.current = null;
     };
-  }, [presenter]);
+  }, [playbackPresenter]);
   React.useEffect(() => {
     const container = containerRef.current;
     const viewport = viewportRef.current;
@@ -606,7 +611,7 @@ const JotView = observer((props: JotViewProps) => {
       containerRo.disconnect();
       viewportRo.disconnect();
     };
-  }, [presenter]);
+  }, [playbackPresenter]);
 
   // Wheel zooms the score (mirrors the Zoom slider), no modifier
   // required, and Ctrl/Cmd + wheel still works (also covers the macOS
@@ -740,7 +745,7 @@ const JotView = observer((props: JotViewProps) => {
     };
     // `store` is a stable singleton from `createJotView`; included for
     // exhaustive-deps correctness even though it never changes in practice.
-  }, [presenter]);
+  }, [playbackPresenter]);
 
   // Middle-mouse + drag pans the scroller in both axes. The mousedown
   // listener is on the container so preventDefault can suppress the
@@ -764,7 +769,7 @@ const JotView = observer((props: JotViewProps) => {
       el.style.cursor = 'grabbing';
       // Middle-mouse pan is an explicit "I want to look somewhere else"
       // gesture; auto-follow would just fight it on the next frame.
-      presenter.setFollowPlayhead(false);
+      playbackPresenter.setFollowPlayhead(false);
     };
     const onMouseMove = (e: MouseEvent) => {
       if (!panning) return;
@@ -793,7 +798,7 @@ const JotView = observer((props: JotViewProps) => {
       window.removeEventListener('mouseup', stop);
       window.removeEventListener('blur', stop);
     };
-  }, [presenter]);
+  }, [playbackPresenter]);
 
   // Touch gestures on the score: one finger pans (analogue of the
   // middle-mouse drag above), two fingers pinch the score-zoom slider
@@ -856,7 +861,7 @@ const JotView = observer((props: JotViewProps) => {
       // A tap-only touch should NOT disengage follow, so this is only
       // called once the gesture has been confirmed as a pan/pinch
       // (movement threshold crossed, or a second finger landed).
-      presenter.setFollowPlayhead(false);
+      playbackPresenter.setFollowPlayhead(false);
     };
 
     // Start tracking pan state without yet committing to "this is a
@@ -895,7 +900,7 @@ const JotView = observer((props: JotViewProps) => {
         initPadLeft,
         anchorBarsRowX,
       };
-      presenter.setFollowPlayhead(false);
+      playbackPresenter.setFollowPlayhead(false);
     };
 
     const onTouchStart = (e: TouchEvent) => {
@@ -1040,7 +1045,7 @@ const JotView = observer((props: JotViewProps) => {
       el.removeEventListener('touchend', onTouchEnd);
       el.removeEventListener('touchcancel', onTouchCancel);
     };
-  }, [presenter]);
+  }, [playbackPresenter]);
 
   // `--note-pad-beats` is the engraving inset (a zoom-invariant
   // fraction of a beat) every note / grid / bracket reads in its

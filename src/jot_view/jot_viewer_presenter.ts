@@ -1,4 +1,4 @@
-import { makeAutoObservable, reaction, runInAction } from 'mobx';
+import { makeAutoObservable, runInAction } from 'mobx';
 import { loadDebugZip, NO_DRUMS_KEY } from 'src/debug_zip';
 import { ExampleJot } from 'src/fakes';
 import { RenderedJot } from 'src/jot';
@@ -20,9 +20,7 @@ import {
   AudioTrackRole,
   jotPlayer,
   buildTimeline,
-  xToTime,
 } from 'src/playback';
-import { pickDominantBpmAndTime } from 'src/playback/timeline';
 import { loadParadbZip } from 'src/rlrr';
 import {
   BeatInput,
@@ -158,21 +156,6 @@ export class JotViewerPresenter {
       provenancePresenter: false,
       mixer: false,
     });
-    // Seed the player's live drum↔audio offset from each loaded jot's
-    // transcribed lead-in (`globalMetadata.drumsT0Sec`). Tracking
-    // `currentJot` (an observable reference) re-fires whenever a new jot
-    // is loaded, resetting the offset to that recording's value; manual
-    // nudges via the Offset control persist until the next load. We read
-    // `globalMetadata` (the raw source) rather than `resolved` so seeding
-    // doesn't force a layout pass.
-    reaction(
-      () => {
-        const raw = this.document.currentJot?.globalMetadata.drumsT0Sec;
-        return typeof raw === 'number' && raw > 0 ? raw : 0;
-      },
-      (offsetSec) => jotPlayer.setDrumsT0Sec(offsetSec),
-      { fireImmediately: true }
-    );
   }
 
   /**
@@ -213,23 +196,6 @@ export class JotViewerPresenter {
     // playhead, scheduled drum events, and idle cue from the previous
     // jot don't leak onto the new one.
     jotPlayer.stop();
-  }
-
-  toggleFollowPlayhead() {
-    this.setFollowPlayhead(!this.playback.followPlayhead);
-  }
-
-  /**
-   * Set {@link followPlayhead} and tag whether the off-state is
-   * transient (set while playing) or deliberate (set while idle/paused).
-   * Idempotent: redundant calls don't reshuffle the transient tag so e.g.
-   * a pan during playback can't promote an already-deliberate off-state
-   * into a transient one.
-   */
-  setFollowPlayhead(on: boolean) {
-    if (on === this.playback.followPlayhead) return;
-    this.playback.followPlayhead = on;
-    this.playback.followDisabledIsTransient = on ? false : jotPlayer.state === 'playing';
   }
 
   setExamples(examples: readonly ExampleJot[]) {
@@ -1304,106 +1270,6 @@ export class JotViewerPresenter {
     });
   }
 
-  async playCurrent(): Promise<void> {
-    const jot = this.document.currentJot;
-    if (!jot) return;
-    // Pass the laid-out RenderedJot (not its source) so the player's
-    // timeline reads live bar widths — the playhead then tracks correctly
-    // across zoom changes.
-    await jotPlayer.play(jot);
-  }
-
-  stopPlayback(): void {
-    jotPlayer.stop();
-  }
-
-  /**
-   * Slide every drum note across the bar grid by `beats` quarter-note
-   * beats to realign a consistently mis-detected groove (see
-   * {@link RenderedJot.drumOffsetBeats}). Reflows the score reactively and
-   * reschedules in-flight playback so the change is heard immediately.
-   */
-  setDrumOffset(beats: number): void {
-    const jot = this.document.currentJot;
-    if (!jot) return;
-    // Slider semantics: the user is re-labeling note positions on the
-    // notational grid (e.g. "this hit is on 1/48, not 3/48"), not
-    // re-timing the drums against the audio recording. So when the
-    // shift moves every note by Δ beats in jot time, compensate the
-    // audio offset by the same magnitude in the opposite direction so
-    // the audio-track waveform tracks the noteheads instead of sliding
-    // out from under them. Uses the dominant bpm (the tempo the song
-    // spends the most audio time at, excluding lead-in bars) rather
-    // than globalMetadata.bpm, because transcribed bundles store a
-    // back-solved lead-in tempo as the first setTempo event and that
-    // value can be very different from the song's actual rate. Per-bar
-    // tempo variation still leaves a few-ms-per-note residual; same
-    // caveat as the Drum-offset row in the debug panel.
-    const deltaBeats = beats - jot.drumOffsetBeats;
-    if (Math.abs(deltaBeats) > 1e-12) {
-      const { dominantBpm } = pickDominantBpmAndTime(jot);
-      const bpm = dominantBpm ?? 120;
-      const deltaSec = (deltaBeats * 60) / bpm;
-      jotPlayer.setDrumsT0Sec(jotPlayer.drumsT0Sec - deltaSec);
-    }
-    jot.setDrumOffset(beats);
-    jotPlayer.refreshDrumSchedule(jot);
-  }
-
-  /**
-   * Click-to-seek. `x` is a pixel offset within the bars row — the same
-   * coordinate space `bar.x` / the playhead use (origin at the left
-   * edge of the bars region, after the gutter). While playing this
-   * scrubs live; while idle it parks the playhead and the next Play
-   * starts from there. Uses the live timeline when one exists so a
-   * mid-playback scrub reads the exact bars being played.
-   */
-  seekToX(x: number): void {
-    const jot = this.document.currentJot;
-    if (!jot) return;
-    const timeline = jotPlayer.timeline.bars.length > 0 ? jotPlayer.timeline : buildTimeline(jot);
-    jotPlayer.seek(jot, xToTime(timeline, x));
-  }
-
-  /**
-   * Single transport action shared by the spacebar shortcut and the
-   * toolbar's play/pause button:
-   *   idle    -> play the current jot from the start
-   *   playing -> pause (freezes the clock, playhead stays put)
-   *   paused  -> resume from the same spot
-   * `loading` is intentionally a no-op so a double-press during the
-   * one-time sample fetch can't stack two `play()` calls.
-   */
-  async togglePlayPause(): Promise<void> {
-    switch (jotPlayer.state) {
-      case 'idle':
-        this.maybeReenableFollowOnPlay();
-        await this.playCurrent();
-        break;
-      case 'playing':
-        await jotPlayer.pause();
-        break;
-      case 'paused':
-        this.maybeReenableFollowOnPlay();
-        await jotPlayer.resume();
-        break;
-    }
-  }
-
-  /**
-   * Restore {@link followPlayhead} on the idle/paused → playing
-   * transition when the off-state was set during the previous playback
-   * session (pan, minimap drag, or follow-button toggle while playing).
-   * No-op when {@link autoFollowOnPlay} is off, when follow is already
-   * on, or when the user deliberately disabled it while idle/paused.
-   */
-  private maybeReenableFollowOnPlay() {
-    if (!this.playback.autoFollowOnPlay) return;
-    if (this.playback.followPlayhead) return;
-    if (!this.playback.followDisabledIsTransient) return;
-    this.setFollowPlayhead(true);
-  }
-
   // --- transcribe (form options + resume picker) ---
 
   setDebug(enabled: boolean) {
@@ -1455,11 +1321,4 @@ export class JotViewerPresenter {
   setLyricsTextOpen(open: boolean) {
     this.lyricsAlign.lyricsTextOpen = open;
   }
-
-  // --- playback / transport ---
-
-  setAutoFollowOnPlay(on: boolean) {
-    this.playback.autoFollowOnPlay = on;
-  }
-
 }

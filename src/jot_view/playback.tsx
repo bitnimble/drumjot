@@ -11,7 +11,7 @@ import styles from './playback.module.css';
 import { VOLUME_STEP } from './store';
 import { DocumentStore } from './stores/document_store';
 import { PlaybackStore } from './stores/playback_store';
-import { JotViewerPresenter } from './jot_viewer_presenter';
+import { PlaybackPresenter } from './presenters/playback_presenter';
 
 function truncate(s: string, n: number): string {
   return s.length <= n ? s : `${s.slice(0, n - 1)}…`;
@@ -214,7 +214,7 @@ export const PlaybackBar = observer(
   }: {
     documentStore: DocumentStore;
     playback: PlaybackStore;
-    presenter: JotViewerPresenter;
+    presenter: PlaybackPresenter;
   }) => (
   <div className={styles.playbackBar}>
     <PlaybackControls
