@@ -81,16 +81,16 @@ architectural and flagged).
 | minimap | not started | `minimap.tsx` (~530) has pure peak/tick canvas-prep logic that could move to a tested helper. Perf-adjacent (canvas paint), review before splitting. |
 | mixer | **FLAGGED** | `mixer.tsx` (~1600), InstrumentRow / AudioTrackRow / waveform canvas / gutter rows. Perf-critical (per-frame waveform + windowed rows). Mechanical sub-component splits are safe in principle but high-blast-radius; recommend doing as its own reviewed slice. |
 | toolbar | partial | `DebugPanel` extracted. The menu code (~1130 lines) remains; could split leaf pieces (busy pills, ThemeSection, PlaybackKitSubmenu, sample-progress helpers), lower risk, not yet done. |
-| score | **mostly done** | `score.tsx` 2825 → **585 lines**, split into 3 perf-gated files (E2E_DEBUG_BUNDLE live; all 26 e2e incl. 3×120fps perf specs pass after each slice): (1) `score/note_provenance_details.tsx`, per-note debug-details cluster (1692 lines); (2) `score/bar_view.tsx`, bars-row render (BarView/NoteView/brackets/grace + note-desc helpers, 611 lines), the per-frame hot path, verified no perf regression. `WAVEFORM_PAINT_COLOR` → `utils/waveform_color.ts`; `PopoverPortal` exported from score (shared by NoteView + FilteredOnsetView), bars-row consumer is the mixer's InstrumentRow (repointed). Remaining in score.tsx (585 lines, no longer monolithic; optional further splits): seekFromClick, PopoverPortal, title/subtitle helpers, Legend, TimelineHeader (+WindowedTicks/TickDescriptor), FilteredOnsetView. |
+| score | **done** | `score.tsx` 2825 → **123 lines**, split into 6 focused files, every slice perf-gated (E2E_DEBUG_BUNDLE live; all 26 e2e incl. 3×120fps perf specs green): `note_provenance_details.tsx` (debug-details, 1671), `bar_view.tsx` (BarView/NoteView/brackets/grace + note-desc helpers, 599, per-frame hot path, no perf regression), `popover_portal.tsx` (160), `timeline_header.tsx` (+WindowedTicks/TickDescriptor, 226), `filtered_onset_view.tsx` (119). score.tsx is now a 123-line leaf (seekFromClick + title/subtitle helpers + Legend). `WAVEFORM_PAINT_COLOR` → `utils/waveform_color.ts`. No import cycles. |
 | contexts.ts split | not started | Splitting each React context next to its feature is low-risk but high import-churn (every context consumer). Cross-cutting contexts (NoteProvenance, BarTimings, RenderedJot, GridLineSettings, UniformWaveforms, FollowPlayhead, Selection) have no single feature home. Deferred; recommend a dedicated mechanical pass.
 
 **Summary:** the safe behaviour-preserving extractions were done (playback,
-provenance/DebugPanel, lyrics layout). `score.tsx` was then halved (2825 →
-1172) by extracting its debug-details cluster, verified against the now-live
-perf gate (E2E_DEBUG_BUNDLE). Still flagged for a reviewed pass: `mixer.tsx`,
-the remaining perf-critical score sub-components (BarView/NoteView/TimelineHeader/
-PopoverPortal), and the contexts split, all mechanically splittable, each a
-careful slice best done with the perf specs enabled.
+provenance/DebugPanel, lyrics layout). `score.tsx` was then fully broken up
+(2825 → 123 lines across 6 files), every slice verified against the now-live
+perf gate (E2E_DEBUG_BUNDLE) including the 3×120fps specs. Still flagged for a
+reviewed pass: `mixer.tsx` (1600 lines, same perf-sensitive shape, the
+waveform canvas + windowed rows) and the contexts split (low-risk but
+high import-churn). Both mechanically splittable with the same gated approach.
 
 ---
 
