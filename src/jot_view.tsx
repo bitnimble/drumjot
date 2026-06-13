@@ -35,11 +35,11 @@ import { VerticalScrollbar } from './jot_view/viewport/vertical_scrollbar';
 import { PlaybackBar } from './jot_view/playback/playback';
 import {
   Legend,
-  TimelineHeader,
   extractArtist,
   formatDisplayTitle,
   formatSubtitle,
 } from './jot_view/score/score';
+import { TimelineHeader } from './jot_view/score/timeline_header';
 import { GridLineSettings, TrackKey, snapToDevicePx } from './jot_view/store';
 import { SettingsStore } from './jot_view/settings/settings_store';
 import { DocumentStore } from './jot_view/document/document_store';

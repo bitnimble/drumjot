@@ -17,7 +17,7 @@ import {
 } from '../contexts';
 import styles from './score.module.css';
 import { NoteProvenanceDetails } from './note_provenance_details';
-import { PopoverPortal } from './score';
+import { PopoverPortal } from './popover_portal';
 
 // Bars-row rendering: a single bar (BarView) and everything it draws, 
 // note glyphs (NoteView + flam/drag grace), pattern/tuplet brackets, and
