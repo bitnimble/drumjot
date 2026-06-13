@@ -84,6 +84,49 @@ Loader + `--dataset enst` built but data is request-gated (Télécom Paris) and
 real `annotation/*.txt` labels, (b) optionally run `separate_enst_dataset.py`
 for the `sep_drum`/perstem trees, (c) `--dataset enst --enst-mix wet_mix`.
 
+### 6. Dropped-percussion hard negatives (built 2026-06-12, no run yet)
+- **Scope:** train (changes the loss; old checkpoints unaffected, no new head).
+- **What:** every source onset that maps to NO output lane, the removed `mp`
+  (cowbell/clap/tambourine) PLUS non-kit GM aux perc (congas/bongos/timbales/
+  agogo/claves/woodblocks/guiro/cuica/triangle, notes 39/54/56/58/60-81), is
+  bucketed by the readers into a single catch-all lane `x` (`lanes.NEGATIVE_LANES`).
+  It is never predicted but acts as a **hard negative for every output lane**
+  ("a hit happened, and it's none of your drums"), folded into `sib_act` so it
+  rides the existing `--sib-neg-weight`/`--sib-pos-weight`. Fixes the gap where
+  dropping a class silently dropped its false-trigger signal.
+- **Default:** ON. **Disable:** `--no-dropped-neg` (or `Config.use_dropped_neg=False`);
+  also inert when sibling weighting is off. Readers still emit `x` either way.
+- **Safety:** explicit per-source aux-perc lists (not "anything unmapped"), so an
+  incomplete label map (e.g. ENST's unverified table) can't turn a real drum into
+  a negative against its own lane, unknown labels keep dropping silently.
+- **Interactions:** reuses sibling weighting (off if both sib weights = 1); the
+  `_onsets.json` pooled cache auto-rebuilds entries that predate the `x` lane.
+- **Test it:** A/B on the per-stem set, `--dropped-neg` vs `--no-dropped-neg`,
+  watch precision on the leak-prone lanes (hc/rd/cr/mc, snare vs clap).
+
+### 7. MuQ encoder pathway (built 2026-06-12, no run yet)
+- **Scope:** train + infer (changes the frozen feature extractor; a MuQ-trained
+  checkpoint must be decoded with MuQ features too). Old MERT checkpoints unaffected.
+- **What:** `--encoder muq` swaps the frozen MERT encoder for **MuQ**
+  (`OpenMuQ/MuQ-large-msd-iter`, wav2vec2-conformer, 1024-dim, 24 kHz, **25 fps**).
+  `embeddings.MuQEncoder` mirrors `MertEncoder`'s `encode`/`encode_layers`; a
+  `make_encoder(name, layer)` factory dispatches by name. MuQ dim == MERT dim, so
+  the head width is unchanged; the only knock-on is the **25 fps** frame rate,
+  which (a) sets `cfg.encoder_fps=25` (targets/rings/peak-pick/eval follow) and
+  (b) the high-band/cym blocks now align to `encoder.fps` (were hardcoded to 75).
+  Features cache separately per encoder (cache key carries the encoder name).
+- **Default:** OFF (`--encoder mert`). **Revert:** just omit `--encoder muq`.
+- **Deps / setup (REQUIRED before it runs):** `cd transcriber && uv pip install muq`,
+  then `python training/scripts/fetch_models.py` (now also prefetches MuQ for the
+  offline cache; it SKIPs gracefully if `muq` isn't installed). MuQ runs FP32 (its
+  docs warn bf16 can NaN), no autocast.
+- **Caveats:** 25 fps is coarser than MERT's 75 (fine for mainstream, weak for fast
+  double-bass/blasts; see RESULTS notes); MuQ weights are **CC-BY-NC** (non-
+  commercial), same as MERT. `scripts/perstem_layer_sweep.py` still hardcodes
+  `MertEncoder`, add `make_encoder` there too if you want to sweep MuQ layers.
+- **Test it:** frozen-probe A/B vs MERT on ParaDB at MuQ's best layer(s); MuQ has
+  no published onset/ADT numbers, so this is the only way to know if it helps drums.
+
 ### Open decisions (proposed, not approved, don't action without a nod)
 - Sibling λ (8/3) and `aux_act_weight` (0.5) are **untuned guesses**, sweep
   only if v3 underperforms and these are suspected.
@@ -98,6 +141,7 @@ for the `sep_drum`/perstem trees, (c) `--dataset enst --enst-mix wet_mix`.
 | change | disable with |
 |---|---|
 | sibling-aware loss weighting | `--sib-neg-weight 1 --sib-pos-weight 1` |
+| dropped-percussion hard negatives | `--no-dropped-neg` (`Config.use_dropped_neg`) |
 | aux ring-activity objective | `Config.aux_act_weight = 0` (no CLI flag) |
 | rare-lane threshold floor | `Config.rare_thr_floor = 0` |
 | high-band spectral block | code revert (embeddings.embed_clip) + retrain, not flag-gated |

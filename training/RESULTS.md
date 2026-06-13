@@ -16,6 +16,348 @@ Scoring is `mir_eval` onset-F1 at ±50 ms (`metrics.onset_f1`).
 
 ---
 
+## Per-lane F1 progress (consolidated, newest columns right within each group)
+
+One row per lane, one column per run condition, so each lane's trajectory reads
+across. **Columns are only comparable *within* an eval-domain group** (the three
+`||`-separated blocks below use different eval sets, real ParaDB vs synthetic
+STAR-val vs separated pooled per-stem; so a 0.96 in PS is not "better" than a
+0.18 in PDB; compare down a column and along a row *within* a block). Detailed
+per-run tables (with precision/recall, leakage, confounds) stay in the sections
+below; this is the at-a-glance index. Legend under the table.
+
+| lane | PDB·full | PDB·bal | PDB·bal2 || SV·bal | SV·full || PS·trial | PS·sweep |
+|---|---|---|---|---|---|---|---|---|
+| k  | 0.907 | 0.914 | 0.906 || 0.994 | 0.992 || 0.964 | 0.97 |
+| s  | 0.806 | 0.826 | 0.851 || 0.989 | 0.980 || 0.815 | 0.84 |
+| ss | –     | –     | –     || 0.451 | 0.507 || 0.481 | 0.55 |
+| t  | 0.660 | 0.639 | 0.663 || 0.744 | 0.710 || 0.759 | 0.76 |
+| hc | 0.297 | 0.238 | 0.314 || 0.808 | 0.840 || 0.601 | 0.59 |
+| hp | –     | –     | –     || 0.434 | 0.474 || 0.378 | 0.36 |
+| ho | 0.702 | 0.787 | 0.662 || 0.767 | 0.797 || 0.661 | 0.62 |
+| rd | 0.178 | 0.210 | 0.028 || 0.644 | 0.457¹| 0.535 | 0.51 |
+| cr | 0.417 | 0.562 | 0.449 || 0.677 | 0.728 || 0.561 | 0.54 |
+| mc | 0.092 | 0.073 | 0.000 || 0.350 | 0.704¹| 0.392 | 0.45 |
+| mp | –     | –     | –     || 0.402 | 0.585 || ✗     | ✗    |
+
+**Columns**
+- **PDB** = ParaDB, real hand-charted songs through our own separation (the metric
+  that counts), per-instrument isolation + new per-lane picker.
+  - `full` = star_stem_full_v1, 6035 train clips, 40 ep, natural dist., scratch.
+  - `bal` = star_balanced_stem_v1, 448 clips, 20 ep, warm-started.
+  - `bal2` = star_balanced_stem_v2, 1000 clips, ~80 ep, scratch.
+- **SV** = STAR held-out val (synthetic, in-domain, tuned thresholds; optimistic).
+  - `bal` = balanced_v1 (old picker); `full` = full_v1 (new picker).
+- **PS** = pooled per-stem val (star+enst+egmd sep stems, deployment-domain proxy).
+  - `trial` = first trial, cap 30, 15 ep, layer 10 (single config).
+  - `sweep` = per-stem layer sweep, cap 30, 35 ep, 2 seeds, each lane at its **best
+    layer** (see sweep section for the full lane×layer matrix).
+
+`–` = lane not scored in that run (ParaDB tables fold/omit ss/hp/mp; ParaDB also
+has folded `h`/`cym` rows not shown here). `✗` = `mp` removed from the model
+(2026-06, garbage-attractor lane). ¹ few-clip, high-variance (full_v1's val has
+~4 ride/misc clips); don't read into it.
+
+**Reading the rows.** Kick/snare/toms saturate everywhere. The cymbal lanes
+(rd/cr/mc) and closed-hat are strong on synthetic SV but collapse on real PDB, the synthetic→real gap. The PS columns are the separation-aware bet: ride
+**0.51–0.54** and crash **0.54–0.56** on separated stems vs PDB ride 0.03–0.21,
+the cymbal recovery the per-stem direction targets.
+
+---
+
+## MuQ vs MERT encoder A/B (2026-06-13)
+
+**Clean A/B**, both encoders fresh through the full per-stem pipeline (not the bare
+probe), identical settings: pooled star+enst+egmd, `--pool-cap 60`, 2 seeds, 45
+epochs, high-band + aux + sibling. MuQ swept layers 1/4/7/10/12 (it exposes only 13
+hidden states, NOT 24 as its w2v2 config implies), MERT 1/4/7/10/13. Best layer per
+lane (mean over 2 seeds):
+
+| | k | s | ss | t | hc | hp | ho | rd | cr | mc | macro |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| **MERT** | 0.97 | 0.83 | 0.50 | 0.79 | 0.65 | 0.38 | 0.68 | 0.44 | 0.62 | 0.42 | **0.63** |
+| **MuQ** | 0.90 | 0.75 | 0.47 | 0.69 | 0.35 | 0.25 | 0.62 | 0.21 | 0.51 | 0.38 | **0.51** |
+| Δ | +.07 | +.08 | +.03 | +.10 | **+.30** | +.13 | +.06 | **+.23** | +.11 | +.04 | +.12 |
+
+**Verdict: MERT wins every lane; keep MERT.** MuQ is decisively worse for drum
+onsets (macro 0.51 vs 0.63, −19%), collapsing on the hard fine-timing/timbre lanes
+(closed-hat −0.30, ride −0.23). Two coherent causes, both matching priors:
+- **25 fps hurts onset precision** (hats/cymbals worst), as expected vs MERT's 75.
+- **MuQ's onset signal lives in its EARLY layers** (s/ss/t/hc/hp/ho all peak at L1,
+  declining with depth), whereas MERT's depth helps (hats/cymbals peak L7-L13). MuQ's
+  deeper layers lean semantic (its MARBLE strength) rather than acoustic; onsets are
+  an acoustic, fine-time task, MERT's wheelhouse. MuQ's MARBLE lead does NOT transfer.
+
+The fresh MERT here reproduces the recorded cap-30 sweep within noise (hc 0.65 vs
+0.59, cr 0.62 vs 0.54, t 0.79 vs 0.76), confirming the A/B is sound. **Decision:
+stay on MERT.** (License is moot: both CC-BY-NC. MuQ remains an option only if a
+future need is semantic, not onset.)
+
+## Soft-argmax onset timing spike (2026-06-13)
+
+Tested whether sub-frame **soft-argmax** decoding (re-time each detected peak as the
+prob-weighted centroid of its ±1-frame lobe) recovers MuQ's 25 fps timing loss.
+Same trained model decoded two ways (identical peaks, only the time differs), MuQ
+hc@L1 + cr@L4, cap 60 / 2 seeds / 45 ep (reproduces the overnight MuQ: hard@±50 ms
+hc 0.351, cr 0.507). Scored at three tolerances:
+
+| lane | ±50 ms | ±25 ms | ±10 ms |
+|---|---|---|---|
+| hc (dense) | −0.001 | +0.001 | **−0.011** |
+| cr (sparse) | +0.001 | +0.010 | **+0.011** |
+
+**Conclusion: ~no-op at our ±50 ms tolerance; tiny (+0.01) gain only on sparse/
+sustained lanes at tighter tolerances; slightly NEGATIVE on dense lanes.** As
+theory predicts, it's precision-only (the note-density ceiling stays frame-rate
+bound) and there's nothing to win at ±50 ms because 25 fps quantization (±20 ms) is
+already inside tolerance. Dense hats get *worse* at ±10 ms: neighbouring 16th-note
+lobes (~2.5 frames apart at 25 fps) contaminate the centroid. **Don't ship as-is**
+(would need an isolated-peak gate); it does not rescue MuQ (its deficit is
+representational, not sub-tolerance timing). Useful only if we ever score tighter /
+care about groove feel, and then sparse lanes only.
+
+## MuQ cymbal classification probe (idea-A, 2026-06-13)
+
+Tests the two-stage hypothesis: given a KNOWN onset, can MuQ out-CLASSIFY MERT on
+cymbal type (ride/crash/misc + reject)? Proper setup: full features (encoder +
+high-band) + a 2-layer BiGRU over a 40 ms-pre .. 500 ms-post window (attack + ring),
+mean-pooled -> softmax; identical examples/head/seed, only the encoder differs.
+Cymbal stem, cap 60. MERT@L13 vs MuQ at L4 (detection-best) / L7 / L10 (deeper,
+where its semantic/timbre strength should live).
+
+| config | acc | ride F1 | crash F1 | mc F1 | reject F1 | crash→ride |
+|---|---|---|---|---|---|---|
+| **MERT@L13** | 0.851 | 0.834 | **0.554** | 0.262 | 0.924 | **0.244** |
+| MuQ@L4 | 0.846 | 0.824 | 0.514 | 0.181 | 0.923 | 0.466 |
+| MuQ@L7 | 0.861 | 0.852 | 0.442 | 0.133 | 0.937 | 0.433 |
+| MuQ@L10 | 0.704 | 0.716 | 0.453 | 0.359 | 0.738 | 0.448 |
+
+**MuQ ruled out for drums, at every layer.** On the call that matters (crash vs
+ride) MERT wins everywhere: best crash F1 (0.554) and **half** the crash→ride
+confusion (0.244 vs MuQ's 0.43-0.47). MuQ@L7's higher *overall* acc is a mirage,
+it comes from the easy classes (ride + reject) while crash gets worse; aggregate
+accuracy rewards MuQ's ride-bias. Deeper (L10) collapses (reject recall 0.63: 883
+rejects called "ride"), confirming MuQ's deep layers shed the acoustic onset signal
+as they go semantic. Across detection (A/B macro 0.63 vs 0.51), timing (soft-argmax
+no-op) and classification (here), MuQ never beats MERT for drums. **Stay on MERT.**
+
+**Encoder-agnostic by-products:** (1) the two-stage structure works, reject F1
+~0.92-0.94, so "high-recall propose -> classify-with-reject" is viable (use MERT as
+the classifier). (2) Crash/ride is an INTRINSIC ceiling: even MERT given the onset
+hits only crash F1 0.55 / 24% crash→ride, and crash is data-starved (802 train vs
+ride 2500, mc 180). Levers for cymbals are more crash/mc data, the sub-6 kHz `cym`
+timbre block (built, never A/B'd), or better separation, NOT the encoder.
+
+## Two-stage vs per-frame: CEILING gate (2026-06-13)
+
+**Question.** Would a two-stage arch (high-recall onset *proposer* -> per-onset
+*classifier*) beat the current per-frame detector? First gate: the **ceiling** --
+give the proposer GROUND-TRUTH onset times (perfect recall) and see if the best
+case clears the baseline. If not, the arch is dead cheaply.
+
+**Setup** (`tmp_e2e_ceiling_k7m2.py`, cymbals + hats stems, ceiling-gate). Both
+arms on the IDENTICAL pooled split (star+enst+egmd sep, cap 60: 180 train / 173 val
+per stem), SAME cached MERT features (c@L10, h@L7, high-band), scored mir_eval
+onset-F1 @ ±50 ms, per-lane tuned thresholds. Restricted to each stem's 3 lanes.
+- **per-frame** = existing `MultiLaneHeads` (per-lane BiGRU, aux + sibling), 45 ep.
+- **two-stage** = proposer = GT union onsets clustered @20 ms (perfect recall);
+  classifier = shared 2-layer BiGRU over a 40 ms-pre..500 ms-post window,
+  mean-pooled, MULTI-LABEL sigmoids; ±a cross-stem sibling-coincidence vector
+  (other-stem kit lanes onset within ±30 ms, from full-kit onsets).
+
+| lane | per-frame | 2stage | 2stage+sib | best Δ |
+|---|---|---|---|---|
+| rd | 0.344 | 0.830 | **0.846** | **+0.502** |
+| cr | 0.469 | 0.685 | **0.727** | +0.258 |
+| mc | 0.298 | 0.413 | **0.484** | +0.186 |
+| hc | 0.657 | **0.793** | 0.769 | +0.136 |
+| hp | 0.312 | **0.478** | 0.465 | +0.167 |
+| ho | 0.690 | **0.828** | 0.806 | +0.138 |
+
+**Verdict: ceiling PASSES on every lane, hugely on the detection-limited ones
+(ride +0.50, crash +0.26, hp +0.17).** The arch has large headroom -> proceed to
+the realistic proposer. But read the gap correctly:
+- **It is mostly perfect-RECALL headroom, not realized.** The two-stage was handed
+  the onset times; ride's +0.50 says the per-frame model's ride failure is
+  dominantly a *detection/recall* problem, fixable IF a proposer hits ~100% recall.
+  The realistic-proposer stage is now the whole ballgame; this gap collapses toward
+  the proposer's actual recall.
+- **Two confounds inflate the gap (both pessimise the baseline):** (1) the per-frame
+  cymbal baseline **overfit** -- val macro peaked ~0.60 @ep2, decayed to 0.36 @ep44,
+  and we score the final epoch (no best-checkpoint). Best-epoch baseline would be
+  higher. (2) single seed. Fix both in the realistic round (early-stop/best-ckpt,
+  2 seeds).
+- **Sibling conditioning is a cymbal-specific win** (cr +0.04, mc +0.07, rd +0.02)
+  and a slight hat *loss* (hc/ho −0.02): cross-stem coincidence helps crashes (kick
+  under crash) but adds noise to steady-state hats. Keep it cymbal-side.
+
+Next: build a class-agnostic high-recall onset proposer, swap it for the GT
+proposer, re-score; the ceiling→realistic drop is the real number.
+
+**Junk-rejection probe (precision side, same settings).** The ceiling assumed not
+just perfect recall but perfect candidate *precision* (no junk). This probe
+(`tmp_junk_probe_w4r.py`) keeps perfect recall but injects synthetic JUNK
+candidates -- random non-onset times (≥120 ms from any onset), label all-zeros --
+into BOTH train and val at 1:1 with true onsets (≈50% proposer precision), to test
+whether the multi-label classifier can reject them. No-junk columns reproduce the
+ceiling EXACTLY (same seed), so it's directly comparable. Each stem at its better
+sib setting (cymbals +sib, hats no-sib):
+
+| lane | per-frame | 2stage no-junk | 2stage +junk | junk cost |
+|---|---|---|---|---|
+| rd | 0.344 | 0.846 | 0.713 | **−0.133** |
+| cr | 0.469 | 0.727 | 0.716 | −0.011 |
+| mc | 0.298 | 0.484 | 0.502 | +0.018 |
+| hc | 0.657 | 0.793 | 0.756 | −0.037 |
+| hp | 0.312 | 0.478 | 0.435 | −0.043 |
+| ho | 0.690 | 0.828 | 0.769 | −0.059 |
+
+Junk rejection rate (all lanes below thr): cymbals 0.91 no-sib / 0.85 +sib; hats
+0.94 / 0.91.
+- **The advantage survives 50%-precision junk** -- every lane still clears per-frame
+  (ride +0.37, crash +0.25, hats +0.06–0.12). The headroom isn't a perfect-recall
+  mirage; it tolerates heavy false-positive load.
+- **Ride is the precision canary** (−0.13): dense/steady, historically the #1
+  garbage-attractor, so it over-fires on junk. Crash barely moves (−0.01), distinct
+  enough that junk rarely reads as crash.
+- **Sib trades rejection for classification**: +sib lowers junk reject rate (junk
+  under a kick/snare nudges the cymbal heads) yet still nets higher cymbal F1.
+- **Caveat:** random junk (silence/ring-tail) is far easier to reject than a real
+  proposer's transient-like FPs, so these costs are optimistic FLOORS (ride worst).
+  Still passes, so the gate holds; the real proposer remains the deciding test.
+
+**hp-as-output ablation (shared trunk, 2026-06-13).** Now that the classifier
+shares one BiGRU trunk across hc/hp/ho (vs the old per-lane heads that walled lanes
+off), does hp's output head drag hc/ho? Controlled (`tmp_hp_abl_q3z.py`): identical
+candidates/windows, only the hp output node + its loss toggled. Removing hp:
+hc 0.808→0.822 (+0.014), ho 0.805→0.810 (+0.005) -- a slight drag, within
+single-seed noise. No meaningful negative transfer; keeping hp costs the hats
+~nothing (hp itself stays poor, 0.372).
+
+## Per-stem pooled MERT layer sweep (2026-06-12)
+
+**Setup.** `scripts/perstem_layer_sweep.py` over pooled per-stem examples from all
+three SEPARATION-AWARE trees (star_balanced_sep + enst-sep + egmd-sep), full
+pipeline (high-band block + aux ring-activity + sibling weighting), `--pool-cap 30`
+balanced (450 train / 865 val per-stem windows), layers {1,4,7,10,13}, 2 seeds, 35
+epochs. One MERT forward/clip caches all layers. Goal: lock the best encoder layer
+per lane on the deployment (per-stem) domain. STAR-val F1, ±std over 2 seeds.
+
+| lane | L1 | L4 | L7 | L10 | L13 | best |
+|---|---|---|---|---|---|---|
+| k  | 0.97 | 0.97 | 0.97 | 0.96 | 0.97 | flat |
+| s  | 0.83 | 0.84 | 0.83 | 0.83 | 0.84 | flat |
+| t  | 0.76 | 0.74 | 0.73 | 0.75 | 0.76 | flat |
+| hc | 0.57 | 0.58 | 0.59 | 0.57 | 0.58 | ~L7 (flat) |
+| hp | 0.36 | 0.32 | 0.36 | 0.35 | 0.35 | ~L7 (rare/noisy) |
+| ss | 0.55 | 0.52 | 0.42 | 0.42 | 0.41 | **L1** (monotonic ↓) |
+| ho | 0.62 | 0.62 | 0.59 | 0.54 | 0.60 | **L1/L4** (early) |
+| rd | 0.42 | 0.49 | 0.47 | 0.51 | 0.49 | **L10** |
+| cr | 0.50 | 0.43 | 0.51 | 0.54 | 0.50 | **L10** |
+| mc | 0.38 | 0.41 | 0.44 | 0.30 | 0.45 | L13 (53 onsets, noisy) |
+
+**Findings.**
+- **Most lanes are layer-insensitive** (k/s/t/hc/hp flat within ±0.01–0.04). Layer
+  choice barely matters for them.
+- **Real per-lane preferences:** side-stick wants **L1** (0.55→0.41, the largest
+  effect), open-hat wants **early** (L1/L4 > L10), and **ride+crash peak at L10**, *deeper* than the full-mix sweep found (L4/L7); isolating the cymbal stem shifts
+  the optimum.
+- **Per-stem ≫ full-mix on cymbals**: ride 0.51 vs ~0.25 full-mix, the per-stem
+  direction is the cymbal win, more than layer choice.
+
+**Recommended per-STEM layers** (stems are encoded per-instrument): s→**L1** (ss
++0.14, s indifferent), c→**L10** (rd/cr peak), h→**L7** (hc/hp; ho ~flat L1–L7),
+k/t→any (L7). Layer-concat's gain over this is mostly ss + cymbals (most lanes
+flat), so single-layer-per-stem captures most of it at 1× input width.
+
+**Caveats.** cap=30 / 2 seeds, flat lanes genuinely flat; ss/ride/crash clear the
+noise; mc/hp shaky (few onsets). Worth a higher-cap confirmation of s→L1 / c→L10.
+
+**Layer-concat probe (hi-hat stem only), cap-30 first pass.** Concatenating the hat
+lanes' top layers, `[MERT_L1 | MERT_L7 | high-band]` (2064-d), on 90 train / 150
+val, 1 seed, batch 4: every hat lane got *worse* (hc 0.46 vs 0.59, hp 0.11 vs 0.36,
+ho 0.39 vs 0.62). But this was **data-starved** (see the controlled run next, which
+overturns the "concat hurts" reading).
+
+**Controlled hat concat-vs-single (cap-150, 2026-06-12).** Matched A/B to remove
+the cap-30 confounds: pooled per-stem h-stem, `--pool-cap 150` (450 train / 120 val,
+~5× the data), 2 seeds, 35 epochs, IDENTICAL windows/val. Four arms; concat-h256
+uses batch 2 (2064-d into a 256 head OOMs at 4 on 6 GB), the others batch 4.
+
+| lane | L1 (h128) | L7 (h128) | concat L1+L7 (h128) | concat L1+L7 (h256) |
+|---|---|---|---|---|
+| hc | 0.658 | 0.653 | 0.665 | **0.691** |
+| hp | 0.373 | 0.378 | **0.391** | 0.374 |
+| ho | 0.665 | **0.680** | 0.679 | 0.687 |
+
+**Findings.**
+- **More data was the real story.** All cap-150 single-layer arms (0.65–0.68) sit
+  far above the cap-30 baselines (hc ~0.57–0.59, ho ~0.62), +0.05–0.08. The earlier
+  "concat hurts" was the 90-clip starvation, not the concat.
+- **Layer-concat is a wash, not a win.** At matched head/batch, concat-h128 vs
+  best single: hc +0.007, hp +0.013, ho −0.001, all within noise (±std ≤0.016).
+  Confirms the recommendation: **pick one best layer per lane; don't concat** (the
+  flat-across-layers profile means the layers are redundant, not complementary).
+- **Capacity (head 256) helped hc** (+0.026 over concat-h128, ~2σ) and ho slightly,
+  hp not, a hint the head is mildly capacity-limited for closed-hat. **Confounded**
+  by batch 2 (forced by GPU memory) and by having no single-layer-h256 arm, so it's
+  suggestive, not conclusive: a clean head-size A/B (best-layer, h128/256/384, same
+  batch) is the follow-up, and it speaks to the "is the RNN too small" question more
+  than concat does.
+
+**Full-band log-mel vs high-band input (2026-06-13).** Tested N2N's input recipe,
+replace the targeted 6-20 kHz high-band block with a 128-bin FULL-band log-mel
+(`[MERT_layer | mel128]`, replace not augment), same per-stem sweep (cap 30, layers
+1/4/7/10/13, 2 seeds, full pipeline). Best layer per lane, mel vs the hb16 sweep:
+
+| | k | s | ss | t | hc | hp | ho | rd | cr | mc |
+|---|---|---|---|---|---|---|---|---|---|---|
+| mel-128 | 0.97 | 0.85 | 0.55 | 0.77 | 0.59 | 0.36 | 0.62 | 0.54 | 0.54 | 0.47 |
+| hb16 | 0.97 | 0.84 | 0.55 | 0.76 | 0.59 | 0.36 | 0.62 | 0.51 | 0.54 | 0.45 |
+
+**Wash.** Full-band mel tracks the narrow high-band almost exactly; only a marginal
+cymbal edge (rd +0.03, mc +0.02, ~2σ) at **8× the width** (128 vs 16 dims). The
+high-band already carries the discriminative cymbal info and MERT covers the
+low/mid mel adds, so **keep hb16**; mel is a *slight* cymbal lever if ever needed.
+
+## Per-stem pooled pipeline, first trial (2026-06-12)
+
+**Setup.** First end-to-end run of pooled per-stem training (`train.py --dataset
+pooled`): per-stem examples pooled from all three SEPARATION-AWARE trees
+(star_balanced_sep + enst-sep + egmd-sep), `--pool-cap 30 --pool-balance` (450
+train / 865 val per-stem windows), full pipeline (high-band + aux ring-activity +
+sibling weighting), default encoder **layer 10**, 15 epochs, 1 seed. Eval is the
+pooled per-stem val set (each clip = one isolated instrument's stem, scored only on
+its own lanes). This is the single-config baseline the layer sweep above builds on.
+
+**Held-out per-lane F1** (tuned thresholds, pooled per-stem val):
+
+| lane | k | s | t | ho | hc | cr | rd | ss | mc | hp |
+|---|---|---|---|---|---|---|---|---|---|---|
+| F1 | 0.964 | 0.815 | 0.759 | 0.661 | 0.601 | 0.561 | 0.535 | 0.481 | 0.392 | 0.378 |
+| onsets | 4869 | 4342 | 1312 | 1882 | 4418 | 457 | 1732 | 1057 | 53 | 765 |
+
+**Findings.**
+- **The pooled per-stem pipeline works**: kick/snare/toms strong (0.96/0.82/0.76),
+  and the historically weak cymbals recover hard, **ride 0.535** and **crash 0.561**
+  here vs full-mix ParaDB ride ~0.18, crash ~0.42 (and STAR-val ride 0.43). The
+  per-stem (isolated-instrument) direction is the cymbal win, exactly what the
+  separation-aware experiment targeted.
+- **The shared per-lane picker earns its place on separated audio.** Bare
+  peak-pick vs the `drumjot_dsp` deterministic picker on this val: +0.082 ride,
+  +0.089 misc-cym, +0.059 side-stick, +0.057 closed-hat, +0.049 crash, +0.034
+  open-hat (precision-driven). Contrast the near-no-op (dF ≈ 0) on *clean* STAR
+  val, the picker pays off where the audio is messy (real separator output), which
+  is the deployment domain.
+- **Exposed the `val_macro_f1` bug.** During-training val read ~0.057 despite kick
+  at 0.96, because the old metric averaged over all 10 lanes including the ~9
+  empty-reference lanes per per-stem clip. Fixed afterward (now counts only lanes
+  with reference onsets); see CHANGELOG / `mean_f1`.
+
+**Caveats.** cap=30, 15 epochs (short), 1 seed, layer 10 (pre-sweep default; the
+sweep later found cymbals prefer L10 anyway, side-stick L1). Pooled val mixes the
+three sources' per-stem clips, so it's a deployment-domain proxy, not ParaDB.
+
 ## Current setup (2026-06-09)
 
 **Architecture.** Frozen **MERT-v1-330M** encoder (sr 24 kHz, **layer 10**, ~75 fps,
