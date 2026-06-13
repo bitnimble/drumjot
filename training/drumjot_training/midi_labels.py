@@ -13,21 +13,24 @@ from pathlib import Path
 
 import mido
 
-from drumjot_training.lanes import LANES, lane_for_gm_note
+from drumjot_training.lanes import WEIGHT_LANES, lane_for_gm_note, negative_lane_for_gm_note
 
 
 def onsets_by_lane(midi: mido.MidiFile) -> dict[str, list[float]]:
     """Per-lane ascending onset times (seconds) for `midi`.
 
-    Always returns all five lanes; absent lanes map to an empty list.
+    Always returns all output lanes (empty list when absent) PLUS the catch-all
+    negative lane `x`: non-kit GM percussion (clap/tambourine/cowbell + latin/aux
+    perc) the kit map drops, kept for hard-negative loss weighting and ignored by
+    output-lane consumers.
     """
-    out: dict[str, list[float]] = {lane: [] for lane in LANES}
+    out: dict[str, list[float]] = {lane: [] for lane in WEIGHT_LANES}
     t = 0.0
     for msg in midi:  # tempo-aware iteration: msg.time is delta seconds
         t += msg.time
         if msg.type != "note_on" or msg.velocity <= 0:
             continue
-        lane = lane_for_gm_note(msg.note)
+        lane = lane_for_gm_note(msg.note) or negative_lane_for_gm_note(msg.note)
         if lane is not None:
             out[lane].append(t)
     return out

@@ -21,6 +21,18 @@ LANES: tuple[str, ...] = (
     "k", "s", "ss", "t", "hc", "hp", "ho", "rd", "cr", "mc",
 )
 
+# Catch-all "negative" lane for real percussive onsets that belong to NO output
+# lane: the removed `mp` (cowbell/clap/tambourine) PLUS all non-kit aux percussion
+# (congas, bongos, timbales, agogo, claves, woodblocks, guiro, cuica, triangle,
+# ...). It gets no head and is never predicted, but the readers still emit its
+# onset times (bucketed here) so the loss can treat those frames as HARD NEGATIVES
+# for every output lane -- "a hit happened, and it's none of your drums" -- instead
+# of silently discarding the false-trigger signal when a class is dropped from the
+# model. See train.build_negative_targets / negative_sibling_matrix.
+NEGATIVE_LANES: tuple[str, ...] = ("x",)
+# Rows the loss-weighting machinery sees: the output lanes plus the ghost lane(s).
+WEIGHT_LANES: tuple[str, ...] = LANES + NEGATIVE_LANES
+
 LANE_NAMES: dict[str, str] = {
     "k": "kick",
     "s": "snare",
@@ -56,6 +68,21 @@ def lane_for_gm_note(note: int) -> str | None:
     return _GM_NOTE_TO_LANE.get(note)
 
 
+# Non-kit GM percussion -> the catch-all negative lane (NEGATIVE_LANES): hand
+# clap (39), tambourine (54), cowbell (56), vibraslap (58), and the latin/aux
+# percussion block bongos..open-triangle (60-81). These are genuine onsets the
+# kit map drops; they become hard negatives, never outputs.
+_GM_NOTE_TO_NEG: dict[int, str] = {n: "x" for n in (39, 54, 56, 58, *range(60, 82))}
+
+
+def negative_lane_for_gm_note(note: int) -> str | None:
+    """Catch-all negative lane for a non-kit GM percussion `note`, else None.
+    Only fires for notes that are NOT an output lane (so it never shadows the kit)."""
+    if note in _GM_NOTE_TO_LANE:
+        return None
+    return _GM_NOTE_TO_NEG.get(note)
+
+
 # Acoustically-confusable siblings, per lane: the lanes whose hits this lane's
 # head is empirically prone to firing on. SEEDED FROM MEASURED ParaDB leakage
 # (eval_paradb cross-instrument tables, 2026-06), not instrument taxonomy: e.g.
@@ -89,4 +116,27 @@ def sibling_matrix(lanes: tuple[str, ...] = LANES) -> list[list[bool]]:
         for s in sibs:
             if s in idx:
                 out[idx[ln]][idx[s]] = True
+    return out
+
+
+# Which output lanes each NEGATIVE (ghost) lane is a hard negative for. The
+# catch-all "x" is a hard negative for EVERY output lane ("this percussive frame
+# is none of your drums"). A map (not just "all") so a future split of the ghost
+# lane into e.g. low vs metallic aux-perc can target specific lanes.
+NEGATIVE_SIBLINGS: dict[str, tuple[str, ...]] = {ln: NEGATIVE_LANES for ln in LANES}
+
+
+def negative_sibling_matrix(
+    lanes: tuple[str, ...] = LANES, negatives: tuple[str, ...] = NEGATIVE_LANES
+) -> list[list[bool]]:
+    """(len(lanes), len(negatives)) boolean matrix: out[i][j] is True when the
+    ghost lane `negatives[j]` is a hard negative for output lane `lanes[i]`.
+    Pairs with `sibling_matrix`: the loss extends each lane's sibling activity
+    with these ghost columns (the dropped-percussion negatives)."""
+    nidx = {ln: j for j, ln in enumerate(negatives)}
+    out = [[False] * len(negatives) for _ in lanes]
+    for i, ln in enumerate(lanes):
+        for g in NEGATIVE_SIBLINGS.get(ln, ()):
+            if g in nidx:
+                out[i][nidx[g]] = True
     return out

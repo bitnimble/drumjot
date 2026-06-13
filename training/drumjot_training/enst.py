@@ -40,7 +40,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from drumjot_training.lanes import LANES
+from drumjot_training.lanes import LANES, WEIGHT_LANES
 
 # Normalised ENST label -> our lane (see `_normalize`: rc1->rc, c3->c, sd- ->sd).
 _ENST_TO_LANE: dict[str, str] = {
@@ -55,8 +55,12 @@ _ENST_TO_LANE: dict[str, str] = {
     "rc": "rd",                                   # ride cymbal
     "cr": "cr", "c": "cr",                         # crash; bare/other cymbal -> crash
     "ch": "mc", "spl": "mc", "rb": "mc",           # china / splash / ride-bell -> misc cymbal
-    # cb (cowbell) deliberately unmapped: the `mp` lane was removed (lanes.py).
 }
+
+# Non-kit aux percussion -> the catch-all negative lane (lanes.NEGATIVE_LANES):
+# cowbell. Not an output lane, but emitted by `onsets_by_lane` for hard-negative
+# loss weighting. (The `sticks` count-in is left unmapped -> dropped, not a hit.)
+_ENST_TO_NEG: dict[str, str] = {"cb": "x"}
 
 _TRAIL = "0123456789-_ "
 
@@ -72,19 +76,28 @@ def lane_for_enst_class(label: str) -> str | None:
     return _ENST_TO_LANE.get(_normalize(label))
 
 
+def negative_lane_for_enst_class(label: str) -> str | None:
+    """Catch-all negative lane for a non-kit ENST label (cowbell), else None."""
+    base = _normalize(label)
+    if base in _ENST_TO_LANE:
+        return None
+    return _ENST_TO_NEG.get(base)
+
+
 def onsets_by_lane(annotation_path: str | Path) -> dict[str, list[float]]:
     """Parse an ENST `.txt` annotation into per-lane onset times (seconds).
 
     Lines are whitespace-separated `<time> <label>`; out-of-kit labels (and
-    malformed lines) are dropped. Always returns all 11 lanes (empty lists for
-    absent ones), each sorted ascending."""
-    out: dict[str, list[float]] = {lane: [] for lane in LANES}
+    malformed lines) are dropped. Always returns all output lanes (empty lists
+    for absent ones) PLUS the catch-all negative lane `x` (non-kit aux perc, e.g.
+    cowbell) kept for hard-negative loss weighting; each list sorted ascending."""
+    out: dict[str, list[float]] = {lane: [] for lane in WEIGHT_LANES}
     with open(annotation_path) as f:
         for line in f:
             parts = line.split()
             if len(parts) < 2:
                 continue
-            lane = lane_for_enst_class(parts[1])
+            lane = lane_for_enst_class(parts[1]) or negative_lane_for_enst_class(parts[1])
             if lane is None:
                 continue
             try:
