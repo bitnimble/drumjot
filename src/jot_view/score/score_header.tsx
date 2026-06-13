@@ -1,41 +1,7 @@
 import { observer } from 'mobx-react-lite';
-import React from 'react';
 import { RenderedJot } from 'src/jot';
 import sharedStyles from '../../jot_view.module.css';
 
-/**
- * Shared click-to-seek handler for the score bars row and the audio-track
- * waveforms. Bails on clicks that originated on a note, pattern label,
- * or anything else tagged `data-noseek` so those keep their own
- * behaviour. `e.currentTarget` is the bars-row element whose left edge
- * is x=0 in `bar.x` space, so `clientX - rect.left` is the bars-row-
- * local pixel regardless of horizontal scroll.
- */
-export function seekFromClick(
-  e: React.MouseEvent<HTMLDivElement>,
-  onSeek: (x: number) => void
-): void {
-  if (e.button !== 0) return;
-  if ((e.target as HTMLElement).closest('[data-noseek]')) return;
-  const rect = e.currentTarget.getBoundingClientRect();
-  onSeek(e.clientX - rect.left);
-}
-
-/**
- * Decides whether a label popover anchored to `anchorRef` should flip
- * above its anchor instead of below. Default placement is below; flips
- * when below-placement would extend past the score scroll viewport's
- * bottom edge; which sits flush with the playback bar's top, so
- * "extends past" means "hidden behind the playback bar / debug panel".
- *
- * Measured synchronously on open in `useLayoutEffect` so the flip class
- * is applied before paint (no one-frame flash of a wrongly-placed
- * label). Not re-measured on scroll/zoom: the popover is transient and
- * users dismiss + re-open if the score moves under them.
- *
- * Falls back to below-placement when neither side fits; better to
- * partially clip the bottom of the label than to cover the notehead.
- */
 /**
  * Read the artist string from wherever a loader plausibly stashed it.
  * Today only the RLRR (Paradiddle map) loader surfaces an artist, on
@@ -87,11 +53,12 @@ export function formatSubtitle(jot: RenderedJot): string {
   return parts.join('  -  ');
 }
 
+/**
+ * Per-jot colour/name legend shown above the score. Aggregates unique
+ * pitches across all voices (in first-seen order, cached on the jot as
+ * `legendPitches`).
+ */
 export const Legend = observer(({ jot }: { jot: RenderedJot }) => {
-  // Aggregate unique pitches across all voices, in first-seen order.
-  // Cached on the jot itself (`legendPitches`) so the walk is shared
-  // across observers and only recomputes when the structural cache
-  // changes, not on every zoom tick.
   const entries = jot.legendPitches;
   if (entries.length === 0) return null;
   return (

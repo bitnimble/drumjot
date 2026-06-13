@@ -7,7 +7,7 @@ import { ViewportStoreContext } from '../contexts';
 import { Playhead } from '../playback/playhead';
 import styles from './score.module.css';
 import { barsRowWidthSeed, intersectsBeatRange } from '../utils/windowing';
-import { seekFromClick } from './score';
+import { seekFromClick } from './seek';
 
 /**
  * Sticky-gutter header above the audio tracks / score that labels each

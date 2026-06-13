@@ -36,7 +36,7 @@ import { PositionedLine, PositionedWord, positionLyricLines } from './lyric_layo
 import styles from './lyrics_row.module.css';
 import mixerStyles from '../mixer/mixer.module.css';
 import { Playhead } from '../playback/playhead';
-import { seekFromClick } from '../score/score';
+import { seekFromClick } from '../score/seek';
 import { barsRowWidthSeed, intersectsBeatRange } from '../utils/windowing';
 
 /** Taller than the audio-track row (which is 56) to fit the enlarged 22px

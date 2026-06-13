@@ -38,7 +38,7 @@ import {
   extractArtist,
   formatDisplayTitle,
   formatSubtitle,
-} from './jot_view/score/score';
+} from './jot_view/score/score_header';
 import { TimelineHeader } from './jot_view/score/timeline_header';
 import { GridLineSettings, TrackKey, snapToDevicePx } from './jot_view/store';
 import { SettingsStore } from './jot_view/settings/settings_store';
