@@ -24,7 +24,8 @@ import {
 import { LyricsRow } from '../lyrics/lyrics_row';
 import styles from './mixer.module.css';
 import { Playhead } from '../playback/playhead';
-import { BarView, FilteredOnsetView, seekFromClick } from '../score/score';
+import { FilteredOnsetView, seekFromClick } from '../score/score';
+import { BarView } from '../score/bar_view';
 import { TrackKey, VOLUME_STEP } from '../store';
 import { ViewportStore } from '../viewport/viewport_store';
 import { barsRowWidthSeed, intersectsBeatRange } from '../utils/windowing';
