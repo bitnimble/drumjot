@@ -84,6 +84,44 @@ Loader + `--dataset enst` built but data is request-gated (Télécom Paris) and
 real `annotation/*.txt` labels, (b) optionally run `separate_enst_dataset.py`
 for the `sep_drum`/perstem trees, (c) `--dataset enst --enst-mix wet_mix`.
 
+### 6. Dropped-percussion hard negatives (built 2026-06-12, no run yet)
+- **Scope:** train (changes the loss; old checkpoints unaffected, no new head).
+- **What:** every source onset that maps to NO output lane, the removed `mp`
+  (cowbell/clap/tambourine) PLUS non-kit GM aux perc (congas/bongos/timbales/
+  agogo/claves/woodblocks/guiro/cuica/triangle, notes 39/54/56/58/60-81), is
+  bucketed by the readers into a single catch-all lane `x` (`lanes.NEGATIVE_LANES`).
+  It is never predicted but acts as a **hard negative for every output lane**
+  ("a hit happened, and it's none of your drums"), folded into `sib_act` so it
+  rides the existing `--sib-neg-weight`/`--sib-pos-weight`. Fixes the gap where
+  dropping a class silently dropped its false-trigger signal.
+- **Default:** ON. **Disable:** `--no-dropped-neg` (or `Config.use_dropped_neg=False`);
+  also inert when sibling weighting is off. Readers still emit `x` either way.
+- **Safety:** explicit per-source aux-perc lists (not "anything unmapped"), so an
+  incomplete label map (e.g. ENST's unverified table) can't turn a real drum into
+  a negative against its own lane, unknown labels keep dropping silently.
+- **Interactions:** reuses sibling weighting (off if both sib weights = 1); the
+  `_onsets.json` pooled cache auto-rebuilds entries that predate the `x` lane.
+- **Test it:** A/B on the per-stem set, `--dropped-neg` vs `--no-dropped-neg`,
+  watch precision on the leak-prone lanes (hc/rd/cr/mc, snare vs clap).
+
+### 7. MuQ encoder pathway (built 2026-06-12, TESTED + REMOVED 2026-06-14)
+- **Outcome: MuQ is decisively worse than MERT for drum onsets; the pathway was
+  removed from the codebase.** A clean per-stem A/B (pooled star+enst+egmd, cap 60,
+  2 seeds, 45 ep, best layer per lane) gave **MuQ macro 0.51 vs MERT 0.63 (-19%)**,
+  MERT winning EVERY lane and collapsing MuQ worst on the fine-timing/timbre lanes
+  (closed-hat -0.30, ride -0.23). Two coherent causes: MuQ's 25 fps hurts onset
+  precision (hats/cymbals worst), and MuQ's onset signal lives in its EARLY layers
+  (deeper layers go semantic), whereas MERT's depth helps. Follow-ups (soft-argmax
+  sub-frame timing; a cymbal classification probe) didn't rescue it. See RESULTS.md
+  ("MuQ vs MERT encoder A/B").
+- **What was removed:** `embeddings.MuQEncoder`, the `MUQ_*` constants,
+  `_encoder_class`, the `--encoder` flags (train.py + perstem_layer_sweep.py),
+  `fetch_muq`, and the MuQ unit tests. **Kept** (now MERT-only but general): the
+  fps-aware high-band/cym blocks, `MertEncoder.n_hidden_states()`, and `make_encoder`
+  as the single construction point (a future MusicFM drop-in would dispatch there).
+  `cfg.encoder_fps` stays (it's just MERT's 75 now). No checkpoint/format impact
+  (no MuQ checkpoint was ever trained).
+
 ### Open decisions (proposed, not approved, don't action without a nod)
 - Sibling λ (8/3) and `aux_act_weight` (0.5) are **untuned guesses**, sweep
   only if v3 underperforms and these are suspected.
@@ -98,6 +136,7 @@ for the `sep_drum`/perstem trees, (c) `--dataset enst --enst-mix wet_mix`.
 | change | disable with |
 |---|---|
 | sibling-aware loss weighting | `--sib-neg-weight 1 --sib-pos-weight 1` |
+| dropped-percussion hard negatives | `--no-dropped-neg` (`Config.use_dropped_neg`) |
 | aux ring-activity objective | `Config.aux_act_weight = 0` (no CLI flag) |
 | rare-lane threshold floor | `Config.rare_thr_floor = 0` |
 | high-band spectral block | code revert (embeddings.embed_clip) + retrain, not flag-gated |

@@ -2,10 +2,11 @@
 
 STAR (Zenodo 15690078, BSD-3) annotates drums as plain text:
 `time<TAB>CLASS<TAB>velocity`, one onset per line, over an 18-class
-vocabulary. We fold to our expanded 11-lane set: kick, snare, side-stick,
-toms, the three hat articulations, ride, crash, and the two fold-up lanes
-(misc cymbals = splash/china/ride-bell; misc percussion = cowbell/clap/
-tambourine). Out-of-kit classes map to None and are dropped.
+vocabulary. We fold to our 10-lane set: kick, snare, side-stick, toms, the
+three hat articulations, ride, crash, and misc cymbals (= splash/china/
+ride-bell). Non-kit percussion (cowbell/clap/tambourine, ...) folds into the
+catch-all `x` negative lane (a hard negative for every output lane, never
+predicted); anything else maps to None and is dropped.
 
 STAR's labels are accurate by construction (the audio is re-synthesized from
 these annotations), so there's no timing-offset / mislabel cleanup needed,
@@ -20,7 +21,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from drumjot_training.lanes import LANES
+from drumjot_training.lanes import LANES, WEIGHT_LANES
 
 _STAR_TO_LANE: dict[str, str] = {
     "BD": "k",
@@ -33,9 +34,12 @@ _STAR_TO_LANE: dict[str, str] = {
     "RD": "rd", "RC": "rd",  # RC: defensive ride alias (some kit CSVs use it)
     "CRC": "cr",
     "SPC": "mc", "CHC": "mc", "RB": "mc",  # splash / china / ride bell
-    # CB/CL/CLP/TB (cowbell/clap/tambourine) deliberately unmapped: the `mp`
-    # lane was removed (see lanes.py); they drop like other out-of-kit classes.
 }
+
+# Non-kit aux percussion -> the catch-all negative lane (lanes.NEGATIVE_LANES):
+# cowbell / clap / tambourine (the removed `mp` classes). Not output lanes, but
+# emitted by `onsets_by_lane` so the loss can use them as hard negatives.
+_STAR_TO_NEG: dict[str, str] = {"CB": "x", "CL": "x", "CLP": "x", "TB": "x"}
 
 
 def lane_for_star_class(cls: str) -> str | None:
@@ -43,19 +47,29 @@ def lane_for_star_class(cls: str) -> str | None:
     return _STAR_TO_LANE.get(cls)
 
 
+def negative_lane_for_star_class(cls: str) -> str | None:
+    """Catch-all negative lane for a non-kit STAR class, else None."""
+    if cls in _STAR_TO_LANE:
+        return None
+    return _STAR_TO_NEG.get(cls)
+
+
 def onsets_by_lane(annotation_path: str | Path) -> dict[str, list[float]]:
     """Parse a STAR `.txt` annotation into per-lane onset times (seconds).
 
     Lines are `time<TAB>class<TAB>velocity`; velocity is ignored here.
-    Always returns all lanes (empty lists for absent ones).
+    Always returns all lanes (empty lists for absent ones), PLUS the catch-all
+    negative lane `x` (non-kit aux percussion: cowbell/clap/tambourine), kept for
+    hard-negative loss weighting and ignored by output-lane consumers.
     """
-    out: dict[str, list[float]] = {lane: [] for lane in LANES}
+    out: dict[str, list[float]] = {lane: [] for lane in WEIGHT_LANES}
     with open(annotation_path) as f:
         for line in f:
             parts = line.rstrip("\n").split("\t")
             if len(parts) < 2:
                 continue
-            lane = lane_for_star_class(parts[1].strip())
+            cls = parts[1].strip()
+            lane = lane_for_star_class(cls) or negative_lane_for_star_class(cls)
             if lane is not None:
                 out[lane].append(float(parts[0]))
     return out
@@ -144,7 +158,7 @@ def perstem_index(root: str | Path) -> list[StarPerstemClip]:
 def restricted_onsets(annotation_path: str | Path, pitch: str) -> dict[str, list[float]]:
     """STAR onsets keeping ONLY the lanes that belong to `pitch`'s stem; all other
     lanes are empty (so the isolated-stem example teaches bleed suppression).
-    Always returns all 11 lanes."""
+    Always returns all 10 lanes."""
     full = onsets_by_lane(annotation_path)
     keep = set(PERSTEM_TO_LANES.get(pitch, ()))
     return {lane: (full[lane] if lane in keep else []) for lane in LANES}

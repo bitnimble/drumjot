@@ -1,5 +1,5 @@
 from drumjot_training import enst
-from drumjot_training.lanes import LANES
+from drumjot_training.lanes import WEIGHT_LANES
 
 
 def test_label_normalization_and_mapping():
@@ -27,19 +27,20 @@ def test_onsets_by_lane_parses_drops_and_sorts(tmp_path):
         "0.25 chh\n"
         "1.00 rc1\n"       # ride variant
         "1.10 c2\n"        # crash variant
-        "1.20 cb\n"        # cowbell -> dropped (mp removed)
+        "1.20 cb\n"        # cowbell -> catch-all negative lane `x` (weighting-only)
         "2.00 sticks\n"    # count-in -> dropped
         "2.10 xyz\n"       # out-of-kit -> dropped
         "garbage\n"        # malformed -> dropped
     )
     o = enst.onsets_by_lane(ann)
-    assert set(o) == set(LANES)              # always all 11 lanes
+    assert set(o) == set(WEIGHT_LANES)       # output lanes + the `x` negative lane
     assert o["k"] == [0.5]
     assert o["s"] == [0.75]
     assert o["hc"] == [0.25]
     assert o["rd"] == [1.0]
     assert o["cr"] == [1.1]
-    assert sum(len(v) for v in o.values()) == 5   # cb/sticks/xyz/garbage dropped
+    assert o["x"] == [1.2]                    # cowbell kept as a hard negative
+    assert sum(len(v) for v in o.values()) == 6   # 5 kit + cowbell; sticks/xyz/garbage dropped
 
 
 def test_index_pairing_and_drummer_split(tmp_path):

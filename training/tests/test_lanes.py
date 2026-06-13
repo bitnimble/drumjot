@@ -51,3 +51,24 @@ def test_misc_percussion_dropped():
 def test_unknown_note_is_none():
     assert lanes.lane_for_gm_note(99) is None
     assert lanes.lane_for_gm_note(60) is None
+
+
+def test_non_kit_percussion_maps_to_negative_lane():
+    # clap/tambourine/cowbell + latin/aux perc -> the catch-all negative lane `x`
+    for n in (39, 54, 56, 58, 60, 63, 75, 81):
+        assert lanes.negative_lane_for_gm_note(n) == "x"
+    # output-lane notes never shadow into the negative map
+    for n in (36, 38, 42, 51, 49):
+        assert lanes.negative_lane_for_gm_note(n) is None
+    # truly out-of-everything notes stay None (not even a negative)
+    assert lanes.negative_lane_for_gm_note(34) is None
+    assert lanes.negative_lane_for_gm_note(120) is None
+
+
+def test_negative_sibling_matrix_marks_every_lane():
+    import numpy as np
+
+    Sneg = np.asarray(lanes.negative_sibling_matrix())
+    assert Sneg.shape == (len(lanes.LANES), len(lanes.NEGATIVE_LANES))
+    assert Sneg.all()  # the catch-all `x` is a hard negative for every output lane
+    assert lanes.WEIGHT_LANES == lanes.LANES + lanes.NEGATIVE_LANES

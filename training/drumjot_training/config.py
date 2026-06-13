@@ -22,6 +22,10 @@ class Config:
     # default; --no-high-band trains on raw MERT only, for the high-band ablation.
     # Part of the feature-cache key (variant), so on/off caches don't collide.
     high_band: bool = True
+    # Append the sub-6 kHz ride/crash/hi-hat timbre block (embeddings.cym_features,
+    # +CYM_BANDS dims). Off by default; --cym enables it for the cymbal ablation.
+    # Also part of the feature-cache-key variant.
+    cym: bool = False
 
     # Targets (Gaussian onset bumps).
     lanes: tuple[str, ...] = LANES
@@ -50,6 +54,12 @@ class Config:
     # values are starting guesses, not tuned.
     sib_neg_weight: float = 8.0
     sib_pos_weight: float = 3.0
+    # Treat dropped, non-output percussion (lanes.NEGATIVE_LANES: the removed `mp`
+    # + non-kit aux perc) as HARD NEGATIVES for every output lane, reusing the
+    # sibling-weighting knobs above. On by default; set False to ablate (the
+    # readers still emit the onsets, they just stop feeding the loss). No effect
+    # when sibling weighting is off (both sib weights == 1.0).
+    use_dropped_neg: bool = True
     # Auxiliary ring-activity objective (targets.SUSTAINED_LANES): joint BCE on
     # "is this instrument still ringing" frames, weighted by this factor. The
     # open-hat / cymbal tail is what defines those classes; the pure onset
