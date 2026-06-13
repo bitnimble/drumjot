@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 import { AudioTrackRole } from 'src/playback';
-import { splitDrumPiecesState, splitFromMixState } from './mixer';
+import { splitDrumPiecesState, splitFromMixState } from './overflow_menus';
 
 type Row = [AudioTrackRole | undefined, boolean, boolean];
 
