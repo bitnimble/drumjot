@@ -1133,6 +1133,10 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--loss", choices=("bce", "focal"), default="bce",
                     help="pos-weighted BCE (default) or CenterNet penalty-reduced focal "
                     "(focal ignores pos_weight; A/B it before committing)")
+    ap.add_argument("--keep-best", default=True, action=argparse.BooleanOptionalAction,
+                    help="restore the weights from the best val-macro-F1 epoch at the end "
+                    "(guards against late-epoch overfit; the per-frame model peaks early then "
+                    "decays); --no-keep-best keeps the final epoch (legacy behaviour)")
     ap.add_argument("--sib-neg-weight", type=float, default=Config.sib_neg_weight,
                     help="loss multiplier on hard negatives (confusable sibling active, "
                     "this lane silent); 1 disables")
@@ -1225,6 +1229,7 @@ def main(argv: list[str] | None = None) -> None:
         batch_size=args.batch_size, num_workers=args.num_workers, val_clips=val_clips,
         out_dir=args.out, checkpoint_every=10,
         lr_schedule=args.lr_schedule, warmup_steps=args.warmup_steps, loss_fn=args.loss,
+        keep_best=args.keep_best,
         log=lambda s: print(s, flush=True),
     )
     thresholds = tune_thresholds(model, val_clips, cfg)
