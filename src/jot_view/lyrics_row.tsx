@@ -20,7 +20,7 @@ import {
 import { downloadTextFile } from 'src/download';
 import { JotTimeline, jotPlayer } from 'src/playback';
 import {
-  JotViewerPresenterContext,
+  LyricsPresenterContext,
   LyricsAlignStoreContext,
   ViewportStoreContext,
 } from './contexts';
@@ -605,7 +605,7 @@ export const LyricsRow = observer(
     jot: RenderedJot;
     onSeek: (x: number) => void;
   } & LyricsRowDragProps) => {
-    const presenter = React.useContext(JotViewerPresenterContext);
+    const presenter = React.useContext(LyricsPresenterContext);
     const lyricsAlign = React.useContext(LyricsAlignStoreContext);
     const track = lyricsStore.get(id);
     // Guard: the reaction in JotViewStore drops dead lyrics ids on the

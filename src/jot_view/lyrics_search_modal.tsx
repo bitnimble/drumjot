@@ -6,7 +6,7 @@ import { ciTrimEq, LrclibMatch, parseLrc, searchLrclib } from 'src/lyrics';
 import { jotPlayer } from 'src/playback';
 import { Checkbox } from './components/checkbox';
 import styles from './lyrics_search_modal.module.css';
-import { JotViewerPresenter } from './jot_viewer_presenter';
+import { LyricsPresenter } from './presenters/lyrics_presenter';
 
 /**
  * LRCLIB search modal. Opens with `initialTitle` / `initialArtist`
@@ -52,7 +52,7 @@ export const LyricsSearchModal = observer(
     initialTitle: string;
     initialArtist: string;
     onClose: () => void;
-    presenter: JotViewerPresenter;
+    presenter: LyricsPresenter;
   }) => {
     const [title, setTitle] = React.useState(initialTitle);
     const [artist, setArtist] = React.useState(initialArtist);

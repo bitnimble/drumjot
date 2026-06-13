@@ -17,7 +17,7 @@ import {
   BarTimingsContext,
   FollowPlayheadContext,
   GridLineSettingsContext,
-  JotViewerPresenterContext,
+  LyricsPresenterContext,
   LyricsAlignStoreContext,
   MixerStoreContext,
   NoteProvenanceContext,
@@ -55,6 +55,7 @@ import { ViewportPresenter } from './jot_view/presenters/viewport_presenter';
 import { MixerPresenter } from './jot_view/presenters/mixer_presenter';
 import { PlaybackPresenter } from './jot_view/presenters/playback_presenter';
 import { ProvenancePresenter } from './jot_view/presenters/provenance_presenter';
+import { LyricsPresenter } from './jot_view/presenters/lyrics_presenter';
 import { RecentTranscriptionsPicker } from './jot_view/recent_transcriptions';
 import { ToastContainer } from './jot_view/toast_container';
 import { DebugPanel, Toolbar } from './jot_view/toolbar';
@@ -85,6 +86,7 @@ type CreateJotViewResult = {
   mixerPresenter: MixerPresenter;
   provenancePresenter: ProvenancePresenter;
   playbackPresenter: PlaybackPresenter;
+  lyricsPresenter: LyricsPresenter;
   /** Catch-all presenter holding the orchestration not yet split into a
    *  per-domain presenter. */
   presenter: JotViewerPresenter;
@@ -105,6 +107,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   const mixerPresenter = new MixerPresenter(mixer, documentStore);
   const provenancePresenter = new ProvenancePresenter(provenance, viewport);
   const playbackPresenter = new PlaybackPresenter(playback, documentStore);
+  const lyricsPresenter = new LyricsPresenter(lyricsAlign, documentStore);
   const presenter = new JotViewerPresenter({
     document: documentStore,
     settings,
@@ -116,6 +119,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     mixer,
     mixerPresenter,
     provenancePresenter,
+    lyricsPresenter,
   });
   if (options.examples) presenter.setExamples(options.examples);
   const selection = new SelectionStore(documentStore);
@@ -335,7 +339,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     );
 
     return (
-        <JotViewerPresenterContext.Provider value={presenter}>
+        <LyricsPresenterContext.Provider value={lyricsPresenter}>
         <ProvenancePresenterContext.Provider value={provenancePresenter}>
         <ProvenanceStoreContext.Provider value={provenance}>
         <LyricsAlignStoreContext.Provider value={lyricsAlign}>
@@ -362,8 +366,8 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       onLoadDebugBundle={(file) => presenter.loadDebugBundleFile(file)}
                       onLoadAudioTrack={(file) => presenter.loadAudioTrack(file)}
                       onLoadLyricsFile={(file) => presenter.loadLyricsFile(file)}
-                      onOpenLyricsTextLoad={() => presenter.setLyricsTextOpen(true)}
-                      onOpenLyricsSearch={() => presenter.setLyricsSearchOpen(true)}
+                      onOpenLyricsTextLoad={() => lyricsPresenter.setLyricsTextOpen(true)}
+                      onOpenLyricsSearch={() => lyricsPresenter.setLyricsSearchOpen(true)}
                       onCancelTranscribe={() => presenter.cancelTranscribe()}
                       lyricsAlignBusyPhase={lyricsAlign.lyricsAlignBusyPhase}
                       onSetBeatInput={(b) => presenter.setBeatInput(b)}
@@ -439,13 +443,13 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       open={lyricsAlign.lyricsSearchOpen}
                       initialTitle={lyricsInitialTitle}
                       initialArtist={lyricsInitialArtist}
-                      onClose={() => presenter.setLyricsSearchOpen(false)}
-                      presenter={presenter}
+                      onClose={() => lyricsPresenter.setLyricsSearchOpen(false)}
+                      presenter={lyricsPresenter}
                     />
                     <LyricsTextLoadModal
                       open={lyricsAlign.lyricsTextOpen}
-                      onClose={() => presenter.setLyricsTextOpen(false)}
-                      presenter={presenter}
+                      onClose={() => lyricsPresenter.setLyricsTextOpen(false)}
+                      presenter={lyricsPresenter}
                     />
                     <AudioWorkletWarningModal
                       state={audioWorkletState}
@@ -465,7 +469,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
         </LyricsAlignStoreContext.Provider>
         </ProvenanceStoreContext.Provider>
         </ProvenancePresenterContext.Provider>
-        </JotViewerPresenterContext.Provider>
+        </LyricsPresenterContext.Provider>
     );
   });
 
@@ -482,6 +486,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     mixerPresenter,
     provenancePresenter,
     playbackPresenter,
+    lyricsPresenter,
     presenter,
     View,
   };

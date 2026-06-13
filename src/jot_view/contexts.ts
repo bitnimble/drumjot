@@ -8,8 +8,8 @@ import { ProvenanceStore } from './stores/provenance_store';
 import { LyricsAlignStore } from './stores/lyrics_align_store';
 import { ViewportStore } from './stores/viewport_store';
 import { MixerStore } from './stores/mixer_store';
-import { JotViewerPresenter } from './jot_viewer_presenter';
 import { ProvenancePresenter } from './presenters/provenance_presenter';
+import { LyricsPresenter } from './presenters/lyrics_presenter';
 
 /**
  * Routes the active {@link SelectionStore} to deep score chrome (today:
@@ -48,11 +48,12 @@ export const ViewportStoreContext = React.createContext<ViewportStore | null>(nu
 export const MixerStoreContext = React.createContext<MixerStore | null>(null);
 
 /**
- * Routes the {@link JotViewerPresenter} to deep consumers that need to
- * invoke actions (today: `FilteredOnsetView` pinning a popover). `null`
- * outside the view; consumers no-op when absent.
+ * Routes the {@link LyricsPresenter} to deep consumers that mutate
+ * lyrics state (today: `LyricsRow` removing its own row via
+ * `removeLyricsTrack`). `null` outside the view; consumers no-op when
+ * absent.
  */
-export const JotViewerPresenterContext = React.createContext<JotViewerPresenter | null>(null);
+export const LyricsPresenterContext = React.createContext<LyricsPresenter | null>(null);
 
 /**
  * Routes the {@link ProvenancePresenter} to deep consumers that mutate
