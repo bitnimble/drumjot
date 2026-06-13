@@ -53,7 +53,8 @@ test('cursor-anchored zoom keeps the anchor pinned, scale+scroll in lockstep', a
     const clientY = scrollerRect.top + scrollerRect.height * 0.5;
 
     // The DOM's live scale/scroll (what the browser actually paints).
-    const ppbDom = () => Number(scroller.style.getPropertyValue('--px-per-beat')) || store.currentJot.pxPerBeat;
+    const ppbDom = () =>
+      Number(scroller.style.getPropertyValue('--px-per-beat')) || w.drumjot.document.currentJot.pxPerBeat;
     const scrollDom = () => Number(viewport.style.getPropertyValue('--scroll-x')) || 0;
 
     // Musical beat under the cursor right now. Bar layout: content-x of

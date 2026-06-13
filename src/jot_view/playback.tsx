@@ -9,6 +9,7 @@ import { NumberStepper } from './components/number_stepper';
 import { FollowPlayheadContext } from './contexts';
 import styles from './playback.module.css';
 import { JotViewStore, VOLUME_STEP } from './store';
+import { DocumentStore } from './stores/document_store';
 
 function truncate(s: string, n: number): string {
   return s.length <= n ? s : `${s.slice(0, n - 1)}…`;
@@ -203,16 +204,19 @@ const PlaybackControls = observer(
  * state re-renders scoped to this bar instead of bubbling up through
  * `View` and re-rendering the score on every transport change.
  */
-export const PlaybackBar = observer(({ store }: { store: JotViewStore }) => (
+export const PlaybackBar = observer(
+  ({ store, documentStore }: { store: JotViewStore; documentStore: DocumentStore }) => (
   <div className={styles.playbackBar}>
     <PlaybackControls
-      hasJot={!!store.currentJot}
+      hasJot={!!documentStore.currentJot}
       playerState={jotPlayer.state}
       playerError={jotPlayer.errorMessage}
       hasAudioTracks={jotPlayer.audioTracks.size > 0}
       audioOffsetSec={jotPlayer.drumsT0Sec}
       drumOffsetBeats={store.drumOffsetBeats}
-      gridDivision={store.currentJot ? gridDivisionFor(store.currentJot) : DEFAULT_GRID_DIVISION}
+      gridDivision={
+        documentStore.currentJot ? gridDivisionFor(documentStore.currentJot) : DEFAULT_GRID_DIVISION
+      }
       onTogglePlayPause={() => store.togglePlayPause()}
       onStop={() => store.stopPlayback()}
       onSetAudioOffset={(sec) => jotPlayer.setDrumsT0Sec(sec)}

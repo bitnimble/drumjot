@@ -47,7 +47,7 @@ test('captures the debug-details timing visualization', async ({ page }) => {
   // four quantise passes, and a MIDI snap residual.
   await page.evaluate(() => {
     const store = (window as any).drumjot.store;
-    const jot = store.currentJot;
+    const jot = (window as any).drumjot.document.currentJot;
     if (!jot) throw new Error('no rendered jot');
     // Walk the structural cache: voices → bars → tracks[pitch] → notes,
     // matching how the renderer locates notes (see `src/jot.ts`).

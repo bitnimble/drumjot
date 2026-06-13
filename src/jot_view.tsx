@@ -37,6 +37,7 @@ import {
 } from './jot_view/score';
 import { GridLineSettings, JotViewStore, TrackKey, snapToDevicePx } from './jot_view/store';
 import { SettingsStore } from './jot_view/stores/settings_store';
+import { DocumentStore } from './jot_view/stores/document_store';
 import { JotViewerPresenter } from './jot_view/jot_viewer_presenter';
 import { RecentTranscriptionsPicker } from './jot_view/recent_transcriptions';
 import { ToastContainer } from './jot_view/toast_container';
@@ -55,6 +56,7 @@ type CreateJotViewResult = {
   /** Data-only stores carved out of {@link JotViewStore}. Grows as the
    *  carve-up proceeds; exposed so the app shell (and e2e) can reach the
    *  specific store rather than a single top-level one. */
+  document: DocumentStore;
   settings: SettingsStore;
   /** Catch-all presenter holding the actions/orchestration over the
    *  data-only stores. */
@@ -63,9 +65,10 @@ type CreateJotViewResult = {
 };
 
 export function createJotView(options: CreateJotViewOptions = {}): CreateJotViewResult {
+  const documentStore = new DocumentStore();
   const settings = new SettingsStore();
   const presenter = new JotViewerPresenter({ settings });
-  const store = new JotViewStore(settings);
+  const store = new JotViewStore(documentStore, settings);
   if (options.examples) store.setExamples(options.examples);
   const selection = new SelectionStore(store);
 
@@ -104,7 +107,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   const setZoomCentered = (z: number) => {
     const scroller = document.querySelector<HTMLElement>('[data-jot-scroller]');
     const barsRow = scroller?.querySelector<HTMLElement>('[data-bars-row]');
-    const j = store.currentJot;
+    const j = documentStore.currentJot;
     if (!scroller || !barsRow || !j) {
       store.setZoom(z);
       return;
@@ -153,7 +156,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   const audioWorkletState = detectAudioWorkletState();
 
   const View: React.FC = observer(() => {
-    const jot = store.currentJot;
+    const jot = documentStore.currentJot;
     // Modal opens on first mount whenever AudioWorklet is unavailable
     // and closes for the rest of the session once dismissed. A reload
     // re-shows it intentionally; the limitation is real and ongoing,
@@ -289,8 +292,8 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                 <FollowPlayheadContext.Provider value={followPlayheadContextValue}>
                   <div className={styles.appContainer}>
                     <Toolbar
-                      examples={store.examples}
-                      currentId={store.currentExampleId}
+                      examples={documentStore.examples}
+                      currentId={documentStore.currentExampleId}
                       onSelect={(id) => store.loadExample(id)}
                       transcribeStatus={store.transcribeStatus}
                       transcribeOptions={store.transcribeOptions}
@@ -353,10 +356,10 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                         onSetGutterWidth={onSetGutterWidth}
                       />
                     ) : (
-                      <EmptyState store={store} />
+                      <EmptyState store={store} documentStore={documentStore} />
                     )}
-                    <Minimap store={store} />
-                    {jot && <PlaybackBar store={store} />}
+                    <Minimap store={store} documentStore={documentStore} />
+                    {jot && <PlaybackBar store={store} documentStore={documentStore} />}
                     <DebugPanel store={store} />
                     <LyricsSearchModal
                       open={store.lyricsSearchOpen}
@@ -375,7 +378,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       open={audioWorkletWarningOpen}
                       onClose={() => setAudioWorkletWarningOpen(false)}
                     />
-                    <LoadingOverlay store={store} />
+                    <LoadingOverlay documentStore={documentStore} />
                     <ToastContainer />
                   </div>
                 </FollowPlayheadContext.Provider>
@@ -387,7 +390,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     );
   });
 
-  return { store, settings, presenter, View };
+  return { store, document: documentStore, settings, presenter, View };
 }
 
 type JotViewProps = {
@@ -1521,7 +1524,8 @@ const MarqueeOverlay = observer(() => {
  * the toolbar's File / Transcribe menus to avoid duplicating that whole
  * surface here.
  */
-const EmptyState = observer(({ store }: { store: JotViewStore }) => {
+const EmptyState = observer(
+  ({ store, documentStore }: { store: JotViewStore; documentStore: DocumentStore }) => {
   const jotInputRef = React.useRef<HTMLInputElement>(null);
   const paradbInputRef = React.useRef<HTMLInputElement>(null);
   const handleJotFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1577,11 +1581,11 @@ const EmptyState = observer(({ store }: { store: JotViewStore }) => {
         <p className={styles.emptyStateHint}>
           For other formats, use the <b>File</b> or <b>Transcribe</b> menus in the toolbar above.
         </p>
-        {store.examples.length > 0 && (
+        {documentStore.examples.length > 0 && (
           <div className={styles.emptyStateExamples}>
             <span className={styles.emptyStateExamplesLabel}>Or try an example</span>
             <div className={styles.emptyStateExampleRow}>
-              {store.examples.map((ex) => (
+              {documentStore.examples.map((ex) => (
                 <button
                   key={ex.id}
                   type="button"
@@ -1622,8 +1626,8 @@ const EmptyState = observer(({ store }: { store: JotViewStore }) => {
  * `withLoading` counter, so nested loads (debug bundle → many audio
  * tracks) read as one continuous spinner.
  */
-const LoadingOverlay = observer(({ store }: { store: JotViewStore }) => {
-  if (!store.isLoading) return null;
+const LoadingOverlay = observer(({ documentStore }: { documentStore: DocumentStore }) => {
+  if (!documentStore.isLoading) return null;
   return (
     <div
       className={styles.loadingOverlay}
@@ -1632,7 +1636,9 @@ const LoadingOverlay = observer(({ store }: { store: JotViewStore }) => {
       onMouseDown={(e) => e.stopPropagation()}
     >
       <div className={styles.loadingSpinner} aria-hidden="true" />
-      {store.loadingLabel && <div className={styles.loadingLabel}>{store.loadingLabel}</div>}
+      {documentStore.loadingLabel && (
+        <div className={styles.loadingLabel}>{documentStore.loadingLabel}</div>
+      )}
     </div>
   );
 });

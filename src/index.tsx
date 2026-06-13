@@ -6,6 +6,7 @@ import { EXAMPLE_JOTS, ExampleJot, rockJot, tripletJot } from 'src/fakes';
 import { RenderedJot } from 'src/jot';
 import { JotViewStore, createJotView } from 'src/jot_view';
 import { JotViewerPresenter } from 'src/jot_view/jot_viewer_presenter';
+import { DocumentStore } from 'src/jot_view/stores/document_store';
 import { SettingsStore } from 'src/jot_view/stores/settings_store';
 import { parse } from 'src/parser';
 import { jotPlayer } from 'src/playback';
@@ -21,23 +22,25 @@ class Drumjot {
   // Data-only stores + presenter carved out of `JotViewStore`. Exposed
   // (via `window.drumjot`) so console / e2e can reach the specific store
   // rather than a single top-level one.
+  readonly document: DocumentStore;
   readonly settings: SettingsStore;
   readonly presenter: JotViewerPresenter;
 
   constructor(root: HTMLElement, examples: readonly ExampleJot[] = EXAMPLE_JOTS) {
-    const { store, settings, presenter, View } = createJotView({ examples });
+    const { store, document, settings, presenter, View } = createJotView({ examples });
     this.store = store;
+    this.document = document;
     this.settings = settings;
     this.presenter = presenter;
     createRoot(root).render(<View />);
   }
 
   load(jot: Jot) {
-    // Pass the store's shared ViewConfig so `store.setZoom` (which mutates
+    // Pass the shared ViewConfig so `setZoom` (which mutates
     // `viewConfig.barWidth`) actually drives this jot's `pxPerBeat`/layout.
-    // Every in-store loader (loadExample/transcribe/file) does the same;
-    // omitting it here left zoom a no-op for `window.drumjot.load`/`loadDsl`.
-    this.store.setJot(new RenderedJot(jot, this.store.viewConfig));
+    // Every loader (loadExample/transcribe/file) does the same; omitting it
+    // here left zoom a no-op for `window.drumjot.load`/`loadDsl`.
+    this.store.setJot(new RenderedJot(jot, this.document.viewConfig));
   }
 
   /** Parse a DSL source string (SPEC.md syntax) and load the resulting jot. */

@@ -12,6 +12,8 @@
       "Bash(git diff *)",
       "Bash(git --no-pager diff *)",
       "Bash(git ls-tree *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
       "Bash(bun add *)",
       "Bash(bun run build)",
       "Bash(bun run e2e *)",

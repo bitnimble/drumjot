@@ -10,7 +10,7 @@ import {
 import { Instrument } from 'src/dsl';
 import { ExampleJot } from 'src/fakes';
 import { DrumInstrumentKind, defaultKindForPitch } from 'src/instruments';
-import { RenderedJot, ViewConfig, px } from 'src/jot';
+import { RenderedJot, px } from 'src/jot';
 import {
   AlignLyricsRequest,
   LyricLine,
@@ -52,6 +52,7 @@ import type { NoteProvenanceContextValue } from './contexts';
 import { transcribeSuccessToastMessage } from './toasts_messages';
 import { toastStore } from './toasts';
 import { SettingsStore } from './stores/settings_store';
+import { DocumentStore } from './stores/document_store';
 
 /** Long-running lyric-alignment indicator. `queued` is the wait state
  *  while the request sits behind another in-flight GPU job (a transcribe
@@ -309,9 +310,6 @@ export function collectJotPitches(jot: RenderedJot | undefined): string[] {
 }
 
 export class JotViewStore {
-  currentJot: RenderedJot | undefined;
-  examples: readonly ExampleJot[] = [];
-  currentExampleId: string | undefined = undefined;
   transcribeStatus: TranscribeStatus = { phase: 'idle' };
   /** UI-controlled options for the next transcribe call. `debug=true`
    *  so the run is resumable. */
@@ -355,13 +353,6 @@ export class JotViewStore {
    *  recent-runs list is empty so a stale `resume` selection can't
    *  surface an empty form. */
   transcribeMode: 'new' | 'resume' = 'new';
-  /**
-   * Shared layout config threaded into every new `RenderedJot` we
-   * construct, so the zoom slider mutates a single config object and
-   * the layout reflows reactively (ViewConfig is MobX-observable;
-   * RenderedJot's `layoutJot` is a computedFn that reads `barWidth`).
-   */
-  viewConfig: ViewConfig = new ViewConfig();
   /** Horizontal zoom multiplier; 1.0 = `BASE_BAR_WIDTH` pixels per bar. */
   zoom: number = 1;
   /** DSL pitches the user has muted via the row-gutter M button. */
@@ -543,53 +534,40 @@ export class JotViewStore {
   transcribeController: AbortController | undefined;
 
   /**
-   * In-flight file-load counter. Each top-level loader (jot / midi / paradb
-   * map / debug bundle / audio track) enters via {@link withLoading}, which
-   * bumps this and surfaces the modal overlay. Nested calls (e.g. the debug
-   * bundle loading its per-stem audio tracks) bump the count too but keep
-   * the outer label so the overlay reads as one operation. The first loader
-   * sets {@link loadingLabel}; later loaders only set it again when the
-   * count was zero, so we don't churn the label while nested work runs.
-   */
-  loadingCount: number = 0;
-  loadingLabel: string | undefined = undefined;
-
-  get isLoading(): boolean {
-    return this.loadingCount > 0;
-  }
-
-  /**
-   * Wrap an async file-load with the modal overlay's bookkeeping. Errors
+   * Wrap an async file-load with the modal overlay's bookkeeping (the
+   * loading counter / label live on {@link DocumentStore}). Errors
    * propagate; the finally block guarantees the counter decrements even if
    * the inner promise rejects, so a failed load never leaves the overlay
    * stuck on screen.
    */
   private async withLoading<T>(label: string, fn: () => Promise<T>): Promise<T> {
     runInAction(() => {
-      if (this.loadingCount === 0) this.loadingLabel = label;
-      this.loadingCount += 1;
+      if (this.document.loadingCount === 0) this.document.loadingLabel = label;
+      this.document.loadingCount += 1;
     });
     try {
       return await fn();
     } finally {
       runInAction(() => {
-        this.loadingCount -= 1;
-        if (this.loadingCount === 0) this.loadingLabel = undefined;
+        this.document.loadingCount -= 1;
+        if (this.document.loadingCount === 0) this.document.loadingLabel = undefined;
       });
     }
   }
 
-  /** Persistent user settings (grid lines, waveform display, …). Owned
-   * by `SettingsStore`; held here only so the transitional orchestration
-   * still on this store (e.g. {@link applyDebugBundle}) can write it.
-   * Excluded from observability, it's an already-observable store ref. */
+  /** Data-only stores carved out of this (transitional) store. Held as
+   * references so the orchestration still living here can read/write them;
+   * excluded from observability (they're already-observable stores). */
+  readonly document: DocumentStore;
   readonly settings: SettingsStore;
 
-  constructor(settings: SettingsStore) {
+  constructor(document: DocumentStore, settings: SettingsStore) {
+    this.document = document;
     this.settings = settings;
     makeAutoObservable(this, {
       transcribeController: false,
       lyricsAlignControllers: false,
+      document: false,
       settings: false,
     });
     // Wire ourselves in as the player's mixer context so freshly-
@@ -678,7 +656,7 @@ export class JotViewStore {
     // doesn't force a layout pass.
     reaction(
       () => {
-        const raw = this.currentJot?.globalMetadata.drumsT0Sec;
+        const raw = this.document.currentJot?.globalMetadata.drumsT0Sec;
         return typeof raw === 'number' && raw > 0 ? raw : 0;
       },
       (offsetSec) => jotPlayer.setDrumsT0Sec(offsetSec),
@@ -915,7 +893,7 @@ export class JotViewStore {
    * every read.
    */
   get jotPitches(): readonly string[] {
-    return collectJotPitches(this.currentJot);
+    return collectJotPitches(this.document.currentJot);
   }
 
   /**
@@ -1071,7 +1049,7 @@ export class JotViewStore {
     if (track) return track;
     track = new InstrumentTrack(
       pitch,
-      () => this.currentJot?.defaultPaletteColorFor(pitch) ?? INSTRUMENT_FALLBACK_COLOR
+      () => this.document.currentJot?.defaultPaletteColorFor(pitch) ?? INSTRUMENT_FALLBACK_COLOR
     );
     this.instrumentTracks.set(pitch, track);
     return track;
@@ -1184,11 +1162,11 @@ export class JotViewStore {
   }
 
   setJot(jot: RenderedJot | undefined) {
-    this.currentJot = jot;
+    this.document.currentJot = jot;
     // External setJot calls invalidate the example pointer + any
     // previously-loaded debug provenance (provenance is per-bundle and
     // doesn't survive a wholesale jot replacement).
-    this.currentExampleId = undefined;
+    this.document.currentExampleId = undefined;
     this.clearNoteProvenance();
     // Lyrics are tied to a specific recording; a new jot means they no
     // longer apply. See `src/lyrics/store.ts` for the lifecycle rationale.
@@ -1308,14 +1286,14 @@ export class JotViewStore {
   }
 
   setExamples(examples: readonly ExampleJot[]) {
-    this.examples = examples;
+    this.document.examples = examples;
   }
 
   loadExample(id: string) {
-    const example = this.examples.find((e) => e.id === id);
+    const example = this.document.examples.find((e) => e.id === id);
     if (!example) return;
-    this.currentJot = new RenderedJot(example.jot, this.viewConfig);
-    this.currentExampleId = id;
+    this.document.currentJot = new RenderedJot(example.jot, this.document.viewConfig);
+    this.document.currentExampleId = id;
     this.clearNoteProvenance();
     this.clearLyrics();
     jotPlayer.stop();
@@ -1364,7 +1342,7 @@ export class JotViewStore {
   setZoom(z: number) {
     const clamped = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
     this.zoom = clamped;
-    this.viewConfig.barWidth = px(BASE_BAR_WIDTH * clamped);
+    this.document.viewConfig.barWidth = px(BASE_BAR_WIDTH * clamped);
   }
 
   /**
@@ -1716,8 +1694,8 @@ export class JotViewStore {
           if (derivedTitle) jot.title = derivedTitle;
         }
         runInAction(() => {
-          this.currentJot = new RenderedJot(jot, this.viewConfig);
-          this.currentExampleId = undefined;
+          this.document.currentJot = new RenderedJot(jot, this.document.viewConfig);
+          this.document.currentExampleId = undefined;
           // A bare jot file has no provenance; drop whatever the
           // previous bundle put there so the selection label doesn't
           // surface stale debug data on the new song's notes.
@@ -1760,8 +1738,8 @@ export class JotViewStore {
           if (derivedTitle) jot.title = derivedTitle;
         }
         runInAction(() => {
-          this.currentJot = new RenderedJot(jot, this.viewConfig);
-          this.currentExampleId = undefined;
+          this.document.currentJot = new RenderedJot(jot, this.document.viewConfig);
+          this.document.currentExampleId = undefined;
           // Same reasoning as in loadJotFile: a bare MIDI load shouldn't
           // surface stale provenance from a previous debug bundle.
           this.clearNoteProvenance();
@@ -1807,8 +1785,8 @@ export class JotViewStore {
         // old song's mute/solo/faders don't bleed onto the new rows.
         this.clearAllAudioTracks();
         this.resetPitchMixer();
-        this.currentJot = new RenderedJot(jot, this.viewConfig);
-        this.currentExampleId = undefined;
+        this.document.currentJot = new RenderedJot(jot, this.document.viewConfig);
+        this.document.currentExampleId = undefined;
         this.clearNoteProvenance();
         this.clearLyrics();
         jotPlayer.stop();
@@ -1967,9 +1945,9 @@ export class JotViewStore {
         // selection popup as the "Beat alignment" row sourced from
         // `noteProvenance.beat_alignment_offset_sec`.
         runInAction(() => {
-          const rendered = new RenderedJot(jot, this.viewConfig);
-          this.currentJot = rendered;
-          this.currentExampleId = undefined;
+          const rendered = new RenderedJot(jot, this.document.viewConfig);
+          this.document.currentJot = rendered;
+          this.document.currentExampleId = undefined;
           jotPlayer.stop();
         });
         scoreLoaded = true;
@@ -2049,7 +2027,7 @@ export class JotViewStore {
    * no-ops right after a fresh bundle load.
    */
   private applyDebugBundleTrackOrder(loadedByKey: ReadonlyMap<string, AudioTrackId>): void {
-    const pitches = collectJotPitches(this.currentJot);
+    const pitches = collectJotPitches(this.document.currentJot);
     this.trackOrder = buildDebugBundleTrackOrder(pitches, loadedByKey);
   }
 
@@ -2165,7 +2143,7 @@ export class JotViewStore {
    * test environments still render the full score.
    */
   get visibleBeatRange(): { startBeat: number; endBeat: number } | null {
-    const ppb = this.currentJot?.pxPerBeat ?? 0;
+    const ppb = this.document.currentJot?.pxPerBeat ?? 0;
     const vw = this._viewportWidth;
     if (ppb <= 0 || vw <= 0) return null;
     const buffer = vw;
@@ -2378,8 +2356,8 @@ export class JotViewStore {
       if (t.durationSec > longestAudio) longestAudio = t.durationSec;
     }
     if (longestAudio > 0) return longestAudio;
-    if (this.currentJot) {
-      const tl = buildTimeline(this.currentJot);
+    if (this.document.currentJot) {
+      const tl = buildTimeline(this.document.currentJot);
       if (tl.totalDurationSec > 0) return tl.totalDurationSec;
     }
     return 60;
@@ -2575,7 +2553,7 @@ export class JotViewStore {
   }
 
   async playCurrent(): Promise<void> {
-    const jot = this.currentJot;
+    const jot = this.document.currentJot;
     if (!jot) return;
     // Pass the laid-out RenderedJot (not its source) so the player's
     // timeline reads live bar widths — the playhead then tracks correctly
@@ -2589,7 +2567,7 @@ export class JotViewStore {
 
   /** Current beat-grid offset (quarter-note beats) on the loaded jot. */
   get drumOffsetBeats(): number {
-    return this.currentJot?.drumOffsetBeats ?? 0;
+    return this.document.currentJot?.drumOffsetBeats ?? 0;
   }
 
   /**
@@ -2599,7 +2577,7 @@ export class JotViewStore {
    * reschedules in-flight playback so the change is heard immediately.
    */
   setDrumOffset(beats: number): void {
-    const jot = this.currentJot;
+    const jot = this.document.currentJot;
     if (!jot) return;
     // Slider semantics: the user is re-labeling note positions on the
     // notational grid (e.g. "this hit is on 1/48, not 3/48"), not
@@ -2634,7 +2612,7 @@ export class JotViewStore {
    * mid-playback scrub reads the exact bars being played.
    */
   seekToX(x: number): void {
-    const jot = this.currentJot;
+    const jot = this.document.currentJot;
     if (!jot) return;
     const timeline = jotPlayer.timeline.bars.length > 0 ? jotPlayer.timeline : buildTimeline(jot);
     jotPlayer.seek(jot, xToTime(timeline, x));

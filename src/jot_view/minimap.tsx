@@ -34,6 +34,7 @@ import { type BarSlice, waveformWorker } from 'src/playback/waveform_worker_clie
 import styles from './minimap.module.css';
 import { WAVEFORM_PAINT_COLOR } from './score';
 import { JotViewStore } from './store';
+import { DocumentStore } from './stores/document_store';
 
 const NOTE_STRIP_H = 16;
 const WAVEFORM_H = 36;
@@ -65,8 +66,9 @@ function noteMarksEqual(a: readonly NoteMark[], b: readonly NoteMark[]): boolean
   return true;
 }
 
-export const Minimap = observer(({ store }: { store: JotViewStore }) => {
-  const jot = store.currentJot;
+export const Minimap = observer(
+  ({ store, documentStore }: { store: JotViewStore; documentStore: DocumentStore }) => {
+    const jot = documentStore.currentJot;
   const containerRef = React.useRef<HTMLDivElement>(null);
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
 
