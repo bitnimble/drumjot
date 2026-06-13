@@ -670,7 +670,8 @@ def train_loop(
         # periodic safety checkpoint (untuned thresholds) for long unattended
         # runs; the final main() save overwrites this with tuned thresholds
         if out_dir and checkpoint_every and (epoch + 1) % checkpoint_every == 0 and epoch != epochs - 1:
-            checkpoint.save(out_dir, model, cfg, {ln: cfg.peak_threshold for ln in cfg.lanes})
+            checkpoint.save(out_dir, model, cfg, {ln: cfg.peak_threshold for ln in cfg.lanes},
+                            in_dim=embeddings.feat_dim(cfg.high_band, cfg.cym))
             log(f"  checkpoint saved @ epoch {epoch} (untuned) -> {out_dir}")
     if keep_best and best_state is not None:
         model.load_state_dict(best_state)
@@ -720,7 +721,8 @@ def _report(model, val_clips: Sequence[Clip], cfg: Config, thresholds: dict[str,
     lane_n: dict[str, int] = defaultdict(int)
     for clip in val_clips:
         f1 = evaluate_clip(model, clip, cfg, thresholds)
-        for lane, ts in clip.onsets_by_lane.items():
+        for lane in cfg.lanes:  # output lanes only; onsets_by_lane may carry the `x` ghost lane
+            ts = clip.onsets_by_lane.get(lane)
             if ts:
                 lane_f1[lane].append(f1[lane])
                 lane_n[lane] += len(ts)

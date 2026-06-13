@@ -210,3 +210,24 @@ def test_mean_f1_counts_only_lanes_with_reference_onsets(monkeypatch):
     )
     # == kick's F1, NOT 0.9/len(lanes); empty lanes are skipped
     assert abs(train.mean_f1(None, [clip], cfg) - 0.9) < 1e-9
+
+
+def test_report_ignores_ghost_x_lane(monkeypatch):
+    # Non-pooled readers (star/enst) put dropped percussion in onsets_by_lane under
+    # the `x` ghost key. _report must score OUTPUT lanes only -- iterating the onset
+    # keys would index the 10-lane F1 dict with `x` and KeyError mid-run.
+    import numpy as np
+
+    from drumjot_training import train
+    from drumjot_training.config import Config
+
+    cfg = Config()
+    clip = train.Clip(
+        features=np.zeros((4, 4), dtype=np.float32),
+        targets=np.zeros((len(cfg.lanes), 4), dtype=np.float32),
+        onsets_by_lane={"k": [0.1], "x": [0.2]},  # `x` = dropped-perc ghost lane
+    )
+    monkeypatch.setattr(
+        train, "evaluate_clip", lambda m, c, cf, th=None: {ln: 0.5 for ln in cf.lanes}
+    )
+    train._report(None, [clip], cfg, {})  # must not raise KeyError on `x`

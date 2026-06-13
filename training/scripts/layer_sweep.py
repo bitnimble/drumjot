@@ -194,7 +194,8 @@ def main():
                 lane_f1: dict[str, list[float]] = defaultdict(list)
                 for c in va_clips:
                     f1 = evaluate_clip(model, c, cfg, thresholds)
-                    for ln, ts in c.onsets_by_lane.items():
+                    for ln in cfg.lanes:  # output lanes only (onsets may carry the `x` ghost lane)
+                        ts = c.onsets_by_lane.get(ln)
                         if ts:
                             lane_f1[ln].append(f1[ln])
                 for ln, v in lane_f1.items():
