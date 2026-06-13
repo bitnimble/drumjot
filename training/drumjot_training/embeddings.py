@@ -2,10 +2,10 @@
 
 The encoder is frozen; we extract one intermediate hidden layer (design
 spec §4 / N2N use MERT layer ~10) at ~75 Hz, 1024-dim, and cache per-clip
-features as .npy so epochs are cheap. Encoder-agnostic: MERT (via transformers)
-and MuQ (via the `muq` package) are both wired behind the same `encode` /
-`encode_layers` interface (pick with `make_encoder`); MuQ runs at 25 fps so the
-appended high-band/cym blocks align to `encoder.fps`. MusicFM is a future drop-in.
+features as .npy so epochs are cheap. The appended high-band/cym blocks align to
+`encoder.fps`. (MuQ was evaluated as an alternative encoder and removed -- it was
+decisively worse for drum onsets at every layer; see RESULTS.md. MusicFM remains a
+possible future drop-in behind the same `encode`/`encode_layers` interface.)
 
 Sandbox-verified facts (m-a-p/MERT-v1-330M): sampling_rate 24000, 25 hidden
 states, layer-10 output (frames, 1024) at ~75 fps. The model's `nnAudio`
@@ -28,17 +28,6 @@ MERT_NAME = "m-a-p/MERT-v1-330M"
 MERT_SR = 24000
 MERT_FPS = 75.0
 MERT_DIM = 1024
-
-# MuQ (Tencent, wav2vec2-conformer + Mel-RVQ SSL): same 24 kHz input and 1024-dim
-# hidden as MERT, but 25 fps (40 ms hop) vs MERT's 75 fps. Loaded via the `muq`
-# pip package, not transformers. Drop-in behind the same encode/encode_layers
-# interface; the only knock-on is that the high-band/cym blocks must be aligned to
-# the encoder's fps (passed through below), not hardcoded to 75. 24 conformer
-# layers -> 25 hidden states (embeddings + 24), indexed like MERT.
-MUQ_NAME = "OpenMuQ/MuQ-large-msd-iter"
-MUQ_SR = 24000
-MUQ_FPS = 25.0
-MUQ_DIM = 1024
 
 # High-band spectral pathway: MERT's 24 kHz input caps it at a 12 kHz Nyquist,
 # discarding the hat/cymbal sizzle band (8-16 kHz+) BEFORE the encoder sees
@@ -107,8 +96,8 @@ def highband_from_wave(y44: np.ndarray, n_frames: int, fps: float = MERT_FPS) ->
     `y44` must be mono at `HB_SR`. dB-scaled to [0, 1] ([-80, 0] dB clipped),
     deterministic (no learned/per-clip normalisation, so absolute level
     survives -- bleed suppression needs it). Padded/trimmed to `n_frames` to line
-    up with the encoder frames. `fps` is the ENCODER's frame rate (75 for MERT,
-    25 for MuQ) so the hop matches; default keeps the MERT alignment."""
+    up with the encoder frames. `fps` is the encoder's frame rate (75 for MERT) so
+    the hop matches."""
     import librosa
 
     hop = int(round(HB_SR / fps))  # 588 @ 75 fps, 1764 @ 25 fps (exact at 44100/fps)
@@ -132,7 +121,7 @@ def highband_features(
     """`highband_from_wave` for a file: loads at HB_SR (resampling if needed;
     sources at <=24 kHz simply yield near-zero bands, degrading gracefully).
     `start_seconds`/`max_seconds` select the [start, start+max] window. `fps` is
-    the encoder frame rate the block must align to (MERT 75 / MuQ 25)."""
+    the encoder frame rate the block must align to (MERT 75)."""
     import librosa
 
     y44, _ = librosa.load(str(audio_path), sr=HB_SR, mono=True)
@@ -285,85 +274,16 @@ class MertEncoder:
         return len(out.hidden_states)
 
 
-class MuQEncoder:
-    """Frozen MuQ feature extractor (Tencent wav2vec2-conformer, 24 kHz, 25 fps,
-    1024-dim). Same `encode` / `encode_layers` / `.name` / `.layer` / `.sr` /
-    `.fps` / `.dim` interface as `MertEncoder`, so `embed_clip` and the sweeps
-    treat the two interchangeably. Loaded via the `muq` package (not transformers)
-    and run in FP32 -- MuQ documents that bf16 can NaN, so no autocast here."""
-
-    def __init__(self, name: str = MUQ_NAME, layer: int = 10, device: str | None = None):
-        import torch
-
-        try:
-            from muq import MuQ
-        except ImportError as e:
-            raise RuntimeError(
-                "The MuQ encoder needs the `muq` package, which isn't installed.\n"
-                "    (cd transcriber && uv pip install muq)\n"
-                "then pre-fetch the weights once with training/scripts/fetch_models.py."
-            ) from e
-
-        self.name = name
-        self.layer = layer
-        self.fps = MUQ_FPS
-        self.dim = MUQ_DIM
-        self.sr = MUQ_SR
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        try:
-            self._model = MuQ.from_pretrained(name).to(self.device).eval()
-        except Exception as e:  # noqa: BLE001
-            raise RuntimeError(
-                f"MuQ model {name!r} is not available offline (HF_HUB_OFFLINE is on by "
-                f"default). Fetch it ONCE with:\n"
-                f"    python training/scripts/fetch_models.py\n"
-                f"then re-run. (underlying error: {type(e).__name__}: {e})"
-            ) from e
-
-    def _hidden(self, waveform: np.ndarray, sr: int):
-        import torch
-
-        if sr != self.sr:
-            import librosa
-
-            waveform = librosa.resample(waveform, orig_sr=sr, target_sr=self.sr)
-        wavs = torch.as_tensor(waveform, dtype=torch.float32, device=self.device).unsqueeze(0)
-        with torch.no_grad():  # FP32, no autocast (MuQ warns bf16 can NaN)
-            return self._model(wavs, output_hidden_states=True).hidden_states
-
-    def encode(self, waveform: np.ndarray, sr: int) -> np.ndarray:
-        """Frozen layer-`layer` features (frames, dim) for `waveform`."""
-        return self._hidden(waveform, sr)[self.layer][0].float().cpu().numpy()
-
-    def encode_layers(self, waveform: np.ndarray, sr: int, layers: list[int]) -> dict[int, np.ndarray]:
-        """One forward pass -> {layer: (frames, dim)} for several hidden layers."""
-        hs = self._hidden(waveform, sr)
-        return {int(li): hs[li][0].float().cpu().numpy() for li in layers}
-
-    def n_hidden_states(self) -> int:
-        """How many hidden-state tensors the model returns (valid layers 0..n-1).
-        MuQ-large-msd-iter exposes **13** (embedding + 12 layers), NOT the 24 the
-        bundled w2v2 config implies, so a MERT-style 0..24 sweep must be clamped."""
-        return len(self._hidden(np.zeros(int(0.2 * self.sr), dtype=np.float32), self.sr))
-
-
-def _encoder_class(name: str):
-    """Pick the encoder implementation for a model `name` (no instantiation, so
-    it's importable/testable without the heavy deps). MuQ ids route to MuQEncoder,
-    everything else (MERT, MusicFM later) to MertEncoder's transformers loader."""
-    return MuQEncoder if "muq" in name.lower() else MertEncoder
-
-
 def make_encoder(name: str = MERT_NAME, layer: int = 10, device: str | None = None):
-    """Construct the right frozen encoder for `name`. Both encoders share the
-    `encode`/`encode_layers`/`.fps`/`.dim`/`.sr` interface, so callers (embed_clip,
-    materialize, the sweeps) need no encoder-specific branches."""
-    return _encoder_class(name)(name=name, layer=layer, device=device)
+    """Construct the frozen encoder (MERT). Kept as a single construction point so
+    callers (embed_clip, materialize, the sweeps) stay encoder-agnostic; a future
+    MusicFM drop-in would dispatch here on `name`."""
+    return MertEncoder(name=name, layer=layer, device=device)
 
 
 def embed_clip(
     audio_path: str | Path,
-    encoder: MertEncoder | MuQEncoder,
+    encoder: MertEncoder,
     cache_dir: str | Path | None = None,
     max_seconds: float | None = None,
     cache_dtype: str = "float16",

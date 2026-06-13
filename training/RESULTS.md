@@ -79,9 +79,11 @@ lane (mean over 2 seeds):
 | **MuQ** | 0.90 | 0.75 | 0.47 | 0.69 | 0.35 | 0.25 | 0.62 | 0.21 | 0.51 | 0.38 | **0.51** |
 | Δ | +.07 | +.08 | +.03 | +.10 | **+.30** | +.13 | +.06 | **+.23** | +.11 | +.04 | +.12 |
 
-**Verdict: MERT wins every lane; keep MERT.** MuQ is decisively worse for drum
-onsets (macro 0.51 vs 0.63, −19%), collapsing on the hard fine-timing/timbre lanes
-(closed-hat −0.30, ride −0.23). Two coherent causes, both matching priors:
+**Verdict: MERT wins every lane; keep MERT.** (The MuQ encoder pathway was
+**removed from the codebase on 2026-06-14** on the strength of this; see
+CHANGELOG #7.) MuQ is decisively worse for drum onsets (macro 0.51 vs 0.63, −19%),
+collapsing on the hard fine-timing/timbre lanes (closed-hat −0.30, ride −0.23).
+Two coherent causes, both matching priors:
 - **25 fps hurts onset precision** (hats/cymbals worst), as expected vs MERT's 75.
 - **MuQ's onset signal lives in its EARLY layers** (s/ss/t/hc/hp/ho all peak at L1,
   declining with depth), whereas MERT's depth helps (hats/cymbals peak L7-L13). MuQ's

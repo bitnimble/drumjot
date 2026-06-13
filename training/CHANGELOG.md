@@ -104,28 +104,23 @@ for the `sep_drum`/perstem trees, (c) `--dataset enst --enst-mix wet_mix`.
 - **Test it:** A/B on the per-stem set, `--dropped-neg` vs `--no-dropped-neg`,
   watch precision on the leak-prone lanes (hc/rd/cr/mc, snare vs clap).
 
-### 7. MuQ encoder pathway (built 2026-06-12, no run yet)
-- **Scope:** train + infer (changes the frozen feature extractor; a MuQ-trained
-  checkpoint must be decoded with MuQ features too). Old MERT checkpoints unaffected.
-- **What:** `--encoder muq` swaps the frozen MERT encoder for **MuQ**
-  (`OpenMuQ/MuQ-large-msd-iter`, wav2vec2-conformer, 1024-dim, 24 kHz, **25 fps**).
-  `embeddings.MuQEncoder` mirrors `MertEncoder`'s `encode`/`encode_layers`; a
-  `make_encoder(name, layer)` factory dispatches by name. MuQ dim == MERT dim, so
-  the head width is unchanged; the only knock-on is the **25 fps** frame rate,
-  which (a) sets `cfg.encoder_fps=25` (targets/rings/peak-pick/eval follow) and
-  (b) the high-band/cym blocks now align to `encoder.fps` (were hardcoded to 75).
-  Features cache separately per encoder (cache key carries the encoder name).
-- **Default:** OFF (`--encoder mert`). **Revert:** just omit `--encoder muq`.
-- **Deps / setup (REQUIRED before it runs):** `cd transcriber && uv pip install muq`,
-  then `python training/scripts/fetch_models.py` (now also prefetches MuQ for the
-  offline cache; it SKIPs gracefully if `muq` isn't installed). MuQ runs FP32 (its
-  docs warn bf16 can NaN), no autocast.
-- **Caveats:** 25 fps is coarser than MERT's 75 (fine for mainstream, weak for fast
-  double-bass/blasts; see RESULTS notes); MuQ weights are **CC-BY-NC** (non-
-  commercial), same as MERT. `scripts/perstem_layer_sweep.py` still hardcodes
-  `MertEncoder`, add `make_encoder` there too if you want to sweep MuQ layers.
-- **Test it:** frozen-probe A/B vs MERT on ParaDB at MuQ's best layer(s); MuQ has
-  no published onset/ADT numbers, so this is the only way to know if it helps drums.
+### 7. MuQ encoder pathway (built 2026-06-12, TESTED + REMOVED 2026-06-14)
+- **Outcome: MuQ is decisively worse than MERT for drum onsets; the pathway was
+  removed from the codebase.** A clean per-stem A/B (pooled star+enst+egmd, cap 60,
+  2 seeds, 45 ep, best layer per lane) gave **MuQ macro 0.51 vs MERT 0.63 (-19%)**,
+  MERT winning EVERY lane and collapsing MuQ worst on the fine-timing/timbre lanes
+  (closed-hat -0.30, ride -0.23). Two coherent causes: MuQ's 25 fps hurts onset
+  precision (hats/cymbals worst), and MuQ's onset signal lives in its EARLY layers
+  (deeper layers go semantic), whereas MERT's depth helps. Follow-ups (soft-argmax
+  sub-frame timing; a cymbal classification probe) didn't rescue it. See RESULTS.md
+  ("MuQ vs MERT encoder A/B").
+- **What was removed:** `embeddings.MuQEncoder`, the `MUQ_*` constants,
+  `_encoder_class`, the `--encoder` flags (train.py + perstem_layer_sweep.py),
+  `fetch_muq`, and the MuQ unit tests. **Kept** (now MERT-only but general): the
+  fps-aware high-band/cym blocks, `MertEncoder.n_hidden_states()`, and `make_encoder`
+  as the single construction point (a future MusicFM drop-in would dispatch there).
+  `cfg.encoder_fps` stays (it's just MERT's 75 now). No checkpoint/format impact
+  (no MuQ checkpoint was ever trained).
 
 ### Open decisions (proposed, not approved, don't action without a nod)
 - Sibling λ (8/3) and `aux_act_weight` (0.5) are **untuned guesses**, sweep

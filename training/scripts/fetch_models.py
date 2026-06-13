@@ -50,21 +50,6 @@ def fetch_mert(name: str) -> None:
     print(f"  cached {name}", flush=True)
 
 
-def fetch_muq(name: str) -> None:
-    """Download the MuQ weights via the `muq` package (CPU cache-warm). Optional:
-    if `muq` isn't installed, skip with a note rather than crash, so MERT-only
-    setups still fetch cleanly. Install with `uv pip install muq` to enable it."""
-    try:
-        from muq import MuQ
-    except ImportError:
-        print(f"  SKIP {name}: `muq` package not installed "
-              f"(cd transcriber && uv pip install muq, then re-run to enable MuQ)", flush=True)
-        return
-    print(f"fetching {name}: MuQ weights ...", flush=True)
-    MuQ.from_pretrained(name)
-    print(f"  cached {name}", flush=True)
-
-
 def _verify_offline(name: str) -> None:
     """Spawn a fresh OFFLINE process and load the feature extractor from cache,
     proving a real (offline) run will find it."""
@@ -83,11 +68,9 @@ def _verify_offline(name: str) -> None:
 
 # Add other internet-fetched models here as the training stack grows (each must
 # end up in a local cache the offline run can find). Entries are
-# (name, fetch_fn, verify_fn_or_None); MuQ has no transformers-based offline
-# verify (loaded via the muq package), so its verify is None.
+# (name, fetch_fn, verify_fn_or_None).
 FETCHERS = [
     (embeddings.MERT_NAME, fetch_mert, _verify_offline),
-    (embeddings.MUQ_NAME, fetch_muq, None),
 ]
 
 

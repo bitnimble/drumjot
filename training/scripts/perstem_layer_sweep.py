@@ -18,11 +18,6 @@ Models load OFFLINE (run training/scripts/fetch_models.py once first).
 DRUMJOT_STAR/ENST/EGMD must point at the sep trees. Usage:
   perstem_layer_sweep.py --pool-sources star,enst,egmd --pool-cap 150 \
     --layers 1,4,7,10,13,16,19,22 --seeds 0,1,2 [--pool-cache /nvme/cache]
-
-ENCODER A/B (MERT vs MuQ): add `--encoder muq` (needs the `muq` pkg + a MuQ
-fetch_models prefetch). MuQ runs at 25 fps; the high-band block auto-aligns. Run
-both encoders with IDENTICAL --pool-cap/--layers/--seeds/--epochs and compare the
-per-lane best-layer F1 (features cache separately per encoder, so no collision).
 """
 import argparse
 import os
@@ -97,9 +92,6 @@ def main():
     ap.add_argument("--batch-size", type=int, default=8)
     ap.add_argument("--max-seconds", type=float, default=30.0)
     ap.add_argument("--enst-mix", default="sep_drum")
-    ap.add_argument("--encoder", choices=("mert", "muq"), default="mert",
-                    help="frozen encoder to sweep: mert (75 fps; default) or muq (25 fps; needs the "
-                    "`muq` pip package + a fetch_models.py prefetch). Features cache separately per encoder.")
     args = ap.parse_args()
 
     import torch
@@ -109,8 +101,8 @@ def main():
     runtime.configure_backends()
     layers = [int(x) for x in args.layers.split(",")]
     seeds = [int(s) for s in args.seeds.split(",")]
-    enc_name = embeddings.MUQ_NAME if args.encoder == "muq" else embeddings.MERT_NAME
-    enc_fps = embeddings.MUQ_FPS if args.encoder == "muq" else embeddings.MERT_FPS
+    enc_name = embeddings.MERT_NAME
+    enc_fps = embeddings.MERT_FPS
     cfg0 = Config(encoder=enc_name, encoder_fps=enc_fps, high_band=True, cym=False)
 
     train_specs, val_specs, cache = _pooled_specs(args)
@@ -119,8 +111,8 @@ def main():
     va = _window_specs(val_specs, args.max_seconds, 3.0, 1)
     log = lambda s: print(s, flush=True)  # noqa: E731
     enc = embeddings.make_encoder(cfg0.encoder, layers[0])
-    # clamp to the encoder's real depth: MuQ exposes 13 hidden states (0..12), not
-    # MERT's 25, so a shared --layers like 1,4,7,10,13 would IndexError on MuQ.
+    # clamp to the encoder's real depth (MERT exposes 25 hidden states, 0..24) so an
+    # out-of-range --layers entry is dropped instead of crashing with an IndexError.
     n_hs = enc.n_hidden_states()
     valid = [li for li in layers if 0 <= li < n_hs]
     if valid != layers:
@@ -129,7 +121,7 @@ def main():
         layers = valid
     if not layers:
         raise SystemExit(f"no requested layer is valid for this encoder ({n_hs} hidden states)")
-    print(f"per-stem layer sweep [{args.encoder}, {enc_fps:.0f}fps]: layers={layers} seeds={seeds}  "
+    print(f"per-stem layer sweep [MERT, {enc_fps:.0f}fps]: layers={layers} seeds={seeds}  "
           f"{len(tr)} train / {len(va)} val windows  epochs={args.epochs}", flush=True)
     _encode_all_layers(tr + va, enc, layers, cache, cfg0, log)
 
@@ -167,7 +159,7 @@ def main():
         print(f"L{li:2d} done ({len(seeds)} seeds): {summ}", flush=True)
 
     # ---- report: lane x layer F1 (mean+/-std), best layer per lane ----
-    print(f"\n==== per-stem per-lane F1 by {args.encoder.upper()} layer "
+    print(f"\n==== per-stem per-lane F1 by MERT layer "
           f"(mean+/-std over {len(seeds)} seeds) ====", flush=True)
     print("  lane " + "".join(f"   L{li:<8d}" for li in layers), flush=True)
     for ln in cfg0.lanes:
