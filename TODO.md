@@ -19,7 +19,7 @@
   - [DONE] split out files even more by feature/domain/etc., per-concern data stores + per-domain presenters (settings/viewport/mixer/playback/provenance/lyrics/document/transcribe).
   - [DONE] if each feature has multiple files, group them into a folder (store + presenter + tsx). All jot_view features are now `src/jot_view/<feature>/`.
     - [DONE] move `DebugPanel` out of `toolbar.tsx` into the `provenance/` feature.
-    - [FLAGGED, not done] break up the large `score.tsx` into its sub-components. Perf-critical; flagged for a reviewed pass (see notes doc).
+    - [PARTIAL] break up the large `score.tsx`. Done: extracted the debug-details cluster to `score/note_provenance_details.tsx` (2825 to 1172 lines), verified against the perf e2e gate (E2E_DEBUG_BUNDLE). Remaining: the perf-critical hot-path sub-components (BarView/NoteView/TimelineHeader/PopoverPortal).
     - [TODO] split the central `contexts.ts` so each React context lives next to its feature's store/presenter. Low-risk but high import-churn; deferred.
   - [PARTIAL] pull out business logic / pure logic into a presenter/util file; keep .tsx scoped to instantiation + React + wiring. Done: playback (playhead + label logic), lyrics (beat-positioning). Remaining: mixer (FLAGGED, perf), score (FLAGGED, perf), toolbar (leaf pieces), minimap.
   - [PARTIAL] pull out component state into stores that the presenter acts over (only *persistable* state; transient UI state stays React-local). Domain state already lives in stores from the store carve-up.

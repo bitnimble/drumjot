@@ -81,14 +81,16 @@ architectural and flagged).
 | minimap | not started | `minimap.tsx` (~530) has pure peak/tick canvas-prep logic that could move to a tested helper. Perf-adjacent (canvas paint), review before splitting. |
 | mixer | **FLAGGED** | `mixer.tsx` (~1600), InstrumentRow / AudioTrackRow / waveform canvas / gutter rows. Perf-critical (per-frame waveform + windowed rows). Mechanical sub-component splits are safe in principle but high-blast-radius; recommend doing as its own reviewed slice. |
 | toolbar | partial | `DebugPanel` extracted. The menu code (~1130 lines) remains; could split leaf pieces (busy pills, ThemeSection, PlaybackKitSubmenu, sample-progress helpers), lower risk, not yet done. |
-| score | **FLAGGED** | `score.tsx` (~2825), the headline monolith (TimelineHeader, Playhead host, Legend, BarView, NoteView, FilteredOnsetView, NoteProvenanceDetails, PopoverPortal, windowed rendering). PERF-CRITICAL: PopoverPortal subscription gating, PlayheadPosVar, DomTargetCache, windowing all live here and the perf e2e specs are skipped without a debug bundle. A mechanical file-split is behaviour-preserving in principle, but per the "don't risk behaviour/quality" guidance I did **not** attempt it autonomously overnight. Recommend doing this interactively with the perf specs enabled. |
+| score | **partial (halved)** | `score.tsx` 2825 → **1172 lines**: the per-note debug-details cluster (NoteProvenanceDetails + OnsetTimingVisualization + stage/acoustic renderers + helpers, 1653 lines) was extracted to `score/note_provenance_details.tsx`. Done with the perf gate live (E2E_DEBUG_BUNDLE copied from ~/code/drumjot): all 26 e2e pass incl. the 3 perf specs (120fps) + debug-bundle/details. `WAVEFORM_PAINT_COLOR` moved to `utils/waveform_color.ts` to avoid a cycle. **Remaining (perf-critical hot path, do next with perf specs):** BarView / NoteView / TimelineHeader / FilteredOnsetView / PopoverPortal are still in score.tsx (they're on the windowed per-frame render path. PopoverPortal subscription gating, PlayheadPosVar). Splittable now that the gate is enabled, but each is a careful slice. |
 | contexts.ts split | not started | Splitting each React context next to its feature is low-risk but high import-churn (every context consumer). Cross-cutting contexts (NoteProvenance, BarTimings, RenderedJot, GridLineSettings, UniformWaveforms, FollowPlayhead, Selection) have no single feature home. Deferred; recommend a dedicated mechanical pass.
 
-**Summary:** the safe, clearly behaviour-preserving extractions were done
-(playback, provenance/DebugPanel, lyrics layout). The two giant perf-sensitive
-views (`score.tsx`, `mixer.tsx`) and the contexts split are flagged for a
-reviewed pass rather than done blind overnight, they're mechanically
-splittable but the risk/benefit said "flag" under the stated guidance.
+**Summary:** the safe behaviour-preserving extractions were done (playback,
+provenance/DebugPanel, lyrics layout). `score.tsx` was then halved (2825 →
+1172) by extracting its debug-details cluster, verified against the now-live
+perf gate (E2E_DEBUG_BUNDLE). Still flagged for a reviewed pass: `mixer.tsx`,
+the remaining perf-critical score sub-components (BarView/NoteView/TimelineHeader/
+PopoverPortal), and the contexts split, all mechanically splittable, each a
+careful slice best done with the perf specs enabled.
 
 ---
 
