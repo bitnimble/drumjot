@@ -234,6 +234,46 @@ hc 0.808→0.822 (+0.014), ho 0.805→0.810 (+0.005) -- a slight drag, within
 single-seed noise. No meaningful negative transfer; keeping hp costs the hats
 ~nothing (hp itself stays poor, 0.372).
 
+**REALISTIC two-stage vs per-frame -- the deciding test (2026-06-13).** Replaced
+the perfect GT proposer with a real one (`tmp_e2e_full_z9x.py`): a class-agnostic
+1-lane "any-drum onset" head trained on the union target (keep_best), peak-picked
+at a recall-tuned threshold -> real candidates WITH real false positives, fed to
+the multi-label classifier. Baseline fixed (keep_best + 2 seeds) to kill the
+ceiling run's overfit/single-seed confounds. Same split/features/metric.
+
+| lane | per-frame (fixed) | 2stage (real) | ceiling | real Δ | vs ceiling |
+|---|---|---|---|---|---|
+| rd | 0.603 | 0.558 | 0.846 | −0.045 | −0.288 |
+| cr | 0.647 | 0.527 | 0.727 | −0.120 | −0.200 |
+| mc | 0.334 | 0.482 | 0.484 | +0.149 | −0.002 |
+| hc | 0.653 | 0.685 | 0.793 | +0.032 | −0.108 |
+| hp | 0.455 | 0.313 | 0.478 | −0.142 | −0.165 |
+| ho | 0.706 | 0.753 | 0.828 | +0.047 | −0.075 |
+
+Proposer op points (val): cymbals recall 0.83 / prec 0.70; hats recall 0.90 / 0.82.
+
+**Verdict: two-stage does NOT beat per-frame at this scale.** It loses on ride,
+crash, hp; the only wins are marginal (hc +0.03, ho +0.05, within seed noise) plus
+noisy mc. The ceiling's huge gap was a mirage, two causes now exposed:
+1. **The ceiling baseline was overfit.** keep_best + 2 seeds lifted per-frame
+   enormously: ride 0.34→0.60, crash 0.47→0.65. Most of the "+0.50 ride headroom"
+   was a broken baseline, not an arch win. (The confound flagged in the ceiling
+   entry -- caught before believing it.)
+2. **Proposer recall caps the two-stage.** Held-out recall 0.83/0.90 (not 100%);
+   the "vs ceiling" column IS that loss (ride −0.29, crash −0.20). The bottleneck
+   just MOVED from the per-frame detector's recall to the proposer's recall, both
+   equally data-limited at cap 60 (cymbal proposer overfit: train 0.995 vs val
+   0.826).
+
+Separating detection from classification is theoretically sound (the ceiling shows
+classification-given-onset CAN be excellent) but unrealizable here: a high-recall
+proposer needs the same data the per-frame model already uses, so the split buys
+nothing and the simpler per-frame model wins. **Drop the two-stage direction;** the
+real lever stays shared across both archs -- more cymbal/crash data + better
+separation to lift the recall ceiling. (Caveat: cap 60; a cap-150+ re-test could
+check if two-stage scales differently, but the burden of proof is on it and it's
+currently losing.)
+
 ## Per-stem pooled MERT layer sweep (2026-06-12)
 
 **Setup.** `scripts/perstem_layer_sweep.py` over pooled per-stem examples from all
