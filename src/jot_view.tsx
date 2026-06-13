@@ -56,6 +56,7 @@ import { MixerPresenter } from './jot_view/presenters/mixer_presenter';
 import { PlaybackPresenter } from './jot_view/presenters/playback_presenter';
 import { ProvenancePresenter } from './jot_view/presenters/provenance_presenter';
 import { LyricsPresenter } from './jot_view/presenters/lyrics_presenter';
+import { DocumentPresenter } from './jot_view/presenters/document_presenter';
 import { RecentTranscriptionsPicker } from './jot_view/recent_transcriptions';
 import { ToastContainer } from './jot_view/toast_container';
 import { DebugPanel, Toolbar } from './jot_view/toolbar';
@@ -87,8 +88,9 @@ type CreateJotViewResult = {
   provenancePresenter: ProvenancePresenter;
   playbackPresenter: PlaybackPresenter;
   lyricsPresenter: LyricsPresenter;
-  /** Catch-all presenter holding the orchestration not yet split into a
-   *  per-domain presenter. */
+  documentPresenter: DocumentPresenter;
+  /** Transcribe presenter (`/transcribe` + `/resume` flows, progress
+   *  pill, recent-runs picker, form options). */
   presenter: JotViewerPresenter;
   View: React.FC;
 };
@@ -108,20 +110,15 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   const provenancePresenter = new ProvenancePresenter(provenance, viewport);
   const playbackPresenter = new PlaybackPresenter(playback, documentStore);
   const lyricsPresenter = new LyricsPresenter(lyricsAlign, documentStore);
-  const presenter = new JotViewerPresenter({
-    document: documentStore,
-    settings,
-    transcribe,
-    provenance,
-    lyricsAlign,
-    playback,
-    viewport,
-    mixer,
+  const documentPresenter = new DocumentPresenter(
+    documentStore,
+    settingsPresenter,
     mixerPresenter,
     provenancePresenter,
-    lyricsPresenter,
-  });
-  if (options.examples) presenter.setExamples(options.examples);
+    lyricsPresenter
+  );
+  const presenter = new JotViewerPresenter({ transcribe, documentPresenter });
+  if (options.examples) documentPresenter.setExamples(options.examples);
   const selection = new SelectionStore(documentStore);
 
   // Translate a click on `.jotContainer` into the marquee's coordinate
@@ -354,18 +351,18 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                     <Toolbar
                       examples={documentStore.examples}
                       currentId={documentStore.currentExampleId}
-                      onSelect={(id) => presenter.loadExample(id)}
+                      onSelect={(id) => documentPresenter.loadExample(id)}
                       transcribeStatus={transcribe.transcribeStatus}
                       transcribeOptions={transcribe.transcribeOptions}
                       onTranscribe={(file) => presenter.transcribeAudio(file)}
                       onResumeTranscribe={(folder, stage) => presenter.resumeTranscribe(folder, stage)}
-                      onLoadJot={(file) => presenter.loadJotFile(file)}
-                      onLoadMidi={(file) => presenter.loadMidiFile(file)}
-                      onLoadParadb={(file) => presenter.loadParadbMap(file)}
-                      onScoreParadb={(file) => presenter.scoreParadbMap(file)}
-                      onLoadDebugBundle={(file) => presenter.loadDebugBundleFile(file)}
-                      onLoadAudioTrack={(file) => presenter.loadAudioTrack(file)}
-                      onLoadLyricsFile={(file) => presenter.loadLyricsFile(file)}
+                      onLoadJot={(file) => documentPresenter.loadJotFile(file)}
+                      onLoadMidi={(file) => documentPresenter.loadMidiFile(file)}
+                      onLoadParadb={(file) => documentPresenter.loadParadbMap(file)}
+                      onScoreParadb={(file) => documentPresenter.scoreParadbMap(file)}
+                      onLoadDebugBundle={(file) => documentPresenter.loadDebugBundleFile(file)}
+                      onLoadAudioTrack={(file) => documentPresenter.loadAudioTrack(file)}
+                      onLoadLyricsFile={(file) => documentPresenter.loadLyricsFile(file)}
                       onOpenLyricsTextLoad={() => lyricsPresenter.setLyricsTextOpen(true)}
                       onOpenLyricsSearch={() => lyricsPresenter.setLyricsSearchOpen(true)}
                       onCancelTranscribe={() => presenter.cancelTranscribe()}
@@ -420,6 +417,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                     ) : (
                       <EmptyState
                         presenter={presenter}
+                        documentPresenter={documentPresenter}
                         documentStore={documentStore}
                         transcribe={transcribe}
                       />
@@ -487,6 +485,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     provenancePresenter,
     playbackPresenter,
     lyricsPresenter,
+    documentPresenter,
     presenter,
     View,
   };
@@ -1661,10 +1660,12 @@ const MarqueeOverlay = observer(() => {
 const EmptyState = observer(
   ({
     presenter,
+    documentPresenter,
     documentStore,
     transcribe,
   }: {
     presenter: JotViewerPresenter;
+    documentPresenter: DocumentPresenter;
     documentStore: DocumentStore;
     transcribe: TranscribeStore;
   }) => {
@@ -1672,12 +1673,12 @@ const EmptyState = observer(
   const paradbInputRef = React.useRef<HTMLInputElement>(null);
   const handleJotFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) presenter.loadJotFile(file);
+    if (file) documentPresenter.loadJotFile(file);
     e.target.value = '';
   };
   const handleParadbFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) presenter.loadParadbMap(file);
+    if (file) documentPresenter.loadParadbMap(file);
     e.target.value = '';
   };
   return (
@@ -1732,7 +1733,7 @@ const EmptyState = observer(
                   key={ex.id}
                   type="button"
                   className={styles.emptyStateExampleButton}
-                  onClick={() => presenter.loadExample(ex.id)}
+                  onClick={() => documentPresenter.loadExample(ex.id)}
                 >
                   {ex.label}
                 </button>

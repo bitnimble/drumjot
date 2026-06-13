@@ -25,4 +25,21 @@ export class SettingsPresenter {
   setUniformWaveforms(on: boolean) {
     this.settings.uniformWaveforms = on;
   }
+
+  /**
+   * Switch the grid to the 48ths overlay used for transcribed bundles.
+   * The transcribe pipeline routinely emits triplet subdivisions; 48ths
+   * is the LCM of 16ths + triplets so it visualises both. Called by the
+   * bundle loader (DocumentPresenter) to override the store-wide 16ths
+   * default for that load specifically.
+   */
+  useTranscribeGridLines() {
+    this.settings.gridLines = {
+      mainBeat: true,
+      subBeat16: false,
+      subBeatQuarterTriplet: false,
+      subBeatTriplet: false,
+      subBeat48: true,
+    };
+  }
 }

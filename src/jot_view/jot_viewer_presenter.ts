@@ -1,82 +1,41 @@
 import { makeAutoObservable, runInAction } from 'mobx';
-import { loadDebugZip, NO_DRUMS_KEY } from 'src/debug_zip';
-import { ExampleJot } from 'src/fakes';
-import { RenderedJot } from 'src/jot';
-import { lyricsStore, parseEnhancedLrc } from 'src/lyrics';
-import { fromMidi } from 'src/midi';
-import { parse, ParseError } from 'src/parser';
-import {
-  AudioTrackId,
-  AudioTrackRole,
-  jotPlayer,
-} from 'src/playback';
-import { loadParadbZip } from 'src/rlrr';
+import { ParseError } from 'src/parser';
 import {
   BeatInput,
   DrumSeparator,
   LlmModel,
   stemUrl,
-  titleFromFilename,
   transcriber,
   TranscribeProgress,
   TranscribeStage,
 } from 'src/transcriber';
 import { transcribeSuccessToastMessage } from './toasts_messages';
 import { toastStore } from './toasts';
-import { SettingsStore } from './stores/settings_store';
-import { DocumentStore } from './stores/document_store';
 import { TranscribeStore } from './stores/transcribe_store';
-import { ProvenanceStore } from './stores/provenance_store';
-import { LyricsAlignStore } from './stores/lyrics_align_store';
-import { PlaybackStore } from './stores/playback_store';
-import { ViewportStore } from './stores/viewport_store';
-import { MixerStore } from './stores/mixer_store';
-
-import { MixerPresenter } from './presenters/mixer_presenter';
-import { ProvenancePresenter } from './presenters/provenance_presenter';
-import { LyricsPresenter } from './presenters/lyrics_presenter';
+import { DocumentPresenter } from './presenters/document_presenter';
 
 /**
- * Dependencies the presenter orchestrates over. Every store is a plain
- * data container; the presenter is the single place that mutates them.
- *
- * This is a TEMPORARY catch-all for all the orchestration that used to
- * live on `JotViewStore`; once split further, each feature gets its own
- * presenter owning the subset of stores it touches.
+ * Dependencies the transcribe presenter orchestrates over.
  */
 export type JotViewerPresenterDeps = {
-  document: DocumentStore;
-  settings: SettingsStore;
   transcribe: TranscribeStore;
-  provenance: ProvenanceStore;
-  lyricsAlign: LyricsAlignStore;
-  playback: PlaybackStore;
-  viewport: ViewportStore;
-  mixer: MixerStore;
-  /** Sibling presenters: song-load orchestration here calls into them
-   *  (mixer reset/clear/order; provenance clear; lyrics clear). */
-  mixerPresenter: MixerPresenter;
-  provenancePresenter: ProvenancePresenter;
-  lyricsPresenter: LyricsPresenter;
+  /** Sibling presenter: the transcribe flow auto-loads its result bundle
+   *  (score + audio + provenance) through the shared document loader, and
+   *  the recent-runs picker reuses the loading overlay. */
+  documentPresenter: DocumentPresenter;
 };
 
 /**
- * Catch-all presenter for the jot viewer. Holds the actions, reactions,
- * and orchestration that mutate the data-only stores; React components
- * bind its methods to UI callbacks and read store state for rendering.
+ * Transcribe orchestration for the jot viewer: the `/transcribe` and
+ * `/resume` flows, the streamed-progress pill, the recent-runs picker,
+ * and the transcribe form options. The post-run artifact load (score,
+ * audio tracks, note provenance) is delegated to {@link DocumentPresenter}.
+ *
+ * Formerly the catch-all `JotViewStore` orchestration; the per-domain
+ * presenters (document / mixer / playback / provenance / lyrics /
+ * viewport / settings) were split out around it.
  */
 export class JotViewerPresenter {
-  // Mute/solo/volume, masters, instrumentTracks, trackOrder, split
-  // statuses + their computeds moved to `MixerStore` (this.mixer).
-  // Debug-bundle + per-note provenance + DebugPanel chrome moved to
-  // `ProvenanceStore` (this.provenance).
-  // Playhead-follow + transport state moved to `PlaybackStore`
-  // (this.playback).
-  // DebugPanel open/height moved to `ProvenanceStore` (this.provenance).
-  // Lyrics modal visibility + per-track align status moved to
-  // `LyricsAlignStore` (this.lyricsAlign).
-  // Zoom / scroll offsets / viewport+content extents / gutter width
-  // moved to `ViewportStore` (this.viewport).
   /**
    * Controller for the in-flight `/transcribe` request, if any. The
    * "Stop" toolbar button calls `.abort()` here; the request's
@@ -86,125 +45,18 @@ export class JotViewerPresenter {
    */
   transcribeController: AbortController | undefined;
 
-  /**
-   * Wrap an async file-load with the modal overlay's bookkeeping (the
-   * loading counter / label live on {@link DocumentStore}). Errors
-   * propagate; the finally block guarantees the counter decrements even if
-   * the inner promise rejects, so a failed load never leaves the overlay
-   * stuck on screen.
-   */
-  private async withLoading<T>(label: string, fn: () => Promise<T>): Promise<T> {
-    runInAction(() => {
-      if (this.document.loadingCount === 0) this.document.loadingLabel = label;
-      this.document.loadingCount += 1;
-    });
-    try {
-      return await fn();
-    } finally {
-      runInAction(() => {
-        this.document.loadingCount -= 1;
-        if (this.document.loadingCount === 0) this.document.loadingLabel = undefined;
-      });
-    }
-  }
-
-  /** Data-only stores carved out of this (transitional) store. Held as
-   * references so the orchestration still living here can read/write them;
-   * excluded from observability (they're already-observable stores). */
-  readonly document: DocumentStore;
-  readonly settings: SettingsStore;
   readonly transcribe: TranscribeStore;
-  readonly provenance: ProvenanceStore;
-  readonly lyricsAlign: LyricsAlignStore;
-  readonly playback: PlaybackStore;
-  readonly viewport: ViewportStore;
-  readonly mixer: MixerStore;
-  readonly mixerPresenter: MixerPresenter;
-  readonly provenancePresenter: ProvenancePresenter;
-  readonly lyricsPresenter: LyricsPresenter;
+  readonly documentPresenter: DocumentPresenter;
 
   constructor(deps: JotViewerPresenterDeps) {
-    this.document = deps.document;
-    this.settings = deps.settings;
     this.transcribe = deps.transcribe;
-    this.provenance = deps.provenance;
-    this.lyricsAlign = deps.lyricsAlign;
-    this.playback = deps.playback;
-    this.viewport = deps.viewport;
-    this.mixer = deps.mixer;
-    this.mixerPresenter = deps.mixerPresenter;
-    this.provenancePresenter = deps.provenancePresenter;
-    this.lyricsPresenter = deps.lyricsPresenter;
+    this.documentPresenter = deps.documentPresenter;
     makeAutoObservable(this, {
       transcribeController: false,
-      document: false,
-      settings: false,
       transcribe: false,
-      provenance: false,
-      lyricsAlign: false,
-      playback: false,
-      viewport: false,
-      mixerPresenter: false,
-      provenancePresenter: false,
-      lyricsPresenter: false,
-      mixer: false,
+      documentPresenter: false,
     });
   }
-
-  /**
-   * Load an audio file as a new audio track and update the status pill
-   * on failure. Decoding goes through the shared `AudioContext`, so the
-   * call has to occur inside a user gesture (the file-picker click
-   * satisfies that). Every call appends an independent track — load N
-   * files to get N tracks. Returns the new track's id, or `undefined`
-   * if the load failed (so callers can e.g. default it to muted).
-   */
-  async loadAudioTrack(
-    file: File,
-    pitch?: string,
-    role?: AudioTrackRole
-  ): Promise<AudioTrackId | undefined> {
-    return this.withLoading(`Loading ${file.name}…`, async () => {
-      try {
-        return await jotPlayer.loadAudioTrack(file, pitch, role);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        toastStore.showError(`Audio track load failed: ${message}`);
-        return undefined;
-      }
-    });
-  }
-
-  setJot(jot: RenderedJot | undefined) {
-    this.document.currentJot = jot;
-    // External setJot calls invalidate the example pointer + any
-    // previously-loaded debug provenance (provenance is per-bundle and
-    // doesn't survive a wholesale jot replacement).
-    this.document.currentExampleId = undefined;
-    this.provenancePresenter.clearNoteProvenance();
-    // Lyrics are tied to a specific recording; a new jot means they no
-    // longer apply. See `src/lyrics/store.ts` for the lifecycle rationale.
-    this.lyricsPresenter.clearLyrics();
-    // Replace the song wholesale: stop any in-flight playback so the
-    // playhead, scheduled drum events, and idle cue from the previous
-    // jot don't leak onto the new one.
-    jotPlayer.stop();
-  }
-
-  setExamples(examples: readonly ExampleJot[]) {
-    this.document.examples = examples;
-  }
-
-  loadExample(id: string) {
-    const example = this.document.examples.find((e) => e.id === id);
-    if (!example) return;
-    this.document.currentJot = new RenderedJot(example.jot, this.document.viewConfig);
-    this.document.currentExampleId = id;
-    this.provenancePresenter.clearNoteProvenance();
-    this.lyricsPresenter.clearLyrics();
-    jotPlayer.stop();
-  }
-
 
   /**
    * Upload an audio file to the transcriber service, parse the returned
@@ -317,7 +169,7 @@ export class JotViewerPresenter {
       toastStore.showError('Transcriber returned no debug bundle.');
       return;
     }
-    const ok = await this.autoLoadDebugBundle(bundleUrl, fallbackName, signal);
+    const ok = await this.documentPresenter.autoLoadDebugBundle(bundleUrl, fallbackName, signal);
     if (!ok) {
       // The auto-loader already surfaced the specific failure as an
       // error toast; clear the busy pill back to idle and bail.
@@ -345,48 +197,6 @@ export class JotViewerPresenter {
           : undefined,
       }
     );
-  }
-
-  /**
-   * Fetch the debug zip from `url`, parse it, and load every artifact
-   * via {@link applyDebugBundle}. The predicted-MIDI score, audio
-   * tracks, note provenance, and stage timings / logs all come along
-   * in one round trip.
-   *
-   * Returns `true` on success, `false` if either the fetch or the
-   * parse failed (in which case the caller surfaces an error pill).
-   */
-  private async autoLoadDebugBundle(
-    url: string,
-    fallbackName: string,
-    signal: AbortSignal
-  ): Promise<boolean> {
-    let bundle: Awaited<ReturnType<typeof loadDebugZip>>;
-    try {
-      const res = await fetch(url, { signal });
-      if (!res.ok) {
-        throw new Error(`fetch ${url} failed (${res.status})`);
-      }
-      const blob = await res.blob();
-      const file = new File([blob], `${fallbackName}.debug.zip`, {
-        type: 'application/zip',
-      });
-      bundle = await loadDebugZip(file);
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') throw err;
-      // eslint-disable-next-line no-console
-      console.warn('Auto-load debug bundle failed:', err);
-      return false;
-    }
-    try {
-      const ok = await this.applyDebugBundle(bundle, fallbackName);
-      return ok;
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') throw err;
-      // eslint-disable-next-line no-console
-      console.warn('Auto-load debug bundle apply failed:', err);
-      return false;
-    }
   }
 
   /** Shared transcribe / resume failure handler. Routes aborts to idle
@@ -502,26 +312,7 @@ export class JotViewerPresenter {
     if (!url) return;
     const summary = this.transcribe.recentTranscriptions.find((s) => s.folder === folder);
     const fallbackName = summary?.original_filename ?? folder;
-    return this.withLoading(`Loading ${fallbackName}…`, async () => {
-      try {
-        const res = await fetch(url);
-        if (!res.ok) {
-          throw new Error(`fetch ${url} failed (${res.status})`);
-        }
-        const blob = await res.blob();
-        const file = new File([blob], `${fallbackName}.debug.zip`, {
-          type: 'application/zip',
-        });
-        const bundle = await loadDebugZip(file);
-        const ok = await this.applyDebugBundle(bundle, fallbackName);
-        if (!ok) {
-          toastStore.showError(`Could not parse score from ${fallbackName}.`);
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        toastStore.showError(`Could not load ${fallbackName}: ${message}`);
-      }
-    });
+    return this.documentPresenter.loadDebugBundleFromUrl(url, fallbackName);
   }
 
   /**
@@ -532,387 +323,6 @@ export class JotViewerPresenter {
     if (!this.transcribeController) return;
     this.transcribeController.abort();
     this.transcribeController = undefined;
-  }
-
-  /**
-   * Read a Drumjot DSL file from the user's machine and load it as the
-   * current jot. Parse failures surface as error toasts.
-   */
-  async loadJotFile(file: File): Promise<void> {
-    return this.withLoading(`Loading ${file.name}…`, async () => {
-      let text: string;
-      try {
-        text = await file.text();
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        toastStore.showError(`Could not read ${file.name}: ${message}`);
-        return;
-      }
-      try {
-        const jot = parse(text);
-        if (!jot.title) {
-          const derivedTitle = titleFromFilename(file.name);
-          if (derivedTitle) jot.title = derivedTitle;
-        }
-        runInAction(() => {
-          this.document.currentJot = new RenderedJot(jot, this.document.viewConfig);
-          this.document.currentExampleId = undefined;
-          // A bare jot file has no provenance; drop whatever the
-          // previous bundle put there so the selection label doesn't
-          // surface stale debug data on the new song's notes.
-          this.provenancePresenter.clearNoteProvenance();
-          this.lyricsPresenter.clearLyrics();
-          jotPlayer.stop();
-        });
-      } catch (err) {
-        const message =
-          err instanceof ParseError
-            ? `Could not parse ${file.name}: ${err.message}`
-            : err instanceof Error
-              ? err.message
-              : String(err);
-        toastStore.showError(message);
-      }
-    });
-  }
-
-  /**
-   * Read a Standard MIDI File from the user's machine, convert it to a
-   * Jot via {@link fromMidi}, and load it as the current jot. Like
-   * {@link loadJotFile}, conversion runs entirely client-side and
-   * failures surface through the shared `transcribeStatus` pill.
-   */
-  async loadMidiFile(file: File): Promise<void> {
-    return this.withLoading(`Loading ${file.name}…`, async () => {
-      let bytes: ArrayBuffer;
-      try {
-        bytes = await file.arrayBuffer();
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        toastStore.showError(`Could not read ${file.name}: ${message}`);
-        return;
-      }
-      try {
-        const jot = fromMidi(bytes);
-        if (!jot.title) {
-          const derivedTitle = titleFromFilename(file.name);
-          if (derivedTitle) jot.title = derivedTitle;
-        }
-        runInAction(() => {
-          this.document.currentJot = new RenderedJot(jot, this.document.viewConfig);
-          this.document.currentExampleId = undefined;
-          // Same reasoning as in loadJotFile: a bare MIDI load shouldn't
-          // surface stale provenance from a previous debug bundle.
-          this.provenancePresenter.clearNoteProvenance();
-          this.lyricsPresenter.clearLyrics();
-          jotPlayer.stop();
-        });
-      } catch (err) {
-        const message =
-          err instanceof Error ? `Could not convert ${file.name}: ${err.message}` : String(err);
-        toastStore.showError(message);
-      }
-    });
-  }
-
-  /**
-   * Load a ParaDB / Paradiddle map pack (`.zip`): convert its `.rlrr`
-   * chart to a Jot and auto-load its audio tracks so the pack is
-   * immediately play-along ready. Audio decoding shares the
-   * `AudioContext`, so this must run inside the file-picker's user
-   * gesture (the same constraint as {@link loadAudioTrack}). Errors surface
-   * through the shared status pill, matching {@link loadJotFile}.
-   */
-  async loadParadbMap(file: File): Promise<void> {
-    return this.withLoading(`Loading ${file.name}…`, async () => {
-      let map: Awaited<ReturnType<typeof loadParadbZip>>;
-      try {
-        map = await loadParadbZip(file);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        toastStore.showError(`Could not load ${file.name}: ${message}`);
-        return;
-      }
-
-      const jot = map.jot;
-      if (!jot.title) {
-        const derivedTitle = titleFromFilename(file.name);
-        if (derivedTitle) jot.title = derivedTitle;
-      }
-      runInAction(() => {
-        // Replace the song wholesale: drop any audio tracks from a
-        // previously loaded map/transcription so they don't play over
-        // the new pack's tracks, and reset the per-pitch mixer so an
-        // old song's mute/solo/faders don't bleed onto the new rows.
-        this.mixerPresenter.clearAllAudioTracks();
-        this.mixerPresenter.resetPitchMixer();
-        this.document.currentJot = new RenderedJot(jot, this.document.viewConfig);
-        this.document.currentExampleId = undefined;
-        this.provenancePresenter.clearNoteProvenance();
-        this.lyricsPresenter.clearLyrics();
-        jotPlayer.stop();
-      });
-
-      // Audio tracks are best-effort: a chart with the score loaded is
-      // still useful even if one is absent or fails to decode.
-      // loadAudioTrack already reports its own failures on the status pill.
-      // Drum tracks load too but start muted; you're playing the drums,
-      // so the backing music should be the only thing you hear by default.
-      //
-      // Lyrics alignment is deliberately NOT auto-fired here: vocals
-      // separation (BS-Roformer) eats a chunk of GPU time, and most
-      // ParaDB loads don't need lyrics. The user kicks it off explicitly
-      // via the Lyrics menu (or the LRCLIB search modal) when they want
-      // synced lyrics.
-      //
-      // Decode in parallel; `decodeAudioData` runs on browser-side
-      // codec threads so concurrent calls overlap, cutting the song +
-      // drums decode wall time roughly in half. Mirrors the debug-
-      // bundle loader's approach.
-      const resolved = await Promise.all(
-        map.audioTracks.map(async (track) => {
-          const id = await this.loadAudioTrack(track.file, undefined, track.role);
-          return { id, defaultMuted: track.defaultMuted };
-        })
-      );
-      runInAction(() => {
-        for (const { id, defaultMuted } of resolved) {
-          if (id && defaultMuted) this.mixer.mutedAudioTracks.add(id);
-        }
-      });
-    });
-  }
-
-  /**
-   * Score a ParaDB `.zip` map against its own audio via the transcriber's
-   * `POST /score`, surfacing the result as a toast (full result to the
-   * console). A development test harness for the corpus-filtering scorer
-   * (`transcriber/app/scoring`); unlike {@link loadParadbMap} it does NOT
-   * touch the current score, it only reports a quality number.
-   */
-  async scoreParadbMap(file: File): Promise<void> {
-    return this.withLoading(`Scoring ${file.name}…`, async () => {
-      try {
-        const result = await transcriber.scoreParadb(file);
-        const offsetMs = (result.offset_sec * 1000).toFixed(0);
-        toastStore.showSuccess(
-          `${file.name}: ${result.score_corrected}/100 corrected ` +
-            `(raw ${result.score}) · offset ${offsetMs} ms · ` +
-            `tempo ${result.tempo_ratio.toFixed(3)}× · ${result.audio_reference}`,
-          { title: 'See the browser console for the full per-lane breakdown.' }
-        );
-        // eslint-disable-next-line no-console
-        console.log('Alignment score', file.name, result);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        toastStore.showError(`Could not score ${file.name}: ${message}`);
-      }
-    });
-  }
-
-  /**
-   * Load a transcriber debug `.zip` bundle: parse the embedded
-   * `final.jot`, load every audio track in the manifest's `mapping`, and
-   * stash the manifest (stage timings + log stream) on
-   * {@link lastDebugBundle} so the {@link DebugPanel} can show it.
-   *
-   * Behaves like {@link loadParadbMap}: replaces the current song
-   * wholesale (drops previously loaded audio tracks, resets the pitch
-   * mixer), runs entirely client-side, and surfaces errors on the
-   * shared status pill.
-   *
-   * The `no_drums` entry (drumless backing audio) is auto-defaulted to
-   * unmuted; the per-pitch stems are defaulted to muted, mirroring the
-   * "drum tracks are reference-only, you're playing them" convention
-   * from the ParaDB loader — the drums you hear should be the smplr-
-   * scheduled ones from the score, not a re-decoded stem layered on top.
-   */
-  async loadDebugBundleFile(file: File): Promise<void> {
-    return this.withLoading(`Loading ${file.name}…`, async () => {
-      let bundle: Awaited<ReturnType<typeof loadDebugZip>>;
-      try {
-        bundle = await loadDebugZip(file);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        toastStore.showError(`Could not load ${file.name}: ${message}`);
-        return;
-      }
-      const ok = await this.applyDebugBundle(bundle, file.name);
-      if (!ok) {
-        toastStore.showError(`Could not parse score from ${file.name}.`);
-      }
-    });
-  }
-
-  /**
-   * Apply an already-parsed {@link DebugBundle} to the store: replace the
-   * current song with the bundle's score (DSL → MIDI fallback), load each
-   * audio track, pair stems with their instrument rows, and mount the
-   * manifest on the DebugPanel.
-   *
-   * Returns `true` if a score was loaded, `false` if neither `final.jot`
-   * nor `prediction.mid` could be turned into a jot (the audio tracks
-   * still load either way so the operator can at least listen).
-   *
-   * Status-pill management is left to the caller — `loadDebugBundleFile`
-   * sets it to idle/error on completion, while `transcribeAudio` keeps
-   * its success pill visible after the auto-load.
-   */
-  private async applyDebugBundle(
-    bundle: Awaited<ReturnType<typeof loadDebugZip>>,
-    fallbackName: string
-  ): Promise<boolean> {
-    runInAction(() => {
-      this.mixerPresenter.clearAllAudioTracks();
-      this.mixerPresenter.resetPitchMixer();
-      this.lyricsPresenter.clearLyrics();
-      this.provenance.lastDebugBundle = bundle.manifest;
-      // Replace (or clear) the per-note debug provenance whenever a
-      // new bundle loads. Older bundles may not carry one (e.g. a
-      // hand-built or legacy zip); the absent-case clears the previous
-      // bundle's provenance so it doesn't leak onto the new score.
-      this.provenance.noteProvenance = bundle.noteProvenance ?? undefined;
-      // Reset the visibility toggle so a freshly loaded bundle reads
-      // as just "the score"; operator opts into the ghost overlays.
-      this.provenance.showFilteredOnsets = false;
-      // Bundles come from the transcribe pipeline, which routinely
-      // emits triplet subdivisions; the 48ths grid is the LCM of 16ths
-      // + triplets so it visualises both. Override the store-wide 16ths
-      // default for this load specifically.
-      this.settings.gridLines = {
-        mainBeat: true,
-        subBeat16: false,
-        subBeatQuarterTriplet: false,
-        subBeatTriplet: false,
-        subBeat48: true,
-      };
-    });
-
-    // The bundle's score is the `prediction.mid` produced by the
-    // transcribe stage; `src/midi/from_midi.ts` converts it to a Jot.
-    let scoreLoaded = false;
-    if (bundle.predictionMidi) {
-      try {
-        const jot = fromMidi(bundle.predictionMidi);
-        if (!jot.title) {
-          const derivedTitle = titleFromFilename(fallbackName);
-          if (derivedTitle) jot.title = derivedTitle;
-        }
-        // The beats stage's `align_beats_to_*` shift is already baked
-        // into `prediction.mid`'s tick grid (see `compute_bar_tick_grid`
-        // in `transcriber/app/pipeline/onsets_midi.py`), so the loaded
-        // MIDI is at the aligned positions and the Beat control starts
-        // at 0. The applied alignment is still visible per-note in the
-        // selection popup as the "Beat alignment" row sourced from
-        // `noteProvenance.beat_alignment_offset_sec`.
-        runInAction(() => {
-          const rendered = new RenderedJot(jot, this.document.viewConfig);
-          this.document.currentJot = rendered;
-          this.document.currentExampleId = undefined;
-          jotPlayer.stop();
-        });
-        scoreLoaded = true;
-      } catch (err) {
-        const message =
-          err instanceof Error ? `Could not convert prediction.mid: ${err.message}` : String(err);
-        toastStore.showError(message);
-      }
-    }
-
-    // Decode every audio track in parallel, `decodeAudioData` runs on
-    // browser-side codec threads, so concurrent calls overlap well and
-    // turn what used to be a one-by-one wait into a single combined
-    // wait. `Promise.all` preserves input order so the resolved array
-    // still matches `bundle.audioTracks` (which is already in manifest
-    // order; `no_drums` first, then pitch letters), keeping the
-    // post-load pair-with-instrument-row logic stable. The bundle
-    // loader dedupes by filename, so each `track` here represents one
-    // unique file; we bind every key in `track.keys` to the resulting
-    // `AudioTrackId` so a shared stem (e.g. `stem_c.mp3` serving both
-    // crash and ride after the cymbal split) is loaded once and looked
-    // up under either key.
-    const resolved = await Promise.all(
-      bundle.audioTracks.map(async (track) => {
-        // The audio-row's `pitch` (used by the mixer for waveform
-        // tinting) takes the first non-`no_drums` key; for a stem
-        // shared across pitches, this picks the first-mentioned pitch
-        // in the manifest, which is good enough since the tint is
-        // cosmetic and both siblings live in the same colour family.
-        const primaryKey = track.keys.find((k) => k !== NO_DRUMS_KEY);
-        // Role classification: any track whose only key is `no_drums`
-        // is the Demucs drumless mix; everything else came from the
-        // per-pitch split (a key shared between multiple pitches still
-        // counts as a single drum piece for menu purposes).
-        const role: AudioTrackRole = primaryKey === undefined ? 'no-drums' : 'drum-piece';
-        const id = await this.loadAudioTrack(track.file, primaryKey, role);
-        return { keys: track.keys, id };
-      })
-    );
-    const loadedByKey = new Map<string, AudioTrackId>();
-    const toMute: AudioTrackId[] = [];
-    for (const { keys, id } of resolved) {
-      if (!id) continue;
-      let muteThis = false;
-      for (const key of keys) {
-        loadedByKey.set(key, id);
-        // Mute the per-pitch stems by default so the (audible) drums
-        // come from the smplr score scheduler; the drumless backing
-        // stays unmuted. Multiple keys → still one mute, since they
-        // share the same `id`.
-        if (key !== NO_DRUMS_KEY) muteThis = true;
-      }
-      if (muteThis) toMute.push(id);
-    }
-
-    // Batch the mute updates and the reorder into a single observable
-    // mutation so the mixer renders once at the end instead of once
-    // per loaded track.
-    runInAction(() => {
-      for (const id of toMute) this.mixer.mutedAudioTracks.add(id);
-      this.mixerPresenter.applyDebugBundleTrackOrder(loadedByKey);
-    });
-
-    return scoreLoaded;
-  }
-
-
-  // Viewport actions (setZoom, scroll setters + clamps, viewport/content
-  // size, setGutterWidth) and the visibleBeatRange computed moved to
-  // `ViewportStore` (data) + the presenter (actions).
-
-  /**
-   * Read a synced-lyrics file (LRC, or a text file in LRC format) from
-   * disk and push it into the session lyrics store. Empty / unparseable
-   * inputs surface a failure message on the shared status pill instead
-   * of silently doing nothing.
-   */
-  async loadLyricsFile(file: File): Promise<void> {
-    return this.withLoading(`Loading ${file.name}…`, async () => {
-      let text: string;
-      try {
-        text = await file.text();
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        toastStore.showError(`Could not read ${file.name}: ${message}`);
-        return;
-      }
-      // Enhanced-LRC aware: word-tagged files load as word-aligned
-      // tracks (with per-word durations), plain line-level LRC parses
-      // exactly as before. A leading `[offset:±ms]` restores the saved
-      // offset nudge.
-      const { lines, offsetSec } = parseEnhancedLrc(text);
-      if (lines.length === 0) {
-        toastStore.showError(`No synced lyrics found in ${file.name}.`);
-        return;
-      }
-      runInAction(() => {
-        const id = lyricsStore.add(lines, {
-          source: 'file',
-          sourceLabel: `File · ${file.name}`,
-        });
-        if (offsetSec !== 0) lyricsStore.setOffsetSec(id, offsetSec);
-      });
-    });
   }
 
   // --- transcribe (form options + resume picker) ---

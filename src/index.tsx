@@ -11,6 +11,7 @@ import { MixerPresenter } from 'src/jot_view/presenters/mixer_presenter';
 import { ProvenancePresenter } from 'src/jot_view/presenters/provenance_presenter';
 import { PlaybackPresenter } from 'src/jot_view/presenters/playback_presenter';
 import { LyricsPresenter } from 'src/jot_view/presenters/lyrics_presenter';
+import { DocumentPresenter } from 'src/jot_view/presenters/document_presenter';
 import { DocumentStore } from 'src/jot_view/stores/document_store';
 import { SettingsStore } from 'src/jot_view/stores/settings_store';
 import { TranscribeStore } from 'src/jot_view/stores/transcribe_store';
@@ -45,6 +46,7 @@ class Drumjot {
   readonly provenancePresenter: ProvenancePresenter;
   readonly playbackPresenter: PlaybackPresenter;
   readonly lyricsPresenter: LyricsPresenter;
+  readonly documentPresenter: DocumentPresenter;
   readonly presenter: JotViewerPresenter;
 
   constructor(root: HTMLElement, examples: readonly ExampleJot[] = EXAMPLE_JOTS) {
@@ -62,6 +64,7 @@ class Drumjot {
       provenancePresenter,
       playbackPresenter,
       lyricsPresenter,
+      documentPresenter,
       presenter,
       View,
     } = createJotView({ examples });
@@ -78,6 +81,7 @@ class Drumjot {
     this.provenancePresenter = provenancePresenter;
     this.playbackPresenter = playbackPresenter;
     this.lyricsPresenter = lyricsPresenter;
+    this.documentPresenter = documentPresenter;
     this.presenter = presenter;
     createRoot(root).render(<View />);
   }
@@ -87,7 +91,7 @@ class Drumjot {
     // `viewConfig.barWidth`) actually drives this jot's `pxPerBeat`/layout.
     // Every loader (loadExample/transcribe/file) does the same; omitting it
     // here left zoom a no-op for `window.drumjot.load`/`loadDsl`.
-    this.presenter.setJot(new RenderedJot(jot, this.document.viewConfig));
+    this.documentPresenter.setJot(new RenderedJot(jot, this.document.viewConfig));
   }
 
   /** Parse a DSL source string (SPEC.md syntax) and load the resulting jot. */
@@ -97,7 +101,7 @@ class Drumjot {
 
   /** Load one of the registered example jots by id. */
   loadExample(id: string) {
-    this.presenter.loadExample(id);
+    this.documentPresenter.loadExample(id);
   }
 
   loadTestJot() {

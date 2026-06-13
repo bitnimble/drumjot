@@ -1,4 +1,5 @@
 import { makeAutoObservable } from 'mobx';
+import { DebugBundleManifest, NoteProvenanceFile } from 'src/debug_zip';
 import { ProvenanceStore } from '../stores/provenance_store';
 import { ViewportStore } from '../stores/viewport_store';
 
@@ -37,6 +38,24 @@ export class ProvenancePresenter {
   setDebugPanelHeight(px: number): void {
     const max = Math.max(120, this.viewport._viewportHeight - 160);
     this.provenance.debugPanelHeight = Math.min(max, Math.max(80, px));
+  }
+
+  /**
+   * Mount a freshly-loaded debug bundle's provenance: the manifest (logs
+   * + stage timings behind the DebugPanel) and the per-note onset
+   * provenance behind the selection label / filtered-onset ghosts. Always
+   * resets the visibility toggle so a new bundle reads as just "the score"
+   * until the operator opts into the ghost overlays. `noteProvenance` is
+   * cleared when the bundle didn't ship one (legacy / hand-built zips) so
+   * the previous bundle's provenance can't leak onto the new score.
+   */
+  loadDebugBundle(
+    manifest: DebugBundleManifest,
+    noteProvenance: NoteProvenanceFile | undefined
+  ) {
+    this.provenance.lastDebugBundle = manifest;
+    this.provenance.noteProvenance = noteProvenance;
+    this.provenance.showFilteredOnsets = false;
   }
 
   /** Drop the debug bundle's per-note provenance + reset the visibility

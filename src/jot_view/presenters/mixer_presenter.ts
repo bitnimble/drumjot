@@ -265,6 +265,13 @@ export class MixerPresenter {
     this.mixer.audioTrackVolumes.set(id, clampVolume(v));
   }
 
+  /** Mute a batch of audio tracks. Used by the song loaders
+   * (DocumentPresenter) to default per-pitch stems / drum tracks to
+   * muted so the audible drums come from the score scheduler. */
+  muteAudioTracks(ids: readonly AudioTrackId[]): void {
+    for (const id of ids) this.mixer.mutedAudioTracks.add(id);
+  }
+
   /** Drop a removed audio track's mute/solo/volume so it doesn't linger
    * (ids are never reused), and so clearing the only soloed track doesn't
    * leave a phantom solo silencing everything else. The colour override
