@@ -10,6 +10,7 @@ import { DocumentStore } from 'src/jot_view/stores/document_store';
 import { SettingsStore } from 'src/jot_view/stores/settings_store';
 import { TranscribeStore } from 'src/jot_view/stores/transcribe_store';
 import { ProvenanceStore } from 'src/jot_view/stores/provenance_store';
+import { LyricsAlignStore } from 'src/jot_view/stores/lyrics_align_store';
 import { parse } from 'src/parser';
 import { jotPlayer } from 'src/playback';
 // Side-effect import: instantiates the theme controller so the
@@ -28,17 +29,18 @@ class Drumjot {
   readonly settings: SettingsStore;
   readonly transcribe: TranscribeStore;
   readonly provenance: ProvenanceStore;
+  readonly lyricsAlign: LyricsAlignStore;
   readonly presenter: JotViewerPresenter;
 
   constructor(root: HTMLElement, examples: readonly ExampleJot[] = EXAMPLE_JOTS) {
-    const { store, document, settings, transcribe, provenance, presenter, View } = createJotView({
-      examples,
-    });
+    const { store, document, settings, transcribe, provenance, lyricsAlign, presenter, View } =
+      createJotView({ examples });
     this.store = store;
     this.document = document;
     this.settings = settings;
     this.transcribe = transcribe;
     this.provenance = provenance;
+    this.lyricsAlign = lyricsAlign;
     this.presenter = presenter;
     createRoot(root).render(<View />);
   }

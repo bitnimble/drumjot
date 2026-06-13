@@ -5,6 +5,7 @@ import { BarTiming } from 'src/playback';
 import { SelectionStore } from 'src/selection';
 import { GridLineSettings, JotViewStore } from './store';
 import { ProvenanceStore } from './stores/provenance_store';
+import { LyricsAlignStore } from './stores/lyrics_align_store';
 import { JotViewerPresenter } from './jot_viewer_presenter';
 
 /**
@@ -29,6 +30,13 @@ export const JotViewStoreContext = React.createContext<JotViewStore | null>(null
  * identity). `null` outside the view.
  */
 export const ProvenanceStoreContext = React.createContext<ProvenanceStore | null>(null);
+
+/**
+ * Routes the {@link LyricsAlignStore} to deep consumers that read lyrics
+ * align state (today: `LyricsRow`'s per-row align spinner). `null`
+ * outside the view.
+ */
+export const LyricsAlignStoreContext = React.createContext<LyricsAlignStore | null>(null);
 
 /**
  * Routes the {@link JotViewerPresenter} to deep consumers that need to

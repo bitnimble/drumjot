@@ -44,16 +44,11 @@ import { SettingsStore } from './stores/settings_store';
 import { DocumentStore } from './stores/document_store';
 import { TranscribeStore } from './stores/transcribe_store';
 import { ProvenanceStore } from './stores/provenance_store';
+import { LyricsAlignStore } from './stores/lyrics_align_store';
 
-/** Long-running lyric-alignment indicator. `queued` is the wait state
- *  while the request sits behind another in-flight GPU job (a transcribe
- *  or another align); `aligning` is once it owns the GPU and forced
- *  alignment is actually running. Success and failure surface as toasts
- *  (see `./toasts.ts`). */
-export type LyricsAlignStatus =
-  | { phase: 'idle' }
-  | { phase: 'queued'; detail: string }
-  | { phase: 'aligning'; detail: string };
+// `LyricsAlignStatus` + lyrics-align UI state moved to `LyricsAlignStore`.
+// Re-exported so existing type imports from `./store` keep working.
+export type { LyricsAlignStatus } from './stores/lyrics_align_store';
 
 /** Long-running stem-split indicator for an audio track. `mix` covers
  *  stage 1 (`stems_all`, isolating drums + drumless backing from a full
@@ -343,10 +338,8 @@ export class JotViewStore {
    */
   private followDisabledIsTransient: boolean = false;
   // DebugPanel open/height moved to `ProvenanceStore` (this.provenance).
-  /** Lyrics search modal visibility. */
-  lyricsSearchOpen: boolean = false;
-  /** Lyrics plain-text load modal visibility. */
-  lyricsTextOpen: boolean = false;
+  // Lyrics modal visibility + per-track align status moved to
+  // `LyricsAlignStore` (this.lyricsAlign).
   /** Width (px) of the sticky mixer/score gutter column; user-resizable
    * by dragging the gutter's right edge. Propagated to every gutter
    * element through the `--gutter-width` CSS variable set on the JotView
@@ -432,17 +425,20 @@ export class JotViewStore {
   readonly settings: SettingsStore;
   readonly transcribe: TranscribeStore;
   readonly provenance: ProvenanceStore;
+  readonly lyricsAlign: LyricsAlignStore;
 
   constructor(
     document: DocumentStore,
     settings: SettingsStore,
     transcribe: TranscribeStore,
-    provenance: ProvenanceStore
+    provenance: ProvenanceStore,
+    lyricsAlign: LyricsAlignStore
   ) {
     this.document = document;
     this.settings = settings;
     this.transcribe = transcribe;
     this.provenance = provenance;
+    this.lyricsAlign = lyricsAlign;
     makeAutoObservable(this, {
       transcribeController: false,
       lyricsAlignControllers: false,
@@ -450,6 +446,7 @@ export class JotViewStore {
       settings: false,
       transcribe: false,
       provenance: false,
+      lyricsAlign: false,
     });
     // Wire ourselves in as the player's mixer context so freshly-
     // constructed AudioTracks can resolve grouped-instrument colour
@@ -1038,14 +1035,6 @@ export class JotViewStore {
   private clearNoteProvenance() {
     this.provenance.noteProvenance = undefined;
     this.provenance.showFilteredOnsets = false;
-  }
-
-  setLyricsSearchOpen(open: boolean) {
-    this.lyricsSearchOpen = open;
-  }
-
-  setLyricsTextOpen(open: boolean) {
-    this.lyricsTextOpen = open;
   }
 
   toggleFollowPlayhead() {
@@ -2160,7 +2149,7 @@ export class JotViewStore {
       this.lyricsAlignControllers.delete(id);
     }
     runInAction(() => {
-      this.lyricsAlignStatuses.delete(id);
+      this.lyricsAlign.lyricsAlignStatuses.delete(id);
     });
     lyricsStore.remove(id);
   }
@@ -2178,22 +2167,6 @@ export class JotViewStore {
    * `lyricsAnyAligning` and the per-row spinner re-render on change.
    */
   lyricsAlignControllers: Map<LyricsTrackId, AbortController> = new Map();
-  lyricsAlignStatuses: Map<LyricsTrackId, LyricsAlignStatus> = new Map();
-
-  /** Aggregate lyrics-alignment state across all rows, for the toolbar
-   *  busy pill (which doesn't display *which* row; the per-row spinner
-   *  does). `aligning` wins over `queued` so that once any row owns the
-   *  GPU the pill reads as actively working; `queued` shows only while
-   *  every in-flight row is still waiting its turn. The backend
-   *  serialises GPU work, so at most one row is `aligning` at a time. */
-  get lyricsAlignBusyPhase(): 'idle' | 'queued' | 'aligning' {
-    let anyQueued = false;
-    for (const s of this.lyricsAlignStatuses.values()) {
-      if (s.phase === 'aligning') return 'aligning';
-      if (s.phase === 'queued') anyQueued = true;
-    }
-    return anyQueued ? 'queued' : 'idle';
-  }
 
   /**
    * Run CTC forced-alignment against the given input source and
@@ -2221,7 +2194,7 @@ export class JotViewStore {
     const controller = new AbortController();
     this.lyricsAlignControllers.set(targetTrackId, controller);
     runInAction(() => {
-      this.lyricsAlignStatuses.set(targetTrackId, { phase: 'aligning', detail: label });
+      this.lyricsAlign.lyricsAlignStatuses.set(targetTrackId, { phase: 'aligning', detail: label });
     });
     let lines: LyricLine[];
     try {
@@ -2237,7 +2210,7 @@ export class JotViewStore {
             return;
           }
           runInAction(() => {
-            this.lyricsAlignStatuses.set(targetTrackId, {
+            this.lyricsAlign.lyricsAlignStatuses.set(targetTrackId, {
               phase: event.kind === 'queued' ? 'queued' : 'aligning',
               detail: label,
             });
@@ -2254,7 +2227,7 @@ export class JotViewStore {
       }
       const message = err instanceof Error ? err.message : String(err);
       runInAction(() => {
-        this.lyricsAlignStatuses.delete(targetTrackId);
+        this.lyricsAlign.lyricsAlignStatuses.delete(targetTrackId);
       });
       toastStore.showError(`Lyrics align failed: ${message}`);
       return;
@@ -2265,7 +2238,7 @@ export class JotViewStore {
     }
     if (lines.length === 0) {
       runInAction(() => {
-        this.lyricsAlignStatuses.delete(targetTrackId);
+        this.lyricsAlign.lyricsAlignStatuses.delete(targetTrackId);
       });
       toastStore.showError(`No lyrics were aligned (the aligner found no speech in ${label}).`);
       return;
@@ -2275,7 +2248,7 @@ export class JotViewStore {
         source: opts.source,
         sourceLabel: opts.sourceLabel,
       });
-      this.lyricsAlignStatuses.delete(targetTrackId);
+      this.lyricsAlign.lyricsAlignStatuses.delete(targetTrackId);
     });
   }
 
@@ -2290,7 +2263,7 @@ export class JotViewStore {
     }
     this.lyricsAlignControllers.clear();
     runInAction(() => {
-      this.lyricsAlignStatuses.clear();
+      this.lyricsAlign.lyricsAlignStatuses.clear();
     });
   }
 

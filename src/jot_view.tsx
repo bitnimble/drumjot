@@ -19,6 +19,7 @@ import {
   GridLineSettingsContext,
   JotViewStoreContext,
   JotViewerPresenterContext,
+  LyricsAlignStoreContext,
   NoteProvenanceContext,
   ProvenanceStoreContext,
   RenderedJotContext,
@@ -42,6 +43,7 @@ import { SettingsStore } from './jot_view/stores/settings_store';
 import { DocumentStore } from './jot_view/stores/document_store';
 import { TranscribeStore } from './jot_view/stores/transcribe_store';
 import { ProvenanceStore } from './jot_view/stores/provenance_store';
+import { LyricsAlignStore } from './jot_view/stores/lyrics_align_store';
 import { JotViewerPresenter } from './jot_view/jot_viewer_presenter';
 import { RecentTranscriptionsPicker } from './jot_view/recent_transcriptions';
 import { ToastContainer } from './jot_view/toast_container';
@@ -64,6 +66,7 @@ type CreateJotViewResult = {
   settings: SettingsStore;
   transcribe: TranscribeStore;
   provenance: ProvenanceStore;
+  lyricsAlign: LyricsAlignStore;
   /** Catch-all presenter holding the actions/orchestration over the
    *  data-only stores. */
   presenter: JotViewerPresenter;
@@ -75,8 +78,9 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   const settings = new SettingsStore();
   const transcribe = new TranscribeStore();
   const provenance = new ProvenanceStore();
-  const presenter = new JotViewerPresenter({ settings, transcribe, provenance });
-  const store = new JotViewStore(documentStore, settings, transcribe, provenance);
+  const lyricsAlign = new LyricsAlignStore();
+  const presenter = new JotViewerPresenter({ settings, transcribe, provenance, lyricsAlign });
+  const store = new JotViewStore(documentStore, settings, transcribe, provenance, lyricsAlign);
   if (options.examples) store.setExamples(options.examples);
   const selection = new SelectionStore(store);
 
@@ -295,6 +299,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
       <JotViewStoreContext.Provider value={store}>
         <JotViewerPresenterContext.Provider value={presenter}>
         <ProvenanceStoreContext.Provider value={provenance}>
+        <LyricsAlignStoreContext.Provider value={lyricsAlign}>
         <SelectionContext.Provider value={selection}>
           <NoteProvenanceContext.Provider value={provenanceContextValue}>
             <GridLineSettingsContext.Provider value={settings.gridLines}>
@@ -316,10 +321,10 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       onLoadDebugBundle={(file) => store.loadDebugBundleFile(file)}
                       onLoadAudioTrack={(file) => store.loadAudioTrack(file)}
                       onLoadLyricsFile={(file) => store.loadLyricsFile(file)}
-                      onOpenLyricsTextLoad={() => store.setLyricsTextOpen(true)}
-                      onOpenLyricsSearch={() => store.setLyricsSearchOpen(true)}
+                      onOpenLyricsTextLoad={() => presenter.setLyricsTextOpen(true)}
+                      onOpenLyricsSearch={() => presenter.setLyricsSearchOpen(true)}
                       onCancelTranscribe={() => store.cancelTranscribe()}
-                      lyricsAlignBusyPhase={store.lyricsAlignBusyPhase}
+                      lyricsAlignBusyPhase={lyricsAlign.lyricsAlignBusyPhase}
                       onSetBeatInput={(b) => presenter.setBeatInput(b)}
                       onSetDrumSeparator={(s) => presenter.setDrumSeparator(s)}
                       onSetLlmModel={(m) => presenter.setLlmModel(m)}
@@ -376,15 +381,15 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                     {jot && <PlaybackBar store={store} documentStore={documentStore} />}
                     <DebugPanel store={store} provenance={provenance} presenter={presenter} />
                     <LyricsSearchModal
-                      open={store.lyricsSearchOpen}
+                      open={lyricsAlign.lyricsSearchOpen}
                       initialTitle={lyricsInitialTitle}
                       initialArtist={lyricsInitialArtist}
-                      onClose={() => store.setLyricsSearchOpen(false)}
+                      onClose={() => presenter.setLyricsSearchOpen(false)}
                       store={store}
                     />
                     <LyricsTextLoadModal
-                      open={store.lyricsTextOpen}
-                      onClose={() => store.setLyricsTextOpen(false)}
+                      open={lyricsAlign.lyricsTextOpen}
+                      onClose={() => presenter.setLyricsTextOpen(false)}
                       store={store}
                     />
                     <AudioWorkletWarningModal
@@ -400,13 +405,23 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
             </GridLineSettingsContext.Provider>
           </NoteProvenanceContext.Provider>
         </SelectionContext.Provider>
+        </LyricsAlignStoreContext.Provider>
         </ProvenanceStoreContext.Provider>
         </JotViewerPresenterContext.Provider>
       </JotViewStoreContext.Provider>
     );
   });
 
-  return { store, document: documentStore, settings, transcribe, provenance, presenter, View };
+  return {
+    store,
+    document: documentStore,
+    settings,
+    transcribe,
+    provenance,
+    lyricsAlign,
+    presenter,
+    View,
+  };
 }
 
 type JotViewProps = {

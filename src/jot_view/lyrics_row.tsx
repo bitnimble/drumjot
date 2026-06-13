@@ -19,7 +19,7 @@ import {
 } from 'src/lyrics';
 import { downloadTextFile } from 'src/download';
 import { JotTimeline, jotPlayer } from 'src/playback';
-import { JotViewStoreContext } from './contexts';
+import { JotViewStoreContext, LyricsAlignStoreContext } from './contexts';
 import { DropdownButton, dropdownStyles } from './components/dropdown';
 import { GutterResizeHandle } from './components/gutter_resize_handle';
 import { NumberStepper } from './components/number_stepper';
@@ -602,6 +602,7 @@ export const LyricsRow = observer(
     onSeek: (x: number) => void;
   } & LyricsRowDragProps) => {
     const store = React.useContext(JotViewStoreContext);
+    const lyricsAlign = React.useContext(LyricsAlignStoreContext);
     const track = lyricsStore.get(id);
     // Guard: the reaction in JotViewStore drops dead lyrics ids on the
     // same MobX tick a `remove()` happens, so this gap is one-frame at
@@ -610,7 +611,7 @@ export const LyricsRow = observer(
     const lines = track.lines;
     const offsetSec = track.offsetSec;
     const sourceLabel = track.sourceLabel;
-    const alignPhase = store?.lyricsAlignStatuses.get(id)?.phase;
+    const alignPhase = lyricsAlign?.lyricsAlignStatuses.get(id)?.phase;
     const isAligning = alignPhase === 'aligning' || alignPhase === 'queued';
     const alignLabel =
       alignPhase === 'queued'

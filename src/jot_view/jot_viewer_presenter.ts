@@ -3,6 +3,7 @@ import { BeatInput, DrumSeparator, LlmModel, TranscribeStage } from 'src/transcr
 import { GridLineSettings, SettingsStore } from './stores/settings_store';
 import { TranscribeStore } from './stores/transcribe_store';
 import { ProvenanceStore } from './stores/provenance_store';
+import { LyricsAlignStore } from './stores/lyrics_align_store';
 
 /**
  * Dependencies the presenter orchestrates over. Every store is a plain
@@ -18,6 +19,7 @@ export type JotViewerPresenterDeps = {
   settings: SettingsStore;
   transcribe: TranscribeStore;
   provenance: ProvenanceStore;
+  lyricsAlign: LyricsAlignStore;
 };
 
 /**
@@ -40,14 +42,16 @@ export class JotViewerPresenter {
   readonly settings: SettingsStore;
   readonly transcribe: TranscribeStore;
   readonly provenance: ProvenanceStore;
+  readonly lyricsAlign: LyricsAlignStore;
 
   constructor(deps: JotViewerPresenterDeps) {
     this.settings = deps.settings;
     this.transcribe = deps.transcribe;
     this.provenance = deps.provenance;
+    this.lyricsAlign = deps.lyricsAlign;
     makeAutoObservable(
       this,
-      { settings: false, transcribe: false, provenance: false },
+      { settings: false, transcribe: false, provenance: false, lyricsAlign: false },
       { autoBind: true }
     );
   }
@@ -121,5 +125,15 @@ export class JotViewerPresenter {
   /** Toggle the DebugPanel's open state without forgetting the bundle. */
   toggleDebugPanel() {
     this.provenance.debugPanelOpen = !this.provenance.debugPanelOpen;
+  }
+
+  // --- lyrics (modal visibility) ---
+
+  setLyricsSearchOpen(open: boolean) {
+    this.lyricsAlign.lyricsSearchOpen = open;
+  }
+
+  setLyricsTextOpen(open: boolean) {
+    this.lyricsAlign.lyricsTextOpen = open;
   }
 }
