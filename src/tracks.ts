@@ -189,6 +189,52 @@ export function buildDebugBundleTrackOrder(
 }
 
 /**
+ * Reorder the mixer row list: move the row at `fromIdx` to insertion
+ * point `toIdx` (an index into the *current* list: 0 = before the first
+ * row, `length` = after the last). A no-op move, dropped back in place,
+ * or an out-of-range `fromIdx`, returns the SAME array reference, so a
+ * caller assigning the result to an observable doesn't trigger a spurious
+ * change.
+ *
+ * On drop the moved row's `groupId` is recomputed from its new
+ * neighbours: dropped strictly *inside* a group (the rows immediately
+ * above and below share a defined `groupId`) joins that group; dropped at
+ * a group boundary, the top, or the bottom clears it (the row goes solo).
+ * The row's identity (`kind` + id/pitch) is preserved; only `groupId`
+ * changes. Pure (no store / observable / DOM); unit-tested in
+ * `tracks.test.ts`. This is the logic behind drag-and-drop track
+ * reordering; `MixerPresenter.moveTrack` is the thin observable wrapper.
+ */
+export function reorderTrackOrder(
+  order: readonly TrackKey[],
+  fromIdx: number,
+  toIdx: number,
+): readonly TrackKey[] {
+  if (fromIdx < 0 || fromIdx >= order.length) return order;
+  const clamped = Math.max(0, Math.min(order.length, toIdx));
+  if (clamped === fromIdx || clamped === fromIdx + 1) return order;
+  const next = order.slice();
+  const [moved] = next.splice(fromIdx, 1);
+  const adjusted = clamped > fromIdx ? clamped - 1 : clamped;
+  const above = adjusted > 0 ? next[adjusted - 1] : undefined;
+  const below = adjusted < next.length ? next[adjusted] : undefined;
+  const newGroupId =
+    above && below && above.groupId !== undefined && above.groupId === below.groupId
+      ? above.groupId
+      : undefined;
+  let repositioned: TrackKey;
+  if (moved.kind === 'audio') {
+    repositioned = { kind: 'audio', id: moved.id, groupId: newGroupId };
+  } else if (moved.kind === 'instrument') {
+    repositioned = { kind: 'instrument', pitch: moved.pitch, groupId: newGroupId };
+  } else {
+    repositioned = { kind: 'lyrics', id: moved.id, groupId: newGroupId };
+  }
+  next.splice(adjusted, 0, repositioned);
+  return next;
+}
+
+/**
  * Lookup surface the audio-track colour computation needs to walk
  * grouped instrument tracks. Implemented by the UI store
  * (`JotViewStore`) and handed to the player at startup so freshly-

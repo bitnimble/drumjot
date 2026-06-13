@@ -1,7 +1,7 @@
 import { comparer, makeAutoObservable, reaction } from 'mobx';
 import { lyricsStore, LyricsTrackId } from 'src/lyrics';
 import { AudioTrackId, jotPlayer } from 'src/playback';
-import { buildDebugBundleTrackOrder, trackKeyEq, type TrackKey } from 'src/tracks';
+import { buildDebugBundleTrackOrder, reorderTrackOrder, trackKeyEq, type TrackKey } from 'src/tracks';
 import { DocumentStore } from '../document/document_store';
 import { MixerStore, clampVolume, collectJotPitches } from './mixer_store';
 import { toastStore } from '../toasts/toasts';
@@ -176,29 +176,10 @@ export class MixerPresenter {
    * dropped at a boundary / top / bottom → becomes solo).
    */
   moveTrack(fromIdx: number, toIdx: number): void {
-    if (fromIdx < 0 || fromIdx >= this.mixer.trackOrder.length) return;
-    const clamped = Math.max(0, Math.min(this.mixer.trackOrder.length, toIdx));
-    if (clamped === fromIdx || clamped === fromIdx + 1) return;
-    const next = this.mixer.trackOrder.slice();
-    const [moved] = next.splice(fromIdx, 1);
-    const adjusted = clamped > fromIdx ? clamped - 1 : clamped;
-    const above = adjusted > 0 ? next[adjusted - 1] : undefined;
-    const below = adjusted < next.length ? next[adjusted] : undefined;
-    const newGroupId =
-      above && below && above.groupId !== undefined && above.groupId === below.groupId
-        ? above.groupId
-        : undefined;
-    // Spread keeps the discriminant intact while overwriting groupId.
-    let repositioned: TrackKey;
-    if (moved.kind === 'audio') {
-      repositioned = { kind: 'audio', id: moved.id, groupId: newGroupId };
-    } else if (moved.kind === 'instrument') {
-      repositioned = { kind: 'instrument', pitch: moved.pitch, groupId: newGroupId };
-    } else {
-      repositioned = { kind: 'lyrics', id: moved.id, groupId: newGroupId };
-    }
-    next.splice(adjusted, 0, repositioned);
-    this.mixer.trackOrder = next;
+    const next = reorderTrackOrder(this.mixer.trackOrder, fromIdx, toIdx);
+    // `reorderTrackOrder` returns the same array reference on a no-op move,
+    // so this only writes (and wakes observers) on a real reorder.
+    if (next !== this.mixer.trackOrder) this.mixer.trackOrder = next as TrackKey[];
   }
 
   toggleAudioMasterMute() {
