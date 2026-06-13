@@ -15,7 +15,7 @@ import { MuteButton, SoloButton } from './components/icon_button';
 import { ColorPickerMenuRow } from './components/color_picker_menu_row';
 import { DropdownButton, dropdownStyles } from './components/dropdown';
 import {
-  JotViewStoreContext,
+  MixerStoreContext,
   NoteProvenanceContext,
   RenderedJotContext,
   UniformWaveformsContext,
@@ -181,14 +181,14 @@ export const MixerView = observer(
     // and the mixer-ordered pitch list are MobX computeds on the store,
     // so MixerView (already an observer) gets correct invalidation when
     // the user reorders rows.
-    const store = React.useContext(JotViewStoreContext);
-    const firstInstrumentIdx = store?.firstInstrumentIdx ?? -1;
+    const mixer = React.useContext(MixerStoreContext);
+    const firstInstrumentIdx = mixer?.firstInstrumentIdx ?? -1;
     // Drum pitches in mixer order. Pattern brackets are drawn on every
     // row whose pitch participates in the pattern; this list lets each
     // row know whether it's the topmost / bottommost participant for a
     // given span so the bracket reads as one continuous outline across
     // rows (with non-participating rows in between visually skipped).
-    const pitchOrder: readonly string[] = store?.pitchOrder ?? [];
+    const pitchOrder: readonly string[] = mixer?.pitchOrder ?? [];
 
     return (
       <div className={styles.mixer}>
@@ -710,8 +710,8 @@ const AudioTrackRow = observer(
       onResetDrag,
     });
     const isDragging = dragFromIdx === idx;
-    const store = React.useContext(JotViewStoreContext);
-    const splitStatus = store?.audioTrackSplitStatuses.get(id);
+    const mixer = React.useContext(MixerStoreContext);
+    const splitStatus = mixer?.audioTrackSplitStatuses.get(id);
     const splittingTitle =
       splitStatus?.kind === 'mix'
         ? 'Splitting into drums + backing…'
@@ -972,9 +972,9 @@ const InstrumentRow = observer(
     // otherwise the neutral fallback grey. Reading it inside this
     // observer is the dependency that drives a row re-render when the
     // user picks a new colour.
-    const store = React.useContext(JotViewStoreContext);
+    const mixer = React.useContext(MixerStoreContext);
     const viewport = React.useContext(ViewportStoreContext);
-    const instrumentTrack = store?.getInstrumentTrack(pitch);
+    const instrumentTrack = mixer?.getInstrumentTrack(pitch);
     const pitchColor = instrumentTrack?.color ?? 'var(--color-text-faint-strong)';
 
     // Filtered-onset ghost overlays (debug bundle + checkbox gated).
@@ -1000,8 +1000,8 @@ const InstrumentRow = observer(
     // don't bust `BarView`'s observer memo for bars that didn't move.
     const pitchesMemo = React.useMemo(() => [pitch], [pitch]);
     const colorForPitch = React.useCallback(
-      (p: string) => store?.getInstrumentTrack(p).color,
-      [store]
+      (p: string) => mixer?.getInstrumentTrack(p).color,
+      [mixer]
     );
     return (
       <div

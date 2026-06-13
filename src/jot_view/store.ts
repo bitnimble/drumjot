@@ -1,9 +1,6 @@
 import { comparer, makeAutoObservable, reaction, runInAction } from 'mobx';
-import { computedFn } from 'mobx-utils';
 import { loadDebugZip, NO_DRUMS_KEY } from 'src/debug_zip';
-import { Instrument } from 'src/dsl';
 import { ExampleJot } from 'src/fakes';
-import { DrumInstrumentKind, defaultKindForPitch } from 'src/instruments';
 import { RenderedJot } from 'src/jot';
 import {
   AlignLyricsRequest,
@@ -19,13 +16,9 @@ import {
 import { fromMidi } from 'src/midi';
 import { parse, ParseError } from 'src/parser';
 import {
-  AudioTrackFilter,
   AudioTrackId,
   AudioTrackRole,
-  isAudibleUnder,
-  isAudioTrackAudibleUnder,
   jotPlayer,
-  PlayerFilter,
   buildTimeline,
   xToTime,
 } from 'src/playback';
@@ -47,20 +40,14 @@ import { ProvenanceStore } from './stores/provenance_store';
 import { LyricsAlignStore } from './stores/lyrics_align_store';
 import { PlaybackStore } from './stores/playback_store';
 import { ViewportStore } from './stores/viewport_store';
+import { MixerStore, clampVolume, collectJotPitches } from './stores/mixer_store';
 
 // `LyricsAlignStatus` + lyrics-align UI state moved to `LyricsAlignStore`.
 // Re-exported so existing type imports from `./store` keep working.
 export type { LyricsAlignStatus } from './stores/lyrics_align_store';
 
-/** Long-running stem-split indicator for an audio track. `mix` covers
- *  stage 1 (`stems_all`, isolating drums + drumless backing from a full
- *  mix); `pieces` covers stage 2 (`stems_per`, splitting an isolated
- *  drum stem into per-instrument pieces). Only the in-flight phase is
- *  modelled here; success and failure surface as toasts. The store
- *  exposes {@link beginAudioTrackSplit} / {@link endAudioTrackSplit} so
- *  the future server wiring just brackets its work with those calls
- *  and the per-row spinner picks it up automatically. */
-export type AudioTrackSplitStatus = { phase: 'splitting'; kind: 'mix' | 'pieces' };
+// `AudioTrackSplitStatus` moved to `MixerStore`; re-exported for callers.
+export type { AudioTrackSplitStatus } from './stores/mixer_store';
 
 // `TranscribeStatus` + `TranscribeOptions` + the transcribe/resume UI
 // state moved to `TranscribeStore`. Re-exported so existing type imports
@@ -84,209 +71,22 @@ export {
   snapToDevicePx,
 } from './stores/viewport_store';
 
-// Row volume faders are pure attenuation (0 = silent, 1 = unscaled).
-// The kit's overall loudness is handled by the drum master gain.
-export const VOLUME_STEP = 0.05;
-
-export function clampVolume(v: number): number {
-  if (!Number.isFinite(v)) return 1;
-  return Math.max(0, Math.min(1, v));
-}
-
-// `TrackKey` + `trackKeyEq` were moved to `src/tracks.ts` alongside the
-// `MixerContext` interface they participate in. Re-exported here so
-// existing callers (and the JSDoc references below to
-// `JotViewStore.trackOrder`) keep working without an import churn.
-import {
-  buildDebugBundleTrackOrder,
-  trackKeyEq,
-  type TrackKey,
-  InstrumentTrack,
-  INSTRUMENT_FALLBACK_COLOR,
-  type MixerContext,
-} from 'src/tracks';
+// `TrackKey` + `trackKeyEq` live in `src/tracks.ts`. Re-exported here so
+// existing callers keep working without an import churn.
+import { buildDebugBundleTrackOrder, trackKeyEq, type TrackKey } from 'src/tracks';
 export type { TrackKey };
 export { trackKeyEq };
 
-/**
- * Default top-to-bottom mixer ordering for drum-instrument kinds when
- * the user hasn't manually reordered rows: top-of-kit cymbals first,
- * then drums from high to low, with kick last. `custom` falls to the
- * very bottom. Drives `collectJotPitches`, so both `syncTrackOrder` and
- * the debug-bundle / ParaDB track-order layouts adopt it.
- */
-const DEFAULT_MIXER_KIND_ORDER: readonly DrumInstrumentKind[] = [
-  'crash',
-  'ride',
-  'hihat',
-  'tom',
-  'snare',
-  'kick',
-  'custom',
-];
-
-/**
- * Best-effort `DrumInstrumentKind` from an instrument's display name.
- * Used to recover a sensible mixer position for rows whose loader
- * stamped `kind: 'custom'` despite a recognisable name; e.g. ParaDB
- * fallback-allocated pitches (a `BP_Snare2_C` not in our class table
- * still arrives with `name = 'BP_Snare2_C'`). Substring-based; the
- * patterns mirror the names produced by the RLRR / MIDI / transcriber
- * loaders.
- */
-function inferKindFromInstrumentName(name: string | undefined): DrumInstrumentKind | undefined {
-  if (!name) return undefined;
-  const n = name.toLowerCase();
-  if (/\bkick\b|\bbass\s*drum\b/.test(n)) return 'kick';
-  if (/\bsnare\b/.test(n)) return 'snare';
-  if (/hi.?hat/.test(n)) return 'hihat';
-  if (/\bride\b/.test(n)) return 'ride';
-  if (/\bcrash\b|\bchina\b|\bsplash\b/.test(n)) return 'crash';
-  if (/\bfloor\s*tom\b|\btom\b/.test(n)) return 'tom';
-  return undefined;
-}
-
-/**
- * Floor toms render below regular toms within the tom group. Detected
- * from the instrument name; pitch letter `f` is the GM importer's
- * convention for the floor tom (see `src/instruments.ts`) so it counts
- * even when the instrument has no display name.
- */
-function isFloorTom(instrument: Instrument | undefined, pitch: string): boolean {
-  if (instrument?.name && /floor/i.test(instrument.name)) return true;
-  return pitch === 'f';
-}
-
-/**
- * Sort tuple for the default mixer order: [kind rank, intra-kind rank,
- * pitch]. Kind comes from the parsed `Instrument` when available;
- * `kind: 'custom'` falls back to a name heuristic, then to the pitch
- * letter's default kind (so a raw DSL jot without `instrumentMapping`
- * still lands on the canonical layout). Intra-kind rank only matters
- * for toms today (regular before floor).
- */
-function defaultMixerSortKey(
-  pitch: string,
-  instrument: Instrument | undefined
-): [number, number, string] {
-  let kind: DrumInstrumentKind = instrument?.kind ?? 'custom';
-  if (kind === 'custom') {
-    const fromName = inferKindFromInstrumentName(instrument?.name);
-    if (fromName) kind = fromName;
-  }
-  if (kind === 'custom') {
-    const fromLetter = defaultKindForPitch(pitch);
-    if (fromLetter !== 'custom') kind = fromLetter;
-  }
-  const kindRank = DEFAULT_MIXER_KIND_ORDER.indexOf(kind);
-  const subRank = kind === 'tom' && isFloorTom(instrument, pitch) ? 1 : 0;
-  return [kindRank === -1 ? DEFAULT_MIXER_KIND_ORDER.length : kindRank, subRank, pitch];
-}
-
-/**
- * Pitches that appear anywhere in the rendered jot, sorted into the
- * default mixer ordering (see {@link DEFAULT_MIXER_KIND_ORDER}). A
- * pitch that shows up in two voices is listed once at its first
- * appearance; ordering reads each pitch's resolved `Instrument` (from
- * the first bar that has a track for it) so ParaDB / debug-bundle
- * loads, whose instrument names carry the kind even when the pitch
- * letter has been fallback-allocated, still land on the canonical
- * layout.
- *
- * Reads the zoom-invariant structural cache (not `jot.resolved`) so the
- * mixer-order reaction that wraps this doesn't re-evaluate on every
- * wheel tick; pitch identity is a function of the source DSL, not the
- * pixel layout.
- */
-export function collectJotPitches(jot: RenderedJot | undefined): string[] {
-  if (!jot) return [];
-  const out: string[] = [];
-  const instrumentByPitch = new Map<string, Instrument>();
-  for (const voice of jot.structure.voices) {
-    for (const p of voice.pitches) {
-      if (!out.includes(p)) out.push(p);
-    }
-    for (const bar of voice.bars) {
-      for (const [pitch, track] of Object.entries(bar.tracks)) {
-        if (!instrumentByPitch.has(pitch)) {
-          instrumentByPitch.set(pitch, track.instrument);
-        }
-      }
-    }
-  }
-  out.sort((a, b) => {
-    const ka = defaultMixerSortKey(a, instrumentByPitch.get(a));
-    const kb = defaultMixerSortKey(b, instrumentByPitch.get(b));
-    if (ka[0] !== kb[0]) return ka[0] - kb[0];
-    if (ka[1] !== kb[1]) return ka[1] - kb[1];
-    return ka[2].localeCompare(kb[2]);
-  });
-  return out;
-}
+// Mixer ordering helpers + `collectJotPitches` + volume helpers moved to
+// `MixerStore`. Re-exported so existing importers keep working
+// (`collectJotPitches` / `clampVolume` are also imported below for the
+// transitional mixer orchestration still on this store).
+export { VOLUME_STEP } from './stores/mixer_store';
+export { collectJotPitches, clampVolume };
 
 export class JotViewStore {
-  /** Horizontal zoom multiplier; 1.0 = `BASE_BAR_WIDTH` pixels per bar. */
-  zoom: number = 1;
-  /** DSL pitches the user has muted via the row-gutter M button. */
-  mutedPitches: Set<string> = new Set();
-  /**
-   * DSL pitches the user has soloed. When non-empty, ONLY these rows
-   * are audible; this and `mutedPitches` are pushed to the player via
-   * an autorun so toggles take effect live during playback.
-   */
-  soloedPitches: Set<string> = new Set();
-  /** Audio-track ids the user has muted via the gutter M button. */
-  mutedAudioTracks: Set<AudioTrackId> = new Set();
-  /** Soloed audio-track ids; same semantics as `soloedPitches`. */
-  soloedAudioTracks: Set<AudioTrackId> = new Set();
-  /**
-   * Section-master mute / solo. These act on the whole bus, not by
-   * editing the per-row M/S sets; see {@link isAudioSectionAudible} and
-   * {@link isDrumSectionAudible} for the audibility formula and
-   * `JotPlayer.setAudioMasterAudible` / `.setDrumMasterAudible` for the
-   * audio-graph side. Master-solo is folded into {@link soloActive} so
-   * it participates in the same cross-domain "if anything is soloed,
-   * non-soloed rows fall silent" rule the per-row solos already follow.
-   */
-  audioMasterMuted: boolean = false;
-  drumMasterMuted: boolean = false;
-  audioMasterSoloed: boolean = false;
-  drumMasterSoloed: boolean = false;
-  /**
-   * Per-row volume faders, 0..1 (1 = full). Sparse: a row absent from
-   * the map plays at full volume. Pitch volumes scale note velocity in
-   * the scheduler; audio-track volumes scale the track's GainNode.
-   */
-  pitchVolumes: Map<string, number> = new Map();
-  audioTrackVolumes: Map<AudioTrackId, number> = new Map();
-  /**
-   * Per-pitch {@link InstrumentTrack} view-models keyed by DSL pitch
-   * letter. Each holds the user's per-instrument note-colour override
-   * (sparse; `_color === undefined` falls back to the jot's palette
-   * default). Survives jot reloads so a customisation made on one song
-   * persists onto matching pitches in the next song; a kept-in-sync
-   * reaction drops entries for pitches no longer present in any
-   * loaded jot (see the constructor reaction).
-   *
-   * Audio-track colour overrides live on the {@link AudioTrack}
-   * instance itself; they're not stored here.
-   */
-  instrumentTracks: Map<string, InstrumentTrack> = new Map();
-  /**
-   * User-customizable order of mixer rows. Each entry is either a
-   * loaded audio track id or a DSL pitch letter; the mixer renders rows
-   * top-to-bottom in this exact order, with audio and drum-instrument
-   * rows freely interleavable.
-   *
-   * Kept in sync with the live set of audio tracks (added via
-   * {@link loadAudioTrack}, removed via {@link clearAudioTrack}) and
-   * the pitches in the current jot through a reaction in the
-   * constructor — entries that no longer correspond to anything are
-   * dropped, new audio tracks append after the last audio entry (or to
-   * the top if none), and new pitches append at the end so manual
-   * reorderings survive reloads.
-   */
-  trackOrder: TrackKey[] = [];
+  // Mute/solo/volume, masters, instrumentTracks, trackOrder, split
+  // statuses + their computeds moved to `MixerStore` (this.mixer).
   // Debug-bundle + per-note provenance + DebugPanel chrome moved to
   // `ProvenanceStore` (this.provenance).
   // Playhead-follow + transport state moved to `PlaybackStore`
@@ -337,6 +137,7 @@ export class JotViewStore {
   readonly lyricsAlign: LyricsAlignStore;
   readonly playback: PlaybackStore;
   readonly viewport: ViewportStore;
+  readonly mixer: MixerStore;
 
   constructor(
     document: DocumentStore,
@@ -345,7 +146,8 @@ export class JotViewStore {
     provenance: ProvenanceStore,
     lyricsAlign: LyricsAlignStore,
     playback: PlaybackStore,
-    viewport: ViewportStore
+    viewport: ViewportStore,
+    mixer: MixerStore
   ) {
     this.document = document;
     this.settings = settings;
@@ -354,6 +156,7 @@ export class JotViewStore {
     this.lyricsAlign = lyricsAlign;
     this.playback = playback;
     this.viewport = viewport;
+    this.mixer = mixer;
     makeAutoObservable(this, {
       transcribeController: false,
       lyricsAlignControllers: false,
@@ -364,12 +167,13 @@ export class JotViewStore {
       lyricsAlign: false,
       playback: false,
       viewport: false,
+      mixer: false,
     });
-    // Wire ourselves in as the player's mixer context so freshly-
+    // Wire the mixer store in as the player's mixer context so freshly-
     // constructed AudioTracks can resolve grouped-instrument colour
     // inheritance. Done before any reactions fire so loadAudioTrack
     // calls made during the same tick see a populated context.
-    jotPlayer.attachMixerContext(this as MixerContext);
+    jotPlayer.attachMixerContext(this.mixer);
 
     // Prune instrument-track view-models for pitches no longer present
     // in the active jot. The override is store-owned and survives jot
@@ -379,10 +183,10 @@ export class JotViewStore {
     // a long session. `fireImmediately` runs the prune once on boot
     // (a no-op when the map is empty).
     reaction(
-      () => new Set(this.jotPitches),
+      () => new Set(this.mixer.jotPitches),
       (pitches) => {
-        for (const p of Array.from(this.instrumentTracks.keys())) {
-          if (!pitches.has(p)) this.instrumentTracks.delete(p);
+        for (const p of Array.from(this.mixer.instrumentTracks.keys())) {
+          if (!pitches.has(p)) this.mixer.instrumentTracks.delete(p);
         }
       },
       { fireImmediately: true, equals: comparer.structural }
@@ -414,7 +218,7 @@ export class JotViewStore {
     // after the initial seed; see the `pitchFilter` getter's doc
     // comment.
     reaction(
-      () => this.pitchFilter,
+      () => this.mixer.pitchFilter,
       (filter) => jotPlayer.setFilter(filter),
       { fireImmediately: true, equals: comparer.structural }
     );
@@ -425,7 +229,7 @@ export class JotViewStore {
     // (`setAudioTrackFilter` reads/writes `currentAudioTrackFilter`), so this is a
     // `reaction` for the same reason.
     reaction(
-      () => this.audioTrackFilter,
+      () => this.mixer.audioTrackFilter,
       (filter) => jotPlayer.setAudioTrackFilter(filter),
       { fireImmediately: true, equals: comparer.structural }
     );
@@ -433,12 +237,12 @@ export class JotViewStore {
     // and master solo can flip the bus gain to 0 without touching the
     // per-row M/S sets. fireImmediately to seed the initial unmuted state.
     reaction(
-      () => this.isAudioSectionAudible,
+      () => this.mixer.isAudioSectionAudible,
       (audible) => jotPlayer.setAudioMasterAudible(audible),
       { fireImmediately: true }
     );
     reaction(
-      () => this.isDrumSectionAudible,
+      () => this.mixer.isDrumSectionAudible,
       (audible) => jotPlayer.setDrumMasterAudible(audible),
       { fireImmediately: true }
     );
@@ -468,7 +272,7 @@ export class JotViewStore {
     reaction(
       () => ({
         audioIds: Array.from(jotPlayer.audioTracks.keys()),
-        pitches: this.jotPitches,
+        pitches: this.mixer.jotPitches,
         lyricsIds: lyricsStore.trackIds.slice(),
       }),
       ({ audioIds, pitches, lyricsIds }) => this.syncTrackOrder(audioIds, pitches, lyricsIds),
@@ -504,7 +308,7 @@ export class JotViewStore {
       ...audioIds.map((id) => ({ kind: 'audio' as const, id })),
       ...pitches.map((pitch) => ({ kind: 'instrument' as const, pitch })),
     ];
-    const next: TrackKey[] = this.trackOrder.filter((k) => wanted.some((w) => trackKeyEq(w, k)));
+    const next: TrackKey[] = this.mixer.trackOrder.filter((k) => wanted.some((w) => trackKeyEq(w, k)));
     for (const w of wanted) {
       if (next.some((k) => trackKeyEq(k, w))) continue;
       if (w.kind === 'lyrics') {
@@ -550,14 +354,14 @@ export class JotViewStore {
     // don't pay an unnecessary re-render but a real grouping change
     // still propagates.
     if (
-      next.length === this.trackOrder.length &&
+      next.length === this.mixer.trackOrder.length &&
       next.every(
-        (k, i) => trackKeyEq(k, this.trackOrder[i]) && k.groupId === this.trackOrder[i].groupId
+        (k, i) => trackKeyEq(k, this.mixer.trackOrder[i]) && k.groupId === this.mixer.trackOrder[i].groupId
       )
     ) {
       return;
     }
-    this.trackOrder = next;
+    this.mixer.trackOrder = next;
   }
 
   /**
@@ -582,10 +386,10 @@ export class JotViewStore {
    * without any explicit "leave group" / "join group" UI.
    */
   moveTrack(fromIdx: number, toIdx: number): void {
-    if (fromIdx < 0 || fromIdx >= this.trackOrder.length) return;
-    const clamped = Math.max(0, Math.min(this.trackOrder.length, toIdx));
+    if (fromIdx < 0 || fromIdx >= this.mixer.trackOrder.length) return;
+    const clamped = Math.max(0, Math.min(this.mixer.trackOrder.length, toIdx));
     if (clamped === fromIdx || clamped === fromIdx + 1) return;
-    const next = this.trackOrder.slice();
+    const next = this.mixer.trackOrder.slice();
     const [moved] = next.splice(fromIdx, 1);
     // After the removal a `toIdx` that was past the source shifts down
     // by one; before the source it's unaffected.
@@ -607,220 +411,71 @@ export class JotViewStore {
       repositioned = { kind: 'lyrics', id: moved.id, groupId: newGroupId };
     }
     next.splice(adjusted, 0, repositioned);
-    this.trackOrder = next;
-  }
-
-  /**
-   * Solo is one global mode across both the pitch and audio-track domains: any
-   * soloed row (drum *or* music) puts every non-soloed row; in either
-   * domain; into the "solo-excluded" state. Without this, soloing a
-   * drum to practise it would leave the backing music playing. The two
-   * section-master solos count too, so soloing the Drums master silences
-   * the Audio section even when no individual rows are soloed.
-   */
-  get soloActive(): boolean {
-    return (
-      this.soloedPitches.size > 0 ||
-      this.soloedAudioTracks.size > 0 ||
-      this.audioMasterSoloed ||
-      this.drumMasterSoloed
-    );
-  }
-
-  /**
-   * Whether the audio section's bus is currently audible. Master mute
-   * always wins; under an active solo the section is audible only if it
-   * is master-soloed OR has at least one soloed row. Pushed to
-   * {@link JotPlayer.setAudioMasterAudible} via a constructor reaction.
-   */
-  get isAudioSectionAudible(): boolean {
-    if (this.audioMasterMuted) return false;
-    if (!this.soloActive) return true;
-    return this.audioMasterSoloed || this.soloedAudioTracks.size > 0;
-  }
-
-  /** Mirror of {@link isAudioSectionAudible} for the drum section. */
-  get isDrumSectionAudible(): boolean {
-    if (this.drumMasterMuted) return false;
-    if (!this.soloActive) return true;
-    return this.drumMasterSoloed || this.soloedPitches.size > 0;
-  }
-
-  /**
-   * Live {@link PlayerFilter} view onto the per-pitch mute/solo/volume
-   * state. Sets and Maps are *snapshotted* on each read (small entries;
-   * sparse mute/solo sets, one entry per pitch with a fader nudge), so
-   * the downstream `reaction(..., comparer.structural)` that pushes this
-   * to the player can actually detect changes. Sharing the store's live
-   * Set/Map references here would defeat the comparer: the prev and next
-   * cached values both point to the same mutated instance, so a deep-
-   * equal walk sees no diff and the reaction never refires; mute/solo
-   * toggles update the UI but the player never learns about them.
-   */
-  get pitchFilter(): PlayerFilter {
-    return {
-      mutedPitches: new Set(this.mutedPitches),
-      soloedPitches: new Set(this.soloedPitches),
-      soloActive: this.soloActive,
-      sectionMasterMuted: this.drumMasterMuted,
-      sectionMasterSoloed: this.drumMasterSoloed,
-      volumes: new Map(this.pitchVolumes),
-    };
-  }
-
-  /** Mirror of {@link pitchFilter} for the audio-track domain. */
-  get audioTrackFilter(): AudioTrackFilter {
-    return {
-      mutedAudioTracks: new Set(this.mutedAudioTracks),
-      soloedAudioTracks: new Set(this.soloedAudioTracks),
-      soloActive: this.soloActive,
-      sectionMasterMuted: this.audioMasterMuted,
-      sectionMasterSoloed: this.audioMasterSoloed,
-      volumes: new Map(this.audioTrackVolumes),
-    };
-  }
-
-  /**
-   * Pitches that appear anywhere in the rendered jot, in the default
-   * mixer ordering. Thin wrapper over {@link collectJotPitches} so the
-   * `syncTrackOrder` reaction and any future consumer tracks a single
-   * MobX-memoised computed rather than re-walking the jot structure on
-   * every read.
-   */
-  get jotPitches(): readonly string[] {
-    return collectJotPitches(this.document.currentJot);
-  }
-
-  /**
-   * Drum-pitch lane order derived from {@link trackOrder}, dropping audio
-   * + lyrics rows and keeping only pitches in the user's mixer order.
-   * Pattern brackets in {@link MixerView} use this to know whether a
-   * given row is the topmost / bottommost participant of a pattern span
-   * so the bracket reads as one continuous outline across rows.
-   */
-  get pitchOrder(): readonly string[] {
-    return this.trackOrder.flatMap((k) => (k.kind === 'instrument' ? [k.pitch] : []));
-  }
-
-  /**
-   * Index of the topmost instrument row in {@link trackOrder}. The mixer
-   * hosts score-wide chrome (tuplet brackets, lead-in label) on that row
-   * because it belongs to the score as a whole, not to any one
-   * instrument. `-1` when no instrument row exists yet.
-   */
-  get firstInstrumentIdx(): number {
-    return this.trackOrder.findIndex((k) => k.kind === 'instrument');
+    this.mixer.trackOrder = next;
   }
 
   toggleAudioMasterMute() {
-    this.audioMasterMuted = !this.audioMasterMuted;
+    this.mixer.audioMasterMuted = !this.mixer.audioMasterMuted;
   }
 
   toggleDrumMasterMute() {
-    this.drumMasterMuted = !this.drumMasterMuted;
+    this.mixer.drumMasterMuted = !this.mixer.drumMasterMuted;
   }
 
   /** Enabling solo clears the matching master-mute so the section can
    * actually be heard; mirrors `toggleSolo` for per-row state. */
   toggleAudioMasterSolo() {
-    if (this.audioMasterSoloed) {
-      this.audioMasterSoloed = false;
+    if (this.mixer.audioMasterSoloed) {
+      this.mixer.audioMasterSoloed = false;
     } else {
-      this.audioMasterSoloed = true;
-      this.audioMasterMuted = false;
+      this.mixer.audioMasterSoloed = true;
+      this.mixer.audioMasterMuted = false;
     }
   }
 
   toggleDrumMasterSolo() {
-    if (this.drumMasterSoloed) {
-      this.drumMasterSoloed = false;
+    if (this.mixer.drumMasterSoloed) {
+      this.mixer.drumMasterSoloed = false;
     } else {
-      this.drumMasterSoloed = true;
-      this.drumMasterMuted = false;
+      this.mixer.drumMasterSoloed = true;
+      this.mixer.drumMasterMuted = false;
     }
   }
 
   toggleMute(pitch: string) {
-    if (this.mutedPitches.has(pitch)) this.mutedPitches.delete(pitch);
-    else this.mutedPitches.add(pitch);
+    if (this.mixer.mutedPitches.has(pitch)) this.mixer.mutedPitches.delete(pitch);
+    else this.mixer.mutedPitches.add(pitch);
   }
 
   toggleSolo(pitch: string) {
-    if (this.soloedPitches.has(pitch)) {
-      this.soloedPitches.delete(pitch);
+    if (this.mixer.soloedPitches.has(pitch)) {
+      this.mixer.soloedPitches.delete(pitch);
     } else {
-      this.soloedPitches.add(pitch);
-      this.mutedPitches.delete(pitch);
+      this.mixer.soloedPitches.add(pitch);
+      this.mixer.mutedPitches.delete(pitch);
     }
-  }
-
-  /**
-   * Whether a given drum pitch is currently audible under the live
-   * mute / solo / volume state. `computedFn` memoises per-argument, so
-   * the per-row gutter observer for pitch `k` only re-renders when `k`'s
-   * audibility actually flips; toggling mute on pitch `s` doesn't pull
-   * in `k`'s observer the way a method call would.
-   */
-  isPitchAudible = computedFn((pitch: string): boolean => {
-    return isAudibleUnder(pitch, this.pitchFilter);
-  });
-
-  pitchVolume(pitch: string): number {
-    return this.pitchVolumes.get(pitch) ?? 1;
   }
 
   setPitchVolume(pitch: string, v: number) {
-    this.pitchVolumes.set(pitch, clampVolume(v));
+    this.mixer.pitchVolumes.set(pitch, clampVolume(v));
   }
 
   toggleAudioTrackMute(id: AudioTrackId) {
-    if (this.mutedAudioTracks.has(id)) this.mutedAudioTracks.delete(id);
-    else this.mutedAudioTracks.add(id);
+    if (this.mixer.mutedAudioTracks.has(id)) this.mixer.mutedAudioTracks.delete(id);
+    else this.mixer.mutedAudioTracks.add(id);
   }
 
   toggleAudioTrackSolo(id: AudioTrackId) {
-    if (this.soloedAudioTracks.has(id)) {
-      this.soloedAudioTracks.delete(id);
+    if (this.mixer.soloedAudioTracks.has(id)) {
+      this.mixer.soloedAudioTracks.delete(id);
     } else {
-      this.soloedAudioTracks.add(id);
-      this.mutedAudioTracks.delete(id);
+      this.mixer.soloedAudioTracks.add(id);
+      this.mixer.mutedAudioTracks.delete(id);
     }
   }
 
-  /** Mirror of {@link isPitchAudible} for the audio-track domain. */
-  isAudioTrackAudible = computedFn((id: AudioTrackId): boolean => {
-    return isAudioTrackAudibleUnder(id, this.audioTrackFilter);
-  });
-
-  audioTrackVolume(id: AudioTrackId): number {
-    return this.audioTrackVolumes.get(id) ?? 1;
-  }
-
   setAudioTrackVolume(id: AudioTrackId, v: number) {
-    this.audioTrackVolumes.set(id, clampVolume(v));
-  }
-
-  /**
-   * Lazily-constructed {@link InstrumentTrack} for a DSL pitch. The
-   * track's fallback closure reads the active jot's palette default for
-   * the pitch, so a jot reload that re-shuffles palette slots updates
-   * unfilled tracks automatically. Caches the instance in
-   * {@link instrumentTracks} so the picker reads/writes the same MobX
-   * observable from every callsite; the constructor reaction prunes
-   * dead entries when pitches leave every loaded jot.
-   *
-   * Also serves the {@link MixerContext} the player's AudioTrack
-   * colour resolution calls back into.
-   */
-  getInstrumentTrack(pitch: string): InstrumentTrack {
-    let track = this.instrumentTracks.get(pitch);
-    if (track) return track;
-    track = new InstrumentTrack(
-      pitch,
-      () => this.document.currentJot?.defaultPaletteColorFor(pitch) ?? INSTRUMENT_FALLBACK_COLOR
-    );
-    this.instrumentTracks.set(pitch, track);
-    return track;
+    this.mixer.audioTrackVolumes.set(id, clampVolume(v));
   }
 
   /**
@@ -855,34 +510,22 @@ export class JotViewStore {
     // a phantom solo silencing everything else. The colour override
     // lives on the AudioTrack instance itself and is freed alongside it
     // when the player drops the track.
-    this.mutedAudioTracks.delete(id);
-    this.soloedAudioTracks.delete(id);
-    this.audioTrackVolumes.delete(id);
+    this.mixer.mutedAudioTracks.delete(id);
+    this.mixer.soloedAudioTracks.delete(id);
+    this.mixer.audioTrackVolumes.delete(id);
   }
 
-  /**
-   * Per-track stem-split status; read by the audio-track row to render a
-   * loading spinner alongside the label while a split is in flight.
-   * Sparse map: a row absent from this map renders without a spinner.
-   *
-   * Today the actual server-side wiring (POST the track's PCM to the
-   * `stems_all` / `stems_per` stage) is still deferred; the in-progress
-   * state is plumbed through here so future wiring just brackets its
-   * work with {@link beginAudioTrackSplit} / {@link endAudioTrackSplit}
-   * and the existing per-row UI picks it up unchanged.
-   */
-  audioTrackSplitStatuses: Map<AudioTrackId, AudioTrackSplitStatus> = new Map();
 
   /** Mark an audio track as currently being split. Drives the per-row
    *  spinner; safe to call multiple times (latest call wins). */
   beginAudioTrackSplit(id: AudioTrackId, kind: 'mix' | 'pieces'): void {
-    this.audioTrackSplitStatuses.set(id, { phase: 'splitting', kind });
+    this.mixer.audioTrackSplitStatuses.set(id, { phase: 'splitting', kind });
   }
 
   /** Clear the splitting status for an audio track once the work has
    *  finished (success, failure, or cancellation). */
   endAudioTrackSplit(id: AudioTrackId): void {
-    this.audioTrackSplitStatuses.delete(id);
+    this.mixer.audioTrackSplitStatuses.delete(id);
   }
 
   /**
@@ -924,9 +567,9 @@ export class JotViewStore {
    * set on one song silently bleeds onto the next song's matching rows
    * when a new source replaces the current one. */
   resetPitchMixer(): void {
-    this.mutedPitches.clear();
-    this.soloedPitches.clear();
-    this.pitchVolumes.clear();
+    this.mixer.mutedPitches.clear();
+    this.mixer.soloedPitches.clear();
+    this.mixer.pitchVolumes.clear();
   }
 
   setJot(jot: RenderedJot | undefined) {
@@ -1457,7 +1100,7 @@ export class JotViewStore {
       );
       runInAction(() => {
         for (const { id, defaultMuted } of resolved) {
-          if (id && defaultMuted) this.mutedAudioTracks.add(id);
+          if (id && defaultMuted) this.mixer.mutedAudioTracks.add(id);
         }
       });
     });
@@ -1648,7 +1291,7 @@ export class JotViewStore {
     // mutation so the mixer renders once at the end instead of once
     // per loaded track.
     runInAction(() => {
-      for (const id of toMute) this.mutedAudioTracks.add(id);
+      for (const id of toMute) this.mixer.mutedAudioTracks.add(id);
       this.applyDebugBundleTrackOrder(loadedByKey);
     });
 
@@ -1669,7 +1312,7 @@ export class JotViewStore {
    */
   private applyDebugBundleTrackOrder(loadedByKey: ReadonlyMap<string, AudioTrackId>): void {
     const pitches = collectJotPitches(this.document.currentJot);
-    this.trackOrder = buildDebugBundleTrackOrder(pitches, loadedByKey);
+    this.mixer.trackOrder = buildDebugBundleTrackOrder(pitches, loadedByKey);
   }
 
   /** Resize the {@link DebugPanel}. Clamped so it can't shrink past the

@@ -7,6 +7,7 @@ import { GridLineSettings, JotViewStore } from './store';
 import { ProvenanceStore } from './stores/provenance_store';
 import { LyricsAlignStore } from './stores/lyrics_align_store';
 import { ViewportStore } from './stores/viewport_store';
+import { MixerStore } from './stores/mixer_store';
 import { JotViewerPresenter } from './jot_viewer_presenter';
 
 /**
@@ -45,6 +46,13 @@ export const LyricsAlignStoreContext = React.createContext<LyricsAlignStore | nu
  * and `WindowedLyricLines`). `null` outside the view.
  */
 export const ViewportStoreContext = React.createContext<ViewportStore | null>(null);
+
+/**
+ * Routes the {@link MixerStore} to deep consumers that read mixer state
+ * (today: `MixerView`'s row order, the per-row audio-split status, the
+ * per-instrument colour view-models). `null` outside the view.
+ */
+export const MixerStoreContext = React.createContext<MixerStore | null>(null);
 
 /**
  * Routes the {@link JotViewerPresenter} to deep consumers that need to

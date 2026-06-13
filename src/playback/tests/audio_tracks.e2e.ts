@@ -136,7 +136,7 @@ test('mute/solo on a track flips audibility live', async ({ page }) => {
 
   // Assert via the store's public audibility API, not player internals.
   const audible = (id: string) =>
-    page.evaluate((tid) => (window as any).drumjot.store.isAudioTrackAudible(tid), id);
+    page.evaluate((tid) => (window as any).drumjot.mixer.isAudioTrackAudible(tid), id);
 
   await expect.poll(() => audible(a)).toBe(true);
   await page.getByTestId(`audio-track-mute-${a}`).click();

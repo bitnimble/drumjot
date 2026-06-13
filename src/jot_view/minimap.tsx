@@ -36,6 +36,7 @@ import { WAVEFORM_PAINT_COLOR } from './score';
 import { JotViewStore } from './store';
 import { DocumentStore } from './stores/document_store';
 import { ViewportStore } from './stores/viewport_store';
+import { MixerStore } from './stores/mixer_store';
 import { JotViewerPresenter } from './jot_viewer_presenter';
 
 const NOTE_STRIP_H = 16;
@@ -73,11 +74,13 @@ export const Minimap = observer(
     store,
     documentStore,
     viewport,
+    mixer,
     presenter,
   }: {
     store: JotViewStore;
     documentStore: DocumentStore;
     viewport: ViewportStore;
+    mixer: MixerStore;
     presenter: JotViewerPresenter;
   }) => {
     const jot = documentStore.currentJot;
@@ -141,7 +144,7 @@ export const Minimap = observer(
   // toggle reflects in the waveform immediately and a fully-muted bus
   // renders empty rather than misleading the operator.
   const audibleAudioTrackIds = Array.from(jotPlayer.audioTracks.keys()).filter((id) =>
-    store.isAudioTrackAudible(id)
+    mixer.isAudioTrackAudible(id)
   );
   const audibleAudioTrackIdsKey = audibleAudioTrackIds.join(',');
   const drumsT0Sec = jotPlayer.drumsT0Sec;
@@ -237,8 +240,8 @@ export const Minimap = observer(
             // waveform path. Tracking `isPitchAudible` here subscribes
             // the reaction to the underlying mute/solo observables, so
             // a toggle updates the ticks live.
-            if (!store.isPitchAudible(pitch)) continue;
-            const color = store.getInstrumentTrack(pitch).color || track.color;
+            if (!mixer.isPitchAudible(pitch)) continue;
+            const color = mixer.getInstrumentTrack(pitch).color || track.color;
             for (const note of track.notes) {
               const frac = note.beat / sb.beats;
               out.push({ x: layout.x + frac * layout.width, color });

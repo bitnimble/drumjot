@@ -20,6 +20,7 @@ import {
   JotViewStoreContext,
   JotViewerPresenterContext,
   LyricsAlignStoreContext,
+  MixerStoreContext,
   NoteProvenanceContext,
   ProvenanceStoreContext,
   ViewportStoreContext,
@@ -47,6 +48,7 @@ import { ProvenanceStore } from './jot_view/stores/provenance_store';
 import { LyricsAlignStore } from './jot_view/stores/lyrics_align_store';
 import { PlaybackStore } from './jot_view/stores/playback_store';
 import { ViewportStore } from './jot_view/stores/viewport_store';
+import { MixerStore } from './jot_view/stores/mixer_store';
 import { JotViewerPresenter } from './jot_view/jot_viewer_presenter';
 import { RecentTranscriptionsPicker } from './jot_view/recent_transcriptions';
 import { ToastContainer } from './jot_view/toast_container';
@@ -72,6 +74,7 @@ type CreateJotViewResult = {
   lyricsAlign: LyricsAlignStore;
   playback: PlaybackStore;
   viewport: ViewportStore;
+  mixer: MixerStore;
   /** Catch-all presenter holding the actions/orchestration over the
    *  data-only stores. */
   presenter: JotViewerPresenter;
@@ -86,6 +89,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   const lyricsAlign = new LyricsAlignStore();
   const playback = new PlaybackStore(documentStore);
   const viewport = new ViewportStore(documentStore);
+  const mixer = new MixerStore(documentStore);
   const presenter = new JotViewerPresenter({
     settings,
     transcribe,
@@ -102,7 +106,8 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     provenance,
     lyricsAlign,
     playback,
-    viewport
+    viewport,
+    mixer
   );
   if (options.examples) store.setExamples(options.examples);
   const selection = new SelectionStore(store);
@@ -271,53 +276,53 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     // re-render regardless of the bundle's identity.
     const voiceControls: VoiceControls = React.useMemo(
       () => ({
-        mutedPitches: store.mutedPitches,
-        soloedPitches: store.soloedPitches,
-        isPitchAudible: store.isPitchAudible,
-        volumeFor: (pitch) => store.pitchVolume(pitch),
+        mutedPitches: mixer.mutedPitches,
+        soloedPitches: mixer.soloedPitches,
+        isPitchAudible: mixer.isPitchAudible,
+        volumeFor: (pitch) => mixer.pitchVolume(pitch),
         onSetVolume: (pitch, v) => store.setPitchVolume(pitch, v),
         onToggleMute: (pitch) => store.toggleMute(pitch),
         onToggleSolo: (pitch) => store.toggleSolo(pitch),
-        masterMuted: store.drumMasterMuted,
-        masterSoloed: store.drumMasterSoloed,
-        masterAudible: store.isDrumSectionAudible,
+        masterMuted: mixer.drumMasterMuted,
+        masterSoloed: mixer.drumMasterSoloed,
+        masterAudible: mixer.isDrumSectionAudible,
         onToggleMasterMute: () => store.toggleDrumMasterMute(),
         onToggleMasterSolo: () => store.toggleDrumMasterSolo(),
       }),
       // eslint-disable-next-line react-hooks/exhaustive-deps -- observable snapshots; observer wrapper rebuilds when any of these change.
       [
-        store.mutedPitches,
-        store.soloedPitches,
-        store.drumMasterMuted,
-        store.drumMasterSoloed,
-        store.isDrumSectionAudible,
+        mixer.mutedPitches,
+        mixer.soloedPitches,
+        mixer.drumMasterMuted,
+        mixer.drumMasterSoloed,
+        mixer.isDrumSectionAudible,
       ]
     );
     const audioTrackControls: AudioTrackControls = React.useMemo(
       () => ({
-        mutedAudioTracks: store.mutedAudioTracks,
-        soloedAudioTracks: store.soloedAudioTracks,
-        isAudioTrackAudible: store.isAudioTrackAudible,
-        volumeFor: (id) => store.audioTrackVolume(id),
+        mutedAudioTracks: mixer.mutedAudioTracks,
+        soloedAudioTracks: mixer.soloedAudioTracks,
+        isAudioTrackAudible: mixer.isAudioTrackAudible,
+        volumeFor: (id) => mixer.audioTrackVolume(id),
         onSetVolume: (id, v) => store.setAudioTrackVolume(id, v),
         onToggleMute: (id) => store.toggleAudioTrackMute(id),
         onToggleSolo: (id) => store.toggleAudioTrackSolo(id),
         onClear: (id) => store.clearAudioTrack(id),
         onSplitFromMix: (id) => store.splitAudioTrackFromMix(id),
         onSplitDrumPieces: (id) => store.splitAudioTrackDrumPieces(id),
-        masterMuted: store.audioMasterMuted,
-        masterSoloed: store.audioMasterSoloed,
-        masterAudible: store.isAudioSectionAudible,
+        masterMuted: mixer.audioMasterMuted,
+        masterSoloed: mixer.audioMasterSoloed,
+        masterAudible: mixer.isAudioSectionAudible,
         onToggleMasterMute: () => store.toggleAudioMasterMute(),
         onToggleMasterSolo: () => store.toggleAudioMasterSolo(),
       }),
       // eslint-disable-next-line react-hooks/exhaustive-deps -- observable snapshots; observer wrapper rebuilds when any of these change.
       [
-        store.mutedAudioTracks,
-        store.soloedAudioTracks,
-        store.audioMasterMuted,
-        store.audioMasterSoloed,
-        store.isAudioSectionAudible,
+        mixer.mutedAudioTracks,
+        mixer.soloedAudioTracks,
+        mixer.audioMasterMuted,
+        mixer.audioMasterSoloed,
+        mixer.isAudioSectionAudible,
       ]
     );
 
@@ -327,6 +332,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
         <ProvenanceStoreContext.Provider value={provenance}>
         <LyricsAlignStoreContext.Provider value={lyricsAlign}>
         <ViewportStoreContext.Provider value={viewport}>
+        <MixerStoreContext.Provider value={mixer}>
         <SelectionContext.Provider value={selection}>
           <NoteProvenanceContext.Provider value={provenanceContextValue}>
             <GridLineSettingsContext.Provider value={settings.gridLines}>
@@ -392,7 +398,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                         onMouseUp={selection.endSelection}
                         onSeek={onSeek}
                         onZoomBy={onZoomBy}
-                        trackOrder={store.trackOrder}
+                        trackOrder={mixer.trackOrder}
                         onMoveTrack={onMoveTrack}
                         voiceControls={voiceControls}
                         audioTrackControls={audioTrackControls}
@@ -410,6 +416,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       store={store}
                       documentStore={documentStore}
                       viewport={viewport}
+                      mixer={mixer}
                       presenter={presenter}
                     />
                     {jot && (
@@ -441,6 +448,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
             </GridLineSettingsContext.Provider>
           </NoteProvenanceContext.Provider>
         </SelectionContext.Provider>
+        </MixerStoreContext.Provider>
         </ViewportStoreContext.Provider>
         </LyricsAlignStoreContext.Provider>
         </ProvenanceStoreContext.Provider>
@@ -458,6 +466,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     lyricsAlign,
     playback,
     viewport,
+    mixer,
     presenter,
     View,
   };

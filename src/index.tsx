@@ -13,6 +13,7 @@ import { ProvenanceStore } from 'src/jot_view/stores/provenance_store';
 import { LyricsAlignStore } from 'src/jot_view/stores/lyrics_align_store';
 import { PlaybackStore } from 'src/jot_view/stores/playback_store';
 import { ViewportStore } from 'src/jot_view/stores/viewport_store';
+import { MixerStore } from 'src/jot_view/stores/mixer_store';
 import { parse } from 'src/parser';
 import { jotPlayer } from 'src/playback';
 // Side-effect import: instantiates the theme controller so the
@@ -34,6 +35,7 @@ class Drumjot {
   readonly lyricsAlign: LyricsAlignStore;
   readonly playback: PlaybackStore;
   readonly viewport: ViewportStore;
+  readonly mixer: MixerStore;
   readonly presenter: JotViewerPresenter;
 
   constructor(root: HTMLElement, examples: readonly ExampleJot[] = EXAMPLE_JOTS) {
@@ -46,6 +48,7 @@ class Drumjot {
       lyricsAlign,
       playback,
       viewport,
+      mixer,
       presenter,
       View,
     } = createJotView({ examples });
@@ -57,6 +60,7 @@ class Drumjot {
     this.lyricsAlign = lyricsAlign;
     this.playback = playback;
     this.viewport = viewport;
+    this.mixer = mixer;
     this.presenter = presenter;
     createRoot(root).render(<View />);
   }
