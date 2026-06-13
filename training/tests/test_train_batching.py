@@ -112,6 +112,38 @@ def test_train_loop_runs_batched_over_variable_lengths():
     assert "eta" in epoch_lines[-1]
 
 
+def test_train_loop_keep_best_restores_peak_epoch(monkeypatch):
+    # keep_best must snapshot the highest-val-F1 epoch and restore those exact
+    # weights at the end (so an overfitting run is scored at its peak, not last).
+    from drumjot_training import train
+    from drumjot_training.config import Config
+    from drumjot_training.model import MultiLaneHeads
+
+    cfg = Config(encoder_fps=100.0)
+    nl = len(cfg.lanes)
+    clips = [_clip(20, dim=8, n_lanes=nl) for _ in range(4)]
+    val = [_clip(20, dim=8, n_lanes=nl)]
+    model = MultiLaneHeads(in_dim=8, hidden=8, num_layers=1, lane_names=cfg.lanes)
+
+    scores = iter([0.1, 0.5, 0.3, 0.2])  # peak at epoch 1
+    snaps: list[dict] = []
+
+    def fake_mean_f1(m, c, cf):
+        snaps.append({k: v.detach().clone() for k, v in m.state_dict().items()})
+        return next(scores)
+
+    monkeypatch.setattr(train, "mean_f1", fake_mean_f1)
+    hist = train.train_loop(
+        model, clips, cfg, epochs=4, batch_size=2, val_clips=val,
+        keep_best=True, log=lambda s: None,
+    )
+    assert hist["val_f1"] == [0.1, 0.5, 0.3, 0.2]
+    assert hist["best_epoch"] == [1.0]
+    # final weights must equal the epoch-1 (peak) snapshot, not the last epoch's
+    for k, v in model.state_dict().items():
+        assert torch.equal(v, snaps[1][k])
+
+
 def test_train_loop_writes_periodic_checkpoint(tmp_path):
     from drumjot_training.config import Config
     from drumjot_training.model import MultiLaneHeads

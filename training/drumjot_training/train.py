@@ -530,6 +530,7 @@ def train_loop(
     lr_schedule: str = "cosine",
     warmup_steps: int = 0,
     loss_fn: str = "bce",
+    keep_best: bool = False,
     log: Callable[[str], None] = print,
 ) -> dict:
     """Train `model` on `clips` in padded mini-batches of `batch_size` (clips
@@ -562,6 +563,10 @@ def train_loop(
     sus_idx = [i for i, ln in enumerate(cfg.lanes) if ln in SUSTAINED_LANES]
     one_pw = torch.ones(len(sus_idx), 1, device=device)
     history: dict[str, list[float]] = {"train_loss": []}
+    # keep_best: snapshot the weights at the highest val macro-F1 and restore them
+    # at the end, so an overfitting run (val peaks early then decays) is scored at
+    # its peak rather than its final epoch. CPU copy to avoid holding a 2nd GPU set.
+    best_f1, best_state, best_epoch = -1.0, None, -1
 
     gen = torch.Generator().manual_seed(0)  # reproducible per-epoch shuffle
     loader = DataLoader(
@@ -648,7 +653,11 @@ def train_loop(
         avg = total / max(1, n_batches)
         history["train_loss"].append(avg)
         if val_clips:
-            history.setdefault("val_f1", []).append(mean_f1(model, val_clips, cfg))
+            vf1 = mean_f1(model, val_clips, cfg)
+            history.setdefault("val_f1", []).append(vf1)
+            if keep_best and vf1 > best_f1:
+                best_f1, best_epoch = vf1, epoch
+                best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
         dt = time.perf_counter() - ep_start
         # print the first 3 epochs (immediate speed read), then every 10th + last
         if epoch < 3 or (epoch + 1) % 10 == 0 or epoch == epochs - 1:
@@ -663,6 +672,10 @@ def train_loop(
         if out_dir and checkpoint_every and (epoch + 1) % checkpoint_every == 0 and epoch != epochs - 1:
             checkpoint.save(out_dir, model, cfg, {ln: cfg.peak_threshold for ln in cfg.lanes})
             log(f"  checkpoint saved @ epoch {epoch} (untuned) -> {out_dir}")
+    if keep_best and best_state is not None:
+        model.load_state_dict(best_state)
+        history["best_epoch"] = [float(best_epoch)]
+        log(f"  keep_best: restored epoch {best_epoch} (val_macro_f1 {best_f1:.3f})")
     return history
 
 
