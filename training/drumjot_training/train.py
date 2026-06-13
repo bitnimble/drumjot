@@ -1090,7 +1090,7 @@ def main(argv: list[str] | None = None) -> None:
                     "muq (OpenMuQ/MuQ-large-msd-iter, 25 fps; needs the `muq` pip package + a "
                     "fetch_models.py prefetch). Sets encoder name + frame rate; features cache "
                     "separately per encoder.")
-    ap.add_argument("--layer", type=int, default=10, help="encoder hidden layer (MERT 0-24, MuQ 0-24)")
+    ap.add_argument("--layer", type=int, default=10, help="encoder hidden layer (MERT 0-24, MuQ 0-12)")
     ap.add_argument("--seed", type=int, default=0,
                     help="torch init seed for reproducible head weights (multi-seed ablations)")
     ap.add_argument(
@@ -1185,6 +1185,13 @@ def main(argv: list[str] | None = None) -> None:
         train_specs = train_specs[:1]
 
     encoder = embeddings.make_encoder(cfg.encoder, cfg.encoder_layer)
+    # Fail fast on an out-of-range layer (MuQ exposes only 13 hidden states, NOT 24
+    # like MERT) instead of an opaque IndexError deep into the encode pass.
+    nhs = encoder.n_hidden_states()
+    if not 0 <= cfg.encoder_layer < nhs:
+        raise SystemExit(
+            f"--layer {cfg.encoder_layer} out of range for {args.encoder}: valid 0..{nhs - 1}"
+        )
 
     # Expand into per-window specs. Both train and val segment long clips into up
     # to --max-windows windows (recovering audio past the first --max-seconds).
