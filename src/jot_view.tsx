@@ -51,6 +51,7 @@ import { MixerStore } from './jot_view/stores/mixer_store';
 import { JotViewerPresenter } from './jot_view/jot_viewer_presenter';
 import { SettingsPresenter } from './jot_view/presenters/settings_presenter';
 import { ViewportPresenter } from './jot_view/presenters/viewport_presenter';
+import { MixerPresenter } from './jot_view/presenters/mixer_presenter';
 import { RecentTranscriptionsPicker } from './jot_view/recent_transcriptions';
 import { ToastContainer } from './jot_view/toast_container';
 import { DebugPanel, Toolbar } from './jot_view/toolbar';
@@ -78,6 +79,7 @@ type CreateJotViewResult = {
   /** Per-domain presenters split out of the catch-all. Exposed for
    *  console / e2e. */
   viewportPresenter: ViewportPresenter;
+  mixerPresenter: MixerPresenter;
   /** Catch-all presenter holding the orchestration not yet split into a
    *  per-domain presenter. */
   presenter: JotViewerPresenter;
@@ -95,6 +97,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   const mixer = new MixerStore(documentStore);
   const settingsPresenter = new SettingsPresenter(settings);
   const viewportPresenter = new ViewportPresenter(viewport, documentStore);
+  const mixerPresenter = new MixerPresenter(mixer, documentStore);
   const presenter = new JotViewerPresenter({
     document: documentStore,
     settings,
@@ -104,6 +107,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     playback,
     viewport,
     mixer,
+    mixerPresenter,
   });
   if (options.examples) presenter.setExamples(options.examples);
   const selection = new SelectionStore(documentStore);
@@ -184,7 +188,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   const onPatternClick = (name: string) => selection.togglePattern(name);
   const onSeek = (x: number) => presenter.seekToX(x);
   const onZoomBy = (factor: number) => viewportPresenter.setZoom(viewport.zoom * factor);
-  const onMoveTrack = (from: number, to: number) => presenter.moveTrack(from, to);
+  const onMoveTrack = (from: number, to: number) => mixerPresenter.moveTrack(from, to);
   const getGutterWidth = () => viewport.gutterWidth;
   const onSetGutterWidth = (px: number) => viewportPresenter.setGutterWidth(px);
 
@@ -276,14 +280,14 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
         soloedPitches: mixer.soloedPitches,
         isPitchAudible: mixer.isPitchAudible,
         volumeFor: (pitch) => mixer.pitchVolume(pitch),
-        onSetVolume: (pitch, v) => presenter.setPitchVolume(pitch, v),
-        onToggleMute: (pitch) => presenter.toggleMute(pitch),
-        onToggleSolo: (pitch) => presenter.toggleSolo(pitch),
+        onSetVolume: (pitch, v) => mixerPresenter.setPitchVolume(pitch, v),
+        onToggleMute: (pitch) => mixerPresenter.toggleMute(pitch),
+        onToggleSolo: (pitch) => mixerPresenter.toggleSolo(pitch),
         masterMuted: mixer.drumMasterMuted,
         masterSoloed: mixer.drumMasterSoloed,
         masterAudible: mixer.isDrumSectionAudible,
-        onToggleMasterMute: () => presenter.toggleDrumMasterMute(),
-        onToggleMasterSolo: () => presenter.toggleDrumMasterSolo(),
+        onToggleMasterMute: () => mixerPresenter.toggleDrumMasterMute(),
+        onToggleMasterSolo: () => mixerPresenter.toggleDrumMasterSolo(),
       }),
       // eslint-disable-next-line react-hooks/exhaustive-deps -- observable snapshots; observer wrapper rebuilds when any of these change.
       [
@@ -300,17 +304,17 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
         soloedAudioTracks: mixer.soloedAudioTracks,
         isAudioTrackAudible: mixer.isAudioTrackAudible,
         volumeFor: (id) => mixer.audioTrackVolume(id),
-        onSetVolume: (id, v) => presenter.setAudioTrackVolume(id, v),
-        onToggleMute: (id) => presenter.toggleAudioTrackMute(id),
-        onToggleSolo: (id) => presenter.toggleAudioTrackSolo(id),
-        onClear: (id) => presenter.clearAudioTrack(id),
-        onSplitFromMix: (id) => presenter.splitAudioTrackFromMix(id),
-        onSplitDrumPieces: (id) => presenter.splitAudioTrackDrumPieces(id),
+        onSetVolume: (id, v) => mixerPresenter.setAudioTrackVolume(id, v),
+        onToggleMute: (id) => mixerPresenter.toggleAudioTrackMute(id),
+        onToggleSolo: (id) => mixerPresenter.toggleAudioTrackSolo(id),
+        onClear: (id) => mixerPresenter.clearAudioTrack(id),
+        onSplitFromMix: (id) => mixerPresenter.splitAudioTrackFromMix(id),
+        onSplitDrumPieces: (id) => mixerPresenter.splitAudioTrackDrumPieces(id),
         masterMuted: mixer.audioMasterMuted,
         masterSoloed: mixer.audioMasterSoloed,
         masterAudible: mixer.isAudioSectionAudible,
-        onToggleMasterMute: () => presenter.toggleAudioMasterMute(),
-        onToggleMasterSolo: () => presenter.toggleAudioMasterSolo(),
+        onToggleMasterMute: () => mixerPresenter.toggleAudioMasterMute(),
+        onToggleMasterSolo: () => mixerPresenter.toggleAudioMasterSolo(),
       }),
       // eslint-disable-next-line react-hooks/exhaustive-deps -- observable snapshots; observer wrapper rebuilds when any of these change.
       [
@@ -465,6 +469,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     viewport,
     mixer,
     viewportPresenter,
+    mixerPresenter,
     presenter,
     View,
   };
