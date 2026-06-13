@@ -49,6 +49,7 @@ import { PlaybackStore } from './jot_view/stores/playback_store';
 import { ViewportStore } from './jot_view/stores/viewport_store';
 import { MixerStore } from './jot_view/stores/mixer_store';
 import { JotViewerPresenter } from './jot_view/jot_viewer_presenter';
+import { SettingsPresenter } from './jot_view/presenters/settings_presenter';
 import { RecentTranscriptionsPicker } from './jot_view/recent_transcriptions';
 import { ToastContainer } from './jot_view/toast_container';
 import { DebugPanel, Toolbar } from './jot_view/toolbar';
@@ -88,6 +89,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   const playback = new PlaybackStore(documentStore);
   const viewport = new ViewportStore(documentStore);
   const mixer = new MixerStore(documentStore);
+  const settingsPresenter = new SettingsPresenter(settings);
   const presenter = new JotViewerPresenter({
     document: documentStore,
     settings,
@@ -356,9 +358,9 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       showFilteredOnsets={provenance.showFilteredOnsets}
                       onSetShowFilteredOnsets={(v) => presenter.setShowFilteredOnsets(v)}
                       gridLines={settings.gridLines}
-                      onToggleGridLine={(k) => presenter.toggleGridLine(k)}
+                      onToggleGridLine={(k) => settingsPresenter.toggleGridLine(k)}
                       uniformWaveforms={settings.uniformWaveforms}
-                      onSetUniformWaveforms={(v) => presenter.setUniformWaveforms(v)}
+                      onSetUniformWaveforms={(v) => settingsPresenter.setUniformWaveforms(v)}
                       autoFollowOnPlay={playback.autoFollowOnPlay}
                       onSetAutoFollowOnPlay={(v) => presenter.setAutoFollowOnPlay(v)}
                       recentTranscriptions={transcribe.recentTranscriptions}

@@ -36,7 +36,7 @@ import {
 } from 'src/transcriber';
 import { transcribeSuccessToastMessage } from './toasts_messages';
 import { toastStore } from './toasts';
-import { GridLineSettings, SettingsStore } from './stores/settings_store';
+import { SettingsStore } from './stores/settings_store';
 import { DocumentStore } from './stores/document_store';
 import { TranscribeStore } from './stores/transcribe_store';
 import { ProvenanceStore } from './stores/provenance_store';
@@ -1796,19 +1796,6 @@ export class JotViewerPresenter {
     if (this.playback.followPlayhead) return;
     if (!this.playback.followDisabledIsTransient) return;
     this.setFollowPlayhead(true);
-  }
-
-  // --- settings ---
-
-  toggleGridLine(key: keyof GridLineSettings) {
-    this.settings.gridLines = {
-      ...this.settings.gridLines,
-      [key]: !this.settings.gridLines[key],
-    };
-  }
-
-  setUniformWaveforms(on: boolean) {
-    this.settings.uniformWaveforms = on;
   }
 
   // --- transcribe (form options + resume picker) ---
