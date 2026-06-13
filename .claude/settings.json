@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Read(//tmp/*)",
+      "Bash(ls *)",
+      "Bash(git show *)",
+      "Bash(git diff *)",
+      "Bash(git --no-pager diff *)",
+      "Bash(git ls-tree *)",
+      "Bash(bun add *)",
+      "Bash(bun run build)",
+      "Bash(bun run e2e *)",
+      "Bash(echo *)",
+      "Bash(scripts/check)",
+      "Bash(scripts/check-py)",
+      "Bash(scripts/check-py *)",
+      "Bash(scripts/check-ts)",
+      "Bash(scripts/check-ts *)",
+      "Bash(scripts/test-py)",
+      "Bash(scripts/test-py *)",
+      "Bash(./scripts/check)",
+      "Bash(./scripts/check-py)",
+      "Bash(./scripts/check-py *)",
+      "Bash(./scripts/check-ts)",
+      "Bash(./scripts/check-ts *)",
+      "Bash(./scripts/test-py)",
+      "Bash(./scripts/test-py *)",
+      "Bash(scripts/sandbox-py *)",
+      "Bash(scripts/sandbox-bun *)",
+      "Bash(scripts/sandbox-run *)",
+      "Read(//codebox-workspace/drumjot/*)"
+    ],
+    "defaultMode": "acceptEdits"
+  },
+  "enabledMcpjsonServers": [
+    "playwright"
+  ]
+}
