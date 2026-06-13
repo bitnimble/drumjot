@@ -31,7 +31,7 @@ test('cursor-anchored zoom keeps the anchor pinned, scale+scroll in lockstep', a
   const result = await page.evaluate(async () => {
     const w = window as any;
     const viewportStore = w.drumjot.viewport;
-    const presenter = w.drumjot.presenter;
+    const viewportPresenter = w.drumjot.viewportPresenter;
     const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
     const settle = async () => {
       await nextFrame();
@@ -47,7 +47,7 @@ test('cursor-anchored zoom keeps the anchor pinned, scale+scroll in lockstep', a
 
     // Scroll most of the way into the song so the per-tick scroll delta is
     // large (this is where a desync paints multiple screens off).
-    presenter.setScrollX(
+    viewportPresenter.setScrollX(
       Math.max(0, viewportStore._contentWidth - viewportStore._viewportWidth) * 0.8
     );
     await settle();

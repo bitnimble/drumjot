@@ -13,12 +13,12 @@ import { observer } from 'mobx-react-lite';
 import React from 'react';
 import styles from './vertical_scrollbar.module.css';
 import type { ViewportStore } from './stores/viewport_store';
-import type { JotViewerPresenter } from './jot_viewer_presenter';
+import type { ViewportPresenter } from './presenters/viewport_presenter';
 
 const MIN_THUMB_HEIGHT = 24;
 
 export const VerticalScrollbar = observer(
-  ({ viewport, presenter }: { viewport: ViewportStore; presenter: JotViewerPresenter }) => {
+  ({ viewport, viewportPresenter }: { viewport: ViewportStore; viewportPresenter: ViewportPresenter }) => {
     const containerHeight = viewport._viewportHeight;
     const contentHeight = viewport._contentHeight;
 
@@ -46,7 +46,7 @@ export const VerticalScrollbar = observer(
         // continue as a drag from there (mirrors Minimap behavior).
         grabOffset = thumbHeight / 2;
         const newTop = Math.max(0, Math.min(travel, localY - grabOffset));
-        presenter.setScrollY((newTop / travel) * overflow);
+        viewportPresenter.setScrollY((newTop / travel) * overflow);
       }
 
       let pendingClientY = e.clientY;
@@ -55,7 +55,7 @@ export const VerticalScrollbar = observer(
         rafId = 0;
         const y = pendingClientY - trackRect.top - grabOffset;
         const clamped = Math.max(0, Math.min(travel, y));
-        presenter.setScrollY((clamped / travel) * overflow);
+        viewportPresenter.setScrollY((clamped / travel) * overflow);
       };
       const onMove = (ev: PointerEvent) => {
         pendingClientY = ev.clientY;

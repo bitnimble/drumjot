@@ -6,6 +6,7 @@ import { EXAMPLE_JOTS, ExampleJot, rockJot, tripletJot } from 'src/fakes';
 import { RenderedJot } from 'src/jot';
 import { createJotView } from 'src/jot_view';
 import { JotViewerPresenter } from 'src/jot_view/jot_viewer_presenter';
+import { ViewportPresenter } from 'src/jot_view/presenters/viewport_presenter';
 import { DocumentStore } from 'src/jot_view/stores/document_store';
 import { SettingsStore } from 'src/jot_view/stores/settings_store';
 import { TranscribeStore } from 'src/jot_view/stores/transcribe_store';
@@ -35,6 +36,7 @@ class Drumjot {
   readonly playback: PlaybackStore;
   readonly viewport: ViewportStore;
   readonly mixer: MixerStore;
+  readonly viewportPresenter: ViewportPresenter;
   readonly presenter: JotViewerPresenter;
 
   constructor(root: HTMLElement, examples: readonly ExampleJot[] = EXAMPLE_JOTS) {
@@ -47,6 +49,7 @@ class Drumjot {
       playback,
       viewport,
       mixer,
+      viewportPresenter,
       presenter,
       View,
     } = createJotView({ examples });
@@ -58,6 +61,7 @@ class Drumjot {
     this.playback = playback;
     this.viewport = viewport;
     this.mixer = mixer;
+    this.viewportPresenter = viewportPresenter;
     this.presenter = presenter;
     createRoot(root).render(<View />);
   }

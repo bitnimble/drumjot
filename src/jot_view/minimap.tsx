@@ -36,6 +36,7 @@ import { WAVEFORM_PAINT_COLOR } from './score';
 import { DocumentStore } from './stores/document_store';
 import { ViewportStore } from './stores/viewport_store';
 import { MixerStore } from './stores/mixer_store';
+import { ViewportPresenter } from './presenters/viewport_presenter';
 import { JotViewerPresenter } from './jot_viewer_presenter';
 
 const NOTE_STRIP_H = 16;
@@ -72,11 +73,13 @@ export const Minimap = observer(
   ({
     documentStore,
     viewport,
+    viewportPresenter,
     mixer,
     presenter,
   }: {
     documentStore: DocumentStore;
     viewport: ViewportStore;
+    viewportPresenter: ViewportPresenter;
     mixer: MixerStore;
     presenter: JotViewerPresenter;
   }) => {
@@ -354,7 +357,7 @@ export const Minimap = observer(
     if (!onBox) {
       // Centre the box on the click; the drag continues from there.
       const target = (localXAtDown / width) * sw - cw / 2;
-      presenter.setScrollX(target);
+      viewportPresenter.setScrollX(target);
       startScroll = viewport.scrollX;
     }
 
@@ -363,7 +366,7 @@ export const Minimap = observer(
     const flush = () => {
       rafId = 0;
       const dx = pendingClientX - originX;
-      presenter.setScrollX(startScroll + dx * scale);
+      viewportPresenter.setScrollX(startScroll + dx * scale);
     };
     const onMove = (ev: PointerEvent) => {
       pendingClientX = ev.clientX;

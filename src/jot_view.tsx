@@ -50,6 +50,7 @@ import { ViewportStore } from './jot_view/stores/viewport_store';
 import { MixerStore } from './jot_view/stores/mixer_store';
 import { JotViewerPresenter } from './jot_view/jot_viewer_presenter';
 import { SettingsPresenter } from './jot_view/presenters/settings_presenter';
+import { ViewportPresenter } from './jot_view/presenters/viewport_presenter';
 import { RecentTranscriptionsPicker } from './jot_view/recent_transcriptions';
 import { ToastContainer } from './jot_view/toast_container';
 import { DebugPanel, Toolbar } from './jot_view/toolbar';
@@ -74,8 +75,11 @@ type CreateJotViewResult = {
   playback: PlaybackStore;
   viewport: ViewportStore;
   mixer: MixerStore;
-  /** Catch-all presenter holding the actions/orchestration over the
-   *  data-only stores. */
+  /** Per-domain presenters split out of the catch-all. Exposed for
+   *  console / e2e. */
+  viewportPresenter: ViewportPresenter;
+  /** Catch-all presenter holding the orchestration not yet split into a
+   *  per-domain presenter. */
   presenter: JotViewerPresenter;
   View: React.FC;
 };
@@ -90,6 +94,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   const viewport = new ViewportStore(documentStore);
   const mixer = new MixerStore(documentStore);
   const settingsPresenter = new SettingsPresenter(settings);
+  const viewportPresenter = new ViewportPresenter(viewport, documentStore);
   const presenter = new JotViewerPresenter({
     document: documentStore,
     settings,
@@ -143,7 +148,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     const barsRow = scroller?.querySelector<HTMLElement>('[data-bars-row]');
     const j = documentStore.currentJot;
     if (!scroller || !barsRow || !j) {
-      presenter.setZoom(z);
+      viewportPresenter.setZoom(z);
       return;
     }
     const pxPerBeatBefore = j.pxPerBeat;
@@ -151,11 +156,11 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     const scrollerRect = scroller.getBoundingClientRect();
     const barsRowRect = barsRow.getBoundingClientRect();
     const anchorBarsRowX = scrollerRect.left + scrollerRect.width / 2 - barsRowRect.left;
-    presenter.setZoom(z);
+    viewportPresenter.setZoom(z);
     if (pxPerBeatBefore <= 0) return;
     const factor = j.pxPerBeat / pxPerBeatBefore;
     if (factor === 1) return;
-    presenter.setScrollBy((anchorBarsRowX - padLeft) * (factor - 1), 0);
+    viewportPresenter.setScrollBy((anchorBarsRowX - padLeft) * (factor - 1), 0);
     // Same-tick scale + scroll write (cache-free; this runs outside the
     // component) so the slider never paints the post-zoom scroll offset at
     // the pre-zoom scale; see applyZoomVarsSync.
@@ -178,10 +183,10 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   // render time, so they don't subscribe createJotView to anything.
   const onPatternClick = (name: string) => selection.togglePattern(name);
   const onSeek = (x: number) => presenter.seekToX(x);
-  const onZoomBy = (factor: number) => presenter.setZoom(viewport.zoom * factor);
+  const onZoomBy = (factor: number) => viewportPresenter.setZoom(viewport.zoom * factor);
   const onMoveTrack = (from: number, to: number) => presenter.moveTrack(from, to);
   const getGutterWidth = () => viewport.gutterWidth;
-  const onSetGutterWidth = (px: number) => presenter.setGutterWidth(px);
+  const onSetGutterWidth = (px: number) => viewportPresenter.setGutterWidth(px);
 
   // Computed once per page load; AudioWorklet availability doesn't
   // change after boot, so capturing this outside the component (and
@@ -378,6 +383,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                     {jot ? (
                       <JotView
                         viewport={viewport}
+                        viewportPresenter={viewportPresenter}
                         presenter={presenter}
                         jot={jot}
                         highlightedPattern={selection.selectedPattern}
@@ -404,6 +410,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                     <Minimap
                       documentStore={documentStore}
                       viewport={viewport}
+                      viewportPresenter={viewportPresenter}
                       mixer={mixer}
                       presenter={presenter}
                     />
@@ -457,6 +464,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     playback,
     viewport,
     mixer,
+    viewportPresenter,
     presenter,
     View,
   };
@@ -467,11 +475,13 @@ type JotViewProps = {
    * scroll viewport's native `overflow: auto` is replaced by a CSS
    * `transform` on `.scrollViewport`; `viewport.scrollX`/`scrollY` are
    * the canonical source of scroll position, fed by JotView's
-   * ResizeObservers (via `presenter.setViewportSize`/`setContentSize`)
+   * ResizeObservers (via `viewportPresenter.setViewportSize`/`setContentSize`)
    * and driven by auto-follow / zoom-anchor / pan / Stop (via
-   * `presenter.setScrollX`/`setScrollBy`/`resetScrollX`). */
+   * `viewportPresenter.setScrollX`/`setScrollBy`/`resetScrollX`). */
   viewport: ViewportStore;
-  /** Presenter for viewport mutations (scroll / zoom / size) + transport. */
+  /** Viewport mutations (scroll / zoom / size / gutter). */
+  viewportPresenter: ViewportPresenter;
+  /** Catch-all presenter (transport / follow + remaining orchestration). */
   presenter: JotViewerPresenter;
   jot: RenderedJot;
   highlightedPattern: string | undefined;
@@ -511,6 +521,7 @@ type JotViewProps = {
 const JotView = observer((props: JotViewProps) => {
   const {
     viewport,
+    viewportPresenter,
     presenter,
     jot,
     highlightedPattern,
@@ -567,10 +578,10 @@ const JotView = observer((props: JotViewProps) => {
     const viewport = viewportRef.current;
     if (!container || !viewport) return;
     const updateContainer = () => {
-      presenter.setViewportSize(container.clientWidth, container.clientHeight);
+      viewportPresenter.setViewportSize(container.clientWidth, container.clientHeight);
     };
     const updateViewport = () => {
-      presenter.setContentSize(viewport.offsetWidth, viewport.offsetHeight);
+      viewportPresenter.setContentSize(viewport.offsetWidth, viewport.offsetHeight);
     };
     updateContainer();
     updateViewport();
@@ -624,7 +635,7 @@ const JotView = observer((props: JotViewProps) => {
       pendingDelta = 0;
       pendingScrollX = 0;
       pendingClientX = undefined;
-      if (scrollDx !== 0) presenter.setScrollBy(scrollDx, 0);
+      if (scrollDx !== 0) viewportPresenter.setScrollBy(scrollDx, 0);
       if (delta === 0) return;
       const factor = Math.exp(-delta * 0.0015);
 
@@ -669,7 +680,7 @@ const JotView = observer((props: JotViewProps) => {
           // async); for zoom-in this is conservative-safe (smaller
           // max), for zoom-out the next observer tick re-clamps within
           // a frame, so a one-frame overshoot is the worst case.
-          presenter.setScrollBy(delta, 0);
+          viewportPresenter.setScrollBy(delta, 0);
         }
       }
 
@@ -752,7 +763,7 @@ const JotView = observer((props: JotViewProps) => {
       // both axes of the store. Replaces the previous native
       // `el.scrollLeft -= dx` / `el.scrollTop -= dy` since the
       // container is now `overflow: hidden`.
-      presenter.setScrollBy(-dx, -dy);
+      viewportPresenter.setScrollBy(-dx, -dy);
     };
     const stop = () => {
       if (!panning) return;
@@ -924,17 +935,17 @@ const JotView = observer((props: JotViewProps) => {
         const dy = t.clientY - gesture.lastY;
         gesture.lastX = t.clientX;
         gesture.lastY = t.clientY;
-        presenter.setScrollBy(-dx, -dy);
+        viewportPresenter.setScrollBy(-dx, -dy);
         e.preventDefault();
       } else if (gesture.kind === 'pinch' && e.touches.length >= 2) {
         const a = e.touches[0];
         const b = e.touches[1];
         const dist = touchDistance(a, b);
         if (gesture.initDistance > 0 && gesture.initPxPerBeat > 0) {
-          presenter.setZoom(gesture.initZoom * (dist / gesture.initDistance));
+          viewportPresenter.setZoom(gesture.initZoom * (dist / gesture.initDistance));
           const actualFactor = jotRef.current.pxPerBeat / gesture.initPxPerBeat;
           if (actualFactor !== 1) {
-            presenter.setScrollX(
+            viewportPresenter.setScrollX(
               gesture.initScrollX +
                 (gesture.anchorBarsRowX - gesture.initPadLeft) * (actualFactor - 1)
             );
@@ -1114,7 +1125,7 @@ const JotView = observer((props: JotViewProps) => {
             cacheRef={cacheRef}
             getGutterWidth={getGutterWidth}
             viewport={viewport}
-            presenter={presenter}
+            viewportPresenter={viewportPresenter}
           />
           <div
             ref={viewportRef}
@@ -1142,7 +1153,7 @@ const JotView = observer((props: JotViewProps) => {
             />
             <MarqueeOverlay />
           </div>
-          <VerticalScrollbar viewport={viewport} presenter={presenter} />
+          <VerticalScrollbar viewport={viewport} viewportPresenter={viewportPresenter} />
         </div>
       </BarTimingsContext.Provider>
     </RenderedJotContext.Provider>
@@ -1496,12 +1507,12 @@ const PlayheadPosVar = observer(
     cacheRef,
     getGutterWidth,
     viewport,
-    presenter,
+    viewportPresenter,
   }: {
     cacheRef: React.RefObject<DomTargetCache | null>;
     getGutterWidth: () => number;
     viewport: ViewportStore;
-    presenter: JotViewerPresenter;
+    viewportPresenter: ViewportPresenter;
   }) => {
     const t = jotPlayer.currentTime;
     const state = jotPlayer.state;
@@ -1529,7 +1540,7 @@ const PlayheadPosVar = observer(
       // keeps its scroll; initial mount is idle→idle so this is a
       // no-op until the first play has happened.
       if (wasActive && state === 'idle') {
-        presenter.resetScrollX();
+        viewportPresenter.resetScrollX();
         clearPlayheadVar(cache);
         return;
       }
@@ -1571,12 +1582,23 @@ const PlayheadPosVar = observer(
       if (follow && state === 'playing') {
         const clientWidth = viewport._viewportWidth;
         if (clientWidth > 0) {
-          presenter.setScrollX(getGutterWidth() + x - clientWidth / 2);
+          viewportPresenter.setScrollX(getGutterWidth() + x - clientWidth / 2);
           setScrollX(cache, viewport.scrollX);
         }
       }
       setPlayheadVar(cache, x);
-    }, [t, state, cued, timeline, pxPerBeat, follow, cacheRef, getGutterWidth, viewport, presenter]);
+    }, [
+      t,
+      state,
+      cued,
+      timeline,
+      pxPerBeat,
+      follow,
+      cacheRef,
+      getGutterWidth,
+      viewport,
+      viewportPresenter,
+    ]);
     return null;
   }
 );
