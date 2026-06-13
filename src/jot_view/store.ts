@@ -1,12 +1,6 @@
 import { comparer, makeAutoObservable, reaction, runInAction } from 'mobx';
 import { computedFn } from 'mobx-utils';
-import {
-  DebugBundleManifest,
-  loadDebugZip,
-  NO_DRUMS_KEY,
-  NoteProvenanceEntry,
-  NoteProvenanceFile,
-} from 'src/debug_zip';
+import { loadDebugZip, NO_DRUMS_KEY } from 'src/debug_zip';
 import { Instrument } from 'src/dsl';
 import { ExampleJot } from 'src/fakes';
 import { DrumInstrumentKind, defaultKindForPitch } from 'src/instruments';
@@ -44,12 +38,12 @@ import {
   TranscribeProgress,
   TranscribeStage,
 } from 'src/transcriber';
-import type { NoteProvenanceContextValue } from './contexts';
 import { transcribeSuccessToastMessage } from './toasts_messages';
 import { toastStore } from './toasts';
 import { SettingsStore } from './stores/settings_store';
 import { DocumentStore } from './stores/document_store';
 import { TranscribeStore } from './stores/transcribe_store';
+import { ProvenanceStore } from './stores/provenance_store';
 
 /** Long-running lyric-alignment indicator. `queued` is the wait state
  *  while the request sits behind another in-flight GPU job (a transcribe
@@ -219,23 +213,6 @@ function defaultMixerSortKey(
 }
 
 /**
- * Map a transcriber-side provenance pitch tag onto the jot's pitch
- * letter. The transcriber's hi-hat split (`transcriber/app/pipeline/
- * hihat_split.py`) routes open-hi-hat onsets through synthetic pitch
- * `H` so the filter LLM can see closed (`h`) and open (`H`) hits as
- * separate lanes; from_midi.ts then folds those back into the standard
- * `h:o` notation. Provenance lookups (debug-details popover, "show
- * filtered" ghost overlays) have to canonicalise the same way so the
- * jot's `note.pitch = 'h'` finds entries the provenance stored under
- * `'H'`. Adding new synthetic-pitch routes (e.g. a future ride-bell
- * split) means adding a case here.
- */
-function canonicalProvenancePitch(transcriberPitch: string): string {
-  if (transcriberPitch === 'H') return 'h';
-  return transcriberPitch;
-}
-
-/**
  * Pitches that appear anywhere in the rendered jot, sorted into the
  * default mixer ordering (see {@link DEFAULT_MIXER_KIND_ORDER}). A
  * pitch that shows up in two voices is listed once at its first
@@ -339,34 +316,8 @@ export class JotViewStore {
    * reorderings survive reloads.
    */
   trackOrder: TrackKey[] = [];
-  /**
-   * Last loaded transcriber debug bundle (`.zip`), if any. Carries the
-   * captured logs + per-stage timings produced server-side during a
-   * transcribe run, so the UI's DebugPanel can show what happened end-
-   * to-end without requiring a `docker compose logs` round trip.
-   * Replaced when a new bundle is loaded; otherwise survives jot/audio
-   * changes.
-   */
-  lastDebugBundle: DebugBundleManifest | undefined = undefined;
-  /**
-   * Per-note debug provenance from the loaded debug bundle, if the
-   * bundle came from a filter-mode transcribe run. Keyed by DSL pitch
-   * letter → list of every detected onset (kept and rejected). The
-   * NoteView selection label looks up its provenance by matching
-   * `note.metadata.midi.tick` against entries' `tick`; the
-   * FilteredOnsetView renders the `kept=false` entries as ghost
-   * overlays gated by {@link showFilteredOnsets}. `undefined` until a
-   * filter-mode bundle is loaded; cleared when a new (non-bundle) song
-   * replaces the current one.
-   */
-  noteProvenance: NoteProvenanceFile | undefined = undefined;
-  /**
-   * Toolbar checkbox: show rejected onsets as dashed ghost overlays.
-   * Only meaningful when {@link noteProvenance} is loaded; the checkbox
-   * is hidden when there's nothing to show. Default off so a freshly
-   * loaded bundle reads as just "the score" until the operator opts in.
-   */
-  showFilteredOnsets: boolean = false;
+  // Debug-bundle + per-note provenance + DebugPanel chrome moved to
+  // `ProvenanceStore` (this.provenance).
   /**
    * When true, the score auto-scrolls horizontally during playback to
    * keep the playhead pinned to the viewport's centre
@@ -391,16 +342,11 @@ export class JotViewStore {
    * `followPlayhead` is true. See {@link setFollowPlayhead}.
    */
   private followDisabledIsTransient: boolean = false;
-  /** Whether the DebugPanel is expanded, small UI state, kept here so
-   * the toolbar toggle and the panel itself stay in sync. */
-  debugPanelOpen: boolean = false;
+  // DebugPanel open/height moved to `ProvenanceStore` (this.provenance).
   /** Lyrics search modal visibility. */
   lyricsSearchOpen: boolean = false;
   /** Lyrics plain-text load modal visibility. */
   lyricsTextOpen: boolean = false;
-  /** Height of the DebugPanel (px) when expanded; adjusted by dragging
-   * the resize handle along its top edge. */
-  debugPanelHeight: number = 280;
   /** Width (px) of the sticky mixer/score gutter column; user-resizable
    * by dragging the gutter's right edge. Propagated to every gutter
    * element through the `--gutter-width` CSS variable set on the JotView
@@ -485,17 +431,25 @@ export class JotViewStore {
   readonly document: DocumentStore;
   readonly settings: SettingsStore;
   readonly transcribe: TranscribeStore;
+  readonly provenance: ProvenanceStore;
 
-  constructor(document: DocumentStore, settings: SettingsStore, transcribe: TranscribeStore) {
+  constructor(
+    document: DocumentStore,
+    settings: SettingsStore,
+    transcribe: TranscribeStore,
+    provenance: ProvenanceStore
+  ) {
     this.document = document;
     this.settings = settings;
     this.transcribe = transcribe;
+    this.provenance = provenance;
     makeAutoObservable(this, {
       transcribeController: false,
       lyricsAlignControllers: false,
       document: false,
       settings: false,
       transcribe: false,
+      provenance: false,
     });
     // Wire ourselves in as the player's mixer context so freshly-
     // constructed AudioTracks can resolve grouped-instrument colour
@@ -844,33 +798,6 @@ export class JotViewStore {
     return this.trackOrder.findIndex((k) => k.kind === 'instrument');
   }
 
-  /**
-   * Bundle the per-note debug provenance into the shape
-   * {@link NoteProvenanceContext} consumers expect, or `null` when no
-   * filter-mode bundle is loaded. Memoised through the MobX computed
-   * graph so the `audioFilenameByPitch` Map (rebuilt from the manifest's
-   * plain-object `mapping`) is only re-constructed when the underlying
-   * provenance / bundle / toggle changes.
-   */
-  get provenanceContextValue(): NoteProvenanceContextValue | null {
-    const provenance = this.noteProvenance;
-    if (!provenance) return null;
-    return {
-      byTick: this.noteProvenanceByTick,
-      rejectedByPitch: this.filteredOnsetsByPitch,
-      leadBars: provenance.lead_bars ?? 0,
-      showFiltered: this.showFilteredOnsets,
-      beatAlignmentOffsetSec: provenance.beat_alignment_offset_sec ?? null,
-      beatAlignCoarseOffsetSec: provenance.beat_align_coarse_offset_sec ?? null,
-      beatAlignFineOffsetSec: provenance.beat_align_fine_offset_sec ?? null,
-      // Bundle manifest mapping is `Record<string, string>`; rebuild it
-      // as a Map for ergonomic .get() lookups inside the per-onset
-      // timing visualization. Empty when the current bundle didn't ship
-      // a manifest (hand-authored jots, legacy bundles).
-      audioFilenameByPitch: new Map(Object.entries(this.lastDebugBundle?.mapping ?? {})),
-    };
-  }
-
   toggleAudioMasterMute() {
     this.audioMasterMuted = !this.audioMasterMuted;
   }
@@ -1109,13 +1036,8 @@ export class JotViewStore {
    * current song outside the bundle path so stale debug info from a
    * previous bundle doesn't leak onto the new score. */
   private clearNoteProvenance() {
-    this.noteProvenance = undefined;
-    this.showFilteredOnsets = false;
-  }
-
-  /** Replace the toolbar's `Show filtered` checkbox state. */
-  setShowFilteredOnsets(show: boolean) {
-    this.showFilteredOnsets = show;
+    this.provenance.noteProvenance = undefined;
+    this.provenance.showFilteredOnsets = false;
   }
 
   setLyricsSearchOpen(open: boolean) {
@@ -1124,16 +1046,6 @@ export class JotViewStore {
 
   setLyricsTextOpen(open: boolean) {
     this.lyricsTextOpen = open;
-  }
-
-  /** Identifies which filtered-onset popover is pinned open. The key is
-   * `${pitch}:${detected_time_sec}` (rejected onsets have `tick === null`,
-   * so we can't use it); `undefined` means none pinned. Hover-only popovers
-   * don't go through here. */
-  pinnedFilteredOnsetKey: string | undefined = undefined;
-
-  setPinnedFilteredOnsetKey(key: string | undefined) {
-    this.pinnedFilteredOnsetKey = key;
   }
 
   toggleFollowPlayhead() {
@@ -1155,61 +1067,6 @@ export class JotViewStore {
 
   setAutoFollowOnPlay(on: boolean) {
     this.autoFollowOnPlay = on;
-  }
-
-  /**
-   * Pre-indexed view onto `noteProvenance` for the per-note selection
-   * label lookup. Keyed by `${pitch}:${tick}` so `NoteView` can attach
-   * provenance to its note in O(1) instead of scanning the per-pitch
-   * list on every render. Recomputed when `noteProvenance` changes.
-   *
-   * Pitch keys are canonicalised through {@link canonicalProvenancePitch}
-   * so the rendered jot's pitch letter (what `NoteView` builds the
-   * lookup key from) matches the provenance regardless of any synthetic
-   * routing pitches the transcriber pipeline used (today: `H` for open
-   * hi-hat, which `from_midi.ts` collapses back into `h:o`).
-   */
-  get noteProvenanceByTick(): Map<string, NoteProvenanceEntry> {
-    const out = new Map<string, NoteProvenanceEntry>();
-    const provenance = this.noteProvenance;
-    if (!provenance) return out;
-    for (const [pitch, entries] of Object.entries(provenance.per_pitch)) {
-      const jotPitch = canonicalProvenancePitch(pitch);
-      for (const entry of entries) {
-        if (entry.tick === null || !entry.kept) continue;
-        out.set(`${jotPitch}:${entry.tick}`, entry);
-      }
-    }
-    return out;
-  }
-
-  /**
-   * Per-pitch list of rejected onsets the {@link FilteredOnsetView}
-   * renders. Built once from `noteProvenance` and cached via MobX so
-   * the per-instrument row doesn't re-filter on every render. Out-of-range
-   * entries (those that fell outside the beat-tracked region) are
-   * dropped — they have no displayable bar to anchor against.
-   */
-  get filteredOnsetsByPitch(): Map<string, NoteProvenanceEntry[]> {
-    const out = new Map<string, NoteProvenanceEntry[]>();
-    const provenance = this.noteProvenance;
-    if (!provenance) return out;
-    for (const [pitch, entries] of Object.entries(provenance.per_pitch)) {
-      const rejected = entries.filter((e) => !e.kept && !e.out_of_range);
-      if (rejected.length === 0) continue;
-      // Canonicalise so the consuming instrument row (which keys by the
-      // jot's `note.pitch`) finds entries even when the transcriber
-      // routed them through a synthetic pitch like `H` for open hat; // merge into the existing bucket rather than overwriting so the
-      // closed (`h`) and open (`H` → `h`) rejected lists land together.
-      const jotPitch = canonicalProvenancePitch(pitch);
-      const existing = out.get(jotPitch);
-      if (existing) {
-        existing.push(...rejected);
-      } else {
-        out.set(jotPitch, rejected);
-      }
-    }
-    return out;
   }
 
   setExamples(examples: readonly ExampleJot[]) {
@@ -1792,15 +1649,15 @@ export class JotViewStore {
       this.clearAllAudioTracks();
       this.resetPitchMixer();
       this.clearLyrics();
-      this.lastDebugBundle = bundle.manifest;
+      this.provenance.lastDebugBundle = bundle.manifest;
       // Replace (or clear) the per-note debug provenance whenever a
       // new bundle loads. Older bundles may not carry one (e.g. a
       // hand-built or legacy zip); the absent-case clears the previous
       // bundle's provenance so it doesn't leak onto the new score.
-      this.noteProvenance = bundle.noteProvenance ?? undefined;
+      this.provenance.noteProvenance = bundle.noteProvenance ?? undefined;
       // Reset the visibility toggle so a freshly loaded bundle reads
       // as just "the score"; operator opts into the ghost overlays.
-      this.showFilteredOnsets = false;
+      this.provenance.showFilteredOnsets = false;
       // Bundles come from the transcribe pipeline, which routinely
       // emits triplet subdivisions; the 48ths grid is the LCM of 16ths
       // + triplets so it visualises both. Override the store-wide 16ths
@@ -1918,16 +1775,14 @@ export class JotViewStore {
     this.trackOrder = buildDebugBundleTrackOrder(pitches, loadedByKey);
   }
 
-  /** Toggle the {@link DebugPanel}'s open state without forgetting the bundle. */
-  toggleDebugPanel(): void {
-    this.debugPanelOpen = !this.debugPanelOpen;
-  }
-
   /** Resize the {@link DebugPanel}. Clamped so it can't shrink past the
-   * header or grow past the viewport (with headroom for the toolbar). */
+   * header or grow past the viewport (with headroom for the toolbar).
+   * Stays here transitionally because the clamp reads `_viewportHeight`
+   * (viewport state not yet extracted); moves to the presenter with the
+   * viewport slice. */
   setDebugPanelHeight(px: number): void {
     const max = Math.max(120, this._viewportHeight - 160);
-    this.debugPanelHeight = Math.min(max, Math.max(80, px));
+    this.provenance.debugPanelHeight = Math.min(max, Math.max(80, px));
   }
 
   /** Resize the sticky gutter column. Clamped to a sensible range so a

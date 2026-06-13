@@ -24,9 +24,11 @@ import sharedStyles from '../jot_view.module.css';
 import { GutterResizeHandle } from './components/gutter_resize_handle';
 import {
   BarTimingsContext,
+  JotViewerPresenterContext,
   JotViewStoreContext,
   NoteProvenanceContext,
   NoteProvenanceContextValue,
+  ProvenanceStoreContext,
   RenderedJotContext,
   SelectionContext,
 } from './contexts';
@@ -2689,9 +2691,10 @@ export const FilteredOnsetView = observer(({
   color: string;
   trackHeight: number;
 }) => {
-  const store = React.useContext(JotViewStoreContext);
+  const provenance = React.useContext(ProvenanceStoreContext);
+  const presenter = React.useContext(JotViewerPresenterContext);
   const pinnedKey = `${entry.pitch}:${entry.detected_time_sec}`;
-  const clicked = store?.pinnedFilteredOnsetKey === pinnedKey;
+  const clicked = provenance?.pinnedFilteredOnsetKey === pinnedKey;
   const [hovered, setHovered] = React.useState(false);
   const show = hovered || clicked;
   const stop = (e: React.MouseEvent) => e.stopPropagation();
@@ -2708,7 +2711,7 @@ export const FilteredOnsetView = observer(({
   // dismissing click from also moving the playhead via the bars-row
   // seek handler (or any other bubbling onClick further up the tree).
   React.useEffect(() => {
-    if (!clicked || !store) return;
+    if (!clicked || !presenter) return;
     const onClickCapture = (e: MouseEvent) => {
       const target = e.target as Node;
       if (anchorRef.current?.contains(target)) return;
@@ -2718,11 +2721,11 @@ export const FilteredOnsetView = observer(({
       // which still holds the portaled element.
       if (labelRef.current?.contains(target)) return;
       e.stopPropagation();
-      store.setPinnedFilteredOnsetKey(undefined);
+      presenter.setPinnedFilteredOnsetKey(undefined);
     };
     document.addEventListener('click', onClickCapture, true);
     return () => document.removeEventListener('click', onClickCapture, true);
-  }, [clicked, store]);
+  }, [clicked, presenter]);
   return (
     <div
       ref={anchorRef}
@@ -2740,7 +2743,7 @@ export const FilteredOnsetView = observer(({
       onMouseDown={stop}
       onClick={(e) => {
         stop(e);
-        store?.setPinnedFilteredOnsetKey(clicked ? undefined : pinnedKey);
+        presenter?.setPinnedFilteredOnsetKey(clicked ? undefined : pinnedKey);
       }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}

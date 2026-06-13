@@ -46,7 +46,7 @@ test('captures the debug-details timing visualization', async ({ page }) => {
   // a non-zero envelope refine, both coarse + fine beat alignment, all
   // four quantise passes, and a MIDI snap residual.
   await page.evaluate(() => {
-    const store = (window as any).drumjot.store;
+    const provenance = (window as any).drumjot.provenance;
     const jot = (window as any).drumjot.document.currentJot;
     if (!jot) throw new Error('no rendered jot');
     // Walk the structural cache: voices → bars → tracks[pitch] → notes,
@@ -70,7 +70,7 @@ test('captures the debug-details timing visualization', async ({ page }) => {
       midi: { ...(sourceNote.metadata?.midi ?? {}), tick: 100 },
     };
 
-    store.noteProvenance = {
+    provenance.noteProvenance = {
       format: 3,
       lead_bars: 0,
       beat_alignment_offset_sec: 0.011,

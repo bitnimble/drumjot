@@ -2,6 +2,7 @@ import { makeAutoObservable } from 'mobx';
 import { BeatInput, DrumSeparator, LlmModel, TranscribeStage } from 'src/transcriber';
 import { GridLineSettings, SettingsStore } from './stores/settings_store';
 import { TranscribeStore } from './stores/transcribe_store';
+import { ProvenanceStore } from './stores/provenance_store';
 
 /**
  * Dependencies the presenter orchestrates over. Every store is a plain
@@ -16,6 +17,7 @@ import { TranscribeStore } from './stores/transcribe_store';
 export type JotViewerPresenterDeps = {
   settings: SettingsStore;
   transcribe: TranscribeStore;
+  provenance: ProvenanceStore;
 };
 
 /**
@@ -37,11 +39,17 @@ export class JotViewerPresenter {
   // only holds references, it doesn't own their reactivity).
   readonly settings: SettingsStore;
   readonly transcribe: TranscribeStore;
+  readonly provenance: ProvenanceStore;
 
   constructor(deps: JotViewerPresenterDeps) {
     this.settings = deps.settings;
     this.transcribe = deps.transcribe;
-    makeAutoObservable(this, { settings: false, transcribe: false }, { autoBind: true });
+    this.provenance = deps.provenance;
+    makeAutoObservable(
+      this,
+      { settings: false, transcribe: false, provenance: false },
+      { autoBind: true }
+    );
   }
 
   // --- settings ---
@@ -97,5 +105,21 @@ export class JotViewerPresenter {
 
   setTranscribeMode(mode: 'new' | 'resume') {
     this.transcribe.transcribeMode = mode;
+  }
+
+  // --- provenance / debug panel ---
+
+  /** Replace the toolbar's `Show filtered` checkbox state. */
+  setShowFilteredOnsets(show: boolean) {
+    this.provenance.showFilteredOnsets = show;
+  }
+
+  setPinnedFilteredOnsetKey(key: string | undefined) {
+    this.provenance.pinnedFilteredOnsetKey = key;
+  }
+
+  /** Toggle the DebugPanel's open state without forgetting the bundle. */
+  toggleDebugPanel() {
+    this.provenance.debugPanelOpen = !this.provenance.debugPanelOpen;
   }
 }

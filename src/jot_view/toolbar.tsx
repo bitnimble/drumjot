@@ -37,6 +37,8 @@ import { Tabs } from './components/tabs';
 import { formatTranscriptionSummary, RecentTranscriptionsPicker } from './recent_transcriptions';
 import styles from './toolbar.module.css';
 import { GridLineSettings, JotViewStore, TranscribeOptions, TranscribeStatus } from './store';
+import { ProvenanceStore } from './stores/provenance_store';
+import { JotViewerPresenter } from './jot_viewer_presenter';
 import { JotViewStoreContext } from './contexts';
 
 /** Stage labels in pipeline order, shown verbatim in the resume stage
@@ -1146,15 +1148,24 @@ const TranscribeBusyPill = observer(({ status }: { status: TranscribeStatus }) =
  * tracks are operated through the existing toolbar / gutter controls
  * exactly as if they had been loaded by hand.
  */
-export const DebugPanel = observer(({ store }: { store: JotViewStore }) => {
-  const bundle = store.lastDebugBundle;
+export const DebugPanel = observer(
+  ({
+    store,
+    provenance,
+    presenter,
+  }: {
+    store: JotViewStore;
+    provenance: ProvenanceStore;
+    presenter: JotViewerPresenter;
+  }) => {
+  const bundle = provenance.lastDebugBundle;
   if (!bundle) return null;
-  if (!store.debugPanelOpen) {
+  if (!provenance.debugPanelOpen) {
     return (
       <div
         className={styles.debugPanelToggleBar}
         role="button"
-        onClick={() => store.toggleDebugPanel()}
+        onClick={() => presenter.toggleDebugPanel()}
         title="Re-open the debug panel."
       >
         <ChevronUp size={14} aria-hidden="true" />
@@ -1169,7 +1180,7 @@ export const DebugPanel = observer(({ store }: { store: JotViewStore }) => {
   const onResizePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
     const startY = e.clientY;
-    const startHeight = store.debugPanelHeight;
+    const startHeight = provenance.debugPanelHeight;
     const target = e.currentTarget;
     target.setPointerCapture(e.pointerId);
     const onMove = (ev: PointerEvent) => {
@@ -1187,13 +1198,13 @@ export const DebugPanel = observer(({ store }: { store: JotViewStore }) => {
     target.addEventListener('pointercancel', onUp);
   };
   return (
-    <div className={styles.debugPanel} style={{ height: store.debugPanelHeight }}>
+    <div className={styles.debugPanel} style={{ height: provenance.debugPanelHeight }}>
       <div
         className={styles.debugPanelResizeHandle}
         onPointerDown={onResizePointerDown}
         title="Drag to resize the debug panel."
       />
-      <div className={styles.debugPanelHeader} onClick={() => store.toggleDebugPanel()}>
+      <div className={styles.debugPanelHeader} onClick={() => presenter.toggleDebugPanel()}>
         <span className={styles.debugPanelTitle}>
           <ChevronDown size={14} aria-hidden="true" />
           Hide debug logs

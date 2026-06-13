@@ -18,7 +18,9 @@ import {
   FollowPlayheadContext,
   GridLineSettingsContext,
   JotViewStoreContext,
+  JotViewerPresenterContext,
   NoteProvenanceContext,
+  ProvenanceStoreContext,
   RenderedJotContext,
   SelectionContext,
   UniformWaveformsContext,
@@ -39,6 +41,7 @@ import { GridLineSettings, JotViewStore, TrackKey, snapToDevicePx } from './jot_
 import { SettingsStore } from './jot_view/stores/settings_store';
 import { DocumentStore } from './jot_view/stores/document_store';
 import { TranscribeStore } from './jot_view/stores/transcribe_store';
+import { ProvenanceStore } from './jot_view/stores/provenance_store';
 import { JotViewerPresenter } from './jot_view/jot_viewer_presenter';
 import { RecentTranscriptionsPicker } from './jot_view/recent_transcriptions';
 import { ToastContainer } from './jot_view/toast_container';
@@ -60,6 +63,7 @@ type CreateJotViewResult = {
   document: DocumentStore;
   settings: SettingsStore;
   transcribe: TranscribeStore;
+  provenance: ProvenanceStore;
   /** Catch-all presenter holding the actions/orchestration over the
    *  data-only stores. */
   presenter: JotViewerPresenter;
@@ -70,8 +74,9 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   const documentStore = new DocumentStore();
   const settings = new SettingsStore();
   const transcribe = new TranscribeStore();
-  const presenter = new JotViewerPresenter({ settings, transcribe });
-  const store = new JotViewStore(documentStore, settings, transcribe);
+  const provenance = new ProvenanceStore();
+  const presenter = new JotViewerPresenter({ settings, transcribe, provenance });
+  const store = new JotViewStore(documentStore, settings, transcribe, provenance);
   if (options.examples) store.setExamples(options.examples);
   const selection = new SelectionStore(store);
 
@@ -206,7 +211,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
       return () => window.removeEventListener('keydown', onKeyDown);
     }, []);
 
-    const provenanceContextValue = store.provenanceContextValue;
+    const provenanceContextValue = provenance.provenanceContextValue;
 
     // Lyrics modal visibility lives on the store so any TS consumer can
     // observe / drive it; the seeded title/artist fields are still local
@@ -288,6 +293,8 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
 
     return (
       <JotViewStoreContext.Provider value={store}>
+        <JotViewerPresenterContext.Provider value={presenter}>
+        <ProvenanceStoreContext.Provider value={provenance}>
         <SelectionContext.Provider value={selection}>
           <NoteProvenanceContext.Provider value={provenanceContextValue}>
             <GridLineSettingsContext.Provider value={settings.gridLines}>
@@ -319,9 +326,9 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       onSetQuantise={(v) => presenter.setQuantise(v)}
                       onSetQuantiseUseLlm={(v) => presenter.setQuantiseUseLlm(v)}
                       onSetZoom={setZoomCentered}
-                      hasNoteProvenance={store.noteProvenance !== undefined}
-                      showFilteredOnsets={store.showFilteredOnsets}
-                      onSetShowFilteredOnsets={(v) => store.setShowFilteredOnsets(v)}
+                      hasNoteProvenance={provenance.noteProvenance !== undefined}
+                      showFilteredOnsets={provenance.showFilteredOnsets}
+                      onSetShowFilteredOnsets={(v) => presenter.setShowFilteredOnsets(v)}
                       gridLines={settings.gridLines}
                       onToggleGridLine={(k) => presenter.toggleGridLine(k)}
                       uniformWaveforms={settings.uniformWaveforms}
@@ -367,7 +374,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                     )}
                     <Minimap store={store} documentStore={documentStore} />
                     {jot && <PlaybackBar store={store} documentStore={documentStore} />}
-                    <DebugPanel store={store} />
+                    <DebugPanel store={store} provenance={provenance} presenter={presenter} />
                     <LyricsSearchModal
                       open={store.lyricsSearchOpen}
                       initialTitle={lyricsInitialTitle}
@@ -393,11 +400,13 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
             </GridLineSettingsContext.Provider>
           </NoteProvenanceContext.Provider>
         </SelectionContext.Provider>
+        </ProvenanceStoreContext.Provider>
+        </JotViewerPresenterContext.Provider>
       </JotViewStoreContext.Provider>
     );
   });
 
-  return { store, document: documentStore, settings, transcribe, presenter, View };
+  return { store, document: documentStore, settings, transcribe, provenance, presenter, View };
 }
 
 type JotViewProps = {
