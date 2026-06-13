@@ -59,7 +59,8 @@ import { DocumentPresenter } from './jot_view/document/document_presenter';
 import { TranscribePresenter } from './jot_view/transcribe/transcribe_presenter';
 import { RecentTranscriptionsPicker } from './jot_view/transcribe/recent_transcriptions';
 import { ToastContainer } from './jot_view/toasts/toast_container';
-import { DebugPanel, Toolbar } from './jot_view/toolbar/toolbar';
+import { Toolbar } from './jot_view/toolbar/toolbar';
+import { DebugPanel } from './jot_view/provenance/debug_panel';
 import { ExampleJot } from 'src/fakes';
 
 export { TranscribePresenter } from './jot_view/transcribe/transcribe_presenter';
