@@ -13,11 +13,12 @@ def _clip(t, dim=4, n_lanes=3, val=1.0):
 
 
 def test_collate_pads_and_masks():
-    X, Y, Yw, A, mask = collate_clips([_clip(5), _clip(3)])
+    X, Y, Yw, A, Aneg, mask = collate_clips([_clip(5), _clip(3)])
     assert X.shape == (2, 5, 4)
     assert Y.shape == (2, 3, 5)
     assert torch.equal(Yw, Y)  # no weight_targets set -> falls back to targets
     assert float(A.sum()) == 0.0  # no activity targets set -> zeros
+    assert float(Aneg.sum()) == 0.0  # no negative_targets set -> zeros
     assert mask.sum().item() == 8  # 5 + 3 valid frames
     assert mask[1, 3:].sum().item() == 0  # second clip padded after frame 3
     assert torch.all(X[1, 3:] == 0)  # padded feature region zeroed
@@ -40,11 +41,11 @@ def test_masked_bce_ignores_padding():
     c = _clip(6, val=0.5)
     pw = torch.ones(3, 1)
 
-    _, Ya, _, _, ma = collate_clips([c])
+    _, Ya, _, _, _, ma = collate_clips([c])
     logits_a = torch.randn_like(Ya)
     loss_a = masked_bce(logits_a, Ya, ma, pw)
 
-    _, Yb, _, _, _ = collate_clips([c, _clip(10)])
+    _, Yb, _, _, _, _ = collate_clips([c, _clip(10)])
     logits_b = torch.randn(2, 3, 10)
     logits_b[0, :, :6] = logits_a[0]
     only_clip0 = torch.zeros(2, 10)
@@ -155,3 +156,25 @@ def test_masked_bce_applies_per_lane_pos_weight():
     base = masked_bce(logits, targets, mask, torch.ones(2, 1))
     up = masked_bce(logits, targets, mask, torch.tensor([[10.0], [1.0]]))
     assert up > base
+
+
+def test_mean_f1_counts_only_lanes_with_reference_onsets(monkeypatch):
+    # per-stem clips carry onsets for one instrument; mean_f1 must average only
+    # the lanes that have reference onsets, not score the empty lanes as 0.
+    import numpy as np
+
+    from drumjot_training import train
+    from drumjot_training.config import Config
+
+    cfg = Config()
+    clip = train.Clip(
+        features=np.zeros((4, 4), dtype=np.float32),
+        targets=np.zeros((len(cfg.lanes), 4), dtype=np.float32),
+        onsets_by_lane={"k": [0.1]},  # only kick present (a kick stem)
+    )
+    monkeypatch.setattr(
+        train, "evaluate_clip",
+        lambda m, c, cf, th=None: {ln: (0.9 if ln == "k" else 0.0) for ln in cf.lanes},
+    )
+    # == kick's F1, NOT 0.9/len(lanes); empty lanes are skipped
+    assert abs(train.mean_f1(None, [clip], cfg) - 0.9) < 1e-9

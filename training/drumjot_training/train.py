@@ -31,7 +31,7 @@ from drumjot_training import (
     star,
 )
 from drumjot_training.config import Config
-from drumjot_training.lanes import sibling_matrix
+from drumjot_training.lanes import NEGATIVE_LANES, negative_sibling_matrix, sibling_matrix
 from drumjot_training.model import MultiLaneHeads
 from drumjot_training.targets import (
     SUSTAINED_LANES,
@@ -60,6 +60,11 @@ class Clip:
     # Auxiliary ring-activity targets (n_lanes, T), nonzero only on the
     # sustained lanes (targets.SUSTAINED_LANES). None -> zeros.
     activity_targets: np.ndarray | None = None
+    # Hard-negative activity for dropped, non-output percussion (n_neg, T over
+    # lanes.NEGATIVE_LANES): frames where a non-kit hit occurred. Fed to the loss
+    # as extra sibling activity so every output lane learns NOT to fire there.
+    # None -> zeros (no dropped-percussion supervision for this clip).
+    negative_targets: np.ndarray | None = None
 
 
 def build_targets(
@@ -70,6 +75,20 @@ def build_targets(
         [
             onsets_to_target(onsets_by_lane.get(lane, []), n_frames, cfg.encoder_fps, cfg.sigma_frames)
             for lane in cfg.lanes
+        ]
+    )
+
+
+def build_negative_targets(
+    onsets_by_lane: dict[str, list[float]], n_frames: int, cfg: Config
+) -> np.ndarray:
+    """Stack the dropped-percussion negative lanes (lanes.NEGATIVE_LANES) into
+    (n_neg, T). Same Gaussian rendering as `build_targets`; these are weighting-
+    only (no head). Reads the catch-all `x` key the onset readers emit."""
+    return np.stack(
+        [
+            onsets_to_target(onsets_by_lane.get(ln, []), n_frames, cfg.encoder_fps, cfg.sigma_frames)
+            for ln in NEGATIVE_LANES
         ]
     )
 
@@ -95,7 +114,11 @@ def _build_clip(
     if max_seconds is not None:
         onsets = {ln: [t for t in ts if t < max_seconds] for ln, ts in onsets.items()}
     targets = build_targets(onsets, feat.shape[0], cfg)
-    return Clip(features=feat, targets=targets, onsets_by_lane=onsets, audio_path=str(audio_path))
+    neg = build_negative_targets(onsets, feat.shape[0], cfg)
+    return Clip(
+        features=feat, targets=targets, onsets_by_lane=onsets,
+        audio_path=str(audio_path), negative_targets=neg,
+    )
 
 
 def build_clip(
@@ -141,14 +164,23 @@ def evaluate_clip(
 
 
 def mean_f1(model, clips: Sequence[Clip], cfg: Config) -> float:
-    """Macro onset-F1 across lanes, averaged over clips."""
+    """Macro onset-F1, averaged over clips, counting only lanes that ACTUALLY
+    have reference onsets in each clip.
+
+    Empty-reference lanes are skipped (not scored as 0): per-stem clips carry
+    onsets for a single instrument's lanes, so averaging in the ~9 empty lanes
+    made this metric meaningless (~0.05 even with kick at F1 0.96). Matches how
+    `tune_thresholds` and the per-lane report aggregate. Full-mix clips (most
+    lanes present) are essentially unchanged."""
     if not clips:
         return 0.0
     per_clip = []
     for clip in clips:
         per_lane = evaluate_clip(model, clip, cfg)
-        per_clip.append(sum(per_lane.values()) / len(per_lane))
-    return sum(per_clip) / len(per_clip)
+        present = [per_lane[ln] for ln in cfg.lanes if clip.onsets_by_lane.get(ln)]
+        if present:
+            per_clip.append(sum(present) / len(present))
+    return sum(per_clip) / len(per_clip) if per_clip else 0.0
 
 
 def tune_thresholds(
@@ -193,15 +225,18 @@ def collate_clips(clips: Sequence[Clip]):
     touch CUDA); `train_loop` moves the batch to the device.
 
     Returns (X (B, T, dim), Y (B, n_lanes, T), Yw (B, n_lanes, T),
-    A (B, n_lanes, T), mask (B, T)); padded frames are zero everywhere and 0 in
-    mask so the losses ignore them. `Yw` is the sibling-weighting target source
-    (`clip.weight_targets`, falling back to `targets`); `A` is the auxiliary
-    ring-activity target (zeros when absent). Clips are capped to a uniform
-    `max_seconds` upstream, so most are full length and padding waste is small."""
+    A (B, n_lanes, T), Aneg (B, n_neg, T), mask (B, T)); padded frames are zero
+    everywhere and 0 in mask so the losses ignore them. `Yw` is the
+    sibling-weighting target source (`clip.weight_targets`, falling back to
+    `targets`); `A` is the auxiliary ring-activity target (zeros when absent);
+    `Aneg` is the dropped-percussion hard-negative activity (`negative_targets`,
+    zeros when absent). Clips are capped to a uniform `max_seconds` upstream, so
+    most are full length and padding waste is small."""
     import torch
 
     dim = clips[0].features.shape[1]
     n_lanes = clips[0].targets.shape[0]
+    n_neg = len(NEGATIVE_LANES)
     lengths = [c.features.shape[0] for c in clips]
     t_max = max(lengths)
     b = len(clips)
@@ -209,6 +244,7 @@ def collate_clips(clips: Sequence[Clip]):
     Y = torch.zeros(b, n_lanes, t_max, dtype=torch.float32)
     Yw = torch.zeros(b, n_lanes, t_max, dtype=torch.float32)
     A = torch.zeros(b, n_lanes, t_max, dtype=torch.float32)
+    Aneg = torch.zeros(b, n_neg, t_max, dtype=torch.float32)
     mask = torch.zeros(b, t_max, dtype=torch.float32)
     for i, clip in enumerate(clips):
         t = lengths[i]
@@ -218,8 +254,10 @@ def collate_clips(clips: Sequence[Clip]):
         Yw[i, :, :t] = torch.as_tensor(wt, dtype=torch.float32)
         if clip.activity_targets is not None:
             A[i, :, :t] = torch.as_tensor(clip.activity_targets, dtype=torch.float32)
+        if clip.negative_targets is not None:
+            Aneg[i, :, :t] = torch.as_tensor(clip.negative_targets, dtype=torch.float32)
         mask[i, :t] = 1.0
-    return X, Y, Yw, A, mask
+    return X, Y, Yw, A, Aneg, mask
 
 
 def sibling_weight(targets, sib_act, pos_w: float, neg_w: float):
@@ -330,9 +368,14 @@ class CachedClips:
             for li, lane in enumerate(self._cfg.lanes):
                 if rings.get(lane):
                     act[li] = spans_to_activity(rings[lane], feat.shape[0], self._cfg.encoder_fps)
+        # dropped-percussion negatives: from the FULL-kit onsets (per-stem) so
+        # bleed shows, else this clip's own onsets. Both carry the `x` key.
+        neg_src = weight_onsets if weight_onsets is not None else onsets
+        neg = build_negative_targets(_cap_onsets(neg_src, length), feat.shape[0], self._cfg)
         return Clip(
             features=feat, targets=targets, onsets_by_lane=onsets,
             audio_path=str(audio_path), weight_targets=wt, activity_targets=act,
+            negative_targets=neg,
         )
 
     def __iter__(self):
@@ -433,7 +476,7 @@ def _window_specs(specs, window: float, search: float, max_windows: int) -> list
 
 def materialize(
     specs: Sequence[tuple],
-    encoder: embeddings.MertEncoder,
+    encoder: embeddings.MertEncoder | embeddings.MuQEncoder,
     cfg: Config,
     cache_dir,
     max_seconds: float | None,
@@ -511,6 +554,10 @@ def train_loop(
     # lane's confusable siblings; per batch, sib_act = max sibling target.
     sib_on = cfg.sib_neg_weight != 1.0 or cfg.sib_pos_weight != 1.0
     S = torch.as_tensor(sibling_matrix(cfg.lanes), dtype=torch.bool, device=device)
+    # dropped-percussion ghost lanes -> hard negatives for the output lanes they
+    # confuse (lanes.negative_sibling_matrix); folded into sib_act below.
+    Sneg = torch.as_tensor(negative_sibling_matrix(cfg.lanes), dtype=torch.bool, device=device)
+    use_neg = sib_on and cfg.use_dropped_neg
     # aux ring-activity rows + a unit pos_weight for the activity BCE
     sus_idx = [i for i, ln in enumerate(cfg.lanes) if ln in SUSTAINED_LANES]
     one_pw = torch.ones(len(sus_idx), 1, device=device)
@@ -548,21 +595,30 @@ def train_loop(
         ep_start = time.perf_counter()
         model.train()
         total, n_batches = 0.0, 0
-        for bi, (X, Y, Yw, A, mask) in enumerate(loader):
+        for bi, (X, Y, Yw, A, Aneg, mask) in enumerate(loader):
             X = X.to(device, non_blocking=True)
             Y = Y.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
             fw = None
             if sib_on:
                 Yw = Yw.to(device, non_blocking=True)
-                # per lane l: max over its siblings' weight-targets at each frame
-                sib_act = torch.stack(
-                    [
-                        Yw[:, S[li]].amax(dim=1) if bool(S[li].any()) else torch.zeros_like(Yw[:, 0])
-                        for li in range(len(cfg.lanes))
-                    ],
-                    dim=1,
-                )  # (B, n_lanes, T)
+                if use_neg:
+                    Aneg = Aneg.to(device, non_blocking=True)
+                # per lane l: max sibling activity at each frame, over its
+                # confusable OUTPUT siblings (Yw[S]) AND, when enabled, the
+                # dropped-percussion ghost lanes (Aneg[Sneg]). Both are hard
+                # negatives on frames where l is silent.
+                parts = []
+                for li in range(len(cfg.lanes)):
+                    cols = []
+                    if bool(S[li].any()):
+                        cols.append(Yw[:, S[li]].amax(dim=1))
+                    if use_neg and bool(Sneg[li].any()):
+                        cols.append(Aneg[:, Sneg[li]].amax(dim=1))
+                    parts.append(
+                        torch.stack(cols, dim=0).amax(dim=0) if cols else torch.zeros_like(Yw[:, 0])
+                    )
+                sib_act = torch.stack(parts, dim=1)  # (B, n_lanes, T)
                 fw = sibling_weight(Y, sib_act, cfg.sib_pos_weight, cfg.sib_neg_weight)
             opt.zero_grad()
             with runtime.autocast():  # bf16 fwd on Ampere+; FP32 no-op elsewhere
@@ -873,11 +929,17 @@ def _pooled_specs(args) -> tuple[list, list, Path]:
     enst-sep, egmd-sep). `--pool-sources` selects which; `--pool-cap` caps clips
     per source; `--pool-balance` oversamples smaller sources so none dominates.
     """
+    import json
     import os
 
+    from drumjot_training.lanes import LANES, WEIGHT_LANES
+
     sources = [s.strip() for s in args.pool_sources.split(",") if s.strip()]
-    per_train: dict[str, list] = {}
-    per_val: dict[str, list] = {}
+
+    # Index each source's per-stem clips (file pairing only -- NO onset parsing
+    # here) + how to read its labels: ann_of -> the clip's label file, reader ->
+    # the parser. --pool-cap dedups by label file (one song per file).
+    info: dict[str, tuple] = {}
     roots: list[str] = []
     for name in sources:
         root = paths.dataset_path(name)
@@ -886,36 +948,74 @@ def _pooled_specs(args) -> tuple[list, list, Path]:
             allper = star.perstem_index(root)
             tr = [c for c in allper if c.split == "training"]
             va = [c for c in allper if c.split in ("validation", "test")]
-            keyf = lambda c: c.annotation_path  # noqa: E731
-            spec = lambda c: (  # noqa: E731
-                c.audio_path,
-                star.restricted_onsets(c.annotation_path, c.pitch),
-                star.onsets_by_lane(c.annotation_path),
-            )
+            ann_of, reader, p2l = (lambda c: c.annotation_path), star.onsets_by_lane, star.PERSTEM_TO_LANES
         elif name == "enst":
             allper = enst.perstem_index(root)
             tr = enst.perstem_for_split(allper, "train")
             va = enst.perstem_for_split(allper, "validation")
-            keyf = lambda c: c.annotation_path  # noqa: E731
-            spec = lambda c: (  # noqa: E731
-                c.audio_path,
-                enst.restricted_onsets(c.annotation_path, c.pitch),
-                enst.onsets_by_lane(c.annotation_path),
-            )
+            ann_of, reader, p2l = (lambda c: c.annotation_path), enst.onsets_by_lane, enst.PERSTEM_TO_LANES
         elif name == "egmd":
             allper = egmd.perstem_index(root)
             tr = [c for c in allper if c.split == "train"]
             va = [c for c in allper if c.split == "validation"]
-            keyf = lambda c: c.midi_path  # noqa: E731
-            spec = lambda c: (  # noqa: E731
-                c.audio_path,
-                egmd.restricted_onsets(c.midi_path, c.pitch),
-                midi_labels.onsets_from_path(c.midi_path),
-            )
+            ann_of, reader, p2l = (lambda c: c.midi_path), midi_labels.onsets_from_path, egmd.PERSTEM_TO_LANES
         else:
             raise SystemExit(f"--pool-sources: unknown source {name!r} (use star/enst/egmd)")
-        per_train[name] = [spec(c) for c in _cap_by_clip(tr, keyf, args.pool_cap)]
-        per_val[name] = [spec(c) for c in va]
+        # use each SOURCE's own pitch->lanes map (not STAR's) so a source whose
+        # stem-pitch vocab ever diverges can't silently yield all-empty restricted
+        # onsets. (They're identical today; this keeps it correct if one changes.)
+        info[name] = (tr, va, ann_of, reader, p2l)
+
+    # Feature cache: default beside the sep trees (NFS), but --pool-cache should
+    # point it at LOCAL NVMe -- the .npy features are re-encodable scratch (~50 GB
+    # for --pool-cap 1000) and local reads keep the GPU compute-bound instead of
+    # NFS-throttled, with no large-RAM/page-cache requirement.
+    cache = (
+        Path(args.pool_cache) if getattr(args, "pool_cache", None)
+        else Path(os.path.commonpath(roots)) / "_cache_mert_pooled"
+    )
+    cache.mkdir(parents=True, exist_ok=True)
+
+    # Parsed-onset cache: each label file is parsed ONCE -- a 5-stem song was
+    # otherwise parsed 10x (5 pitches x {restricted, full}) -- memoized in-run and
+    # persisted so reruns/sweeps skip parsing entirely (the dominant spec-build
+    # cost). restricted onsets are DERIVED by filtering full to the stem's lanes
+    # (matches *.restricted_onsets). Keyed by absolute label path; delete
+    # `_onsets.json` if the labels are regenerated.
+    ocp = cache / "_onsets.json"
+    try:
+        onsets_cache = json.loads(ocp.read_text()) if ocp.exists() else {}
+    except Exception:  # noqa: BLE001  corrupt cache -> rebuild
+        onsets_cache = {}
+    dirty = False
+
+    def _full(path, reader):
+        nonlocal dirty
+        v = onsets_cache.get(str(path))
+        # rebuild stale entries that predate the dropped-percussion `x` lane
+        if v is None or any(ln not in v for ln in NEGATIVE_LANES):
+            r = reader(path)
+            v = {ln: list(r.get(ln, [])) for ln in WEIGHT_LANES}
+            onsets_cache[str(path)] = v
+            dirty = True
+        return v
+
+    def _spec(c, ann_of, reader, p2l):
+        full = _full(ann_of(c), reader)  # all output lanes + the `x` negative lane
+        keep = set(p2l.get(c.pitch, ()))
+        restricted = {ln: (full[ln] if ln in keep else []) for ln in LANES}
+        return (c.audio_path, restricted, full)
+
+    per_train: dict[str, list] = {}
+    per_val: dict[str, list] = {}
+    for name in sources:
+        tr, va, ann_of, reader, p2l = info[name]
+        per_train[name] = [_spec(c, ann_of, reader, p2l) for c in _cap_by_clip(tr, ann_of, args.pool_cap)]
+        per_val[name] = [_spec(c, ann_of, reader, p2l) for c in va]
+    if dirty:  # atomic so a ctrl-C can't leave a half-written cache
+        tmp = ocp.with_name(ocp.name + ".tmp")
+        tmp.write_text(json.dumps(onsets_cache))
+        os.replace(tmp, ocp)
 
     # Oversample (repeat) smaller sources up to the largest so a big synthetic
     # source can't drown the small real-acoustic one (ENST). Capped at 5x.
@@ -931,14 +1031,6 @@ def _pooled_specs(args) -> tuple[list, list, Path]:
 
     train_specs = [s for name in sources for s in per_train[name]]
     val_specs = [s for name in sources for s in per_val[name]]
-    # Feature cache: default beside the sep trees (NFS), but --pool-cache should
-    # point it at LOCAL NVMe -- the .npy features are re-encodable scratch (~50 GB
-    # for --pool-cap 1000) and local reads keep the GPU compute-bound instead of
-    # NFS-throttled, with no large-RAM/page-cache requirement.
-    cache = (
-        Path(args.pool_cache) if getattr(args, "pool_cache", None)
-        else Path(os.path.commonpath(roots)) / "_cache_mert_pooled"
-    )
     return train_specs, val_specs, cache
 
 
@@ -980,7 +1072,12 @@ def main(argv: list[str] | None = None) -> None:
         help="DataLoader prefetch workers; >0 needs docker --shm-size=2g (else it hangs). "
         "0 still streams from the SSD cache (RAM stays bounded), just no prefetch overlap.",
     )
-    ap.add_argument("--layer", type=int, default=10, help="MERT hidden layer")
+    ap.add_argument("--encoder", choices=("mert", "muq"), default="mert",
+                    help="frozen SSL encoder: mert (m-a-p/MERT-v1-330M, 75 fps; default) or "
+                    "muq (OpenMuQ/MuQ-large-msd-iter, 25 fps; needs the `muq` pip package + a "
+                    "fetch_models.py prefetch). Sets encoder name + frame rate; features cache "
+                    "separately per encoder.")
+    ap.add_argument("--layer", type=int, default=10, help="encoder hidden layer (MERT 0-24, MuQ 0-24)")
     ap.add_argument("--seed", type=int, default=0,
                     help="torch init seed for reproducible head weights (multi-seed ablations)")
     ap.add_argument(
@@ -1029,6 +1126,11 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--sib-pos-weight", type=float, default=Config.sib_pos_weight,
                     help="loss multiplier on co-occurring positives (hit under sibling "
                     "noise, the harder detection); 1 disables")
+    ap.add_argument("--dropped-neg", default=Config.use_dropped_neg,
+                    action=argparse.BooleanOptionalAction,
+                    help="treat dropped, non-output percussion (the removed mp + non-kit "
+                    "aux perc) as hard negatives for every output lane, reusing the sib "
+                    "weighting; --no-dropped-neg ablates (default on)")
     ap.add_argument("--align-window", type=float, default=0.03, help="post-filter peak-align window (s)")
     ap.add_argument("--support-percentile", type=float, default=60.0, help="post-filter envelope support floor pctl")
     ap.add_argument("--no-filter-report", action="store_true", help="skip the deterministic-filter F1 comparison")
@@ -1043,11 +1145,15 @@ def main(argv: list[str] | None = None) -> None:
     import torch
 
     runtime.configure_backends()  # TF32 + sets up the bf16 autocast path
+    enc_name = embeddings.MUQ_NAME if args.encoder == "muq" else embeddings.MERT_NAME
+    enc_fps = embeddings.MUQ_FPS if args.encoder == "muq" else embeddings.MERT_FPS
     cfg = Config(
+        encoder=enc_name, encoder_fps=enc_fps,
         encoder_layer=args.layer, cache_dtype=args.cache_dtype,
         high_band=args.high_band, cym=args.cym,
         lr=args.lr, weight_decay=args.weight_decay,
         sib_neg_weight=args.sib_neg_weight, sib_pos_weight=args.sib_pos_weight,
+        use_dropped_neg=args.dropped_neg,
     )
     train_specs, val_specs, cache = (
         _star_specs(args) if args.dataset == "star"
@@ -1061,7 +1167,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.overfit_one:
         train_specs = train_specs[:1]
 
-    encoder = embeddings.MertEncoder(name=cfg.encoder, layer=cfg.encoder_layer)
+    encoder = embeddings.make_encoder(cfg.encoder, cfg.encoder_layer)
 
     # Expand into per-window specs. Both train and val segment long clips into up
     # to --max-windows windows (recovering audio past the first --max-seconds).
