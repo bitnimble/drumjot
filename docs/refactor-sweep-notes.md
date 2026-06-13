@@ -73,24 +73,54 @@ architectural and flagged).
 
 | feature | status | notes |
 |---|---|---|
-| playback | pending | |
-| viewport | pending | |
-| transcribe | pending | |
-| lyrics | pending | |
-| minimap | pending | |
-| mixer | pending | |
-| toolbar | pending | incl. DebugPanel → provenance |
-| score | pending | big; split sub-components |
-| contexts.ts split | pending | per-feature contexts |
+| playback | **done** | split `playhead.tsx` out of `playback.tsx`; pure label logic → `playhead_label.ts` (+ unit test) |
+| provenance | **done** | `DebugPanel` moved out of `toolbar` → `provenance/debug_panel.{tsx,module.css}` |
+| lyrics | partial | pure beat-positioning → `lyric_layout.ts`. The big `lyrics_row.tsx` (~770 lines) still bundles several components (chips, WordText, WindowedLines, useDropTarget) that could be split. |
+| viewport | not started | `vertical_scrollbar` + store/presenter already small/clean; nothing obvious to extract. |
+| transcribe | not started | `recent_transcriptions` is small; toolbar holds the transcribe form (see toolbar). |
+| minimap | not started | `minimap.tsx` (~530) has pure peak/tick canvas-prep logic that could move to a tested helper. Perf-adjacent (canvas paint), review before splitting. |
+| mixer | **FLAGGED** | `mixer.tsx` (~1600), InstrumentRow / AudioTrackRow / waveform canvas / gutter rows. Perf-critical (per-frame waveform + windowed rows). Mechanical sub-component splits are safe in principle but high-blast-radius; recommend doing as its own reviewed slice. |
+| toolbar | partial | `DebugPanel` extracted. The menu code (~1130 lines) remains; could split leaf pieces (busy pills, ThemeSection, PlaybackKitSubmenu, sample-progress helpers), lower risk, not yet done. |
+| score | **FLAGGED** | `score.tsx` (~2825), the headline monolith (TimelineHeader, Playhead host, Legend, BarView, NoteView, FilteredOnsetView, NoteProvenanceDetails, PopoverPortal, windowed rendering). PERF-CRITICAL: PopoverPortal subscription gating, PlayheadPosVar, DomTargetCache, windowing all live here and the perf e2e specs are skipped without a debug bundle. A mechanical file-split is behaviour-preserving in principle, but per the "don't risk behaviour/quality" guidance I did **not** attempt it autonomously overnight. Recommend doing this interactively with the perf specs enabled. |
+| contexts.ts split | not started | Splitting each React context next to its feature is low-risk but high import-churn (every context consumer). Cross-cutting contexts (NoteProvenance, BarTimings, RenderedJot, GridLineSettings, UniformWaveforms, FollowPlayhead, Selection) have no single feature home. Deferred; recommend a dedicated mechanical pass.
+
+**Summary:** the safe, clearly behaviour-preserving extractions were done
+(playback, provenance/DebugPanel, lyrics layout). The two giant perf-sensitive
+views (`score.tsx`, `mixer.tsx`) and the contexts split are flagged for a
+reviewed pass rather than done blind overnight, they're mechanically
+splittable but the risk/benefit said "flag" under the stated guidance.
 
 ---
 
-## Unit-test cleanup
+## Unit-test cleanup (bullet 24)
 
-_(pending)_
+Not started as a dedicated pass. Added one new focused unit test alongside an
+extraction (`playback/playhead_label.test.ts`). The existing suite (282 pass)
+stays green throughout. Good future targets now that logic is extracted:
+`lyric_layout.ts` (`positionLyricLines`) and the toolbar sample-progress
+helpers.
 
 ---
 
-## Storybook
+## Storybook (done, foundation)
 
-_(pending)_
+Storybook 9 (`@storybook/react-vite`) installed + configured
+(`.storybook/main.ts` re-applies `patchCssModules()` + the `src` alias;
+`preview.ts` loads the design tokens). Scripts: `bun run storybook` (dev),
+`bun run build-storybook` (static build, green). Stories live in per-feature
+`stories/` subfolders.
+
+Coverage so far (all three requested categories represented):
+- **Primitives** (`components/stories/`): IconButton (+Mute/Solo/Clear),
+  Checkbox, NumberStepper, Tabs, Logo, ColorPot, ColorPicker, variants +
+  interactive, handlers routed to the Actions panel via `fn()`.
+- **Major component** (`playback/stories/`): PlaybackBar driven by a real
+  DocumentStore + PlaybackStore + PlaybackPresenter trio (with-jot / no-jot).
+- **Library sandbox** (`src/stories/jot_loader.stories.tsx`): pick a
+  `.jot`/`.mid` (or built-in example) → `parse()`/`fromMidi()` → view the Jot
+  as text + a live JotView.
+
+Remaining (not done): stories for the bigger feature components (audio-track
+row, instrument/note row, toolbar menus, full mixer), these depend on the
+`mixer.tsx`/`score.tsx` sub-components being exported, which ties into the
+flagged breakups above.

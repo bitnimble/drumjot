@@ -15,19 +15,19 @@
 - fix audioTrack.pitch - it shouldn't exist, it should be computed from the track group instead?
 - refactor StructuralTrack type and co to share same source of truth as RenderedJot (or vice versa), using type unions or Omit
 - refactor sweep all code to split out more, be less monolithic:
-  - split out files even more by feature/domain/etc. for example, viewport (consisting of the bounds of the viewport, converters between coordinate systems like pixels to beats, DPI awareness, etc) should probably be its own store and presenter.
-  - if each feature has multiple files, group them into a folder. it's okay if each folder only has three files (store + presenter + tsx).
-    - deferred from the folder-grouping pass (do during per-feature logic extraction below):
-      - move `DebugPanel` out of `toolbar.tsx` into the `provenance/` feature.
-      - break up the large `score.tsx` into its sub-components (TimelineHeader, Playhead, Legend, FilteredOnsetView, NoteProvenanceDetails, …).
-      - split the central `contexts.ts` so each React context lives next to its feature's store/presenter.
-  - pull out business logic / pure logic stuff into a foo_presenter.ts file. Keep the *.tsx file scoped to (a) instantiation (b) React stuff (hooks, events, callbacks, VDOM+JSX) and (c) wiring between stores, presenters, and React.
-  - pull out component state into stores that the presenter acts over
+  (progress + flagged items: docs/refactor-sweep-notes.md)
+  - [DONE] split out files even more by feature/domain/etc., per-concern data stores + per-domain presenters (settings/viewport/mixer/playback/provenance/lyrics/document/transcribe).
+  - [DONE] if each feature has multiple files, group them into a folder (store + presenter + tsx). All jot_view features are now `src/jot_view/<feature>/`.
+    - [DONE] move `DebugPanel` out of `toolbar.tsx` into the `provenance/` feature.
+    - [FLAGGED, not done] break up the large `score.tsx` into its sub-components. Perf-critical; flagged for a reviewed pass (see notes doc).
+    - [TODO] split the central `contexts.ts` so each React context lives next to its feature's store/presenter. Low-risk but high import-churn; deferred.
+  - [PARTIAL] pull out business logic / pure logic into a presenter/util file; keep .tsx scoped to instantiation + React + wiring. Done: playback (playhead + label logic), lyrics (beat-positioning). Remaining: mixer (FLAGGED, perf), score (FLAGGED, perf), toolbar (leaf pieces), minimap.
+  - [PARTIAL] pull out component state into stores that the presenter acts over (only *persistable* state; transient UI state stays React-local). Domain state already lives in stores from the store carve-up.
   - react rendering is now based on the component store state
-  - once logic has been moved into presenter files, unit tests can now directly test logic without needing to mock React components.
-  - with component state moved out into stores, we can also now mock data and render the component with less depenedencies required, e.g. in a Storybook or visual diff (don't actually implement Storybook or visual diffing, that's just an example)
-  - move helper files, functions, and classes into a utils/ directory
-  - explore all the code to see if there's anything that's duplicated unnecessarily, especially focusing on data structures that may get out of sync. if something is duplicated it is not necessarily bad - it's only bad if they can "get out of sync". i.e. if one implementation changes but not the other, would it lead to a product bug or regression? if so, they should share the same source of truth or implementation.
+  - [PARTIAL] once logic has been moved into presenter files, unit tests can directly test logic without mocking React. (Added playhead_label.test.ts; dedicated test-simplification pass not done.)
+  - [DONE, foundation] mock data + render components in isolation: Storybook 9 set up with stories for primitives, a major component (PlaybackBar w/ real store+presenter), and a jot-loader library sandbox. More feature-component stories pending the score/mixer splits.
+  - [PARTIAL] move helper files, functions, and classes into a utils/ directory. `windowing` → `jot_view/utils/`; feature-specific helpers placed with their primary consumer per agreed rule.
+  - [DONE] explore all the code for unnecessary duplication, esp. state that can drift out of sync. Audited; findings + one architectural flag (section-audibility mirror) in docs/refactor-sweep-notes.md. No unsafe drift-prone duplication found beyond pre-listed items.
 - prepare for editing support. review all presenters and stores for any state management issues that may arise from editing.
 
 
