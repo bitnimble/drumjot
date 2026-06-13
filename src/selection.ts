@@ -1,7 +1,7 @@
 import { makeAutoObservable, observable } from 'mobx';
 import { Box, Point } from 'src/geom';
 import { StructuralBar, StructuralNote, StructuralVoice } from 'src/jot';
-import { DocumentStore } from 'src/jot_view/stores/document_store';
+import { DocumentStore } from 'src/jot_view/document/document_store';
 
 export type SelectionState =
   | { type: 'notes'; notes: Set<StructuralNote> }

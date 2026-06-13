@@ -6,11 +6,11 @@
  * import paths working for the shared types + helpers that several files
  * still pull from here.
  */
-export type { GridLineSettings } from './stores/settings_store';
-export type { TranscribeStatus, TranscribeOptions } from './stores/transcribe_store';
-export type { LyricsAlignStatus } from './stores/lyrics_align_store';
-export type { AudioTrackSplitStatus } from './stores/mixer_store';
-export { collectJotPitches, clampVolume, VOLUME_STEP } from './stores/mixer_store';
+export type { GridLineSettings } from './settings/settings_store';
+export type { TranscribeStatus, TranscribeOptions } from './transcribe/transcribe_store';
+export type { LyricsAlignStatus } from './lyrics/lyrics_align_store';
+export type { AudioTrackSplitStatus } from './mixer/mixer_store';
+export { collectJotPitches, clampVolume, VOLUME_STEP } from './mixer/mixer_store';
 export {
   BASE_BAR_WIDTH,
   MIN_ZOOM,
@@ -19,5 +19,5 @@ export {
   MIN_GUTTER_WIDTH,
   MAX_GUTTER_WIDTH,
   snapToDevicePx,
-} from './stores/viewport_store';
+} from './viewport/viewport_store';
 export { trackKeyEq, type TrackKey } from 'src/tracks';

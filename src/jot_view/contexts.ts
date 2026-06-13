@@ -4,12 +4,12 @@ import { RenderedJot } from 'src/jot';
 import { BarTiming } from 'src/playback';
 import { SelectionStore } from 'src/selection';
 import { GridLineSettings } from './store';
-import { ProvenanceStore } from './stores/provenance_store';
-import { LyricsAlignStore } from './stores/lyrics_align_store';
-import { ViewportStore } from './stores/viewport_store';
-import { MixerStore } from './stores/mixer_store';
-import { ProvenancePresenter } from './presenters/provenance_presenter';
-import { LyricsPresenter } from './presenters/lyrics_presenter';
+import { ProvenanceStore } from './provenance/provenance_store';
+import { LyricsAlignStore } from './lyrics/lyrics_align_store';
+import { ViewportStore } from './viewport/viewport_store';
+import { MixerStore } from './mixer/mixer_store';
+import { ProvenancePresenter } from './provenance/provenance_presenter';
+import { LyricsPresenter } from './lyrics/lyrics_presenter';
 
 /**
  * Routes the active {@link SelectionStore} to deep score chrome (today:

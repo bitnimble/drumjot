@@ -10,9 +10,9 @@ import styles from './jot_view.module.css';
 import {
   AudioWorkletWarningModal,
   detectAudioWorkletState,
-} from './jot_view/audio_worklet_warning_modal';
-import { LyricsSearchModal } from './jot_view/lyrics_search_modal';
-import { LyricsTextLoadModal } from './jot_view/lyrics_text_modal';
+} from './jot_view/playback/audio_worklet_warning_modal';
+import { LyricsSearchModal } from './jot_view/lyrics/lyrics_search_modal';
+import { LyricsTextLoadModal } from './jot_view/lyrics/lyrics_text_modal';
 import {
   BarTimingsContext,
   FollowPlayheadContext,
@@ -28,41 +28,41 @@ import {
   SelectionContext,
   UniformWaveformsContext,
 } from './jot_view/contexts';
-import { AudioTrackControls, MixerView, VoiceControls } from './jot_view/mixer';
+import { AudioTrackControls, MixerView, VoiceControls } from './jot_view/mixer/mixer';
 import { Logo } from './jot_view/components/logo';
-import { Minimap } from './jot_view/minimap';
-import { VerticalScrollbar } from './jot_view/vertical_scrollbar';
-import { PlaybackBar } from './jot_view/playback';
+import { Minimap } from './jot_view/minimap/minimap';
+import { VerticalScrollbar } from './jot_view/viewport/vertical_scrollbar';
+import { PlaybackBar } from './jot_view/playback/playback';
 import {
   Legend,
   TimelineHeader,
   extractArtist,
   formatDisplayTitle,
   formatSubtitle,
-} from './jot_view/score';
+} from './jot_view/score/score';
 import { GridLineSettings, TrackKey, snapToDevicePx } from './jot_view/store';
-import { SettingsStore } from './jot_view/stores/settings_store';
-import { DocumentStore } from './jot_view/stores/document_store';
-import { TranscribeStore } from './jot_view/stores/transcribe_store';
-import { ProvenanceStore } from './jot_view/stores/provenance_store';
-import { LyricsAlignStore } from './jot_view/stores/lyrics_align_store';
-import { PlaybackStore } from './jot_view/stores/playback_store';
-import { ViewportStore } from './jot_view/stores/viewport_store';
-import { MixerStore } from './jot_view/stores/mixer_store';
-import { SettingsPresenter } from './jot_view/presenters/settings_presenter';
-import { ViewportPresenter } from './jot_view/presenters/viewport_presenter';
-import { MixerPresenter } from './jot_view/presenters/mixer_presenter';
-import { PlaybackPresenter } from './jot_view/presenters/playback_presenter';
-import { ProvenancePresenter } from './jot_view/presenters/provenance_presenter';
-import { LyricsPresenter } from './jot_view/presenters/lyrics_presenter';
-import { DocumentPresenter } from './jot_view/presenters/document_presenter';
-import { TranscribePresenter } from './jot_view/presenters/transcribe_presenter';
-import { RecentTranscriptionsPicker } from './jot_view/recent_transcriptions';
-import { ToastContainer } from './jot_view/toast_container';
-import { DebugPanel, Toolbar } from './jot_view/toolbar';
+import { SettingsStore } from './jot_view/settings/settings_store';
+import { DocumentStore } from './jot_view/document/document_store';
+import { TranscribeStore } from './jot_view/transcribe/transcribe_store';
+import { ProvenanceStore } from './jot_view/provenance/provenance_store';
+import { LyricsAlignStore } from './jot_view/lyrics/lyrics_align_store';
+import { PlaybackStore } from './jot_view/playback/playback_store';
+import { ViewportStore } from './jot_view/viewport/viewport_store';
+import { MixerStore } from './jot_view/mixer/mixer_store';
+import { SettingsPresenter } from './jot_view/settings/settings_presenter';
+import { ViewportPresenter } from './jot_view/viewport/viewport_presenter';
+import { MixerPresenter } from './jot_view/mixer/mixer_presenter';
+import { PlaybackPresenter } from './jot_view/playback/playback_presenter';
+import { ProvenancePresenter } from './jot_view/provenance/provenance_presenter';
+import { LyricsPresenter } from './jot_view/lyrics/lyrics_presenter';
+import { DocumentPresenter } from './jot_view/document/document_presenter';
+import { TranscribePresenter } from './jot_view/transcribe/transcribe_presenter';
+import { RecentTranscriptionsPicker } from './jot_view/transcribe/recent_transcriptions';
+import { ToastContainer } from './jot_view/toasts/toast_container';
+import { DebugPanel, Toolbar } from './jot_view/toolbar/toolbar';
 import { ExampleJot } from 'src/fakes';
 
-export { TranscribePresenter } from './jot_view/presenters/transcribe_presenter';
+export { TranscribePresenter } from './jot_view/transcribe/transcribe_presenter';
 export type { TrackKey, TranscribeOptions, TranscribeStatus } from './jot_view/store';
 
 type CreateJotViewOptions = {

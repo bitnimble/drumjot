@@ -77,9 +77,14 @@ request, and pull in the linked docs when a task touches that area.
 ### Frontend store / presenter / component architecture
 
 The frontend follows a strict three-layer split (the former monolithic
-`JotViewStore` was carved into data stores under `src/jot_view/stores/*`
-and per-domain presenters under `src/jot_view/presenters/*`). When adding
-or moving frontend state/logic, follow it:
+`JotViewStore` was carved into per-domain data stores + presenters). Code
+is grouped by **feature folder** under `src/jot_view/<feature>/`, each
+folder holds that domain's `<feature>_store.ts` + `<feature>_presenter.ts`
++ its view `.tsx`/`.css` (e.g. `mixer/`, `playback/`, `lyrics/`,
+`viewport/`, `transcribe/`, …). Shared UI primitives live in
+`components/`, truly-shared helpers in `utils/`, and the cross-cutting
+context registry + re-export barrel stay at `contexts.ts` / `store.ts`.
+When adding or moving frontend state/logic, follow it:
 
 - **Stores = data only.** A store holds MobX `observable`s and
   `computed`s and nothing else: no actions, no setters/toggles, no

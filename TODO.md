@@ -17,6 +17,10 @@
 - refactor sweep all code to split out more, be less monolithic:
   - split out files even more by feature/domain/etc. for example, viewport (consisting of the bounds of the viewport, converters between coordinate systems like pixels to beats, DPI awareness, etc) should probably be its own store and presenter.
   - if each feature has multiple files, group them into a folder. it's okay if each folder only has three files (store + presenter + tsx).
+    - deferred from the folder-grouping pass (do during per-feature logic extraction below):
+      - move `DebugPanel` out of `toolbar.tsx` into the `provenance/` feature.
+      - break up the large `score.tsx` into its sub-components (TimelineHeader, Playhead, Legend, FilteredOnsetView, NoteProvenanceDetails, …).
+      - split the central `contexts.ts` so each React context lives next to its feature's store/presenter.
   - pull out business logic / pure logic stuff into a foo_presenter.ts file. Keep the *.tsx file scoped to (a) instantiation (b) React stuff (hooks, events, callbacks, VDOM+JSX) and (c) wiring between stores, presenters, and React.
   - pull out component state into stores that the presenter acts over
   - react rendering is now based on the component store state
