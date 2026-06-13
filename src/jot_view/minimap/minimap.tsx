@@ -32,7 +32,7 @@ import React from 'react';
 import { jotPlayer } from 'src/playback';
 import { type BarSlice, waveformWorker } from 'src/playback/waveform_worker_client';
 import styles from './minimap.module.css';
-import { WAVEFORM_PAINT_COLOR } from '../score/score';
+import { WAVEFORM_PAINT_COLOR } from '../utils/waveform_color';
 import { DocumentStore } from '../document/document_store';
 import { ViewportStore } from '../viewport/viewport_store';
 import { MixerStore } from '../mixer/mixer_store';
