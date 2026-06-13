@@ -9,15 +9,15 @@ import {
   TranscribeProgress,
   TranscribeStage,
 } from 'src/transcriber';
-import { transcribeSuccessToastMessage } from './toasts_messages';
-import { toastStore } from './toasts';
-import { TranscribeStore } from './stores/transcribe_store';
-import { DocumentPresenter } from './presenters/document_presenter';
+import { transcribeSuccessToastMessage } from '../toasts_messages';
+import { toastStore } from '../toasts';
+import { TranscribeStore } from '../stores/transcribe_store';
+import { DocumentPresenter } from './document_presenter';
 
 /**
  * Dependencies the transcribe presenter orchestrates over.
  */
-export type JotViewerPresenterDeps = {
+export type TranscribePresenterDeps = {
   transcribe: TranscribeStore;
   /** Sibling presenter: the transcribe flow auto-loads its result bundle
    *  (score + audio + provenance) through the shared document loader, and
@@ -35,7 +35,7 @@ export type JotViewerPresenterDeps = {
  * presenters (document / mixer / playback / provenance / lyrics /
  * viewport / settings) were split out around it.
  */
-export class JotViewerPresenter {
+export class TranscribePresenter {
   /**
    * Controller for the in-flight `/transcribe` request, if any. The
    * "Stop" toolbar button calls `.abort()` here; the request's
@@ -48,7 +48,7 @@ export class JotViewerPresenter {
   readonly transcribe: TranscribeStore;
   readonly documentPresenter: DocumentPresenter;
 
-  constructor(deps: JotViewerPresenterDeps) {
+  constructor(deps: TranscribePresenterDeps) {
     this.transcribe = deps.transcribe;
     this.documentPresenter = deps.documentPresenter;
     makeAutoObservable(this, {

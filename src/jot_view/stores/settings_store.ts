@@ -28,8 +28,8 @@ export type GridLineSettings = {
  * whole thing can be serialised to localStorage in one place later.
  *
  * Pure data: only MobX observables (+ computeds). Every mutation lives on
- * the presenter (see `jot_viewer_presenter.ts`), so settings logic can be
- * unit-tested against a mocked store.
+ * the presenter (see `presenters/settings_presenter.ts`), so settings
+ * logic can be unit-tested against a mocked store.
  */
 export class SettingsStore {
   /**

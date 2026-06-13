@@ -5,7 +5,7 @@ import { Jot } from 'src/dsl';
 import { EXAMPLE_JOTS, ExampleJot, rockJot, tripletJot } from 'src/fakes';
 import { RenderedJot } from 'src/jot';
 import { createJotView } from 'src/jot_view';
-import { JotViewerPresenter } from 'src/jot_view/jot_viewer_presenter';
+import { TranscribePresenter } from 'src/jot_view/presenters/transcribe_presenter';
 import { ViewportPresenter } from 'src/jot_view/presenters/viewport_presenter';
 import { MixerPresenter } from 'src/jot_view/presenters/mixer_presenter';
 import { ProvenancePresenter } from 'src/jot_view/presenters/provenance_presenter';
@@ -47,7 +47,7 @@ class Drumjot {
   readonly playbackPresenter: PlaybackPresenter;
   readonly lyricsPresenter: LyricsPresenter;
   readonly documentPresenter: DocumentPresenter;
-  readonly presenter: JotViewerPresenter;
+  readonly transcribePresenter: TranscribePresenter;
 
   constructor(root: HTMLElement, examples: readonly ExampleJot[] = EXAMPLE_JOTS) {
     const {
@@ -65,7 +65,7 @@ class Drumjot {
       playbackPresenter,
       lyricsPresenter,
       documentPresenter,
-      presenter,
+      transcribePresenter,
       View,
     } = createJotView({ examples });
     this.document = document;
@@ -82,7 +82,7 @@ class Drumjot {
     this.playbackPresenter = playbackPresenter;
     this.lyricsPresenter = lyricsPresenter;
     this.documentPresenter = documentPresenter;
-    this.presenter = presenter;
+    this.transcribePresenter = transcribePresenter;
     createRoot(root).render(<View />);
   }
 

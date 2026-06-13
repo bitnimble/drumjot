@@ -49,7 +49,6 @@ import { LyricsAlignStore } from './jot_view/stores/lyrics_align_store';
 import { PlaybackStore } from './jot_view/stores/playback_store';
 import { ViewportStore } from './jot_view/stores/viewport_store';
 import { MixerStore } from './jot_view/stores/mixer_store';
-import { JotViewerPresenter } from './jot_view/jot_viewer_presenter';
 import { SettingsPresenter } from './jot_view/presenters/settings_presenter';
 import { ViewportPresenter } from './jot_view/presenters/viewport_presenter';
 import { MixerPresenter } from './jot_view/presenters/mixer_presenter';
@@ -57,12 +56,13 @@ import { PlaybackPresenter } from './jot_view/presenters/playback_presenter';
 import { ProvenancePresenter } from './jot_view/presenters/provenance_presenter';
 import { LyricsPresenter } from './jot_view/presenters/lyrics_presenter';
 import { DocumentPresenter } from './jot_view/presenters/document_presenter';
+import { TranscribePresenter } from './jot_view/presenters/transcribe_presenter';
 import { RecentTranscriptionsPicker } from './jot_view/recent_transcriptions';
 import { ToastContainer } from './jot_view/toast_container';
 import { DebugPanel, Toolbar } from './jot_view/toolbar';
 import { ExampleJot } from 'src/fakes';
 
-export { JotViewerPresenter } from './jot_view/jot_viewer_presenter';
+export { TranscribePresenter } from './jot_view/presenters/transcribe_presenter';
 export type { TrackKey, TranscribeOptions, TranscribeStatus } from './jot_view/store';
 
 type CreateJotViewOptions = {
@@ -91,7 +91,7 @@ type CreateJotViewResult = {
   documentPresenter: DocumentPresenter;
   /** Transcribe presenter (`/transcribe` + `/resume` flows, progress
    *  pill, recent-runs picker, form options). */
-  presenter: JotViewerPresenter;
+  transcribePresenter: TranscribePresenter;
   View: React.FC;
 };
 
@@ -117,7 +117,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     provenancePresenter,
     lyricsPresenter
   );
-  const presenter = new JotViewerPresenter({ transcribe, documentPresenter });
+  const transcribePresenter = new TranscribePresenter({ transcribe, documentPresenter });
   if (options.examples) documentPresenter.setExamples(options.examples);
   const selection = new SelectionStore(documentStore);
 
@@ -354,8 +354,8 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       onSelect={(id) => documentPresenter.loadExample(id)}
                       transcribeStatus={transcribe.transcribeStatus}
                       transcribeOptions={transcribe.transcribeOptions}
-                      onTranscribe={(file) => presenter.transcribeAudio(file)}
-                      onResumeTranscribe={(folder, stage) => presenter.resumeTranscribe(folder, stage)}
+                      onTranscribe={(file) => transcribePresenter.transcribeAudio(file)}
+                      onResumeTranscribe={(folder, stage) => transcribePresenter.resumeTranscribe(folder, stage)}
                       onLoadJot={(file) => documentPresenter.loadJotFile(file)}
                       onLoadMidi={(file) => documentPresenter.loadMidiFile(file)}
                       onLoadParadb={(file) => documentPresenter.loadParadbMap(file)}
@@ -365,13 +365,13 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       onLoadLyricsFile={(file) => documentPresenter.loadLyricsFile(file)}
                       onOpenLyricsTextLoad={() => lyricsPresenter.setLyricsTextOpen(true)}
                       onOpenLyricsSearch={() => lyricsPresenter.setLyricsSearchOpen(true)}
-                      onCancelTranscribe={() => presenter.cancelTranscribe()}
+                      onCancelTranscribe={() => transcribePresenter.cancelTranscribe()}
                       lyricsAlignBusyPhase={lyricsAlign.lyricsAlignBusyPhase}
-                      onSetBeatInput={(b) => presenter.setBeatInput(b)}
-                      onSetDrumSeparator={(s) => presenter.setDrumSeparator(s)}
-                      onSetLlmModel={(m) => presenter.setLlmModel(m)}
-                      onSetQuantise={(v) => presenter.setQuantise(v)}
-                      onSetQuantiseUseLlm={(v) => presenter.setQuantiseUseLlm(v)}
+                      onSetBeatInput={(b) => transcribePresenter.setBeatInput(b)}
+                      onSetDrumSeparator={(s) => transcribePresenter.setDrumSeparator(s)}
+                      onSetLlmModel={(m) => transcribePresenter.setLlmModel(m)}
+                      onSetQuantise={(v) => transcribePresenter.setQuantise(v)}
+                      onSetQuantiseUseLlm={(v) => transcribePresenter.setQuantiseUseLlm(v)}
                       onSetZoom={setZoomCentered}
                       hasNoteProvenance={provenance.noteProvenance !== undefined}
                       showFilteredOnsets={provenance.showFilteredOnsets}
@@ -387,12 +387,12 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       recentTranscriptionsLoading={transcribe.recentTranscriptionsLoading}
                       selectedResumeFolder={transcribe.selectedResumeFolder}
                       selectedResumeStage={transcribe.selectedResumeStage}
-                      onSetSelectedResumeFolder={(f) => presenter.setSelectedResumeFolder(f)}
-                      onSetSelectedResumeStage={(s) => presenter.setSelectedResumeStage(s)}
-                      onRefreshRecentTranscriptions={() => presenter.refreshRecentTranscriptions()}
-                      onLoadRecentTranscription={(folder) => presenter.loadRecentTranscription(folder)}
+                      onSetSelectedResumeFolder={(f) => transcribePresenter.setSelectedResumeFolder(f)}
+                      onSetSelectedResumeStage={(s) => transcribePresenter.setSelectedResumeStage(s)}
+                      onRefreshRecentTranscriptions={() => transcribePresenter.refreshRecentTranscriptions()}
+                      onLoadRecentTranscription={(folder) => transcribePresenter.loadRecentTranscription(folder)}
                       transcribeMode={transcribe.transcribeMode}
-                      onSetTranscribeMode={(m) => presenter.setTranscribeMode(m)}
+                      onSetTranscribeMode={(m) => transcribePresenter.setTranscribeMode(m)}
                     />
                     {jot ? (
                       <JotView
@@ -416,7 +416,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       />
                     ) : (
                       <EmptyState
-                        presenter={presenter}
+                        transcribePresenter={transcribePresenter}
                         documentPresenter={documentPresenter}
                         documentStore={documentStore}
                         transcribe={transcribe}
@@ -486,7 +486,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     playbackPresenter,
     lyricsPresenter,
     documentPresenter,
-    presenter,
+    transcribePresenter,
     View,
   };
 }
@@ -1659,12 +1659,12 @@ const MarqueeOverlay = observer(() => {
  */
 const EmptyState = observer(
   ({
-    presenter,
+    transcribePresenter,
     documentPresenter,
     documentStore,
     transcribe,
   }: {
-    presenter: JotViewerPresenter;
+    transcribePresenter: TranscribePresenter;
     documentPresenter: DocumentPresenter;
     documentStore: DocumentStore;
     transcribe: TranscribeStore;
@@ -1716,8 +1716,8 @@ const EmptyState = observer(
               items={transcribe.recentTranscriptions}
               loaded={transcribe.recentTranscriptionsLoaded}
               loading={transcribe.recentTranscriptionsLoading}
-              onRefresh={() => presenter.refreshRecentTranscriptions()}
-              onPick={(folder) => presenter.loadRecentTranscription(folder)}
+              onRefresh={() => transcribePresenter.refreshRecentTranscriptions()}
+              onPick={(folder) => transcribePresenter.loadRecentTranscription(folder)}
             />
           </div>
         </div>

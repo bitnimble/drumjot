@@ -76,10 +76,10 @@ request, and pull in the linked docs when a task touches that area.
 
 ### Frontend store / presenter / component architecture
 
-The frontend is mid-migration to a strict three-layer split (the
-`JotViewStore` carve-up; see `src/jot_view/stores/*` +
-`src/jot_view/jot_viewer_presenter.ts`). When adding or moving frontend
-state/logic, follow it:
+The frontend follows a strict three-layer split (the former monolithic
+`JotViewStore` was carved into data stores under `src/jot_view/stores/*`
+and per-domain presenters under `src/jot_view/presenters/*`). When adding
+or moving frontend state/logic, follow it:
 
 - **Stores = data only.** A store holds MobX `observable`s and
   `computed`s and nothing else: no actions, no setters/toggles, no
@@ -105,9 +105,13 @@ state/logic, follow it:
 - **Why:** this lets business logic be unit-tested against mocked stores,
   and components be rendered (tests / Storybook) with mocked stores +
   presenter, each concern swappable in isolation.
-- `jot_viewer_presenter.ts` is a **temporary catch-all** for orchestration
-  pulled off `JotViewStore`; it gets split into per-feature presenters
-  once the carve-up finishes.
+- **Per-domain presenters.** Each presenter owns one store + the
+  cross-cutting orchestration for its domain (`settings`, `viewport`,
+  `mixer`, `playback`, `provenance`, `lyrics`, `document`, `transcribe`).
+  Where an action spans domains, the owning presenter calls a sibling
+  presenter rather than writing the sibling's store directly, keeping the
+  single-writer rule intact. The dependency graph stays acyclic
+  (leaf presenters → `DocumentPresenter` → `TranscribePresenter`).
 
 ### Workflow
 

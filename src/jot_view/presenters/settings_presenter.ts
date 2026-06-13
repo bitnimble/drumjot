@@ -4,8 +4,8 @@ import { GridLineSettings, SettingsStore } from '../stores/settings_store';
 /**
  * Mutations over {@link SettingsStore}, the display-toggle settings the
  * View dropdown drives. One of the per-domain presenters the legacy
- * `JotViewerPresenter` was split into; stores stay data-only, presenters
- * are the sole writers.
+ * catch-all `JotViewStore` was split into; stores stay data-only,
+ * presenters are the sole writers.
  */
 export class SettingsPresenter {
   readonly settings: SettingsStore;
