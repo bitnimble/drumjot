@@ -8,10 +8,10 @@ function fixture(palette: readonly string[]) {
     title: '',
     bpm: 120,
     bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
-    notes: {
-      k: { id: 'k', barId: 'b1', beat: 0, pitch: 'k', duration: 1, modifiers: [] },
-      s: { id: 's', barId: 'b1', beat: 1, pitch: 's', duration: 1, modifiers: [] },
-      h: { id: 'h', barId: 'b1', beat: 0, pitch: 'h', duration: 1, modifiers: [] },
+    elements: {
+      k: { kind: 'note', id: 'k', barId: 'b1', beat: 0, pitch: 'k', duration: 1, modifiers: [] },
+      s: { kind: 'note', id: 's', barId: 'b1', beat: 1, pitch: 's', duration: 1, modifiers: [] },
+      h: { kind: 'note', id: 'h', barId: 'b1', beat: 0, pitch: 'h', duration: 1, modifiers: [] },
     },
     instruments: {
       k: { kind: 'kick', name: 'Kick' },

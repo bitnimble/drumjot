@@ -13,7 +13,17 @@
  * types so this can't silently drift from the domain.
  */
 import { z } from 'zod';
-import { idMap, movableList, record, type Infer, type Init } from './descriptors';
+import {
+  idMap,
+  type Infer,
+  type Init,
+  lazy,
+  movableList,
+  type ReactiveMap,
+  record,
+  union,
+  type UnionDescriptor,
+} from './descriptors';
 import { createReactiveDoc, type ReactiveDoc } from './reactive_doc';
 
 // ---------- Leaf enums (mirror src/dsl/dsl.ts) ----------
@@ -39,41 +49,84 @@ export const MODIFIER = z.enum([
 
 export const STICKING = z.enum(['r', 'l', 'rf', 'lf']);
 export const LIMB = z.enum(['lh', 'rh', 'lf', 'rf']);
+export const VOLUME = z.enum(['pp', 'p', 'mp', 'mf', 'f', 'ff']);
 export const INSTRUMENT_KIND = z.enum(['kick', 'snare', 'hihat', 'ride', 'crash', 'tom', 'custom']);
 
 // ---------- Entities ----------
 
+// ---------- Elements (the note | group | pattern tree) ----------
+
 /**
- * A single drum hit. `barId` + `beat` place it (quarter-note beats from
- * the owning bar's downbeat); `pitch` is the DSL lane letter. All are LWW
- * registers, so a drag-to-move is one `beat` write and a crash→ride
- * correction is one `pitch` write. `id` is the stable identity selection,
- * undo, React keys and provenance all key off (it equals the `notes`
- * idMap key, carried on the record for convenience + export).
+ * Positional fields every element shares. Coordinates are RELATIVE to the
+ * immediate container's space: top-level elements are positioned from
+ * their bar's downbeat (and carry `barId`/`voiceId`); a group's children
+ * are positioned in the group's own internal space (no `barId`; the
+ * derivation converts to global time via the group's duration scaling).
  */
-export const NoteSchema = record({
+const elementBase = {
   id: z.string(),
-  /** Owning `||` voice (a `voices` key); absent = the primary voice. */
+  /** Owning `||` voice (top-level only; nested elements inherit). */
   voiceId: z.string().optional(),
-  barId: z.string(),
+  /** Owning bar (top-level only; nested elements live in their group's space). */
+  barId: z.string().optional(),
+  /** Position in the immediate container's coordinate space. */
   beat: z.number(),
-  pitch: z.string(),
-  /** Onset duration in quarter-note beats. */
+  /** Span in the immediate container's coordinate space. */
   duration: z.number(),
+};
+
+/** A single drum hit. `pitch` is the lane; dynamics via `vol` + modifiers. */
+export const NoteElementSchema = record({
+  ...elementBase,
+  kind: z.literal('note'),
+  pitch: z.string(),
   /** Whole-array LWW register (rarely concurrent; merge the set atomically). */
   modifiers: z.array(MODIFIER),
   sticking: STICKING.optional(),
-  /** Roll / buzz fill (DSL `~`). Absent = false. */
+  /** Roll / buzz fill (DSL `~`). */
   roll: z.boolean().optional(),
   /** Signed sub-slot timing offset in milliseconds (DSL `Note.offset`). */
   offsetMs: z.number().optional(),
-  /** Explicit MIDI velocity override (0–127); absent = derive from dynamics. */
+  /** Explicit MIDI velocity override; absent = derive from `vol`/modifiers. */
   velocity: z.number().optional(),
   /** Explicit MIDI note override; absent = derive from instrument/pitch. */
   midiNote: z.number().optional(),
-  /** Pattern-instance membership (a `patternInstances` key). Notes sharing
-   *  one instance render as a single bracket; absent = not in a pattern. */
-  patternId: z.string().optional(),
+  /** Symbolic dynamic (pp…ff). */
+  vol: VOLUME.optional(),
+});
+
+/**
+ * A container of child elements with its own `duration`. The children live
+ * in the group's internal coordinate space; a **tuplet** is simply a group
+ * whose children's natural span ≠ its `duration` (the ratio is the
+ * scaling). Moving/stretching a group touches only its own `beat`/
+ * `duration`, the children are untouched. Group-level `modifiers`/`roll`/
+ * `vol` apply to all descendants. Annotated `RecordDescriptor` so the
+ * `lazy` self-reference type-checks.
+ */
+export const GroupElementSchema = record({
+  ...elementBase,
+  kind: z.literal('group'),
+  children: idMap(lazy((): UnionDescriptor => ElementSchema)),
+  modifiers: z.array(MODIFIER).optional(),
+  roll: z.boolean().optional(),
+  vol: VOLUME.optional(),
+});
+
+/** A leaf usage of a pattern definition, referenced by its internal id.
+ *  The body lives once in `patterns`; rendering instantiates it scaled to
+ *  this element's `duration`. (Substitutions deferred.) */
+export const PatternElementSchema = record({
+  ...elementBase,
+  kind: z.literal('pattern'),
+  patternId: z.string(),
+});
+
+/** An element: a note, a group (incl. tuplets), or a pattern usage. */
+export const ElementSchema: UnionDescriptor = union({
+  note: NoteElementSchema,
+  group: GroupElementSchema,
+  pattern: PatternElementSchema,
 });
 
 /**
@@ -129,22 +182,14 @@ export const TempoEventSchema = record({
 });
 
 /**
- * A reusable pattern definition, keyed in `patterns` by name. The body
- * (the reusable element sequence, for find-and-replace-with-a-pattern) is
- * deferred to the editing-features phase; today the expanded notes carry
- * the content and instances drive the rendered brackets.
+ * A reusable pattern definition, keyed in `patterns` by internal `id`
+ * (referenced by a `pattern` element's `patternId`). `name` is the display
+ * label; `body` is the reusable element tree in pattern-internal space.
  */
-export const PatternSchema = record({
+export const PatternDefSchema = record({
+  id: z.string(),
   name: z.string(),
-});
-
-/**
- * One usage of a pattern, keyed in `patternInstances` by instance id (what
- * `note.patternId` references). `patternName` links it to its definition
- * and drives the bracket's shared colour across instances.
- */
-export const PatternInstanceSchema = record({
-  patternName: z.string(),
+  body: idMap(lazy((): UnionDescriptor => ElementSchema)),
 });
 
 /**
@@ -180,24 +225,59 @@ export const JotSchema = record({
   /** `||` voices by id; a single-voice jot has one (or none → primary). */
   voices: idMap(VoiceSchema),
   bars: movableList(BarSchema),
-  notes: idMap(NoteSchema),
+  /** The note | group | pattern tree, top-level entries keyed by id. */
+  elements: idMap(ElementSchema),
   /** Pitch letter → instrument display/playback info. */
   instruments: idMap(InstrumentSchema),
   /** Sticky tempo changes by id (sorted by bar order + beat at read time). */
   tempoEvents: idMap(TempoEventSchema),
-  /** Pattern definitions by name. */
-  patterns: idMap(PatternSchema),
-  /** Pattern usages by instance id (referenced by `note.patternId`). */
-  patternInstances: idMap(PatternInstanceSchema),
+  /** Pattern definitions by internal id. */
+  patterns: idMap(PatternDefSchema),
 });
 
-export type Note = Infer<typeof NoteSchema>;
+// ---------- Consumer types ----------
+// `ElementSchema` is a recursive union; its descriptor is annotated loosely
+// (`UnionDescriptor`) to avoid the verbose explicit recursive type, so the
+// precise element shapes are hand-written here for consumers to narrow on.
+
+export type Modifier = z.infer<typeof MODIFIER>;
+export type Sticking = z.infer<typeof STICKING>;
+export type Volume = z.infer<typeof VOLUME>;
+export type DrumInstrumentKind = z.infer<typeof INSTRUMENT_KIND>;
+
+type ElementCommon = {
+  id: string;
+  voiceId?: string;
+  barId?: string;
+  beat: number;
+  duration: number;
+};
+export type NoteElement = ElementCommon & {
+  kind: 'note';
+  pitch: string;
+  modifiers: Modifier[];
+  sticking?: Sticking;
+  roll?: boolean;
+  offsetMs?: number;
+  velocity?: number;
+  midiNote?: number;
+  vol?: Volume;
+};
+export type GroupElement = ElementCommon & {
+  kind: 'group';
+  children: ReactiveMap<Element>;
+  modifiers?: Modifier[];
+  roll?: boolean;
+  vol?: Volume;
+};
+export type PatternElement = ElementCommon & { kind: 'pattern'; patternId: string };
+export type Element = NoteElement | GroupElement | PatternElement;
+export type PatternDef = { id: string; name: string; body: ReactiveMap<Element> };
+
 export type Bar = Infer<typeof BarSchema>;
 export type Instrument = Infer<typeof InstrumentSchema>;
 export type Voice = Infer<typeof VoiceSchema>;
 export type TempoEvent = Infer<typeof TempoEventSchema>;
-export type Pattern = Infer<typeof PatternSchema>;
-export type PatternInstance = Infer<typeof PatternInstanceSchema>;
 export type Jot = Infer<typeof JotSchema>;
 
 /**

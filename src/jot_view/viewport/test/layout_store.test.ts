@@ -1,20 +1,20 @@
 import { describe, expect, it } from 'bun:test';
-import { createReactiveJot, type Jot, type Note } from 'src/schema/schema';
+import { createReactiveJot, type Jot, type NoteElement } from 'src/schema/schema';
 import { StructureStore } from 'src/jot_view/structure/structure_store';
 import { LayoutStore } from 'src/jot_view/viewport/layout_store';
 
 const BAR_WIDTH = 448;
 
-function jotWith(notes: Record<string, Partial<Note> & { pitch: string; beat: number }>, bars = 1) {
-  const fullNotes: Record<string, Note> = {};
+function jotWith(notes: Record<string, { pitch: string; beat: number }>, bars = 1) {
+  const elements: Record<string, NoteElement> = {};
   for (const [id, n] of Object.entries(notes)) {
-    fullNotes[id] = { id, barId: 'b1', duration: 1, modifiers: [], ...n } as Note;
+    elements[id] = { kind: 'note', id, barId: 'b1', duration: 1, modifiers: [], ...n };
   }
   const { model } = createReactiveJot({
     title: '',
     bpm: 120,
     bars: Array.from({ length: bars }, (_, i) => ({ id: `b${i + 1}`, tsCount: 4, tsUnit: 4 })),
-    notes: fullNotes,
+    elements,
     instruments: {},
   });
   return model;
