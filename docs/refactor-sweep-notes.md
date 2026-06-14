@@ -30,28 +30,45 @@ Each completed slice is a green-gated commit (`bun run build` +
 
 ## Flagged for review (NOT changed autonomously)
 
-### F1. Section-audibility state mirrored into `jotPlayer` (architectural)
-`MixerStore.isAudioSectionAudible` / `isDrumSectionAudible` (computeds over the
-authoritative mute/solo state) are pushed into `jotPlayer.audioMasterAudible` /
-`drumMasterAudible` via two `reaction`s in `MixerPresenter` (mixer_presenter.ts
-~L71-82). The player fields are 100% derivable from the mixer store, so they
-*could* become computeds reading the mixer; eliminating the reaction sync.
+> **Update:** after review the user directed fixes for F2/F3/F5/F6 (all now
+> done, see each entry) and asked about F1 (answered below; left as-is, it's
+> deliberate). F4 was already resolved during the sweep. So everything in this
+> section is now either resolved or a deliberate keep.
 
-**Why flagged, not changed:** this inverts the dependency direction (today the
-player is deliberately decoupled from the mixer and the mixer *pushes* filters
-to it; see also `currentFilter`/`currentAudioTrackFilter` snapshots, same
-pattern). Making the player read the mixer is an architectural change with
-real behaviour/perf surface (the player is the per-frame audio path). The
-current reaction-push is a deliberate decoupling, not an accident. Leaving for
-your call. Low real-world drift risk today since the reactions are the sole
-writers and `fireImmediately` seeds them.
+### F1. Section-audibility state mirrored into `jotPlayer` (architectural). KEPT
+**`currentFilter` (the F1 question):** `jotPlayer.currentFilter` (and its twin
+`currentAudioTrackFilter`) is the player's local snapshot of the resolved
+mute/solo/volume state, pushed in by `MixerPresenter` via `setFilter()`. The
+player retains it (alongside `events`, the scheduled note list) so a mid-play
+M/S toggle reschedules the upcoming notes against it sample-accurately, and so
+the non-React audio path can read "is this pitch audible / at what gain"
+(`isAudibleUnder(ev.pitch, currentFilter)`) without taking a reactive
+dependency on the mixer store. It's the deliberate decoupling boundary: mixer
+owns the authoritative state, presenter pushes a snapshot, the per-frame audio
+engine reads only its own copy. The section-audibility booleans
+(`audioMasterAudible`/`drumMasterAudible`) follow the same push pattern.
+**Decision: keep**, making the player read the mixer would invert that
+decoupling and put the per-frame audio path on the UI store's reactive graph;
+drift risk is nil today (the reactions are the sole writers, `fireImmediately`
+seeds them).
 
-### F2. `audioTrack.pitch` (already in TODO.md, bullet 15)
-Confirmed still present, `AudioTrack.pitch` duplicates info derivable from the
-track's mixer group. Pre-existing TODO; not touched.
+### F2. `audioTrack.pitch` (TODO bullet 15), DONE
+`AudioTrack.pitch` is now a computed derived from the mixer group: when the
+audio row shares a group with instrument row(s) it reports that pitch (the
+user's grouping is the source of truth). A private `_pitchOverride` holds the
+load-time mapping, used only as the tiebreaker when one file maps to several
+pitches in a group, and as the fallback when the row is solo. On drag-OUT
+(grouped → solo) `MixerPresenter.moveTrack` calls `detachPitch()` to bake the
+group pitch into `_pitchOverride` before the group is gone. The group walk is a
+shared free function `groupInstrumentPitches` (tracks.ts), kept a free
+function, not a MobX action, so the `trackOrder` read stays tracked inside the
+`pitch`/`color` computeds. +8 unit tests.
 
-### F3. `StructuralTrack` vs `RenderedJot` shared source of truth (TODO bullet 16)
-Pre-existing TODO; not touched.
+### F3. `StructuralTrack` vs `RenderedJot` shared source of truth (TODO bullet 16). DONE
+Each `Resolved*` layout type now extends its zoom-invariant `Structural*` base
+(`ResolvedNote = StructuralNote & { x, width }`, `ResolvedBar = Omit<StructuralBar,
+'tracks'|'patternSpans'|'tupletSpans'> & {…}`, etc.), so the beat-only base
+fields are declared once. Type-only change (erases at compile).
 
 ### F4. `LyricsRowDragProps` re-declared to avoid a circular import. RESOLVED
 ~~`lyrics/lyrics_row.tsx` re-declares a subset of `MixerRowDragProps`...~~
@@ -193,7 +210,16 @@ in `tempo.ts`), drum mappings (gm/drums/instruments are distinct domains, not
 dupes), and the lyrics module are all clean. No edits made (review-only; the
 candidates below carry behaviour risk).
 
-### F5. Velocity/dynamics constants duplicated across converters (POSSIBLE BUG)
+### F5. Velocity/dynamics constants duplicated across converters. FIXED (was a bug)
+Resolved: extracted one shared `src/dynamics.ts` (DEFAULT_VELOCITY,
+ACCENT_BOOST, GHOST_REDUCTION, VOLUME_TO_VELOCITY + the from_midi
+ACCENT/GHOST thresholds); playback / to_midi / from_midi / jot_to_rlrr all
+import it. Canonical `accentBoost = 36`: an accent must clear the loudest
+non-accent volume (ff = 96) so `from_midi` (threshold 100) can recover it on
+import, `mf:a` = 64 + 36 = 100 round-trips, 24 → 88 < 96 does not. So 24 was
+the buggy value; playback + RLRR accents are now +36 to match MIDI export.
+Original analysis below.
+
 The accent/ghost/default velocity mapping is redefined in three places:
 - `src/playback/events.ts` (~L35-45): DEFAULT_VELOCITY / ACCENT_BOOST / GHOST_REDUCTION / VOLUME_TO_VELOCITY
 - `src/midi/to_midi.ts` (~L58-67): `DEFAULTS` with **accentBoost: 36**
@@ -210,11 +236,11 @@ decide whether the 24/36 split is intentional; if yes, document it at both
 sites; if no, pick the canonical value, consolidate, and re-check the MIDI
 round-trip tests. Until then it's a real drift risk.
 
-### F6. `src/jot.ts` (~1490 lines), splittable, low priority
-Three separable responsibilities: `ViewConfig` (layout config), the resolved
-data model (`ResolvedNote`/`ResolvedTrack`/`RenderedJot` structure), and the
-pattern-expansion tree-rewriting. Could split into `view_config.ts` /
-`resolved_jot.ts` / `pattern_expansion.ts` re-exported from `jot.ts`. Pure
-mechanical move, low risk if import contracts are preserved, but it's a
-load-bearing core file touched by nearly everything, so worth doing
-deliberately with the full suite rather than blind. Not done.
+### F6. `src/jot.ts` (~1490 lines), splittable, DONE
+Split into `view_config.ts` (Pixels brand + ViewConfig), `resolved_jot.ts`
+(the Structural*/Resolved* types + the RenderedJot layout engine + drum-offset
+pass), and `pattern_expansion.ts` (pattern/repeat tree-rewriting + element
+weight / straightness / type-guards), all re-exported from a 12-line `jot.ts`
+barrel so every `from 'src/jot'` importer is unchanged. `sumWeights` is now
+exported (resolved_jot uses it). The pre-existing jot↔playback/timeline cycle
+is preserved (type-only / lazy). Done by codemod (byte-for-byte) + full gate.

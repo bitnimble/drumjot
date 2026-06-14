@@ -12,8 +12,8 @@
 - Add test map + regression tests
 
 ## Refactoring
-- fix audioTrack.pitch - it shouldn't exist, it should be computed from the track group instead?
-- refactor StructuralTrack type and co to share same source of truth as RenderedJot (or vice versa), using type unions or Omit
+- [DONE] fix audioTrack.pitch - now a computed derived from the mixer group (own `_pitchOverride` only as tiebreaker/solo-fallback; detach bakes in on drag-out). Shared `groupInstrumentPitches` helper in tracks.ts.
+- [DONE] StructuralTrack type and co now share one source of truth with RenderedJot: each `Resolved*` extends its `Structural*` via `&` / `Omit` (no duplicated base fields).
 - refactor sweep all code to split out more, be less monolithic:
   (progress + flagged items: docs/refactor-sweep-notes.md)
   - [DONE] split out files even more by feature/domain/etc., per-concern data stores + per-domain presenters (settings/viewport/mixer/playback/provenance/lyrics/document/transcribe).
