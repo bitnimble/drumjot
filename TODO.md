@@ -20,7 +20,7 @@
   - [DONE] if each feature has multiple files, group them into a folder (store + presenter + tsx). All jot_view features are now `src/jot_view/<feature>/`.
     - [DONE] move `DebugPanel` out of `toolbar.tsx` into the `provenance/` feature.
     - [DONE] break up the large `score.tsx`: 2825 to 123 lines, split into 6 files (note_provenance_details, bar_view, popover_portal, timeline_header, filtered_onset_view + the score.tsx leaf), each verified against the perf e2e gate (E2E_DEBUG_BUNDLE; 120fps specs green).
-    - [TODO] split the central `contexts.ts` so each React context lives next to its feature's store/presenter. Low-risk but high import-churn; deferred.
+    - [DONE] split the central `contexts.ts`: the 8 feature-routing contexts moved to `<feature>/<feature>_contexts.ts` (mixer/viewport/lyrics/provenance/playback); contexts.ts keeps the 5 cross-cutting ones (Selection, BarTimings, RenderedJot, GridLineSettings, UniformWaveforms). All consumers repointed.
   - [PARTIAL] pull out business logic / pure logic into a presenter/util file; keep .tsx scoped to instantiation + React + wiring. Done: playback (playhead + label logic), lyrics (beat-positioning), score (2825→123, 6 files), mixer (1605→201: just MixerView; rows + leaves split into overflow_menus/gutter_controls/mixer_drag/mixer_controls/instrument_row/audio_track_row/waveform_chunks/use_live_px_per_beat, + reorderTrackOrder→tracks.ts w/ tests). Remaining: toolbar (leaf pieces), minimap (canvas helpers). All perf-gated.
   - [PARTIAL] pull out component state into stores that the presenter acts over (only *persistable* state; transient UI state stays React-local). Domain state already lives in stores from the store carve-up.
   - react rendering is now based on the component store state
