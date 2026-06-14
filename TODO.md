@@ -48,9 +48,8 @@ Architecture is locked to frozen MERT + per-frame per-lane heads. MuQ and a
 two-stage propose→classify arch were both evaluated and ruled out (see
 training/RESULTS.md). The open problem is the cymbal ceiling (crash/ride/misc),
 which is data/separation-bound, not architecture-bound.
-- [in progress] `cym` sub-6 kHz timbre block A/B (`--cym`): does the ride-ping-vs-
-  crash-wash block lift cymbal F1? If yes, wire it into inference (currently raises
-  NotImplementedError for cym).
+- [done 2026-06-14] `cym` sub-6 kHz timbre block A/B (`--cym`): **no benefit**, all per-lane deltas within seed noise (crash +0.013 cancelled by ride/mc); see
+  RESULTS.md. Not wiring `cym` into inference.
 - dropped-neg A/B (`--dropped-neg` vs `--no-dropped-neg`): confirm the hard-negative
   `x` lane actually improves precision on the leak-prone lanes (hc/rd/cr/mc); revert
   if it doesn't pull its weight.

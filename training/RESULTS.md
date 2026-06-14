@@ -317,6 +317,29 @@ center=False high-band confirmed no gain (rd −0.013, cr −0.011, mc −0.004,
 noise -- center=False marginally *worse*). **Non-issue; keep center=True, no cache
 bump.** (`tmp_hb_align_check_v5k.py` / `tmp_cym_center_ab.py`.)
 
+**`cym` sub-6 kHz timbre block A/B -- no benefit (2026-06-14).** Tested the
+ride-ping-vs-crash-wash block (`embeddings.cym_features`: low_mid ratio, low-band
+crest, flatness + 2 smoothed copies) that was built but never A/B'd. Per-stem
+cymbals + hats, cap 150, 2 seeds, per-lane keep_best; reuse cached [MERT|HB],
+append the cym block ([MERT|HB|CYM]) for the +cym arm, train the per-frame detector
+both ways:
+
+| lane | baseline | +cym | Δ |
+|---|---|---|---|
+| rd | 0.662 | 0.647 | −0.015 |
+| cr | 0.657 | 0.670 | +0.013 |
+| mc | 0.466 | 0.449 | −0.017 |
+| hc | 0.718 | 0.711 | −0.007 |
+| hp | 0.485 | 0.474 | −0.011 |
+| ho | 0.723 | 0.731 | +0.008 |
+
+**Wash -- every delta is within seed noise (±0.02); crash's +0.013 is cancelled by
+ride/mc (cymbal sum 1.785 vs 1.766, net −0.019).** The hand-crafted ride/crash
+timbre cue adds nothing over MERT + the high-band block at this scale. Don't wire
+`cym` into inference; the crash ceiling stays data/separation-bound. (NB: baselines
+here, e.g. ride 0.662, sit above the cap-300 run's per-frame ride 0.597 -- partly
+the new per-lane keep_best, partly cap/seed variance; not directly comparable.)
+
 ## Per-stem pooled MERT layer sweep (2026-06-12)
 
 **Setup.** `scripts/perstem_layer_sweep.py` over pooled per-stem examples from all
