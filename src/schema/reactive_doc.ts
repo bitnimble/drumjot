@@ -5,10 +5,12 @@ import type {
   IdMapDescriptor,
   Infer,
   Init,
+  LazyDescriptor,
   MovableListDescriptor,
   ReactiveList,
   ReactiveMap,
   RecordDescriptor,
+  UnionDescriptor,
 } from './descriptors';
 
 /** Root container name holding the top-level record. */
@@ -46,6 +48,67 @@ interface Node {
 }
 
 type Registry = Map<ContainerID, Node>;
+
+type BuiltNode = { surface: unknown; dispose: () => void };
+
+// ---------- Node dispatch ----------
+
+/**
+ * Build the node for any descriptor over its backing container. `lazy`
+ * resolves its thunk; `union` picks its variant by the discriminant. The
+ * container kind must match the descriptor (a map for record/union/idMap,
+ * a movable list for movableList).
+ */
+function buildNode(
+  desc: Descriptor,
+  container: LoroMap | LoroMovableList,
+  doc: LoroDoc,
+  registry: Registry
+): BuiltNode {
+  switch (desc.kind) {
+    case 'record':
+      return buildRecordNode(desc, container as LoroMap, doc, registry);
+    case 'union':
+      return buildUnionNode(desc, container as LoroMap, doc, registry);
+    case 'idMap':
+      return buildIdMapNode(desc, container as LoroMap, doc, registry);
+    case 'movableList':
+      return buildMovableListNode(desc, container as LoroMovableList, doc, registry);
+    case 'lazy':
+      return buildNode((desc as LazyDescriptor).resolve(), container, doc, registry);
+    default:
+      throw new Error(`reactive_doc: cannot build a node for kind '${(desc as Descriptor).kind}'`);
+  }
+}
+
+/**
+ * A discriminated-union value. The active variant is read from the
+ * discriminant field and fixed for the value's lifetime (changing kind =
+ * delete + re-add), so the variant's record surface *is* the union surface.
+ */
+function buildUnionNode(
+  desc: UnionDescriptor,
+  lmap: LoroMap,
+  doc: LoroDoc,
+  registry: Registry
+): { surface: Record<string, unknown>; dispose: () => void } {
+  const kind = lmap.get(desc.discriminant) as string | undefined;
+  const variant = kind !== undefined ? desc.variants[kind] : undefined;
+  if (!variant) {
+    throw new Error(`reactive_doc: union has no variant for ${desc.discriminant}='${kind}'`);
+  }
+  return buildRecordNode(variant, lmap, doc, registry);
+}
+
+/** Resolve a collection's entry descriptor (through `lazy`) and assert it's
+ *  buildable as a map entry, a record or a union. */
+function entryDescriptor(value: Descriptor, container: string): RecordDescriptor | UnionDescriptor {
+  const resolved = value.kind === 'lazy' ? (value as LazyDescriptor).resolve() : value;
+  if (resolved.kind !== 'record' && resolved.kind !== 'union') {
+    throw new Error(`reactive_doc: ${container} value must be a record or union (got '${resolved.kind}')`);
+  }
+  return resolved;
+}
 
 // ---------- Record node ----------
 
@@ -161,12 +224,10 @@ function buildIdMapNode(
   doc: LoroDoc,
   registry: Registry
 ): { surface: ObservableIdMap; dispose: () => void } {
-  // Entries are record containers; nothing else is buildable as one. Fail
-  // fast on an unsupported entry kind rather than mis-cast it below.
+  // Validate the entry kind up front (resolving `lazy`); entries are built
+  // per-id via the node dispatcher so they can be records or unions.
+  entryDescriptor(desc.value, 'idMap');
   const entryDesc = desc.value;
-  if (entryDesc.kind !== 'record') {
-    throw new Error(`reactive_doc: idMap value must be a record (got '${entryDesc.kind}')`);
-  }
 
   const entries = observable.map<string, Record<string, unknown>>({}, { deep: false });
   // Per-entry teardown, disposes the entry's whole subtree (its container
@@ -181,9 +242,9 @@ function buildIdMapNode(
         const present = raw !== undefined;
         if (present && !entries.has(id)) {
           const child = raw as LoroMap;
-          const built = buildRecordNode(entryDesc, child, doc, registry);
+          const built = buildNode(entryDesc, child, doc, registry);
           entryDisposers.set(id, built.dispose);
-          entries.set(id, built.surface);
+          entries.set(id, built.surface as Record<string, unknown>);
         } else if (!present && entries.has(id)) {
           entryDisposers.get(id)?.();
           entryDisposers.delete(id);
@@ -285,10 +346,8 @@ function buildMovableListNode(
   doc: LoroDoc,
   registry: Registry
 ): { surface: ObservableList; dispose: () => void } {
+  entryDescriptor(desc.value, 'movableList');
   const entryDesc = desc.value;
-  if (entryDesc.kind !== 'record') {
-    throw new Error(`reactive_doc: movableList value must be a record (got '${entryDesc.kind}')`);
-  }
 
   const items = observable.array<Record<string, unknown>>([], { deep: false });
   const childrenByCid = new Map<ContainerID, { surface: Record<string, unknown>; dispose: () => void }>();
@@ -303,7 +362,8 @@ function buildMovableListNode(
       seen.add(cid);
       let entry = childrenByCid.get(cid);
       if (!entry) {
-        entry = buildRecordNode(entryDesc, child, doc, registry);
+        const built = buildNode(entryDesc, child, doc, registry);
+        entry = { surface: built.surface as Record<string, unknown>, dispose: built.dispose };
         childrenByCid.set(cid, entry);
       }
       next[i] = entry.surface;
@@ -338,7 +398,7 @@ class ObservableList implements ReactiveList<Record<string, unknown>> {
     private readonly items: ReturnType<typeof observable.array<Record<string, unknown>>>,
     private readonly llist: LoroMovableList,
     private readonly doc: LoroDoc,
-    private readonly entryDesc: RecordDescriptor
+    private readonly entryDesc: Descriptor
   ) {}
 
   get length(): number {
@@ -355,7 +415,7 @@ class ObservableList implements ReactiveList<Record<string, unknown>> {
 
   insert(index: number, value: Record<string, unknown>): void {
     const child = this.llist.insertContainer(index, new LoroMap());
-    populateRecord(this.entryDesc, child, value);
+    populateNode(this.entryDesc, child, value);
     this.doc.commit();
   }
 
@@ -407,17 +467,31 @@ function populateRecord(
   }
 }
 
+/** Populate a map-backed entry: a record, or a union (through `lazy`). */
+function populateNode(desc: Descriptor, lmap: LoroMap, value: Record<string, unknown>): void {
+  if (desc.kind === 'lazy') return populateNode((desc as LazyDescriptor).resolve(), lmap, value);
+  if (desc.kind === 'record') return populateRecord(desc, lmap, value);
+  if (desc.kind === 'union') return populateUnion(desc, lmap, value);
+  throw new Error(`reactive_doc: cannot initialize entry kind '${desc.kind}'`);
+}
+
+function populateUnion(desc: UnionDescriptor, lmap: LoroMap, value: Record<string, unknown>): void {
+  const kind = value[desc.discriminant] as string | undefined;
+  const variant = kind !== undefined ? desc.variants[kind] : undefined;
+  if (!variant) {
+    throw new Error(`reactive_doc: union init missing/invalid '${desc.discriminant}'`);
+  }
+  // The variant record carries the discriminant field, so this writes it too.
+  populateRecord(variant, lmap, value);
+}
+
 function populateList(
   desc: MovableListDescriptor,
   llist: LoroMovableList,
   value: Record<string, unknown>[]
 ): void {
-  const entryDesc = desc.value;
-  if (entryDesc.kind !== 'record') {
-    throw new Error(`reactive_doc: movableList value must be a record (got '${entryDesc.kind}')`);
-  }
   for (let i = 0; i < value.length; i++) {
-    populateRecord(entryDesc, llist.insertContainer(i, new LoroMap()), value[i]);
+    populateNode(desc.value, llist.insertContainer(i, new LoroMap()), value[i]);
   }
 }
 
@@ -426,12 +500,8 @@ function populateIdMap(
   lmap: LoroMap,
   value: Record<string, Record<string, unknown>>
 ): void {
-  const entryDesc = desc.value;
-  if (entryDesc.kind !== 'record') {
-    throw new Error(`reactive_doc: idMap value must be a record (got '${entryDesc.kind}')`);
-  }
   for (const id of Object.keys(value)) {
-    populateRecord(entryDesc, lmap.ensureMergeableMap(id), value[id]);
+    populateNode(desc.value, lmap.ensureMergeableMap(id), value[id]);
   }
 }
 
@@ -444,6 +514,11 @@ export function createReactiveDoc<S extends RecordDescriptor>(
   // via the same event path as every later write.
   initial?: Init<S>
 ): ReactiveDoc<S> {
+  // Erase `Init<S>` to a plain object up front (through `unknown`, no
+  // narrowing) so nothing in the body forces it to expand, its recursive
+  // union/lazy branches blow TS's depth limit for the *generic* S, though
+  // concrete call sites are fine.
+  const initData = initial as unknown as Record<string, unknown> | undefined;
   const doc = new LoroDoc();
   const rootMap = doc.getMap(ROOT);
   const registry: Registry = new Map();
@@ -470,8 +545,12 @@ export function createReactiveDoc<S extends RecordDescriptor>(
 
   // Deep-populate the initial plain object through Loro; the commit's
   // events then hydrate every node's cache and materialize collections.
-  if (initial) {
-    populateRecord(schema, rootMap, initial as Record<string, unknown>);
+  // Cast through `unknown` (and test definedness, not truthiness) so the
+  // body never forces `Init<S>` to expand, its recursive union/lazy
+  // branches would blow TS's depth limit for the *generic* S (call sites,
+  // where S is concrete, are fine).
+  if (initData !== undefined) {
+    populateRecord(schema, rootMap, initData);
     doc.commit();
   }
 
@@ -479,5 +558,10 @@ export function createReactiveDoc<S extends RecordDescriptor>(
     unsubscribe();
     root.dispose();
   };
-  return { model: surface as Infer<S>, doc, dispose, containerCount: () => registry.size };
+  return {
+    model: surface as unknown as Infer<S>,
+    doc,
+    dispose,
+    containerCount: () => registry.size,
+  };
 }

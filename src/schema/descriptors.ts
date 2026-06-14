@@ -48,11 +48,41 @@ export interface MovableListDescriptor<V extends Descriptor = Descriptor> {
   value: V;
 }
 
+/**
+ * A discriminated union of record variants, selected at runtime by the
+ * `discriminant` field (default `'kind'`). Each variant must carry that
+ * field as a literal matching its key. The active variant is fixed at
+ * creation, changing a value's kind means deleting and re-adding it.
+ */
+export interface UnionDescriptor<
+  V extends Record<string, RecordDescriptor> = Record<string, RecordDescriptor>,
+> {
+  [KIND]: true;
+  kind: 'union';
+  discriminant: string;
+  variants: V;
+}
+
+/**
+ * A descriptor resolved on demand, for recursive schemas (a value that
+ * contains values of its own type). The `resolve` thunk defers the
+ * self-reference past the cyclic `const` initialization; the recursive
+ * type itself needs an explicit annotation to break the cycle (like Zod's
+ * `z.lazy`).
+ */
+export interface LazyDescriptor<D extends Descriptor = Descriptor> {
+  [KIND]: true;
+  kind: 'lazy';
+  resolve: () => D;
+}
+
 export type Descriptor =
   | RegDescriptor
   | RecordDescriptor
   | IdMapDescriptor
-  | MovableListDescriptor;
+  | MovableListDescriptor
+  | UnionDescriptor
+  | LazyDescriptor;
 
 export function isDescriptor(v: unknown): v is Descriptor {
   return typeof v === 'object' && v !== null && KIND in v;
@@ -77,6 +107,20 @@ export function record<F extends Record<string, ZodType | Descriptor>>(
 
 export function idMap<V extends Descriptor>(value: V): IdMapDescriptor<V> {
   return { [KIND]: true, kind: 'idMap', value };
+}
+
+export function union<V extends Record<string, RecordDescriptor>>(
+  variants: V,
+  discriminant: string = 'kind'
+): UnionDescriptor<V> {
+  return { [KIND]: true, kind: 'union', discriminant, variants };
+}
+
+/** A recursive reference. Annotate the recursive schema's descriptor type
+ *  explicitly (`const X: XDesc = union(...)`) so the `() => X` thunk's
+ *  return type breaks the cyclic-initializer error. */
+export function lazy<D extends Descriptor = Descriptor>(resolve: () => D): LazyDescriptor<D> {
+  return { [KIND]: true, kind: 'lazy', resolve };
 }
 
 // ---------- Surface types ----------
@@ -126,20 +170,31 @@ export interface ReactiveList<T> {
  *  keyed `Map`, `movableList` → an array, `record` → an object, `reg` →
  *  the leaf Zod type. A bare Zod field is treated as its inferred type
  *  (it gets normalized to `reg` at runtime). */
-export type Infer<D> =
-  D extends RegDescriptor<infer T> ? z.infer<T>
-  : D extends RecordDescriptor<infer F> ? InferRecord<F>
-  : D extends IdMapDescriptor<infer V> ? ReactiveMap<Infer<V>>
-  : D extends MovableListDescriptor<infer V> ? ReactiveList<Infer<V>>
+// Recursion fuel: a precise schema terminates well before the cap (via the
+// `ReactiveMap`/`ReactiveList` interface boundary), but the *broad*
+// `Descriptor`, which TS expands in generic contexts now that `union`/
+// `lazy` are members, needs a floor or it instantiates forever.
+type Depths = [never, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+
+export type Infer<D, N extends number = 15> =
+  N extends 0 ? unknown
+  : D extends RegDescriptor<infer T> ? z.infer<T>
+  : D extends RecordDescriptor<infer F> ? InferRecord<F, N>
+  : D extends IdMapDescriptor<infer V> ? ReactiveMap<Infer<V, Depths[N]>>
+  : D extends MovableListDescriptor<infer V> ? ReactiveList<Infer<V, Depths[N]>>
+  : D extends UnionDescriptor<infer V> ? Infer<V[keyof V], Depths[N]>
+  : D extends LazyDescriptor<infer R> ? Infer<R, Depths[N]>
   : never;
 
-type InferField<X> =
-  X extends Descriptor ? Infer<X> : X extends ZodType ? z.infer<X> : never;
+type InferField<X, N extends number> =
+  X extends Descriptor ? Infer<X, N> : X extends ZodType ? z.infer<X> : never;
 
 /** Project a record's fields, making any field whose value admits
  *  `undefined` (an optional Zod leaf) an optional *key*, matching Zod's
  *  own `infer`, rather than a required key of `T | undefined`. */
-type InferRecord<F> = Prettify<MakeUndefinedOptional<{ [K in keyof F]: InferField<F[K]> }>>;
+type InferRecord<F, N extends number> = Prettify<
+  MakeUndefinedOptional<{ [K in keyof F]: InferField<F[K], Depths[N]> }>
+>;
 
 type MakeUndefinedOptional<T> =
   { [K in keyof T as undefined extends T[K] ? K : never]?: Exclude<T[K], undefined> } & {
@@ -155,11 +210,14 @@ type Prettify<T> = { [K in keyof T]: T[K] } & {};
  * `ReactiveMap`/`ReactiveList` you'd read back. Records and leaves are the
  * same as `Infer`.
  */
-export type Init<D> =
-  D extends RegDescriptor<infer T> ? z.infer<T>
-  : D extends RecordDescriptor<infer F> ? InitRecord<F>
-  : D extends IdMapDescriptor<infer V> ? InitMap<Init<V>>
-  : D extends MovableListDescriptor<infer V> ? Init<V>[]
+export type Init<D, N extends number = 15> =
+  N extends 0 ? unknown
+  : D extends RegDescriptor<infer T> ? z.infer<T>
+  : D extends RecordDescriptor<infer F> ? InitRecord<F, N>
+  : D extends IdMapDescriptor<infer V> ? InitMap<Init<V, Depths[N]>>
+  : D extends MovableListDescriptor<infer V> ? Init<V, Depths[N]>[]
+  : D extends UnionDescriptor<infer V> ? Init<V[keyof V], Depths[N]>
+  : D extends LazyDescriptor<infer R> ? Init<R, Depths[N]>
   : never;
 
 /** Interface (not `Record<…>`) so the value type defers expansion, keeps
@@ -169,12 +227,12 @@ interface InitMap<T> {
   [id: string]: T;
 }
 
-type InitField<X> =
-  X extends Descriptor ? Init<X> : X extends ZodType ? z.infer<X> : never;
+type InitField<X, N extends number> =
+  X extends Descriptor ? Init<X, N> : X extends ZodType ? z.infer<X> : never;
 
 // Every field is optional for initialization: you seed the data you have
 // (a missing scalar is just unset; a missing collection starts empty).
-type InitRecord<F> = Prettify<{ [K in keyof F]?: InitField<F[K]> }>;
+type InitRecord<F, N extends number> = Prettify<{ [K in keyof F]?: InitField<F[K], Depths[N]> }>;
 
 export function movableList<V extends Descriptor>(value: V): MovableListDescriptor<V> {
   return { [KIND]: true, kind: 'movableList', value };

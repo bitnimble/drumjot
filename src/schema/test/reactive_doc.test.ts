@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'bun:test';
 import { autorun, runInAction } from 'mobx';
 import { z } from 'zod';
-import { idMap, movableList, record } from 'src/schema/descriptors';
+import {
+  idMap,
+  type IdMapDescriptor,
+  lazy,
+  type LazyDescriptor,
+  movableList,
+  record,
+  type RecordDescriptor,
+  union,
+  type UnionDescriptor,
+} from 'src/schema/descriptors';
 import { createReactiveDoc } from 'src/schema/reactive_doc';
 
 const Note = record({ pitch: z.string(), beat: z.number() });
@@ -140,6 +150,66 @@ describe('movableList', () => {
     const dispose = autorun(() => seen.push(bar.n));
     runInAction(() => {
       bar.n = 9;
+    });
+    dispose();
+    expect(seen).toEqual([1, 9]);
+  });
+});
+
+describe('union + recursion', () => {
+  // A recursive tree: leaf{value} | branch{ children: idMap(Tree) }. The
+  // descriptor type is annotated explicitly so the self-reference in the
+  // `lazy` thunk breaks the cyclic-initializer error (as a real recursive
+  // schema must).
+  type TreeDesc = UnionDescriptor<{
+    leaf: RecordDescriptor<{ kind: z.ZodLiteral<'leaf'>; value: z.ZodNumber }>;
+    branch: RecordDescriptor<{
+      kind: z.ZodLiteral<'branch'>;
+      children: IdMapDescriptor<LazyDescriptor<TreeDesc>>;
+    }>;
+  }>;
+  const Tree: TreeDesc = union({
+    leaf: record({ kind: z.literal('leaf'), value: z.number() }),
+    branch: record({ kind: z.literal('branch'), children: idMap(lazy((): TreeDesc => Tree)) }),
+  });
+  const TreeDoc = record({ root: idMap(Tree) });
+
+  it('deep-initializes a recursive union tree', () => {
+    const { model } = createReactiveDoc(TreeDoc, {
+      root: {
+        a: { kind: 'leaf', value: 1 },
+        b: { kind: 'branch', children: { c: { kind: 'leaf', value: 2 } } },
+      },
+    });
+    const a = model.root.get('a')!;
+    expect(a.kind).toBe('leaf');
+    expect((a as { value: number }).value).toBe(1);
+    const b = model.root.get('b')! as {
+      kind: string;
+      children: { get(id: string): { value: number } | undefined };
+    };
+    expect(b.kind).toBe('branch');
+    expect(b.children.get('c')!.value).toBe(2);
+  });
+
+  it('a union entry exposes only its variant fields', () => {
+    const { model } = createReactiveDoc(TreeDoc, {
+      root: { a: { kind: 'leaf', value: 7 } },
+    });
+    expect(Object.keys(model.root.get('a')!).sort()).toEqual(['kind', 'value']);
+  });
+
+  it('is reactive: editing a nested leaf notifies observers', () => {
+    const { model } = createReactiveDoc(TreeDoc, {
+      root: { b: { kind: 'branch', children: { c: { kind: 'leaf', value: 1 } } } },
+    });
+    const leaf = (
+      model.root.get('b')! as { children: { get(id: string): { value: number } } }
+    ).children.get('c');
+    const seen: number[] = [];
+    const dispose = autorun(() => seen.push(leaf.value));
+    runInAction(() => {
+      leaf.value = 9;
     });
     dispose();
     expect(seen).toEqual([1, 9]);
