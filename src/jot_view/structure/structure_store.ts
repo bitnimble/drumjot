@@ -1,5 +1,5 @@
 import { computed, makeObservable } from 'mobx';
-import { isDyadic } from 'src/jot/pattern_expansion';
+import { isDyadic } from 'src/jot/element_metrics';
 import type { Element, Jot, PatternDef } from 'src/schema/schema';
 
 /**

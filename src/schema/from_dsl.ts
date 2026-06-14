@@ -12,7 +12,7 @@
  * becomes coincident note elements.
  */
 import type { Element as DslElement, Jot as DslJot, TimeSignature } from 'src/dsl/dsl';
-import { elementWeight, sumWeights } from 'src/jot/pattern_expansion';
+import { elementWeight, sumWeights } from 'src/jot/element_metrics';
 import { initialBpm } from 'src/tempo/tempo';
 import type { Init } from './descriptors';
 import { createReactiveJot, JotSchema } from './schema';

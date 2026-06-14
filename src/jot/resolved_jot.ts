@@ -29,7 +29,7 @@ import {
 import { PaletteStore } from 'src/jot_view/palette/palette_store';
 import { LayoutStore } from 'src/jot_view/viewport/layout_store';
 import { Pixels, px, ViewConfig } from './view_config';
-import { isDyadic } from './pattern_expansion';
+import { isDyadic } from './element_metrics';
 
 // ---------- Resolved (laid out) types ----------
 

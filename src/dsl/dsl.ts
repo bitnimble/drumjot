@@ -234,8 +234,8 @@ export type Group = {
   modifiers?: Modifier[];
   metadata?: Metadata;
   /**
-   * Set during expansion (`RenderedJot.expandElements`) when this group
-   * originated from a `patternRef`. The renderer uses it to draw outlines
+   * Set when this group originated from a `patternRef` (e.g. by the parser
+   * or the reactive converter). The renderer uses it to draw outlines
    * around pattern usages and link them back to their definition.
    */
   patternSource?: { name: string };

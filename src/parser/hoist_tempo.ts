@@ -266,8 +266,8 @@ function visitElement(
 }
 
 /**
- * Pattern expansion + repeat unroll, mirroring `jot.ts::expandElements`
- * but inlined here so this module stays free of layout deps.
+ * Pattern expansion + repeat unroll, inlined here so this module stays
+ * free of layout deps.
  */
 function expandForVisit(els: Element[], patterns: Record<string, Pattern>): Element[] {
   const out: Element[] = [];
