@@ -35,22 +35,32 @@ Each completed slice is a green-gated commit (`bun run build` +
 > deliberate). F4 was already resolved during the sweep. So everything in this
 > section is now either resolved or a deliberate keep.
 
-### F1. Section-audibility state mirrored into `jotPlayer` (architectural). KEPT
-**`currentFilter` (the F1 question):** `jotPlayer.currentFilter` (and its twin
-`currentAudioTrackFilter`) is the player's local snapshot of the resolved
-mute/solo/volume state, pushed in by `MixerPresenter` via `setFilter()`. The
-player retains it (alongside `events`, the scheduled note list) so a mid-play
-M/S toggle reschedules the upcoming notes against it sample-accurately, and so
-the non-React audio path can read "is this pitch audible / at what gain"
-(`isAudibleUnder(ev.pitch, currentFilter)`) without taking a reactive
-dependency on the mixer store. It's the deliberate decoupling boundary: mixer
-owns the authoritative state, presenter pushes a snapshot, the per-frame audio
-engine reads only its own copy. The section-audibility booleans
-(`audioMasterAudible`/`drumMasterAudible`) follow the same push pattern.
-**Decision: keep**, making the player read the mixer would invert that
-decoupling and put the per-frame audio path on the UI store's reactive graph;
-drift risk is nil today (the reactions are the sole writers, `fireImmediately`
-seeds them).
+### F1. Filter flow inverted: engine PULLS from PlaybackStore. DONE
+Originally flagged as a "keep" (the player held pushed snapshots). After
+review the user chose to invert it (and confirmed it's fine for the engine to
+depend on a store). Now:
+- `PlaybackStore` takes `MixerStore` as a dependency and exposes the
+  engine-facing computeds `pitchFilter` / `audioTrackFilter` /
+  `audioMasterAudible` / `drumMasterAudible`, delegating to the mixer's
+  existing computeds (the mixer also consumes `pitchFilter`/`audioTrackFilter`
+  for per-row audibility, so the build logic stays in one place).
+- `jotPlayer.currentFilter` etc. are now GETTERS that read the late-bound
+  `PlaybackStore` (`attachPlayback`); the audio path pulls the computed
+  directly instead of caching a snapshot. The `setX` methods became
+  parameterless `applyPitchFilter` / `applyAudioTrackFilter` /
+  `apply{Drum,Audio}BusGain`.
+- The four reactions moved from `MixerPresenter` to `PlaybackPresenter`; they
+  carry no data now, just firing the imperative audio-graph re-apply when the
+  pulled computed changes (still `reaction`s, not `autorun`s, the reschedule
+  reads+writes player observables). If the scheduler ever moves to a worker,
+  these become the reaction that postMessages the computed across.
+
+Also moved the whole playback engine from `src/playback/` into
+`src/jot_view/playback/` (the jot viewer is its only consumer).
+
+Caveat: audio *fidelity* isn't e2e-verifiable (the suite asserts
+scheduling/audibility wiring, which the `audio_tracks` mute/solo-live spec
+covers, not sound), worth an ear-check.
 
 ### F2. `audioTrack.pitch` (TODO bullet 15), DONE
 `AudioTrack.pitch` is now a computed derived from the mixer group: when the

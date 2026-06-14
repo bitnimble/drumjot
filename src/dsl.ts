@@ -1,4 +1,4 @@
-askljdhakjdhakjsdakjhd/**
+/**
  * DSL data structures matching the Drumming DSL spec (SPEC.md).
  *
  * These types describe a jot at the level the DSL describes it: a tree of
