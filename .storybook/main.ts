@@ -18,6 +18,10 @@ import path from 'node:path';
 const config: StorybookConfig = {
   stories: ['../src/**/stories/*.stories.@(ts|tsx)'],
   framework: { name: '@storybook/react-vite', options: {} },
+  // Serve the app's `public/` at the iframe root so absolute asset URLs
+  // resolve the same as in the app, the Logo `<img src="/favicon.svg">`
+  // would otherwise fall through to Storybook's own default favicon.
+  staticDirs: ['../public'],
   viteFinal: async (cfg) => {
     cfg.plugins = cfg.plugins ?? [];
     // `unshift` so the CSS-modules patch wraps Vite's handling before the
