@@ -2,7 +2,7 @@ import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { themeStore, ThemeMode } from 'src/theme';
 import { DropdownSection, ToggleMenuItem } from '../components/dropdown';
-import { ViewportStoreContext } from '../contexts';
+import { ViewportStoreContext } from '../viewport/viewport_contexts';
 import styles from './toolbar.module.css';
 
 /**

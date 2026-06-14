@@ -3,7 +3,7 @@ import React from 'react';
 import { RenderedJot } from 'src/jot';
 import { jotPlayer } from 'src/jot_view/playback';
 import { GutterResizeHandle } from '../components/gutter_resize_handle';
-import { ViewportStoreContext } from '../contexts';
+import { ViewportStoreContext } from '../viewport/viewport_contexts';
 import { Playhead } from '../playback/playhead';
 import styles from './score.module.css';
 import { barsRowWidthSeed, intersectsBeatRange } from '../utils/windowing';

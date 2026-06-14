@@ -6,7 +6,7 @@ import { DEFAULT_GRID_DIVISION, gridDivisionFor } from 'src/grid';
 import { jotPlayer, PlayerState } from 'src/jot_view/playback';
 import sharedStyles from '../../jot_view.module.css';
 import { NumberStepper } from '../components/number_stepper';
-import { FollowPlayheadContext } from '../contexts';
+import { FollowPlayheadContext } from './playback_contexts';
 import styles from './playback.module.css';
 import { VOLUME_STEP } from '../store';
 import { DocumentStore } from '../document/document_store';

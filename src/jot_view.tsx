@@ -15,19 +15,23 @@ import { LyricsSearchModal } from './jot_view/lyrics/lyrics_search_modal';
 import { LyricsTextLoadModal } from './jot_view/lyrics/lyrics_text_modal';
 import {
   BarTimingsContext,
-  FollowPlayheadContext,
   GridLineSettingsContext,
-  LyricsPresenterContext,
-  LyricsAlignStoreContext,
-  MixerStoreContext,
-  NoteProvenanceContext,
-  ProvenancePresenterContext,
-  ProvenanceStoreContext,
-  ViewportStoreContext,
   RenderedJotContext,
   SelectionContext,
   UniformWaveformsContext,
 } from './jot_view/contexts';
+import { MixerStoreContext } from './jot_view/mixer/mixer_contexts';
+import { ViewportStoreContext } from './jot_view/viewport/viewport_contexts';
+import {
+  LyricsAlignStoreContext,
+  LyricsPresenterContext,
+} from './jot_view/lyrics/lyrics_contexts';
+import {
+  NoteProvenanceContext,
+  ProvenancePresenterContext,
+  ProvenanceStoreContext,
+} from './jot_view/provenance/provenance_contexts';
+import { FollowPlayheadContext } from './jot_view/playback/playback_contexts';
 import { AudioTrackControls, MixerView, VoiceControls } from './jot_view/mixer/mixer';
 import { Logo } from './jot_view/components/logo';
 import { Minimap } from './jot_view/minimap/minimap';

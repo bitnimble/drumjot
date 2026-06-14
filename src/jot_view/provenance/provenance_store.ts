@@ -4,7 +4,7 @@ import {
   NoteProvenanceEntry,
   NoteProvenanceFile,
 } from 'src/debug_zip';
-import type { NoteProvenanceContextValue } from '../contexts';
+import type { NoteProvenanceContextValue } from './provenance_contexts';
 
 /**
  * Map a transcriber-side provenance pitch tag onto the jot's pitch

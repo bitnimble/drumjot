@@ -10,11 +10,8 @@ import {
   ViewConfig,
 } from 'src/jot';
 import { msOffsetToBeats } from 'src/tempo';
-import {
-  BarTimingsContext,
-  NoteProvenanceContext,
-  SelectionContext,
-} from '../contexts';
+import { BarTimingsContext, SelectionContext } from '../contexts';
+import { NoteProvenanceContext } from '../provenance/provenance_contexts';
 import styles from './score.module.css';
 import { NoteProvenanceDetails } from './note_provenance_details';
 import { PopoverPortal } from './popover_portal';

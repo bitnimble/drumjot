@@ -2,7 +2,7 @@ import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { NoteProvenanceEntry } from 'src/debug_zip';
-import { ProvenancePresenterContext, ProvenanceStoreContext } from '../contexts';
+import { ProvenancePresenterContext, ProvenanceStoreContext } from '../provenance/provenance_contexts';
 import styles from './score.module.css';
 import { NoteProvenanceDetails } from './note_provenance_details';
 import { PopoverPortal } from './popover_portal';
