@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { buildDebugBundleTrackOrder, reorderTrackOrder, type TrackKey } from './tracks';
+import {
+  buildDebugBundleTrackOrder,
+  groupInstrumentPitches,
+  reorderTrackOrder,
+  resolveAudioInheritedColor,
+  type MixerContext,
+  type TrackKey,
+} from './tracks';
 
 /** Collapse the order to a compact `audio:<id>` / `instr:<pitch>` form
  *  so assertions read as the rendered row sequence. */
@@ -132,5 +139,86 @@ describe('reorderTrackOrder (drag-and-drop)', () => {
     const out = reorderTrackOrder(order, 0, 3);
     expect(out[2]).toMatchObject({ kind: 'audio', id: 'a1' });
     expect(summary(out)).toEqual(['instr:k', 'instr:s', 'audio:a1']);
+  });
+});
+
+describe('groupInstrumentPitches', () => {
+  const ctx = (order: TrackKey[]): MixerContext => ({
+    trackOrder: order,
+    // Unused by groupInstrumentPitches; throws if a test accidentally relies on it.
+    getInstrumentTrack: () => {
+      throw new Error('getInstrumentTrack should not be called here');
+    },
+  });
+
+  test('returns the paired instrument pitch for a grouped audio row', () => {
+    const order: TrackKey[] = [
+      { kind: 'audio', id: 'a1', groupId: 'pair:k' },
+      { kind: 'instrument', pitch: 'k', groupId: 'pair:k' },
+    ];
+    expect(groupInstrumentPitches('a1', ctx(order))).toEqual(['k']);
+  });
+
+  test('returns every instrument sharing the group, in row order', () => {
+    const order: TrackKey[] = [
+      { kind: 'audio', id: 'a1', groupId: 'pair:c' },
+      { kind: 'instrument', pitch: 'c', groupId: 'pair:c' },
+      { kind: 'instrument', pitch: 'd', groupId: 'pair:c' },
+    ];
+    expect(groupInstrumentPitches('a1', ctx(order))).toEqual(['c', 'd']);
+  });
+
+  test('is empty for a solo (ungrouped) audio row', () => {
+    const order: TrackKey[] = [
+      { kind: 'audio', id: 'a1' },
+      { kind: 'instrument', pitch: 'k', groupId: 'pair:k' },
+    ];
+    expect(groupInstrumentPitches('a1', ctx(order))).toEqual([]);
+  });
+
+  test('is empty when the group holds no instrument rows', () => {
+    const order: TrackKey[] = [
+      { kind: 'audio', id: 'a1', groupId: 'g' },
+      { kind: 'audio', id: 'a2', groupId: 'g' },
+    ];
+    expect(groupInstrumentPitches('a1', ctx(order))).toEqual([]);
+  });
+
+  test('is empty when the audio id is absent', () => {
+    const order: TrackKey[] = [{ kind: 'instrument', pitch: 'k', groupId: 'pair:k' }];
+    expect(groupInstrumentPitches('missing', ctx(order))).toEqual([]);
+  });
+});
+
+describe('resolveAudioInheritedColor', () => {
+  const ctxWith = (order: TrackKey[], colors: Record<string, string>): MixerContext => ({
+    trackOrder: order,
+    getInstrumentTrack: (pitch: string) =>
+      ({ color: colors[pitch] ?? '#000000' }) as ReturnType<MixerContext['getInstrumentTrack']>,
+  });
+
+  test('inherits the matched-pitch instrument colour as the tiebreaker', () => {
+    const order: TrackKey[] = [
+      { kind: 'audio', id: 'a1', groupId: 'pair:c' },
+      { kind: 'instrument', pitch: 'c', groupId: 'pair:c' },
+      { kind: 'instrument', pitch: 'd', groupId: 'pair:c' },
+    ];
+    // audioPitch 'd' is a group member -> picks d's colour, not the first.
+    expect(resolveAudioInheritedColor('a1', 'd', ctxWith(order, { c: '#111', d: '#222' }))).toBe(
+      '#222',
+    );
+  });
+
+  test('falls back to the first grouped instrument when the pitch is not a member', () => {
+    const order: TrackKey[] = [
+      { kind: 'audio', id: 'a1', groupId: 'pair:c' },
+      { kind: 'instrument', pitch: 'c', groupId: 'pair:c' },
+    ];
+    expect(resolveAudioInheritedColor('a1', 'zzz', ctxWith(order, { c: '#111' }))).toBe('#111');
+  });
+
+  test('returns undefined (no inheritance) for a solo audio row', () => {
+    const order: TrackKey[] = [{ kind: 'audio', id: 'a1' }];
+    expect(resolveAudioInheritedColor('a1', 'c', ctxWith(order, { c: '#111' }))).toBeUndefined();
   });
 });

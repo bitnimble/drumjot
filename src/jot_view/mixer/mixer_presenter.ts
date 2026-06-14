@@ -176,10 +176,22 @@ export class MixerPresenter {
    * dropped at a boundary / top / bottom → becomes solo).
    */
   moveTrack(fromIdx: number, toIdx: number): void {
-    const next = reorderTrackOrder(this.mixer.trackOrder, fromIdx, toIdx);
+    const prev = this.mixer.trackOrder;
+    const next = reorderTrackOrder(prev, fromIdx, toIdx);
     // `reorderTrackOrder` returns the same array reference on a no-op move,
     // so this only writes (and wakes observers) on a real reorder.
-    if (next !== this.mixer.trackOrder) this.mixer.trackOrder = next as TrackKey[];
+    if (next === prev) return;
+    // If the reorder pulled an audio row out of its group (grouped ->
+    // solo), bake the group-derived pitch into the track's own state
+    // before the group is gone, so it keeps its instrument association.
+    const movedPrev = prev[fromIdx];
+    if (movedPrev?.kind === 'audio' && movedPrev.groupId !== undefined) {
+      const movedNext = next.find((k) => k.kind === 'audio' && k.id === movedPrev.id);
+      if (movedNext && movedNext.groupId === undefined) {
+        jotPlayer.audioTracks.get(movedPrev.id)?.detachPitch();
+      }
+    }
+    this.mixer.trackOrder = next as TrackKey[];
   }
 
   toggleAudioMasterMute() {

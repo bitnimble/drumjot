@@ -322,11 +322,20 @@ export class InstrumentTrack implements Track {
  * tested directly against a synthetic `MixerContext` if we ever need
  * to.
  */
-export function resolveAudioInheritedColor(
-  audioId: AudioTrackId,
-  audioPitch: string | undefined,
-  ctx: MixerContext,
-): string | undefined {
+/**
+ * Instrument pitches sharing an audio track's mixer group, in `trackOrder`
+ * row order. Empty when the audio row is solo (no `groupId`) or its group
+ * holds no instrument rows. The single source of truth for "which
+ * instrument(s) is this audio track paired with" — both the audio track's
+ * own derived `pitch` and {@link resolveAudioInheritedColor} read it.
+ *
+ * Pure, but reads `ctx.trackOrder`, so calling it inside a MobX
+ * derivation (a computed / observer) makes that derivation react to row
+ * drags. Must NOT be wrapped as a MobX action (an action would untrack
+ * the read); that's why it lives here as a free function rather than a
+ * method on the observable AudioTrack.
+ */
+export function groupInstrumentPitches(audioId: AudioTrackId, ctx: MixerContext): string[] {
   let groupId: string | undefined;
   for (const k of ctx.trackOrder) {
     if (k.kind === 'audio' && k.id === audioId) {
@@ -334,13 +343,20 @@ export function resolveAudioInheritedColor(
       break;
     }
   }
-  if (groupId === undefined) return undefined;
-  const instrumentsInGroup: string[] = [];
+  if (groupId === undefined) return [];
+  const out: string[] = [];
   for (const k of ctx.trackOrder) {
-    if (k.kind === 'instrument' && k.groupId === groupId) {
-      instrumentsInGroup.push(k.pitch);
-    }
+    if (k.kind === 'instrument' && k.groupId === groupId) out.push(k.pitch);
   }
+  return out;
+}
+
+export function resolveAudioInheritedColor(
+  audioId: AudioTrackId,
+  audioPitch: string | undefined,
+  ctx: MixerContext,
+): string | undefined {
+  const instrumentsInGroup = groupInstrumentPitches(audioId, ctx);
   if (instrumentsInGroup.length === 0) return undefined;
   if (audioPitch !== undefined && instrumentsInGroup.includes(audioPitch)) {
     return ctx.getInstrumentTrack(audioPitch).color;

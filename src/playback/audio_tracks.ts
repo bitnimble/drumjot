@@ -37,6 +37,7 @@
 import { makeAutoObservable, runInAction } from 'mobx';
 import {
   AUDIO_FALLBACK_COLOR,
+  groupInstrumentPitches,
   MixerContext,
   resolveAudioInheritedColor,
   Track,
@@ -115,13 +116,14 @@ export class AudioTrack implements Track {
   readonly sourceBlob: Blob;
   readonly durationSec: number;
   /**
-   * DSL pitch letter (e.g. `k`, `s`, `h`) this audio track is the
-   * isolated stem of, when known. Set from a debug bundle's `mapping`
-   * entry; the waveform canvas tints itself with that pitch's lane
-   * color so the audio track reads as visually paired with its
-   * instrument row. Undefined for ad-hoc / drumless tracks.
+   * Own-state fallback for {@link pitch}. Holds the load-time mapping
+   * (a debug bundle's `mapping` entry) and the value baked in by
+   * {@link detachPitch} when the row is dragged out of a group. The
+   * effective pitch is normally *derived* from the mixer group (see
+   * {@link pitch}); this only takes over when the track is solo.
+   * Undefined for ad-hoc / drumless tracks that were never mapped.
    */
-  readonly pitch?: string;
+  private _pitchOverride: string | undefined = undefined;
   /**
    * What the loader believes the audio is. Drives the per-row overflow
    * menu's enable matrix. Undefined is treated as `unknown`.
@@ -155,20 +157,14 @@ export class AudioTrack implements Track {
     this.buffer = fields.buffer;
     this.sourceBlob = fields.sourceBlob;
     this.durationSec = fields.durationSec;
-    this.pitch = fields.pitch;
+    this._pitchOverride = fields.pitch;
     this.role = fields.role;
-    // Only the mutable colour field is observable; the buffer / blob
-    // are large immutables and don't need MobX wrappers.
+    // `_color` + `_pitchOverride` are the mutable observable fields and
+    // `pitch` is a computed (derives from the mixer group); the buffer /
+    // blob are large immutables that don't need MobX wrappers.
     makeAutoObservable<
       this,
-      | 'getCtx'
-      | 'id'
-      | 'filename'
-      | 'buffer'
-      | 'sourceBlob'
-      | 'durationSec'
-      | 'pitch'
-      | 'role'
+      'getCtx' | 'id' | 'filename' | 'buffer' | 'sourceBlob' | 'durationSec' | 'role'
     >(this, {
       getCtx: false,
       id: false,
@@ -176,7 +172,6 @@ export class AudioTrack implements Track {
       buffer: false,
       sourceBlob: false,
       durationSec: false,
-      pitch: false,
       role: false,
     });
   }
@@ -195,6 +190,56 @@ export class AudioTrack implements Track {
   /** Drop the user override so the colour reverts to inheritance. */
   clearColor(): void {
     this._color = undefined;
+  }
+
+  /**
+   * Instrument pitches sharing this audio track's mixer group, in row
+   * order. Empty when solo. Delegates to the shared free function (NOT a
+   * method) so the read of `trackOrder` stays tracked when called from
+   * the `pitch` / `color` computeds, see its note in `tracks.ts`.
+   */
+  private get inGroupPitches(): string[] {
+    const ctx = this.getCtx();
+    return ctx ? groupInstrumentPitches(this.id, ctx) : [];
+  }
+
+  /**
+   * DSL pitch letter (e.g. `k`, `s`, `h`) this audio track is the
+   * isolated stem of. **Derived from the mixer group** (the user's own
+   * drag-and-drop grouping is the source of truth): when the track shares
+   * a group with one or more instrument rows it reports that pitch, so
+   * regrouping the row to a different instrument retints it correctly
+   * instead of clinging to the load-time mapping. The load-time mapping
+   * (kept in {@link _pitchOverride}) only acts as the tiebreaker when one
+   * audio file maps to several pitches in the same group, and as the
+   * fallback when the track is solo. Undefined for ad-hoc / drumless
+   * tracks that were never mapped or grouped.
+   */
+  get pitch(): string | undefined {
+    const inGroup = this.inGroupPitches;
+    if (inGroup.length > 0) {
+      if (this._pitchOverride !== undefined && inGroup.includes(this._pitchOverride)) {
+        return this._pitchOverride;
+      }
+      return inGroup[0];
+    }
+    return this._pitchOverride;
+  }
+
+  /**
+   * Bake the current group-derived pitch into {@link _pitchOverride} so a
+   * row dragged out of its group keeps its instrument association as its
+   * own state. Called by the mixer the moment a reorder clears this row's
+   * group — while the old group is still live — so the association isn't
+   * lost. No-op for a track that wasn't grouped.
+   */
+  detachPitch(): void {
+    const inGroup = this.inGroupPitches;
+    if (inGroup.length === 0) return;
+    this._pitchOverride =
+      this._pitchOverride !== undefined && inGroup.includes(this._pitchOverride)
+        ? this._pitchOverride
+        : inGroup[0];
   }
 
   /** Whether the user has set an explicit override on this track.
