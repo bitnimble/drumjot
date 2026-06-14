@@ -13,14 +13,10 @@ import {
 } from './jot_view/playback/audio_worklet_warning_modal';
 import { LyricsSearchModal } from './jot_view/lyrics/lyrics_search_modal';
 import { LyricsTextLoadModal } from './jot_view/lyrics/lyrics_text_modal';
-import {
-  BarTimingsContext,
-  GridLineSettingsContext,
-  RenderedJotContext,
-  SelectionContext,
-  UniformWaveformsContext,
-} from './jot_view/contexts';
-import { MixerStoreContext } from './jot_view/mixer/mixer_contexts';
+import { SelectionContext } from 'src/selection';
+import { BarTimingsContext, RenderedJotContext } from './jot_view/document/document_contexts';
+import { GridLineSettingsContext } from './jot_view/settings/settings_contexts';
+import { MixerStoreContext, UniformWaveformsContext } from './jot_view/mixer/mixer_contexts';
 import { ViewportStoreContext } from './jot_view/viewport/viewport_contexts';
 import {
   LyricsAlignStoreContext,

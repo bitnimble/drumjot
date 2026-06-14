@@ -8,7 +8,7 @@ import { StructuralBar, StructuralNote } from 'src/jot';
 import { TICKS_PER_BEAT } from 'src/midi';
 import { AudioTrack, jotPlayer } from 'src/jot_view/playback';
 import { waveformWorker } from 'src/jot_view/playback/waveform_worker_client';
-import { BarTimingsContext, RenderedJotContext } from '../contexts';
+import { BarTimingsContext, RenderedJotContext } from '../document/document_contexts';
 import { NoteProvenanceContextValue } from '../provenance/provenance_contexts';
 import styles from './score.module.css';
 import { WAVEFORM_PAINT_COLOR } from '../utils/waveform_color';

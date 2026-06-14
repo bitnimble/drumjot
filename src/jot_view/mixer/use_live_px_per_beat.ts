@@ -1,5 +1,5 @@
 import React from 'react';
-import { RenderedJotContext } from '../contexts';
+import { RenderedJotContext } from '../document/document_contexts';
 
 /**
  * Read the live `pxPerBeat` off the active jot via the MobX scope

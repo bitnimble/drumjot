@@ -7,7 +7,8 @@ import { waveformWorker, BarSlice } from 'src/jot_view/playback/waveform_worker_
 import { BarBeat, WaveformChunk, buildChunkLayout } from './waveform_chunks';
 import { GutterResizeHandle } from '../components/gutter_resize_handle';
 import { MuteButton, SoloButton } from '../components/icon_button';
-import { RenderedJotContext, UniformWaveformsContext } from '../contexts';
+import { RenderedJotContext } from '../document/document_contexts';
+import { UniformWaveformsContext } from './mixer_contexts';
 import { MixerStoreContext } from './mixer_contexts';
 import { ViewportStoreContext } from '../viewport/viewport_contexts';
 import styles from './mixer.module.css';

@@ -1,4 +1,5 @@
 import { makeAutoObservable, observable } from 'mobx';
+import React from 'react';
 import { Box, Point } from 'src/geom';
 import { StructuralBar, StructuralNote, StructuralVoice } from 'src/jot';
 import { DocumentStore } from 'src/jot_view/document/document_store';
@@ -114,3 +115,11 @@ export class SelectionStore {
     return undefined;
   }
 }
+
+/**
+ * Routes the active {@link SelectionStore} to deep score chrome (today:
+ * `NoteView`) without threading props through `JotView → MixerView →
+ * InstrumentRow → BarView`. `null` outside the view so a `NoteView`
+ * rendered in isolation just no-ops the click-to-select interaction.
+ */
+export const SelectionContext = React.createContext<SelectionStore | null>(null);
