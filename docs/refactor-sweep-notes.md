@@ -125,10 +125,23 @@ presenters/helpers). Added so far:
 - `toolbar/toolbar_status.test.ts` (14 cases: sampleProgressWidth/Label,
   samplePct, formatMb, formatStageLabel)
 - `minimap/minimap_layout.test.ts` (16 cases: computeBarLayouts, noteMarksEqual)
+- `lyrics/lyric_layout.test.ts` (10 cases: positionLyricLines)
 
-Suite grew 282 → 314 pass, green throughout. Remaining good targets:
-`lyric_layout.ts` (`positionLyricLines`) and `lyrics_measure.ts`
-(`computeLyricShifts`), both pure and currently untested.
+Suite grew 282 → 324 pass, green throughout.
+
+**Existing-test review (the "simplify / remove roundabout tests" half):**
+walked all `src/**/*.test.ts`. The core-domain suites (parser, midi, rlrr,
+lyrics, linter) are legitimate behaviour tests untouched by the React
+refactor; the `jot_view` tests are all right-sized and focused
+(`mixer.test.ts` is a clean role to enable matrix, correctly repointed to
+`overflow_menus.ts` during the extraction). No roundabout or now-duplicated
+tests were found, so nothing was removed or rewritten; the cleanup here was
+additive (test the freshly-extracted pure logic) rather than subtractive.
+
+Still-untested pure target if you want more: `lyrics_measure.ts`
+(`computeLyricShifts`), but it measures glyphs via an off-screen canvas, so
+it needs a DOM/canvas (bun's test env has none); better covered by an e2e or
+a jsdom-canvas shim than a plain unit test.
 
 ---
 
