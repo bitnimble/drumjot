@@ -140,6 +140,7 @@ def test_train_loop_keep_best_restores_per_lane_peak(monkeypatch):
     hist = train.train_loop(model, clips, cfg, epochs=4, batch_size=2, val_clips=val,
                             keep_best=True, log=lambda s: None)
     assert hist["best_epoch_by_lane"] == [1.0, 3.0]  # k@1, s@3 (cfg.lanes order)
+    assert hist["vf1_k"] == [0.1, 0.9, 0.5, 0.4] and hist["vf1_s"] == [0.1, 0.3, 0.5, 0.9]
     # each head restored from its OWN best epoch: k's params from ep1, s's from ep3
     sd = model.state_dict()
     for k in sd:

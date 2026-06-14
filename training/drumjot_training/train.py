@@ -673,6 +673,7 @@ def train_loop(
                     if not vals:
                         continue
                     lf = sum(vals) / len(vals)
+                    history.setdefault(f"vf1_{lane}", []).append(lf)  # per-epoch per-lane curve
                     if lf > best_lane_f1[lane]:
                         best_lane_f1[lane], best_lane_epoch[lane] = lf, epoch
                         pref = f"heads.{lane}."
