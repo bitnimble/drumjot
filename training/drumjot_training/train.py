@@ -1175,7 +1175,8 @@ def main(argv: list[str] | None = None) -> None:
                     action=argparse.BooleanOptionalAction,
                     help="treat dropped, non-output percussion (the removed mp + non-kit "
                     "aux perc) as hard negatives for every output lane, reusing the sib "
-                    "weighting; --no-dropped-neg ablates (default on)")
+                    "weighting; default OFF (a cap-150 A/B found no precision gain + mild "
+                    "ride/crash F1 loss); --dropped-neg re-enables")
     ap.add_argument("--no-filter-report", action="store_true", help="skip the deterministic-filter F1 comparison")
     ap.add_argument("--out", type=str, default=None, help="save model.pt + meta.json here")
     ap.add_argument("--resume", type=str, default=None, help="checkpoint dir to warm-start weights from")

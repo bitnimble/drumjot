@@ -84,7 +84,12 @@ Loader + `--dataset enst` built but data is request-gated (Télécom Paris) and
 real `annotation/*.txt` labels, (b) optionally run `separate_enst_dataset.py`
 for the `sep_drum`/perstem trees, (c) `--dataset enst --enst-mix wet_mix`.
 
-### 6. Dropped-percussion hard negatives (built 2026-06-12, no run yet)
+### 6. Dropped-percussion hard negatives (built 2026-06-12, TESTED + defaulted OFF 2026-06-14)
+- **Outcome: no benefit; defaulted OFF.** A cap-150 per-stem A/B (cymbals+hats, 2
+  seeds) found `use_dropped_neg=True` does NOT raise precision on the leak-prone
+  lanes (precision mostly *dropped*: cr −0.035, mc −0.048, hp −0.037) and cost
+  ride/crash **F1** (−0.030/−0.023). `Config.use_dropped_neg` is now **False** by
+  default; the `x` lane + flag are kept for a higher-cap re-test. See RESULTS.md.
 - **Scope:** train (changes the loss; old checkpoints unaffected, no new head).
 - **What:** every source onset that maps to NO output lane, the removed `mp`
   (cowbell/clap/tambourine) PLUS non-kit GM aux perc (congas/bongos/timbales/
@@ -94,15 +99,16 @@ for the `sep_drum`/perstem trees, (c) `--dataset enst --enst-mix wet_mix`.
   ("a hit happened, and it's none of your drums"), folded into `sib_act` so it
   rides the existing `--sib-neg-weight`/`--sib-pos-weight`. Fixes the gap where
   dropping a class silently dropped its false-trigger signal.
-- **Default:** ON. **Disable:** `--no-dropped-neg` (or `Config.use_dropped_neg=False`);
-  also inert when sibling weighting is off. Readers still emit `x` either way.
+- **Default:** OFF (was ON until the A/B). **Re-enable:** `--dropped-neg` (or
+  `Config.use_dropped_neg=True`); also inert when sibling weighting is off. Readers
+  still emit `x` either way.
 - **Safety:** explicit per-source aux-perc lists (not "anything unmapped"), so an
   incomplete label map (e.g. ENST's unverified table) can't turn a real drum into
   a negative against its own lane, unknown labels keep dropping silently.
 - **Interactions:** reuses sibling weighting (off if both sib weights = 1); the
   `_onsets.json` pooled cache auto-rebuilds entries that predate the `x` lane.
-- **Test it:** A/B on the per-stem set, `--dropped-neg` vs `--no-dropped-neg`,
-  watch precision on the leak-prone lanes (hc/rd/cr/mc, snare vs clap).
+- **Tested (2026-06-14):** per-stem `--dropped-neg` vs `--no-dropped-neg` A/B, no
+  precision gain, mild ride/crash F1 loss; defaulted off (see Outcome above).
 
 ### 7. MuQ encoder pathway (built 2026-06-12, TESTED + REMOVED 2026-06-14)
 - **Outcome: MuQ is decisively worse than MERT for drum onsets; the pathway was

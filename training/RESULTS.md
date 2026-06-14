@@ -340,6 +340,45 @@ timbre cue adds nothing over MERT + the high-band block at this scale. Don't wir
 here, e.g. ride 0.662, sit above the cap-300 run's per-frame ride 0.597 -- partly
 the new per-lane keep_best, partly cap/seed variance; not directly comparable.)
 
+**dropped-neg A/B -- doesn't help, defaulted OFF (2026-06-14).** A/B of
+`use_dropped_neg` (feed the `x` ghost lane's onsets to the loss as hard negatives
+for every output lane). Real pipeline (CachedClips carry the negative/weight
+targets; only the loss flag differs), per-stem cymbals+hats, cap 150, 2 seeds,
+keep_best, tuned thresholds. ON vs OFF (Δ = on − off):
+
+| lane | F1 off | F1 on | ΔF1 | P off | P on | ΔP |
+|---|---|---|---|---|---|---|
+| rd | 0.655 | 0.625 | −0.030 | 0.634 | 0.645 | +0.012 |
+| cr | 0.641 | 0.618 | −0.023 | 0.671 | 0.637 | −0.035 |
+| mc | 0.490 | 0.492 | +0.003 | 0.550 | 0.501 | −0.048 |
+| hc | 0.718 | 0.722 | +0.004 | 0.717 | 0.726 | +0.009 |
+| hp | 0.485 | 0.481 | −0.004 | 0.459 | 0.422 | −0.037 |
+| ho | 0.736 | 0.734 | −0.003 | 0.824 | 0.816 | −0.008 |
+
+The feature was meant to raise PRECISION on leak-prone lanes; instead precision
+mostly *drops* (cr −0.035, mc −0.048, hp −0.037) and it costs ride/crash **F1**
+(−0.030/−0.023, the targeted lanes). Everything else is noise. **Defaulted OFF**
+(`Config.use_dropped_neg=False`); flag kept for a higher-cap re-test.
+
+**keep_best re-baseline: per-lane vs global vs final (2026-06-14).** From the
+per-epoch per-lane val-F1 curves (`history["vf1_<lane>"]`), UNTUNED (0.5 thr) so
+absolute values are low; the comparison across the three is the point:
+
+| lane | final | global | per-lane | pl−glob | pl−final |
+|---|---|---|---|---|---|
+| rd | 0.519 | 0.616 | 0.620 | +0.004 | +0.102 |
+| cr | 0.581 | 0.528 | 0.616 | **+0.089** | +0.036 |
+| mc | 0.301 | 0.425 | 0.487 | **+0.062** | +0.186 |
+| hc | 0.705 | 0.715 | 0.720 | +0.006 | +0.015 |
+| hp | 0.323 | 0.445 | 0.469 | +0.025 | +0.147 |
+| ho | 0.721 | 0.722 | 0.730 | +0.008 | +0.009 |
+
+**Per-lane keep_best is validated**: over the old global-best it adds real F1 where
+a lane peaks off the macro (crash **+0.089**, mc +0.062, hp +0.025); over
+final-epoch it's huge on the overfitters (mc +0.186, hp +0.147, ride +0.102).
+Note crash benefits most from per-lane -> the cap-300 runs (global keep_best)
+understated crash; doesn't change the two-stage verdict but worth knowing.
+
 ## Per-stem pooled MERT layer sweep (2026-06-12)
 
 **Setup.** `scripts/perstem_layer_sweep.py` over pooled per-stem examples from all

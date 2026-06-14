@@ -50,13 +50,14 @@ training/RESULTS.md). The open problem is the cymbal ceiling (crash/ride/misc),
 which is data/separation-bound, not architecture-bound.
 - [done 2026-06-14] `cym` sub-6 kHz timbre block A/B (`--cym`): **no benefit**, all per-lane deltas within seed noise (crash +0.013 cancelled by ride/mc); see
   RESULTS.md. Not wiring `cym` into inference.
-- dropped-neg A/B (`--dropped-neg` vs `--no-dropped-neg`): confirm the hard-negative
-  `x` lane actually improves precision on the leak-prone lanes (hc/rd/cr/mc); revert
-  if it doesn't pull its weight.
+- [done 2026-06-14] dropped-neg A/B (`--dropped-neg` vs `--no-dropped-neg`): **no
+  precision gain, mild ride/crash F1 loss** → defaulted OFF (`use_dropped_neg=False`).
+  See RESULTS.md; flag kept for a higher-cap re-test.
+- [done 2026-06-14] per-lane `keep_best` re-baseline: **validated**, over old
+  global-best it adds crash +0.089 / mc +0.062 / hp +0.025 (lanes peak off the
+  macro); huge over final-epoch on overfitters. Kept as default.
 - more crash / misc-cym training data + better cymbal separation, the fundamental
   ceiling levers (crash is data-starved vs ride; mc has ~50 val onsets).
-- re-baseline with the new per-lane `keep_best`: quantify the per-lane-F1 lift over
-  the old global-best-epoch behaviour.
 - higher-cap confirmation of the per-stem best layers (the sweep was cap-30: s→L1,
   c→L10).
 - (bigger, only if the above stall) fine-tune the MERT encoder.
