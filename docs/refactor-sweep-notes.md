@@ -95,7 +95,7 @@ architectural and flagged).
 | lyrics | **done** | pure beat-positioning → `lyric_layout.ts`. `lyrics_row.tsx` 776 → 342: chips/WordText/WindowedLines + word-debug tooltip → `lyric_chips.tsx`; overflow menu + LRC export → `lyrics_overflow_menu.tsx`; the duplicated drag props + drop-target hook removed (F4 resolved, now imports `mixer/mixer_drag`). LyricsRow keeps the row composition + positioning/shift memos. |
 | viewport | not started | `vertical_scrollbar` + store/presenter already small/clean; nothing obvious to extract. |
 | transcribe | not started | `recent_transcriptions` is small; toolbar holds the transcribe form (see toolbar). |
-| minimap | not started | `minimap.tsx` (~530) has pure peak/tick canvas-prep logic that could move to a tested helper. Perf-adjacent (canvas paint), review before splitting. |
+| minimap | **done (conservative)** | `minimap.tsx` 532 → 495. The file is densely perf-critical (canvas paint, rAF-coalesced pointer drag, per-frame MinimapViewportBox/MinimapPlayhead observers) and already internally decomposed, so only the genuinely-pure, perf-neutral math was extracted: `computeBarLayouts` (jot-time → minimap px) + `noteMarksEqual` + the NoteMark types → `minimap_layout.ts`, with `minimap_layout.test.ts` (16 cases). These run in `useMemo`/`reaction`, never in the paint, so the paint/pointer/per-frame code is byte-identical. The waveform-peaks effect + canvas paint were deliberately left in place (touching them risks the 120fps budget, which can't be re-measured on the currently-loaded box). |
 | mixer | **done** | `mixer.tsx` 1605 → **201 lines** (just the `MixerView` composition root + the control-type re-export), every slice perf-gated (all 26 e2e incl. 3×120fps specs green throughout). Extracted leaf clusters: `overflow_menus.tsx` (audio + instrument overflow menus + split-state, which mixer.test.ts covers), `gutter_controls.tsx` (GutterMasterRow + RowVolumeSlider), `mixer_drag.tsx` (MixerRowDragProps + useMixerRowDropTarget + drop zones + drag handle), `mixer_controls.ts` (VoiceControls/AudioTrackControls types), `use_live_px_per_beat.ts`, `waveform_chunks.ts`, then the two big row components: `instrument_row.tsx` (InstrumentRow + WindowedBarList, 362) and `audio_track_row.tsx` (AudioTrackRow + AudioTrackWaveformCanvas/Chunk, 497). Also extracted `reorderTrackOrder` → `src/tracks.ts` + 7 unit tests (drag-reorder logic). |
 | toolbar | **mostly done** | `DebugPanel` extracted earlier. `toolbar.tsx` 1136 → 823: leaf clusters that read stores directly (no prop threading) pulled into `playback_menu.tsx` (kit/speed/latency), `view_menu.tsx` (ZoomControl + ThemeSection), `toolbar_status.tsx` (DrumLoadingIndicator + busy pills + the pure sample-progress/stage-label helpers). Added `toolbar_status.test.ts` (14 cases) for the extracted pure helpers. **Remaining (optional):** the File + Transcribe dropdown bodies are still inline in `Toolbar` (~400 lines of JSX); they're cohesive with the composition root and need heavy prop/ref threading to extract, so left as-is. |
 | score | **done** | `score.tsx` 2825 → **123 lines**, split into 6 focused files, every slice perf-gated (E2E_DEBUG_BUNDLE live; all 26 e2e incl. 3×120fps perf specs green): `note_provenance_details.tsx` (debug-details, 1671), `bar_view.tsx` (BarView/NoteView/brackets/grace + note-desc helpers, 599, per-frame hot path, no perf regression), `popover_portal.tsx` (160), `timeline_header.tsx` (+WindowedTicks/TickDescriptor, 226), `filtered_onset_view.tsx` (119). score.tsx is now a 123-line leaf (seekFromClick + title/subtitle helpers + Legend). `WAVEFORM_PAINT_COLOR` → `utils/waveform_color.ts`. No import cycles. |
@@ -117,11 +117,18 @@ optional splits noted above (lyrics_row, toolbar menus, minimap helpers).
 
 ## Unit-test cleanup (bullet 24)
 
-Not started as a dedicated pass. Added one new focused unit test alongside an
-extraction (`playback/playhead_label.test.ts`). The existing suite (282 pass)
-stays green throughout. Good future targets now that logic is extracted:
-`lyric_layout.ts` (`positionLyricLines`) and the toolbar sample-progress
-helpers.
+Approach: as each extraction lands, the now-pure logic gets a focused unit
+test (no React mocking needed; the whole point of pulling logic into
+presenters/helpers). Added so far:
+- `playback/playhead_label.test.ts` (earlier)
+- `tracks.test.ts` `reorderTrackOrder` (7 cases, drag-reorder logic)
+- `toolbar/toolbar_status.test.ts` (14 cases: sampleProgressWidth/Label,
+  samplePct, formatMb, formatStageLabel)
+- `minimap/minimap_layout.test.ts` (16 cases: computeBarLayouts, noteMarksEqual)
+
+Suite grew 282 → 314 pass, green throughout. Remaining good targets:
+`lyric_layout.ts` (`positionLyricLines`) and `lyrics_measure.ts`
+(`computeLyricShifts`), both pure and currently untested.
 
 ---
 
