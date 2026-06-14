@@ -9,7 +9,7 @@ import {
   furiganaAnnotator,
   lyricsStore,
 } from 'src/lyrics';
-import { jotPlayer } from 'src/playback';
+import { jotPlayer } from 'src/jot_view/playback';
 import { LyricsPresenterContext, LyricsAlignStoreContext } from '../contexts';
 import { GutterResizeHandle } from '../components/gutter_resize_handle';
 import { MixerRowDragProps, useMixerRowDropTarget } from '../mixer/mixer_drag';

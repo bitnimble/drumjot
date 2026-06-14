@@ -1,6 +1,6 @@
 import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
-import { jotPlayer, SampleLoadProgress } from 'src/playback';
+import { jotPlayer, SampleLoadProgress } from 'src/jot_view/playback';
 import { TranscribeStage } from 'src/transcriber';
 import sharedStyles from '../../jot_view.module.css';
 import { TranscribeStatus } from '../store';

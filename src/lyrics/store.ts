@@ -19,7 +19,7 @@
  */
 
 import { makeAutoObservable } from 'mobx';
-import { JotTimeline } from 'src/playback';
+import { JotTimeline } from 'src/jot_view/playback';
 import { LYRICS_FALLBACK_COLOR } from 'src/tracks';
 import { LyricLine } from './lrc';
 

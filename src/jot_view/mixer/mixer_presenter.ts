@@ -1,6 +1,6 @@
 import { comparer, makeAutoObservable, reaction } from 'mobx';
 import { lyricsStore, LyricsTrackId } from 'src/lyrics';
-import { AudioTrackId, jotPlayer } from 'src/playback';
+import { AudioTrackId, jotPlayer } from 'src/jot_view/playback';
 import { buildDebugBundleTrackOrder, reorderTrackOrder, trackKeyEq, type TrackKey } from 'src/tracks';
 import { DocumentStore } from '../document/document_store';
 import { MixerStore, clampVolume, collectJotPitches } from './mixer_store';

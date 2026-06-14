@@ -5,7 +5,7 @@ import { RenderedJot } from 'src/jot';
 import { lyricsStore, parseEnhancedLrc } from 'src/lyrics';
 import { fromMidi } from 'src/midi';
 import { parse, ParseError } from 'src/parser';
-import { AudioTrackId, AudioTrackRole, jotPlayer } from 'src/playback';
+import { AudioTrackId, AudioTrackRole, jotPlayer } from 'src/jot_view/playback';
 import { loadParadbZip } from 'src/rlrr';
 import { titleFromFilename, transcriber } from 'src/transcriber';
 import { toastStore } from '../toasts/toasts';

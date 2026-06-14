@@ -1,7 +1,7 @@
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { RenderedJot, ViewConfig } from 'src/jot';
-import { jotPlayer } from 'src/playback';
+import { jotPlayer } from 'src/jot_view/playback';
 import { MixerStoreContext } from '../contexts';
 import { LyricsRow } from '../lyrics/lyrics_row';
 import styles from './mixer.module.css';

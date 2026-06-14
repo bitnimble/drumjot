@@ -19,7 +19,7 @@
  */
 
 import { makeAutoObservable } from 'mobx';
-import type { AudioTrackId } from 'src/playback/audio_tracks';
+import type { AudioTrackId } from 'src/jot_view/playback/audio_tracks';
 import type { LyricsTrackId } from 'src/lyrics/store';
 
 /**

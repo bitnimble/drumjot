@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import type { LyricLine } from 'src/lyrics';
-import type { JotTimeline } from 'src/playback';
+import type { JotTimeline } from 'src/jot_view/playback';
 import { MIN_BEAT_WIDTH, positionLyricLines } from './lyric_layout';
 
 // Two 4-beat bars, each 2 s long: jot-time [0,2) → beats [0,4),

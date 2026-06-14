@@ -1,7 +1,7 @@
 import React from 'react';
 import { NoteProvenanceEntry } from 'src/debug_zip';
 import { RenderedJot } from 'src/jot';
-import { BarTiming } from 'src/playback';
+import { BarTiming } from 'src/jot_view/playback';
 import { SelectionStore } from 'src/selection';
 import { GridLineSettings } from './store';
 import { ProvenanceStore } from './provenance/provenance_store';

@@ -4,7 +4,7 @@ import React from 'react';
 import { Point } from 'src/geom';
 import { RenderedJot } from 'src/jot';
 import { perfProbe } from 'src/perf_probe';
-import { BarTiming, buildTimeline, jotPlayer, timeToX } from 'src/playback';
+import { BarTiming, buildTimeline, jotPlayer, timeToX } from 'src/jot_view/playback';
 import { SelectionStore } from 'src/selection';
 import styles from './jot_view.module.css';
 import {

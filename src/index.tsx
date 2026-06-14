@@ -21,7 +21,7 @@ import { PlaybackStore } from 'src/jot_view/playback/playback_store';
 import { ViewportStore } from 'src/jot_view/viewport/viewport_store';
 import { MixerStore } from 'src/jot_view/mixer/mixer_store';
 import { parse } from 'src/parser';
-import { jotPlayer } from 'src/playback';
+import { jotPlayer } from 'src/jot_view/playback';
 // Side-effect import: instantiates the theme controller so the
 // `<html data-theme>` attribute is in sync with the user's saved choice
 // (or the live OS preference in `system` mode) before React mounts.

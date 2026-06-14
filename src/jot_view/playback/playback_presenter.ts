@@ -1,6 +1,6 @@
 import { makeAutoObservable, reaction } from 'mobx';
-import { buildTimeline, jotPlayer, xToTime } from 'src/playback';
-import { pickDominantBpmAndTime } from 'src/playback/timeline';
+import { buildTimeline, jotPlayer, xToTime } from 'src/jot_view/playback';
+import { pickDominantBpmAndTime } from 'src/jot_view/playback/timeline';
 import { DocumentStore } from '../document/document_store';
 import { PlaybackStore } from './playback_store';
 

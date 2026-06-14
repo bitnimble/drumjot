@@ -3,7 +3,7 @@ import { Info, Search, X } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { ciTrimEq, LrclibMatch, parseLrc, searchLrclib } from 'src/lyrics';
-import { jotPlayer } from 'src/playback';
+import { jotPlayer } from 'src/jot_view/playback';
 import { Checkbox } from '../components/checkbox';
 import styles from './lyrics_search_modal.module.css';
 import { LyricsPresenter } from './lyrics_presenter';

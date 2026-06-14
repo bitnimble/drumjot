@@ -1,7 +1,7 @@
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { RenderedJot } from 'src/jot';
-import { jotPlayer } from 'src/playback';
+import { jotPlayer } from 'src/jot_view/playback';
 import { GutterResizeHandle } from '../components/gutter_resize_handle';
 import { ViewportStoreContext } from '../contexts';
 import { Playhead } from '../playback/playhead';

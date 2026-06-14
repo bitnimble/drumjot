@@ -3,7 +3,7 @@ import { AlertTriangle, Loader, Pause, Play, Square } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { DEFAULT_GRID_DIVISION, gridDivisionFor } from 'src/grid';
-import { jotPlayer, PlayerState } from 'src/playback';
+import { jotPlayer, PlayerState } from 'src/jot_view/playback';
 import sharedStyles from '../../jot_view.module.css';
 import { NumberStepper } from '../components/number_stepper';
 import { FollowPlayheadContext } from '../contexts';

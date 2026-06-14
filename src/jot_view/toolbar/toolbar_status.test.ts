@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import type { SampleLoadProgress } from 'src/playback';
+import type { SampleLoadProgress } from 'src/jot_view/playback';
 import {
   formatMb,
   formatStageLabel,

@@ -5,7 +5,7 @@
  * classify the audio).
  */
 import { describe, expect, it } from 'bun:test';
-import { AudioTrackRole } from 'src/playback';
+import { AudioTrackRole } from 'src/jot_view/playback';
 import { splitDrumPiecesState, splitFromMixState } from './overflow_menus';
 
 type Row = [AudioTrackRole | undefined, boolean, boolean];

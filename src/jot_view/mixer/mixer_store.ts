@@ -9,7 +9,7 @@ import {
   isAudibleUnder,
   isAudioTrackAudibleUnder,
   PlayerFilter,
-} from 'src/playback';
+} from 'src/jot_view/playback';
 import {
   INSTRUMENT_FALLBACK_COLOR,
   InstrumentTrack,

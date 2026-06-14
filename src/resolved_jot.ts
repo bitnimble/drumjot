@@ -20,7 +20,7 @@ import {
   Voice,
 } from 'src/dsl';
 import { BarTempos, buildBarTempos, initialBpm } from 'src/tempo';
-import { buildTimeline, JotTimeline, pickDominantBpmAndTime } from 'src/playback/timeline';
+import { buildTimeline, JotTimeline, pickDominantBpmAndTime } from 'src/jot_view/playback/timeline';
 import { Pixels, px, ViewConfig } from './view_config';
 import { elementWeight, expandElements, isDyadic, sumWeights } from './pattern_expansion';
 

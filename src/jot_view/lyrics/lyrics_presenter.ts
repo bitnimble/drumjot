@@ -9,7 +9,7 @@ import {
   nameLooksLikeVocals,
   stripLyricNoise,
 } from 'src/lyrics';
-import { AudioTrackId, buildTimeline, jotPlayer } from 'src/playback';
+import { AudioTrackId, buildTimeline, jotPlayer } from 'src/jot_view/playback';
 import { toastStore } from '../toasts/toasts';
 import { DocumentStore } from '../document/document_store';
 import { LyricsAlignStore } from './lyrics_align_store';

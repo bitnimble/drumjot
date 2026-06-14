@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
 
 const TONE_WAV = fileURLToPath(
-  new URL('../../../tests/fixtures/tone.wav', import.meta.url),
+  new URL('../../../../tests/fixtures/tone.wav', import.meta.url),
 );
 
 /**

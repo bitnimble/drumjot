@@ -1,4 +1,4 @@
-import { JotTimeline } from 'src/playback';
+import { JotTimeline } from 'src/jot_view/playback';
 
 /**
  * Format a playhead time (seconds) as `M:SS.cc`. Negative times (the

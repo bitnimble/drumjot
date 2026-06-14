@@ -6,8 +6,8 @@ import { NoteProvenanceEntry } from 'src/debug_zip';
 import { DEFAULT_GRID_DIVISION, gridDivisionFor } from 'src/grid';
 import { StructuralBar, StructuralNote } from 'src/jot';
 import { TICKS_PER_BEAT } from 'src/midi';
-import { AudioTrack, jotPlayer } from 'src/playback';
-import { waveformWorker } from 'src/playback/waveform_worker_client';
+import { AudioTrack, jotPlayer } from 'src/jot_view/playback';
+import { waveformWorker } from 'src/jot_view/playback/waveform_worker_client';
 import {
   BarTimingsContext,
   NoteProvenanceContextValue,

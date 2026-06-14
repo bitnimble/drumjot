@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { JotTimeline } from 'src/playback';
+import { JotTimeline } from 'src/jot_view/playback';
 import { formatPlayheadTime, playheadBarBeat } from './playhead_label';
 
 describe('formatPlayheadTime', () => {

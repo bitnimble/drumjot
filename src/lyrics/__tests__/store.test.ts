@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { JotTimeline } from 'src/playback';
+import { JotTimeline } from 'src/jot_view/playback';
 import { LyricsStore, audioSecToBeat } from '../store';
 
 /**
