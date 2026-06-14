@@ -51,7 +51,9 @@ def test_plan_windows_short_clip_no_read(tmp_path):
 
 def test_plan_windows_cut_snaps_to_low_energy_gap(tmp_path):
     pytest.importorskip("soundfile")
-    p = _write(tmp_path, "long.flac", 65.0, gaps=(28.0,))  # quiet gap at 28s (within 30+/-3)
+    # gaps at 28s and 60s: first cut snaps to 28 (within 30+/-3); second to 60, so the
+    # tail is ~5s and stays its own window (not merged), keeping the count at 3.
+    p = _write(tmp_path, "long.flac", 65.0, gaps=(28.0, 60.0))
     wins = train.plan_windows(p, 30.0, 3.0, max_windows=0)
     assert len(wins) == 3  # ceil(65/30)
     # first window length = first cut -> snaps into the 28s gap, not 30
@@ -75,7 +77,27 @@ def test_window_specs_partitions_onsets_without_loss(tmp_path):
 
 def test_window_specs_max_windows_caps_count(tmp_path):
     pytest.importorskip("soundfile")
-    p = _write(tmp_path, "l3.flac", 95.0)  # ceil(95/30)=4 windows
+    p = _write(tmp_path, "l3.flac", 100.0)  # ceil(100/30)=4; tail ~7-13s, never merged
     full = train._window_specs([(p, {"k": [1.0]})], 30.0, 3.0, max_windows=0)
     capped = train._window_specs([(p, {"k": [1.0]})], 30.0, 3.0, max_windows=2)
     assert len(full) == 4 and len(capped) == 2  # cap drops the tail windows
+
+
+def test_plan_windows_merges_short_tail(tmp_path):
+    pytest.importorskip("soundfile")
+    # cuts snap to the 30s/60s gaps -> a ~3s tail [60, 63), too short for MERT
+    p = _write(tmp_path, "tail.flac", 63.0, gaps=(30.0, 60.0))
+    wins = train.plan_windows(p, 30.0, 3.0, max_windows=0)
+    assert len(wins) == 2  # 3s sliver folded into the previous window
+    assert all(length >= train.MIN_WINDOW for _s, length in wins)  # no sub-floor sliver
+    assert abs((wins[-1][0] + wins[-1][1]) - 63.0) < 1e-6  # whole clip still covered
+
+
+def test_window_specs_short_tail_loses_no_onsets(tmp_path):
+    pytest.importorskip("soundfile")
+    p = _write(tmp_path, "tail2.flac", 63.0, gaps=(30.0, 60.0))
+    onsets = {"k": [1.0, 31.0, 61.5]}  # 61.5 is in the merged tail region
+    out = train._window_specs([(p, onsets)], window=30.0, search=3.0, max_windows=0)
+    assert len(out) == 2
+    recon = sorted(t + start for _a, o, _w, start, _l in out for t in o["k"])
+    assert recon == [1.0, 31.0, 61.5]  # merged tail keeps its onset, reconstructs exactly

@@ -389,6 +389,12 @@ def _rings_for_clip(
     return rings
 
 
+# Shortest standalone window we'll emit (seconds). A tail below this is merged into
+# the previous window: MERT's conv feature extractor errors on a ~1-3s input, and
+# 5s (~375 MERT frames) is a safe floor that still keeps genuine short clips.
+MIN_WINDOW = 5.0
+
+
 def plan_windows(
     audio_path, window: float, search: float, max_windows: int,
 ) -> list[tuple[float, float]]:
@@ -397,7 +403,9 @@ def plan_windows(
     Each interior cut is nudged to the lowest-RMS point within +/- `search`
     seconds of the nominal `k*window` boundary, so a window edge lands in a quiet
     gap rather than bisecting a hit. Clips <= `window` return a single
-    (0, window) window with NO audio read (uses sf.info duration). `max_windows`
+    (0, window) window with NO audio read (uses sf.info duration). A final window
+    shorter than `MIN_WINDOW` is merged into the previous one (MERT's conv feature
+    extractor can't encode a ~1-3s sliver -> kernel-size error). `max_windows`
     > 0 caps the count (drops the tail); 0 = cover the whole clip."""
     import soundfile as sf
 
@@ -418,6 +426,14 @@ def plan_windows(
         cuts.append(float(t[sel[np.argmin(rms[sel])]]) if sel.size else b)
     cuts.append(dur)
     wins = [(cuts[i], cuts[i + 1] - cuts[i]) for i in range(full_n)]
+    # Full windowing spawns a tail sliver whenever dur isn't a clean multiple of
+    # `window` (and the low-energy nudge can shrink it further). MERT's conv stack
+    # errors on a ~1-3s input (kernel size > frames), so fold a sub-MIN_WINDOW tail
+    # into the previous window (no audio lost; the last window just runs long).
+    if len(wins) >= 2 and wins[-1][1] < MIN_WINDOW:
+        s0, _ = wins[-2]
+        wins[-2] = (s0, dur - s0)
+        wins.pop()
     return wins[:max_windows] if max_windows else wins
 
 
@@ -1080,20 +1096,18 @@ def main(argv: list[str] | None = None) -> None:
         help="append the 6-20 kHz high-band block to MERT features (default on); "
         "--no-high-band trains on raw MERT only (high-band ablation). Separate cache key.",
     )
-    ap.add_argument(
-        "--max-windows", type=int, default=1,
-        help="split each clip (train AND val) into up to N non-overlapping ~max-seconds "
-        "windows (each its own cached example), instead of using only the first max-seconds. "
-        "1 (default) = legacy first-window-only (reproduces prior runs); >1 segments long "
-        "clips (recovers the separated audio we'd otherwise discard, and multiplies val "
-        "onsets so rare-lane F1 is less noisy); 0 = unlimited. Cuts are nudged to a "
-        "low-energy gap (--window-search). Windowed val is deterministic, so runs stay "
-        "comparable to each other (but not to single-window-val runs).",
-    )
+    # Windowing is unconditional: every clip (train AND val) is sliced into as many
+    # ~max-seconds windows as fit, recovering ALL the separated audio instead of just
+    # the first window. (Was a `--max-windows` flag defaulting to first-window-only;
+    # removed -- using the whole clip is always right, and the flag was only kept for
+    # legacy single-window reproducibility.) Cuts land in low-energy gaps via
+    # --window-search. NB: the feature cache is keyed per (start, length), so the
+    # first run after this re-encodes every clip's later windows (one-time cost,
+    # proportional to total audio duration).
     ap.add_argument(
         "--window-search", type=float, default=3.0,
-        help="when segmenting (--max-windows != 1), nudge each window cut to the lowest-RMS "
-        "point within +/- this many seconds of the nominal boundary, to avoid bisecting a hit.",
+        help="nudge each window cut to the lowest-RMS point within +/- this many seconds "
+        "of the nominal boundary, to avoid bisecting a hit.",
     )
     ap.add_argument(
         "--cache-dtype", choices=("float16", "float32"), default=Config.cache_dtype,
@@ -1158,19 +1172,19 @@ def main(argv: list[str] | None = None) -> None:
     if not 0 <= cfg.encoder_layer < nhs:
         raise SystemExit(f"--layer {cfg.encoder_layer} out of range: valid 0..{nhs - 1}")
 
-    # Expand into per-window specs. Both train and val segment long clips into up
-    # to --max-windows windows (recovering audio past the first --max-seconds).
-    # Windowing val is deterministic (same split every run -> comparable across
-    # future runs) and multiplies eval onsets, which tightens the noisy rare-lane
-    # F1. Default --max-windows 1 keeps BOTH single-window (legacy: first
-    # --max-seconds only), so prior single-window runs stay reproducible.
+    # Expand into per-window specs. Both train and val are sliced into as many
+    # ~max-seconds windows as fit the whole clip (max_windows=0 = unlimited),
+    # recovering ALL the separated audio rather than just the first window. The
+    # split is deterministic (low-energy cuts via --window-search), so runs stay
+    # comparable to each other, and it multiplies val onsets, tightening the noisy
+    # rare-lane F1.
     win = args.max_seconds or 30.0
-    train_wspecs = _window_specs(train_specs, win, args.window_search, args.max_windows)
-    val_wspecs = _window_specs(val_specs, win, args.window_search, args.max_windows)
+    train_wspecs = _window_specs(train_specs, win, args.window_search, 0)
+    val_wspecs = _window_specs(val_specs, win, args.window_search, 0)
     extra = len(train_wspecs) - len(train_specs)
     print(
         f"dataset={args.dataset}  {len(train_specs)} train clips -> {len(train_wspecs)} windows "
-        f"(+{extra} from segmenting, max-windows={args.max_windows}) / "
+        f"(+{extra} from segmenting, full windowing) / "
         f"{len(val_specs)} val -> {len(val_wspecs)} windows  (cache {cache}) ...",
         flush=True,
     )

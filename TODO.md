@@ -48,10 +48,27 @@
   - stage 1: improve crash/ride classification
 
 ## Training (learned drum-onset model)
-Architecture is locked to frozen MERT + per-frame per-lane heads. MuQ and a
-two-stage propose→classify arch were both evaluated and ruled out (see
-training/RESULTS.md). The open problem is the cymbal ceiling (crash/ride/misc),
-which is data/separation-bound, not architecture-bound.
+Frozen MERT + per-frame per-lane heads. MuQ and a two-stage propose→classify arch
+were both evaluated and ruled out (see training/RESULTS.md). Open problem: the
+cymbal ceiling (crash/ride/misc). Current hypothesis (was "separation-bound"):
+we're **under-fed / under-fit** -- training used only the first 30s of each clip
+and a tiny head; lots of labelled audio untapped. Exploring scale (data + capacity)
+before separation.
+- [done 2026-06-14] **full windowing is now the default** (`--max-windows` removed):
+  every clip sliced into all ~30s windows, not just the first. Short-tail merge in
+  `plan_windows` (MERT can't encode a <5s sliver). REQUIRES a one-time cache
+  re-encode (`scripts/encode_feature_cache.py`, run on the 3080 / cu130). See
+  CHANGELOG #0.
+- [done 2026-06-14] Phase-1 head-capacity gate (h128 vs h512, cap-100): width flat
+  but the 12-ep run under-trained both; convergence run (40ep, enlarged 4x val)
+  shows lanes converge by **~30 epochs**, the enlarged val **erased the crash
+  lucky-spike** (true crash plateau ~0.52, not 0.628), rd/mc/hp overfit. Honest
+  cap-100 baseline recorded. See RESULTS Phase-1.
+- **NEXT: data-scale axis** -- full windowing × pool-cap at h128 (cheap), ~30 ep,
+  enlarged val. The actual untapped-data test: does more data lift the cymbal
+  plateau? (After the 3080 re-encode.)
+- (deferred) fair width test (h128/256/512 at >=30 ep both arms) -- ~7h on the
+  1660S; flat 12-ep hint + cost deprioritize pure width vs data-scale.
 - [done 2026-06-14] `cym` sub-6 kHz timbre block A/B (`--cym`): **no benefit** at
   natural dist AND on a cymbal-balanced set (crash 0.000 even with 4x crash; ride
   −0.044) → **removed entirely** (feature + flag + cym_features). See RESULTS.md.
@@ -61,9 +78,11 @@ which is data/separation-bound, not architecture-bound.
 - [done 2026-06-14] per-lane `keep_best` re-baseline: **validated**, over old
   global-best it adds crash +0.089 / mc +0.062 / hp +0.025 (lanes peak off the
   macro); huge over final-epoch on overfitters. Kept as default.
-- better cymbal SEPARATION is the real ceiling lever, NOT more crash data: a
-  cymbal-balanced A/B (crash 1:12→1:3 vs ride) left baseline crash F1 flat (0.645
-  vs 0.657), so crash F1 is separation/ambiguity-bound, not crash-volume-starved.
+- (contested) "separation is the lever, not more crash data": a cymbal-balanced
+  A/B (crash 1:12→1:3 vs ride) left baseline crash F1 flat (0.645 vs 0.657). But
+  that held SIZE fixed (tested distribution, not scale); crash F1 climbed with
+  scale (cap-60→300: 0.55→0.70), so the under-fit/data-scale hypothesis (above) is
+  the current lead, not separation.
 - higher-cap confirmation of the per-stem best layers (the sweep was cap-30: s→L1,
   c→L10).
 - (bigger, only if the above stall) fine-tune the MERT encoder.

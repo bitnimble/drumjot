@@ -34,6 +34,29 @@ below and record numbers in [RESULTS.md](RESULTS.md).
 All v3 defaults (high-band, aux-activity, sibling-weighting, threshold-floor,
 stitching, 10 lanes) are **ON automatically**; no flags needed to get them.
 
+### 0. Full windowing by default. REQUIRES a one-time cache re-encode
+**Scope: data.** **Default: on (was off).** Training now slices every clip (train
+AND val) into as many ~`--max-seconds` windows as fit the whole clip, instead of
+using only the first window. The `--max-windows` flag is **removed** (was
+`default=1` = first-window-only, kept for legacy single-window reproducibility);
+windowing is unconditional. Recovers all the separated audio we were discarding
+(source songs are minutes long; we used ~10-30%). `--window-search` (low-energy
+cut nudge) stays. `plan_windows` now also **merges a sub-5s final window** into the
+previous one (`MIN_WINDOW`), since MERT's conv extractor errors on a ~1-3s sliver.
+- **Re-encode required.** The cache is keyed per `(start, length)`, and the
+  smart-slice nudge changes even window-0's length (old single-window was exactly
+  30s, unnudged), so the existing `_cache_mert_pooled` is **fully stale**, wipe it
+  and rebuild. Run `scripts/encode_feature_cache.py` (reuses the production
+  windowing/materialize, so its cache is byte-key-identical to what the trainer
+  asks for; resumable). Re-encode is ~4-8× the old cache (proportional to total
+  audio duration), GPU-hours one-time.
+- **Revert:** restore the `--max-windows` arg + pass it to `_window_specs` in
+  `main()` (the util still takes the param; probes/tests pass it explicitly).
+- **Interactions:** multiplies val onsets → smoother per-lane F1 (the cap-100
+  convergence run's enlarged 4× val erased the crash lucky-epoch spike; see
+  RESULTS Phase-1). Changes per-epoch data volume, so convergence epoch count
+  will differ from single-window runs.
+
 ### 1. v3 architecture on separation-aware data, THE headline run
 Dataset `star_balanced_sep` (our separator's output; build finishing now).
 First run carrying the whole 2026-06-10 stack. Full-drum mode:

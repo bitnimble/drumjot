@@ -404,6 +404,48 @@ final-epoch it's huge on the overfitters (mc +0.186, hp +0.147, ride +0.102).
 Note crash benefits most from per-lane -> the cap-300 runs (global keep_best)
 understated crash; doesn't change the two-stage verdict but worth knowing.
 
+## Phase 1: head-capacity gate + convergence (2026-06-14)
+
+Testing the "we're capacity/under-fit-bound, not data-bound" hypothesis: does a
+bigger per-lane head lift the cymbal/hat ceiling? Cymbals+hats per-stem pool
+(restricted to lanes hc/hp/ho/rd/cr/mc, 6 heads, full cross-stem sibling
+weighting preserved), pooled star+enst+egmd, per-lane keep_best, batch held
+constant across arms (the prior h256 confound was a GPU-forced batch-2). Slow on
+the 1660 Super: h512 ~691s/epoch.
+
+**Width A/B, cap-100, 12 epochs, seed 0 (h128 vs h512), tuned F1:**
+
+| lane | h128 | h512 | Δ |
+|---|---|---|---|
+| hc | 0.627 | 0.628 | +0.001 |
+| ho | 0.679 | 0.681 | +0.002 |
+| rd | 0.549 | 0.518 | -0.031 |
+| cr | 0.628 | 0.681 | +0.053 |
+| mc | 0.352 | 0.333 | -0.019 |
+
+Cymbal sum flat (1.529 vs 1.532). **But inconclusive: both arms were
+UNDER-TRAINED at 12 epochs**, and the per-epoch curves showed it (the value of
+tracing them) -- ho/cr still climbing at epoch 11 for both; the lone crash
+"+0.053" was a same-epoch-6 eval spike (noise), not capacity. h512 just trains
+slower (rd still climbing @11, hc collapsed at epoch 1) without overtaking h128.
+
+**Convergence run: h128, 40 epochs, cap-100, enlarged 4x-windowed val (346->700
+windows):** the bigger val **erased the crash lucky-spike** -- crash is now a
+smooth curve converging to a stable **~0.52 plateau** (epochs 25-39 all
+0.51-0.54); the old single-window `cr 0.628` was a small-val artifact. All lanes
+**converge by ~epoch 25-30** (hc ~0.60, ho ~0.615, cr ~0.52 dead-flat from ~25).
+rd/mc/hp **overfit** (peak mid-run, decay; rd 0.51@19 -> 0.44@39, mc 0.32@24 ->
+0.27) so per-lane keep_best is essential. Final per-lane-keep_best tuned baseline:
+hc 0.606 / hp 0.427 / ho 0.658 / rd 0.519 / cr 0.539 / mc 0.345.
+
+**Takeaways:** (1) 12 epochs under-tests; **~30 is the real budget** at cap-100.
+(2) A fair width test needs >=30 epochs both arms (~7h for h512 here) -- deferred;
+the flat 12-ep hint + cost deprioritize pure width. (3) **Use the convergence-run
+numbers as the honest cap-100 baseline** (NOT the spiky 12-ep ones). (4) Enlarged
+val is a keeper -> full windowing (now default) gives it automatically. (5) Next:
+the **data-scale axis** (full windowing x cap), the actual untapped-data test,
+cheap at h128.
+
 ## Per-stem pooled MERT layer sweep (2026-06-12)
 
 **Setup.** `scripts/perstem_layer_sweep.py` over pooled per-stem examples from all
