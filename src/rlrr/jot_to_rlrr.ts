@@ -27,15 +27,15 @@
  *       `globalMetadata.rlrr` when present; the Jot's `title` always
  *       overrides `recordingMetadata.title`.
  */
-import { Jot, Volume } from 'src/dsl';
+import { Jot, Volume } from 'src/dsl/dsl';
 import {
   ACCENT_BOOST,
   DEFAULT_VELOCITY,
   GHOST_REDUCTION,
   VOLUME_TO_VELOCITY,
-} from 'src/dynamics';
-import { RenderedJot, ResolvedNote, ResolvedTrack } from 'src/jot';
-import { beatToSecWithinBar, buildBarTempos, initialBpm, resolveBpm } from 'src/tempo';
+} from 'src/dynamics/dynamics';
+import { RenderedJot, ResolvedNote, ResolvedTrack } from 'src/jot/resolved_jot';
+import { beatToSecWithinBar, buildBarTempos, initialBpm, resolveBpm } from 'src/tempo/tempo';
 import {
   CLASS_TO_DRUM,
   describeDrum,

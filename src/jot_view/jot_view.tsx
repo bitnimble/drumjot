@@ -2,10 +2,11 @@ import { untracked } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { Point } from 'src/utils/geom';
-import { RenderedJot } from 'src/jot';
+import { RenderedJot } from 'src/jot/resolved_jot';
 import { perfProbe } from 'src/utils/perf_probe';
-import { BarTiming, buildTimeline, jotPlayer, timeToX } from 'src/jot_view/playback';
-import { SelectionStore } from 'src/selection';
+import { jotPlayer } from 'src/jot_view/playback/player';
+import { BarTiming, buildTimeline, timeToX } from 'src/jot_view/playback/timeline';
+import { SelectionStore } from 'src/selection/selection';
 import styles from './jot_view.module.css';
 import {
   AudioWorkletWarningModal,
@@ -13,7 +14,7 @@ import {
 } from './playback/audio_worklet_warning_modal';
 import { LyricsSearchModal } from './lyrics/lyrics_search_modal';
 import { LyricsTextLoadModal } from './lyrics/lyrics_text_modal';
-import { SelectionContext } from 'src/selection';
+import { SelectionContext } from 'src/selection/selection';
 import { BarTimingsContext, RenderedJotContext } from './document/document_contexts';
 import { GridLineSettingsContext } from './settings/settings_contexts';
 import { MixerStoreContext, UniformWaveformsContext } from './mixer/mixer_contexts';
@@ -61,7 +62,7 @@ import { RecentTranscriptionsPicker } from './transcribe/recent_transcriptions';
 import { ToastContainer } from './toasts/toast_container';
 import { Toolbar } from './toolbar/toolbar';
 import { DebugPanel } from './provenance/debug_panel';
-import { ExampleJot } from 'src/fakes';
+import { ExampleJot } from 'src/fakes/fakes';
 
 export { TranscribePresenter } from './transcribe/transcribe_presenter';
 export type { TrackKey, TranscribeOptions, TranscribeStatus } from './store';

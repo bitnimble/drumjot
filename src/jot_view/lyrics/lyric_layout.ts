@@ -1,5 +1,6 @@
-import { audioSecToBeat, LyricLine, LyricWord } from 'src/lyrics';
-import { JotTimeline } from 'src/jot_view/playback';
+import { LyricLine, LyricWord } from 'src/lyrics/lrc';
+import { audioSecToBeat } from 'src/lyrics/store';
+import { JotTimeline } from 'src/jot_view/playback/timeline';
 
 /** Per-word position metadata derived from the lyrics store + timeline.
  *  Stable under playhead movement; rebuilt only when `lines`, `offsetSec`,

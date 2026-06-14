@@ -35,8 +35,8 @@
  * worker iterates bars, so each section gets its real audio-time
  * mapping regardless of the bar's role.
  */
-import { RenderedJot } from 'src/jot';
-import { buildBarTempos } from 'src/tempo';
+import { RenderedJot } from 'src/jot/resolved_jot';
+import { buildBarTempos } from 'src/tempo/tempo';
 
 /**
  * Beats per chunk. Chunks are sliced on this beat-aligned grid,

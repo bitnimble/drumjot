@@ -25,9 +25,10 @@
  * `ViewConfig.barWidth` change reflows the rendered bars reactively and
  * the playhead re-reads their new `x` / `width`).
  */
-import { TimeSignature } from 'src/dsl';
-import { Pixels, RenderedJot, px } from 'src/jot';
-import { buildBarTempos, resolveBpm } from 'src/tempo';
+import { TimeSignature } from 'src/dsl/dsl';
+import { RenderedJot } from 'src/jot/resolved_jot';
+import { Pixels, px } from 'src/jot/view_config';
+import { buildBarTempos, resolveBpm } from 'src/tempo/tempo';
 
 export { resolveBpm };
 

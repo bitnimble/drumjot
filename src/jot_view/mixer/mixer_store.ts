@@ -1,21 +1,16 @@
 import { makeAutoObservable } from 'mobx';
 import { computedFn } from 'mobx-utils';
-import { Instrument } from 'src/dsl';
-import { DrumInstrumentKind, defaultKindForPitch } from 'src/instruments';
-import { RenderedJot } from 'src/jot';
-import {
-  AudioTrackFilter,
-  AudioTrackId,
-  isAudibleUnder,
-  isAudioTrackAudibleUnder,
-  PlayerFilter,
-} from 'src/jot_view/playback';
+import { Instrument } from 'src/dsl/dsl';
+import { DrumInstrumentKind, defaultKindForPitch } from 'src/instruments/instruments';
+import { RenderedJot } from 'src/jot/resolved_jot';
+import { AudioTrackFilter, AudioTrackId, isAudioTrackAudibleUnder } from 'src/jot_view/playback/audio_tracks';
+import { isAudibleUnder, PlayerFilter } from 'src/jot_view/playback/player';
 import {
   INSTRUMENT_FALLBACK_COLOR,
   InstrumentTrack,
   MixerContext,
   TrackKey,
-} from 'src/tracks';
+} from 'src/tracks/tracks';
 import { DocumentStore } from '../document/document_store';
 
 // Row volume faders are pure attenuation (0 = silent, 1 = unscaled).

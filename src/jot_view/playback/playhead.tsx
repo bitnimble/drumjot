@@ -1,6 +1,7 @@
 import { observer } from 'mobx-react-lite';
 import React from 'react';
-import { JotTimeline, jotPlayer } from 'src/jot_view/playback';
+import { jotPlayer } from 'src/jot_view/playback/player';
+import { JotTimeline } from 'src/jot_view/playback/timeline';
 import styles from './playback.module.css';
 import { formatPlayheadTime, playheadBarBeat } from './playhead_label';
 

@@ -32,8 +32,8 @@
  * a visible indicator and the operator can inspect details.
  */
 import { makeAutoObservable, runInAction } from 'mobx';
-import { RenderedJot } from 'src/jot';
-import { MixerContext } from 'src/tracks';
+import { RenderedJot } from 'src/jot/resolved_jot';
+import { MixerContext } from 'src/tracks/tracks';
 import type { PlaybackStore } from './playback_store';
 import { jotToEvents, PlaybackEvent } from './events';
 import { GeneralUserGsKit, KitInfo } from './gm_kit';

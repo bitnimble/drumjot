@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
-import { Jot } from 'src/dsl';
-import { DEFAULT_GRID_DIVISION, gridDivisionFor, slotsPerQuarter } from 'src/grid';
+import { Jot } from 'src/dsl/dsl';
+import { DEFAULT_GRID_DIVISION, gridDivisionFor, slotsPerQuarter } from 'src/grid/grid';
 
 function jotWith(gridDivision?: number): Jot {
   return {

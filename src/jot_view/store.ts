@@ -20,4 +20,4 @@ export {
   MAX_GUTTER_WIDTH,
   snapToDevicePx,
 } from './viewport/viewport_store';
-export { trackKeyEq, type TrackKey } from 'src/tracks';
+export { trackKeyEq, type TrackKey } from 'src/tracks/tracks';

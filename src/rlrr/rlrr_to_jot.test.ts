@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
-import { RlrrFile, rlrrToJot } from 'src/rlrr';
+import { rlrrToJot } from 'src/rlrr/rlrr_to_jot';
+import { RlrrFile } from 'src/rlrr/schema';
 
 /**
  * Regression for the ParaDB "drums offset from audio" bug: a placeholder

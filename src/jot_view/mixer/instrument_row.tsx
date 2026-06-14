@@ -1,8 +1,9 @@
 import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
-import { RenderedJot, StructuralBar, ViewConfig } from 'src/jot';
-import { InstrumentTrack } from 'src/tracks';
+import { RenderedJot, StructuralBar } from 'src/jot/resolved_jot';
+import { ViewConfig } from 'src/jot/view_config';
+import { InstrumentTrack } from 'src/tracks/tracks';
 import { GutterResizeHandle } from '../components/gutter_resize_handle';
 import { MuteButton, SoloButton } from '../components/icon_button';
 import { MixerStoreContext } from './mixer_contexts';

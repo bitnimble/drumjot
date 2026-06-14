@@ -1,4 +1,4 @@
-import type { AudioTrackId } from 'src/jot_view/playback';
+import type { AudioTrackId } from 'src/jot_view/playback/audio_tracks';
 
 /**
  * Callback + state contract the mixer's instrument (drum-pitch) rows are

@@ -1,7 +1,8 @@
 import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
-import { LyricWord, RubySegment, furiganaAnnotator } from 'src/lyrics';
+import { RubySegment, furiganaAnnotator } from 'src/lyrics/furigana';
+import { LyricWord } from 'src/lyrics/lrc';
 import { ViewportStoreContext } from '../viewport/viewport_contexts';
 import { intersectsBeatRange } from '../utils/windowing';
 import { PositionedLine, PositionedWord } from './lyric_layout';

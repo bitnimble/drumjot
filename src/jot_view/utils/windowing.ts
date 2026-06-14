@@ -9,7 +9,7 @@
  */
 
 import { untracked } from 'mobx';
-import type { RenderedJot } from 'src/jot';
+import type { RenderedJot } from 'src/jot/resolved_jot';
 
 /** A half-open-ish quarter-note-beat window. Both ends inclusive (see
  *  {@link intersectsBeatRange}). */

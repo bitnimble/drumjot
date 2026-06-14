@@ -43,15 +43,15 @@
  *       read path so a round trip preserves the visible note.
  */
 import { writeMidi, MidiEvent } from 'midi-file';
-import { Jot, Volume } from 'src/dsl';
-import { RenderedJot, ResolvedNote, ResolvedTrack } from 'src/jot';
+import { Jot, Volume } from 'src/dsl/dsl';
+import { RenderedJot, ResolvedNote, ResolvedTrack } from 'src/jot/resolved_jot';
 import {
   ACCENT_BOOST,
   DEFAULT_VELOCITY,
   GHOST_REDUCTION,
   VOLUME_TO_VELOCITY,
-} from 'src/dynamics';
-import { resolveBpm } from 'src/tempo';
+} from 'src/dynamics/dynamics';
+import { resolveBpm } from 'src/tempo/tempo';
 import { defaultMidiNote } from './gm';
 
 export type ToMidiOptions = {

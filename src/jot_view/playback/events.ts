@@ -14,16 +14,16 @@
  *     shared per-bar tempo helper so the playhead, audio waveform and
  *     scheduled drums all share one clock.
  */
-import { Volume } from 'src/dsl';
-import { RenderedJot, ResolvedNote, ResolvedTrack } from 'src/jot';
+import { Volume } from 'src/dsl/dsl';
+import { RenderedJot, ResolvedNote, ResolvedTrack } from 'src/jot/resolved_jot';
 import {
   ACCENT_BOOST,
   DEFAULT_VELOCITY,
   GHOST_REDUCTION,
   VOLUME_TO_VELOCITY,
-} from 'src/dynamics';
+} from 'src/dynamics/dynamics';
 import { defaultMidiNote } from 'src/midi/gm';
-import { beatToSecWithinBar, buildBarTempos } from 'src/tempo';
+import { beatToSecWithinBar, buildBarTempos } from 'src/tempo/tempo';
 
 export type PlaybackEvent = {
   /** Absolute time from the start of the jot, in seconds. */

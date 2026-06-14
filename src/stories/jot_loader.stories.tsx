@@ -1,11 +1,11 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import React from 'react';
-import { RenderedJot } from 'src/jot';
-import { createJotView } from 'src/jot_view';
-import { fromMidi } from 'src/midi';
-import { parse } from 'src/parser';
-import { rockJot, tripletJot } from 'src/fakes';
-import type { Jot } from 'src/dsl';
+import { RenderedJot } from 'src/jot/resolved_jot';
+import { createJotView } from 'src/jot_view/jot_view';
+import { fromMidi } from 'src/midi/from_midi';
+import { parse } from 'src/parser/parser';
+import { rockJot, tripletJot } from 'src/fakes/fakes';
+import type { Jot } from 'src/dsl/dsl';
 
 /**
  * Library sandbox for the front-end loaders, the DSL parser

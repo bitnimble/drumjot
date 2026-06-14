@@ -1,15 +1,10 @@
 import { makeAutoObservable, runInAction } from 'mobx';
-import {
-  AlignLyricsRequest,
-  LyricLine,
-  LyricsSource,
-  LyricsTrackId,
-  alignLyricsForced,
-  lyricsStore,
-  nameLooksLikeVocals,
-  stripLyricNoise,
-} from 'src/lyrics';
-import { AudioTrackId, buildTimeline, jotPlayer } from 'src/jot_view/playback';
+import { AlignLyricsRequest, alignLyricsForced, nameLooksLikeVocals } from 'src/lyrics/forced_align';
+import { LyricLine, stripLyricNoise } from 'src/lyrics/lrc';
+import { LyricsSource, LyricsTrackId, lyricsStore } from 'src/lyrics/store';
+import { AudioTrackId } from 'src/jot_view/playback/audio_tracks';
+import { jotPlayer } from 'src/jot_view/playback/player';
+import { buildTimeline } from 'src/jot_view/playback/timeline';
 import { toastStore } from '../toasts/toasts';
 import { DocumentStore } from '../document/document_store';
 import { LyricsAlignStore } from './lyrics_align_store';

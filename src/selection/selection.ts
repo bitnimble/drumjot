@@ -1,7 +1,7 @@
 import { makeAutoObservable, observable } from 'mobx';
 import React from 'react';
 import { Box, Point } from 'src/utils/geom';
-import { StructuralBar, StructuralNote, StructuralVoice } from 'src/jot';
+import { StructuralBar, StructuralNote, StructuralVoice } from 'src/jot/resolved_jot';
 import { DocumentStore } from 'src/jot_view/document/document_store';
 
 export type SelectionState =

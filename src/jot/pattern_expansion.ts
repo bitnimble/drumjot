@@ -14,7 +14,7 @@ import {
   PatternSubstitution,
   Rest,
   Simultaneity,
-} from 'src/dsl';
+} from 'src/dsl/dsl';
 
 // ---------- Straightness ----------
 

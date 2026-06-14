@@ -1,8 +1,8 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { runInAction } from 'mobx';
 import React from 'react';
-import { RenderedJot } from 'src/jot';
-import { rockJot } from 'src/fakes';
+import { RenderedJot } from 'src/jot/resolved_jot';
+import { rockJot } from 'src/fakes/fakes';
 import { DocumentStore } from '../../document/document_store';
 import { PlaybackStore } from '../playback_store';
 import { PlaybackPresenter } from '../playback_presenter';

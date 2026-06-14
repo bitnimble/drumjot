@@ -28,7 +28,7 @@ import {
   TempoEvent,
   TimeSignature,
   Voice,
-} from 'src/dsl';
+} from 'src/dsl/dsl';
 
 /** Format a whole Jot as DSL source text. */
 export function formatJot(jot: Jot): string {

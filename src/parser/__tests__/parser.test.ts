@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'bun:test';
-import { Element, Group, Note, PatternRef, Simultaneity } from 'src/dsl';
-import { RenderedJot } from 'src/jot';
-import { parse, ParseError } from 'src/parser';
+import { Element, Group, Note, PatternRef, Simultaneity } from 'src/dsl/dsl';
+import { RenderedJot } from 'src/jot/resolved_jot';
+import { ParseError } from 'src/parser/errors';
+import { parse } from 'src/parser/parser';
 
 // ---------- helpers ----------
 

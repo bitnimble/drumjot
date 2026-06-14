@@ -1,5 +1,5 @@
 import { makeAutoObservable, runInAction } from 'mobx';
-import { ParseError } from 'src/parser';
+import { ParseError } from 'src/parser/errors';
 import {
   BeatInput,
   DrumSeparator,

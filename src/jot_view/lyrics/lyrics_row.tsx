@@ -1,15 +1,11 @@
 import classNames from 'classnames';
 import { observer, useLocalObservable } from 'mobx-react-lite';
 import React from 'react';
-import { RenderedJot } from 'src/jot';
-import {
-  LyricsTrackId,
-  activeLineIndexAt,
-  activeWordIndexAt,
-  furiganaAnnotator,
-  lyricsStore,
-} from 'src/lyrics';
-import { jotPlayer } from 'src/jot_view/playback';
+import { RenderedJot } from 'src/jot/resolved_jot';
+import { furiganaAnnotator } from 'src/lyrics/furigana';
+import { activeLineIndexAt, activeWordIndexAt } from 'src/lyrics/lrc';
+import { LyricsTrackId, lyricsStore } from 'src/lyrics/store';
+import { jotPlayer } from 'src/jot_view/playback/player';
 import { LyricsPresenterContext, LyricsAlignStoreContext } from './lyrics_contexts';
 import { GutterResizeHandle } from '../components/gutter_resize_handle';
 import { MixerRowDragProps, useMixerRowDropTarget } from '../mixer/mixer_drag';

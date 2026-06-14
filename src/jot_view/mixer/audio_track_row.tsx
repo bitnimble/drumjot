@@ -1,8 +1,9 @@
 import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
-import { RenderedJot } from 'src/jot';
-import { AudioTrack, AudioTrackId, jotPlayer } from 'src/jot_view/playback';
+import { RenderedJot } from 'src/jot/resolved_jot';
+import { AudioTrack, AudioTrackId } from 'src/jot_view/playback/audio_tracks';
+import { jotPlayer } from 'src/jot_view/playback/player';
 import { waveformWorker, BarSlice } from 'src/jot_view/playback/waveform_worker_client';
 import { BarBeat, WaveformChunk, buildChunkLayout } from './waveform_chunks';
 import { GutterResizeHandle } from '../components/gutter_resize_handle';

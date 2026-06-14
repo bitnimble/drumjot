@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { formatJot } from './format';
-import { Jot } from 'src/dsl';
-import { parse } from 'src/parser';
+import { Jot } from 'src/dsl/dsl';
+import { parse } from 'src/parser/parser';
 
 /**
  * Deep-strip parser-synthesised `range`s so a `parse → format → parse`

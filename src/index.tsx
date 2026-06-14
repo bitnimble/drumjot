@@ -1,10 +1,10 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import 'src/design_tokens.css';
-import { Jot } from 'src/dsl';
-import { EXAMPLE_JOTS, ExampleJot, rockJot, tripletJot } from 'src/fakes';
-import { RenderedJot } from 'src/jot';
-import { createJotView } from 'src/jot_view';
+import { Jot } from 'src/dsl/dsl';
+import { EXAMPLE_JOTS, ExampleJot, rockJot, tripletJot } from 'src/fakes/fakes';
+import { RenderedJot } from 'src/jot/resolved_jot';
+import { createJotView } from 'src/jot_view/jot_view';
 import { TranscribePresenter } from 'src/jot_view/transcribe/transcribe_presenter';
 import { ViewportPresenter } from 'src/jot_view/viewport/viewport_presenter';
 import { MixerPresenter } from 'src/jot_view/mixer/mixer_presenter';
@@ -20,8 +20,8 @@ import { LyricsAlignStore } from 'src/jot_view/lyrics/lyrics_align_store';
 import { PlaybackStore } from 'src/jot_view/playback/playback_store';
 import { ViewportStore } from 'src/jot_view/viewport/viewport_store';
 import { MixerStore } from 'src/jot_view/mixer/mixer_store';
-import { parse } from 'src/parser';
-import { jotPlayer } from 'src/jot_view/playback';
+import { parse } from 'src/parser/parser';
+import { jotPlayer } from 'src/jot_view/playback/player';
 // Side-effect import: instantiates the theme controller so the
 // `<html data-theme>` attribute is in sync with the user's saved choice
 // (or the live OS preference in `system` mode) before React mounts.
@@ -126,7 +126,6 @@ type DrumjotGlobals = {
 const globals = window as unknown as DrumjotGlobals;
 globals.Drumjot = Drumjot;
 globals.jotPlayer = jotPlayer;
-export default Drumjot;
 
 // Audio-track playback runs through an AudioWorklet (Signalsmith Stretch).
 // Guard at boot so the failure is surfaced up front instead of as a

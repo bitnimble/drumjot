@@ -2,7 +2,7 @@ import classNames from 'classnames';
 import { ChevronDown } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
-import { ExampleJot } from 'src/fakes';
+import { ExampleJot } from 'src/fakes/fakes';
 import {
   BeatInput,
   DRUM_SEPARATOR_LABELS,

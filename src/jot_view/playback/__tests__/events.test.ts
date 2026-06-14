@@ -7,9 +7,9 @@
  * as `toMidi`'s ticks would decode to.
  */
 import { describe, expect, it } from 'bun:test';
-import { parse } from 'src/parser';
-import { Jot } from 'src/dsl';
-import { RenderedJot } from 'src/jot';
+import { parse } from 'src/parser/parser';
+import { Jot } from 'src/dsl/dsl';
+import { RenderedJot } from 'src/jot/resolved_jot';
 import { buildTimeline } from '../timeline';
 import { jotToEvents } from '../events';
 

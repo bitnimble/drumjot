@@ -1,8 +1,8 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { runInAction } from 'mobx';
 import React from 'react';
-import { RenderedJot } from 'src/jot';
-import { rockJot } from 'src/fakes';
+import { RenderedJot } from 'src/jot/resolved_jot';
+import { rockJot } from 'src/fakes/fakes';
 import { fn } from 'storybook/test';
 import { MixerStoreContext } from '../mixer_contexts';
 import { ViewportStoreContext } from '../../viewport/viewport_contexts';

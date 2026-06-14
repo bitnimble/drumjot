@@ -3,17 +3,13 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MidiEvent, parseMidi, writeMidi } from 'midi-file';
-import { Jot } from 'src/dsl';
-import {
-  DEFAULT_INSTRUMENTS,
-  RlrrFile,
-  allocateFallbackLetters,
-  eventTimeSeconds,
-  jotToRlrr,
-  midiToRlrr,
-  rlrrToJot,
-  rlrrToMidi,
-} from 'src/rlrr';
+import { Jot } from 'src/dsl/dsl';
+import { allocateFallbackLetters } from 'src/rlrr/fallback';
+import { jotToRlrr } from 'src/rlrr/jot_to_rlrr';
+import { midiToRlrr } from 'src/rlrr/midi_to_rlrr';
+import { rlrrToJot } from 'src/rlrr/rlrr_to_jot';
+import { rlrrToMidi } from 'src/rlrr/rlrr_to_midi';
+import { DEFAULT_INSTRUMENTS, RlrrFile, eventTimeSeconds } from 'src/rlrr/schema';
 
 const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const DRUM_CHANNEL_IDX = 9;
@@ -468,7 +464,7 @@ describe('rlrrToJot / jotToRlrr', () => {
   });
 
   it('integrates: DSL parser -> Jot -> RLRR -> Jot', async () => {
-    const { parse } = await import('src/parser');
+    const { parse } = await import('src/parser/parser');
     const src = `
       {{ bpm: 120, time: "4/4" }}
       | h:c h:c h:c h:c h:c h:c h:c h:c |

@@ -1,4 +1,4 @@
-import { Jot, bar, group, note, patternRef, rest, simul } from 'src/dsl';
+import { Jot, bar, group, note, patternRef, rest, simul } from 'src/dsl/dsl';
 
 /** A named example jot shown in the web UI's example picker. */
 export type ExampleJot = {

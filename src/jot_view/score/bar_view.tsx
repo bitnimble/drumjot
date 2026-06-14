@@ -1,17 +1,12 @@
 import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
-import { Instrument, Modifier, Sticking } from 'src/dsl';
-import {
-  StructuralBar,
-  StructuralNote,
-  StructuralPatternSpan,
-  StructuralTupletSpan,
-  ViewConfig,
-} from 'src/jot';
-import { msOffsetToBeats } from 'src/tempo';
+import { Instrument, Modifier, Sticking } from 'src/dsl/dsl';
+import { StructuralBar, StructuralNote, StructuralPatternSpan, StructuralTupletSpan } from 'src/jot/resolved_jot';
+import { ViewConfig } from 'src/jot/view_config';
+import { msOffsetToBeats } from 'src/tempo/tempo';
 import { BarTimingsContext } from '../document/document_contexts';
-import { SelectionContext } from 'src/selection';
+import { SelectionContext } from 'src/selection/selection';
 import { NoteProvenanceContext } from '../provenance/provenance_contexts';
 import styles from './score.module.css';
 import { NoteProvenanceDetails } from './note_provenance_details';

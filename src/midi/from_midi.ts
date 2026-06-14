@@ -67,9 +67,9 @@ import {
   Simultaneity,
   TempoEvent,
   TimeSignature,
-} from 'src/dsl';
-import { ACCENT_THRESHOLD, GHOST_THRESHOLD } from 'src/dynamics';
-import { defaultKindForPitch } from 'src/instruments';
+} from 'src/dsl/dsl';
+import { ACCENT_THRESHOLD, GHOST_THRESHOLD } from 'src/dynamics/dynamics';
+import { defaultKindForPitch } from 'src/instruments/instruments';
 import {
   GENERIC_INSTRUMENT_NAME_BY_PITCH,
   GM_PERCUSSION,

@@ -1,7 +1,7 @@
 import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
-import { jotPlayer } from 'src/jot_view/playback';
+import { jotPlayer } from 'src/jot_view/playback/player';
 import { GutterResizeHandle } from '../components/gutter_resize_handle';
 import { MuteButton, SoloButton } from '../components/icon_button';
 import styles from './mixer.module.css';

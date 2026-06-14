@@ -3,9 +3,11 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MidiData, MidiEvent, parseMidi, writeMidi } from 'midi-file';
-import { Jot } from 'src/dsl';
-import { RenderedJot } from 'src/jot';
-import { allocatePitchesForMidi, fromMidi, toMidi } from 'src/midi';
+import { Jot } from 'src/dsl/dsl';
+import { RenderedJot } from 'src/jot/resolved_jot';
+import { fromMidi } from 'src/midi/from_midi';
+import { allocatePitchesForMidi } from 'src/midi/gm';
+import { toMidi } from 'src/midi/to_midi';
 
 const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const DRUM_CHANNEL_IDX = 9;
@@ -516,7 +518,7 @@ describe('MIDI <-> Jot synthetic baseline', () => {
   });
 
   it('round-trips a Jot built from the DSL parser', async () => {
-    const { parse } = await import('src/parser');
+    const { parse } = await import('src/parser/parser');
     const src = `
       {{ bpm: 120, time: "4/4" }}
       | h:c h:c h:c h:c h:c h:c h:c h:c |

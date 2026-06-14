@@ -1,5 +1,5 @@
 import { makeAutoObservable } from 'mobx';
-import { LyricsTrackId } from 'src/lyrics';
+import { LyricsTrackId } from 'src/lyrics/store';
 
 /** Long-running lyric-alignment indicator. `queued` is the wait state
  *  while the request sits behind another in-flight GPU job (a transcribe

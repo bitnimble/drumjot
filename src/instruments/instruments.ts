@@ -14,7 +14,7 @@
  * `custom` opts out of instrument-tier lint checks — users can still attach
  * a display label via `Instrument.name`.
  */
-import { Modifier } from 'src/dsl';
+import { Modifier } from 'src/dsl/dsl';
 
 export type DrumInstrumentKind =
   | 'kick'

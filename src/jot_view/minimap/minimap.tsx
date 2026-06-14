@@ -29,7 +29,7 @@
 import { reaction } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
-import { jotPlayer } from 'src/jot_view/playback';
+import { jotPlayer } from 'src/jot_view/playback/player';
 import { type BarSlice, waveformWorker } from 'src/jot_view/playback/waveform_worker_client';
 import styles from './minimap.module.css';
 import { WAVEFORM_PAINT_COLOR } from '../utils/waveform_color';

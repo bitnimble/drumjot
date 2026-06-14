@@ -1,5 +1,5 @@
 import { observer } from 'mobx-react-lite';
-import { RenderedJot } from 'src/jot';
+import { RenderedJot } from 'src/jot/resolved_jot';
 import sharedStyles from '../jot_view.module.css';
 
 /**

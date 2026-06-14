@@ -1,6 +1,6 @@
 import { observer } from 'mobx-react-lite';
-import { AudioTrack, AudioTrackId, AudioTrackRole } from 'src/jot_view/playback';
-import { InstrumentTrack, PICKER_PALETTE } from 'src/tracks';
+import { AudioTrack, AudioTrackId, AudioTrackRole } from 'src/jot_view/playback/audio_tracks';
+import { InstrumentTrack, PICKER_PALETTE } from 'src/tracks/tracks';
 import { ColorPickerMenuRow } from '../components/color_picker_menu_row';
 import { DropdownButton, dropdownStyles } from '../components/dropdown';
 import styles from './mixer.module.css';

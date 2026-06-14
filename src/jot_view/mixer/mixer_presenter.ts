@@ -1,7 +1,8 @@
 import { comparer, makeAutoObservable, reaction } from 'mobx';
-import { lyricsStore, LyricsTrackId } from 'src/lyrics';
-import { AudioTrackId, jotPlayer } from 'src/jot_view/playback';
-import { buildDebugBundleTrackOrder, reorderTrackOrder, trackKeyEq, type TrackKey } from 'src/tracks';
+import { lyricsStore, LyricsTrackId } from 'src/lyrics/store';
+import { AudioTrackId } from 'src/jot_view/playback/audio_tracks';
+import { jotPlayer } from 'src/jot_view/playback/player';
+import { buildDebugBundleTrackOrder, reorderTrackOrder, trackKeyEq, type TrackKey } from 'src/tracks/tracks';
 import { DocumentStore } from '../document/document_store';
 import { MixerStore, clampVolume, collectJotPitches } from './mixer_store';
 import { toastStore } from '../toasts/toasts';

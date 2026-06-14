@@ -1,9 +1,9 @@
-import { Instrument, Metadata, TimeSignature, Volume } from 'src/dsl';
+import { Instrument, Metadata, TimeSignature, Volume } from 'src/dsl/dsl';
 import {
   ALL_DRUM_INSTRUMENT_KINDS,
   DrumInstrumentKind,
   defaultKindForPitch,
-} from 'src/instruments';
+} from 'src/instruments/instruments';
 import { Cursor } from './cursor';
 import { ParseError } from './errors';
 

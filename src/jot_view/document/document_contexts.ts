@@ -1,6 +1,6 @@
 import React from 'react';
-import { RenderedJot } from 'src/jot';
-import { BarTiming } from 'src/jot_view/playback';
+import { RenderedJot } from 'src/jot/resolved_jot';
+import { BarTiming } from 'src/jot_view/playback/timeline';
 
 /**
  * The active {@link RenderedJot} for the current view (the document's

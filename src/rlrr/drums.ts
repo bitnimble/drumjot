@@ -11,7 +11,7 @@
  * `c`), the converter preserves the original drum class on the produced
  * `Note.metadata.rlrr.name` so a round trip is lossless.
  */
-import { Modifier } from 'src/dsl';
+import { Modifier } from 'src/dsl/dsl';
 
 export type DrumDescriptor = {
   /** Single-letter pitch for the DSL. */

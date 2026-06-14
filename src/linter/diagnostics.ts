@@ -5,7 +5,7 @@
  * so they serialise straight to JSON without extra encoding work — the
  * Python refinement loop consumes these via the bun bridge.
  */
-import { SourceRange } from 'src/dsl';
+import { SourceRange } from 'src/dsl/dsl';
 
 /** Hard-vs-soft severity. Errors block; warnings nudge. */
 export type LintSeverity = 'error' | 'warning';

@@ -7,7 +7,7 @@
  * and china. Confirming intent is cheap; ignoring a real misclassification
  * is expensive.
  */
-import { INSTRUMENT_METADATA, isWarningModifier } from 'src/instruments';
+import { INSTRUMENT_METADATA, isWarningModifier } from 'src/instruments/instruments';
 import { LintDiagnostic } from '../diagnostics';
 import { Rule } from '../rule';
 

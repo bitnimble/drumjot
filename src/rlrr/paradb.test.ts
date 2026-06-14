@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { loadParadbZip } from 'src/rlrr';
+import { loadParadbZip } from 'src/rlrr/paradb';
 import { RlrrFile } from 'src/rlrr/schema';
 
 // ---------- minimal zip writer (mirrors the reader's assumptions) ----------

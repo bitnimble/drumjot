@@ -12,7 +12,7 @@
  * own copy and the accent boost had drifted (playback/RLRR used 24, MIDI
  * used 36), so an accent sounded different from what it exported as.
  */
-import { Volume } from 'src/dsl';
+import { Volume } from 'src/dsl/dsl';
 
 /** Velocity for a note with no explicit volume marker. */
 export const DEFAULT_VELOCITY = 80;

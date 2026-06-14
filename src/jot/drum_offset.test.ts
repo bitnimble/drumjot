@@ -6,9 +6,9 @@
  * shifted times out of `jotToEvents`.
  */
 import { describe, expect, it } from 'bun:test';
-import { parse } from 'src/parser';
-import { RenderedJot } from 'src/jot';
-import { jotToEvents } from 'src/jot_view/playback';
+import { parse } from 'src/parser/parser';
+import { RenderedJot } from 'src/jot/resolved_jot';
+import { jotToEvents } from 'src/jot_view/playback/events';
 
 // Two 4/4 bars at 120 BPM (0.5 s/beat, 2.0 s/bar), one kick on each
 // downbeat: abs beats 0 and 4, event times 0.0 and 2.0 s.

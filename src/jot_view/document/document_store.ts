@@ -1,6 +1,7 @@
 import { makeAutoObservable } from 'mobx';
-import { ExampleJot } from 'src/fakes';
-import { RenderedJot, ViewConfig } from 'src/jot';
+import { ExampleJot } from 'src/fakes/fakes';
+import { RenderedJot } from 'src/jot/resolved_jot';
+import { ViewConfig } from 'src/jot/view_config';
 
 /**
  * The loaded song and the chrome around loading it. The `currentJot` is

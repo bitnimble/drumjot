@@ -33,8 +33,8 @@ import {
   TempoEvent,
   TimeSignature,
   Voice,
-} from 'src/dsl';
-import { defaultKindForPitch } from 'src/instruments';
+} from 'src/dsl/dsl';
+import { defaultKindForPitch } from 'src/instruments/instruments';
 import { CLASS_TO_DRUM, describeDrum, instanceNameToClass } from './drums';
 import { allocateFallbackLetters } from './fallback';
 import {

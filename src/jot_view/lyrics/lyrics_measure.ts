@@ -30,7 +30,7 @@
  * DOM walk during the font-load window.
  */
 import { makeAutoObservable, runInAction } from 'mobx';
-import { RubySegment } from 'src/lyrics';
+import { RubySegment } from 'src/lyrics/furigana';
 
 const FONT_FAMILY =
   "'Bricolage Grotesque', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";

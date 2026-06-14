@@ -1,5 +1,5 @@
 import { makeAutoObservable } from 'mobx';
-import { px } from 'src/jot';
+import { px } from 'src/jot/view_config';
 import { DocumentStore } from '../document/document_store';
 import {
   BASE_BAR_WIDTH,

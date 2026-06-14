@@ -1,5 +1,5 @@
 import { makeAutoObservable } from 'mobx';
-import { PICKER_PALETTE } from 'src/tracks';
+import { PICKER_PALETTE } from 'src/tracks/tracks';
 
 /** Branded pixel scalar to avoid mixing pixel and beat measurements. */
 export type Pixels = number & { __pixels: never };

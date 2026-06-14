@@ -6,7 +6,7 @@ import {
   resolveAudioInheritedColor,
   type MixerContext,
   type TrackKey,
-} from 'src/tracks';
+} from 'src/tracks/tracks';
 
 /** Collapse the order to a compact `audio:<id>` / `instr:<pitch>` form
  *  so assertions read as the rendered row sequence. */

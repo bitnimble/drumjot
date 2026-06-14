@@ -1,11 +1,5 @@
-import {
-  LYRICS_OFFSET_MAX_SEC,
-  LYRICS_OFFSET_MIN_SEC,
-  LYRICS_OFFSET_STEP_SEC,
-  LyricsTrackId,
-  lyricsStore,
-  serializeEnhancedLrc,
-} from 'src/lyrics';
+import { serializeEnhancedLrc } from 'src/lyrics/enhanced_lrc';
+import { LYRICS_OFFSET_MAX_SEC, LYRICS_OFFSET_MIN_SEC, LYRICS_OFFSET_STEP_SEC, LyricsTrackId, lyricsStore } from 'src/lyrics/store';
 import { downloadTextFile } from 'src/utils/download';
 import { DropdownButton, dropdownStyles } from '../components/dropdown';
 import { NumberStepper } from '../components/number_stepper';

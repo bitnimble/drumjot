@@ -14,7 +14,7 @@ import {
   Simultaneity,
   Sticking,
   Voice,
-} from 'src/dsl';
+} from 'src/dsl/dsl';
 import { Cursor } from './cursor';
 import { ParseError } from './errors';
 import { hoistTempoEvents } from './hoist_tempo';

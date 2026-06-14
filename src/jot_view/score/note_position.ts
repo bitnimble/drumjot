@@ -1,4 +1,4 @@
-import type { TimeSignature } from 'src/dsl';
+import type { TimeSignature } from 'src/dsl/dsl';
 
 /**
  * A symbolic moment inside a Jot, with one internal data representation

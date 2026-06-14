@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { msOffsetToBeats } from 'src/tempo';
+import { msOffsetToBeats } from 'src/tempo/tempo';
 
 describe('msOffsetToBeats', () => {
   it('converts ms to beats at the local tempo (120 BPM -> 0.5 s/beat)', () => {
