@@ -53,6 +53,8 @@ export const INSTRUMENT_KIND = z.enum(['kick', 'snare', 'hihat', 'ride', 'crash'
  */
 export const NoteSchema = record({
   id: z.string(),
+  /** Owning `||` voice (a `voices` key); absent = the primary voice. */
+  voiceId: z.string().optional(),
   barId: z.string(),
   beat: z.number(),
   pitch: z.string(),
@@ -69,6 +71,9 @@ export const NoteSchema = record({
   velocity: z.number().optional(),
   /** Explicit MIDI note override; absent = derive from instrument/pitch. */
   midiNote: z.number().optional(),
+  /** Pattern-instance membership (a `patternInstances` key). Notes sharing
+   *  one instance render as a single bracket; absent = not in a pattern. */
+  patternId: z.string().optional(),
 });
 
 /**
@@ -85,6 +90,61 @@ export const BarSchema = record({
   tsUnit: z.number(),
   /** Per-bar tempo override in BPM; absent = inherit the running tempo. */
   tempoBpm: z.number().optional(),
+  /** Anacrusis / pickup bar (DSL `voice.anacrusis`). Its length is sized to
+   *  its content rather than the time signature; the derivation numbers it
+   *  bar 0. Absent = a normal bar. */
+  anacrusis: z.boolean().optional(),
+});
+
+/**
+ * One `||` voice. Voices share the bar grid; they differ only in which
+ * notes they own (`note.voiceId`). `name` is a display hint ("Hands" /
+ * "Feet"), not parseable from DSL.
+ */
+export const VoiceSchema = record({
+  id: z.string(),
+  name: z.string().optional(),
+});
+
+/**
+ * A sticky tempo change anchored at (`barId`, `beat`). Mirrors DSL
+ * `TempoEvent` but anchors by stable bar id instead of array index. `bpm`
+ * is a flat value or a transition ramp (`BpmTransition`), stored as one
+ * LWW register.
+ */
+export const TempoEventSchema = record({
+  id: z.string(),
+  barId: z.string(),
+  /** Beat-within-bar of the anchor (quarter notes from the downbeat). */
+  beat: z.number(),
+  bpm: z.union([
+    z.number(),
+    z.object({
+      start: z.number().optional(),
+      end: z.number(),
+      /** Transition length, in bars. */
+      duration: z.number(),
+    }),
+  ]),
+});
+
+/**
+ * A reusable pattern definition, keyed in `patterns` by name. The body
+ * (the reusable element sequence, for find-and-replace-with-a-pattern) is
+ * deferred to the editing-features phase; today the expanded notes carry
+ * the content and instances drive the rendered brackets.
+ */
+export const PatternSchema = record({
+  name: z.string(),
+});
+
+/**
+ * One usage of a pattern, keyed in `patternInstances` by instance id (what
+ * `note.patternId` references). `patternName` links it to its definition
+ * and drives the bracket's shared colour across instances.
+ */
+export const PatternInstanceSchema = record({
+  patternName: z.string(),
 });
 
 /**
@@ -101,29 +161,43 @@ export const InstrumentSchema = record({
 
 /**
  * The whole song. Global tempo/timeline live as top-level registers; the
- * three collections are the editable entities. Deferred (added when their
- * editing flows land): patterns, multiple `||` voices, and tempo
- * transitions (`BpmTransition`).
+ * collections are the editable entities. The bar grid is shared across
+ * voices. Deferred to the editing-features phase: pattern definition
+ * bodies (see {@link PatternSchema}).
  */
 export const JotSchema = record({
   title: z.string(),
-  /** Initial/global tempo in force before any per-bar override. */
+  /** Initial/global tempo in force before any per-bar override or event. */
   bpm: z.number(),
   /** Audio time (seconds) of the first drum onset; the lead-in offset. */
   drumsT0Sec: z.number().optional(),
+  /** Audio time (seconds) of the first non-silent sample; informational. */
+  signalT0Sec: z.number().optional(),
   /** Number of pre-drum lead-in bars before bar 1. */
   leadBars: z.number().optional(),
   /** Producer grid density (1/N-of-a-whole-note); advisory. */
   gridDivision: z.number().optional(),
+  /** `||` voices by id; a single-voice jot has one (or none → primary). */
+  voices: idMap(VoiceSchema),
   bars: movableList(BarSchema),
   notes: idMap(NoteSchema),
   /** Pitch letter → instrument display/playback info. */
   instruments: idMap(InstrumentSchema),
+  /** Sticky tempo changes by id (sorted by bar order + beat at read time). */
+  tempoEvents: idMap(TempoEventSchema),
+  /** Pattern definitions by name. */
+  patterns: idMap(PatternSchema),
+  /** Pattern usages by instance id (referenced by `note.patternId`). */
+  patternInstances: idMap(PatternInstanceSchema),
 });
 
 export type Note = Infer<typeof NoteSchema>;
 export type Bar = Infer<typeof BarSchema>;
 export type Instrument = Infer<typeof InstrumentSchema>;
+export type Voice = Infer<typeof VoiceSchema>;
+export type TempoEvent = Infer<typeof TempoEventSchema>;
+export type Pattern = Infer<typeof PatternSchema>;
+export type PatternInstance = Infer<typeof PatternInstanceSchema>;
 export type Jot = Infer<typeof JotSchema>;
 
 /**

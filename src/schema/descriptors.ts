@@ -172,7 +172,9 @@ interface InitMap<T> {
 type InitField<X> =
   X extends Descriptor ? Init<X> : X extends ZodType ? z.infer<X> : never;
 
-type InitRecord<F> = Prettify<MakeUndefinedOptional<{ [K in keyof F]: InitField<F[K]> }>>;
+// Every field is optional for initialization: you seed the data you have
+// (a missing scalar is just unset; a missing collection starts empty).
+type InitRecord<F> = Prettify<{ [K in keyof F]?: InitField<F[K]> }>;
 
 export function movableList<V extends Descriptor>(value: V): MovableListDescriptor<V> {
   return { [KIND]: true, kind: 'movableList', value };

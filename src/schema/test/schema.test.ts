@@ -12,12 +12,15 @@ import {
   JotSchema,
 } from 'src/schema/schema';
 
-// ---------- Type-level fidelity: Infer<schema> must equal the DSL types ----------
-// These are compile-time assertions (tsc fails if the schema drifts from
-// the domain, e.g. a missing modifier letter or a wrong optionality).
+// ---------- Type-level fidelity: Infer<schema> matches the DSL types ----------
+// Compile-time assertions (tsc fails if the schema drifts from the domain,
+// e.g. a missing modifier letter or a wrong optionality). The note's
+// DSL-derived fields mirror the DSL types; `voiceId`/`patternId` are
+// flat-model-only references with no DSL Note counterpart.
 
 type ExpectedNote = {
   id: string;
+  voiceId?: string;
   barId: string;
   beat: number;
   pitch: string;
@@ -28,6 +31,7 @@ type ExpectedNote = {
   offsetMs?: number;
   velocity?: number;
   midiNote?: number;
+  patternId?: string;
 };
 type ExpectedInstrument = {
   kind: DrumInstrumentKind;
@@ -138,5 +142,31 @@ describe('createReactiveJot', () => {
       model.notes.get('n1')!.pitch = 'rd';
     });
     expect(model.notes.get('n1')!.pitch).toBe('rd');
+  });
+
+  it('deep-initializes voices, tempo events, patterns, and an anacrusis bar', () => {
+    const { model } = createReactiveJot({
+      title: 'x',
+      bpm: 120,
+      voices: { v0: { id: 'v0', name: 'Hands' } },
+      bars: [
+        { id: 'b0', tsCount: 4, tsUnit: 4, anacrusis: true },
+        { id: 'b1', tsCount: 4, tsUnit: 4 },
+      ],
+      notes: {
+        n1: { id: 'n1', voiceId: 'v0', barId: 'b1', beat: 0, pitch: 'k', duration: 1, modifiers: [], patternId: 'p1' },
+      },
+      instruments: {},
+      tempoEvents: { t1: { id: 't1', barId: 'b1', beat: 0, bpm: 140 } },
+      patterns: { groove: { name: 'groove' } },
+      patternInstances: { p1: { patternName: 'groove' } },
+    });
+    expect(model.voices.get('v0')!.name).toBe('Hands');
+    expect(model.bars.at(0)!.anacrusis).toBe(true);
+    expect(model.notes.get('n1')!.voiceId).toBe('v0');
+    expect(model.notes.get('n1')!.patternId).toBe('p1');
+    expect(model.tempoEvents.get('t1')!.bpm).toBe(140);
+    expect(model.patterns.get('groove')!.name).toBe('groove');
+    expect(model.patternInstances.get('p1')!.patternName).toBe('groove');
   });
 });
