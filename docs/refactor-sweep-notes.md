@@ -12,6 +12,20 @@ unit-test cleanup + dedup audit + Storybook. Branch
 Each completed slice is a green-gated commit (`bun run build` +
 `scripts/check-ts` + `bun run e2e`).
 
+> **Perf-gate caveat (re-run on a quiet box).** Later in the session the
+> shared host got busy (load ~6-7 on 12 cores, lots of background work, the
+> Jun-dated multi-hundred-minute `python3` zombies suggest training runs), and
+> the 3×120fps perf specs (`src/playback/tests/perf.e2e.ts`) started flaking:
+> they need the box quiet to measure the tight 8.3ms median / ≤10%-slow-frame
+> budget. **The functional gates are unaffected**, `bun run build`,
+> `scripts/check-ts` (291 unit), and all 23 functional e2e stay green for every
+> commit. For perf-adjacent structural moves made while the box was loaded I
+> verified perf-neutrality by *baseline comparison*: stash the change, run the
+> perf spec on the pre-change commit under the same load, confirm the change is
+> equal-or-better. (e.g. the F4 dedup measured *better* than its baseline:
+> 7.5ms/13-slow vs 9.7ms/16-slow.) **Please re-run `bun run e2e` on a quiet box
+> to get a clean 26/26 perf stamp.**
+
 ---
 
 ## Flagged for review (NOT changed autonomously)
@@ -39,12 +53,15 @@ track's mixer group. Pre-existing TODO; not touched.
 ### F3. `StructuralTrack` vs `RenderedJot` shared source of truth (TODO bullet 16)
 Pre-existing TODO; not touched.
 
-### F4. `LyricsRowDragProps` re-declared to avoid a circular import
-`lyrics/lyrics_row.tsx` re-declares a subset of `MixerRowDragProps` from
-`mixer/mixer.tsx` with a comment noting it's to dodge a circular import. Minor
-drift risk (the two prop shapes must stay compatible). Could be resolved by
-hoisting the shared drag-props type into a small shared module (e.g.
-`jot_view/utils/` or a `mixer/row_drag.ts`). Low priority; flagged.
+### F4. `LyricsRowDragProps` re-declared to avoid a circular import. RESOLVED
+~~`lyrics/lyrics_row.tsx` re-declares a subset of `MixerRowDragProps`...~~
+**Resolved** (commit `refactor(lyrics): dedupe drag props + drop-target hook`).
+Once the mixer rows were extracted, `mixer/mixer_drag.tsx` became a leaf
+(imports only classnames/react/css), so `lyrics_row.tsx` now imports
+`MixerRowDragProps` + `useMixerRowDropTarget` from it directly, no cycle,
+and the byte-identical local `useDropTarget` hook + the subset prop type are
+gone (−62 lines). Verified perf-neutral by baseline comparison (see perf-gate
+note below).
 
 ---
 
@@ -75,7 +92,7 @@ architectural and flagged).
 |---|---|---|
 | playback | **done** | split `playhead.tsx` out of `playback.tsx`; pure label logic → `playhead_label.ts` (+ unit test) |
 | provenance | **done** | `DebugPanel` moved out of `toolbar` → `provenance/debug_panel.{tsx,module.css}` |
-| lyrics | partial | pure beat-positioning → `lyric_layout.ts`. The big `lyrics_row.tsx` (~770 lines) still bundles several components (chips, WordText, WindowedLines, useDropTarget) that could be split. |
+| lyrics | **done** | pure beat-positioning → `lyric_layout.ts`. `lyrics_row.tsx` 776 → 342: chips/WordText/WindowedLines + word-debug tooltip → `lyric_chips.tsx`; overflow menu + LRC export → `lyrics_overflow_menu.tsx`; the duplicated drag props + drop-target hook removed (F4 resolved, now imports `mixer/mixer_drag`). LyricsRow keeps the row composition + positioning/shift memos. |
 | viewport | not started | `vertical_scrollbar` + store/presenter already small/clean; nothing obvious to extract. |
 | transcribe | not started | `recent_transcriptions` is small; toolbar holds the transcribe form (see toolbar). |
 | minimap | not started | `minimap.tsx` (~530) has pure peak/tick canvas-prep logic that could move to a tested helper. Perf-adjacent (canvas paint), review before splitting. |
