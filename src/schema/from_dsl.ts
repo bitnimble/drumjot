@@ -40,6 +40,14 @@ function genId(prefix: string, ctx: Ctx): string {
   return `${prefix}${ctx.ids.n++}`;
 }
 
+/** The MIDI sidecar a producer stashed on a note (`note`, `velocity`,
+ *  `tick`), reached via the untyped `Metadata` index signature. */
+function midiMeta(el: DslElement): { note?: number; velocity?: number; tick?: number } | undefined {
+  return el.kind === 'note'
+    ? (el.metadata?.midi as { note?: number; velocity?: number; tick?: number } | undefined)
+    : undefined;
+}
+
 /** Convert one DSL element at bar/group-space `[beat, beat+duration)` into
  *  `[id, init]` pairs (a simultaneity yields several). */
 function convertElement(
@@ -69,7 +77,9 @@ function convertElement(
             sticking: el.sticking,
             roll: el.roll ? true : undefined,
             offsetMs: el.offset,
-            midiNote: (el.metadata?.midi as { note?: number } | undefined)?.note,
+            midiNote: midiMeta(el)?.note,
+            velocity: midiMeta(el)?.velocity,
+            midiTick: midiMeta(el)?.tick,
             vol: typeof el.metadata?.vol === 'string' ? el.metadata.vol : undefined,
           }),
         ],

@@ -19,6 +19,10 @@ test('captures the debug-details timing visualization', async ({ page }) => {
   // left when the selected note sits a few hundred px from the gutter.
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.goto('/');
+  // Boot is async (reactive-doc WASM init); wait for the debug global.
+  await page.waitForFunction(
+    () => typeof (window as unknown as { drumjot?: { loadTestJot?: unknown } }).drumjot?.loadTestJot === 'function'
+  );
   await page.evaluate(() =>
     (window as unknown as { drumjot: { loadTestJot(): void } }).drumjot.loadTestJot()
   );

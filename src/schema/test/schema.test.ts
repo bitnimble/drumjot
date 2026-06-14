@@ -34,6 +34,7 @@ type ExpectedNote = {
   offsetMs?: number;
   velocity?: number;
   midiNote?: number;
+  midiTick?: number;
   vol?: Volume;
 };
 type ExpectedInstrument = {

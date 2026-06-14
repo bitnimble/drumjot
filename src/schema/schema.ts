@@ -91,6 +91,8 @@ export const NoteElementSchema = record({
   velocity: z.number().optional(),
   /** Explicit MIDI note override; absent = derive from instrument/pitch. */
   midiNote: z.number().optional(),
+  /** Raw MIDI tick from a transcribed/imported source (provenance key). */
+  midiTick: z.number().optional(),
   /** Symbolic dynamic (pp…ff). */
   vol: VOLUME.optional(),
 });
@@ -261,6 +263,7 @@ export type NoteElement = ElementCommon & {
   offsetMs?: number;
   velocity?: number;
   midiNote?: number;
+  midiTick?: number;
   vol?: Volume;
 };
 export type GroupElement = ElementCommon & {

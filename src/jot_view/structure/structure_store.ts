@@ -30,6 +30,13 @@ export type StructNote = {
   roll: boolean;
   /** Onset lands on the binary (dyadic) grid. `isDyadic(beat)`. */
   straight: boolean;
+  /** Playback fields (carried so a `RenderedJot` façade can synthesise the
+   *  note's MIDI/dynamics without the structure store knowing about it). */
+  offsetMs?: number;
+  velocity?: number;
+  midiNote?: number;
+  midiTick?: number;
+  vol?: string;
 };
 
 export type StructTrack = { pitch: string; notes: StructNote[] };
@@ -87,7 +94,14 @@ export class StructureStore {
     if (!jot) return [];
 
     const tops = [...jot.elements.values()] as Element[];
-    const declared = [...jot.voices.values()];
+    // idMap iteration order isn't the authoring order (Loro keys aren't
+    // insertion-ordered), but `voices[0]` must be the first `||` voice (the
+    // renderer's per-pitch path reads voice 0). The converter assigns ids
+    // `v0`, `v1`, … in source order, so a numeric id-sort restores it.
+    // (A dedicated order field / ordered voice list is the cleaner fix.)
+    const declared = [...jot.voices.values()].sort((a, b) =>
+      a.id.localeCompare(b.id, undefined, { numeric: true })
+    );
     const single = declared.length === 0;
     const voiceList = single ? [{ id: PRIMARY_VOICE, name: undefined }] : declared;
 
@@ -173,6 +187,11 @@ function flattenInto(
       sticking: el.sticking,
       roll: el.roll === true,
       straight: isDyadic(absBeat),
+      offsetMs: el.offsetMs,
+      velocity: el.velocity,
+      midiNote: el.midiNote,
+      midiTick: el.midiTick,
+      vol: el.vol,
     });
     return;
   }

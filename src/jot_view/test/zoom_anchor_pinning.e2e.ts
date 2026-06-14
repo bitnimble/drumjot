@@ -25,6 +25,7 @@ const JOT = `{{ bpm: 120, time: "4/4", title: "Zoom Anchor",
 
 test('cursor-anchored zoom keeps the anchor pinned, scale+scroll in lockstep', async ({ page }) => {
   await page.goto('/');
+  await page.waitForFunction(() => typeof (window as any).drumjot?.loadDsl === 'function');
   await page.evaluate((src) => (window as any).drumjot.loadDsl(src), JOT);
   await page.waitForSelector('[data-testid^="instrument-row-"]');
 

@@ -1,6 +1,8 @@
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { patchCssModules } from 'vite-css-modules';
+import wasm from 'vite-plugin-wasm';
+import topLevelAwait from 'vite-plugin-top-level-await';
 import path from 'node:path';
 
 // We want Vite's file watcher + module-graph invalidation pipeline to
@@ -91,7 +93,11 @@ export default defineConfig({
   // of this plugin). Bonus: it also de-duplicates composed styles instead
   // of inlining button.module.css into all ~20 consumers. Needs build
   // target es2022, which we already set below.
-  plugins: [patchCssModules(), react(), noHmrPushPlugin],
+  // `wasm()` + `topLevelAwait()` let the dev server load `loro-crdt`'s
+  // WebAssembly module (the reactive Jot document's CRDT engine). Vite's
+  // dev ESM transform can't handle the wasm import on its own; the prod
+  // build bundles it via rollup. This is loro-crdt's own recommended setup.
+  plugins: [patchCssModules(), wasm(), topLevelAwait(), react(), noHmrPushPlugin],
   resolve: {
     alias: {
       src: path.resolve(__dirname, 'src'),
@@ -104,6 +110,9 @@ export default defineConfig({
     target: ESBUILD_TARGET,
   },
   optimizeDeps: {
+    // The esbuild dep-prebundler can't process loro's wasm; let Vite serve
+    // it through the wasm plugin instead of prebundling.
+    exclude: ['loro-crdt'],
     // Dev dep-prebundle also goes through esbuild; without aligning the
     // target here, prebundled `signalsmith-stretch` would still emit
     // `__publicField` in dev even though the prod build is clean.

@@ -28,6 +28,7 @@ ${Array.from({ length: 16 }, () => '(k+h s+h k+h s+h)').join('\n')}
 
 test('zoom does not re-render JotView', async ({ page }) => {
   await page.goto('/');
+  await page.waitForFunction(() => typeof (window as any).drumjot?.loadDsl === 'function');
   await page.evaluate((src) => (window as any).drumjot.loadDsl(src), JOT);
   await page.waitForSelector('[data-testid^="instrument-row-"]');
 
@@ -97,6 +98,7 @@ ${Array.from({ length: 40 }, () => '(k+h+r s+h+r k+h+t s+h+c) (k+f s+h k+h s+h)'
 
 test('zoom does not re-render hidden note popovers', async ({ page }) => {
   await page.goto('/');
+  await page.waitForFunction(() => typeof (window as any).drumjot?.loadDsl === 'function');
   await page.evaluate((src) => (window as any).drumjot.loadDsl(src), DENSE_JOT);
   await page.waitForSelector('[data-testid^="instrument-row-"]');
 
