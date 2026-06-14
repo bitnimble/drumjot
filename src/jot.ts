@@ -67,66 +67,27 @@ export class ViewConfig {
 
 // ---------- Resolved (laid out) types ----------
 
-export type ResolvedNote = {
-  source: Note;
-  pitch: string;
-  /**
-   * Modifiers attached to this note, narrowed to the {@link Modifier}
-   * union so consumers can pass literal modifier strings to `.has()`
-   * without casting and so misspelled modifiers fail at compile time.
-   */
-  modifiers: ReadonlySet<Modifier>;
-  sticking?: Note['sticking'];
-  roll: boolean;
-  /** Position within bar, in beats (0 = bar start, bar.length = bar end). */
-  beat: number;
-  /**
-   * True when the onset lands on the binary (dyadic) grid — i.e. an
-   * integer multiple of 1/2^m of a quarter note (whole/half/quarter/
-   * eighth/sixteenth/...). False for triplet/quintuplet/swing positions
-   * and anything else that isn't a "standard straight note". The
-   * renderer flags non-straight notes that aren't already covered by a
-   * tuplet bracket.
-   */
-  straight: boolean;
-  /** Onset duration, in beats. */
-  duration: number;
+// Each `Resolved*` type is the corresponding zoom-invariant `Structural*`
+// type (defined below) plus the pixel fields materialised by the layout
+// pass. Extending — rather than re-declaring — keeps the beat-only base
+// properties (source, pitch, beat, …) defined in exactly one place; the
+// pixel fields (x / width / notePadPx) live only on the resolved side.
+
+export type ResolvedNote = StructuralNote & {
   /** Pixel x within the bar. */
   x: Pixels;
   width: Pixels;
 };
 
-export type ResolvedTrack = {
-  pitch: string;
-  /** The Instrument resolved from `globalMetadata.instrumentMapping[pitch]`. */
-  instrument: Instrument;
-  color: string;
+export type ResolvedTrack = Omit<StructuralTrack, 'notes'> & {
   notes: ResolvedNote[];
 };
 
-export type PatternSpan = {
-  name: string;
-  /** Position within the bar in beats. */
-  startBeat: number;
-  endBeat: number;
+export type PatternSpan = StructuralPatternSpan & {
   /** Pixel x within the bar (aligns with the padded note area). */
   x: Pixels;
   /** Pixel width within the bar (aligns with the padded note area). */
   width: Pixels;
-  /**
-   * Pitches the pattern actually plays (collected from the expanded
-   * pattern body). The mixer uses this to draw the bracket only on rows
-   * whose pitch participates — intermediate rows that don't, the bracket
-   * skips through.
-   */
-  pitches: ReadonlySet<string>;
-  /**
-   * Stable 0-based color slot for this pattern name, assigned in
-   * first-seen order across the jot. The renderer wraps it modulo the
-   * pattern palette length, so every usage of the same pattern shows
-   * the same color.
-   */
-  colorIndex: number;
 };
 
 /**
@@ -136,54 +97,25 @@ export type PatternSpan = {
  * endBeat)` with `count` shown above it, the conventional engraved-
  * notation indicator that the enclosed notes are not straight.
  */
-export type TupletSpan = {
-  /** Slot count shown in the bracket (3 = triplet, 5 = quintuplet, ...). */
-  count: number;
-  /** Position within the bar in beats. */
-  startBeat: number;
-  endBeat: number;
+export type TupletSpan = StructuralTupletSpan & {
   /** Pixel x within the bar (aligns with the padded note area). */
   x: Pixels;
   /** Pixel width within the bar (aligns with the padded note area). */
   width: Pixels;
 };
 
-export type ResolvedBar = {
-  source: Bar;
+export type ResolvedBar = Omit<StructuralBar, 'tracks' | 'patternSpans' | 'tupletSpans'> & {
   /** Pixel x relative to start of the voice. */
   x: Pixels;
   width: Pixels;
-  time: TimeSignature;
-  /** Bar length in beats (count * 4/unit, in quarter notes). */
-  beats: number;
   /** Per-pitch track lanes within this bar. */
   tracks: Record<string, ResolvedTrack>;
-  /**
-   * Pattern usages within this bar, in source order. Renderer draws outlines
-   * around each span.
-   */
   patternSpans: PatternSpan[];
-  /**
-   * Tuplet brackets within this bar, in source order. Renderer draws a
-   * numbered bracket over each so triplets / non-straight subdivisions
-   * are visually obvious.
-   */
   tupletSpans: TupletSpan[];
-  /** Bar number within the voice (1-based; anacrusis is bar 0). */
-  index: number;
 };
 
-export type ResolvedVoice = {
-  source: Voice;
-  /** All bars including anacrusis if present (anacrusis is bar 0). */
+export type ResolvedVoice = Omit<StructuralVoice, 'bars'> & {
   bars: ResolvedBar[];
-  /**
-   * Pitches that appear at least once in this voice, ordered for rendering:
-   * mapped pitches first in `globalMetadata.instrumentMapping` declaration
-   * order, then any unmapped pitches in first-seen order. This is the lane
-   * order in the rendered output (top to bottom).
-   */
-  pitches: string[];
   width: Pixels;
   /**
    * Horizontal offset (px) the note grid is shifted right of each
@@ -202,12 +134,10 @@ export type ResolvedVoice = {
   notePadPx: Pixels;
 };
 
-export type ResolvedJot = {
-  title: string;
+export type ResolvedJot = Omit<JotStructure, 'voices' | 'densityFactor'> & {
   voices: ResolvedVoice[];
   /** Maximum width across all voices, in pixels. */
   width: Pixels;
-  globalMetadata: Metadata;
 };
 
 // ---------- Beat length helpers ----------
@@ -362,16 +292,32 @@ function measureOnsetDensity(jot: Jot): number {
 export type StructuralNote = {
   source: Note;
   pitch: string;
+  /**
+   * Modifiers attached to this note, narrowed to the {@link Modifier}
+   * union so consumers can pass literal modifier strings to `.has()`
+   * without casting and so misspelled modifiers fail at compile time.
+   */
   modifiers: ReadonlySet<Modifier>;
   sticking?: Note['sticking'];
   roll: boolean;
+  /** Position within bar, in beats (0 = bar start, bar.length = bar end). */
   beat: number;
+  /**
+   * True when the onset lands on the binary (dyadic) grid — i.e. an
+   * integer multiple of 1/2^m of a quarter note (whole/half/quarter/
+   * eighth/sixteenth/...). False for triplet/quintuplet/swing positions
+   * and anything else that isn't a "standard straight note". The
+   * renderer flags non-straight notes that aren't already covered by a
+   * tuplet bracket.
+   */
   straight: boolean;
+  /** Onset duration, in beats. */
   duration: number;
 };
 
 export type StructuralTrack = {
   pitch: string;
+  /** The Instrument resolved from `globalMetadata.instrumentMapping[pitch]`. */
   instrument: Instrument;
   color: string;
   notes: StructuralNote[];
@@ -379,16 +325,29 @@ export type StructuralTrack = {
 
 export type StructuralPatternSpan = {
   name: string;
+  /** Position within the bar in beats. */
   startBeat: number;
   endBeat: number;
-  /** See {@link PatternSpan.pitches}. */
+  /**
+   * Pitches the pattern actually plays (collected from the expanded
+   * pattern body). The mixer uses this to draw the bracket only on rows
+   * whose pitch participates — intermediate rows that don't, the bracket
+   * skips through.
+   */
   pitches: ReadonlySet<string>;
-  /** See {@link PatternSpan.colorIndex}. */
+  /**
+   * Stable 0-based color slot for this pattern name, assigned in
+   * first-seen order across the jot. The renderer wraps it modulo the
+   * pattern palette length, so every usage of the same pattern shows
+   * the same color.
+   */
   colorIndex: number;
 };
 
 export type StructuralTupletSpan = {
+  /** Slot count shown in the bracket (3 = triplet, 5 = quintuplet, ...). */
   count: number;
+  /** Position within the bar in beats. */
   startBeat: number;
   endBeat: number;
 };
@@ -396,16 +355,35 @@ export type StructuralTupletSpan = {
 export type StructuralBar = {
   source: Bar;
   time: TimeSignature;
+  /** Bar length in beats (count * 4/unit, in quarter notes). */
   beats: number;
+  /** Per-pitch track lanes within this bar. */
   tracks: Record<string, StructuralTrack>;
+  /**
+   * Pattern usages within this bar, in source order. Renderer draws outlines
+   * around each span.
+   */
   patternSpans: StructuralPatternSpan[];
+  /**
+   * Tuplet brackets within this bar, in source order. Renderer draws a
+   * numbered bracket over each so triplets / non-straight subdivisions
+   * are visually obvious.
+   */
   tupletSpans: StructuralTupletSpan[];
+  /** Bar number within the voice (1-based; anacrusis is bar 0). */
   index: number;
 };
 
 export type StructuralVoice = {
   source: Voice;
+  /** All bars including anacrusis if present (anacrusis is bar 0). */
   bars: StructuralBar[];
+  /**
+   * Pitches that appear at least once in this voice, ordered for rendering:
+   * mapped pitches first in `globalMetadata.instrumentMapping` declaration
+   * order, then any unmapped pitches in first-seen order. This is the lane
+   * order in the rendered output (top to bottom).
+   */
   pitches: string[];
 };
 
