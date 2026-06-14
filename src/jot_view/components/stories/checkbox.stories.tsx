@@ -2,34 +2,39 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import React from 'react';
 import { fn } from 'storybook/test';
 import { Checkbox } from '../checkbox';
+import { Gallery, Variant } from './_variants';
 
-const meta = {
+const meta: Meta = {
   title: 'Components/Checkbox',
-  component: Checkbox,
-  args: { onChange: fn() },
-} satisfies Meta<typeof Checkbox>;
+};
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
-export const Unchecked: Story = { args: { checked: false } };
-export const Checked: Story = { args: { checked: true } };
-export const Disabled: Story = { args: { checked: true, disabled: true } };
-
-/** Interactive: holds its own state so the box actually toggles; the
+/** Interactive instance: holds its own state so the box toggles; the
  *  change still reports to the Actions panel. */
-export const Interactive: Story = {
-  render: (args) => {
-    const [on, setOn] = React.useState(false);
-    return (
-      <Checkbox
-        {...args}
-        checked={on}
-        onChange={(e) => {
-          setOn(e.target.checked);
-          args.onChange?.(e);
-        }}
-      />
-    );
-  },
+function InteractiveCheckbox() {
+  const [on, setOn] = React.useState(false);
+  const onChange = fn((e: React.ChangeEvent<HTMLInputElement>) => setOn(e.target.checked));
+  return <Checkbox checked={on} onChange={onChange} />;
+}
+
+/** Every Checkbox state in one place. */
+export const All: Story = {
+  render: () => (
+    <Gallery>
+      <Variant label="Unchecked">
+        <Checkbox checked={false} onChange={fn()} />
+      </Variant>
+      <Variant label="Checked">
+        <Checkbox checked onChange={fn()} />
+      </Variant>
+      <Variant label="Disabled">
+        <Checkbox checked disabled onChange={fn()} />
+      </Variant>
+      <Variant label="Interactive (toggles)">
+        <InteractiveCheckbox />
+      </Variant>
+    </Gallery>
+  ),
 };

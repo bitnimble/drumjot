@@ -1,41 +1,38 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { fn } from 'storybook/test';
 import { ClearButton, IconButton, MuteButton, SoloButton } from '../icon_button';
+import { Gallery, Variant } from './_variants';
 
 /**
  * Compact 18×18 icon button shared by the mixer-row controls, plus its
  * specialised Mute / Solo / Clear wrappers. Every handler is routed to a
  * spy (`fn()`) so clicks show up in the Actions panel.
  */
-const meta = {
+const meta: Meta = {
   title: 'Components/IconButton',
-  component: IconButton,
-  args: { onClick: fn(), children: 'M' },
-} satisfies Meta<typeof IconButton>;
+};
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
-export const Plain: Story = {};
-
-export const Mute: Story = {
+/** Every icon-button variant + its on/off states in one place. */
+export const All: Story = {
   render: () => (
-    <div style={{ display: 'flex', gap: 8 }}>
-      <MuteButton active={false} onToggle={fn()} offTitle="Mute kick" onTitle="Unmute kick" />
-      <MuteButton active onToggle={fn()} offTitle="Mute kick" onTitle="Unmute kick" />
-    </div>
+    <Gallery>
+      <Variant label="Plain">
+        <IconButton onClick={fn()}>M</IconButton>
+      </Variant>
+      <Variant label="Mute (off / on)">
+        <MuteButton active={false} onToggle={fn()} offTitle="Mute kick" onTitle="Unmute kick" />
+        <MuteButton active onToggle={fn()} offTitle="Mute kick" onTitle="Unmute kick" />
+      </Variant>
+      <Variant label="Solo (off / on)">
+        <SoloButton active={false} onToggle={fn()} offTitle="Solo kick" onTitle="Unsolo kick" />
+        <SoloButton active onToggle={fn()} offTitle="Solo kick" onTitle="Unsolo kick" />
+      </Variant>
+      <Variant label="Clear">
+        <ClearButton onClear={fn()} label="Remove the kick audio track" />
+      </Variant>
+    </Gallery>
   ),
-};
-
-export const Solo: Story = {
-  render: () => (
-    <div style={{ display: 'flex', gap: 8 }}>
-      <SoloButton active={false} onToggle={fn()} offTitle="Solo kick" onTitle="Unsolo kick" />
-      <SoloButton active onToggle={fn()} offTitle="Solo kick" onTitle="Unsolo kick" />
-    </div>
-  ),
-};
-
-export const Clear: Story = {
-  render: () => <ClearButton onClear={fn()} label="Remove the kick audio track" />,
 };

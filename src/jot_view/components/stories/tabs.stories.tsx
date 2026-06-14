@@ -2,11 +2,11 @@ import type { Meta, StoryObj } from '@storybook/react-vite';
 import React from 'react';
 import { fn } from 'storybook/test';
 import { Tabs } from '../tabs';
+import { Gallery, Variant } from './_variants';
 
-/** Generic WAI-ARIA tab strip (today: the Transcribe dropdown's
- *  New ↔ Resume switch). Interactive: holds its own selection; changes
- *  also report to the Actions panel. Typed loosely because `Tabs` is a
- *  generic component, each story drives it through `render`. */
+/** Generic WAI-ARIA tab strip (today: the Transcribe dropdown's New ↔
+ *  Resume switch). Each instance holds its own selection; changes also
+ *  report to the Actions panel. Typed loosely because `Tabs` is generic. */
 const meta: Meta = {
   title: 'Components/Tabs',
 };
@@ -14,39 +14,41 @@ export default meta;
 
 type Story = StoryObj;
 
-export const TwoTabs: Story = {
-  render: () => {
-    const [value, setValue] = React.useState('new');
-    const onChange = fn((v: string) => setValue(v));
-    return (
-      <Tabs
-        ariaLabel="Transcribe mode"
-        value={value}
-        onChange={onChange}
-        options={[
-          { value: 'new', label: 'New' },
-          { value: 'resume', label: 'Resume' },
-        ]}
-      />
-    );
-  },
-};
+function TabsDemo({
+  options,
+  initial,
+}: {
+  options: React.ComponentProps<typeof Tabs>['options'];
+  initial: string;
+}) {
+  const [value, setValue] = React.useState(initial);
+  const onChange = fn((v: string) => setValue(v));
+  return <Tabs ariaLabel="Example tabs" value={value} onChange={onChange} options={options} />;
+}
 
-export const WithDisabledTab: Story = {
-  render: () => {
-    const [value, setValue] = React.useState('a');
-    const onChange = fn((v: string) => setValue(v));
-    return (
-      <Tabs
-        ariaLabel="Example"
-        value={value}
-        onChange={onChange}
-        options={[
-          { value: 'a', label: 'Available' },
-          { value: 'b', label: 'Disabled', disabled: true, title: 'Not available yet' },
-          { value: 'c', label: 'Also available' },
-        ]}
-      />
-    );
-  },
+/** Every Tabs variant in one place; each one actually switches. */
+export const All: Story = {
+  render: () => (
+    <Gallery>
+      <Variant label="Two tabs">
+        <TabsDemo
+          initial="new"
+          options={[
+            { value: 'new', label: 'New' },
+            { value: 'resume', label: 'Resume' },
+          ]}
+        />
+      </Variant>
+      <Variant label="With a disabled tab">
+        <TabsDemo
+          initial="a"
+          options={[
+            { value: 'a', label: 'Available' },
+            { value: 'b', label: 'Disabled', disabled: true, title: 'Not available yet' },
+            { value: 'c', label: 'Also available' },
+          ]}
+        />
+      </Variant>
+    </Gallery>
+  ),
 };

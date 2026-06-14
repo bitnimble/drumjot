@@ -7,6 +7,7 @@ import { DocumentStore } from '../../document/document_store';
 import { PlaybackStore } from '../playback_store';
 import { PlaybackPresenter } from '../playback_presenter';
 import { PlaybackBar } from '../playback';
+import { Gallery, Variant } from '../../components/stories/_variants';
 
 /**
  * The bottom transport bar, driven by REAL stores + presenter (the point
@@ -15,22 +16,18 @@ import { PlaybackBar } from '../playback';
  * PlaybackPresenter; the player singleton stays idle so nothing actually
  * sounds, but the wiring is genuine.
  */
-// Typed loosely: each story builds its own store/presenter trio and
-// drives the component through `render`, so we don't bind the required
-// props as static `args`.
 const meta: Meta = {
   title: 'Playback/PlaybackBar',
-  component: PlaybackBar as Meta['component'],
   parameters: { layout: 'fullscreen' },
 };
 export default meta;
 
 type Story = StoryObj;
 
-/** Build a fresh document/playback store + presenter trio, optionally
- *  seeding a loaded jot so the transport controls light up. */
-function usePlaybackHarness(withJot: boolean) {
-  return React.useMemo(() => {
+/** One PlaybackBar backed by a fresh document/playback store + presenter
+ *  trio; `withJot` seeds a loaded jot so the transport controls light up. */
+function Bar({ withJot }: { withJot: boolean }) {
+  const { documentStore, playback, presenter } = React.useMemo(() => {
     const documentStore = new DocumentStore();
     const playback = new PlaybackStore(documentStore);
     const presenter = new PlaybackPresenter(playback, documentStore);
@@ -42,18 +39,19 @@ function usePlaybackHarness(withJot: boolean) {
     return { documentStore, playback, presenter };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  return <PlaybackBar documentStore={documentStore} playback={playback} presenter={presenter} />;
 }
 
-export const WithJotLoaded: Story = {
-  render: () => {
-    const { documentStore, playback, presenter } = usePlaybackHarness(true);
-    return <PlaybackBar documentStore={documentStore} playback={playback} presenter={presenter} />;
-  },
-};
-
-export const NoJot: Story = {
-  render: () => {
-    const { documentStore, playback, presenter } = usePlaybackHarness(false);
-    return <PlaybackBar documentStore={documentStore} playback={playback} presenter={presenter} />;
-  },
+/** Both transport states in one place. */
+export const All: Story = {
+  render: () => (
+    <Gallery>
+      <Variant label="Jot loaded (transport active)">
+        <Bar withJot />
+      </Variant>
+      <Variant label="No jot (empty state)">
+        <Bar withJot={false} />
+      </Variant>
+    </Gallery>
+  ),
 };

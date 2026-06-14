@@ -1,14 +1,27 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { Logo } from '../logo';
+import { Gallery, Variant } from './_variants';
 
-const meta = {
+const meta: Meta = {
   title: 'Components/Logo',
-  component: Logo,
-  args: { size: 56 },
-} satisfies Meta<typeof Logo>;
+};
 export default meta;
 
-type Story = StoryObj<typeof meta>;
+type Story = StoryObj;
 
-export const Small: Story = { args: { size: 24 } };
-export const Large: Story = { args: { size: 128, title: 'Drumjot' } };
+/** The logo at the sizes it's used, in one place. */
+export const All: Story = {
+  render: () => (
+    <Gallery>
+      <Variant label="Small (24)">
+        <Logo size={24} />
+      </Variant>
+      <Variant label="Medium (56)">
+        <Logo size={56} />
+      </Variant>
+      <Variant label="Large (128, with title)">
+        <Logo size={128} title="Drumjot" />
+      </Variant>
+    </Gallery>
+  ),
+};

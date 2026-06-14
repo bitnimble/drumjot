@@ -12,6 +12,7 @@ import { ViewportStore } from '../../viewport/viewport_store';
 import type { TrackKey } from '../../store';
 import type { VoiceControls } from '../mixer_controls';
 import { InstrumentRow } from '../instrument_row';
+import { Gallery, Variant } from '../../components/stories/_variants';
 
 /**
  * A single drum-instrument (note) row from the unified mixer: the gutter
@@ -33,40 +34,6 @@ export default meta;
 
 type Story = StoryObj;
 
-/** Build the store trio + a stubbed VoiceControls and pick the first real
- *  pitch from the loaded jot, so the row always points at a valid lane. */
-function useInstrumentRowHarness(over: Partial<VoiceControls> = {}) {
-  return React.useMemo(() => {
-    const documentStore = new DocumentStore();
-    runInAction(() => {
-      documentStore.currentJot = new RenderedJot(rockJot, documentStore.viewConfig);
-    });
-    const mixer = new MixerStore(documentStore);
-    const viewport = new ViewportStore(documentStore);
-    const pitches = mixer.jotPitches;
-    runInAction(() => {
-      mixer.trackOrder = pitches.map((pitch): TrackKey => ({ kind: 'instrument', pitch }));
-    });
-    const voiceControls: VoiceControls = {
-      mutedPitches: new Set(),
-      soloedPitches: new Set(),
-      isPitchAudible: () => true,
-      volumeFor: () => 1,
-      onSetVolume: fn(),
-      onToggleMute: fn(),
-      onToggleSolo: fn(),
-      masterMuted: false,
-      masterSoloed: false,
-      masterAudible: true,
-      onToggleMasterMute: fn(),
-      onToggleMasterSolo: fn(),
-      ...over,
-    };
-    return { documentStore, mixer, viewport, pitches, voiceControls };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-}
-
 const NOOP_DRAG = {
   idx: 0,
   dragFromIdx: undefined,
@@ -82,24 +49,48 @@ const NOOP_DRAG = {
   onResizeGutterStart: fn(),
 };
 
-function Row({
-  voiceControlsOver,
-  showBrackets = true,
-}: {
-  voiceControlsOver?: Partial<VoiceControls>;
-  showBrackets?: boolean;
-}) {
-  const { documentStore, mixer, viewport, pitches, voiceControls } =
-    useInstrumentRowHarness(voiceControlsOver);
+/** One InstrumentRow backed by a fresh real store trio, pointed at the
+ *  first real pitch of the loaded jot. `muted` flips the row's audibility
+ *  so the gutter renders its dimmed state. */
+function Row({ muted = false }: { muted?: boolean }) {
+  const { documentStore, mixer, viewport, pitch, voiceControls } = React.useMemo(() => {
+    const documentStore = new DocumentStore();
+    runInAction(() => {
+      documentStore.currentJot = new RenderedJot(rockJot, documentStore.viewConfig);
+    });
+    const mixer = new MixerStore(documentStore);
+    const viewport = new ViewportStore(documentStore);
+    const pitches = mixer.jotPitches;
+    runInAction(() => {
+      mixer.trackOrder = pitches.map((p): TrackKey => ({ kind: 'instrument', pitch: p }));
+    });
+    const pitch = pitches[0];
+    const voiceControls: VoiceControls = {
+      mutedPitches: muted ? new Set([pitch]) : new Set(),
+      soloedPitches: new Set(),
+      isPitchAudible: () => !muted,
+      volumeFor: () => 1,
+      onSetVolume: fn(),
+      onToggleMute: fn(),
+      onToggleSolo: fn(),
+      masterMuted: false,
+      masterSoloed: false,
+      masterAudible: true,
+      onToggleMasterMute: fn(),
+      onToggleMasterSolo: fn(),
+    };
+    return { documentStore, mixer, viewport, pitch, voiceControls };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   return (
     <MixerStoreContext.Provider value={mixer}>
       <ViewportStoreContext.Provider value={viewport}>
         <InstrumentRow
-          pitch={pitches[0]}
+          pitch={pitch}
           jot={documentStore.currentJot!}
           config={documentStore.viewConfig}
-          showBrackets={showBrackets}
-          pitchOrder={pitches}
+          showBrackets
+          pitchOrder={mixer.jotPitches}
           highlightedPattern={undefined}
           onPatternClick={fn()}
           onSeek={fn()}
@@ -111,38 +102,16 @@ function Row({
   );
 }
 
-export const Default: Story = {
-  render: () => <Row />,
-};
-
-export const Muted: Story = {
-  render: () => {
-    // Pre-mute the row's pitch so the gutter renders its dimmed state.
-    const Wrapper = () => {
-      const { documentStore, mixer, viewport, pitches, voiceControls } = useInstrumentRowHarness({
-        isPitchAudible: () => false,
-      });
-      const muted = new Set([pitches[0]]);
-      const controls: VoiceControls = { ...voiceControls, mutedPitches: muted };
-      return (
-        <MixerStoreContext.Provider value={mixer}>
-          <ViewportStoreContext.Provider value={viewport}>
-            <InstrumentRow
-              pitch={pitches[0]}
-              jot={documentStore.currentJot!}
-              config={documentStore.viewConfig}
-              showBrackets
-              pitchOrder={pitches}
-              highlightedPattern={undefined}
-              onPatternClick={fn()}
-              onSeek={fn()}
-              voiceControls={controls}
-              {...NOOP_DRAG}
-            />
-          </ViewportStoreContext.Provider>
-        </MixerStoreContext.Provider>
-      );
-    };
-    return <Wrapper />;
-  },
+/** Default + muted states in one place. */
+export const All: Story = {
+  render: () => (
+    <Gallery>
+      <Variant label="Default">
+        <Row />
+      </Variant>
+      <Variant label="Muted (dimmed gutter)">
+        <Row muted />
+      </Variant>
+    </Gallery>
+  ),
 };
