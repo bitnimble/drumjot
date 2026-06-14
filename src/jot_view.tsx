@@ -102,9 +102,11 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   const transcribe = new TranscribeStore();
   const provenance = new ProvenanceStore();
   const lyricsAlign = new LyricsAlignStore();
-  const playback = new PlaybackStore(documentStore);
   const viewport = new ViewportStore(documentStore);
   const mixer = new MixerStore(documentStore);
+  // PlaybackStore reads the mixer for the engine-facing filter computeds
+  // the player pulls; construct the mixer first.
+  const playback = new PlaybackStore(documentStore, mixer);
   const settingsPresenter = new SettingsPresenter(settings);
   const viewportPresenter = new ViewportPresenter(viewport, documentStore);
   const mixerPresenter = new MixerPresenter(mixer, documentStore);

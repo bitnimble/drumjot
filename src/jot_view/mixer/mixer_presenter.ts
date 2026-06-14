@@ -8,11 +8,13 @@ import { toastStore } from '../toasts/toasts';
 
 /**
  * Mutations over {@link MixerStore}, per-row + master mute/solo/volume,
- * the user-customisable row order, and the audio-track split stubs. Also
- * owns the reactions that push mixer state into the player (live
- * mute/solo/volume + section mute) and keep the row order synced with the
- * live track/pitch/lyrics set, and wires the store in as the player's
- * {@link MixerContext} for audio-track colour inheritance.
+ * the user-customisable row order, and the audio-track split stubs. Owns
+ * the reaction that keeps the row order synced with the live
+ * track/pitch/lyrics set and the instrument-track prune, and wires the
+ * store in as the player's {@link MixerContext} for audio-track colour
+ * inheritance. The engine's mute/solo/volume filter is no longer pushed
+ * from here; the player pulls it off the PlaybackStore computeds (see
+ * `PlaybackPresenter`).
  */
 export class MixerPresenter {
   readonly mixer: MixerStore;
@@ -45,41 +47,12 @@ export class MixerPresenter {
       { fireImmediately: true, equals: comparer.structural }
     );
 
-    // Push mute / solo state to the player whenever it changes. While
-    // playback is in flight the player reschedules so the toggle takes
-    // effect immediately; idle, the filter is stored for the next play().
-    //
-    // This MUST be a `reaction`, not an `autorun`: `setFilter` both reads
-    // and writes a player observable while playing, so an autorun would
-    // depend on the observable it writes (a non-converging reaction MobX
-    // bails on). `reaction` tracks only the data selector; the effect runs
-    // untracked. The `pitchFilter` getter snapshots its Sets/Maps so the
-    // structural comparer can detect changes (sharing the live references
-    // would defeat it, see the getter's doc comment).
-    reaction(
-      () => this.mixer.pitchFilter,
-      (filter) => jotPlayer.setFilter(filter),
-      { fireImmediately: true, equals: comparer.structural }
-    );
-    // Same shape for audio tracks; observed mutations push immediately so
-    // toggling M/S on a track is sample-accurate during playback.
-    reaction(
-      () => this.mixer.audioTrackFilter,
-      (filter) => jotPlayer.setAudioTrackFilter(filter),
-      { fireImmediately: true, equals: comparer.structural }
-    );
-    // Push the section-audibility booleans so master mute / solo can flip
-    // the bus gain to 0 without touching the per-row M/S sets.
-    reaction(
-      () => this.mixer.isAudioSectionAudible,
-      (audible) => jotPlayer.setAudioMasterAudible(audible),
-      { fireImmediately: true }
-    );
-    reaction(
-      () => this.mixer.isDrumSectionAudible,
-      (audible) => jotPlayer.setDrumMasterAudible(audible),
-      { fireImmediately: true }
-    );
+    // NOTE: the engine no longer has mixer state pushed into it here. The
+    // player PULLS its mute/solo/volume filter + section-audibility off the
+    // PlaybackStore computeds (which delegate to this store's `pitchFilter`
+    // / `audioTrackFilter` / `isAudio|DrumSectionAudible`); the reactions
+    // that fire the imperative audio-graph re-apply live in
+    // `PlaybackPresenter`.
 
     // Keep `trackOrder` synced with the live audio-track set and the
     // current jot's pitches. Dropped rows are removed; newly-discovered

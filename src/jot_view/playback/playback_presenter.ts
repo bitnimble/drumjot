@@ -1,4 +1,4 @@
-import { makeAutoObservable, reaction } from 'mobx';
+import { comparer, makeAutoObservable, reaction } from 'mobx';
 import { buildTimeline, jotPlayer, xToTime } from 'src/jot_view/playback';
 import { pickDominantBpmAndTime } from 'src/jot_view/playback/timeline';
 import { DocumentStore } from '../document/document_store';
@@ -34,6 +34,34 @@ export class PlaybackPresenter {
       (offsetSec) => jotPlayer.setDrumsT0Sec(offsetSec),
       { fireImmediately: true }
     );
+
+    // Pull-model filter wiring. The engine reads its mute/solo/volume
+    // filter + section-audibility off the PlaybackStore computeds directly
+    // (via `attachPlayback`); these reactions only fire the *imperative*
+    // re-apply on the live audio graph when those computeds change.
+    //
+    // They MUST be `reaction`s, not `autorun`s: each effect reads AND
+    // writes player observables (the reschedule reads `state` /
+    // `currentTime` and rewrites the schedule), so an autorun would depend
+    // on what it writes and never converge. The filter getters snapshot
+    // their Sets/Maps so `comparer.structural` can see real changes.
+    // `fireImmediately` seeds the graph; all four are no-ops until a
+    // context / playback exists.
+    jotPlayer.attachPlayback(this.playback);
+    reaction(() => this.playback.pitchFilter, () => jotPlayer.applyPitchFilter(), {
+      fireImmediately: true,
+      equals: comparer.structural,
+    });
+    reaction(() => this.playback.audioTrackFilter, () => jotPlayer.applyAudioTrackFilter(), {
+      fireImmediately: true,
+      equals: comparer.structural,
+    });
+    reaction(() => this.playback.audioMasterAudible, () => jotPlayer.applyAudioBusGain(), {
+      fireImmediately: true,
+    });
+    reaction(() => this.playback.drumMasterAudible, () => jotPlayer.applyDrumBusGain(), {
+      fireImmediately: true,
+    });
   }
 
   setAutoFollowOnPlay(on: boolean) {

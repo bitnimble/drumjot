@@ -34,6 +34,7 @@
 import { makeAutoObservable, runInAction } from 'mobx';
 import { RenderedJot } from 'src/jot';
 import { MixerContext } from 'src/tracks';
+import type { PlaybackStore } from './playback_store';
 import { jotToEvents, PlaybackEvent } from './events';
 import { GeneralUserGsKit, KitInfo } from './gm_kit';
 import { SampleLoadProgress } from './sample_storage';
@@ -355,16 +356,31 @@ export class JotPlayer {
   audioTrackMasterVolume: number = DEFAULT_VOLUME;
 
   /**
-   * Whether each section's bus is currently audible. Driven by the store
-   *; it folds master mute, master solo, and per-row solo into a single
-   * boolean per section (see `JotViewStore.isAudioSectionAudible` /
-   * `.isDrumSectionAudible`). When false the corresponding bus gain is
-   * pinned at 0 regardless of the master fader; when true the fader
-   * value takes over again. Public + observable so a non-React renderer
-   * can show muted-bus state without going back through the store.
+   * Late-bound transport store. The engine PULLS its mute/solo/volume
+   * filter and section-audibility from here (see {@link pitchFilter} etc.
+   * below) rather than having them pushed in, so the mixer state has a
+   * single home. Bound once at view construction via
+   * {@link attachPlayback}; undefined for a standalone engine (tests /
+   * stories), where the filter getters fall back to PASSTHROUGH. Not
+   * observable itself (it's a large MobX graph; the getters read its
+   * observable computeds, which is what drives reactivity).
    */
-  drumMasterAudible: boolean = true;
-  audioMasterAudible: boolean = true;
+  playback: PlaybackStore | undefined;
+
+  /**
+   * Whether each section's bus is currently audible, master mute, master
+   * solo, and per-row solo folded into one boolean per section. Pulled
+   * from {@link PlaybackStore} (which delegates to the mixer's
+   * `isAudioSectionAudible` / `isDrumSectionAudible`). When false the
+   * corresponding bus gain is pinned at 0 regardless of the master fader.
+   * True (audible) for a standalone engine with no store wired.
+   */
+  get drumMasterAudible(): boolean {
+    return this.playback?.drumMasterAudible ?? true;
+  }
+  get audioMasterAudible(): boolean {
+    return this.playback?.audioMasterAudible ?? true;
+  }
 
   /**
    * Audio tracks loaded by the user — any number (a ParaDB pack's
@@ -470,10 +486,13 @@ export class JotPlayer {
    * without poking the audio graph. Undefined while idle.
    */
   audioTrackController: AudioTrackPlaybackController | undefined;
-  /** Last mute/solo/volume filter pushed by the store. Observable so an
-   * alt renderer can read what filter the audio is actually running under
-   * without having to re-derive it. */
-  currentAudioTrackFilter: AudioTrackFilter = PASSTHROUGH_AUDIO_TRACK_FILTER;
+  /** Audio-track mute/solo/volume filter the engine runs under, pulled
+   *  live from {@link PlaybackStore} (PASSTHROUGH when no store is wired).
+   *  A computed: an alt renderer can read what's audible right now, and
+   *  the audio path reads it directly instead of caching a snapshot. */
+  get currentAudioTrackFilter(): AudioTrackFilter {
+    return this.playback?.audioTrackFilter ?? PASSTHROUGH_AUDIO_TRACK_FILTER;
+  }
   /**
    * Drum-track ↔ audio-track offset, in seconds — the recording's
    * lead-in. It's the audio-time that lines up with jot-time 0: each
@@ -535,9 +554,12 @@ export class JotPlayer {
    * are upcoming. Empty while idle.
    */
   events: PlaybackEvent[] = [];
-  /** Last pitch-side mute/solo/volume filter pushed by the store.
-   * Same alt-renderer rationale as {@link currentAudioTrackFilter}. */
-  currentFilter: PlayerFilter = PASSTHROUGH_FILTER;
+  /** Pitch-side mute/solo/volume filter the scheduler runs under, pulled
+   *  live from {@link PlaybackStore} (PASSTHROUGH when no store is wired).
+   *  Same computed/pull rationale as {@link currentAudioTrackFilter}. */
+  get currentFilter(): PlayerFilter {
+    return this.playback?.pitchFilter ?? PASSTHROUGH_FILTER;
+  }
   /**
    * Jot-time (seconds) the next `play()` should start from, set by a
    * click-to-seek while idle. `undefined` means "start from the
@@ -552,17 +574,20 @@ export class JotPlayer {
     // through the late-bound callback at compute time, which is the
     // path the picker UI depends on, not through MobX tracking of the
     // field itself.
-    makeAutoObservable(this, { mixerContext: false });
+    makeAutoObservable(this, { mixerContext: false, playback: false });
     this.hydrateAudioLatencyFromStorage();
   }
 
   /**
-   * Update the mute/solo filter. Stored unconditionally; if playback is
-   * in flight OR paused, every scheduled note is cancelled and the
-   * remaining events (those whose audio time hasn't elapsed) are
-   * re-scheduled against the new filter — so toggling M or S takes
+   * Re-apply the (pulled) pitch mute/solo filter to the live schedule. If
+   * playback is in flight OR paused, every scheduled note is cancelled and
+   * the remaining events (those whose audio time hasn't elapsed) are
+   * re-scheduled against the current filter; so toggling M or S takes
    * effect immediately, including bringing previously-muted rows back
-   * in mid-song.
+   * in mid-song. The filter itself is the {@link currentFilter} computed
+   * (pulled from {@link PlaybackStore}); a `PlaybackPresenter` reaction
+   * calls this whenever it changes. Idle does nothing — `play()` reads
+   * the filter when it next schedules.
    *
    * The paused case matters: pause → toggle a row's M → resume is a
    * natural practice workflow, and `resume()` only reschedules audio tracks,
@@ -573,8 +598,7 @@ export class JotPlayer {
    * to it and come alive when the context resumes (same approach as
    * `seek`).
    */
-  setFilter(filter: PlayerFilter): void {
-    this.currentFilter = filter;
+  applyPitchFilter(): void {
     if ((this.state !== 'playing' && this.state !== 'paused') || !this.ctx) return;
 
     const now = this.ctx.currentTime;
@@ -601,9 +625,9 @@ export class JotPlayer {
    * needed, so the change is sample-accurate without the click-risk of
    * stopping and restarting a `BufferSourceNode` mid-decay.
    */
-  setAudioTrackFilter(filter: AudioTrackFilter): void {
-    this.currentAudioTrackFilter = filter;
+  applyAudioTrackFilter(): void {
     if (this.audioTrackController) {
+      const filter = this.currentAudioTrackFilter;
       this.audioTrackController.applyAudibility((id) => audioTrackGainUnder(id, filter));
     }
   }
@@ -712,30 +736,22 @@ export class JotPlayer {
   }
 
   /**
-   * Toggle the drum section's bus audibility. False pins `drumGain` at 0
-   * regardless of the fader (so master mute / cross-domain solo silences
-   * every drum row at once at the bus, not by editing the per-pitch
-   * mute/solo state). True restores the fader value.
+   * Re-apply the drum bus gain from the pulled {@link drumMasterAudible}.
+   * False pins `drumGain` at 0 regardless of the fader (so master mute /
+   * cross-domain solo silences every drum row at once at the bus, not by
+   * editing the per-pitch mute/solo state); true restores the fader value.
+   * Public so a `PlaybackPresenter` reaction can call it when the pulled
+   * audibility changes; also called internally by the fader setter.
    */
-  setDrumMasterAudible(audible: boolean): void {
-    this.drumMasterAudible = audible;
-    this.applyDrumBusGain();
-  }
-
-  /** Mirror of {@link setDrumMasterAudible} for the audio-track bus. */
-  setAudioMasterAudible(audible: boolean): void {
-    this.audioMasterAudible = audible;
-    this.applyAudioBusGain();
-  }
-
-  private applyDrumBusGain(): void {
+  applyDrumBusGain(): void {
     if (!this.drumGain) return;
     this.drumGain.gain.value = this.drumMasterAudible
       ? DRUM_MASTER_GAIN * this.drumMasterVolume
       : 0;
   }
 
-  private applyAudioBusGain(): void {
+  /** Mirror of {@link applyDrumBusGain} for the audio-track bus. */
+  applyAudioBusGain(): void {
     if (!this.audioBusGain) return;
     this.audioBusGain.gain.value = this.audioMasterAudible ? this.audioTrackMasterVolume : 0;
   }
@@ -760,6 +776,14 @@ export class JotPlayer {
    *  constructor. Safe to re-call (the new context replaces the old). */
   attachMixerContext(ctx: MixerContext): void {
     this.mixerContext = ctx;
+  }
+
+  /** Wire the transport store in as the source the engine pulls its
+   *  mute/solo/volume filter + section-audibility from. Called once at
+   *  view construction (the store imports the player, not vice-versa, so
+   *  the player is constructed context-free and the view binds it). */
+  attachPlayback(store: PlaybackStore): void {
+    this.playback = store;
   }
 
   async loadAudioTrack(
