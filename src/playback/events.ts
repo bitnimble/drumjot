@@ -16,6 +16,12 @@
  */
 import { Volume } from 'src/dsl';
 import { RenderedJot, ResolvedNote, ResolvedTrack } from 'src/jot';
+import {
+  ACCENT_BOOST,
+  DEFAULT_VELOCITY,
+  GHOST_REDUCTION,
+  VOLUME_TO_VELOCITY,
+} from 'src/dynamics';
 import { defaultMidiNote } from 'src/midi/gm';
 import { beatToSecWithinBar, buildBarTempos } from 'src/tempo';
 
@@ -30,19 +36,10 @@ export type PlaybackEvent = {
   pitch: string;
 };
 
-// Velocity defaults mirror `src/midi/to_midi.ts`'s `DEFAULTS` so playback
-// loudness matches what gets written to an exported `.mid` file.
-const DEFAULT_VELOCITY = 80;
-const ACCENT_BOOST = 24;
-const GHOST_REDUCTION = 32;
-const VOLUME_TO_VELOCITY: Record<Volume, number> = {
-  pp: 16,
-  p: 33,
-  mp: 49,
-  mf: 64,
-  f: 80,
-  ff: 96,
-};
+// Velocity defaults (DEFAULT_VELOCITY / ACCENT_BOOST / GHOST_REDUCTION /
+// VOLUME_TO_VELOCITY) come from the shared `src/dynamics.ts` so playback
+// loudness matches exactly what gets written to an exported `.mid` /
+// `.rlrr` file.
 
 // Flam = a grace stroke shortly before the main hit on the same drum.
 // Acoustic flams sit ~25-35 ms apart, but two SF2 voices that close on the

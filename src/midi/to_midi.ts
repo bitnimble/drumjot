@@ -45,6 +45,12 @@
 import { writeMidi, MidiEvent } from 'midi-file';
 import { Jot, Volume } from 'src/dsl';
 import { RenderedJot, ResolvedNote, ResolvedTrack } from 'src/jot';
+import {
+  ACCENT_BOOST,
+  DEFAULT_VELOCITY,
+  GHOST_REDUCTION,
+  VOLUME_TO_VELOCITY,
+} from 'src/dynamics';
 import { resolveBpm } from 'src/tempo';
 import { defaultMidiNote } from './gm';
 
@@ -57,13 +63,12 @@ export type ToMidiOptions = {
 
 const DEFAULTS: Required<ToMidiOptions> = {
   drumChannel: 10,
-  defaultVelocity: 80,
-  // `accentBoost` must put `mf + accent` at or above `from_midi`'s
-  // accent threshold (100), otherwise a fresh-authored `:a` note
-  // round-trips into a plain note. Was 24 (→ 88, below threshold);
-  // 36 puts the default-volume accent at 100 exactly.
-  accentBoost: 36,
-  ghostReduction: 32,
+  // Velocity defaults come from the shared `src/dynamics.ts`; see
+  // ACCENT_BOOST's note there for why an accent must clear `ff` (96) to
+  // round-trip through `from_midi`.
+  defaultVelocity: DEFAULT_VELOCITY,
+  accentBoost: ACCENT_BOOST,
+  ghostReduction: GHOST_REDUCTION,
 };
 
 /** [B2] */
@@ -312,15 +317,6 @@ function resolveMidiNote(note: ResolvedNote, track: ResolvedTrack): number | und
   if (track.instrument.midi?.note !== undefined) return track.instrument.midi.note;
   return defaultMidiNote(note.pitch, note.modifiers);
 }
-
-const VOLUME_TO_VELOCITY: Record<Volume, number> = {
-  pp: 16,
-  p: 33,
-  mp: 49,
-  mf: 64,
-  f: 80,
-  ff: 96,
-};
 
 function resolveVelocity(note: ResolvedNote, opts: Required<ToMidiOptions>): number {
   const meta = note.source.metadata as
