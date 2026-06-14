@@ -1,5 +1,5 @@
 import { makeAutoObservable } from 'mobx';
-import { DebugBundleManifest, NoteProvenanceFile } from 'src/debug_zip';
+import { DebugBundleManifest, NoteProvenanceFile } from 'src/jot_view/provenance/debug_zip';
 import { ProvenanceStore } from './provenance_store';
 import { ViewportStore } from '../viewport/viewport_store';
 

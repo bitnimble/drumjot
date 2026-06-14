@@ -3,7 +3,7 @@ import {
   DebugBundleManifest,
   NoteProvenanceEntry,
   NoteProvenanceFile,
-} from 'src/debug_zip';
+} from 'src/jot_view/provenance/debug_zip';
 import type { NoteProvenanceContextValue } from './provenance_contexts';
 
 /**

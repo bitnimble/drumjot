@@ -1,6 +1,6 @@
 import { observer } from 'mobx-react-lite';
 import React from 'react';
-import { themeStore, ThemeMode } from 'src/theme';
+import { themeStore, ThemeMode } from 'src/jot_view/settings/theme';
 import { DropdownSection, ToggleMenuItem } from '../components/dropdown';
 import { ViewportStoreContext } from '../viewport/viewport_contexts';
 import styles from './toolbar.module.css';

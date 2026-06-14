@@ -48,7 +48,7 @@ export type Limb = 'lh' | 'rh' | 'lf' | 'rf';
  * treats those as unrestricted.
  */
 export type Instrument = {
-  kind: import('./instruments').DrumInstrumentKind;
+  kind: import('src/instruments').DrumInstrumentKind;
   name?: string;
   limb?: Limb;
   midi?: { note: number; vol?: Volume };

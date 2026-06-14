@@ -13,7 +13,7 @@
 }
 
 .lyricsGutter {
-    composes: scrollStickyHorizontal from '../../jot_view.module.css';
+    composes: scrollStickyHorizontal from '../jot_view.module.css';
     z-index: 6;
     flex: 0 0 auto;
     width: var(--gutter-width);
@@ -123,7 +123,7 @@
 }
 
 .lyricsBarsRow {
-    composes: barsRowBase from '../../jot_view.module.css';
+    composes: barsRowBase from '../jot_view.module.css';
     /* Lyrics rows keep a SCOPED `--px-per-beat`: the score-wide inherited
        one was removed (zoom now drives per-row width + percentage
        geometry), but the lyric chips' zoom-responsive font metrics

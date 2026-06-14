@@ -27,7 +27,7 @@ import { jotPlayer } from 'src/jot_view/playback';
 // (or the live OS preference in `system` mode) before React mounts.
 // index.html runs a synchronous boot script that sets the attribute for
 // the very first paint; this import then takes over for live updates.
-import 'src/theme';
+import 'src/jot_view/settings/theme';
 
 class Drumjot {
   // Data-only stores + presenter. Exposed (via `window.drumjot`) so

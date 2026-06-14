@@ -1,8 +1,8 @@
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
-import { NotePosition } from 'src/note_position';
-import { NoteProvenanceEntry } from 'src/debug_zip';
+import { NotePosition } from 'src/jot_view/score/note_position';
+import { NoteProvenanceEntry } from 'src/jot_view/provenance/debug_zip';
 import { DEFAULT_GRID_DIVISION, gridDivisionFor } from 'src/grid';
 import { StructuralBar, StructuralNote } from 'src/jot';
 import { TICKS_PER_BEAT } from 'src/midi';

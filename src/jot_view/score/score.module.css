@@ -16,7 +16,7 @@
 }
 
 .timelineHeaderGutter {
-    composes: scrollStickyHorizontal from '../../jot_view.module.css';
+    composes: scrollStickyHorizontal from '../jot_view.module.css';
     z-index: 6;
     flex: 0 0 auto;
     width: var(--gutter-width);
@@ -35,7 +35,7 @@
 }
 
 .timelineHeaderBarsRow {
-    composes: barsRowBase from '../../jot_view.module.css';
+    composes: barsRowBase from '../jot_view.module.css';
     height: 28px;
     background: var(--color-bg-cream);
     /* `border-box` so the right border draws INSIDE the row's width,

@@ -13,8 +13,8 @@ import {
   LlmModel,
   TranscribeStage,
   TranscriptionSummary,
-} from 'src/transcriber';
-import sharedStyles from '../../jot_view.module.css';
+} from 'src/jot_view/transcribe/transcriber';
+import sharedStyles from '../jot_view.module.css';
 import {
   DropdownButton,
   DropdownSection,

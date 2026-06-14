@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { NotePosition } from 'src/note_position';
+import { NotePosition } from 'src/jot_view/score/note_position';
 
 describe('NotePosition.slotsPerBar', () => {
   it('returns 48 for a 4/4 bar at the default 1/48 grid (12 per quarter)', () => {

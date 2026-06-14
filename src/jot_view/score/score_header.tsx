@@ -1,6 +1,6 @@
 import { observer } from 'mobx-react-lite';
 import { RenderedJot } from 'src/jot';
-import sharedStyles from '../../jot_view.module.css';
+import sharedStyles from '../jot_view.module.css';
 
 /**
  * Read the artist string from wherever a loader plausibly stashed it.

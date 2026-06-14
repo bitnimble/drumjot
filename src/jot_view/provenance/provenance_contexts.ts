@@ -1,5 +1,5 @@
 import React from 'react';
-import { NoteProvenanceEntry } from 'src/debug_zip';
+import { NoteProvenanceEntry } from 'src/jot_view/provenance/debug_zip';
 import { ProvenanceStore } from './provenance_store';
 import { ProvenancePresenter } from './provenance_presenter';
 

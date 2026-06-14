@@ -8,7 +8,7 @@ import {
   transcriber,
   TranscribeProgress,
   TranscribeStage,
-} from 'src/transcriber';
+} from 'src/jot_view/transcribe/transcriber';
 import { transcribeSuccessToastMessage } from '../toasts/toasts_messages';
 import { toastStore } from '../toasts/toasts';
 import { TranscribeStore } from './transcribe_store';

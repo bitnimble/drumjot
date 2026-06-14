@@ -6,7 +6,7 @@ import {
   lyricsStore,
   serializeEnhancedLrc,
 } from 'src/lyrics';
-import { downloadTextFile } from 'src/download';
+import { downloadTextFile } from 'src/utils/download';
 import { DropdownButton, dropdownStyles } from '../components/dropdown';
 import { NumberStepper } from '../components/number_stepper';
 import mixerStyles from '../mixer/mixer.module.css';

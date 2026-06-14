@@ -33,7 +33,7 @@
      the controls breathe inside the default gutter width instead of
      fighting the label for horizontal space. */
     composes: bodySm from '../../typography.module.css';
-    composes: scrollStickyHorizontal from '../../jot_view.module.css';
+    composes: scrollStickyHorizontal from '../jot_view.module.css';
     z-index: 6;
     flex: 0 0 auto;
     width: var(--gutter-width);
@@ -141,7 +141,7 @@
 }
 
 .instrumentRowGutter {
-    composes: scrollStickyHorizontal from '../../jot_view.module.css';
+    composes: scrollStickyHorizontal from '../jot_view.module.css';
     z-index: 6;
     flex: 0 0 auto;
     width: var(--gutter-width);
@@ -327,7 +327,7 @@
      the right (the `.musicTrackContent` child); kept in row layout so
      the handle can `align-self: stretch` to the row's full height for
      a tall hit area. */
-    composes: scrollStickyHorizontal from '../../jot_view.module.css';
+    composes: scrollStickyHorizontal from '../jot_view.module.css';
     z-index: 6;
     flex: 0 0 auto;
     width: var(--gutter-width);
@@ -446,7 +446,7 @@
 }
 
 .musicTrackBarsRow {
-    composes: barsRowBase from '../../jot_view.module.css';
+    composes: barsRowBase from '../jot_view.module.css';
 }
 
 /* One tile in the per-track waveform row. The full waveform is now a
@@ -534,7 +534,7 @@
 }
 
 .barsRow {
-    composes: barsRowBase from '../../jot_view.module.css';
+    composes: barsRowBase from '../jot_view.module.css';
     /* Lift instrument-row bars above any neighbouring audio bars row so a
        note-label popover extending vertically into the row below isn't
        painted under that row's waveform. `barsRowBase` gives both rows

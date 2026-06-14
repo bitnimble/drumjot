@@ -1,5 +1,5 @@
 import { makeAutoObservable, runInAction } from 'mobx';
-import { loadDebugZip, NO_DRUMS_KEY } from 'src/debug_zip';
+import { loadDebugZip, NO_DRUMS_KEY } from 'src/jot_view/provenance/debug_zip';
 import { ExampleJot } from 'src/fakes';
 import { RenderedJot } from 'src/jot';
 import { lyricsStore, parseEnhancedLrc } from 'src/lyrics';
@@ -7,7 +7,7 @@ import { fromMidi } from 'src/midi';
 import { parse, ParseError } from 'src/parser';
 import { AudioTrackId, AudioTrackRole, jotPlayer } from 'src/jot_view/playback';
 import { loadParadbZip } from 'src/rlrr';
-import { titleFromFilename, transcriber } from 'src/transcriber';
+import { titleFromFilename, transcriber } from 'src/jot_view/transcribe/transcriber';
 import { toastStore } from '../toasts/toasts';
 import { DocumentStore } from './document_store';
 import { SettingsPresenter } from '../settings/settings_presenter';

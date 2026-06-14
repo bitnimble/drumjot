@@ -2,7 +2,7 @@ import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { perfProbe } from 'src/perf_probe';
+import { perfProbe } from 'src/utils/perf_probe';
 import { ViewportStoreContext } from '../viewport/viewport_contexts';
 
 /**

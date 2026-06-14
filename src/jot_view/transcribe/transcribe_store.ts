@@ -5,7 +5,7 @@ import {
   LlmModel,
   TranscribeStage,
   TranscriptionSummary,
-} from 'src/transcriber';
+} from 'src/jot_view/transcribe/transcriber';
 
 /** Long-running transcribe indicator. Only the in-flight `uploading`
  *  phase is modelled here; success and failure surface as toasts. */

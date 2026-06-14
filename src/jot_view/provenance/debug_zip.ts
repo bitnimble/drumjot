@@ -25,7 +25,7 @@ import {
   readCentralDirectory,
   ZipEntry,
   zipEntryBasename,
-} from 'src/zip';
+} from 'src/utils/zip';
 
 /**
  * The manifest's `mapping` field. Maps drum pitch letter (e.g. `k`,

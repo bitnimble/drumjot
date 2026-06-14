@@ -15,7 +15,7 @@
  * the resulting `durationSec` / `segments`. A within-bar `(beat) -> sec`
  * lookup uses {@link beatToSecWithinBar}.
  */
-import { BpmTransition, Jot, TempoEvent } from './dsl';
+import { BpmTransition, Jot, TempoEvent } from 'src/dsl';
 
 /** Default tempo when neither tempoEvents nor globalMetadata.bpm is set. */
 export const DEFAULT_BPM = 120;

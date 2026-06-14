@@ -1,6 +1,6 @@
 import { makeAutoObservable, observable } from 'mobx';
 import React from 'react';
-import { Box, Point } from 'src/geom';
+import { Box, Point } from 'src/utils/geom';
 import { StructuralBar, StructuralNote, StructuralVoice } from 'src/jot';
 import { DocumentStore } from 'src/jot_view/document/document_store';
 
