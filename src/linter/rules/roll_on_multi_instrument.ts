@@ -6,8 +6,8 @@
  * "snare + ride" isn't a thing humans can produce. Foot instruments are
  * excluded because they aren't part of the rolling hand pattern.
  */
-import { effectiveLimbCategory } from 'src/instruments';
-import { Element, Modifier } from 'src/dsl';
+import { effectiveLimbCategory } from 'src/instruments/instruments';
+import { Element, Modifier } from 'src/dsl/dsl';
 import { LintDiagnostic } from '../diagnostics';
 import { Rule } from '../rule';
 

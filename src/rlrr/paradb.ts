@@ -28,13 +28,13 @@
  * same physical file referenced twice (e.g. once per array) loads once,
  * but every distinct track in the arrays loads.
  */
-import { Jot } from 'src/dsl';
+import { Jot } from 'src/dsl/dsl';
 import {
   inflateEntry,
   readCentralDirectory,
   ZipEntry,
   zipEntryBasename,
-} from 'src/zip';
+} from 'src/utils/zip';
 import { rlrrToJot, RlrrToJotOptions } from './rlrr_to_jot';
 import { RlrrFile } from './schema';
 

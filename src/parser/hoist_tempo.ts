@@ -22,8 +22,8 @@ import {
   Jot,
   Pattern,
   TempoEvent,
-} from 'src/dsl';
-import { resolveBpm, DEFAULT_BPM } from 'src/tempo';
+} from 'src/dsl/dsl';
+import { resolveBpm, DEFAULT_BPM } from 'src/tempo/tempo';
 
 type BpmField = number | BpmTransition;
 

@@ -19,8 +19,8 @@
  */
 
 import { makeAutoObservable } from 'mobx';
-import { JotTimeline } from 'src/playback';
-import { LYRICS_FALLBACK_COLOR } from 'src/tracks';
+import { JotTimeline } from 'src/jot_view/playback/timeline';
+import { LYRICS_FALLBACK_COLOR } from 'src/tracks/tracks';
 import { LyricLine } from './lrc';
 
 export type LyricsSource = 'lrclib' | 'file' | 'plaintext';
@@ -39,7 +39,7 @@ export type LyricsTrack = {
   readonly sourceLabel: string;
   readonly offsetSec: number;
   /**
-   * Satisfies the unified {@link import('src/tracks').Track} interface.
+   * Satisfies the unified {@link import('src/tracks/tracks').Track} interface.
    * Lyrics rows have no visible per-row colour today; the fixed neutral
    * value here is enough to let downstream code (the picker, future
    * tinting) treat every mixer row uniformly. The overflow menu

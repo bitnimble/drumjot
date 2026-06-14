@@ -5,7 +5,7 @@
  * `custom` instruments skip this rule entirely (their valid-modifier set
  * is null = unrestricted) — that's the point of the catch-all kind.
  */
-import { INSTRUMENT_METADATA, isValidModifier } from 'src/instruments';
+import { INSTRUMENT_METADATA, isValidModifier } from 'src/instruments/instruments';
 import { LintDiagnostic } from '../diagnostics';
 import { Rule } from '../rule';
 

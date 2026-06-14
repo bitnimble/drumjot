@@ -27,9 +27,15 @@
  *       `globalMetadata.rlrr` when present; the Jot's `title` always
  *       overrides `recordingMetadata.title`.
  */
-import { Jot, Volume } from 'src/dsl';
-import { RenderedJot, ResolvedNote, ResolvedTrack } from 'src/jot';
-import { beatToSecWithinBar, buildBarTempos, initialBpm, resolveBpm } from 'src/tempo';
+import { Jot, Volume } from 'src/dsl/dsl';
+import {
+  ACCENT_BOOST,
+  DEFAULT_VELOCITY,
+  GHOST_REDUCTION,
+  VOLUME_TO_VELOCITY,
+} from 'src/dynamics/dynamics';
+import { RenderedJot, ResolvedNote, ResolvedTrack } from 'src/jot/resolved_jot';
+import { beatToSecWithinBar, buildBarTempos, initialBpm, resolveBpm } from 'src/tempo/tempo';
 import {
   CLASS_TO_DRUM,
   describeDrum,
@@ -59,20 +65,14 @@ export type JotToRlrrOptions = {
   audioFileData?: RlrrAudioFileData;
 };
 
+// Velocity defaults come from the shared `src/dynamics.ts` so an accent
+// plays back, exports to MIDI, and exports to RLRR at the same loudness.
+// (Previously `accentBoost` here was 24 while MIDI export used 36.)
 const DEFAULTS: Required<Pick<JotToRlrrOptions, 'defaultVelocity' | 'accentBoost' | 'ghostReduction' | 'authoringTool'>> = {
-  defaultVelocity: 80,
-  accentBoost: 24,
-  ghostReduction: 32,
+  defaultVelocity: DEFAULT_VELOCITY,
+  accentBoost: ACCENT_BOOST,
+  ghostReduction: GHOST_REDUCTION,
   authoringTool: RLRR_AUTHORING_TOOL,
-};
-
-const VOLUME_TO_VELOCITY: Record<Volume, number> = {
-  pp: 16,
-  p: 33,
-  mp: 49,
-  mf: 64,
-  f: 80,
-  ff: 96,
 };
 
 type Sidecar = {

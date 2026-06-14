@@ -1,0 +1,141 @@
+/* Recent-transcriptions popover used both inside the toolbar's Load
+   menu and on the empty-state welcome card. Panel + list styling are
+   shared; the trigger button has two variants:
+     - "cta":  outlined standalone button (empty state)
+     - "menu": flush row inside a parent dropdown panel (Load menu) */
+
+.containerCta {
+    position: relative;
+    display: inline-flex;
+}
+
+.containerMenu {
+    position: relative;
+    display: flex;
+    width: 100%;
+}
+
+/* "cta" trigger: outlined neutral button next to a primary CTA on the
+   empty state. Composes `sizeLg` so the action row's two buttons
+   line up at the same height. */
+.triggerCta {
+    composes: secondary sizeLg from '../components/button.module.css';
+    justify-content: space-between;
+    gap: 8px;
+}
+
+/* "menu" trigger: flush row inside a DropdownButton panel. Same
+   ghost-row treatment as `.dropdownItem` so it visually nests with the
+   rows above and below it. */
+.triggerMenu {
+    composes: ghost from '../components/button.module.css';
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+}
+
+/* SVG icons render with inline baseline by default; even inside a flex
+   container with align-items: center, the implicit text descender room
+   pushes them visibly low. `display: block` makes them ride the flex
+   centerline cleanly. */
+.icon {
+    display: block;
+}
+
+/* Submenu-arrow tint: matches the existing .submenuArrow look so the
+   menu-variant trigger doesn't stand out against neighbouring rows. */
+.iconMuted {
+    composes: icon;
+    color: var(--color-text-muted-alt);
+}
+
+.panel {
+    composes: popoverPanel from '../components/dropdown.module.css';
+    position: absolute;
+    z-index: 40;
+    gap: 4px;
+    min-width: 240px;
+    max-width: 320px;
+    text-align: left;
+}
+
+/* CTA variant drops the panel directly below the trigger button. */
+.panelCta {
+    composes: panel;
+    top: calc(100% + 6px);
+    left: 0;
+}
+
+/* Menu variant nests inside a parent dropdown panel, so we slide the
+   panel out to the right to avoid overlapping the rows below the
+   trigger; mirrors the prior Recent-submenu placement. */
+.panelMenu {
+    composes: panel;
+    top: 0;
+    left: calc(100% + 6px);
+}
+
+.header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0 4px 4px;
+    border-bottom: 1px solid var(--color-border-soft);
+    margin-bottom: 4px;
+}
+
+.title {
+    composes: metaLabel from '../../typography.module.css';
+    color: var(--color-text-faint-strong);
+}
+
+.refresh {
+    /* Compose the chrome-only `.iconBox` (border + radius + hover)
+       rather than `.secondary`. `.secondary` bakes in a 5px 12px
+       padding that Vite emits AFTER any consumer override, which
+       would crush the 22x22 box's content area to 0 and clip the
+       refresh icon. */
+    composes: iconBox from '../components/icon_button.module.css';
+    width: 22px;
+    height: 22px;
+    color: var(--color-text-muted);
+}
+
+.refresh:hover:not(:disabled) {
+    color: var(--color-text);
+}
+
+.refresh:disabled {
+    color: var(--color-text-disabled);
+    cursor: progress;
+}
+
+.item {
+    composes: ghost from '../components/button.module.css';
+    /* Long filenames are common; ellipsis keeps rows on one line so the
+       panel doesn't stretch to fit the longest entry. The full label
+       remains available via the title tooltip. */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.loading {
+    composes: bodySm from '../../typography.module.css';
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    color: var(--color-text-muted-alt);
+}
+
+.empty {
+    composes: bodySm from '../../typography.module.css';
+    padding: 8px 10px;
+    color: var(--color-text-faint-strong);
+}
+
+.spinner {
+    composes: statusPillSpinner from '../toolbar/toolbar.module.css';
+}

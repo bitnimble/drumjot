@@ -41,12 +41,21 @@ request, and pull in the linked docs when a task touches that area.
   `scripts/check-ts` (tsc + unit + lint) does **not** exercise real
   browser behaviour, so it can't catch a broken interaction, selector, or
   render. E2E specs live next to the feature they cover, at
-  **`src/<feature>/tests/*.e2e.ts`** (shared fixtures in `tests/fixtures/`).
+  **`src/<feature>/test/*.e2e.ts`** (shared fixtures in repo-root `tests/fixtures/`).
   The specs are coupled to the UI (toolbar menu structure, `data-testid`s,
   the ⋯ overflow): if your change moves or renames those, **update the
   affected specs in the same change** and rerun, don't leave them red.
   Needs the one-time Playwright setup (`bunx playwright install chromium`
   + `sudo bunx playwright install-deps chromium`).
+  - **Two Playwright projects** (`playwright.config.ts`): `functional`
+    (everything, fully parallel) and `perf` (the 120fps `perf.e2e.ts`).
+    `perf` `dependencies: ['functional']` so it runs **after** functional
+    finishes with the worker pool free, its per-frame medians are
+    contention-sensitive, so it must not race the parallel functional
+    workers. So `bun run e2e` gives a clean 26/26 in one shot. Iterate on
+    perf alone with **`bun run e2e:perf`** (`--project=perf --no-deps`).
+    Caveat: a functional failure skips the dependent `perf` project; fix
+    functional first (or use `e2e:perf`).
 - **No naked color literals in CSS modules**, `bun run lint:design`
   fails on hex / `rgb()`/`rgba()`/`hsl()`/`hsla()` in `src/**/*.css`
   outside `src/design_tokens.css`. Typography goes through `composes:`
@@ -66,6 +75,57 @@ request, and pull in the linked docs when a task touches that area.
   `python3`. **Don't install/upgrade deps unprompted**, install ordering
   is fragile; flag dep changes and let the user run them.
 - **Don't read skill files with Read**, use the `Skill` tool.
+- **Prefer built-in tools over ad-hoc bash.** Reach for `Read` / `Edit` /
+  `Write` for files, the `LSP` tool for symbol-level questions
+  (definition / references / hover), and the `Skill` tool for skills, before shelling out. Avoid ad-hoc shell scripting (`echo`/`printf`/`cat`/
+  `sed`/`grep`/`find`/`for`-loops); the permission hook denies many of
+  them outright and trips a confirmation on multi-line inline code. When
+  you genuinely need a text search, a single clean `git grep` is fine, but
+  default to the dedicated tools and the project's `scripts/*` wrappers.
+
+### Frontend store / presenter / component architecture
+
+The frontend follows a strict three-layer split (the former monolithic
+`JotViewStore` was carved into per-domain data stores + presenters). Code
+is grouped by **feature folder** under `src/jot_view/<feature>/`, each
+folder holds that domain's `<feature>_store.ts` + `<feature>_presenter.ts`
++ its view `.tsx`/`.css` (e.g. `mixer/`, `playback/`, `lyrics/`,
+`viewport/`, `transcribe/`, …). Shared UI primitives live in
+`components/`, truly-shared helpers in `utils/`, and the cross-cutting
+context registry + re-export barrel stay at `contexts.ts` / `store.ts`.
+When adding or moving frontend state/logic, follow it:
+
+- **Stores = data only.** A store holds MobX `observable`s and
+  `computed`s and nothing else: no actions, no setters/toggles, no
+  clamping, no reactions, no `AbortController`s, no orchestration. Simple
+  read accessors that just reshape store data are fine (a memoised lazy
+  cache like `getInstrumentTrack` is a deliberate exception). Red/green
+  flag: **stores have only observables + computeds; presenters may have
+  reactions, autoruns, computeds, local observables, and actions.**
+- **Presenters mutate stores.** Every mutation lives on a presenter, down to trivial `setX`/`toggleX`/clamp, plus all `reaction`/`autorun`,
+  cross-store orchestration, and non-view bookkeeping (the in-flight
+  `AbortController`s, etc.). Presenters are the only writers.
+- **Components bind presenter methods to UI callbacks and derive store
+  state into JSX.** They read stores (via per-store React contexts or
+  props) and call `presenter.X` for actions.
+- **No single top-level store.** Construct the peer stores where the view
+  is created and pass each down independently (`viewportStore.foo`,
+  `mixerStore.foo`), never through one aggregate `store`.
+- **Acyclic dependencies.** A store may take a one-way reference to a
+  peer it reads (e.g. most stores read `DocumentStore.currentJot`); the
+  presenter depends on all stores; no store depends on a presenter. If two
+  stores would form a cycle, extract the shared state into a third store
+  both depend on.
+- **Why:** this lets business logic be unit-tested against mocked stores,
+  and components be rendered (tests / Storybook) with mocked stores +
+  presenter, each concern swappable in isolation.
+- **Per-domain presenters.** Each presenter owns one store + the
+  cross-cutting orchestration for its domain (`settings`, `viewport`,
+  `mixer`, `playback`, `provenance`, `lyrics`, `document`, `transcribe`).
+  Where an action spans domains, the owning presenter calls a sibling
+  presenter rather than writing the sibling's store directly, keeping the
+  single-writer rule intact. The dependency graph stays acyclic
+  (leaf presenters → `DocumentPresenter` → `TranscribePresenter`).
 
 ### Workflow
 
@@ -86,7 +146,7 @@ Frontend (`bun`, repo root):
 | `bun run e2e` | Playwright suite (auto-spawns dev server). See below. |
 
 `bun test` is scoped to `src/` via `bunfig.toml` and matches `*.test.ts`
-unit files; Playwright covers the co-located `src/**/tests/*.e2e.ts`
+unit files; Playwright covers the co-located `src/**/test/*.e2e.ts`
 specs (the distinct `.e2e.ts` suffix keeps the two runners from
 overlapping, see `bunfig.toml`). Go through `scripts/check-ts` for the
 post-change loop.

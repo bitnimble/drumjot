@@ -26,11 +26,11 @@ const E2E_URL = `http://localhost:${E2E_PORT}`;
  *
  * Unit tests stay on `bun test` (scoped to `src/` via bunfig.toml, which
  * matches `*.test.ts`); this runner only owns the co-located
- * `src/<feature>/tests/*.e2e.ts` specs.
+ * `src/<feature>/test/*.e2e.ts` specs.
  */
 export default defineConfig({
   // E2E specs are co-located with the feature they cover, under
-  // `src/<feature>/tests/*.e2e.ts`. The `.e2e.ts` suffix (not `.spec.ts`)
+  // `src/<feature>/test/*.e2e.ts`. The `.e2e.ts` suffix (not `.spec.ts`)
   // keeps them out of `bun test`'s auto-discovery, which matches
   // `.test.ts` / `.spec.ts` and has no ignore config, while `testMatch`
   // here keeps Playwright off the `.test.ts` unit tests living alongside.
@@ -50,13 +50,32 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   projects: [
+    // Functional specs: everything except the per-frame perf suite, run
+    // fully in parallel across the worker pool.
     {
-      name: 'chromium',
+      name: 'functional',
+      testIgnore: '**/perf.e2e.ts',
       use: {
         ...devices['Desktop Chrome'],
-        launchOptions: {
-          args: ['--no-sandbox'],
-        },
+        launchOptions: { args: ['--no-sandbox'] },
+      },
+    },
+    // Perf specs measure per-frame timing against a tight 120fps budget, so
+    // they must NOT run alongside the parallel functional workers, their
+    // CPU contention inflates the medians and flakes the budget. `dependencies`
+    // makes this project run only AFTER `functional` completes, with the pool
+    // free; the specs are already `mode: 'serial'` within the file, and
+    // `fullyParallel: false` keeps them on a single worker. (Caveat: if a
+    // functional spec fails, Playwright skips this dependent project, fix
+    // functional first, or run `bun run e2e:perf` to measure in isolation.)
+    {
+      name: 'perf',
+      testMatch: '**/perf.e2e.ts',
+      fullyParallel: false,
+      dependencies: ['functional'],
+      use: {
+        ...devices['Desktop Chrome'],
+        launchOptions: { args: ['--no-sandbox'] },
       },
     },
   ],

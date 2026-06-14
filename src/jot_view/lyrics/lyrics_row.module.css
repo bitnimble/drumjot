@@ -1,0 +1,431 @@
+/* Time-aligned lyrics row in the unified mixer. Geometry mirrors
+   `mixer.module.css::musicTrack` (sticky gutter, bars-row width driven
+   by --voice-beats × --px-per-beat) so the row aligns flush with audio
+   tracks and instrument rows above/below. */
+
+.lyricsRow {
+    position: relative;
+    display: flex;
+    min-width: max-content;
+    border-top: 1px solid var(--color-border);
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-bg-cream);
+}
+
+.lyricsGutter {
+    composes: scrollStickyHorizontal from '../jot_view.module.css';
+    z-index: 6;
+    flex: 0 0 auto;
+    width: var(--gutter-width);
+    box-sizing: border-box;
+    border-right: 1px solid var(--color-border);
+    background: var(--color-bg-cream);
+    padding: 4px 6px;
+    display: flex;
+    align-items: stretch;
+    gap: 4px;
+}
+
+.dragHandle {
+    composes: mixerDragHandle from '../mixer/mixer.module.css';
+}
+
+.lyricsContent {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+/* Top row mirrors the audio-track row's `musicTrackHeader`: label on the
+   left, overflow trigger on the right so the chrome reads identically
+   across both row types. */
+.lyricsHeader {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 6px;
+    min-width: 0;
+}
+
+.lyricsLabel {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    overflow: hidden;
+    min-width: 0;
+}
+
+.lyricsTitle {
+    composes: label from '../../typography.module.css';
+    color: var(--color-text-muted-alt);
+}
+
+.lyricsSourceRow {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+
+.lyricsSource {
+    composes: subtle from '../../typography.module.css';
+    color: var(--color-text-disabled);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+}
+
+/* Per-row spinner shown while a Whisper align job is in flight for this
+   track. Visually small (matches the toolbar busy pill's spinner size)
+   and uses currentColor so it picks up the muted source-label color
+   automatically. The `role="status"` is on the JSX side; this is purely
+   the visual. */
+.lyricsAlignSpinner {
+    composes: spinner from '../components/spinner.module.css';
+    flex: 0 0 auto;
+    width: 10px;
+    height: 10px;
+    border-width: 1.5px;
+    border-color: var(--color-text-disabled);
+    border-top-color: transparent;
+}
+
+/* Inline stepper row used inside the lyrics overflow menu. Mirrors
+   `toolbar.module.css::dropdownStepperRow`: a label-left, control-right
+   menu item that stays inert on click (the stepper inside owns
+   interaction) so the panel doesn't close while the user nudges the
+   value. */
+.offsetStepperRow {
+    composes: bodyMd from '../../typography.module.css';
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 12px;
+    color: var(--color-text-secondary);
+    cursor: default;
+}
+
+.offsetStepperControl {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.offsetStepperUnit {
+    composes: readout from '../../typography.module.css';
+    color: var(--color-text-muted-alt);
+}
+
+.lyricsBarsRow {
+    composes: barsRowBase from '../jot_view.module.css';
+    /* Lyrics rows keep a SCOPED `--px-per-beat`: the score-wide inherited
+       one was removed (zoom now drives per-row width + percentage
+       geometry), but the lyric chips' zoom-responsive font metrics
+       (letter-spacing / wdth / wght below) and the word-cell `left` /
+       `width` can't be expressed as percentages, so `setBarsRowVars`
+       (jot_view.tsx) writes `--px-per-beat` on this element only. The
+       cascade is confined to this row's (windowed) chips. `--note-pad-px`
+       (the engraving inset other rows now express as a percentage) is
+       rebuilt here from that scoped value; `--note-pad-beats` inherits
+       from the score container (zoom-invariant). */
+    --note-pad-px: calc(var(--note-pad-beats) * var(--px-per-beat) * 1px);
+    /* Furigana annotation font size, shared by the `rt` rule and the
+       plain-word reserve (`.lyricsBarsRowFurigana`) so the rt's line box
+       and the reserved strip stay in lockstep. 0.65em of the 22px base =
+       14.3px. Keep in lockstep with lyrics_measure.ts::RT_FONT_SIZE_PX. */
+    --lyric-rt-size: 0.65em;
+    /* Tighten glyph tracking as zoom drops so lyric text packs into the
+       narrower per-beat budget. Ramps from 0 at px-per-beat ≥ 224 to
+       -0.7px around px-per-beat ≈ 45 (≈40% zoom at density 1). Max
+       spread is reached around 200% zoom (pxPerBeat = 224 at density 1).
+       Inherits down to both `.lyricLine` (LRC mode) and `.lyricWordText`
+       (word-aligned mode). */
+    /* stylelint-disable-next-line property-disallowed-list -- zoom-driven dynamic tracking, not a static use case. */
+    letter-spacing: clamp(-0.7px, calc((var(--px-per-beat) - 224) * 0.7 / 179 * 1px), 0px);
+    /* Pair the tracking ramp with Bricolage Grotesque's variable axes:
+       at px-per-beat ≥ 224 (≈200% zoom at density 1) use the
+       120-width / 600-weight, ramping linearly down to 75-width /
+       300-weight around px-per-beat ≈ 80 (≈75% zoom at density 1).
+       Exposed as CSS vars so `.lyricWordActive .lyricWordText` can
+       override just the wght axis below; `font-variation-settings`
+       inherits its computed value (vars already substituted), so the
+       active rule has to re-declare the whole property for its
+       `--lyric-wght` override to take effect.
+
+       Keep in lockstep with lyrics_measure.ts (computeWdth /
+       computeWght / computeLetterSpacingPx); the canvas measurer
+       reproduces these formulas to predict word widths off the DOM. */
+    --lyric-wdth: clamp(75, calc(75 + (var(--px-per-beat) - 80) * 25 / 179), 120);
+    --lyric-wght: clamp(300, calc(300 + (var(--px-per-beat) - 80) * 100 / 179), 600);
+    font-variation-settings:
+        'wdth' var(--lyric-wdth),
+        'wght' var(--lyric-wght);
+}
+
+/* Shared base for both LRC-mode line chips (`.lyricLine`) and word-
+   aligned word chips (`.lyricWord`): the absolute-positioned anchor,
+   pill radius, default color, and active-state transition. Geometry
+   (left / width / max-width) and any container-specific layout
+   (flex vs ellipsis) live on the consumer. Kept here as the single
+   source of truth so the two chip variants can't visually drift. */
+.lyricChipBase {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    border-radius: var(--radius-md);
+    color: var(--color-text-strong);
+    white-space: nowrap;
+    transition:
+        background-color 100ms ease-in-out,
+        color 100ms ease-in-out;
+}
+
+/* Shared active state. `.lyricLineActive` and `.lyricWordActive` both
+   compose from this so the highlight color/background can't drift
+   between modes. */
+.lyricChipActive {
+    background: var(--color-bg-base);
+    color: var(--color-accent);
+}
+
+/* One lyric line, absolutely positioned at its beat offset. Reads the
+   same --px-per-beat root variable every other beat-anchored element
+   uses, so zoom is purely CSS. The max-width is calc'd from the next
+   line's start beat (--lyric-end-beat) so adjacent lines don't visually
+   collide at low zoom; long text ellipsises with a tooltip carrying the
+   full string (set via the React `title` attr).
+
+   In LRC mode the line *is* the active unit (no words), so the chip
+   mirrors `.lyricWord` styling via `.lyricChipBase` + `.lyricChipActive`:
+   transparent by default, lighting up to the same accent + bg-base
+   background when active. */
+.lyricLine {
+    composes: lyricChipBase;
+    left: calc(var(--lyric-start-beat) * var(--px-per-beat) * 1px + var(--note-pad-px));
+    max-width: calc(
+        (var(--lyric-end-beat) - var(--lyric-start-beat)) * var(--px-per-beat) * 1px - 4px
+    );
+    padding: 6px 12px;
+    /* stylelint-disable-next-line property-disallowed-list -- lyric chips run at a one-off 22px so the karaoke text reads larger than UI body copy. */
+    font-size: 22px;
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    user-select: text;
+    pointer-events: auto;
+}
+
+/* Variant for word-aligned lines: the chip stretches from the first
+   word's beat to the last word's beat (driven by --lyric-end-beat).
+   Words inside are absolutely positioned at their own beats, so the
+   chip acts as a positioning context; `overflow: visible` lets the
+   final word's text extend past the right edge when its display width
+   outruns the gap to the next line. The container's own text rules
+   (white-space, ellipsis) are irrelevant in this mode since the children
+   carry the text.
+
+   Background is forced transparent (even when `.lyricLineActive` is
+   added) so it doesn't double up with the active word's own bg-base
+   highlight. The active *word* is the visible signal in this mode. */
+.lyricLineWordAligned {
+    overflow: visible;
+    max-width: none;
+    padding: 0;
+    background: transparent;
+}
+
+.lyricLineActive {
+    composes: lyricChipActive;
+}
+
+/* Word-level cell inside a word-aligned line. Each word occupies a
+   fixed-width box anchored to its forced-alignment timing: the left
+   edge sits at the word's start beat, the right edge at its end beat.
+   The cell is a flex container with two children: the inner
+   `.lyricWordText` span (natural width, left-aligned) and a `::after`
+   pseudo that fills any remaining space with a thin trailing rule, so
+   sustained words read as held bars while quick consecutive syllables
+   (where text + padding consumes the entire cell) show no rule.
+
+   `--lyric-word-beat-offset` and `--lyric-word-beat-width` come from
+   React; the row's --px-per-beat root var scales them with zoom.
+   `--lyric-word-shift` is a JS-applied per-word px offset (see the
+   layout effect in lyrics_row.tsx) that handles glyph-level collisions
+   when two start times are close enough that the previous word's text
+   would overlap. The shift is added to `left` AND subtracted from
+   `width`, so the right edge stays anchored to the word's end time -
+   shifted cells shrink rather than slide. `max(0px, ...)` clamps so a
+   heavy shift (text wider than the duration cell) can't yield a
+   negative width. */
+.lyricWord {
+    composes: lyricChipBase;
+    /* The wrapper extends `--lyric-word-pad-left` past the glyph's left
+       edge so the active-word background has breathing room before the
+       text starts. The text inside (`.lyricWordText`) re-adds the same
+       padding so its first glyph still lands on the beat anchor; i.e.
+       the padding is absorbed into the wrapper, not into the text. */
+    --lyric-word-pad-left: 6px;
+    left: calc(
+        var(--lyric-word-beat-offset) * var(--px-per-beat) * 1px + var(--lyric-word-shift, 0px) -
+            var(--lyric-word-pad-left)
+    );
+    width: max(
+        0px,
+        calc(
+            var(--lyric-word-beat-width) * var(--px-per-beat) * 1px - var(--lyric-word-shift, 0px) +
+                var(--lyric-word-pad-left)
+        )
+    );
+    /* At low zoom the beat-derived width can fall below the text's
+       natural width and the active-state background no longer bounds
+       the glyphs. Growing the cell to at least the text's intrinsic
+       width keeps the highlight wrapping the word. The trailing rule
+       (`::after`, `flex: 1 1 0; min-width: 0`) collapses to invisible
+       when there is no slack, so high-zoom behavior is unchanged. */
+    min-width: max-content;
+    display: flex;
+    align-items: center;
+    /* Higher than .lyricWordActive (which clears z-index) so adjacent
+       inactive words' glyphs paint over an overflowing active chip
+       rather than the other way around (preventing the active chip
+       from visually swallowing close neighbors like a Japanese sokuon). */
+    z-index: 1;
+}
+
+/* Text glyphs of the word. Natural-width flex child so the
+   `::after` rule can claim the leftover space. The vertical padding
+   sizes the active chip's box; horizontal padding matches between
+   states so the text's left edge is stable across the active toggle
+   (no x-shift when a word lights up). `padding-right` is the
+   threshold for the trailing rule: the `::after`'s `min-width: 0`
+   collapses it to invisible whenever the cell width is consumed by
+   text + this padding, so quick syllables get no rule and sustained
+   words get one once there's >12px of slack. */
+.lyricWordText {
+    flex: 0 0 auto;
+    color: inherit;
+    padding: 6px 12px 6px var(--lyric-word-pad-left);
+    transition:
+        color 100ms ease-in-out,
+        font-variation-settings 100ms ease-in-out;
+}
+
+/* Furigana mode: at least one word in the track carries a hiragana reading
+   (toggled from lyrics_row.tsx). Native <ruby> places its reading in the
+   line's leading and only grows the line box if the leading can't contain
+   it - so with a normal line-height the annotated words get taller than the
+   plain ones beside them and their kanji drop off the shared baseline. Open
+   up the line box (a tall line-height) so the reading always fits in the
+   leading: every word - ruby or plain - then keeps the same box height and
+   the same baseline, and because the base glyphs sit centred in that box,
+   the trailing duration rule (centred too) lands on the base's optical
+   centre rather than floating up with the furigana. 2.2 leaves the reading
+   room at the 22px base while keeping the box inside the 64px row. Applies
+   to both the inline LRC line and the word-aligned children. */
+.lyricsBarsRowFurigana .lyricLine,
+.lyricsBarsRowFurigana .lyricWordText {
+    line-height: 2.2;
+}
+
+/* Furigana ruby. Kanji runs in Japanese lyrics carry a hiragana reading
+   stacked above them via the native <ruby>/<rt> element (see
+   lyrics_row.tsx::WordText). The base run inherits the row's variable-font
+   axes; the annotation column is fixed and small. */
+.ruby {
+    ruby-position: over;
+    ruby-align: center;
+}
+
+.lyricWordText rt {
+    /* 0.65em of the 22px base = 14.3px (shared var). Keep in lockstep with
+       lyrics_measure.ts::RT_FONT_SIZE_PX. */
+    /* stylelint-disable-next-line property-disallowed-list -- furigana ruby is a one-off annotation sized relative to the chip's one-off base. */
+    font-size: var(--lyric-rt-size);
+    line-height: 1;
+    /* Reset the variable axes off the row's zoom-driven wght/wdth so the
+       reading stays a steady, legible hairline. wght 400 also resets wdth
+       to the font's 100 default (font-variation-settings is all-or-
+       nothing); the measurer mirrors this (RT_FONT_WEIGHT / RT_WDTH). */
+    font-variation-settings: 'wght' 400;
+    /* stylelint-disable-next-line property-disallowed-list -- furigana reading opts out of the row's zoom-driven tracking ramp. */
+    letter-spacing: normal;
+    color: inherit;
+    user-select: none;
+}
+
+/* Trailing rule that fills the cell's slack space. `flex: 1 1 0` plus
+   `min-width: 0` lets it shrink to nothing when the text consumes the
+   cell, and grow to fill arbitrary slack on sustained words. The
+   `margin-right: 4px` leaves breathing room so a long-held final word
+   doesn't visually kiss the next line's first word. `currentColor` so
+   the rule picks up the active-state accent automatically when the
+   word lights up. */
+.lyricWord::after {
+    content: '';
+    flex: 1 1 0;
+    min-width: 0;
+    height: 1.5px;
+    background: currentColor;
+    opacity: 0.35;
+    border-radius: 1px;
+    margin-right: 4px;
+}
+
+/* Active-word state. The background + accent color sit on the outer
+   wrapper so the trailing dash is enclosed by the chip (the rule
+   visually extends the active highlight across the word's sustain).
+   `color` cascades to both `.lyricWordText` and the `::after`'s
+   `currentColor`, so text and dash light up together. The wrapper
+   drops below neighbors in z-order so adjacent words' glyphs paint
+   over an overflowing active chip rather than the other way around. */
+.lyricWordActive {
+    composes: lyricChipActive;
+    z-index: 0;
+}
+
+.lyricWordActive .lyricWordText {
+    /* Override just the wght axis; re-declare font-variation-settings
+       so the cascade picks up this rule's --lyric-wght. Reads the same
+       --lyric-wdth that the row sets so the active word stays in step
+       with the zoom-driven width ramp.
+
+       Keep in lockstep with lyrics_measure.ts (ACTIVE_FONT_WEIGHT);
+       the canvas measurer uses the same value to predict active-word
+       widths for the collision pass. */
+    --lyric-wght: 800;
+    font-variation-settings:
+        'wdth' var(--lyric-wdth),
+        'wght' var(--lyric-wght);
+}
+
+/* Group/drag/drop affordances; same visual language as mixer.module.css
+   so the lyrics row participates in the same drag-and-drop UX. */
+.mixerRowGroupStart {
+    margin-top: 12px;
+}
+
+.mixerRowInGroup.mixerRowGroupStart {
+    border-top-width: 2px;
+}
+
+.mixerRowInGroup.mixerRowGroupEnd {
+    border-bottom-width: 2px;
+}
+
+.mixerRowDragging {
+    opacity: 0.4;
+}
+
+.mixerDropIndicatorAbove {
+    box-shadow: inset 0 2px 0 0 var(--color-accent-strong);
+}
+
+.mixerDropIndicatorBelow {
+    box-shadow: inset 0 -2px 0 0 var(--color-accent-strong);
+}

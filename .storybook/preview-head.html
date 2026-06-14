@@ -1,0 +1,27 @@
+<!-- Mirror the product font from the app's index.html so stories render in
+     Bricolage Grotesque (otherwise IconButton glyphs / labels, etc. fall
+     back to a system font and look wrong). Storybook injects this file into
+     the preview iframe's <head>. The :root design tokens come from
+     design_tokens.css (imported in preview.tsx); the body font-family lives
+     in the app's index.html <style>, so it has to be replicated here too.
+     Body bg/text read the color tokens so the canvas tracks the Theme
+     toolbar toggle (which sets data-theme on <html>; see preview.tsx). -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  rel="stylesheet"
+  href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,200..800&display=swap"
+/>
+<style>
+  body {
+    font-family:
+      'Bricolage Grotesque',
+      system-ui,
+      -apple-system,
+      'Segoe UI',
+      Roboto,
+      sans-serif;
+    background: var(--color-bg-base);
+    color: var(--color-text);
+  }
+</style>

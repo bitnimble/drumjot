@@ -12,18 +12,22 @@
 - Add test map + regression tests
 
 ## Refactoring
-- fix audioTrack.pitch - it shouldn't exist, it should be computed from the track group instead?
-- refactor StructuralTrack type and co to share same source of truth as RenderedJot (or vice versa), using type unions or Omit
+- [DONE] fix audioTrack.pitch - now a computed derived from the mixer group (own `_pitchOverride` only as tiebreaker/solo-fallback; detach bakes in on drag-out). Shared `groupInstrumentPitches` helper in tracks.ts.
+- [DONE] StructuralTrack type and co now share one source of truth with RenderedJot: each `Resolved*` extends its `Structural*` via `&` / `Omit` (no duplicated base fields).
 - refactor sweep all code to split out more, be less monolithic:
-  - split out files even more by feature/domain/etc. for example, viewport (consisting of the bounds of the viewport, converters between coordinate systems like pixels to beats, DPI awareness, etc) should probably be its own store and presenter.
-  - if each feature has multiple files, group them into a folder. it's okay if each folder only has three files (store + presenter + tsx).
-  - pull out business logic / pure logic stuff into a foo_presenter.ts file. Keep the *.tsx file scoped to (a) instantiation (b) React stuff (hooks, events, callbacks, VDOM+JSX) and (c) wiring between stores, presenters, and React.
-  - pull out component state into stores that the presenter acts over
+  (progress + flagged items: docs/refactor-sweep-notes.md)
+  - [DONE] split out files even more by feature/domain/etc., per-concern data stores + per-domain presenters (settings/viewport/mixer/playback/provenance/lyrics/document/transcribe).
+  - [DONE] if each feature has multiple files, group them into a folder (store + presenter + tsx). All jot_view features are now `src/jot_view/<feature>/`.
+    - [DONE] move `DebugPanel` out of `toolbar.tsx` into the `provenance/` feature.
+    - [DONE] break up the large `score.tsx`: 2825 to 123 lines, split into 6 files (note_provenance_details, bar_view, popover_portal, timeline_header, filtered_onset_view + the score.tsx leaf), each verified against the perf e2e gate (E2E_DEBUG_BUNDLE; 120fps specs green).
+    - [DONE] split the central `contexts.ts` and deleted it: every React context now lives next to its type/store. Feature-routing → `<feature>/<feature>_contexts.ts` (mixer/viewport/lyrics/provenance/playback); SelectionContext → `src/selection`; RenderedJot+BarTimings → `document/document_contexts`; GridLineSettings → `settings/settings_contexts`; UniformWaveforms → `mixer/mixer_contexts`. All consumers repointed.
+  - [PARTIAL] pull out business logic / pure logic into a presenter/util file; keep .tsx scoped to instantiation + React + wiring. Done: playback (playhead + label logic), lyrics (beat-positioning), score (2825→123, 6 files), mixer (1605→201: just MixerView; rows + leaves split into overflow_menus/gutter_controls/mixer_drag/mixer_controls/instrument_row/audio_track_row/waveform_chunks/use_live_px_per_beat, + reorderTrackOrder→tracks.ts w/ tests). Remaining: toolbar (leaf pieces), minimap (canvas helpers). All perf-gated.
+  - [PARTIAL] pull out component state into stores that the presenter acts over (only *persistable* state; transient UI state stays React-local). Domain state already lives in stores from the store carve-up.
   - react rendering is now based on the component store state
-  - once logic has been moved into presenter files, unit tests can now directly test logic without needing to mock React components.
-  - with component state moved out into stores, we can also now mock data and render the component with less depenedencies required, e.g. in a Storybook or visual diff (don't actually implement Storybook or visual diffing, that's just an example)
-  - move helper files, functions, and classes into a utils/ directory
-  - explore all the code to see if there's anything that's duplicated unnecessarily, especially focusing on data structures that may get out of sync. if something is duplicated it is not necessarily bad - it's only bad if they can "get out of sync". i.e. if one implementation changes but not the other, would it lead to a product bug or regression? if so, they should share the same source of truth or implementation.
+  - [PARTIAL] once logic has been moved into presenter files, unit tests can directly test logic without mocking React. (Added playhead_label.test.ts; dedicated test-simplification pass not done.)
+  - [DONE] mock data + render components in isolation: Storybook 9 set up. Stories: all primitives; major components, PlaybackBar (real store+presenter), InstrumentRow / note-track row (real Document/Mixer/Viewport stores, verified rendering in headless Chromium), toolbar busy pills + ThemeSection; jot-loader library sandbox. Remaining (optional, noted in refactor-sweep-notes.md): AudioTrackRow (needs an audio-buffer fixture), full MixerView, File/Transcribe dropdowns.
+  - [PARTIAL] move helper files, functions, and classes into a utils/ directory. `windowing` → `jot_view/utils/`; feature-specific helpers placed with their primary consumer per agreed rule.
+  - [DONE] explore all the code for unnecessary duplication, esp. state that can drift out of sync. Audited; findings + one architectural flag (section-audibility mirror) in docs/refactor-sweep-notes.md. No unsafe drift-prone duplication found beyond pre-listed items.
 - prepare for editing support. review all presenters and stores for any state management issues that may arise from editing.
 
 

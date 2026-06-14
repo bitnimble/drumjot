@@ -7,13 +7,13 @@
  * resolved notes with their effective instrument kinds and source ranges,
  * etc.) so individual rules don't repeat the AST walk.
  */
-import { Bar, Element, Group, Jot, Modifier, Note, SourceRange, Voice } from 'src/dsl';
+import { Bar, Element, Group, Jot, Modifier, Note, SourceRange, Voice } from 'src/dsl/dsl';
 import {
   DrumInstrumentKind,
   LimbCategory,
   defaultKindForPitch,
   effectiveLimbCategory,
-} from 'src/instruments';
+} from 'src/instruments/instruments';
 import { LintDiagnostic, LintKind, LintSeverity } from './diagnostics';
 
 export type RuleSeverityConfig = {

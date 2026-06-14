@@ -67,8 +67,9 @@ import {
   Simultaneity,
   TempoEvent,
   TimeSignature,
-} from 'src/dsl';
-import { defaultKindForPitch } from 'src/instruments';
+} from 'src/dsl/dsl';
+import { ACCENT_THRESHOLD, GHOST_THRESHOLD } from 'src/dynamics/dynamics';
+import { defaultKindForPitch } from 'src/instruments/instruments';
 import {
   GENERIC_INSTRUMENT_NAME_BY_PITCH,
   GM_PERCUSSION,
@@ -102,8 +103,10 @@ export type FromMidiOptions = {
 const DEFAULTS: Required<FromMidiOptions> = {
   drumChannel: 10,
   gridDivision: 48,
-  accentThreshold: 100,
-  ghostThreshold: 40,
+  // Paired with ACCENT_BOOST / GHOST_REDUCTION in `src/dynamics.ts` so the
+  // export boost and this import threshold can't drift apart.
+  accentThreshold: ACCENT_THRESHOLD,
+  ghostThreshold: GHOST_THRESHOLD,
   offsetToleranceMs: 5,
 };
 
