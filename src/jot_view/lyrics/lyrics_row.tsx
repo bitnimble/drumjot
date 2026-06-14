@@ -12,6 +12,7 @@ import {
 import { jotPlayer } from 'src/playback';
 import { LyricsPresenterContext, LyricsAlignStoreContext } from '../contexts';
 import { GutterResizeHandle } from '../components/gutter_resize_handle';
+import { MixerRowDragProps, useMixerRowDropTarget } from '../mixer/mixer_drag';
 import {
   LyricLineMeasureInput,
   computeLyricShifts,
@@ -29,23 +30,6 @@ import { barsRowWidthSeed } from '../utils/windowing';
  *  karaoke text plus the furigana strip stacked above it. Rows stack
  *  independently, so a taller lyrics row doesn't disturb the others. */
 const LYRICS_ROW_HEIGHT = 64;
-
-/** Common drag/drop props passed to every mixer row. Subset of MixerRowDragProps
- *  from mixer.tsx; we re-declare here to avoid a circular import.
- *  See mixer.tsx::MixerRowDragProps for the canonical doc. */
-type LyricsRowDragProps = {
-  idx: number;
-  dragFromIdx: number | undefined;
-  dropTargetIdx: number | undefined;
-  onDragStartIdx: (i: number) => void;
-  onDropTargetIdx: (i: number | undefined) => void;
-  onMoveTrack: (from: number, to: number) => void;
-  onResetDrag: () => void;
-  groupStart: boolean;
-  groupEnd: boolean;
-  inGroup: boolean;
-  onResizeGutterStart: (e: React.PointerEvent<HTMLDivElement>) => void;
-};
 
 /**
  * The time-aligned lyrics row in the unified mixer. Same gutter geometry
@@ -81,7 +65,7 @@ export const LyricsRow = observer(
     id: LyricsTrackId;
     jot: RenderedJot;
     onSeek: (x: number) => void;
-  } & LyricsRowDragProps) => {
+  } & MixerRowDragProps) => {
     const presenter = React.useContext(LyricsPresenterContext);
     const lyricsAlign = React.useContext(LyricsAlignStoreContext);
     const track = lyricsStore.get(id);
@@ -254,7 +238,7 @@ export const LyricsRow = observer(
       },
     }));
 
-    const drop = useDropTarget({
+    const drop = useMixerRowDropTarget({
       idx,
       dragFromIdx,
       dropTargetIdx,
@@ -356,49 +340,3 @@ export const LyricsRow = observer(
     );
   },
 );
-
-/** Locally-mirrored drop-target hook. The mixer's `useMixerRowDropTarget`
- *  is private to mixer.tsx; we duplicate the small body here rather than
- *  exporting it (and trading a tighter mixer.tsx surface for a circular
- *  cross-file dependency). The MIME constant is shared with the mixer
- *  via string literal so foreign drops are still rejected. */
-function useDropTarget(opts: {
-  idx: number;
-  dragFromIdx: number | undefined;
-  dropTargetIdx: number | undefined;
-  onDropTargetIdx: (i: number | undefined) => void;
-  onMoveTrack: (from: number, to: number) => void;
-  onResetDrag: () => void;
-}) {
-  const { idx, dragFromIdx, dropTargetIdx, onDropTargetIdx, onMoveTrack, onResetDrag } = opts;
-  const MIME = 'application/x-drumjot-mixer-row';
-  const onDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-    if (dragFromIdx === undefined) return;
-    if (!e.dataTransfer.types.includes(MIME)) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    const rect = e.currentTarget.getBoundingClientRect();
-    const isTopHalf = e.clientY < rect.top + rect.height / 2;
-    const target = isTopHalf ? idx : idx + 1;
-    if (target !== dropTargetIdx) onDropTargetIdx(target);
-  };
-  const onDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
-    const next = e.relatedTarget as Node | null;
-    if (next && e.currentTarget.contains(next)) return;
-    if (dropTargetIdx === idx || dropTargetIdx === idx + 1) onDropTargetIdx(undefined);
-  };
-  const onDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    if (dragFromIdx === undefined) return;
-    const data = e.dataTransfer.getData(MIME);
-    if (!data) return;
-    e.preventDefault();
-    const from = parseInt(data, 10);
-    if (Number.isFinite(from) && dropTargetIdx !== undefined) {
-      onMoveTrack(from, dropTargetIdx);
-    }
-    onResetDrag();
-  };
-  const isDropIndicatorAbove = dropTargetIdx === idx && dragFromIdx !== undefined;
-  const isDropIndicatorBelow = dropTargetIdx === idx + 1 && dragFromIdx !== undefined;
-  return { onDragOver, onDragLeave, onDrop, isDropIndicatorAbove, isDropIndicatorBelow };
-}
