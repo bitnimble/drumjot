@@ -335,10 +335,32 @@ both ways:
 
 **Wash -- every delta is within seed noise (±0.02); crash's +0.013 is cancelled by
 ride/mc (cymbal sum 1.785 vs 1.766, net −0.019).** The hand-crafted ride/crash
-timbre cue adds nothing over MERT + the high-band block at this scale. Don't wire
-`cym` into inference; the crash ceiling stays data/separation-bound. (NB: baselines
-here, e.g. ride 0.662, sit above the cap-300 run's per-frame ride 0.597 -- partly
-the new per-lane keep_best, partly cap/seed variance; not directly comparable.)
+timbre cue adds nothing over MERT + the high-band block at this scale. (NB:
+baselines here, e.g. ride 0.662, sit above the cap-300 run's per-frame ride 0.597
+-- partly the new per-lane keep_best, partly cap/seed variance; not directly
+comparable.)
+
+**cym A/B on a CYMBAL-BALANCED set -- still no benefit (2026-06-14).** To rule out
+"crash was too starved for cym to matter," curated a same-size set (450 train/stem)
+from the FULL pool via greedy "fill the rarest lane" selection, lifting crash from
+~1:12 vs ride (natural) to ~1:3 (train cymbal onsets: ride 65k / crash 22k / mc 22k;
+hats hc 68k / hp 52k / ho 50k), then re-ran base vs +cym:
+
+| lane | baseline | +cym | Δ | train onsets |
+|---|---|---|---|---|
+| rd | 0.682 | 0.637 | −0.044 | 65k |
+| cr | 0.645 | 0.645 | −0.000 | 22k |
+| mc | 0.339 | 0.375 | +0.036 | 22k |
+| hc | 0.709 | 0.711 | +0.002 | 68k |
+| hp | 0.428 | 0.420 | −0.008 | 52k |
+| ho | 0.723 | 0.728 | +0.005 | 50k |
+
+**Crash gets exactly 0.000 from cym even with 4x the crash representation, ride is
+hurt (−0.044). Conclusive: the cym block is not useful -> remove it.** Second
+finding: **balancing crash did NOT move baseline crash F1** (0.645 balanced vs 0.657
+natural -- flat), so crash F1 is NOT crash-volume-starved. The cymbal ceiling is
+**separation quality / inherent ride-crash acoustic overlap**, not data quantity --
+updates the "more crash data" lever (likely won't help; separation is the lever).
 
 **dropped-neg A/B -- doesn't help, defaulted OFF (2026-06-14).** A/B of
 `use_dropped_neg` (feed the `x` ghost lane's onsets to the loss as hard negatives

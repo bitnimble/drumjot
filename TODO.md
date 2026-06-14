@@ -52,16 +52,18 @@ Architecture is locked to frozen MERT + per-frame per-lane heads. MuQ and a
 two-stage propose→classify arch were both evaluated and ruled out (see
 training/RESULTS.md). The open problem is the cymbal ceiling (crash/ride/misc),
 which is data/separation-bound, not architecture-bound.
-- [done 2026-06-14] `cym` sub-6 kHz timbre block A/B (`--cym`): **no benefit**, all per-lane deltas within seed noise (crash +0.013 cancelled by ride/mc); see
-  RESULTS.md. Not wiring `cym` into inference.
+- [done 2026-06-14] `cym` sub-6 kHz timbre block A/B (`--cym`): **no benefit** at
+  natural dist AND on a cymbal-balanced set (crash gets exactly 0.000 even with 4x
+  crash; ride hurt −0.044). Conclusive → **remove `cym`** (pending). See RESULTS.md.
 - [done 2026-06-14] dropped-neg A/B (`--dropped-neg` vs `--no-dropped-neg`): **no
   precision gain, mild ride/crash F1 loss → removed entirely** (separation already
   strips aux perc; right idea, wrong stage). See RESULTS.md / CHANGELOG #6.
 - [done 2026-06-14] per-lane `keep_best` re-baseline: **validated**, over old
   global-best it adds crash +0.089 / mc +0.062 / hp +0.025 (lanes peak off the
   macro); huge over final-epoch on overfitters. Kept as default.
-- more crash / misc-cym training data + better cymbal separation, the fundamental
-  ceiling levers (crash is data-starved vs ride; mc has ~50 val onsets).
+- better cymbal SEPARATION is the real ceiling lever, NOT more crash data: a
+  cymbal-balanced A/B (crash 1:12→1:3 vs ride) left baseline crash F1 flat (0.645
+  vs 0.657), so crash F1 is separation/ambiguity-bound, not crash-volume-starved.
 - higher-cap confirmation of the per-stem best layers (the sweep was cap-30: s→L1,
   c→L10).
 - (bigger, only if the above stall) fine-tune the MERT encoder.
