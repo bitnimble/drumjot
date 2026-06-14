@@ -31,7 +31,7 @@ from drumjot_training import (
     star,
 )
 from drumjot_training.config import Config
-from drumjot_training.lanes import NEGATIVE_LANES, negative_sibling_matrix, sibling_matrix
+from drumjot_training.lanes import sibling_matrix
 from drumjot_training.model import MultiLaneHeads
 from drumjot_training.targets import (
     SUSTAINED_LANES,
@@ -60,11 +60,6 @@ class Clip:
     # Auxiliary ring-activity targets (n_lanes, T), nonzero only on the
     # sustained lanes (targets.SUSTAINED_LANES). None -> zeros.
     activity_targets: np.ndarray | None = None
-    # Hard-negative activity for dropped, non-output percussion (n_neg, T over
-    # lanes.NEGATIVE_LANES): frames where a non-kit hit occurred. Fed to the loss
-    # as extra sibling activity so every output lane learns NOT to fire there.
-    # None -> zeros (no dropped-percussion supervision for this clip).
-    negative_targets: np.ndarray | None = None
 
 
 def build_targets(
@@ -75,20 +70,6 @@ def build_targets(
         [
             onsets_to_target(onsets_by_lane.get(lane, []), n_frames, cfg.encoder_fps, cfg.sigma_frames)
             for lane in cfg.lanes
-        ]
-    )
-
-
-def build_negative_targets(
-    onsets_by_lane: dict[str, list[float]], n_frames: int, cfg: Config
-) -> np.ndarray:
-    """Stack the dropped-percussion negative lanes (lanes.NEGATIVE_LANES) into
-    (n_neg, T). Same Gaussian rendering as `build_targets`; these are weighting-
-    only (no head). Reads the catch-all `x` key the onset readers emit."""
-    return np.stack(
-        [
-            onsets_to_target(onsets_by_lane.get(ln, []), n_frames, cfg.encoder_fps, cfg.sigma_frames)
-            for ln in NEGATIVE_LANES
         ]
     )
 
@@ -114,10 +95,8 @@ def _build_clip(
     if max_seconds is not None:
         onsets = {ln: [t for t in ts if t < max_seconds] for ln, ts in onsets.items()}
     targets = build_targets(onsets, feat.shape[0], cfg)
-    neg = build_negative_targets(onsets, feat.shape[0], cfg)
     return Clip(
-        features=feat, targets=targets, onsets_by_lane=onsets,
-        audio_path=str(audio_path), negative_targets=neg,
+        features=feat, targets=targets, onsets_by_lane=onsets, audio_path=str(audio_path),
     )
 
 
@@ -225,18 +204,15 @@ def collate_clips(clips: Sequence[Clip]):
     touch CUDA); `train_loop` moves the batch to the device.
 
     Returns (X (B, T, dim), Y (B, n_lanes, T), Yw (B, n_lanes, T),
-    A (B, n_lanes, T), Aneg (B, n_neg, T), mask (B, T)); padded frames are zero
-    everywhere and 0 in mask so the losses ignore them. `Yw` is the
-    sibling-weighting target source (`clip.weight_targets`, falling back to
-    `targets`); `A` is the auxiliary ring-activity target (zeros when absent);
-    `Aneg` is the dropped-percussion hard-negative activity (`negative_targets`,
-    zeros when absent). Clips are capped to a uniform `max_seconds` upstream, so
-    most are full length and padding waste is small."""
+    A (B, n_lanes, T), mask (B, T)); padded frames are zero everywhere and 0 in
+    mask so the losses ignore them. `Yw` is the sibling-weighting target source
+    (`clip.weight_targets`, falling back to `targets`); `A` is the auxiliary
+    ring-activity target (zeros when absent). Clips are capped to a uniform
+    `max_seconds` upstream, so most are full length and padding waste is small."""
     import torch
 
     dim = clips[0].features.shape[1]
     n_lanes = clips[0].targets.shape[0]
-    n_neg = len(NEGATIVE_LANES)
     lengths = [c.features.shape[0] for c in clips]
     t_max = max(lengths)
     b = len(clips)
@@ -244,7 +220,6 @@ def collate_clips(clips: Sequence[Clip]):
     Y = torch.zeros(b, n_lanes, t_max, dtype=torch.float32)
     Yw = torch.zeros(b, n_lanes, t_max, dtype=torch.float32)
     A = torch.zeros(b, n_lanes, t_max, dtype=torch.float32)
-    Aneg = torch.zeros(b, n_neg, t_max, dtype=torch.float32)
     mask = torch.zeros(b, t_max, dtype=torch.float32)
     for i, clip in enumerate(clips):
         t = lengths[i]
@@ -254,10 +229,8 @@ def collate_clips(clips: Sequence[Clip]):
         Yw[i, :, :t] = torch.as_tensor(wt, dtype=torch.float32)
         if clip.activity_targets is not None:
             A[i, :, :t] = torch.as_tensor(clip.activity_targets, dtype=torch.float32)
-        if clip.negative_targets is not None:
-            Aneg[i, :, :t] = torch.as_tensor(clip.negative_targets, dtype=torch.float32)
         mask[i, :t] = 1.0
-    return X, Y, Yw, A, Aneg, mask
+    return X, Y, Yw, A, mask
 
 
 def sibling_weight(targets, sib_act, pos_w: float, neg_w: float):
@@ -368,14 +341,9 @@ class CachedClips:
             for li, lane in enumerate(self._cfg.lanes):
                 if rings.get(lane):
                     act[li] = spans_to_activity(rings[lane], feat.shape[0], self._cfg.encoder_fps)
-        # dropped-percussion negatives: from the FULL-kit onsets (per-stem) so
-        # bleed shows, else this clip's own onsets. Both carry the `x` key.
-        neg_src = weight_onsets if weight_onsets is not None else onsets
-        neg = build_negative_targets(_cap_onsets(neg_src, length), feat.shape[0], self._cfg)
         return Clip(
             features=feat, targets=targets, onsets_by_lane=onsets,
             audio_path=str(audio_path), weight_targets=wt, activity_targets=act,
-            negative_targets=neg,
         )
 
     def __iter__(self):
@@ -555,10 +523,6 @@ def train_loop(
     # lane's confusable siblings; per batch, sib_act = max sibling target.
     sib_on = cfg.sib_neg_weight != 1.0 or cfg.sib_pos_weight != 1.0
     S = torch.as_tensor(sibling_matrix(cfg.lanes), dtype=torch.bool, device=device)
-    # dropped-percussion ghost lanes -> hard negatives for the output lanes they
-    # confuse (lanes.negative_sibling_matrix); folded into sib_act below.
-    Sneg = torch.as_tensor(negative_sibling_matrix(cfg.lanes), dtype=torch.bool, device=device)
-    use_neg = sib_on and cfg.use_dropped_neg
     # aux ring-activity rows + a unit pos_weight for the activity BCE
     sus_idx = [i for i, ln in enumerate(cfg.lanes) if ln in SUSTAINED_LANES]
     one_pw = torch.ones(len(sus_idx), 1, device=device)
@@ -604,28 +568,19 @@ def train_loop(
         ep_start = time.perf_counter()
         model.train()
         total, n_batches = 0.0, 0
-        for bi, (X, Y, Yw, A, Aneg, mask) in enumerate(loader):
+        for bi, (X, Y, Yw, A, mask) in enumerate(loader):
             X = X.to(device, non_blocking=True)
             Y = Y.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
             fw = None
             if sib_on:
                 Yw = Yw.to(device, non_blocking=True)
-                if use_neg:
-                    Aneg = Aneg.to(device, non_blocking=True)
-                # per lane l: max sibling activity at each frame, over its
-                # confusable OUTPUT siblings (Yw[S]) AND, when enabled, the
-                # dropped-percussion ghost lanes (Aneg[Sneg]). Both are hard
-                # negatives on frames where l is silent.
+                # per lane l: max activity over its confusable OUTPUT siblings
+                # (Yw[S]) at each frame -- a hard negative where l is silent there.
                 parts = []
                 for li in range(len(cfg.lanes)):
-                    cols = []
-                    if bool(S[li].any()):
-                        cols.append(Yw[:, S[li]].amax(dim=1))
-                    if use_neg and bool(Sneg[li].any()):
-                        cols.append(Aneg[:, Sneg[li]].amax(dim=1))
                     parts.append(
-                        torch.stack(cols, dim=0).amax(dim=0) if cols else torch.zeros_like(Yw[:, 0])
+                        Yw[:, S[li]].amax(dim=1) if bool(S[li].any()) else torch.zeros_like(Yw[:, 0])
                     )
                 sib_act = torch.stack(parts, dim=1)  # (B, n_lanes, T)
                 fw = sibling_weight(Y, sib_act, cfg.sib_pos_weight, cfg.sib_neg_weight)
@@ -662,7 +617,7 @@ def train_loop(
                 # the log, matching mean_f1) AND track each lane's own best epoch.
                 per = [evaluate_clip(model, c, cfg) for c in val_clips]
                 clip_macros = []
-                for c, pl in zip(val_clips, per):
+                for c, pl in zip(val_clips, per, strict=True):
                     present = [pl[ln] for ln in cfg.lanes if c.onsets_by_lane.get(ln)]
                     if present:
                         clip_macros.append(sum(present) / len(present))
@@ -978,7 +933,7 @@ def _pooled_specs(args) -> tuple[list, list, Path]:
     import json
     import os
 
-    from drumjot_training.lanes import LANES, WEIGHT_LANES
+    from drumjot_training.lanes import LANES
 
     sources = [s.strip() for s in args.pool_sources.split(",") if s.strip()]
 
@@ -1038,10 +993,9 @@ def _pooled_specs(args) -> tuple[list, list, Path]:
     def _full(path, reader):
         nonlocal dirty
         v = onsets_cache.get(str(path))
-        # rebuild stale entries that predate the dropped-percussion `x` lane
-        if v is None or any(ln not in v for ln in NEGATIVE_LANES):
+        if v is None or any(ln not in v for ln in LANES):
             r = reader(path)
-            v = {ln: list(r.get(ln, [])) for ln in WEIGHT_LANES}
+            v = {ln: list(r.get(ln, [])) for ln in LANES}
             onsets_cache[str(path)] = v
             dirty = True
         return v
@@ -1171,12 +1125,6 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--sib-pos-weight", type=float, default=Config.sib_pos_weight,
                     help="loss multiplier on co-occurring positives (hit under sibling "
                     "noise, the harder detection); 1 disables")
-    ap.add_argument("--dropped-neg", default=Config.use_dropped_neg,
-                    action=argparse.BooleanOptionalAction,
-                    help="treat dropped, non-output percussion (the removed mp + non-kit "
-                    "aux perc) as hard negatives for every output lane, reusing the sib "
-                    "weighting; default OFF (a cap-150 A/B found no precision gain + mild "
-                    "ride/crash F1 loss); --dropped-neg re-enables")
     ap.add_argument("--no-filter-report", action="store_true", help="skip the deterministic-filter F1 comparison")
     ap.add_argument("--out", type=str, default=None, help="save model.pt + meta.json here")
     ap.add_argument("--resume", type=str, default=None, help="checkpoint dir to warm-start weights from")
@@ -1195,7 +1143,6 @@ def main(argv: list[str] | None = None) -> None:
         high_band=args.high_band, cym=args.cym,
         lr=args.lr, weight_decay=args.weight_decay,
         sib_neg_weight=args.sib_neg_weight, sib_pos_weight=args.sib_pos_weight,
-        use_dropped_neg=args.dropped_neg,
     )
     train_specs, val_specs, cache = (
         _star_specs(args) if args.dataset == "star"

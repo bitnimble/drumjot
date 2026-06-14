@@ -21,7 +21,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from drumjot_training.lanes import LANES, WEIGHT_LANES
+from drumjot_training.lanes import LANES
 
 _STAR_TO_LANE: dict[str, str] = {
     "BD": "k",
@@ -36,40 +36,25 @@ _STAR_TO_LANE: dict[str, str] = {
     "SPC": "mc", "CHC": "mc", "RB": "mc",  # splash / china / ride bell
 }
 
-# Non-kit aux percussion -> the catch-all negative lane (lanes.NEGATIVE_LANES):
-# cowbell / clap / tambourine (the removed `mp` classes). Not output lanes, but
-# emitted by `onsets_by_lane` so the loss can use them as hard negatives.
-_STAR_TO_NEG: dict[str, str] = {"CB": "x", "CL": "x", "CLP": "x", "TB": "x"}
-
-
 def lane_for_star_class(cls: str) -> str | None:
     """Fold a STAR class abbreviation to our lane, or None if out-of-kit."""
     return _STAR_TO_LANE.get(cls)
 
 
-def negative_lane_for_star_class(cls: str) -> str | None:
-    """Catch-all negative lane for a non-kit STAR class, else None."""
-    if cls in _STAR_TO_LANE:
-        return None
-    return _STAR_TO_NEG.get(cls)
-
-
 def onsets_by_lane(annotation_path: str | Path) -> dict[str, list[float]]:
     """Parse a STAR `.txt` annotation into per-lane onset times (seconds).
 
-    Lines are `time<TAB>class<TAB>velocity`; velocity is ignored here.
-    Always returns all lanes (empty lists for absent ones), PLUS the catch-all
-    negative lane `x` (non-kit aux percussion: cowbell/clap/tambourine), kept for
-    hard-negative loss weighting and ignored by output-lane consumers.
+    Lines are `time<TAB>class<TAB>velocity`; velocity is ignored here. Always
+    returns all output lanes (empty lists for absent ones); out-of-kit classes
+    (cowbell/clap/tambourine, ...) map to None and are dropped.
     """
-    out: dict[str, list[float]] = {lane: [] for lane in WEIGHT_LANES}
+    out: dict[str, list[float]] = {lane: [] for lane in LANES}
     with open(annotation_path) as f:
         for line in f:
             parts = line.rstrip("\n").split("\t")
             if len(parts) < 2:
                 continue
-            cls = parts[1].strip()
-            lane = lane_for_star_class(cls) or negative_lane_for_star_class(cls)
+            lane = lane_for_star_class(parts[1].strip())
             if lane is not None:
                 out[lane].append(float(parts[0]))
     return out

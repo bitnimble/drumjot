@@ -54,14 +54,6 @@ class Config:
     # values are starting guesses, not tuned.
     sib_neg_weight: float = 8.0
     sib_pos_weight: float = 3.0
-    # Treat dropped, non-output percussion (lanes.NEGATIVE_LANES: the removed `mp`
-    # + non-kit aux perc) as HARD NEGATIVES for every output lane, reusing the
-    # sibling-weighting knobs above. Default OFF: a cap-150 A/B (2026-06-14, see
-    # RESULTS.md) found it does NOT improve precision and mildly HURTS ride/crash
-    # F1 (-0.03/-0.02), the lanes it targeted. Flag kept for a higher-cap re-test;
-    # the readers still emit the `x` onsets, they just stop feeding the loss when
-    # off. No effect when sibling weighting is off (both sib weights == 1.0).
-    use_dropped_neg: bool = False
     # Auxiliary ring-activity objective (targets.SUSTAINED_LANES): joint BCE on
     # "is this instrument still ringing" frames, weighted by this factor. The
     # open-hat / cymbal tail is what defines those classes; the pure onset

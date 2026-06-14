@@ -48,23 +48,14 @@ def test_onsets_by_lane_parses_annotation(tmp_path):
     out = star.onsets_by_lane(f)
     assert out["k"] == [0.01]
     assert out["ss"] == [0.50]
-    assert "mp" not in out  # mp lane removed
-    assert out["x"] == [0.50]  # CB -> catch-all negative lane (weighting-only)
-    assert out["ho"] == [0.80]
+    assert "mp" not in out and "x" not in out  # mp + the x ghost lane removed
+    assert out["ho"] == [0.80]  # CB (cowbell) dropped, not emitted
 
 
 def test_all_lanes_present(tmp_path):
     f = tmp_path / "a.txt"
     f.write_text("0.0\tBD\t100\n")
-    # output lanes + the catch-all negative lane `x`
-    assert set(star.onsets_by_lane(f)) == set(lanes.WEIGHT_LANES)
-
-
-def test_non_kit_classes_route_to_negative_lane():
-    assert star.negative_lane_for_star_class("CB") == "x"   # cowbell
-    assert star.negative_lane_for_star_class("CLP") == "x"  # clap
-    assert star.negative_lane_for_star_class("BD") is None  # output lane, not negative
-    assert star.negative_lane_for_star_class("XYZ") is None  # truly out-of-kit
+    assert set(star.onsets_by_lane(f)) == set(lanes.LANES)
 
 
 def _make_song(root, split_dir, name):

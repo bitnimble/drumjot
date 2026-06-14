@@ -357,8 +357,10 @@ keep_best, tuned thresholds. ON vs OFF (Δ = on − off):
 
 The feature was meant to raise PRECISION on leak-prone lanes; instead precision
 mostly *drops* (cr −0.035, mc −0.048, hp −0.037) and it costs ride/crash **F1**
-(−0.030/−0.023, the targeted lanes). Everything else is noise. **Defaulted OFF**
-(`Config.use_dropped_neg=False`); flag kept for a higher-cap re-test.
+(−0.030/−0.023, the targeted lanes). Everything else is noise. **Removed entirely
+from the codebase (2026-06-14)** -- per-stem separation already strips the aux perc,
+so the hard negatives mostly land on silent frames and over-suppress real cymbal
+attacks near residual bleed (right idea, wrong pipeline stage). See CHANGELOG #6.
 
 **keep_best re-baseline: per-lane vs global vs final (2026-06-14).** From the
 per-epoch per-lane val-F1 curves (`history["vf1_<lane>"]`), UNTUNED (0.5 thr) so

@@ -1,6 +1,6 @@
 import argparse
 
-from drumjot_training.lanes import LANES, WEIGHT_LANES
+from drumjot_training.lanes import LANES
 
 
 def _enst_sep_tree(tmp_path):
@@ -35,8 +35,8 @@ def test_pooled_specs_single_source(tmp_path, monkeypatch):
     assert len(tr) == 5 and len(va) == 5            # drummer_1 train, drummer_3 val; 5 stems each
     assert len(tr[0]) == 3                          # (audio, restricted_onsets, full_onsets)
     _audio, restr, full = tr[0]
-    # restricted = output lanes only; full carries the `x` negative lane too
-    assert set(restr) == set(LANES) and set(full) == set(WEIGHT_LANES)
+    # restricted = this stem's lanes; full = all output lanes (for sibling weighting)
+    assert set(restr) == set(LANES) and set(full) == set(LANES)
     assert cache.name == "_cache_mert_pooled"
 
 

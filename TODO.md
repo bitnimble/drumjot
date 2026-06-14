@@ -51,8 +51,8 @@ which is data/separation-bound, not architecture-bound.
 - [done 2026-06-14] `cym` sub-6 kHz timbre block A/B (`--cym`): **no benefit**, all per-lane deltas within seed noise (crash +0.013 cancelled by ride/mc); see
   RESULTS.md. Not wiring `cym` into inference.
 - [done 2026-06-14] dropped-neg A/B (`--dropped-neg` vs `--no-dropped-neg`): **no
-  precision gain, mild ride/crash F1 loss** → defaulted OFF (`use_dropped_neg=False`).
-  See RESULTS.md; flag kept for a higher-cap re-test.
+  precision gain, mild ride/crash F1 loss → removed entirely** (separation already
+  strips aux perc; right idea, wrong stage). See RESULTS.md / CHANGELOG #6.
 - [done 2026-06-14] per-lane `keep_best` re-baseline: **validated**, over old
   global-best it adds crash +0.089 / mc +0.062 / hp +0.025 (lanes peak off the
   macro); huge over final-epoch on overfitters. Kept as default.
