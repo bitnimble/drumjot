@@ -22,10 +22,6 @@ class Config:
     # default; --no-high-band trains on raw MERT only, for the high-band ablation.
     # Part of the feature-cache key (variant), so on/off caches don't collide.
     high_band: bool = True
-    # Append the sub-6 kHz ride/crash/hi-hat timbre block (embeddings.cym_features,
-    # +CYM_BANDS dims). Off by default; --cym enables it for the cymbal ablation.
-    # Also part of the feature-cache-key variant.
-    cym: bool = False
 
     # Targets (Gaussian onset bumps).
     lanes: tuple[str, ...] = LANES

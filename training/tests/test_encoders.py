@@ -10,7 +10,7 @@ def test_make_encoder_is_mert():
     assert embeddings.make_encoder.__module__ == embeddings.__name__
     assert embeddings.MERT_DIM == 1024 and embeddings.MERT_SR == 24000
     assert embeddings.MERT_FPS == 75.0
-    assert embeddings.feat_dim(high_band=True, cym=False) == embeddings.MERT_DIM + embeddings.HB_BANDS
+    assert embeddings.feat_dim(high_band=True) == embeddings.MERT_DIM + embeddings.HB_BANDS
 
 
 def test_highband_block_aligns_to_encoder_fps():

@@ -41,30 +41,17 @@ HB_FMIN = 6000.0
 HB_FMAX = 20000.0
 HB_NFFT = 2048
 FEAT_VARIANT = "hb16"  # cache-key token; bump when the feature recipe changes
-FEAT_DIM = MERT_DIM + HB_BANDS  # model input width (1040) -- default (hb on, cym off)
-
-# Sub-6 kHz ride/crash/hi-hat timbre pathway: a frame-wise (75 fps) port of the
-# deterministic cymbal_split.py features the transcriber measures per onset. The
-# high band tells cymbals apart from non-cymbals; THIS band tells cymbals apart
-# from each OTHER (ride ping vs crash wash), which the high band can't.
-CYM_BANDS = 5
-CYM_VARIANT = "cym5"
+FEAT_DIM = MERT_DIM + HB_BANDS  # model input width (1040) -- default (hb on)
 
 
-def feat_variant(high_band: bool = True, cym: bool = False) -> str:
-    """Cache-key token for a feature recipe, e.g. "hb16", "cym5", "hb16+cym5",
-    or "" (raw MERT). Order is fixed so keys are stable."""
-    parts = []
-    if high_band:
-        parts.append(FEAT_VARIANT)
-    if cym:
-        parts.append(CYM_VARIANT)
-    return "+".join(parts)
+def feat_variant(high_band: bool = True) -> str:
+    """Cache-key token for a feature recipe: "hb16" (default) or "" (raw MERT)."""
+    return FEAT_VARIANT if high_band else ""
 
 
-def feat_dim(high_band: bool = True, cym: bool = False) -> int:
-    """Model input width for a feature recipe: MERT + optional appended blocks."""
-    return MERT_DIM + (HB_BANDS if high_band else 0) + (CYM_BANDS if cym else 0)
+def feat_dim(high_band: bool = True) -> int:
+    """Model input width for a feature recipe: MERT + optional high-band block."""
+    return MERT_DIM + (HB_BANDS if high_band else 0)
 
 
 def cache_key(
@@ -129,68 +116,6 @@ def highband_features(
     b = a + int(max_seconds * HB_SR) if max_seconds is not None else None
     y44 = y44[a:b]
     return highband_from_wave(y44, n_frames, fps)
-
-
-def cym_features(
-    audio_path: str | Path, n_frames: int, max_seconds: float | None = None,
-    start_seconds: float = 0.0, fps: float = MERT_FPS,
-) -> np.ndarray:
-    """(n_frames, CYM_BANDS) sub-6 kHz ride/crash/hi-hat timbre channels at 75 fps,
-    frame-aligned to MERT. A frame-wise port of the deterministic per-onset
-    features in the transcriber's `cymbal_split.py` (the ear-confirmed ride/crash
-    discriminators), so the model gets the cue MERT abstracts away and the high
-    band can't carry (it separates cymbals from non-cymbals, not from each other):
-
-      low_mid : fundamental band (250-800 Hz) over wash band (1.5-5 kHz), dB --
-                a ride's pitched ping fills the low band (high), a crash is mid
-                wash (low). cymbal_split's ear-confirmed winner.
-      crest   : low-band (200-1500 Hz) spectral crest, dB -- tall narrow partial
-                (ride) vs flat noise (crash).
-      flat    : spectral flatness 250 Hz-14 kHz (band-restricted exactly as the
-                split does; full-range collapses on the dead >14 kHz bins).
-      + low_mid smoothed at ~250 ms and ~1 s: the split measured low_mid on a
-        POST-attack window (the attack transient blurs the ratio); the smoothed
-        copies hand the GRU that post-attack tone directly.
-
-    Deterministic [0,1] scaling (no per-clip norm), so absolute level survives.
-    Computed at HB_SR (44.1 kHz), hop 588 -> exact 75 fps."""
-    import librosa
-
-    y, _ = librosa.load(str(audio_path), sr=HB_SR, mono=True)
-    a = int(start_seconds * HB_SR)
-    b = a + int(max_seconds * HB_SR) if max_seconds is not None else None
-    y = y[a:b]
-    hop = int(round(HB_SR / fps))  # 588 @ 75 fps, 1764 @ 25 fps (exact at 44100/fps)
-    if y.size < HB_NFFT:
-        y = np.pad(y, (0, HB_NFFT - y.size))
-    S = np.abs(librosa.stft(y, n_fft=HB_NFFT, hop_length=hop)) ** 2
-    freqs = librosa.fft_frequencies(sr=HB_SR, n_fft=HB_NFFT)
-
-    def band(lo: float, hi: float) -> np.ndarray:
-        return S[(freqs >= lo) & (freqs <= hi), :]
-
-    fund = band(250.0, 800.0).sum(axis=0)
-    wash = band(1500.0, 5000.0).sum(axis=0)
-    low_mid_db = 10.0 * np.log10(np.maximum(fund, 1e-20) / np.maximum(wash, 1e-20))
-    low_mid = np.clip((low_mid_db + 40.0) / 80.0, 0.0, 1.0)  # [-40,+40] dB -> [0,1]
-    tb = band(200.0, 1500.0)
-    crest_db = 10.0 * np.log10(
-        np.maximum(tb.max(axis=0), 1e-20) / np.maximum(tb.mean(axis=0), 1e-20)
-    )
-    crest = np.clip(crest_db / 30.0, 0.0, 1.0)  # 0..30 dB -> [0,1]
-    fb = band(250.0, 14000.0) + 1e-10
-    flat = np.exp(np.mean(np.log(fb), axis=0)) / np.mean(fb, axis=0)  # already [0,1]
-
-    def smooth(x: np.ndarray, win: int) -> np.ndarray:
-        return np.convolve(x, np.ones(win) / win, mode="same")
-
-    w_250ms, w_1s = max(1, int(round(0.25 * fps))), max(1, int(round(fps)))  # fps-scaled
-    feat = np.stack(  # ~250 ms / 1 s post-attack smoothing windows (19/75 @ 75 fps)
-        [low_mid, crest, flat, smooth(low_mid, w_250ms), smooth(low_mid, w_1s)], axis=1
-    ).astype(np.float32)
-    if feat.shape[0] < n_frames:
-        feat = np.pad(feat, ((0, n_frames - feat.shape[0]), (0, 0)))
-    return feat[:n_frames]
 
 
 def load_audio(path: str | Path, sr: int = MERT_SR) -> np.ndarray:
@@ -288,7 +213,6 @@ def embed_clip(
     max_seconds: float | None = None,
     cache_dtype: str = "float16",
     high_band: bool = True,
-    cym: bool = False,
     start_seconds: float = 0.0,
 ) -> np.ndarray:
     """Features for one clip, reading/writing `cache_dir` when given.
@@ -305,12 +229,11 @@ def embed_clip(
     existing cache is reused as-is (loaded at whatever precision it was
     written); delete `_cache_mert` to re-encode at a new precision.
 
-    `high_band` (default True) appends the 6-20 kHz block; `cym` (default False)
-    appends the sub-6 kHz ride/crash block. The model width is
-    `feat_dim(high_band, cym)` and the cache key carries `feat_variant(...)` so
-    every recipe (raw / hb / cym / hb+cym) lands in its own cache, never colliding.
+    `high_band` (default True) appends the 6-20 kHz block. The model width is
+    `feat_dim(high_band)` and the cache key carries `feat_variant(...)` so each
+    recipe (raw / hb) lands in its own cache, never colliding.
     """
-    variant = feat_variant(high_band, cym)  # distinct cache per recipe
+    variant = feat_variant(high_band)  # distinct cache per recipe
     cache_file: Path | None = None
     if cache_dir is not None:
         cache_dir = Path(cache_dir)
@@ -329,9 +252,6 @@ def embed_clip(
     if high_band:
         # the 6-20 kHz sizzle MERT's 24 kHz input discards (cymbal vs non-cymbal)
         blocks.append(highband_features(audio_path, feat.shape[0], max_seconds, start_seconds, fps))
-    if cym:
-        # sub-6 kHz ride/crash timbre (cymbal vs cymbal); frame-aligned
-        blocks.append(cym_features(audio_path, feat.shape[0], max_seconds, start_seconds, fps))
     feat = np.concatenate(blocks, axis=1) if len(blocks) > 1 else feat
     feat = feat.astype(cache_dtype, copy=False)
     if cache_file is not None:

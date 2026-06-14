@@ -34,8 +34,7 @@ def run_metadata(cfg: Config, thresholds: dict[str, float], in_dim: int = FEAT_D
         "head_hidden": cfg.head_hidden,
         "head_layers": cfg.head_layers,
         "in_dim": in_dim,
-        "high_band": cfg.high_band,  # which appended feature blocks the heads expect
-        "cym": cfg.cym,
+        "high_band": cfg.high_band,  # whether the heads expect the high-band block
         "aux_activity": True,  # heads carry the auxiliary ring-activity output
         "thresholds": {k: float(v) for k, v in thresholds.items()},
     }

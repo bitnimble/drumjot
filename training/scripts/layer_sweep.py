@@ -54,11 +54,10 @@ def main():
         "--high-band-modes", default="none",
         help="comma list of feature variants to compare, each trained at every --layer x "
         "--seed. A variant is 'none' (raw MERT) or a '+'-composed set of blocks appended to "
-        "MERT: 'energy' (6-20 kHz log-mel, embeddings.highband_features), 'flux' (its "
-        "positive temporal difference), 'cym' (sub-6 kHz ride/crash discriminator channels "
-        "mirroring transcriber cymbal_split.py: low/mid ratio, low-band crest, flatness + "
-        "smoothed low/mid). E.g. 'none,energy,energy+cym'. All reuse the raw-MERT encode "
-        "cache (no re-encode); blocks are layer-independent, computed once per clip.",
+        "MERT: 'energy' (6-20 kHz log-mel, embeddings.highband_features) or 'flux' (its "
+        "positive temporal difference). E.g. 'none,energy,energy+flux'. All reuse the "
+        "raw-MERT encode cache (no re-encode); blocks are layer-independent, computed "
+        "once per clip.",
     )
     ap.add_argument(
         "--seeds", default="0",
@@ -114,21 +113,9 @@ def main():
 
     # Feature blocks are layer- and seed-independent (derived from raw audio),
     # so each is computed ONCE per clip and reused across every mode/layer/seed.
-    # A mode is "none" or a "+"-joined composition of blocks, e.g.
-    # "energy+cym": energy = 6-20 kHz log-mel; flux = its positive time-diff;
-    # cym = the sub-6 kHz ride/crash discriminator block (see _cym_block).
+    # A mode is "none" or a "+"-joined composition of blocks, e.g. "energy+flux":
+    # energy = 6-20 kHz log-mel; flux = its positive time-diff.
     hb_energy: dict = {}
-    cym_cache: dict = {}
-
-    def _cym_block(audio_path, n_frames):
-        """Sub-6 kHz ride/crash discriminator block (embeddings.cym_features),
-        cached per clip. Canonical impl lives in embeddings so the probe and the
-        full training pipeline share ONE recipe."""
-        f = cym_cache.get(audio_path)
-        if f is None or f.shape[0] < n_frames:
-            f = embeddings.cym_features(audio_path, n_frames, args.max_seconds)
-            cym_cache[audio_path] = f
-        return f[:n_frames]
 
     def _hb_energy(c, n_frames):
         e = hb_energy.get(c.audio_path)
@@ -147,8 +134,6 @@ def main():
             elif p == "flux":  # positive temporal difference per band (onset-sharpened)
                 e = _hb_energy(c, n_frames)
                 parts.append(np.diff(e, axis=0, prepend=e[:1]).clip(min=0))
-            elif p == "cym":
-                parts.append(_cym_block(c.audio_path, n_frames))
             else:
                 raise SystemExit(f"unknown feature block {p!r} in mode {mode!r}")
         return np.concatenate(parts, axis=1)

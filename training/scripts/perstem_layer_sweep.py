@@ -49,7 +49,7 @@ def _encode_all_layers(specs, enc, layers, cache: Path, cfg: Config, log) -> Non
     the exact layout train.py's embed_clip reads ([MERT_layer | high-band] under
     cache_key(..., layer, length, 'hb16', start)). So materialize() below is a
     pure cache hit at every layer -- the sweep pays a single encode pass."""
-    variant = embeddings.feat_variant(cfg.high_band, cfg.cym)  # "hb16"
+    variant = embeddings.feat_variant(cfg.high_band)  # "hb16"
 
     def _key(audio, layer, length, start):
         k = embeddings.cache_key(audio, enc.name, layer, length, variant, start)
@@ -103,7 +103,7 @@ def main():
     seeds = [int(s) for s in args.seeds.split(",")]
     enc_name = embeddings.MERT_NAME
     enc_fps = embeddings.MERT_FPS
-    cfg0 = Config(encoder=enc_name, encoder_fps=enc_fps, high_band=True, cym=False)
+    cfg0 = Config(encoder=enc_name, encoder_fps=enc_fps, high_band=True)
 
     train_specs, val_specs, cache = _pooled_specs(args)
     # single window per clip (the sweep ranks layers; windowing is orthogonal)
@@ -128,7 +128,7 @@ def main():
     # results[layer][lane] = [F1 per seed]
     results: dict[int, dict[str, list[float]]] = {li: defaultdict(list) for li in layers}
     for li in layers:
-        cfg = Config(encoder=enc_name, encoder_fps=enc_fps, encoder_layer=li, high_band=True, cym=False)
+        cfg = Config(encoder=enc_name, encoder_fps=enc_fps, encoder_layer=li, high_band=True)
         enc.layer = li  # so materialize's embed_clip hits the layer-li cache
         train_clips = materialize(tr, enc, cfg, cache, args.max_seconds, f"L{li} train", log)
         val_clips = materialize(va, enc, cfg, cache, args.max_seconds, f"L{li} val", log)
@@ -137,7 +137,7 @@ def main():
             torch.manual_seed(seed)
             if torch.cuda.is_available():
                 torch.cuda.manual_seed_all(seed)
-            model = MultiLaneHeads(in_dim=embeddings.feat_dim(cfg.high_band, cfg.cym),
+            model = MultiLaneHeads(in_dim=embeddings.feat_dim(cfg.high_band),
                                    hidden=cfg.head_hidden, num_layers=cfg.head_layers)
             if torch.cuda.is_available():
                 model = model.cuda()

@@ -53,8 +53,8 @@ two-stage propose→classify arch were both evaluated and ruled out (see
 training/RESULTS.md). The open problem is the cymbal ceiling (crash/ride/misc),
 which is data/separation-bound, not architecture-bound.
 - [done 2026-06-14] `cym` sub-6 kHz timbre block A/B (`--cym`): **no benefit** at
-  natural dist AND on a cymbal-balanced set (crash gets exactly 0.000 even with 4x
-  crash; ride hurt −0.044). Conclusive → **remove `cym`** (pending). See RESULTS.md.
+  natural dist AND on a cymbal-balanced set (crash 0.000 even with 4x crash; ride
+  −0.044) → **removed entirely** (feature + flag + cym_features). See RESULTS.md.
 - [done 2026-06-14] dropped-neg A/B (`--dropped-neg` vs `--no-dropped-neg`): **no
   precision gain, mild ride/crash F1 loss → removed entirely** (separation already
   strips aux perc; right idea, wrong stage). See RESULTS.md / CHANGELOG #6.

@@ -356,7 +356,8 @@ hats hc 68k / hp 52k / ho 50k), then re-ran base vs +cym:
 | ho | 0.723 | 0.728 | +0.005 | 50k |
 
 **Crash gets exactly 0.000 from cym even with 4x the crash representation, ride is
-hurt (−0.044). Conclusive: the cym block is not useful -> remove it.** Second
+hurt (−0.044). Conclusive: the cym block is not useful -> REMOVED from the codebase
+(2026-06-14), same as MuQ and dropped-neg.** Second
 finding: **balancing crash did NOT move baseline crash F1** (0.645 balanced vs 0.657
 natural -- flat), so crash F1 is NOT crash-volume-starved. The cymbal ceiling is
 **separation quality / inherent ride-crash acoustic overlap**, not data quantity --

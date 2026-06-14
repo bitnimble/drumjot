@@ -90,7 +90,7 @@ def _build_clip(
     """
     feat = embeddings.embed_clip(
         audio_path, encoder, cache_dir=cache_dir, max_seconds=max_seconds,
-        cache_dtype=cfg.cache_dtype, high_band=cfg.high_band, cym=cfg.cym,
+        cache_dtype=cfg.cache_dtype, high_band=cfg.high_band,
     )
     if max_seconds is not None:
         onsets = {ln: [t for t in ts if t < max_seconds] for ln, ts in onsets.items()}
@@ -318,7 +318,7 @@ class CachedClips:
         self._max_seconds = max_seconds
 
     def _path(self, audio_path, start: float, length: float | None) -> Path:
-        variant = embeddings.feat_variant(self._cfg.high_band, self._cfg.cym)
+        variant = embeddings.feat_variant(self._cfg.high_band)
         key = embeddings.cache_key(
             audio_path, self._cfg.encoder, self._cfg.encoder_layer, length, variant, start
         )
@@ -465,7 +465,7 @@ def materialize(
         try:
             feat = embeddings.embed_clip(
                 audio, encoder, cache_dir=cache_dir, max_seconds=length,
-                cache_dtype=cfg.cache_dtype, high_band=cfg.high_band, cym=cfg.cym,
+                cache_dtype=cfg.cache_dtype, high_band=cfg.high_band,
                 start_seconds=start,
             )
             rings = _rings_for_clip(audio, onsets, cfg, cache_dir, length, start)
@@ -651,7 +651,7 @@ def train_loop(
         # runs; the final main() save overwrites this with tuned thresholds
         if out_dir and checkpoint_every and (epoch + 1) % checkpoint_every == 0 and epoch != epochs - 1:
             checkpoint.save(out_dir, model, cfg, {ln: cfg.peak_threshold for ln in cfg.lanes},
-                            in_dim=embeddings.feat_dim(cfg.high_band, cfg.cym))
+                            in_dim=embeddings.feat_dim(cfg.high_band))
             log(f"  checkpoint saved @ epoch {epoch} (untuned) -> {out_dir}")
     if keep_best and best_lane_state:
         # load each lane's head from its own best epoch (strict=False: lanes with no
@@ -1081,11 +1081,6 @@ def main(argv: list[str] | None = None) -> None:
         "--no-high-band trains on raw MERT only (high-band ablation). Separate cache key.",
     )
     ap.add_argument(
-        "--cym", default=False, action=argparse.BooleanOptionalAction,
-        help="append the sub-6 kHz ride/crash/hi-hat timbre block (embeddings.cym_features); "
-        "default off. Compose with --high-band for the cymbal ablation. Separate cache key.",
-    )
-    ap.add_argument(
         "--max-windows", type=int, default=1,
         help="split each clip (train AND val) into up to N non-overlapping ~max-seconds "
         "windows (each its own cached example), instead of using only the first max-seconds. "
@@ -1140,7 +1135,7 @@ def main(argv: list[str] | None = None) -> None:
     cfg = Config(
         encoder=embeddings.MERT_NAME, encoder_fps=embeddings.MERT_FPS,
         encoder_layer=args.layer, cache_dtype=args.cache_dtype,
-        high_band=args.high_band, cym=args.cym,
+        high_band=args.high_band,
         lr=args.lr, weight_decay=args.weight_decay,
         sib_neg_weight=args.sib_neg_weight, sib_pos_weight=args.sib_pos_weight,
     )
@@ -1191,7 +1186,7 @@ def main(argv: list[str] | None = None) -> None:
     torch.manual_seed(args.seed)  # reproducible head init (multi-seed ablations)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
-    in_dim = embeddings.feat_dim(cfg.high_band, cfg.cym)
+    in_dim = embeddings.feat_dim(cfg.high_band)
     model = MultiLaneHeads(in_dim=in_dim, hidden=cfg.head_hidden, num_layers=cfg.head_layers)
     if args.resume:
         sd = torch.load(Path(args.resume) / "model.pt", map_location="cpu")

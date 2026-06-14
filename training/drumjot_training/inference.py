@@ -75,11 +75,6 @@ def lane_probs(audio_path, model, meta: dict, encoder=None, max_seconds: float |
     y = embeddings.load_audio(audio_path, sr=enc.sr)
     if max_seconds is not None:
         y = y[: int(max_seconds * enc.sr)]
-    if meta.get("cym"):
-        raise NotImplementedError(
-            "cym (sub-6kHz) feature block is not yet wired into inference; "
-            "only the training/ablation path supports it so far."
-        )
     feat = enc.encode(y, enc.sr)
     use_hb = meta.get("high_band", int(meta.get("in_dim", embeddings.MERT_DIM)) > embeddings.MERT_DIM)
     if use_hb:
@@ -119,11 +114,6 @@ def stitched_probs(
     y = embeddings.load_audio(audio_path, sr=enc.sr)
     if max_seconds is not None:
         y = y[: int(max_seconds * enc.sr)]
-    if meta.get("cym"):
-        raise NotImplementedError(
-            "cym (sub-6kHz) feature block is not yet wired into inference; "
-            "only the training/ablation path supports it so far."
-        )
     fps = meta["encoder_fps"]
     use_hb = meta.get("high_band", int(meta.get("in_dim", embeddings.MERT_DIM)) > embeddings.MERT_DIM)
     y44 = None

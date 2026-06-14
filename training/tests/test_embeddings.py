@@ -79,35 +79,25 @@ def test_cache_key_depends_on_variant(tmp_path):
 
 
 def test_feat_variant_and_dim_compose():
-    assert embeddings.feat_variant(True, False) == "hb16" == embeddings.FEAT_VARIANT
-    assert embeddings.feat_variant(False, False) == ""
-    assert embeddings.feat_variant(False, True) == "cym5"
-    assert embeddings.feat_variant(True, True) == "hb16+cym5"
+    assert embeddings.feat_variant(True) == "hb16" == embeddings.FEAT_VARIANT
+    assert embeddings.feat_variant(False) == ""
     md = embeddings.MERT_DIM
-    assert embeddings.feat_dim(True, False) == md + embeddings.HB_BANDS == embeddings.FEAT_DIM
-    assert embeddings.feat_dim(False, False) == md
-    assert embeddings.feat_dim(False, True) == md + embeddings.CYM_BANDS
-    assert embeddings.feat_dim(True, True) == md + embeddings.HB_BANDS + embeddings.CYM_BANDS
+    assert embeddings.feat_dim(True) == md + embeddings.HB_BANDS == embeddings.FEAT_DIM
+    assert embeddings.feat_dim(False) == md
 
 
-def test_embed_clip_cym_widths_and_distinct_caches(tmp_path, monkeypatch):
+def test_embed_clip_widths_and_distinct_caches(tmp_path, monkeypatch):
     monkeypatch.setattr(embeddings, "load_audio", lambda p, sr=None: np.zeros(100, dtype=np.float32))
     _stub_hb(monkeypatch)
-    monkeypatch.setattr(
-        embeddings, "cym_features",
-        lambda p, n, max_seconds=None, start_seconds=0.0, fps=embeddings.MERT_FPS:
-            np.zeros((n, embeddings.CYM_BANDS), dtype=np.float32),
-    )
     widths = {}
-    for hb, cy in [(True, False), (False, False), (False, True), (True, True)]:
-        feat = embeddings.embed_clip("/x/z.flac", _StubEncoder(), cache_dir=tmp_path,
-                                     high_band=hb, cym=cy)
-        # _StubEncoder emits 4 enc dims (not MERT_DIM); width = enc + appended blocks
-        expect = 4 + (embeddings.HB_BANDS if hb else 0) + (embeddings.CYM_BANDS if cy else 0)
-        widths[(hb, cy)] = feat.shape[1]
-        assert feat.shape[1] == expect, (hb, cy, feat.shape[1], expect)
-    assert len(set(widths.values())) == 4  # all four recipes distinct widths
-    assert len(list(tmp_path.glob("*.npy"))) == 4  # ...and four distinct cache files
+    for hb in (True, False):
+        feat = embeddings.embed_clip("/x/z.flac", _StubEncoder(), cache_dir=tmp_path, high_band=hb)
+        # _StubEncoder emits 4 enc dims (not MERT_DIM); width = enc + optional HB block
+        expect = 4 + (embeddings.HB_BANDS if hb else 0)
+        widths[hb] = feat.shape[1]
+        assert feat.shape[1] == expect, (hb, feat.shape[1], expect)
+    assert len(set(widths.values())) == 2  # hb on/off -> distinct widths
+    assert len(list(tmp_path.glob("*.npy"))) == 2  # ...and distinct cache files
 
 
 def test_cache_key_is_stable(tmp_path):
