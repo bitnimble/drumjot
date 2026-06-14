@@ -144,16 +144,28 @@ Coverage so far (all three requested categories represented):
 - **Primitives** (`components/stories/`): IconButton (+Mute/Solo/Clear),
   Checkbox, NumberStepper, Tabs, Logo, ColorPot, ColorPicker, variants +
   interactive, handlers routed to the Actions panel via `fn()`.
-- **Major component** (`playback/stories/`): PlaybackBar driven by a real
-  DocumentStore + PlaybackStore + PlaybackPresenter trio (with-jot / no-jot).
+- **Major components**:
+  - `playback/stories/`: PlaybackBar driven by a real DocumentStore +
+    PlaybackStore + PlaybackPresenter trio (with-jot / no-jot).
+  - `mixer/stories/`: **InstrumentRow** (the note-track row) driven by real
+    Document/Mixer/Viewport stores (trackOrder seeded from `jotPitches`,
+    voiceControls stubbed), Default + Muted. Verified rendering in headless
+    Chromium off the static build, gutter + bar noteheads paint.
+  - `toolbar/stories/`: the busy pills (LyricsAlignBusyPill,
+    TranscribeBusyPill) + the ThemeSection picker.
 - **Library sandbox** (`src/stories/jot_loader.stories.tsx`): pick a
   `.jot`/`.mid` (or built-in example) → `parse()`/`fromMidi()` → view the Jot
   as text + a live JotView.
 
-Remaining (not done): stories for the bigger feature components (audio-track
-row, instrument/note row, toolbar menus, full mixer), these depend on the
-`mixer.tsx`/`score.tsx` sub-components being exported, which ties into the
-flagged breakups above.
+Remaining (not done):
+- **AudioTrackRow**, needs a decoded `AudioBuffer` + the waveform worker to
+  show its waveform; the gutter chrome alone would story, but a faithful one
+  needs an audio fixture. Recipe is the same as InstrumentRow otherwise
+  (real stores + stubbed AudioTrackControls).
+- **Full mixer / MixerView**, would reuse the InstrumentRow harness plus an
+  audio + lyrics row; mechanical follow-up now that the rows are exported.
+- **Toolbar File/Transcribe dropdowns**, still inline in `Toolbar` (not
+  separately exported), so no isolated story yet.
 
 ---
 
