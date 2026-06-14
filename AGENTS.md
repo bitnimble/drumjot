@@ -41,7 +41,7 @@ request, and pull in the linked docs when a task touches that area.
   `scripts/check-ts` (tsc + unit + lint) does **not** exercise real
   browser behaviour, so it can't catch a broken interaction, selector, or
   render. E2E specs live next to the feature they cover, at
-  **`src/<feature>/tests/*.e2e.ts`** (shared fixtures in `tests/fixtures/`).
+  **`src/<feature>/test/*.e2e.ts`** (shared fixtures in repo-root `tests/fixtures/`).
   The specs are coupled to the UI (toolbar menu structure, `data-testid`s,
   the ⋯ overflow): if your change moves or renames those, **update the
   affected specs in the same change** and rerun, don't leave them red.
@@ -146,7 +146,7 @@ Frontend (`bun`, repo root):
 | `bun run e2e` | Playwright suite (auto-spawns dev server). See below. |
 
 `bun test` is scoped to `src/` via `bunfig.toml` and matches `*.test.ts`
-unit files; Playwright covers the co-located `src/**/tests/*.e2e.ts`
+unit files; Playwright covers the co-located `src/**/test/*.e2e.ts`
 specs (the distinct `.e2e.ts` suffix keeps the two runners from
 overlapping, see `bunfig.toml`). Go through `scripts/check-ts` for the
 post-change loop.

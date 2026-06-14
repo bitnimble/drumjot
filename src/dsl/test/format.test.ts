@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { formatJot } from './format';
+import { formatJot } from '../format';
 import { Jot } from 'src/dsl/dsl';
 import { parse } from 'src/parser/parser';
 

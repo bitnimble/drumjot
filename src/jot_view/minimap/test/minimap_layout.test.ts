@@ -4,7 +4,7 @@ import {
   noteMarksEqual,
   type MinimapBarTiming,
   type NoteMark,
-} from './minimap_layout';
+} from '../minimap_layout';
 
 const bar = (startSec: number, durationSec: number): MinimapBarTiming => ({ startSec, durationSec });
 

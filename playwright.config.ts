@@ -26,11 +26,11 @@ const E2E_URL = `http://localhost:${E2E_PORT}`;
  *
  * Unit tests stay on `bun test` (scoped to `src/` via bunfig.toml, which
  * matches `*.test.ts`); this runner only owns the co-located
- * `src/<feature>/tests/*.e2e.ts` specs.
+ * `src/<feature>/test/*.e2e.ts` specs.
  */
 export default defineConfig({
   // E2E specs are co-located with the feature they cover, under
-  // `src/<feature>/tests/*.e2e.ts`. The `.e2e.ts` suffix (not `.spec.ts`)
+  // `src/<feature>/test/*.e2e.ts`. The `.e2e.ts` suffix (not `.spec.ts`)
   // keeps them out of `bun test`'s auto-discovery, which matches
   // `.test.ts` / `.spec.ts` and has no ignore config, while `testMatch`
   // here keeps Playwright off the `.test.ts` unit tests living alongside.

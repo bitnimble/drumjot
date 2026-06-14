@@ -1,10 +1,16 @@
-# Confine `bun test` to the unit-test tree (`root = "src"`). Playwright
-# e2e specs are co-located under `src/<feature>/tests/*.e2e.ts` and driven
-# by `playwright test` (a different runner that imports `@playwright/test`,
-# which is not bun-test compatible). Bun auto-discovers `*.test.ts` /
-# `*.spec.ts` and has no ignore config, so the e2e specs deliberately use
-# the `.e2e.ts` suffix (no `.test`/`.spec`) to stay invisible to `bun
-# test`; Playwright's `testMatch` (playwright.config.ts) likewise only
-# matches `*.e2e.ts`, so the two runners never overlap.
+# Test layout: every test for a feature lives in that feature's `test/`
+# subfolder, i.e. `src/<feature>/test/`. Unit tests keep the `.test.ts`
+# suffix; Playwright e2e specs use `.e2e.ts` and sit in the same `test/`
+# folder.
+#
+# `bun test` discovery is suffix-based, it matches `.test`/`.spec`/`_test_`/
+# `_spec_` in the filename under `root` (there is no testMatch glob in
+# bunfig, and the positional path filter is not a `**` glob). So the
+# `test/`-folder convention is enforced by placement: all `*.test.ts` live
+# under a `test/` folder, and a bare `bun test` finds exactly those. The
+# `.e2e.ts` suffix has no `.test`/`.spec`, so the Playwright specs stay
+# invisible to `bun test`; Playwright's `testMatch` (playwright.config.ts)
+# only matches `*.e2e.ts`, so the two runners never overlap even though they
+# now share the `test/` folder.
 [test]
 root = "src"

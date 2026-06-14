@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { JotTimeline } from 'src/jot_view/playback/timeline';
-import { formatPlayheadTime, playheadBarBeat } from './playhead_label';
+import { formatPlayheadTime, playheadBarBeat } from '../playhead_label';
 
 describe('formatPlayheadTime', () => {
   it('formats whole seconds as M:SS.cc', () => {

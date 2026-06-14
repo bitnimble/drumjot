@@ -6,7 +6,7 @@ import {
   samplePct,
   sampleProgressLabel,
   sampleProgressWidth,
-} from './toolbar_status';
+} from '../toolbar_status';
 
 const MB = 1024 * 1024;
 const progress = (over: Partial<SampleLoadProgress>): SampleLoadProgress => ({

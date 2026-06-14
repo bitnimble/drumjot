@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { intersectsBeatRange } from './windowing';
+import { intersectsBeatRange } from '../windowing';
 
 describe('intersectsBeatRange', () => {
   const range = { startBeat: 10, endBeat: 20 };

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import type { LyricLine } from 'src/lyrics/lrc';
 import type { JotTimeline } from 'src/jot_view/playback/timeline';
-import { MIN_BEAT_WIDTH, positionLyricLines } from './lyric_layout';
+import { MIN_BEAT_WIDTH, positionLyricLines } from '../lyric_layout';
 
 // Two 4-beat bars, each 2 s long: jot-time [0,2) → beats [0,4),
 // [2,4) → beats [4,8). So audioSecToBeat is `sec * 2` over [0,4).
