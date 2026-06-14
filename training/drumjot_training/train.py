@@ -359,12 +359,16 @@ class CachedClips:
 
 def _rings_for_clip(
     audio_path, onsets: dict[str, list[float]], cfg: Config, cache_dir: Path,
-    max_seconds: float | None, start_seconds: float = 0.0,
+    max_seconds: float | None, start_seconds: float = 0.0, y_full=None,
 ) -> dict[str, list[tuple[float, float]]]:
     """Ring spans for the sustained lanes (aux activity targets), with a JSON
     side-cache next to the feature cache so re-runs never re-read audio.
     `onsets` are window-relative; (start_seconds, max_seconds) select the audio
-    window so the ring envelope matches. Returns {} when no sustained-lane onset."""
+    window so the ring envelope matches. Returns {} when no sustained-lane onset.
+
+    `y_full` is the optional WHOLE-clip waveform already loaded at MERT_SR (=
+    encoder.sr); when given, the per-window `load_audio` is skipped (batched encoder
+    loads each clip once). Same slice -> same spans."""
     import json
 
     capped = _cap_onsets(onsets, max_seconds)
@@ -376,7 +380,7 @@ def _rings_for_clip(
     if rf.exists():
         loaded = json.loads(rf.read_text())
         return {ln: [tuple(s) for s in spans] for ln, spans in loaded.items()}
-    y = embeddings.load_audio(audio_path, sr=embeddings.MERT_SR)
+    y = embeddings.load_audio(audio_path, sr=embeddings.MERT_SR) if y_full is None else y_full
     a = int(start_seconds * embeddings.MERT_SR)
     b = a + int(max_seconds * embeddings.MERT_SR) if max_seconds is not None else None
     y = y[a:b]

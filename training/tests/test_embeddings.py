@@ -33,7 +33,7 @@ def _stub_hb(monkeypatch):
     # the high-band block loads real 44.1k audio; stub it for fake-path tests
     monkeypatch.setattr(
         embeddings, "highband_features",
-        lambda p, n, max_seconds=None, start_seconds=0.0, fps=embeddings.MERT_FPS:
+        lambda p, n, max_seconds=None, start_seconds=0.0, fps=embeddings.MERT_FPS, y44_full=None:
             np.zeros((n, embeddings.HB_BANDS), dtype=np.float32),
     )
 

@@ -103,15 +103,23 @@ def highband_from_wave(y44: np.ndarray, n_frames: int, fps: float = MERT_FPS) ->
 
 def highband_features(
     audio_path: str | Path, n_frames: int, max_seconds: float | None = None,
-    start_seconds: float = 0.0, fps: float = MERT_FPS,
+    start_seconds: float = 0.0, fps: float = MERT_FPS, y44_full: np.ndarray | None = None,
 ) -> np.ndarray:
     """`highband_from_wave` for a file: loads at HB_SR (resampling if needed;
     sources at <=24 kHz simply yield near-zero bands, degrading gracefully).
     `start_seconds`/`max_seconds` select the [start, start+max] window. `fps` is
-    the encoder frame rate the block must align to (MERT 75)."""
-    import librosa
+    the encoder frame rate the block must align to (MERT 75).
 
-    y44, _ = librosa.load(str(audio_path), sr=HB_SR, mono=True)
+    `y44_full` is the optional WHOLE-clip mono waveform already loaded at HB_SR; when
+    given, the per-call `librosa.load` is skipped (the batched encoder loads each
+    clip once and slices all its windows, avoiding re-decoding the file per window
+    over NFS). Identical result either way (same slice -> same `highband_from_wave`)."""
+    if y44_full is None:
+        import librosa
+
+        y44, _ = librosa.load(str(audio_path), sr=HB_SR, mono=True)
+    else:
+        y44 = y44_full
     a = int(start_seconds * HB_SR)
     b = a + int(max_seconds * HB_SR) if max_seconds is not None else None
     y44 = y44[a:b]
@@ -214,8 +222,17 @@ def embed_clip(
     cache_dtype: str = "float16",
     high_band: bool = True,
     start_seconds: float = 0.0,
+    y_full: np.ndarray | None = None,
+    y44_full: np.ndarray | None = None,
 ) -> np.ndarray:
     """Features for one clip, reading/writing `cache_dir` when given.
+
+    `y_full` / `y44_full` are the optional WHOLE-clip mono waveforms already loaded
+    at `encoder.sr` / `HB_SR`. When given, the per-window `load_audio` /
+    `librosa.load` are skipped -- the batched encoder loads each clip ONCE and
+    slices all its windows, instead of re-decoding the whole file (twice, at both
+    sample rates) for every window over NFS. The result is byte-identical (same
+    slice, same encode, same block); these only change WHERE the bytes come from.
 
     `max_seconds` caps the audio before encoding (bounds MERT's sequence
     length on long clips); it's part of the cache key so capped and full
@@ -242,7 +259,7 @@ def embed_clip(
         cache_file = cache_dir / f"{key}.npy"
         if cache_file.exists():
             return np.load(cache_file)
-    y = load_audio(audio_path, sr=encoder.sr)
+    y = load_audio(audio_path, sr=encoder.sr) if y_full is None else y_full
     a = int(start_seconds * encoder.sr)
     b = a + int(max_seconds * encoder.sr) if max_seconds is not None else None
     y = y[a:b]  # the [start, start+max] window (one MERT forward, always <= max)
@@ -251,7 +268,7 @@ def embed_clip(
     blocks = [feat]
     if high_band:
         # the 6-20 kHz sizzle MERT's 24 kHz input discards (cymbal vs non-cymbal)
-        blocks.append(highband_features(audio_path, feat.shape[0], max_seconds, start_seconds, fps))
+        blocks.append(highband_features(audio_path, feat.shape[0], max_seconds, start_seconds, fps, y44_full))
     feat = np.concatenate(blocks, axis=1) if len(blocks) > 1 else feat
     feat = feat.astype(cache_dtype, copy=False)
     if cache_file is not None:

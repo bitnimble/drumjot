@@ -17,17 +17,18 @@ Resumable: `embed_clip` skips any window already cached, so re-running after an
 interruption only encodes what's missing. Start small with `--pool-cap 50` to
 sanity-check throughput before the full pass.
 
-=== Running on a CUDA 13.0 (cu130) box, e.g. an RTX 3080 ===
-This script is pure torch/transformers; cu130 is purely an *environment* concern:
+=== Environment (any CUDA box, e.g. an RTX 3080) ===
+This script is pure torch/transformers. The project pins the **cu128** torch stack
+(transcriber/pyproject.toml), which is forward-compatible with newer drivers (a
+cu128 build runs fine on a CUDA 13.0 driver), so you do NOT need cu130 wheels.
 
-  1. A torch built for CUDA 13.0. With uv (the project's tool):
-       uv pip install --python <venv> torch --torch-backend=cu130
-     or with pip:
-       pip install torch --index-url https://download.pytorch.org/whl/cu130
-     The 3080 is Ampere (sm_86), supported by the cu130 wheels. Keep the rest of
-     the training deps (transformers, librosa, soundfile, ...) from
-     transcriber/pyproject.toml. (Per project policy, install deps yourself --
-     ordering is fragile.)
+  1. torch + torchvision + torchaudio ALL from the cu128 index, together (their
+     ABIs must match; a torchvision from generic PyPI vs a cu128 torch yields
+     "operator torchvision::nms does not exist"). `uv sync` should produce this;
+     if torchvision came from PyPI, force it:
+       uv pip install --reinstall --no-deps torchvision==<ver>+cu128 \
+         --index-url https://download.pytorch.org/whl/cu128
+     (Per project policy, install deps yourself -- ordering is fragile.)
   2. MERT weights cached locally: HF is forced offline, so run
        python3 training/scripts/fetch_models.py
      on this box first (else you get a clear "run fetch_models" error).
@@ -35,8 +36,14 @@ This script is pure torch/transformers; cu130 is purely an *environment* concern
      sep-tree paths ON THIS BOX (star_balanced_sep / enst-sep / egmd_sep), and
      point --pool-cache at where the trainer will read the cache from.
 
-The script prints torch/CUDA/device at startup so you can confirm it's actually
-on the 3080 with a cu130 runtime before it spends hours encoding.
+The script prints torch/CUDA/device at startup so you can confirm the GPU + a
+working torch before it spends hours encoding.
+
+CROSS-BOX RESUME CAVEAT: the cache key includes the clip's ABSOLUTE audio path, so
+resuming a partial cache on a DIFFERENT box only skips already-done windows if the
+datasets resolve at the SAME absolute path (same NFS mount point) AND the config
+(layer / high-band / max-seconds / window-search) is identical. Mount the share at
+the same path on both boxes (or symlink) or the second box re-encodes from scratch.
 
 Usage:
   export DRUMJOT_STAR=/data/star_balanced_sep DRUMJOT_ENST=/data/enst-sep \
@@ -61,6 +68,134 @@ from drumjot_training import embeddings, runtime, train  # noqa: E402
 from drumjot_training.config import Config  # noqa: E402
 
 
+def encode_pipelined(specs, encoder, cfg, cache, workers, writers, log):
+    """Encode all window-specs into `cache`, optimised for an NFS source.
+
+    Three things the serial `materialize` doesn't do, which matter when the audio
+    lives on NFS (else the GPU starves on I/O, like the stem-split job):
+    - **Load each clip ONCE** (at both sample rates) and slice all its windows from
+      memory, instead of re-decoding the whole file per window x per sample rate
+      (`embed_clip` otherwise reloads the entire file 2x for EVERY window).
+    - **Parallel loader threads** overlap NFS reads with the GPU forward and raise
+      aggregate NFS throughput (librosa releases the GIL during decode).
+    - **Background .npy writes** so saves don't stall the forward loop.
+
+    Byte-identical to `materialize`: it reuses `embed_clip` / `_rings_for_clip` with
+    the preloaded audio passed in, so only WHERE the bytes come from changes.
+    Resumable: clips whose every feature (+ needed rings) already exist are skipped.
+    """
+    import queue
+    import threading
+    from collections import defaultdict
+    from concurrent.futures import ThreadPoolExecutor
+
+    import numpy as np
+
+    cache = Path(cache)
+    variant = embeddings.feat_variant(cfg.high_band)
+
+    def feat_path(audio, start, length):
+        k = embeddings.cache_key(audio, cfg.encoder, cfg.encoder_layer, length, variant, start)
+        return cache / f"{k}.npy"
+
+    def rings_path(audio, start, length):
+        k = embeddings.cache_key(audio, cfg.encoder, cfg.encoder_layer, length, start=start)
+        return cache / f"{k}.rings.json"
+
+    by_clip = defaultdict(list)  # audio -> [(onsets, start, length)]
+    for audio, onsets, _weight, start, length in specs:
+        by_clip[audio].append((onsets, start, length))
+
+    def needs_work(audio, wins):
+        for onsets, start, length in wins:
+            if not feat_path(audio, start, length).exists():
+                return True
+            capped = train._cap_onsets(onsets, length)
+            if (any(capped.get(ln) for ln in train.SUSTAINED_LANES)
+                    and not rings_path(audio, start, length).exists()):
+                return True
+        return False
+
+    todo = [(a, w) for a, w in by_clip.items() if needs_work(a, w)]
+    n_win = sum(len(w) for _, w in todo)
+    log(f"{len(by_clip)} clips total, {len(todo)} need work ({n_win} windows); "
+        f"{workers} loaders / {writers} writers")
+    if not todo:
+        return
+
+    load_q: queue.Queue = queue.Queue()
+    ready_q: queue.Queue = queue.Queue(maxsize=workers * 2)  # backpressure -> bounded RAM
+    for item in todo:
+        load_q.put(item)
+    for _ in range(workers):
+        load_q.put(None)  # one stop sentinel per loader
+
+    def loader():
+        import librosa
+        while True:
+            item = load_q.get()
+            if item is None:
+                return
+            audio, wins = item
+            try:
+                y24 = embeddings.load_audio(audio, sr=encoder.sr)
+                y44 = (librosa.load(str(audio), sr=embeddings.HB_SR, mono=True)[0]
+                       if cfg.high_band else None)
+                ready_q.put((audio, wins, y24, y44))
+            except Exception as e:  # noqa: BLE001
+                log(f"  load fail {Path(audio).name}: {e!r}")
+                ready_q.put((audio, wins, None, None))  # keep the consumer count balanced
+
+    loaders = [threading.Thread(target=loader, daemon=True) for _ in range(workers)]
+    for t in loaders:
+        t.start()
+
+    def _save(path, feat):
+        try:
+            # tmp MUST end in .npy, else np.save appends .npy (-> hash.tmp.npy.npy)
+            # and the os.replace below renames a nonexistent file.
+            tmp = path.with_name(path.stem + ".tmp.npy")
+            np.save(tmp, feat)
+            os.replace(tmp, path)
+        except Exception as e:  # noqa: BLE001
+            log(f"  write fail {path.name}: {e!r}")
+
+    writer = ThreadPoolExecutor(max_workers=writers)
+    t0 = time.perf_counter()
+    n_done = n_enc = 0
+    for _ in range(len(todo)):  # GPU consumer (main thread; only it touches the model)
+        audio, wins, y24, y44 = ready_q.get()
+        if y24 is None:
+            n_done += 1
+            continue
+        for onsets, start, length in wins:
+            fp = feat_path(audio, start, length)
+            if not fp.exists():
+                try:
+                    feat = embeddings.embed_clip(
+                        audio, encoder, cache_dir=None, max_seconds=length,
+                        cache_dtype=cfg.cache_dtype, high_band=cfg.high_band,
+                        start_seconds=start, y_full=y24, y44_full=y44,
+                    )
+                    writer.submit(_save, fp, feat)
+                    n_enc += 1
+                except Exception as e:  # noqa: BLE001
+                    log(f"  skip {Path(audio).name}@{start:.0f}s: {e!r}")
+                    continue
+            try:  # rings reuse the preloaded y24 (no reload); idempotent json side-cache
+                train._rings_for_clip(audio, onsets, cfg, cache, length, start, y_full=y24)
+            except Exception as e:  # noqa: BLE001
+                log(f"  rings fail {Path(audio).name}@{start:.0f}s: {e!r}")
+        n_done += 1
+        if n_done % 50 == 0:
+            rate = n_enc / max(1e-9, time.perf_counter() - t0)
+            log(f"  {n_done}/{len(todo)} clips, {n_enc} windows ({rate:.1f} win/s)")
+    writer.shutdown(wait=True)
+    for t in loaders:
+        t.join()
+    log(f"pipelined encode: {n_enc} new windows from {len(todo)} clips")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Pre-encode the full-windowed pooled MERT cache")
     ap.add_argument("--pool-sources", default="star,enst,egmd",
@@ -77,6 +212,13 @@ def main():
     ap.add_argument("--window-search", type=float, default=3.0,
                     help="low-energy cut nudge radius (must match training)")
     ap.add_argument("--cache-dtype", choices=("float16", "float32"), default="float16")
+    ap.add_argument("--workers", type=int, default=6,
+                    help="parallel loader threads (overlap NFS audio reads with the GPU; raise if "
+                    "the GPU is still I/O-starved, lower if NFS/RAM is the limit)")
+    ap.add_argument("--writers", type=int, default=4, help="background .npy writer threads")
+    ap.add_argument("--no-pipeline", action="store_true",
+                    help="use the simple serial materialize instead of the load-once/prefetch "
+                    "pipeline (debug / parity check)")
     args = ap.parse_args()
 
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
@@ -125,8 +267,12 @@ def main():
 
     log = lambda s: print(s, flush=True)  # noqa: E731
     t0 = time.perf_counter()
-    train.materialize(tr_w, encoder, cfg, cache, args.max_seconds, "train", log)
-    train.materialize(va_w, encoder, cfg, cache, args.max_seconds, "val", log)
+    if args.no_pipeline:
+        train.materialize(tr_w, encoder, cfg, cache, args.max_seconds, "train", log)
+        train.materialize(va_w, encoder, cfg, cache, args.max_seconds, "val", log)
+    else:
+        # train+val keys are split-independent, so encode them in one pooled pass
+        encode_pipelined(tr_w + va_w, encoder, cfg, cache, args.workers, args.writers, log)
     n_npy = len(list(Path(cache).glob("*.npy")))
     print(f"\ndone in {(time.perf_counter() - t0) / 60:.1f} min  ({n_npy} .npy now in {cache})", flush=True)
 
