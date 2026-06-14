@@ -38,36 +38,16 @@ import { ViewportStore } from '../viewport/viewport_store';
 import { MixerStore } from '../mixer/mixer_store';
 import { ViewportPresenter } from '../viewport/viewport_presenter';
 import { PlaybackPresenter } from '../playback/playback_presenter';
+import {
+  computeBarLayouts,
+  EMPTY_NOTE_MARKS,
+  noteMarksEqual,
+  type NoteMark,
+} from './minimap_layout';
 
 const NOTE_STRIP_H = 16;
 const WAVEFORM_H = 36;
 const TOTAL_CANVAS_H = NOTE_STRIP_H + WAVEFORM_H;
-
-type BarLayout = {
-  /** Minimap-px x of the bar's left edge. */
-  x: number;
-  /** Minimap-px width of the bar. */
-  width: number;
-  /** Bar length in DSL beats (== `StructuralBar.beats`); used to map
-   *  per-note `beat` positions onto the bar's minimap pixel range. */
-  beats: number;
-};
-
-type NoteMark = {
-  x: number;
-  color: string;
-};
-
-const EMPTY_NOTE_MARKS: readonly NoteMark[] = Object.freeze([]);
-
-function noteMarksEqual(a: readonly NoteMark[], b: readonly NoteMark[]): boolean {
-  if (a === b) return true;
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    if (a[i].x !== b[i].x || a[i].color !== b[i].color) return false;
-  }
-  return true;
-}
 
 export const Minimap = observer(
   ({
@@ -105,32 +85,15 @@ export const Minimap = observer(
   }, [jot]);
 
   // ─── Per-bar minimap layout (jot-time → minimap px) ────────────────
-  const { bars, totalDuration, firstStartSec, hasContent } = React.useMemo(() => {
-    const empty = {
-      bars: [] as BarLayout[],
-      totalDuration: 0,
-      firstStartSec: 0,
-      hasContent: false,
-    };
-    if (!jot || width <= 0) return empty;
-    const timeline = jot.timeline;
-    const structBars = jot.structure.voices[0]?.bars ?? [];
-    if (timeline.bars.length === 0 || structBars.length === 0) return empty;
-    const first = timeline.bars[0].startSec;
-    const last = timeline.bars[timeline.bars.length - 1];
-    const total = last.startSec + last.durationSec - first;
-    if (total <= 0) return empty;
-    const layouts: BarLayout[] = new Array(timeline.bars.length);
-    for (let i = 0; i < timeline.bars.length; i++) {
-      const t = timeline.bars[i];
-      layouts[i] = {
-        x: ((t.startSec - first) / total) * width,
-        width: (t.durationSec / total) * width,
-        beats: structBars[i]?.beats ?? 0,
-      };
-    }
-    return { bars: layouts, totalDuration: total, firstStartSec: first, hasContent: true };
-  }, [jot, width]);
+  const { bars, totalDuration, firstStartSec, hasContent } = React.useMemo(
+    () =>
+      computeBarLayouts(
+        jot?.timeline.bars ?? [],
+        jot?.structure.voices[0]?.bars ?? [],
+        width
+      ),
+    [jot, width]
+  );
 
   // ─── Waveform peaks (worker-computed at minimap resolution) ─────────
   // Compute peaks for every AUDIBLE audio track in parallel and sum them
