@@ -47,6 +47,15 @@ request, and pull in the linked docs when a task touches that area.
   affected specs in the same change** and rerun, don't leave them red.
   Needs the one-time Playwright setup (`bunx playwright install chromium`
   + `sudo bunx playwright install-deps chromium`).
+  - **Two Playwright projects** (`playwright.config.ts`): `functional`
+    (everything, fully parallel) and `perf` (the 120fps `perf.e2e.ts`).
+    `perf` `dependencies: ['functional']` so it runs **after** functional
+    finishes with the worker pool free, its per-frame medians are
+    contention-sensitive, so it must not race the parallel functional
+    workers. So `bun run e2e` gives a clean 26/26 in one shot. Iterate on
+    perf alone with **`bun run e2e:perf`** (`--project=perf --no-deps`).
+    Caveat: a functional failure skips the dependent `perf` project; fix
+    functional first (or use `e2e:perf`).
 - **No naked color literals in CSS modules**, `bun run lint:design`
   fails on hex / `rgb()`/`rgba()`/`hsl()`/`hsla()` in `src/**/*.css`
   outside `src/design_tokens.css`. Typography goes through `composes:`

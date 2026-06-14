@@ -50,13 +50,32 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   projects: [
+    // Functional specs: everything except the per-frame perf suite, run
+    // fully in parallel across the worker pool.
     {
-      name: 'chromium',
+      name: 'functional',
+      testIgnore: '**/perf.e2e.ts',
       use: {
         ...devices['Desktop Chrome'],
-        launchOptions: {
-          args: ['--no-sandbox'],
-        },
+        launchOptions: { args: ['--no-sandbox'] },
+      },
+    },
+    // Perf specs measure per-frame timing against a tight 120fps budget, so
+    // they must NOT run alongside the parallel functional workers, their
+    // CPU contention inflates the medians and flakes the budget. `dependencies`
+    // makes this project run only AFTER `functional` completes, with the pool
+    // free; the specs are already `mode: 'serial'` within the file, and
+    // `fullyParallel: false` keeps them on a single worker. (Caveat: if a
+    // functional spec fails, Playwright skips this dependent project, fix
+    // functional first, or run `bun run e2e:perf` to measure in isolation.)
+    {
+      name: 'perf',
+      testMatch: '**/perf.e2e.ts',
+      fullyParallel: false,
+      dependencies: ['functional'],
+      use: {
+        ...devices['Desktop Chrome'],
+        launchOptions: { args: ['--no-sandbox'] },
       },
     },
   ],
