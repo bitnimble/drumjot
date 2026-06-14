@@ -7,15 +7,16 @@ RLRR; the optional transcription service turns arbitrary audio into a
 Jot via stem separation + beat tracking + an LLM.
 
 The DSL is documented in [SPEC.md](SPEC.md); examples sit in
-[src/fakes.ts](src/fakes.ts). The full architectural overview is in
-[AGENTS.md](AGENTS.md).
+[src/fakes/fakes.ts](src/fakes/fakes.ts). The full architectural overview
+is in [AGENTS.md](AGENTS.md).
 
 ---
 
 ## Web app
 
-Browser-based DSL editor + renderer. Vite + React + MobX. Uses Bun as
-the package manager and test runner.
+Browser-based DSL editor + renderer. Vite + React + MobX. Bun is the
+package manager and unit-test runner; Playwright drives the e2e suite and
+Storybook hosts the component/library sandboxes.
 
 ### Prerequisites
 
@@ -36,28 +37,72 @@ bun run dev
 
 Then open <http://localhost:5173>.
 
-The toolbar gives you:
+The toolbar (left → right) gives you:
 
-- An **example selector** (loads `rockJot` / `tripletJot` from
-  `src/fakes.ts`).
-- A **Transcribe audio** button that uploads audio and renders the
-  resulting Jot. Needs the transcriber service running locally (see
-  the next section).
-- A **Refine accuracy** checkbox that toggles the LLM convergence
-  loop on the transcribed output.
-- A **Samples** dropdown that controls how many best-of-K
-  candidates the transcriber generates.
+- **File** — load a `.jot`, a Standard MIDI File, a Paradiddle `.rlrr`
+  pack, a transcriber **debug bundle** (`.zip`), or audio track(s) as
+  backing; re-open a **Recent** transcription; pick a built-in
+  **Example** (`rockJot` / `tripletJot` from `src/fakes/fakes.ts`); or
+  load synced **Lyrics** (LRCLIB search, `.lrc` file, or pasted text).
+- **Transcribe** — upload audio (or **Resume** a previous run from a
+  chosen pipeline stage) to render a Jot. Options: beat input
+  (full-mix / drum-stem), drum separator (MDX23C / LarsNet), LLM model,
+  and an optional quantise stage with an LLM-adjustment pass. Needs the
+  transcriber service (see the next section).
+- **View** — horizontal zoom, reference grid lines (beats / 16ths /
+  triplets / 48ths), filtered-onset and uniform-waveform overlays, and
+  the light/dark/system theme.
+- **Playback** — drum kit (SoundFont preset), playback speed, audio
+  latency trim, and auto-follow-on-play.
+
+Below the toolbar: the **mixer** (one row per audio track and drum
+instrument — mute / solo / volume / colour, drag to reorder), the score
+itself, a content-aware **minimap** scrubber, and the playback transport.
 
 ### Other useful commands
 
 ```bash
 scripts/check          # post-change: both sides (lint --fix + typecheck + tests)
-scripts/check-ts       # post-change: frontend only (stylelint + tsc + bun test)
-bun test               # full test suite
-bunx tsc --noEmit      # typecheck only
-bun run build          # production build (tsc + Vite)
+scripts/check-ts       # post-change: frontend (stylelint --fix + tsc + bun test)
+                       #   the canonical wrapper; runs tsc / bun test with the
+                       #   right cwd + flags. Pass a path to scope bun test.
+bun run build          # production build (lint:design + tsc + Vite) — compile check
 bun run preview        # serve the production build
+bun run e2e            # Playwright suite (auto-spawns a dev server)
+bun run e2e:perf       # the 120fps perf specs only, in isolation
+bun run storybook      # Storybook dev server (see below)
+bun run build-storybook # static Storybook build (compile check for stories)
 ```
+
+Tests live in a `test/` subfolder per feature (`src/<feature>/test/`):
+unit `*.test.ts` (Bun) and Playwright `*.e2e.ts` side by side. The e2e
+suite is split into a parallel `functional` project and a serial `perf`
+project that runs after it, so a single `bun run e2e` gives a clean pass
+without the perf medians fighting the functional workers for CPU.
+
+### Storybook
+
+Component and library sandboxes (Storybook 9, `@storybook/react-vite`):
+
+```bash
+bun run storybook         # dev server on http://localhost:6006
+bun run build-storybook   # static build into storybook-static/
+```
+
+`storybook dev` binds to **localhost:6006** (no `--host`), so on a remote
+dev box port-forward 6006 to view it. Stories live next to the feature
+they cover, in `src/<feature>/stories/*.stories.tsx`, and cover three
+things:
+
+- **Primitives** (`components/stories/`) — IconButton, Checkbox,
+  NumberStepper, Tabs, Logo, the colour picker, with handlers wired to the
+  Actions panel.
+- **Feature components** — the PlaybackBar and a mixer InstrumentRow
+  driven by real Document / Mixer / Viewport stores, plus the toolbar busy
+  pills and theme picker.
+- **Library sandbox** (`src/stories/jot_loader.stories.tsx`) — pick a
+  `.jot` / `.mid` (or a built-in example), parse it, and view the Jot text
+  alongside a live render.
 
 ### Loading custom Drumjot DSL from the console
 
@@ -166,7 +211,9 @@ When `debug=true` (or `DEBUG_DIR` is set), the response also includes a
 `transcriber/debug/` containing the original upload, separated drum
 stems, per-instrument stems (kick/snare/hat/...), the beat-tracker
 output, the detected onsets, the predicted MIDI, and per-note
-provenance. The Vite app's "Save debug files" checkbox toggles this.
+provenance. The web app requests `debug=true` for every transcription so
+the run's bundle is always saved (and auto-loaded back into the score on
+completion); the **Load → debug bundle** menu item re-opens a saved one.
 
 Full API docs: see [transcriber/README.md](transcriber/README.md).
 
@@ -182,19 +229,32 @@ docker compose down -v            # also delete the models-cache volume
 
 ## Project structure (brief)
 
+Each domain is a folder; there are no barrel `index.ts` files (import from
+the file that defines a symbol), and tests live in a per-feature `test/`
+subfolder.
+
 ```
 drumjot/
 ├── SPEC.md                Drum-DSL grammar (the source of truth).
 ├── AGENTS.md              Comprehensive context for AI / human contributors.
-├── src/                   Frontend + library code.
-│   ├── dsl.ts             Core types.
-│   ├── jot.ts             RenderedJot + layout pipeline.
-│   ├── jot_view.tsx       React renderer.
-│   ├── fakes.ts           Example jots.
+├── src/
+│   ├── index.tsx          App entry (the only loose file besides global CSS).
+│   ├── dsl/               Core DSL types (dsl.ts) + the Jot formatter.
+│   ├── jot/               RenderedJot + layout pipeline (view_config,
+│   │                      resolved_jot, pattern_expansion).
 │   ├── parser/            DSL parser (TS).
 │   ├── midi/              MIDI <-> Jot.
 │   ├── rlrr/              Paradiddle <-> {Jot, MIDI}.
-│   └── transcriber.ts     HTTP client for the transcriber service.
+│   ├── lyrics/            Synced-lyrics parsing + alignment.
+│   ├── linter/            Jot linter + rules.
+│   ├── tempo/ tracks/ instruments/ grid/ dynamics/ selection/ fakes/
+│   │                      Small shared domains (one file each, for now).
+│   ├── utils/             General helpers (geom, zip, download, perf_probe).
+│   └── jot_view/          The React app: jot_view.tsx + per-feature folders
+│                          (mixer, playback, lyrics, score, toolbar, minimap,
+│                          viewport, transcribe, provenance, document,
+│                          settings, components, toasts). The transcriber
+│                          HTTP client is jot_view/transcribe/transcriber.ts.
 ├── transcriber/           Python backend (FastAPI + Docker).
 └── package.json           Bun-managed.
 ```
