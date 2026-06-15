@@ -997,20 +997,32 @@ def _enst_perstem_specs(args) -> tuple[list, list, Path]:
     return [spec(c) for c in tr], [spec(c) for c in va], root / "_cache_mert"
 
 
-def _cap_by_clip(perstem_clips, keyfn, cap: int):
-    """Keep all per-stem examples for the first `cap` distinct source clips
-    (songs/takes), in order. `cap<=0` keeps everything."""
-    if cap <= 0:
+def _cap_by_windows(perstem_clips, n_windows: int, window: float = 30.0):
+    """Keep per-stem clips (in order) until their estimated window count reaches
+    `n_windows` -- so cap-N ~= N windows ~= N*`window` seconds of training audio,
+    a PREDICTABLE data amount (unlike a clip count, since clip lengths vary wildly).
+    Windows/clip are estimated from the audio DURATION via the `sf.info` header (no
+    decode): ceil(dur/window), minus 1 when the tail is shorter than `MIN_WINDOW`
+    (it merges into the previous window; see `plan_windows`). The estimate is "very
+    close" -- the low-energy nudge shifts cut times slightly, so the exact count can
+    differ by ~1 on rare clips. `n_windows <= 0` keeps everything."""
+    if n_windows <= 0:
         return list(perstem_clips)
-    keys: set = set()
-    out = []
+    import soundfile as sf
+
+    out, total = [], 0
     for c in perstem_clips:
-        k = keyfn(c)
-        if k in keys:
-            out.append(c)
-        elif len(keys) < cap:
-            keys.add(k)
-            out.append(c)
+        out.append(c)
+        try:
+            dur = float(sf.info(str(c.audio_path)).duration)
+        except Exception:  # noqa: BLE001  unreadable header -> assume one window
+            dur = window
+        n = max(1, int(np.ceil(dur / window)))
+        if n >= 2 and (dur - (n - 1) * window) < MIN_WINDOW:  # short tail merges
+            n -= 1
+        total += n
+        if total >= n_windows:
+            break
     return out
 
 
@@ -1030,8 +1042,9 @@ def _pooled_specs(args) -> tuple[list, list, Path]:
     signal. (If `hp`/`mc` regress, add per-source lane masking for ENST.)
 
     `DRUMJOT_STAR/ENST/EGMD` must point at the sep trees (star_balanced_sep,
-    enst-sep, egmd-sep). `--pool-sources` selects which; `--pool-cap` caps clips
-    per source; `--pool-balance` oversamples smaller sources so none dominates.
+    enst-sep, egmd-sep). `--pool-sources` selects which; `--pool-cap` caps each
+    source to ~N WINDOWS (~N*max-seconds of audio, predictable across varying clip
+    lengths); `--pool-balance` oversamples smaller sources so none dominates.
     """
     import json
     import os
@@ -1113,7 +1126,7 @@ def _pooled_specs(args) -> tuple[list, list, Path]:
     per_val: dict[str, list] = {}
     for name in sources:
         tr, va, ann_of, reader, p2l = info[name]
-        per_train[name] = [_spec(c, ann_of, reader, p2l) for c in _cap_by_clip(tr, ann_of, args.pool_cap)]
+        per_train[name] = [_spec(c, ann_of, reader, p2l) for c in _cap_by_windows(tr, args.pool_cap)]
         per_val[name] = [_spec(c, ann_of, reader, p2l) for c in va]
     if dirty:  # atomic so a ctrl-C can't leave a half-written cache
         tmp = ocp.with_name(ocp.name + ".tmp")
@@ -1150,7 +1163,8 @@ def main(argv: list[str] | None = None) -> None:
                     help="pooled mode: comma-list of sep-tree sources to combine (DRUMJOT_<SRC> "
                     "must point at each sep tree, e.g. star_balanced_sep / enst-sep / egmd-sep)")
     ap.add_argument("--pool-cap", type=int, default=0,
-                    help="pooled mode: max source-clips per dataset (0 = all); each expands to ~5 stems")
+                    help="pooled mode: target train WINDOWS per dataset source (~N*max-seconds of "
+                    "audio; predictable, unlike a clip count over varying lengths); 0 = all")
     ap.add_argument("--pool-balance", action="store_true",
                     help="pooled mode: oversample smaller sources up to the largest (<=5x) so the big "
                     "synthetic sets don't drown the small real-acoustic one (ENST)")

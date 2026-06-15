@@ -16,13 +16,29 @@ def _enst_sep_tree(tmp_path):
     return tmp_path
 
 
-def test_cap_by_clip():
+def test_cap_by_windows(tmp_path):
+    from types import SimpleNamespace
+
+    import numpy as np
+    import pytest
+
+    pytest.importorskip("soundfile")
+    import soundfile as sf
+
     from drumjot_training import train
 
-    items = [("a", 1), ("a", 2), ("b", 1), ("c", 1), ("c", 2)]
-    key = lambda x: x[0]  # noqa: E731
-    assert train._cap_by_clip(items, key, 0) == items                 # 0 = keep all
-    assert train._cap_by_clip(items, key, 2) == [("a", 1), ("a", 2), ("b", 1)]  # first 2 keys
+    def clip(name, secs):
+        p = tmp_path / name
+        sf.write(str(p), np.zeros(int(secs * 24000), dtype="float32"), 24000)
+        return SimpleNamespace(audio_path=str(p))
+
+    c90 = [clip(f"{i}.flac", 90.0) for i in range(3)]  # 90/30 = 3 windows each (no tail merge)
+    assert train._cap_by_windows(c90, 0) == c90        # 0 = keep all
+    assert train._cap_by_windows(c90, 5) == c90[:2]    # 3+3 >= 5 -> first 2 clips
+    assert train._cap_by_windows(c90, 3) == c90[:1]    # 3 >= 3 -> first 1
+    # short tail merges: a 63s clip is 2 windows (not 3), so cap-3 needs a 2nd clip
+    short = [clip("a63.flac", 63.0), clip("b90.flac", 90.0)]
+    assert train._cap_by_windows(short, 3) == short    # 2 (merged) < 3 -> add the 90s clip
 
 
 def test_pooled_specs_single_source(tmp_path, monkeypatch):

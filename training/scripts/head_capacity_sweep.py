@@ -53,7 +53,7 @@ from drumjot_training.lanes import LANES  # noqa: E402
 from drumjot_training.model import MultiLaneHeads  # noqa: E402
 from drumjot_training.targets import pos_weights_from_targets  # noqa: E402
 from drumjot_training.train import (  # noqa: E402
-    _cap_by_clip,
+    _cap_by_windows,
     _window_specs,
     evaluate_clip,
     materialize,
@@ -107,9 +107,10 @@ def _source(name: str):
 
 def build_specs(sources, cap, cache):
     """Pooled cymbal+hat per-stem specs (audio, restricted_onsets, full_onsets),
-    capped per source by distinct source song. Restricted = full filtered to the
-    stem's own lanes; full rides along for sibling weighting. Parsed onsets are
-    memoized to _onsets.json beside the feature cache (same as _pooled_specs)."""
+    capped per source to ~`cap` WINDOWS (~cap*30s of audio; predictable across
+    varying clip lengths). Restricted = full filtered to the stem's own lanes; full
+    rides along for sibling weighting. Parsed onsets are memoized to _onsets.json
+    beside the feature cache (same as _pooled_specs)."""
     ocp = Path(cache) / "_onsets.json"
     try:
         ocache = json.loads(ocp.read_text()) if ocp.exists() else {}
@@ -137,7 +138,7 @@ def build_specs(sources, cap, cache):
             restricted = {ln: (full[ln] if ln in keep else []) for ln in LANES}
             return (c.audio_path, restricted, full)
 
-        tr_c = _cap_by_clip(tr, ann_of, cap)
+        tr_c = _cap_by_windows(tr, cap)
         tr_specs += [_spec(c) for c in tr_c]
         va_specs += [_spec(c) for c in va]
         print(f"  {name:5} train={len(tr_c):5d}  val={len(va):5d}", flush=True)
@@ -169,7 +170,9 @@ def eval_per_lane(model, val_clips, cfg, thresholds):
 def main():
     ap = argparse.ArgumentParser(description="Head-capacity x data-scale sweep (cymbals+hats)")
     ap.add_argument("--pool-sources", default="star,enst,egmd")
-    ap.add_argument("--pool-cap", type=int, default=0, help="max source-songs per dataset (0 = all)")
+    ap.add_argument("--pool-cap", type=int, default=0,
+                    help="target train WINDOWS per source (~N*30s of audio; predictable, unlike a "
+                    "song count over varying lengths); 0 = all")
     ap.add_argument("--hidden", default="128,512", help="comma list of head hidden sizes to sweep")
     ap.add_argument("--layers", type=int, default=2)
     ap.add_argument("--seeds", default="0")
