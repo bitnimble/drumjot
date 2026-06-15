@@ -10,6 +10,16 @@ request, and pull in the linked docs when a task touches that area.
 
 ## Critical rules (apply to every request)
 
+- **Close the loop; don't stop for a rubber-stamp.** If you would end a
+  turn asking a question whose answer is obviously "yes, continue" /
+  "yes, do it", don't, just do it. You can edit, run
+  `scripts/check*`/`build`/`e2e`, and validate yourself, so prefer acting
+  and verifying over asking. If you spot something unconditionally better
+  (cleanup, dead code, an obvious fix) while working, fix it rather than
+  asking whether to, that's the job. Reserve questions for genuine forks
+  (materially different paths, neither clearly better) and
+  irreversible/destructive actions (push, delete, data loss), those still
+  warrant a pause.
 - **Use `bun`, never npm/yarn. Use `bunx`, never npx.**
 - **After any code change, run `scripts/check*`**, never invoke
   pytest / bun test / tsc / stylelint / playwright directly. Those direct
