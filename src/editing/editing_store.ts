@@ -20,6 +20,8 @@ export type PlaceholderNote = {
   /** Cumulative beat offset from the start of the layer's bars row; drives
    *  the rendered x via the same CSS calc the real notes use. */
   absBeat: number;
+  /** The owning bar's length in beats; the upper clamp for snapping. */
+  barBeats: number;
 };
 
 /**
@@ -34,6 +36,11 @@ export class EditingStore {
   /** Insert-mode preview note under the cursor, or `undefined` when the
    *  cursor isn't over a lane (or not in insert mode). */
   placeholder: PlaceholderNote | undefined = undefined;
+
+  /** When enabled, inserting and moving notes snaps to the grid at the
+   *  resolution of the currently-enabled grid-line families. Toggled from the
+   *  Edit toolbar menu. */
+  snappingEnabled: boolean = false;
 
   constructor() {
     makeAutoObservable(this);

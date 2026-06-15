@@ -31,6 +31,7 @@ import type { GridLineSettings } from 'src/settings/settings_store';
 import type { TranscribeOptions, TranscribeStatus } from 'src/editing/transcribe/transcribe_store';
 import { PlaybackKitSubmenu, PlaybackSpeedItem, AudioLatencyItem } from './playback_menu';
 import { ZoomControl, ThemeSection } from './view_menu';
+import { EditMenu } from './edit_menu';
 import { DrumLoadingIndicator, LyricsAlignBusyPill, TranscribeBusyPill } from './toolbar_status';
 
 /** Stage labels in pipeline order, shown verbatim in the resume stage
@@ -72,7 +73,7 @@ export const Select = ({ onChange, ...rest }: React.ComponentPropsWithoutRef<'se
  * (overflow-icon callers like the mixer don't want one); toolbar
  * triggers compose it via this helper instead.
  */
-const ToolbarDropdownLabel = ({ children }: { children: React.ReactNode }) => (
+export const ToolbarDropdownLabel = ({ children }: { children: React.ReactNode }) => (
   <span className={styles.toolbarDropdownLabel}>
     {children}
     <ChevronDown size={14} aria-hidden="true" />
@@ -795,6 +796,7 @@ export const Toolbar = observer(
             </>
           )}
         </DropdownButton>
+        <EditMenu />
         <DropdownButton
           label={<ToolbarDropdownLabel>Playback</ToolbarDropdownLabel>}
           className={styles.playButton}

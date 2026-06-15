@@ -1,5 +1,7 @@
 import { makeAutoObservable } from 'mobx';
 import type { Jot, NoteElement } from 'src/schema/schema';
+import { SettingsStore } from 'src/settings/settings_store';
+import { enabledDivisors, snapBeat } from './snap';
 import { EditingStore, type EditMode, type PlaceholderNote } from './editing_store';
 import { JotEditorStore } from './jot_editor_store';
 
@@ -18,11 +20,13 @@ const INSERTED_NOTE_DURATION = 0.25;
 export class EditingPresenter {
   constructor(
     private readonly editingStore: EditingStore,
-    private readonly jotEditorStore: JotEditorStore
+    private readonly jotEditorStore: JotEditorStore,
+    private readonly settingsStore: SettingsStore
   ) {
-    makeAutoObservable<this, 'editingStore' | 'jotEditorStore'>(this, {
+    makeAutoObservable<this, 'editingStore' | 'jotEditorStore' | 'settingsStore'>(this, {
       editingStore: false,
       jotEditorStore: false,
+      settingsStore: false,
     });
   }
 
@@ -32,8 +36,25 @@ export class EditingPresenter {
     if (mode !== 'insert') this.editingStore.placeholder = undefined;
   }
 
+  /** Enable/disable grid snapping (Edit menu). */
+  setSnapping(on: boolean): void {
+    this.editingStore.snappingEnabled = on;
+  }
+
   movePlaceholder(placeholder: PlaceholderNote): void {
-    this.editingStore.placeholder = placeholder;
+    // Snap the preview as it moves so the user sees where the note will land;
+    // `insertNote` then commits the already-snapped beat verbatim.
+    this.editingStore.placeholder = this.snapPlaceholder(placeholder);
+  }
+
+  /** Snap a placeholder's beat to the grid (union of enabled families) when
+   *  snapping is on, recomputing its `absBeat`. Identity when snapping is off. */
+  private snapPlaceholder(p: PlaceholderNote): PlaceholderNote {
+    if (!this.editingStore.snappingEnabled) return p;
+    const divisors = enabledDivisors(this.settingsStore.gridLines);
+    const beat = snapBeat(p.beat, divisors, p.barBeats);
+    if (beat === p.beat) return p;
+    return { ...p, beat, absBeat: p.absBeat - p.beat + beat };
   }
 
   clearPlaceholder(): void {

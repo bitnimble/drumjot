@@ -147,7 +147,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     orderedNotes(jotEditorStore.structural?.layers ?? [])
   );
   const editingStore = new EditingStore();
-  const editingPresenter = new EditingPresenter(editingStore, jotEditorStore);
+  const editingPresenter = new EditingPresenter(editingStore, jotEditorStore, settings);
 
   // Marquee hit-test: which notes a rubber-band box (scrollViewport coords)
   // encloses. Wired up with real geometry in the drag/coordinate layer; until
