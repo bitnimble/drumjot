@@ -48,15 +48,15 @@ drumjot/
 │   │                               Metadata, Instrument, Modifier, Sticking, Limb.
 │   ├── jot.ts                      RenderedJot + layout pipeline; per-bar pixel
 │   │                               positions. Holds LANE_COLORS data palette.
-│   ├── jot_view.tsx                React renderer + JotViewStore (MobX).
-│   ├── jot_view.module.css         Shared form chrome CSS modules.
-│   ├── jot_view/                   Per-component chrome split out of jot_view.tsx.
+│   ├── jot_editor.tsx                React renderer + JotEditorStore (MobX).
+│   ├── jot_editor.module.css         Shared form chrome CSS modules.
+│   ├── editing/                   Per-component chrome split out of jot_editor.tsx.
 │   │   ├── toolbar.tsx             Header strip + dropdowns + DebugPanel.
 │   │   ├── playback.tsx            Bottom transport bar + master volume + playhead.
 │   │   ├── mixer.tsx               Unified mixer (audio tracks + drum pitch rows).
 │   │   ├── score.tsx               Timeline header, bars, notes, brackets,
 │   │   │                           note-label popovers, filtered-onset ghosts.
-│   │   ├── store.ts                JotViewStore (MobX) + TrackKey + constants.
+│   │   ├── store.ts                JotEditorStore (MobX) + TrackKey + constants.
 │   │   └── contexts.ts             React contexts (NoteProvenanceContext, …).
 │   ├── ui/                         Shared React UI primitives, one folder per
 │   │                               component (button, icon_button, modal, form,
@@ -169,16 +169,16 @@ failure modes inspectable.
 **No DOM layout reads in hot paths.** The score uses a virtualised
 scroll model: `.jotContainer` is `overflow: hidden`, an inner
 `.scrollViewport` moves via `transform: translate(-scrollX, -scrollY)`,
-and offsets live on `JotViewStore` as MobX observables (`scrollX`,
+and offsets live on `JotEditorStore` as MobX observables (`scrollX`,
 `scrollY`). Viewport/content extents are cached on the store, fed by a
-`ResizeObserver` in JotView.
+`ResizeObserver` in JotEditor.
 
 In any render, effect, MobX reaction, or per-frame/scroll/zoom path, **do
 not read DOM layout metrics** (`scrollLeft`, `clientWidth`,
 `getBoundingClientRect`, `getComputedStyle` for layout, etc.), a layout
 read forces a synchronous reflow; per-frame that's jank. Read from the
 store. If a needed dimension isn't on the store, add an observable and
-feed it from the existing JotView `ResizeObserver`.
+feed it from the existing JotEditor `ResizeObserver`.
 
 **Legitimate exceptions** (stay as DOM reads): synchronous user-input
 handlers that need a fresh rect at gesture time (click→seek, marquee

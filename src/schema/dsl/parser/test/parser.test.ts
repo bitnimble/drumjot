@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { Element, Group, Note, PatternRef, Simultaneity } from 'src/schema/dsl/dsl';
-import { buildJotModel } from 'src/jot_view/jot_view_store';
+import { buildJotModel } from 'src/editing/jot_editor_store';
 import { ParseError } from 'src/schema/dsl/parser/errors';
 import { parse } from 'src/schema/dsl/parser/parser';
 

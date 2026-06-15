@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
-import type { TranscribeStatus } from 'src/jot_view/transcribe/transcribe_store';
+import type { TranscribeStatus } from 'src/editing/transcribe/transcribe_store';
 import { LyricsAlignBusyPill, TranscribeBusyPill } from '../toolbar_status';
 import { Gallery, Variant } from 'src/ui/stories/_variants';
 

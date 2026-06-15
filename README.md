@@ -250,11 +250,11 @@ drumjot/
 │   ├── tempo/ tracks/ instruments/ grid/ dynamics/ selection/ fakes/
 │   │                      Small shared domains (one file each, for now).
 │   ├── utils/             General helpers (geom, zip, download, perf_probe).
-│   └── jot_view/          The React app: jot_view.tsx + per-feature folders
+│   └── editing/          The React app: jot_editor.tsx + per-feature folders
 │                          (mixer, playback, lyrics, score, toolbar, minimap,
 │                          viewport, transcribe, provenance, document,
 │                          settings, components, toasts). The transcriber
-│                          HTTP client is jot_view/transcribe/transcriber.ts.
+│                          HTTP client is editing/transcribe/transcriber.ts.
 ├── transcriber/           Python backend (FastAPI + Docker).
 └── package.json           Bun-managed.
 ```

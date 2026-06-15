@@ -58,7 +58,7 @@ export type AlignLyricsOptions = {
  * Non-terminal envelopes drive `opts.onProgress` so the caller can show
  * a wait state; the `result` lines (shape `{lines: LyricLine[]}`, an
  * exact match for our in-memory type) go straight into
- * `lyricsStore.replace(id, ...)` via `JotViewStore.alignLyricsForced`.
+ * `lyricsStore.replace(id, ...)` via `JotEditorStore.alignLyricsForced`.
  *
  * Input-validation failures arrive as a real 4xx (before any stream
  * bytes) and surface here as the server's `detail` message, same as

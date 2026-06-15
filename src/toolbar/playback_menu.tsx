@@ -1,5 +1,5 @@
 import { observer } from 'mobx-react-lite';
-import { jotPlayer, PLAYBACK_SPEED_MAX, PLAYBACK_SPEED_MIN, PLAYBACK_SPEED_STEP } from 'src/jot_view/playback/player';
+import { jotPlayer, PLAYBACK_SPEED_MAX, PLAYBACK_SPEED_MIN, PLAYBACK_SPEED_STEP } from 'src/editing/playback/player';
 import { SubmenuItem, ToggleMenuItem } from 'src/ui/dropdown/dropdown';
 import { NumberStepper } from 'src/ui/number_stepper/number_stepper';
 import styles from './toolbar.module.css';

@@ -16,7 +16,7 @@
         "Bash(bun run lint *)",
         "Bash(bunx --bun vite *)"
       ],
-      "reason": "Use `scripts/check-ts` instead of invoking tsc / bun test / stylelint directly. It chains stylelint --fix + tsc --noEmit + bun test in the right cwd; trailing args pass through to `bun test` so single-file iteration still works (`scripts/check-ts src/jot_view/store.test.ts`). See AGENTS.md §3."
+      "reason": "Use `scripts/check-ts` instead of invoking tsc / bun test / stylelint directly. It chains stylelint --fix + tsc --noEmit + bun test in the right cwd; trailing args pass through to `bun test` so single-file iteration still works (`scripts/check-ts src/editing/store.test.ts`). See AGENTS.md §3."
     },
     {
       "commands": ["Bash(gh *)"],

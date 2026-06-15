@@ -1,10 +1,10 @@
 import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
-import { jotPlayer } from 'src/jot_view/playback/player';
-import { SampleLoadProgress } from 'src/jot_view/playback/sample_storage';
-import { TranscribeStage } from 'src/jot_view/transcribe/transcriber';
-import sharedStyles from '../jot_view/jot_view.module.css';
-import type { TranscribeStatus } from 'src/jot_view/transcribe/transcribe_store';
+import { jotPlayer } from 'src/editing/playback/player';
+import { SampleLoadProgress } from 'src/editing/playback/sample_storage';
+import { TranscribeStage } from 'src/editing/transcribe/transcriber';
+import sharedStyles from '../editing/jot_editor.module.css';
+import type { TranscribeStatus } from 'src/editing/transcribe/transcribe_store';
 import styles from './toolbar.module.css';
 
 /** Human-readable label for one pipeline stage, used in the status
@@ -125,7 +125,7 @@ export const LyricsAlignBusyPill = observer(
  * live pipeline stage (and substage detail, if any) alongside the
  * filename so the operator can see what the server is actually
  * working on; fed from the NDJSON progress stream via
- * `JotViewStore.applyProgress`. Completion (success or failure) drops
+ * `JotEditorStore.applyProgress`. Completion (success or failure) drops
  * back to nothing; the user-visible result surfaces as a toast.
  */
 export const TranscribeBusyPill = observer(({ status }: { status: TranscribeStatus }) => {

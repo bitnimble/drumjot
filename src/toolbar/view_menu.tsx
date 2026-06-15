@@ -2,7 +2,7 @@ import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { themeStore, ThemeMode } from 'src/settings/theme';
 import { DropdownSection, ToggleMenuItem } from 'src/ui/dropdown/dropdown';
-import { ViewportStoreContext } from '../jot_view/viewport/viewport_contexts';
+import { ViewportStoreContext } from '../editing/viewport/viewport_contexts';
 import styles from './toolbar.module.css';
 
 /**
@@ -13,7 +13,7 @@ import styles from './toolbar.module.css';
  * Toolbar prop) the whole shell + toolbar reconciled every tick. Reading
  * it in this leaf instead means only this single control reacts, and it
  * only mounts while the View dropdown is open anyway. Pairs with the
- * stable-prop isolation that keeps `JotView` off the zoom path entirely.
+ * stable-prop isolation that keeps `JotEditor` off the zoom path entirely.
  */
 export const ZoomControl = observer(({ onSetZoom }: { onSetZoom: (z: number) => void }) => {
   const viewport = React.useContext(ViewportStoreContext);

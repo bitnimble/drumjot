@@ -3,25 +3,25 @@ import { createRoot } from 'react-dom/client';
 import 'src/design_tokens.css';
 import { Jot } from 'src/schema/dsl/dsl';
 import { EXAMPLE_JOTS, ExampleJot, rockJot, tripletJot } from 'src/fakes/fakes';
-import { createJotView } from 'src/jot_view/jot_view';
-import { TranscribePresenter } from 'src/jot_view/transcribe/transcribe_presenter';
-import { ViewportPresenter } from 'src/jot_view/viewport/viewport_presenter';
-import { MixerPresenter } from 'src/jot_view/mixer/mixer_presenter';
-import { ProvenancePresenter } from 'src/jot_view/provenance/provenance_presenter';
-import { PlaybackPresenter } from 'src/jot_view/playback/playback_presenter';
-import { LyricsPresenter } from 'src/jot_view/lyrics/lyrics_presenter';
-import { JotViewPresenter } from 'src/jot_view/jot_view_presenter';
-import { JotViewStore } from 'src/jot_view/jot_view_store';
+import { createJotEditor } from 'src/editing/jot_editor';
+import { TranscribePresenter } from 'src/editing/transcribe/transcribe_presenter';
+import { ViewportPresenter } from 'src/editing/viewport/viewport_presenter';
+import { MixerPresenter } from 'src/editing/mixer/mixer_presenter';
+import { ProvenancePresenter } from 'src/editing/provenance/provenance_presenter';
+import { PlaybackPresenter } from 'src/editing/playback/playback_presenter';
+import { LyricsPresenter } from 'src/editing/lyrics/lyrics_presenter';
+import { JotEditorPresenter } from 'src/editing/jot_editor_presenter';
+import { JotEditorStore } from 'src/editing/jot_editor_store';
 import { SettingsStore } from 'src/settings/settings_store';
-import { TranscribeStore } from 'src/jot_view/transcribe/transcribe_store';
-import { ProvenanceStore } from 'src/jot_view/provenance/provenance_store';
-import { LyricsAlignStore } from 'src/jot_view/lyrics/lyrics_align_store';
-import { PlaybackStore } from 'src/jot_view/playback/playback_store';
-import { ViewportStore } from 'src/jot_view/viewport/viewport_store';
-import { MixerStore } from 'src/jot_view/mixer/mixer_store';
+import { TranscribeStore } from 'src/editing/transcribe/transcribe_store';
+import { ProvenanceStore } from 'src/editing/provenance/provenance_store';
+import { LyricsAlignStore } from 'src/editing/lyrics/lyrics_align_store';
+import { PlaybackStore } from 'src/editing/playback/playback_store';
+import { ViewportStore } from 'src/editing/viewport/viewport_store';
+import { MixerStore } from 'src/editing/mixer/mixer_store';
 import { parse } from 'src/schema/dsl/parser/parser';
 import { writeDsl } from 'src/schema/dsl/writer';
-import { jotPlayer } from 'src/jot_view/playback/player';
+import { jotPlayer } from 'src/editing/playback/player';
 // Side-effect import: instantiates the theme controller so the
 // `<html data-theme>` attribute is in sync with the user's saved choice
 // (or the live OS preference in `system` mode) before React mounts.
@@ -33,7 +33,7 @@ class Drumjot {
   // Data-only stores + presenter. Exposed (via `window.drumjot`) so
   // console / e2e can reach each peer directly; there is no single
   // top-level store.
-  readonly jotViewStore: JotViewStore;
+  readonly jotEditorStore: JotEditorStore;
   readonly settings: SettingsStore;
   readonly transcribe: TranscribeStore;
   readonly provenance: ProvenanceStore;
@@ -46,12 +46,12 @@ class Drumjot {
   readonly provenancePresenter: ProvenancePresenter;
   readonly playbackPresenter: PlaybackPresenter;
   readonly lyricsPresenter: LyricsPresenter;
-  readonly jotViewPresenter: JotViewPresenter;
+  readonly jotEditorPresenter: JotEditorPresenter;
   readonly transcribePresenter: TranscribePresenter;
 
   constructor(root: HTMLElement, examples: readonly ExampleJot[] = EXAMPLE_JOTS) {
     const {
-      jotViewStore,
+      jotEditorStore,
       settings,
       transcribe,
       provenance,
@@ -64,11 +64,11 @@ class Drumjot {
       provenancePresenter,
       playbackPresenter,
       lyricsPresenter,
-      jotViewPresenter,
+      jotEditorPresenter,
       transcribePresenter,
       View,
-    } = createJotView({ examples });
-    this.jotViewStore = jotViewStore;
+    } = createJotEditor({ examples });
+    this.jotEditorStore = jotEditorStore;
     this.settings = settings;
     this.transcribe = transcribe;
     this.provenance = provenance;
@@ -81,7 +81,7 @@ class Drumjot {
     this.provenancePresenter = provenancePresenter;
     this.playbackPresenter = playbackPresenter;
     this.lyricsPresenter = lyricsPresenter;
-    this.jotViewPresenter = jotViewPresenter;
+    this.jotEditorPresenter = jotEditorPresenter;
     this.transcribePresenter = transcribePresenter;
     createRoot(root).render(<View />);
   }
@@ -90,7 +90,7 @@ class Drumjot {
     // The presenter builds the song's peers against the shared ViewConfig
     // (so `setZoom`, which mutates `viewConfig.barWidth`, drives this jot's
     // `pxPerBeat`/layout), matching every other loader.
-    this.jotViewPresenter.setJot(jot);
+    this.jotEditorPresenter.setJot(jot);
   }
 
   /** Parse a DSL source string (SPEC.md syntax) and load the resulting jot. */
@@ -102,13 +102,13 @@ class Drumjot {
    *  the inverse of {@link loadDsl}. Empty string when nothing is loaded.
    *  Round-trips through {@link writeDsl} over the source jot. */
   toDsl(): string {
-    const source = this.jotViewStore.source;
+    const source = this.jotEditorStore.source;
     return source ? writeDsl(source) : '';
   }
 
   /** Load one of the registered example jots by id. */
   loadExample(id: string) {
-    this.jotViewPresenter.loadExample(id);
+    this.jotEditorPresenter.loadExample(id);
   }
 
   loadTestJot() {

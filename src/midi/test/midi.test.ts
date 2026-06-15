@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MidiData, MidiEvent, parseMidi, writeMidi } from 'midi-file';
 import { Jot } from 'src/schema/dsl/dsl';
-import { buildJotModel } from 'src/jot_view/jot_view_store';
+import { buildJotModel } from 'src/editing/jot_editor_store';
 import { fromMidi } from 'src/midi/from_midi';
 import { allocatePitchesForMidi } from 'src/midi/gm';
 import { toMidi } from 'src/midi/to_midi';

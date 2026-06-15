@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { bar, group, type Jot as DslJot, note } from 'src/schema/dsl/dsl';
-import { StructureStore } from 'src/jot_view/structure/structure_store';
+import { StructureStore } from 'src/editing/structure/structure_store';
 import { dslToReactive } from 'src/schema/dsl/from_dsl';
 
 function structureOf(jot: DslJot) {

@@ -34,8 +34,8 @@ import {
   GHOST_REDUCTION,
   VOLUME_TO_VELOCITY,
 } from 'src/dynamics/dynamics';
-import { buildJotModel } from 'src/jot_view/jot_view_store';
-import type { StructNote } from 'src/jot_view/structure/structure_store';
+import { buildJotModel } from 'src/editing/jot_editor_store';
+import type { StructNote } from 'src/editing/structure/structure_store';
 import { beatToSecWithinBar, buildBarTempos, initialBpm, resolveBpm } from 'src/schema/dsl/tempo';
 import {
   CLASS_TO_DRUM,
