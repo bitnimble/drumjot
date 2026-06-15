@@ -138,7 +138,7 @@ type Metadata = {
   bpm?: number | BpmTransition;
   vol?: Volume | VolTransition;
   time?: string;            // e.g. "4/4", "7/8"
-  // Maps each pitch letter to an Instrument. Order is the rendered lane order.
+  // Maps each lane letter to an Instrument. Order is the rendered lane order.
   instrumentMapping?: Record<string, Instrument>;
   comment?: string;
   // Three timeline epochs the playback / score / waveform code coordinates
@@ -201,7 +201,7 @@ Macros are always silent by virtue of preprocessing — the definition itself pr
 
 | Token | Purpose |
 |---|---|
-| `a`–`z` | Note pitches |
+| `a`–`z` | Note lanes |
 | `A`–`Z` | Allowed in pattern/macro identifiers (not as notes) |
 | `0`–`9` | Numeric arguments (`*N`, `_N`, `#N`); allowed inside identifiers |
 | `.` | Rest |
