@@ -439,12 +439,74 @@ rd/mc/hp **overfit** (peak mid-run, decay; rd 0.51@19 -> 0.44@39, mc 0.32@24 ->
 hc 0.606 / hp 0.427 / ho 0.658 / rd 0.519 / cr 0.539 / mc 0.345.
 
 **Takeaways:** (1) 12 epochs under-tests; **~30 is the real budget** at cap-100.
-(2) A fair width test needs >=30 epochs both arms (~7h for h512 here) -- deferred;
-the flat 12-ep hint + cost deprioritize pure width. (3) **Use the convergence-run
+(2) ~~A fair width test needs >=30 epochs both arms; the flat 12-ep hint + cost
+deprioritize pure width.~~ **RETRACTED (2026-06-16) -- the width A/B is invalid:
+cap-100 is data-bound, so it cannot test capacity at all (see Phase 2). The fix
+is not "more epochs," it's "data-UNbound arms."** (3) **Use the convergence-run
 numbers as the honest cap-100 baseline** (NOT the spiky 12-ep ones). (4) Enlarged
 val is a keeper -> full windowing (now default) gives it automatically. (5) Next:
 the **data-scale axis** (full windowing x cap), the actual untapped-data test,
 cheap at h128.
+
+## Phase 2: data-scale axis (h128) (2026-06-16)
+
+**Setup.** Identical to Phase 1's convergence run (cym+hat pool hc/hp/ho/rd/cr/mc,
+same ~700-window val, per-lane keep_best, early-stop: es_min 20, |slope|<0.002,
+jitter<0.015, 8-ep window, 80-ep cap), h128, batch 8, 8 workers. The **only**
+knob is `--pool-cap`, now in WINDOW units. Caps: 1000 / 3000 / 0(full). Tuned
+per-lane keep_best F1.
+
+**cap-1000 (2563 train / 694 val windows; early-stop @ epoch 69):**
+
+| lane | cap-100^1 | cap-1000 | Δ |
+|---|---|---|---|
+| hc | 0.606 | 0.689 | +0.083 |
+| hp | 0.427 | 0.478 | +0.051 |
+| ho | 0.658 | 0.664 | +0.006 |
+| rd | 0.519 | 0.623 | +0.104 |
+| cr | 0.539 | 0.620 | +0.081 |
+| mc | 0.345 | 0.504 | +0.159 |
+| **cym macro (rd+cr+mc)** | **0.468** | **0.582** | **+0.114** |
+| all-6 macro | 0.516 | 0.596 | +0.080 |
+
+^1 Phase-1 convergence run; cap-100 was CLIP-unit (pre window-cap), so the cap
+*number* isn't 1:1 on the windows axis, but the val is identical (~700 windows)
+and the lift is unambiguous.
+
+**Per-lane dynamics (cap-1000 curve).** Two regimes -> per-lane keep_best is
+load-bearing: late monotonic risers hc(best@68) / ho(@62); early-peak-then-decay
+(overfit) rd(@12) / cr(@15) / hp(@13); mid-late mc(@48). Early-stop @69 = global
+flatness (risers plateaued, overfitters bottomed out), NOT all-at-peak.
+
+**Headline: at h128 the cymbal ceiling is DATA-bound, not capacity-bound.** 10x
+data lifts every lane, cymbals most (mc +0.159, rd +0.104, cym macro +0.114).
+cap-3000 / cap-0 pending (running on the 1660) to find where h128 tapers.
+
+### Why this invalidates the Phase-1 width A/B
+
+A data-bound operating point **cannot** test capacity. If data is the binding
+constraint, width can't express itself -- neither arm has enough data to fill
+even h128's capacity, let alone h512's. Worse, it's anti-informative: larger
+models are more data-hungry, so at cap-100 h512 was *more* starved than h128
+(trained slower, hc collapsed@1, rd still climbing@11). The flat/slightly-negative
+h512 result is the expected artifact of that confound, not evidence about its
+ceiling. Phase 1 measured "which model is more starved," not "which has more
+useful capacity."
+
+### Corrected width test: bracket h128's saturation
+
+Width is only interpretable where the *smaller* model has saturated but data is
+still being added:
+1. Map h128's data curve (cap-1000/3000/0) to find two adjacent caps that tie
+   (e.g. cap-3000 ~= cap-0) -> h128's taper / saturation bracket.
+2. Run h512 at those two bracketing scales. If h512 climbs across the bracket
+   where h128 was flat, it converts the extra data into accuracy h128 structurally
+   can't -> width IS the lever. If h512 also flatlines, width is dead.
+3. h512 is ~691s/ep on the 1660 -> this test wants the 3080.
+
+Caveat: if h128 is still climbing at cap-0 (full = all data we have), it hasn't
+saturated and the width test is confounded by data availability -- note the
+limitation rather than over-read it.
 
 ## Per-stem pooled MERT layer sweep (2026-06-12)
 
