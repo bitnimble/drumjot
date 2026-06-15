@@ -203,29 +203,11 @@ describe('pattern spans', () => {
   });
 });
 
-describe('lead-in', () => {
-  it('synthesizes a negative-indexed lead-in bar from drumsT0Sec when no explicit lead bars', () => {
+describe('lead-in (musical structure)', () => {
+  it('materialises explicit leadBars as negative-indexed bars (no synthesis here)', () => {
     const { model } = createReactiveJot({
       title: '',
       bpm: 120,
-      drumsT0Sec: 3, // 3s @ 120bpm = 6 quarter-note beats of pre-roll
-      bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
-      elements: {
-        n1: { kind: 'note', id: 'n1', barId: 'b1', beat: 0, duration: 1, lane: 'k', modifiers: [] },
-      },
-      instruments: {},
-    });
-    const bars = store(model).layers[0].bars;
-    expect(bars[0].index).toBe(-1); // synthetic lead-in is the first bar
-    expect(bars[0].beats).toBeCloseTo(6, 6);
-    expect(bars[1].index).toBe(1); // the real first bar still follows
-  });
-
-  it('does not double up the lead-in when explicit lead bars already exist', () => {
-    const { model } = createReactiveJot({
-      title: '',
-      bpm: 120,
-      drumsT0Sec: 3,
       leadBars: 1,
       bars: [
         { id: 'b0', tsCount: 4, tsUnit: 4 },
@@ -236,7 +218,22 @@ describe('lead-in', () => {
       },
       instruments: {},
     });
-    const leadIns = store(model).layers[0].bars.filter((b) => b.index < 0);
-    expect(leadIns).toHaveLength(1);
+    // StructureStore is purely musical: the explicit lead bar is negative,
+    // and there is NO synthetic/virtual bar (that lives on the view layer).
+    expect(store(model).layers[0].bars.map((b) => b.index)).toEqual([-1, 1]);
+  });
+
+  it('adds no synthetic bar for a drumsT0Sec-only song (that is a view concern)', () => {
+    const { model } = createReactiveJot({
+      title: '',
+      bpm: 120,
+      drumsT0Sec: 3,
+      bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
+      elements: {
+        n1: { kind: 'note', id: 'n1', barId: 'b1', beat: 0, duration: 1, lane: 'k', modifiers: [] },
+      },
+      instruments: {},
+    });
+    expect(store(model).layers[0].bars.map((b) => b.index)).toEqual([1]);
   });
 });

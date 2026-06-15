@@ -55,7 +55,9 @@ const FLAM_GRACE_OFFSET_SEC = 0.03;
 const FLAM_GRACE_VELOCITY_RATIO = 0.9;
 
 export function jotToEvents(structural: StructuralPresenter): PlaybackEvent[] {
-  const layers = structural.layers;
+  // Musical structure only: the view-only virtual lead-in must never schedule
+  // (or shift) drum events.
+  const layers = structural.musicalLayers;
   const events: PlaybackEvent[] = [];
   const instrumentFor = (lane: string): Instrument =>
     structural.source.globalMetadata.instrumentMapping?.[lane] ?? { kind: 'custom' };

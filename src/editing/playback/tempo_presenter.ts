@@ -8,6 +8,7 @@
  */
 import { computed, makeObservable } from 'mobx';
 import { TimeSignature } from 'src/schema/dsl/dsl';
+import { toTempoBars } from 'src/editing/structure/structure_store';
 import { BarTempos, buildBarTempos } from 'src/schema/dsl/tempo';
 import {
   buildTimeline,
@@ -30,9 +31,11 @@ export class TempoPresenter {
   }
 
   get barTempos(): readonly BarTempos[] {
+    // View bars (incl. the virtual lead-in); `toTempoBars` flags the
+    // synthetic bar so tempo-event anchoring stays aligned to the source.
     const bars = this.jot.layers[0]?.bars;
     if (!bars) return [];
-    return buildBarTempos(this.jot.source, bars);
+    return buildBarTempos(this.jot.source, toTempoBars(bars));
   }
 
   get dominantBpmAndTime(): {

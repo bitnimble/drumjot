@@ -38,20 +38,20 @@ describe('EditingPresenter', () => {
 
   it('insertNote is a no-op without a placeholder', () => {
     const { store, presenter } = setup();
-    const before = store.structural!.layers[0].bars[0].tracks['k'].notes.length;
+    const before = store.structural!.musicalLayers[0].bars[0].tracks['k'].notes.length;
     presenter.insertNote();
-    const after = store.structural!.layers[0].bars[0].tracks['k'].notes.length;
+    const after = store.structural!.musicalLayers[0].bars[0].tracks['k'].notes.length;
     expect(after).toBe(before);
   });
 
   it('commits the placeholder as a note at its exact bar + beat', () => {
     const { store, presenter } = setup();
-    const bar0 = store.structural!.layers[0].bars[0];
+    const bar0 = store.structural!.musicalLayers[0].bars[0];
     presenter.setMode('insert');
     presenter.movePlaceholder({ lane: 'k', barId: bar0.id, beat: 2, absBeat: 2 });
     presenter.insertNote();
 
-    const notes = store.structural!.layers[0].bars[0].tracks['k'].notes;
+    const notes = store.structural!.musicalLayers[0].bars[0].tracks['k'].notes;
     // The original downbeat kick plus the newly inserted one at beat 2.
     expect(notes.map((n) => n.beat).sort((a, b) => a - b)).toEqual([0, 2]);
   });

@@ -99,7 +99,12 @@ function sortedEvents(jot: Jot): TempoEvent[] {
  */
 export function buildBarTempos(
   jot: Jot,
-  bars: { beats: number }[],
+  // `synthetic` bars (e.g. the view-only virtual lead-in) carry no
+  // tempo-event anchors of their own, `jot.tempoEvents` are indexed against
+  // the SOURCE bars, which don't include them, so they're skipped for
+  // event-matching and just inherit the running tempo. Plain `{beats}` bars
+  // (the musical structure) all count as non-synthetic.
+  bars: { beats: number; synthetic?: boolean }[],
 ): BarTempos[] {
   const events = sortedEvents(jot);
   let evIdx = 0;
@@ -114,15 +119,28 @@ export function buildBarTempos(
   }
 
   const out: BarTempos[] = new Array(bars.length);
+  // Index into the SOURCE bar sequence (what `event.barIndex` references),
+  // advanced only for real bars so a prepended synthetic bar doesn't shift
+  // every tempo event onto the wrong bar.
+  let sourceIdx = 0;
   for (let i = 0; i < bars.length; i++) {
     const barBeats = bars[i].beats;
+    if (bars[i].synthetic) {
+      // Synthetic bar: one constant segment at the running tempo; consumes
+      // no events and doesn't advance the source index.
+      out[i] = {
+        durationSec: barBeats * (60 / currentBpm),
+        segments: [{ startBeat: 0, endBeat: barBeats, bpm: currentBpm }],
+      };
+      continue;
+    }
     const segments: TempoSegment[] = [];
     let cursor = 0;
     let durationSec = 0;
 
     while (
       evIdx < events.length &&
-      events[evIdx].barIndex === i &&
+      events[evIdx].barIndex === sourceIdx &&
       events[evIdx].beat <= barBeats
     ) {
       const ev = events[evIdx];
@@ -149,12 +167,13 @@ export function buildBarTempos(
     // into the next bar's downbeat.
     while (
       evIdx < events.length &&
-      events[evIdx].barIndex === i &&
+      events[evIdx].barIndex === sourceIdx &&
       events[evIdx].beat > barBeats
     ) {
       currentBpm = resolveBpm(events[evIdx].bpm, currentBpm);
       evIdx++;
     }
+    sourceIdx++;
   }
 
   return out;

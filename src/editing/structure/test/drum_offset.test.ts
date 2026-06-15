@@ -31,7 +31,7 @@ describe('drum beat-grid offset', () => {
   it('shifts notes later within the fixed bar grid (+1 beat)', () => {
     const rendered = render(1);
     // abs 0 -> bar 1 beat 1; abs 4 -> bar 2 beat 1.
-    const bars = rendered.layers[0].bars;
+    const bars = rendered.musicalLayers[0].bars;
     expect(bars[0].tracks['k'].notes[0].beat).toBeCloseTo(1, 6);
     expect(bars[1].tracks['k'].notes[0].beat).toBeCloseTo(1, 6);
     // One beat at 120 BPM = 0.5 s, so both events slide by 0.5 s.
@@ -46,11 +46,11 @@ describe('drum beat-grid offset', () => {
     const evs = jotToEvents(rendered);
     expect(evs).toHaveLength(1);
     expect(evs[0].time).toBeCloseTo(1.5, 6);
-    expect(rendered.layers[0].bars[0].tracks['k'].notes[0].beat).toBeCloseTo(3, 6);
+    expect(rendered.musicalLayers[0].bars[0].tracks['k'].notes[0].beat).toBeCloseTo(3, 6);
   });
 
   it('keeps straightness for dyadic shifts', () => {
-    const note = render(1.5).layers[0].bars[0].tracks['k'].notes[0];
+    const note = render(1.5).musicalLayers[0].bars[0].tracks['k'].notes[0];
     // abs 0 -> 1.5, still on the binary grid.
     expect(note.beat).toBeCloseTo(1.5, 6);
     expect(note.straight).toBe(true);

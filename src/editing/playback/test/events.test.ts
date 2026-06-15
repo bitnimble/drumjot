@@ -145,7 +145,8 @@ describe('jotToEvents timing', () => {
     );
     const structural = buildStructural(jot);
     const timeline = buildTimeline(structural);
-    expect(timeline.bars[0].durationSec).toBeCloseTo(3.0, 6);
+    // bars[0] is the view-only virtual lead-in; the real bpm-doubling bar is bars[1].
+    expect(timeline.bars[1].durationSec).toBeCloseTo(3.0, 6);
   });
 
   it('anchors bar 1 at jot 0 when leadBars shifts bars[0] into the pre-drum window', () => {

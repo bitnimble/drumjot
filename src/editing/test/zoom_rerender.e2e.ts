@@ -132,6 +132,15 @@ test('zoom does not re-render hidden note popovers', async ({ page }) => {
 
   // POSITIVE CONTROL: select a note so exactly one popover is shown, then a
   // zoom tick must re-render it (it repositions against the moved anchor).
+  // Reset zoom + scroll to a known in-range state first so the subsequent
+  // 1.3x tick is unambiguously a real change (the sweep above left zoom near
+  // MAX_ZOOM) and the first note is on-screen to click.
+  await page.evaluate(() => {
+    const w = window as any;
+    w.drumjot.viewportPresenter.setZoom(1.0);
+    w.drumjot.viewportPresenter.setScrollX(0);
+  });
+  await settle();
   await page.locator('[data-noseek="true"]').first().click();
   await settle();
   const onControl = await page.evaluate(async () => {

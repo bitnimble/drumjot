@@ -85,7 +85,8 @@ type Sidecar = {
 
 export function writeRlrr(jot: Jot, options: JotToRlrrOptions = {}): RlrrFile {
   const opts = { ...DEFAULTS, ...options };
-  const layers = buildStructural(jot).layers;
+  // Musical structure only, the view-only virtual lead-in is never exported.
+  const layers = buildStructural(jot).musicalLayers;
   const instrumentFor = (lane: string): Instrument =>
     jot.globalMetadata.instrumentMapping?.[lane] ?? { kind: 'custom' };
 

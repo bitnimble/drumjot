@@ -455,7 +455,7 @@ describe('integration with the structural derivation', () => {
 
   it('expands patterns at render time', () => {
     const jot = parse('[Groove=(k.s.kks.)] | [Groove] |');
-    const layers = buildStructural(jot).layers;
+    const layers = buildStructural(jot).musicalLayers;
     const bar = layers[0].bars[0];
     const kickNotes = bar.tracks.k?.notes ?? [];
     const snareNotes = bar.tracks.s?.notes ?? [];

@@ -78,7 +78,8 @@ export const TICKS_PER_BEAT = 480;
 /** Convert a Drumjot `Jot` into a MIDI byte buffer (Standard MIDI File). */
 export function toMidi(jot: Jot, options: ToMidiOptions = {}): Uint8Array {
   const opts = { ...DEFAULTS, ...options };
-  const layers = buildStructural(jot).layers;
+  // Musical structure only, the view-only virtual lead-in is never exported.
+  const layers = buildStructural(jot).musicalLayers;
   const instrumentFor = (lane: string): Instrument =>
     jot.globalMetadata.instrumentMapping?.[lane] ?? { kind: 'custom' };
 

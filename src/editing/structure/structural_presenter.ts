@@ -13,9 +13,11 @@ import { action, computed, makeObservable, observable } from 'mobx';
 import { computedFn } from 'mobx-utils';
 import { Instrument, Jot } from 'src/schema/dsl/dsl';
 import { isDyadic } from 'src/schema/dsl/element_metrics';
+import { resolveBpm } from 'src/schema/dsl/tempo';
 import { ViewConfig } from 'src/editing/viewport/view_config';
 import type { LaidOutJot } from 'src/editing/playback/timeline';
 import {
+  LEAD_IN_BAR_ID,
   type StructBar,
   type StructTrack,
   type StructLayer,
@@ -40,6 +42,7 @@ export class StructuralPresenter implements LaidOutJot {
       drumOffsetBeatsBaseline: observable,
       setDrumOffset: action,
       setDrumOffsetBaseline: action,
+      musicalLayers: computed,
       layers: computed,
       pxPerBeat: computed,
       layerBeats: computed,
@@ -65,12 +68,28 @@ export class StructuralPresenter implements LaidOutJot {
     return this.viewConfig;
   }
 
-  /** The store-native `Struct*` layers, drum-offset applied. The canonical
-   *  beat-addressed structure consumers read. */
-  get layers(): StructLayer[] {
+  /** The store-native `Struct*` layers, drum-offset applied. The MUSICAL
+   *  structure (1:1 with the source bars): export, playback scheduling, and
+   *  the tempo summary read this so a view-only lead-in never leaks into
+   *  exported/scheduled content. View code reads {@link layers} instead. */
+  get musicalLayers(): StructLayer[] {
     const base = this.structureStore.layers;
     const eff = this.effectiveDrumOffsetBeats;
     return eff === 0 ? base : applyOffsetToStructLayers(base, eff);
+  }
+
+  /** The structure as the SCORE renders it: {@link musicalLayers} plus a
+   *  view-only "virtual" lead-in bar so the first note never clips at the
+   *  left edge and an audio track with no pre-roll still has room. The
+   *  virtual bar is sized so total lead-in is at least one full bar (using
+   *  the `drumsT0Sec` audio pre-roll when that already exceeds a bar), and is
+   *  prepended only when the song carries no real lead-in bar of its own.
+   *  Tagged {@link LEAD_IN_BAR_ID}; transparent to the renderer, excluded
+   *  from export/playback via {@link musicalLayers}. */
+  get layers(): StructLayer[] {
+    const drumsT0Sec = this.source.globalMetadata.drumsT0Sec ?? 0;
+    const bpm = resolveBpm(this.source.globalMetadata.bpm, 120);
+    return this.musicalLayers.map((layer) => withVirtualLeadIn(layer, drumsT0Sec, bpm));
   }
 
   get pxPerBeat(): number {
@@ -138,6 +157,39 @@ export class StructuralPresenter implements LaidOutJot {
       };
     }
   );
+}
+
+// ---------- View-only virtual lead-in ----------
+
+/**
+ * Prepend a view-only "virtual" lead-in bar to a layer when it has no real
+ * lead-in bar of its own (no negative-indexed bar), so the first note isn't
+ * clipped at the score's left edge. Sized to at least one full bar; when the
+ * audio pre-roll (`drumsT0Sec`) already exceeds a bar, the bar covers the
+ * whole pre-roll instead. The bar is empty and indexed -1, exactly like a
+ * real lead-in bar, so the renderer / waveform / timeline treat it uniformly;
+ * it carries {@link LEAD_IN_BAR_ID} so musical paths (`musicalLayers`) and the
+ * tempo builder can tell it apart.
+ */
+function withVirtualLeadIn(layer: StructLayer, drumsT0Sec: number, bpm: number): StructLayer {
+  if (layer.bars.length === 0) return layer;
+  // A real lead-in (explicit `leadBars`) already gives the first note room.
+  if (layer.bars.some((b) => b.index < 0)) return layer;
+  const firstReal = layer.bars.find((b) => b.index === 1) ?? layer.bars[0];
+  const oneBarBeats = (firstReal.tsCount * 4) / firstReal.tsUnit;
+  const preRollBeats = (drumsT0Sec * bpm) / 60;
+  const virtual: StructBar = {
+    id: LEAD_IN_BAR_ID,
+    index: -1,
+    beats: Math.max(preRollBeats, oneBarBeats),
+    tsCount: firstReal.tsCount,
+    tsUnit: firstReal.tsUnit,
+    anacrusis: false,
+    tracks: {},
+    patternSpans: [],
+    tupletSpans: [],
+  };
+  return { ...layer, bars: [virtual, ...layer.bars] };
 }
 
 // ---------- Drum beat-grid offset ----------
