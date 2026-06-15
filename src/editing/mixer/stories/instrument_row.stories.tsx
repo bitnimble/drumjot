@@ -1,7 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { runInAction } from 'mobx';
 import React from 'react';
-import { buildJotModel } from '../../jot_editor_store';
 import { rockJot } from 'src/fakes/fakes';
 import { fn } from 'storybook/test';
 import { MixerStoreContext } from '../mixer_contexts';
@@ -56,14 +55,8 @@ const NOOP_DRAG = {
 function Row({ muted = false }: { muted?: boolean }) {
   const { jotEditorStore, structural, mixer, viewport, lane, layerControls } = React.useMemo(() => {
     const jotEditorStore = new JotEditorStore();
-    const model = buildJotModel(rockJot, jotEditorStore.viewConfig);
-    runInAction(() => {
-      jotEditorStore.source = rockJot;
-      jotEditorStore.structural = model.structural;
-      jotEditorStore.palette = model.palette;
-      jotEditorStore.tempo = model.tempo;
-    });
-    const { structural } = model;
+    runInAction(() => jotEditorStore.loadSource(rockJot));
+    const structural = jotEditorStore.structural!;
     const mixer = new MixerStore(jotEditorStore);
     const viewport = new ViewportStore(jotEditorStore);
     const lanes = mixer.jotLanes;

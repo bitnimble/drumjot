@@ -1,5 +1,7 @@
 import { makeAutoObservable } from 'mobx';
 import { Jot } from 'src/schema/dsl/dsl';
+import type { Jot as ReactiveJot, JotSchema } from 'src/schema/schema';
+import type { ReactiveDoc } from 'src/schema/reactive_doc';
 import { ExampleJot } from 'src/fakes/fakes';
 import { dslToReactive } from 'src/schema/dsl/from_dsl';
 import { ViewConfig } from 'src/editing/viewport/view_config';
@@ -20,11 +22,20 @@ import { TempoPresenter } from 'src/editing/playback/tempo_presenter';
  * always set / cleared together by the presenter (a single atomic load), so
  * any one being defined implies all are.
  *
- * Pure data: observables + one computed. All loading orchestration (parse,
- * convert, build the peers, replace-song coordination) lives on the presenter;
- * it is the only thing that writes these fields.
+ * Observables + computeds, plus the {@link loadSource} peer-constructor: it
+ * builds the reactive document and the structure / palette / tempo views over
+ * it (the one place that does, the sanctioned exception to "stores hold no
+ * logic"). All higher-level load orchestration (parse, convert, replace-song
+ * coordination) still lives on the presenter, which is the only caller of
+ * `loadSource`. Document edits go through {@link jot} (`store.jot.elements.set`).
  */
 export class JotEditorStore {
+  /** Reactive Loro-backed document for the loaded song, or `undefined` before
+   *  the first load. The source of truth the peers below are views over;
+   *  edits go through {@link jot}. Held as a plain (non-observable) handle,
+   *  load reactivity flows through the peer fields, set together with it. */
+  private reactiveDoc: ReactiveDoc<typeof JotSchema> | undefined;
+
   /** Raw source of the loaded song (title / globalMetadata read off this),
    *  or `undefined` before the first load (the empty-state welcome screen
    *  renders then). */
@@ -62,33 +73,61 @@ export class JotEditorStore {
   loadingLabel: string | undefined = undefined;
 
   constructor() {
-    makeAutoObservable(this);
+    // `reactiveDoc` is a plain WASM-backed handle and `jot` reads it directly,
+    // keep both out of MobX (deep-observing a Loro doc would be wrong, and
+    // load reactivity already flows through `source` / `structural` / etc.).
+    makeAutoObservable<this, 'reactiveDoc'>(this, { reactiveDoc: false, jot: false });
   }
 
   get isLoading(): boolean {
     return this.loadingCount > 0;
   }
-}
 
-/** The peer domains for one loaded song (the value the presenter splays into
- *  {@link JotEditorStore}'s `structural` / `palette` / `tempo` fields). */
-export interface JotModel {
-  structural: StructuralPresenter;
-  palette: PaletteStore;
-  tempo: TempoPresenter;
+  /** The reactive document model for the loaded song, or `undefined` before
+   *  the first load. Edits go straight through it, e.g.
+   *  `store.jot?.elements.set(id, note)`; the commit reflows `structural`. */
+  get jot(): ReactiveJot | undefined {
+    return this.reactiveDoc?.model;
+  }
+
+  /**
+   * Build (or clear) the loaded song's reactive document and its peer views,
+   * installing them atomically. The sole writer of `reactiveDoc` / `source` /
+   * `structural` / `palette` / `tempo`; the presenter calls it from inside its
+   * per-load `runInAction`. Pass `undefined` to clear the loaded song (empty
+   * state). Disposes the previous document so its Loro subscription is torn
+   * down (leak-test safety).
+   */
+  loadSource(source: Jot | undefined): void {
+    this.reactiveDoc?.dispose();
+    if (!source) {
+      this.reactiveDoc = undefined;
+      this.source = undefined;
+      this.structural = undefined;
+      this.palette = undefined;
+      this.tempo = undefined;
+      return;
+    }
+    const peers = buildJotPeers(source, this.viewConfig);
+    this.reactiveDoc = peers.doc;
+    this.source = source;
+    this.structural = peers.structural;
+    this.palette = peers.palette;
+    this.tempo = peers.tempo;
+  }
 }
 
 /**
- * Build the peer domains for `source`: convert the DSL into the reactive
- * document and construct the structure / palette / tempo views over it. The
- * shared `reactive` doc + `StructureStore` + `LayoutStore` are captured by the
- * peers' closures and intentionally not surfaced. Pass the shared
- * {@link ViewConfig} so the zoom slider (which mutates `viewConfig.barWidth`)
- * drives this song's `pxPerBeat` / layout; standalone callers (MIDI / RLRR
- * export, unit tests) can omit it and get a fresh default config.
+ * Build the reactive document for `source` plus the structure / palette /
+ * tempo views over it. The `StructureStore` + `LayoutStore` are captured by the
+ * peers' closures and intentionally not surfaced; the `doc` is returned so the
+ * owner can hold it for edits + disposal. Pass the shared {@link ViewConfig} so
+ * the zoom slider (which mutates `viewConfig.barWidth`) drives this song's
+ * `pxPerBeat` / layout; standalone callers can omit it for a fresh default.
  */
-export function buildJotModel(source: Jot, viewConfig: ViewConfig = new ViewConfig()): JotModel {
-  const reactive = dslToReactive(source).model;
+function buildJotPeers(source: Jot, viewConfig: ViewConfig) {
+  const doc = dslToReactive(source);
+  const reactive = doc.model;
   const structureStore = new StructureStore(() => reactive);
   const palette = new PaletteStore(
     structureStore,
@@ -108,5 +147,18 @@ export function buildJotModel(source: Jot, viewConfig: ViewConfig = new ViewConf
     viewConfig
   );
   const tempo = new TempoPresenter(structural);
-  return { structural, palette, tempo };
+  return { doc, structural, palette, tempo };
+}
+
+/**
+ * Store-free structure builder for one-shot consumers that only need the
+ * derived structure of a plain `Jot` (MIDI / RLRR export, unit tests,
+ * Storybook), with no document lifecycle. Returns just the
+ * {@link StructuralPresenter}; the underlying reactive doc is transient.
+ */
+export function buildStructural(
+  source: Jot,
+  viewConfig: ViewConfig = new ViewConfig()
+): StructuralPresenter {
+  return buildJotPeers(source, viewConfig).structural;
 }

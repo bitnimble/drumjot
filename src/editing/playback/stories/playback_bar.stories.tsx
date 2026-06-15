@@ -1,7 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { runInAction } from 'mobx';
 import React from 'react';
-import { buildJotModel } from '../../jot_editor_store';
 import { rockJot } from 'src/fakes/fakes';
 import { JotEditorStore } from '../../jot_editor_store';
 import { PlaybackStore } from '../playback_store';
@@ -32,13 +31,7 @@ function Bar({ withJot }: { withJot: boolean }) {
     const playback = new PlaybackStore(jotEditorStore);
     const presenter = new PlaybackPresenter(playback, jotEditorStore);
     if (withJot) {
-      const model = buildJotModel(rockJot, jotEditorStore.viewConfig);
-      runInAction(() => {
-        jotEditorStore.source = rockJot;
-        jotEditorStore.structural = model.structural;
-        jotEditorStore.palette = model.palette;
-        jotEditorStore.tempo = model.tempo;
-      });
+      runInAction(() => jotEditorStore.loadSource(rockJot));
     }
     return { jotEditorStore, playback, presenter };
     // eslint-disable-next-line react-hooks/exhaustive-deps

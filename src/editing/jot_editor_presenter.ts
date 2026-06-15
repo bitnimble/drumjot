@@ -12,7 +12,7 @@ import { jotPlayer } from 'src/editing/playback/player';
 import { loadParadbZip } from 'src/schema/rlrr/paradb';
 import { titleFromFilename, transcriber } from 'src/editing/transcribe/transcriber';
 import { toastStore } from '../ui/toasts/toasts';
-import { JotEditorStore, buildJotModel } from './jot_editor_store';
+import { JotEditorStore } from './jot_editor_store';
 import { SettingsPresenter } from '../settings/settings_presenter';
 import { MixerPresenter } from './mixer/mixer_presenter';
 import { ProvenancePresenter } from './provenance/provenance_presenter';
@@ -107,26 +107,14 @@ export class JotEditorPresenter {
   }
 
   /**
-   * Build the loaded song's peer domains from `source` and install them on
-   * {@link JotEditorStore} atomically. The sole place the four song fields
-   * (`source` / `structural` / `palette` / `tempo`) are written; callers wrap
-   * it in their own `runInAction` alongside the per-load bookkeeping (example
-   * pointer, provenance/lyrics clears, `jotPlayer.stop()`). Pass `undefined`
-   * to clear the loaded song (empty state).
+   * Install `source` as the loaded song (or clear it with `undefined`).
+   * Delegates the reactive-document + peer construction to
+   * {@link JotEditorStore.loadSource} (the single writer of those fields);
+   * callers wrap this in their own `runInAction` alongside the per-load
+   * bookkeeping (example pointer, provenance/lyrics clears, `jotPlayer.stop()`).
    */
   private installJot(source: Jot | undefined): void {
-    if (!source) {
-      this.jotEditorStore.source = undefined;
-      this.jotEditorStore.structural = undefined;
-      this.jotEditorStore.palette = undefined;
-      this.jotEditorStore.tempo = undefined;
-      return;
-    }
-    const { structural, palette, tempo } = buildJotModel(source, this.jotEditorStore.viewConfig);
-    this.jotEditorStore.source = source;
-    this.jotEditorStore.structural = structural;
-    this.jotEditorStore.palette = palette;
-    this.jotEditorStore.tempo = tempo;
+    this.jotEditorStore.loadSource(source);
   }
 
   setJot(source: Jot | undefined) {

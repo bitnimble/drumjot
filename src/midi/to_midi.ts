@@ -44,7 +44,7 @@
  */
 import { writeMidi, MidiEvent } from 'midi-file';
 import { Instrument, Jot, Modifier, Volume } from 'src/schema/dsl/dsl';
-import { buildJotModel } from 'src/editing/jot_editor_store';
+import { buildStructural } from 'src/editing/jot_editor_store';
 import type { StructNote } from 'src/editing/structure/structure_store';
 import {
   ACCENT_BOOST,
@@ -78,7 +78,7 @@ export const TICKS_PER_BEAT = 480;
 /** Convert a Drumjot `Jot` into a MIDI byte buffer (Standard MIDI File). */
 export function toMidi(jot: Jot, options: ToMidiOptions = {}): Uint8Array {
   const opts = { ...DEFAULTS, ...options };
-  const layers = buildJotModel(jot).structural.layers;
+  const layers = buildStructural(jot).layers;
   const instrumentFor = (lane: string): Instrument =>
     jot.globalMetadata.instrumentMapping?.[lane] ?? { kind: 'custom' };
 

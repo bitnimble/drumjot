@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 import { parse } from 'src/schema/dsl/parser/parser';
-import { buildJotModel } from 'src/editing/jot_editor_store';
+import { buildStructural } from 'src/editing/jot_editor_store';
 import { StructuralPresenter } from 'src/editing/structure/structural_presenter';
 import { jotToEvents } from 'src/editing/playback/events';
 
@@ -17,7 +17,7 @@ const SRC =
   '{{ bpm: 120, time: "4/4", instrumentMapping: { k:{name:"Kick"} } }} | k . . . | k . . . |';
 
 function render(offsetBeats: number): StructuralPresenter {
-  const structural = buildJotModel(parse(SRC)).structural;
+  const structural = buildStructural(parse(SRC));
   structural.setDrumOffset(offsetBeats);
   return structural;
 }
@@ -60,7 +60,7 @@ describe('drum beat-grid offset', () => {
     // Hydrates the way `applyDebugBundle` does after a transcriber run:
     // the control shows the alignment value, but baseline matching it
     // means the score still renders at the source positions.
-    const rendered = buildJotModel(parse(SRC)).structural;
+    const rendered = buildStructural(parse(SRC));
     rendered.setDrumOffsetBaseline(0.5);
     rendered.setDrumOffset(0.5);
     expect(rendered.effectiveDrumOffsetBeats).toBe(0);
@@ -70,7 +70,7 @@ describe('drum beat-grid offset', () => {
   it('shifts by the delta when the control diverges from the baseline', () => {
     // Reset-to-zero exposes the pre-alignment positions when a baseline
     // is set: effective offset = 0 - 0.5 = -0.5 beats earlier.
-    const rendered = buildJotModel(parse(SRC)).structural;
+    const rendered = buildStructural(parse(SRC));
     rendered.setDrumOffsetBaseline(0.5);
     rendered.setDrumOffset(0);
     expect(rendered.effectiveDrumOffsetBeats).toBe(-0.5);

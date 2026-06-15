@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MidiData, MidiEvent, parseMidi, writeMidi } from 'midi-file';
 import { Jot } from 'src/schema/dsl/dsl';
-import { buildJotModel } from 'src/editing/jot_editor_store';
+import { buildStructural } from 'src/editing/jot_editor_store';
 import { fromMidi } from 'src/midi/from_midi';
 import { allocateLanesForMidi } from 'src/midi/gm';
 import { toMidi } from 'src/midi/to_midi';
@@ -512,7 +512,7 @@ describe('MIDI <-> Jot synthetic baseline', () => {
       bpm: 120,
       notes: [{ tick: tpq * 8, note: 36, velocity: 100 }],
     });
-    const bars = buildJotModel(fromMidi(bytes)).structural.layers[0].bars;
+    const bars = buildStructural(fromMidi(bytes)).layers[0].bars;
     expect(bars.map((b) => b.index)).toEqual([-2, -1, 1]);
   });
 

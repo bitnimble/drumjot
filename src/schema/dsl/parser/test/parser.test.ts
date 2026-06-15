@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { Element, Group, Note, PatternRef, Simultaneity } from 'src/schema/dsl/dsl';
-import { buildJotModel } from 'src/editing/jot_editor_store';
+import { buildStructural } from 'src/editing/jot_editor_store';
 import { ParseError } from 'src/schema/dsl/parser/errors';
 import { parse } from 'src/schema/dsl/parser/parser';
 
@@ -448,14 +448,14 @@ describe('integration with the structural derivation', () => {
     const jot = parse(
       '{{ bpm: 120, time: "4/4" }} | h h h h h h h h | || | k . s . k . s . |'
     );
-    const layers = buildJotModel(jot).structural.layers;
+    const layers = buildStructural(jot).layers;
     expect(layers).toHaveLength(2);
     expect(layers[0].bars.length).toBeGreaterThan(0);
   });
 
   it('expands patterns at render time', () => {
     const jot = parse('[Groove=(k.s.kks.)] | [Groove] |');
-    const layers = buildJotModel(jot).structural.layers;
+    const layers = buildStructural(jot).layers;
     const bar = layers[0].bars[0];
     const kickNotes = bar.tracks.k?.notes ?? [];
     const snareNotes = bar.tracks.s?.notes ?? [];

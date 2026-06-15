@@ -9,17 +9,17 @@
 import { describe, expect, it } from 'bun:test';
 import { parse } from 'src/schema/dsl/parser/parser';
 import { Jot } from 'src/schema/dsl/dsl';
-import { buildJotModel } from 'src/editing/jot_editor_store';
+import { buildStructural } from 'src/editing/jot_editor_store';
 import { buildTimeline } from '../timeline';
 import { jotToEvents } from '../events';
 
 function events(src: string) {
   const jot = parse(src);
-  return jotToEvents(buildJotModel(jot).structural);
+  return jotToEvents(buildStructural(jot));
 }
 
 function eventsFor(jot: Jot) {
-  return jotToEvents(buildJotModel(jot).structural);
+  return jotToEvents(buildStructural(jot));
 }
 
 /** A 4/4 @ 120 BPM jot whose only note is a kick on beat 1 with `offset` ms. */
@@ -143,7 +143,7 @@ describe('jotToEvents timing', () => {
       '{{ bpm: 60, time: "4/4", instrumentMapping: { k:{name:"Kick"}, s:{name:"Snare"} } }} ' +
         '| k . s . {{ bpm: 120 }} k . s . |'
     );
-    const structural = buildJotModel(jot).structural;
+    const structural = buildStructural(jot);
     const timeline = buildTimeline(structural);
     expect(timeline.bars[0].durationSec).toBeCloseTo(3.0, 6);
   });
@@ -156,7 +156,7 @@ describe('jotToEvents timing', () => {
     const jot = parse(
       '{{ bpm: 120, time: "4/4", leadBars: 2, instrumentMapping: { k:{name:"Kick"} } }} | . . . . | . . . . | k . . . |',
     );
-    const structural = buildJotModel(jot).structural;
+    const structural = buildStructural(jot);
     const evs = jotToEvents(structural);
     expect(evs).toHaveLength(1);
     expect(evs[0].time).toBeCloseTo(0, 6);

@@ -34,7 +34,7 @@ import {
   GHOST_REDUCTION,
   VOLUME_TO_VELOCITY,
 } from 'src/dynamics/dynamics';
-import { buildJotModel } from 'src/editing/jot_editor_store';
+import { buildStructural } from 'src/editing/jot_editor_store';
 import type { StructNote } from 'src/editing/structure/structure_store';
 import { beatToSecWithinBar, buildBarTempos, initialBpm, resolveBpm } from 'src/schema/dsl/tempo';
 import {
@@ -85,7 +85,7 @@ type Sidecar = {
 
 export function writeRlrr(jot: Jot, options: JotToRlrrOptions = {}): RlrrFile {
   const opts = { ...DEFAULTS, ...options };
-  const layers = buildJotModel(jot).structural.layers;
+  const layers = buildStructural(jot).layers;
   const instrumentFor = (lane: string): Instrument =>
     jot.globalMetadata.instrumentMapping?.[lane] ?? { kind: 'custom' };
 
