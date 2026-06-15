@@ -747,10 +747,16 @@ def train_loop(
         # never stop before `es_min_epochs`.
         if early_stop and val_clips and (epoch + 1) >= es_min_epochs:
             tracked = [ln for ln in cfg.lanes if history.get(f"vf1_{ln}")]
-            if tracked and all(
-                _lane_converged(history[f"vf1_{ln}"], es_window, es_slope, es_jitter)
+            conv = {
+                ln: _lane_converged(history[f"vf1_{ln}"], es_window, es_slope, es_jitter)
                 for ln in tracked
-            ):
+            }
+            waiting = [ln for ln in tracked if not conv[ln]]
+            if tracked and waiting:
+                # live per-lane visibility: which lanes still block early-stop
+                log(f"  converged {len(tracked) - len(waiting)}/{len(tracked)}, "
+                    f"waiting: {' '.join(waiting)}")
+            if tracked and not waiting:
                 history["stopped_epoch"] = float(epoch)
                 log(f"  early stop @ epoch {epoch}: all {len(tracked)} lanes converged "
                     f"(|slope|<{es_slope}, jitter<{es_jitter}, last {es_window} ep)")
