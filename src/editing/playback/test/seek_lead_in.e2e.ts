@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test';
 // The score always shows at least one bar of (virtual) lead-in before bar 1,
 // at negative jot time. Seeking must be able to reach that left edge, not
 // clamp at jot time 0 (bar 1), even when the song has no audio pre-roll
-// (drumsT0Sec === 0), where the old `-drumsT0Sec` floor stranded the playhead.
+// (songLeadIn === 0), where the old `songLeadIn` floor stranded the playhead.
 test('scrubs the playhead all the way to the lead-in left edge', async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => typeof (window as any).drumjot?.loadDsl === 'function');

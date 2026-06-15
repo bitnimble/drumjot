@@ -94,7 +94,7 @@ class TrackWorkerHandle {
           id: AudioTrackId;
           bars: BarSlice[];
           totalWidthPx: number;
-          drumsT0Sec: number;
+          songLeadInSec: number;
         }
       | {
           kind: 'window';
@@ -232,7 +232,7 @@ class WaveformWorkerClient {
     id: AudioTrackId,
     bars: BarSlice[],
     widthPx: number,
-    drumsT0Sec: number,
+    songLeadInSec: number,
   ): Promise<Float32Array> {
     const handle = this.workers.get(id);
     if (!handle) return Promise.reject(new Error(`unregistered track ${id}`));
@@ -241,7 +241,7 @@ class WaveformWorkerClient {
       id,
       bars,
       totalWidthPx: widthPx,
-      drumsT0Sec,
+      songLeadInSec,
     });
   }
 
@@ -304,7 +304,7 @@ class WaveformWorkerClient {
     height: number,
     backingW: number,
     backingH: number,
-    drumsT0Sec: number,
+    songLeadInSec: number,
     laneColor: string,
     ampScale: number,
   ): void {
@@ -320,7 +320,7 @@ class WaveformWorkerClient {
       height,
       backingW,
       backingH,
-      drumsT0Sec,
+      songLeadInSec,
       laneColor,
       ampScale,
     });

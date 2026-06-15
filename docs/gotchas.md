@@ -11,7 +11,7 @@ project, not history.
   if real durations differ. Fine for notation; would need work for
   "playback-accurate" rendering. Two song-global scalars sit on top:
   `densityFactor` scales every bar by onset density, and `leadInPx`
-  reserves pre-roll before bar 1 from `globalMetadata.drumsT0Sec`. Both
+  reserves pre-roll before bar 1 from `globalMetadata.songLeadIn`. Both
   derive at the bars' exact px/second
   (`(barWidth·densityFactor/4)·(bpm/60)`), that equivalence with
   `buildTimeline` is load-bearing for waveform/playhead alignment; change

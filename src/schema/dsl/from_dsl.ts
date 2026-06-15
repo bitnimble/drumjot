@@ -240,8 +240,7 @@ export function dslToInit(jot: DslJot): Init<typeof JotSchema> {
   return omitUndef({
     title: jot.title,
     bpm: initialBpm(jot),
-    drumsT0Sec: gm.drumsT0Sec,
-    signalT0Sec: gm.signalT0Sec,
+    songLeadIn: gm.songLeadIn,
     leadBars: gm.leadBars,
     gridDivision: gm.gridDivision,
     layers,

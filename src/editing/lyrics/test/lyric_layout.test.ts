@@ -26,8 +26,8 @@ const cells = (line: { wordPositions: { sourceIdx: number; text: string; beatOff
     beatWidth,
   }));
 
-function position(lines: LyricLine[], offsetSec = 0, drumsT0Sec = 0) {
-  return positionLyricLines(lines, TIMELINE, drumsT0Sec, STRUCT_BEATS, offsetSec, LAYER_BEATS);
+function position(lines: LyricLine[], offsetSec = 0, songLeadIn = 0) {
+  return positionLyricLines(lines, TIMELINE, songLeadIn, STRUCT_BEATS, offsetSec, LAYER_BEATS);
 }
 
 describe('positionLyricLines (word-less / LRCLIB-style)', () => {
@@ -55,9 +55,9 @@ describe('positionLyricLines (word-less / LRCLIB-style)', () => {
     expect(out[0].startBeat).toBe(4);
   });
 
-  it('accounts for the drums lead-in (drumsT0Sec)', () => {
-    const out = position([{ startSec: 2, text: 'd' }], 0, 2);
-    // 2s audio - 2s drumsT0 => jot-time 0 => beat 0.
+  it('accounts for the audio lead-in (songLeadIn)', () => {
+    const out = position([{ startSec: 2, text: 'd' }], 0, -2);
+    // 2s audio + (-2s songLeadIn) => jot-time 0 => beat 0.
     expect(out[0].startBeat).toBe(0);
   });
 });

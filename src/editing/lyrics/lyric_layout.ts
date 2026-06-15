@@ -4,7 +4,7 @@ import { JotTimeline } from 'src/editing/playback/timeline';
 
 /** Per-word position metadata derived from the lyrics store + timeline.
  *  Stable under playhead movement; rebuilt only when `lines`, `offsetSec`,
- *  `timeline`, `drumsT0Sec`, `structuralBeats`, or `layerBeats` change. */
+ *  `timeline`, `songLeadIn`, `structuralBeats`, or `layerBeats` change. */
 export type PositionedWord = {
   /** Index back into the source `line.words` array, so the JSX can
    *  compare against `activeWordIndexAt`'s return value even when
@@ -50,7 +50,7 @@ export const MIN_BEAT_WIDTH = 0.05;
 export function positionLyricLines(
   lines: readonly LyricLine[],
   timeline: JotTimeline,
-  drumsT0Sec: number,
+  songLeadIn: number,
   structuralBeats: readonly number[],
   offsetSec: number,
   layerBeats: number,
@@ -90,14 +90,14 @@ export function positionLyricLines(
         const ws = audioSecToBeat(
           w.startSec + offsetSec,
           timeline,
-          drumsT0Sec,
+          songLeadIn,
           structuralBeats,
         );
         if (ws === undefined) continue;
         const weRaw = audioSecToBeat(
           w.endSec + offsetSec,
           timeline,
-          drumsT0Sec,
+          songLeadIn,
           structuralBeats,
         );
         const we =
@@ -116,7 +116,7 @@ export function positionLyricLines(
         }));
       }
     } else {
-      startBeat = audioSecToBeat(lineSec, timeline, drumsT0Sec, structuralBeats);
+      startBeat = audioSecToBeat(lineSec, timeline, songLeadIn, structuralBeats);
       if (startBeat !== undefined) {
         // End beat = next-line's start (clamped to layerBeats) so the
         // text has a defined max-width region. The final line uses
@@ -126,7 +126,7 @@ export function positionLyricLines(
           const next = audioSecToBeat(
             lines[j].startSec + offsetSec,
             timeline,
-            drumsT0Sec,
+            songLeadIn,
             structuralBeats,
           );
           if (next !== undefined) {

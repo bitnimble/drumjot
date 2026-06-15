@@ -216,10 +216,10 @@ export const JotSchema = record({
   title: z.string(),
   /** Initial/global tempo in force before any per-bar override or event. */
   bpm: z.number(),
-  /** Audio time (seconds) of the first drum onset; the lead-in offset. */
-  drumsT0Sec: z.number().optional(),
-  /** Audio time (seconds) of the first non-silent sample; informational. */
-  signalT0Sec: z.number().optional(),
+  /** Jot time (seconds, bar-1 = 0) at which the recorded audio begins; the
+   *  lead-in alignment (<= 0). `media = jot - songLeadIn`. The derived runtime
+   *  anchors live in the `Epochs` record. */
+  songLeadIn: z.number().optional(),
   /** Number of pre-drum lead-in bars before bar 1. */
   leadBars: z.number().optional(),
   /** Producer grid density (1/N-of-a-whole-note); advisory. */

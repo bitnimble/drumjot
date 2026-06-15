@@ -222,14 +222,14 @@ export const PlaybackBar = observer(
       playerState={jotPlayer.state}
       playerError={jotPlayer.errorMessage}
       hasAudioTracks={jotPlayer.audioTracks.size > 0}
-      audioOffsetSec={jotPlayer.drumsT0Sec}
+      audioOffsetSec={-jotPlayer.songLeadInSec}
       drumOffsetBeats={playback.drumOffsetBeats}
       gridDivision={
         jotEditorStore.source ? gridDivisionFor(jotEditorStore.source) : DEFAULT_GRID_DIVISION
       }
       onTogglePlayPause={() => presenter.togglePlayPause()}
       onStop={() => presenter.stopPlayback()}
-      onSetAudioOffset={(sec) => jotPlayer.setDrumsT0Sec(sec)}
+      onSetAudioOffset={(sec) => jotPlayer.setSongLeadIn(-sec)}
       onSetDrumOffset={(beats) => presenter.setDrumOffset(beats)}
     />
   </div>

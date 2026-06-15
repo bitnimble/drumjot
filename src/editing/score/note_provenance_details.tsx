@@ -327,7 +327,7 @@ const OnsetTimingVisualization = observer(
     // present, see AGENTS.md §8.7); this is a visual aid, not a
     // precise timing readout.
     const timeline = jotPlayer.timeline;
-    const drumsT0Sec = jotPlayer.drumsT0Sec;
+    const songLeadInSec = jotPlayer.songLeadInSec;
     // Per-overlay positions are stored as percentage values (`pct`,
     // 0..100) of the timing-viz row width, not pixels. The waveform +
     // every aligned overlay stretch with the popover; using pixels
@@ -340,7 +340,7 @@ const OnsetTimingVisualization = observer(
       for (let i = 0; i < timeline.bars.length; i++) {
         const bar = timeline.bars[i]!;
         const structBar = structBars[i];
-        const barStart = bar.startSec + drumsT0Sec;
+        const barStart = bar.startSec - songLeadInSec;
         const barEnd = barStart + bar.durationSec;
         if (barStart >= windowStart && barStart <= windowEnd) {
           barBoundaries.push({ pct: timeToPct(barStart), label: structBar?.index ?? null });
@@ -712,7 +712,7 @@ export const NoteProvenanceDetails = observer(
         // matches what the MIDI tick was emitted from (see
         // `onsets_to_midi_bytes`).
         const quantSourceSec = entry.quantised_time_sec ?? entry.detected_time_sec;
-        const originalBarAudioStart = originalBarTiming.startSec + jotPlayer.drumsT0Sec;
+        const originalBarAudioStart = originalBarTiming.startSec - jotPlayer.songLeadInSec;
         const intraBarQn =
           (quantSourceSec - originalBarAudioStart) / originalSecPerQuarterNote;
         originalQuantizedBeat = 1 + intraBarQn * (originalBar.tsUnit / 4);
@@ -724,7 +724,7 @@ export const NoteProvenanceDetails = observer(
       if (currentBarTiming && currentSecPerQuarterNote !== undefined) {
         const intra =
           (currentQuantizedBeat - 1) * (4 / rendered.bar.tsUnit) * currentSecPerQuarterNote;
-        finalSec = currentBarTiming.startSec + intra + jotPlayer.drumsT0Sec;
+        finalSec = currentBarTiming.startSec + intra - jotPlayer.songLeadInSec;
       }
 
       // Bar-anchor drift: the difference between where the JOT places
@@ -735,7 +735,7 @@ export const NoteProvenanceDetails = observer(
       // `compute_bar_tick_grid` rounding `lead_bars = round(lead_in_secs *
       // initial_tempo_ticks_per_sec / bar0_ticks)` to zero when the
       // pre-roll is shorter than ~half a bar. The MIDI then carries no
-      // lead-in, `from_midi.ts` reconstructs `drumsT0Sec = 0`, and every
+      // lead-in, `from_midi.ts` reconstructs `songLeadIn = 0`, and every
       // bar is anchored `lead_in_secs` early in audio time. Secondary
       // sources (per-bar bpm attribution drift, integer-tick rounding)
       // can also contribute small amounts but are dominated by lead-in
@@ -752,7 +752,7 @@ export const NoteProvenanceDetails = observer(
           (entry.beat_in_bar - 1) * (4 / originalBar.tsUnit) * originalSecPerQuarterNote;
         const transcriberBarAudioTime = entry.detected_time_sec - intraSecFromDetected;
         // Where the JOT places that same bar in audio time.
-        const jotBarAudioTime = originalBarTiming.startSec + jotPlayer.drumsT0Sec;
+        const jotBarAudioTime = originalBarTiming.startSec - jotPlayer.songLeadInSec;
         const drift = jotBarAudioTime - transcriberBarAudioTime;
         if (Math.abs(drift) > 1e-6) {
           anchorDriftSec = drift;
@@ -897,8 +897,8 @@ export const NoteProvenanceDetails = observer(
     //     onset's audio time `c.time` is unchanged. The post-alignment
     //     bar positions ARE reflected in the JOT's bar audio anchors
     //     (via the transcriber's per-bar `set_tempo` map +
-    //     `from_midi.ts`'s `drumsT0Sec` reconstruction), so
-    //     `finalSec = currentBarTiming.startSec + intra + drumsT0Sec`
+    //     `from_midi.ts`'s `songLeadIn` reconstruction), so
+    //     `finalSec = currentBarTiming.startSec + intra + songLeadIn`
     //     is already in the post-alignment frame.
     //
     // Their combined value `(envelopeRefineSec ?? 0) + combinedAlignSec`
@@ -946,7 +946,7 @@ export const NoteProvenanceDetails = observer(
       // comment above. The alignment shifts the beat grid (and
       // thereby `bar.start_time`), not the onset's audio time; the
       // post-alignment bar positions are already reflected in
-      // `originalBarTiming.startSec + drumsT0Sec`.
+      // `originalBarTiming.startSec + songLeadIn`.
       if (anchorDriftSec !== undefined) accountedSec += anchorDriftSec;
       if (drumOffsetSec !== undefined) accountedSec += drumOffsetSec;
       const residual = finalSec - accountedSec;

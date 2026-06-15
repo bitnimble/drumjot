@@ -50,7 +50,7 @@ export type LyricsTrack = {
 };
 
 /** Slider bounds for the user-facing time-offset nudger. Mirrors the
- *  drumsT0Sec / drum-offset pattern: a single uniform shift across one
+ *  songLeadIn / drum-offset pattern: a single uniform shift across one
  *  lyric row, expressed in audio seconds. ±60s covers the realistic
  *  range of nudges (file-loaded LRC from a different cut, LRCLIB match
  *  against a remaster/edit) while still acting as a sanity tripwire for
@@ -170,7 +170,7 @@ export const lyricsStore = new LyricsStore();
 /**
  * Convert an audio-time second to a beat offset on the row's bars-row.
  * Mirrors how `AudioTrackWaveformCanvas` maps bar slices: the audio
- * recording's `t` lands at jot time `t - drumsT0Sec`; that jot time is
+ * recording's `t` lands at jot time `t + songLeadIn`; that jot time is
  * looked up against the per-bar `BarTiming` table, linearly interpolated
  * within its bar, and the resulting fraction is converted back to beats
  * by walking the structural bars' `beats` sums.
@@ -183,10 +183,11 @@ export const lyricsStore = new LyricsStore();
 export function audioSecToBeat(
   audioTimeSec: number,
   timeline: JotTimeline,
-  drumsT0Sec: number,
+  songLeadIn: number,
   structuralBeats: readonly number[],
 ): number | undefined {
-  const jotTime = audioTimeSec - drumsT0Sec;
+  // jot = media + songLeadIn (the inverse of media = jot - songLeadIn).
+  const jotTime = audioTimeSec + songLeadIn;
   const bars = timeline.bars;
   if (bars.length === 0 || structuralBeats.length !== bars.length) return undefined;
   const first = bars[0];

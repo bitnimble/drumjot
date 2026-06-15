@@ -1,7 +1,7 @@
 /**
  * Tests for the view-only virtual lead-in on StructuralPresenter: the score
  * always shows at least one bar of lead-in so the first note never clips,
- * sized to the audio pre-roll (drumsT0Sec) when that already exceeds a bar.
+ * sized to the audio pre-roll (songLeadIn) when that already exceeds a bar.
  * The virtual bar is present only on `layers` (the view), never on
  * `musicalLayers` (export / playback / tempo).
  */
@@ -26,7 +26,7 @@ describe('virtual lead-in (view layer)', () => {
 
   it('sizes the virtual lead-in to the audio pre-roll when it exceeds a bar', () => {
     // 3s @ 120bpm = 6 quarter-note beats (> one 4/4 bar).
-    const s = buildStructural(parse(`{{ drumsT0Sec: 3 }}\n${META}\n| k . . . |`));
+    const s = buildStructural(parse(`{{ songLeadIn: -3 }}\n${META}\n| k . . . |`));
     expect(s.musicalLayers[0].bars.map((b) => b.index)).toEqual([1]);
     const view = s.layers[0].bars;
     expect(view[0].index).toBe(-1);
@@ -35,7 +35,7 @@ describe('virtual lead-in (view layer)', () => {
 
   it('rounds a sub-bar pre-roll up to a full bar', () => {
     // 1s @ 120bpm = 2 beats (< one 4/4 bar) -> rounded up to 4.
-    const s = buildStructural(parse(`{{ drumsT0Sec: 1 }}\n${META}\n| k . . . |`));
+    const s = buildStructural(parse(`{{ songLeadIn: -1 }}\n${META}\n| k . . . |`));
     expect(s.layers[0].bars[0].beats).toBeCloseTo(4, 6);
   });
 

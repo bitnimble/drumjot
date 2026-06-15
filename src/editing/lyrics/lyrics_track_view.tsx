@@ -101,7 +101,7 @@ export const LyricsTrackView = observer(
     // `jotPlayer.timeline`) keeps this row off the per-frame playback
     // observable graph.
     const timeline = tempo.timeline;
-    const drumsT0Sec = jotPlayer.drumsT0Sec;
+    const songLeadInSec = jotPlayer.songLeadInSec;
     const pxPerBeat = structural.pxPerBeat;
 
     // Pre-compute each line's beat positions. For lines with `words`,
@@ -120,12 +120,12 @@ export const LyricsTrackView = observer(
         positionLyricLines(
           lines,
           timeline,
-          drumsT0Sec,
+          songLeadInSec,
           structuralBeats,
           offsetSec,
           layerBeats,
         ),
-      [lines, timeline, drumsT0Sec, structuralBeats, offsetSec, layerBeats],
+      [lines, timeline, songLeadInSec, structuralBeats, offsetSec, layerBeats],
     );
 
     // Word-collision avoidance. Word spans are absolutely positioned at
@@ -220,7 +220,7 @@ export const LyricsTrackView = observer(
     // the local observable.
     const playhead = useLocalObservable(() => ({
       get audioTimeNow(): number {
-        return jotPlayer.currentTime + jotPlayer.drumsT0Sec;
+        return jotPlayer.currentTime - jotPlayer.songLeadInSec;
       },
       get activeLineIdx(): number | undefined {
         const t = lyricsStore.get(id);

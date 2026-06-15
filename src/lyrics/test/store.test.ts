@@ -58,10 +58,10 @@ describe('audioSecToBeat', () => {
       { startSec: 0, durationSec: 2 },
     ]);
     const beats = [4, 4];
-    // drumsT0Sec = 1: audio 0 = jot time -1, the lead-in's start.
-    expect(audioSecToBeat(0, timeline, 1, beats)).toBe(0);
+    // songLeadIn = -1: audio 0 = jot time -1, the lead-in's start.
+    expect(audioSecToBeat(0, timeline, -1, beats)).toBe(0);
     // audio 1s = jot time 0 = end of lead-in / start of bar 1 = 4 beats.
-    expect(audioSecToBeat(1, timeline, 1, beats)).toBe(4);
+    expect(audioSecToBeat(1, timeline, -1, beats)).toBe(4);
   });
 
   test('returns undefined for times outside the timeline', () => {

@@ -19,19 +19,19 @@ export class PlaybackPresenter {
     this.playback = playback;
     this.jotEditorStore = jotEditorStore;
     makeAutoObservable(this, { playback: false, jotEditorStore: false });
-    // Seed the player's live drum↔audio offset from each loaded jot's
-    // transcribed lead-in (`globalMetadata.drumsT0Sec`). Tracking
-    // `document.source` (an observable reference) re-fires whenever a new
-    // jot is loaded, resetting the offset to that recording's value; manual
-    // nudges via the Offset control persist until the next load. We read
-    // the raw `source.globalMetadata` (not a laid-out peer) so seeding
+    // Seed the player's live `songLeadIn` epoch from each loaded jot's
+    // transcribed lead-in (`globalMetadata.songLeadIn`, jot seconds <= 0).
+    // Tracking `document.source` (an observable reference) re-fires whenever
+    // a new jot is loaded, resetting the offset to that recording's value;
+    // manual nudges via the Offset control persist until the next load. We
+    // read the raw `source.globalMetadata` (not a laid-out peer) so seeding
     // doesn't force a layout pass.
     reaction(
       () => {
-        const raw = this.jotEditorStore.source?.globalMetadata.drumsT0Sec;
-        return typeof raw === 'number' && raw > 0 ? raw : 0;
+        const raw = this.jotEditorStore.source?.globalMetadata.songLeadIn;
+        return typeof raw === 'number' && raw < 0 ? raw : 0;
       },
-      (offsetSec) => jotPlayer.setDrumsT0Sec(offsetSec),
+      (songLeadIn) => jotPlayer.setSongLeadIn(songLeadIn),
       { fireImmediately: true }
     );
 
@@ -125,7 +125,9 @@ export class PlaybackPresenter {
       const { dominantBpm } = tempo.dominantBpmAndTime;
       const bpm = dominantBpm ?? 120;
       const deltaSec = (deltaBeats * 60) / bpm;
-      jotPlayer.setDrumsT0Sec(jotPlayer.drumsT0Sec - deltaSec);
+      // Shift songLeadIn the opposite way to the note shift so the audio
+      // waveform tracks the noteheads instead of sliding out from under them.
+      jotPlayer.setSongLeadIn(jotPlayer.songLeadInSec + deltaSec);
     }
     structural.setDrumOffset(beats);
     jotPlayer.refreshDrumSchedule(structural);

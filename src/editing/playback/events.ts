@@ -67,11 +67,11 @@ export function jotToEvents(structural: StructuralPresenter): PlaybackEvent[] {
   // bar-offset so an empty lead-in produces no events but a lead-in bar
   // that DOES contain notes (rare; today only relevant if the upstream
   // generator stamps drums into a pre-drum bar) fires its events at
-  // negative jot time; at media `jot + drumsT0Sec >= 0` in audio time,
+  // negative jot time; at media `jot - songLeadIn >= 0` in audio time,
   // which is still valid. Lead-in count comes from the structure
   // (counting leading negative-indexed bars); `structureForLayer`
   // materialises both the explicit-leadBars and the chrome-only
-  // (`drumsT0Sec` without `leadBars`) source shapes into the same
+  // (`songLeadIn` without `leadBars`) source shapes into the same
   // negative-indexed-bar form, so the scheduler reads only the
   // structure.
   for (const layer of layers) {

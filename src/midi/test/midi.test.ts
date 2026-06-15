@@ -471,9 +471,9 @@ describe('MIDI <-> Jot synthetic baseline', () => {
     expect((el as { offset?: number }).offset).toBeCloseTo(20, 0);
   });
 
-  it('counts the leading rest run as leadBars and stamps drumsT0Sec', () => {
+  it('counts the leading rest run as leadBars and stamps songLeadIn', () => {
     // Two empty 4/4 bars at 120 bpm (1.0s/beat / 2.0s/bar) followed by a
-    // kick on bar-3 downbeat: leadBars=2, drumsT0Sec=4.0s exactly.
+    // kick on bar-3 downbeat: leadBars=2, songLeadIn=-4.0s exactly.
     const tpq = 480;
     const bytes = buildMidi({
       ticksPerBeat: tpq,
@@ -485,7 +485,7 @@ describe('MIDI <-> Jot synthetic baseline', () => {
 
     const jot = fromMidi(bytes);
     expect(jot.globalMetadata.leadBars).toBe(2);
-    expect(jot.globalMetadata.drumsT0Sec).toBeCloseTo(4.0, 6);
+    expect(jot.globalMetadata.songLeadIn).toBeCloseTo(-4.0, 6);
     // First non-rest bar is bars[2].
     expect(jot.layers[0].bars).toHaveLength(3);
     expect(jot.layers[0].bars[0].elements.every((e) => e.kind === 'rest')).toBe(true);
@@ -493,13 +493,13 @@ describe('MIDI <-> Jot synthetic baseline', () => {
     expect(jot.layers[0].bars[2].elements[0].kind).toBe('note');
   });
 
-  it('omits leadBars / drumsT0Sec when drums start at tick 0', () => {
+  it('omits leadBars / songLeadIn when drums start at tick 0', () => {
     const bytes = buildMidi({
       notes: [{ tick: 0, note: 36, velocity: 100 }],
     });
     const jot = fromMidi(bytes);
     expect(jot.globalMetadata.leadBars).toBeUndefined();
-    expect(jot.globalMetadata.drumsT0Sec).toBeUndefined();
+    expect(jot.globalMetadata.songLeadIn).toBeUndefined();
   });
 
   it('numbers pre-drum bars negatively and bar 1 starts the drums', () => {

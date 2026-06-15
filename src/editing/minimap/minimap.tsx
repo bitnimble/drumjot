@@ -111,7 +111,7 @@ export const Minimap = observer(
     mixer.isAudioTrackAudible(id)
   );
   const audibleAudioTrackIdsKey = audibleAudioTrackIds.join(',');
-  const drumsT0Sec = jotPlayer.drumsT0Sec;
+  const songLeadInSec = jotPlayer.songLeadInSec;
   const [peaks, setPeaks] = React.useState<Float32Array | null>(null);
   React.useEffect(() => {
     if (
@@ -134,7 +134,7 @@ export const Minimap = observer(
     let cancelled = false;
     Promise.all(
       audibleAudioTrackIds.map((id) =>
-        waveformWorker.computePeaks(id, slices, width, drumsT0Sec).catch((err) => {
+        waveformWorker.computePeaks(id, slices, width, songLeadInSec).catch((err) => {
           // eslint-disable-next-line no-console
           console.warn('[minimap] peaks failed for', id, err);
           return null;
@@ -170,7 +170,7 @@ export const Minimap = observer(
     // its string key rather than the array itself; otherwise the effect
     // would refire on every Minimap render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [audibleAudioTrackIdsKey, bars, width, hasContent, drumsT0Sec, tempo]);
+  }, [audibleAudioTrackIdsKey, bars, width, hasContent, songLeadInSec, tempo]);
 
   // ─── Note marks (color-coded per lane, plotted in minimap-px) ──────
   // Driven by a MobX `reaction` rather than computed in the render body so

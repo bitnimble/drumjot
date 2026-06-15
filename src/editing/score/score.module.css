@@ -292,7 +292,7 @@
 
 /* Negative-indexed bar (audio pre-roll absorbed into the score by
    `structureForLayer`, either from `globalMetadata.leadBars` or
-   synthesised from a chrome-only `globalMetadata.drumsT0Sec`). Hatched
+   synthesised from a chrome-only `globalMetadata.songLeadIn`). Hatched
    so the operator reads bars -N..-1 as "this is the recording's intro"
    rather than "extra real bars they need to count from". Internal
    bar-right borders are suppressed so consecutive lead-in bars merge

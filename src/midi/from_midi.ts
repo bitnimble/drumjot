@@ -356,7 +356,7 @@ export function fromMidi(
   // pre-drum audio still has a position on the timeline — but their count
   // is surfaced on `globalMetadata.leadBars` so consumers don't have to
   // recount them, and their cumulative audio duration becomes
-  // `globalMetadata.drumsT0Sec` so playback / waveform alignment match the
+  // `globalMetadata.preRollSec` so playback / waveform alignment match the
   // transcriber's RLRR/DSL paths.
   let leadBars = 0;
   while (
@@ -366,12 +366,12 @@ export function fromMidi(
     leadBars++;
   }
   // If the whole jot is rests (no drums in the file at all) we leave
-  // leadBars = 0 / drumsT0Sec undefined — there's no "bar 1" to anchor
+  // leadBars = 0 / preRollSec undefined — there's no "bar 1" to anchor
   // against and emitting a giant pre-drum offset would just hide the
   // entire content.
   if (leadBars >= bars.length) leadBars = 0;
 
-  let drumsT0Sec = 0;
+  let preRollSec = 0;
   if (leadBars > 0) {
     // Walk the pre-drum bars in lockstep with the tempo timeline (same
     // attribution rule as the main bar loop: "most recent tempo at or
@@ -391,7 +391,7 @@ export function fromMidi(
       const barBpm = tempoChanges[leadTempoIdx]?.bpm ?? initialBpm;
       const barBeats = (span.time.count * 4) / span.time.unit;
       if (barBpm > 0) {
-        drumsT0Sec += (barBeats * 60) / barBpm;
+        preRollSec += (barBeats * 60) / barBpm;
       }
     }
   }
@@ -410,12 +410,13 @@ export function fromMidi(
     // math) read the real resolution instead of assuming 48.
     gridDivision: opts.gridDivision,
     ...(leadBars > 0 ? { leadBars } : {}),
-    ...(drumsT0Sec > 0 ? { drumsT0Sec } : {}),
+    // Jot-time audio start = negative of the pre-drum audio duration.
+    ...(preRollSec > 0 ? { songLeadIn: -preRollSec } : {}),
   };
 
   // [A9] No anacrusis is inferred; bars run from tick 0 onward. Pre-drum
   // bars are preserved in `bars[0..leadBars-1]` and surfaced via
-  // `globalMetadata.leadBars` / `globalMetadata.drumsT0Sec` so the
+  // `globalMetadata.leadBars` / `globalMetadata.preRollSec` so the
   // renderer can label them with negative indices.
   const jot: Jot = {
     title: '',

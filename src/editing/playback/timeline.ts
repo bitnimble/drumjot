@@ -10,8 +10,8 @@
  *
  * Jot-time anchor: bar 1 (= the first drum bar, `layer.bars[leadBars]`)
  * sits at jot time 0 by construction. That coincides with the audio time
- * stored in `globalMetadata.drumsT0Sec` so the player's
- * `media = jot + drumsT0Sec` identity lines the synth drums up with the
+ * stored in `globalMetadata.songLeadIn` so the player's
+ * `media = jot - songLeadIn` identity lines the synth drums up with the
  * recorded audio drums. Pre-drum lead-in bars (if any) sit at negative
  * startSec; their notes (rare, but possible if an upstream generator
  * stamps drums into a pre-drum bar) fire at negative jot time, which
@@ -150,7 +150,7 @@ export function buildTimeline(rendered: LaidOutJot): JotTimeline {
   for (let i = 0; i < layer.bars.length; i++) durations[i] = tempos[i].durationSec;
 
   // Anchor bar 1 (= the first non-lead-in bar) at jot time 0, so the
-  // audio scheduler's "media = jot + drumsT0Sec" identity lines up the
+  // audio scheduler's "media = jot - songLeadIn" identity lines up the
   // synth drums with the recorded audio drums. Pre-drum bars (the
   // lead-in, identified by `bar.index < 0`) get negative `startSec`;
   // playback's rAF loop already accepts negative jot times for the
@@ -158,7 +158,7 @@ export function buildTimeline(rendered: LaidOutJot): JotTimeline {
   // Lead-in count is read directly from the structure (counting the
   // leading run of negative-indexed bars) rather than from
   // `globalMetadata.leadBars`: `structureForLayer` materialises both
-  // the explicit-leadBars and the chrome-only (`drumsT0Sec` without
+  // the explicit-leadBars and the chrome-only (`songLeadIn` without
   // `leadBars`) source shapes into the same negative-indexed-bar form,
   // so reading the count from the bars themselves keeps the timeline
   // path single-source-of-truth.

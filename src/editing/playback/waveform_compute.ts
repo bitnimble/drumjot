@@ -132,8 +132,8 @@ export function extractChannels(buffer: AudioBuffer): ChannelData {
 /**
  * Bar-by-bar peak extraction; the canvas-mixer waveform. Mirrors the
  * legacy `computeWaveformPeaks` semantics: each pixel column inside a
- * bar's pixel range maps to the bar's audio-time slice (= jot-time +
- * `drumsT0Sec`), and the [min, max] envelope of the channels collapsed
+ * bar's pixel range maps to the bar's audio-time slice (= jot-time -
+ * `songLeadIn`), and the [min, max] envelope of the channels collapsed
  * to mono goes into `peaks[2*p, 2*p+1]`. Pixels outside any bar stay
  * at 0/0 (the array is zero-initialised by `Float32Array`).
  */
@@ -141,7 +141,7 @@ export function computeWaveformPeaksFromChannels(
   data: ChannelData,
   bars: BarSlice[],
   totalWidthPx: number,
-  drumsT0Sec: number
+  songLeadInSec: number
 ): Float32Array {
   const peaks = new Float32Array(totalWidthPx * 2);
   if (totalWidthPx <= 0 || bars.length === 0) return peaks;
@@ -158,8 +158,8 @@ export function computeWaveformPeaksFromChannels(
       const frac1 = (p + 1 - x0) / w;
       const tJot0 = bar.startSec + frac0 * bar.durationSec;
       const tJot1 = bar.startSec + frac1 * bar.durationSec;
-      const tAudio0 = tJot0 + drumsT0Sec;
-      const tAudio1 = tJot1 + drumsT0Sec;
+      const tAudio0 = tJot0 - songLeadInSec;
+      const tAudio1 = tJot1 - songLeadInSec;
       const s0 = Math.max(0, Math.floor(tAudio0 * sampleRate));
       const s1 = Math.min(length, Math.ceil(tAudio1 * sampleRate));
       writePixelPeak(channels, numChannels, channelScale, s0, s1, peaks, p * 2);

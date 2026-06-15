@@ -315,7 +315,7 @@ const AudioTrackWaveformCanvas = observer(
  * `IntersectionObserver` round-trip to wait through. The first render
  * after mount draws immediately so a newly-visible chunk paints on
  * the same frame as the parent's visibility decision; subsequent
- * renders triggered by zoom / `drumsT0Sec` / etc. rAF-coalesce so a
+ * renders triggered by zoom / `songLeadInSec` / etc. rAF-coalesce so a
  * sustained wheel-zoom gesture triggers at most one worker call per
  * displayed frame.
  */
@@ -342,7 +342,7 @@ const AudioTrackWaveformChunk = observer(
     const canvasRef = React.useRef<HTMLCanvasElement>(null);
     // Live drum↔audio offset; chunks re-render (and so re-rasterise
     // on the next rAF) when the user nudges the Offset control.
-    const drumsT0Sec = jotPlayer.drumsT0Sec;
+    const songLeadInSec = jotPlayer.songLeadInSec;
     const livePxPerBeat = useLiveJotPxPerBeat();
     const padBeats = React.useContext(StructuralContext)?.config.barNotePaddingBeats ?? 0.125;
     // Globally-unique worker-side slot identifier for this tile.
@@ -400,7 +400,7 @@ const AudioTrackWaveformChunk = observer(
 
     // First render after mount paints immediately so a newly-visible
     // chunk shows up on the same frame as the parent's visibility
-    // decision; subsequent paints (zoom tick, drumsT0Sec change, etc.)
+    // decision; subsequent paints (zoom tick, songLeadInSec change, etc.)
     // rAF-coalesce so a sustained wheel-zoom gesture triggers at most
     // one worker call per displayed frame. The paint itself is
     // fire-and-forget: the worker computes peaks and paints into the
@@ -451,7 +451,7 @@ const AudioTrackWaveformChunk = observer(
           height,
           backingW,
           backingH,
-          drumsT0Sec,
+          songLeadInSec,
           laneColor ?? '#5BA8E8',
           ampScale,
         );
@@ -468,7 +468,7 @@ const AudioTrackWaveformChunk = observer(
       chunk,
       bars,
       height,
-      drumsT0Sec,
+      songLeadInSec,
       livePxPerBeat,
       laneColor,
       ampScale,

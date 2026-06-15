@@ -223,11 +223,11 @@ describe('lead-in (musical structure)', () => {
     expect(store(model).layers[0].bars.map((b) => b.index)).toEqual([-1, 1]);
   });
 
-  it('adds no synthetic bar for a drumsT0Sec-only song (that is a view concern)', () => {
+  it('adds no synthetic bar for a songLeadIn-only song (that is a view concern)', () => {
     const { model } = createReactiveJot({
       title: '',
       bpm: 120,
-      drumsT0Sec: 3,
+      songLeadIn: -3,
       bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
       elements: {
         n1: { kind: 'note', id: 'n1', barId: 'b1', beat: 0, duration: 1, lane: 'k', modifiers: [] },

@@ -474,7 +474,7 @@ export class AudioTrackPlaybackController {
     audioStartTime: number,
     jotOffsetSec: number,
     speed: number,
-    drumsT0Sec: number,
+    songLeadInSec: number,
     gainFor: (id: AudioTrackId) => number,
   ): void {
     for (const track of tracks) {
@@ -483,7 +483,7 @@ export class AudioTrackPlaybackController {
         audioStartTime,
         jotOffsetSec,
         speed,
-        drumsT0Sec,
+        songLeadInSec,
         gainFor(track.id),
       );
     }
@@ -494,7 +494,7 @@ export class AudioTrackPlaybackController {
    * stretch worklet handles every speed in [0.25, 1.25] uniformly so
    * this is just a `schedule({rate, output})` per slot; no path
    * switch, no source rebuild. The caller still passes the anchor
-   * state (`audioStartTime`, `jotOffsetSec`, `drumsT0Sec`, `gainFor`)
+   * state (`audioStartTime`, `jotOffsetSec`, `songLeadInSec`, `gainFor`)
    * for parity with the drum-side reschedule, but they're unused in
    * the worklet path.
    */
@@ -502,7 +502,7 @@ export class AudioTrackPlaybackController {
     speed: number,
     audioStartTime: number,
     _jotOffsetSec: number,
-    _drumsT0Sec: number,
+    _songLeadInSec: number,
     _gainFor: (id: AudioTrackId) => number,
   ): void {
     const when = Math.max(audioStartTime, this.ctx.currentTime + SCHEDULE_PAD_SEC);
@@ -524,13 +524,13 @@ export class AudioTrackPlaybackController {
     audioStartTime: number,
     jotOffsetSec: number,
     speed: number,
-    drumsT0Sec: number,
+    songLeadInSec: number,
     gain: number,
   ): void {
-    // Input time = jot time + drumsT0Sec. A negative jot offset
+    // Input time = jot time - songLeadIn. A negative jot offset
     // (lead-in) clamps to 0 so the recording's own intro is what plays
     // during the lead-in, exactly as the legacy path did.
-    const inputTime = Math.max(0, jotOffsetSec + drumsT0Sec);
+    const inputTime = Math.max(0, jotOffsetSec - songLeadInSec);
     const slot = this.ensureSlot(track);
     this.setSlotGain(slot, gain);
 

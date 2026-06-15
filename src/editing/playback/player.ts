@@ -32,6 +32,7 @@
  * a visible indicator and the operator can inspect details.
  */
 import { makeAutoObservable, runInAction } from 'mobx';
+import { type Epochs, makeEpochs } from './epochs';
 import type { StructuralPresenter } from 'src/editing/structure/structural_presenter';
 import type { TempoPresenter } from 'src/editing/playback/tempo_presenter';
 import { MixerContext } from 'src/editing/tracks/tracks';
@@ -495,21 +496,27 @@ export class JotPlayer {
     return this.playback?.audioTrackFilter ?? PASSTHROUGH_AUDIO_TRACK_FILTER;
   }
   /**
-   * Drum-track ↔ audio-track offset, in seconds — the recording's
-   * lead-in. It's the audio-time that lines up with jot-time 0: each
-   * audio track plays at media time `jotTime + drumsT0Sec`, so
-   * raising it slides the backing audio *ahead* of the drums (the drums
-   * come in later relative to the song) and lowering it pulls them
-   * together. Drum scheduling is in jot-time and doesn't depend on this,
-   * so a change only has to reposition the audio tracks.
+   * The `songLeadIn` epoch: the JOT time (<= 0) at which the recorded audio
+   * begins, i.e. the recording's pre-drum lead-in. Each audio track plays at
+   * media time `jot - songLeadInSec` (see {@link jotToMedia}); lowering it
+   * (more negative) slides the backing audio *ahead* of the drums and raising
+   * it pulls them together. Drum scheduling is in jot-time and doesn't depend
+   * on this, so a change only repositions the audio tracks.
    *
-   * Observable and user-adjustable live via {@link setDrumsT0Sec} (the
+   * Observable and user-adjustable live via {@link setSongLeadIn} (the
    * transport bar's Offset control); the store seeds it from each loaded
-   * jot's `globalMetadata.drumsT0Sec`, after which manual nudges persist
-   * until a different jot is loaded. `setPlaybackSpeed` / `seek` also read
-   * it to re-anchor audio tracks to the right audio position.
+   * jot's `globalMetadata.songLeadIn`, after which manual nudges persist until
+   * a different jot is loaded. The full derived anchor set is {@link epochs}.
    */
-  drumsT0Sec: number = 0;
+  songLeadInSec: number = 0;
+
+  /** The song's time anchors (jot seconds): the live {@link songLeadInSec}
+   *  plus the rendered left edge (`fullLeadIn`) from the current timeline.
+   *  `fullLeadIn` falls back to `songLeadIn` before a timeline is built. */
+  get epochs(): Epochs {
+    return makeEpochs(this.songLeadInSec, this.timeline.bars[0]?.startSec ?? this.songLeadInSec);
+  }
+
   /**
    * AudioContext time of the playback anchor (updated at `play()` and
    * whenever `setPlaybackSpeed` re-anchors mid-flight); `currentJotTime`
@@ -533,7 +540,7 @@ export class JotPlayer {
   // Audio-context time of the last drum event scheduled by the most
   // recent `scheduleEvents` call. Tracked separately from
   // `tailAudioTime` (which already takes the max with audio-track
-  // endings) so callers that don't reschedule drums; `setDrumsT0Sec`
+  // endings) so callers that don't reschedule drums; `setSongLeadIn`
   // is the only one today; can recompute the tail when only the
   // audio side moves.
   private lastScheduledDrumTime: number = 0;
@@ -564,7 +571,7 @@ export class JotPlayer {
   /**
    * Jot-time (seconds) the next `play()` should start from, set by a
    * click-to-seek while idle. `undefined` means "start from the
-   * beginning" (honouring `drumsT0Sec` lead-in as before).
+   * beginning" (honouring `songLeadIn` lead-in as before).
    */
   private pendingStartSec: number | undefined;
 
@@ -906,7 +913,7 @@ export class JotPlayer {
         now,
         jotOffset,
         this.playbackSpeed,
-        this.drumsT0Sec,
+        this.songLeadInSec,
         (sid) => audioTrackGainUnder(sid, this.currentAudioTrackFilter)
       );
     }
@@ -1002,7 +1009,7 @@ export class JotPlayer {
       clamped,
       now,
       jotOffset,
-      this.drumsT0Sec,
+      this.songLeadInSec,
       (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter),
     );
     this.scheduleTailTimer(lastTime);
@@ -1017,14 +1024,14 @@ export class JotPlayer {
    * rescheduled elements stay silent (their `play()` no-ops against a
    * suspended context) and realign on resume — same approach as `seek`.
    *
-   * Clamped at 0: media time can't precede the start of the recording,
-   * so a negative offset has no meaning (the audio would just clamp to
+   * Clamped at 0 (songLeadIn <= 0): the audio can't start *after* bar 1,
+   * so a positive lead-in has no meaning (the audio would just clamp to
    * its own t=0).
    */
-  setDrumsT0Sec(sec: number): void {
-    const clamped = Number.isFinite(sec) ? Math.max(0, sec) : 0;
+  setSongLeadIn(sec: number): void {
+    const clamped = Number.isFinite(sec) ? Math.min(0, sec) : 0;
     runInAction(() => {
-      this.drumsT0Sec = clamped;
+      this.songLeadInSec = clamped;
     });
     if ((this.state !== 'playing' && this.state !== 'paused') || !this.ctx) return;
     if (!this.audioTrackController) return;
@@ -1043,7 +1050,7 @@ export class JotPlayer {
     );
     // The auto-stop fires when the latest of (last drum event, last
     // audio-track sample) is reached. `computeAudioTracksEndTime` reads
-    // `drumsT0Sec`, so a mid-flight offset change shifts the audio end
+    // `songLeadIn`, so a mid-flight offset change shifts the audio end
     // time and the tail must be re-armed; otherwise raising the offset
     // can cause auto-stop to fire before the audio finishes.
     if (this.state === 'playing') {
@@ -1105,7 +1112,7 @@ export class JotPlayer {
     // first bar's `startSec`), so the user can scrub all the way to the
     // start of the lead-in. That left edge is the view's virtual lead-in
     // bar (always at least one bar), which can sit further left than the
-    // audio pre-roll alone (`-drumsT0Sec`), clamping at the latter would
+    // audio pre-roll alone (`songLeadIn`), clamping at the latter would
     // strand the playhead short of the rendered left edge. The media
     // mapping still clamps audio to >= 0, so the silent pre-bar scrubs in
     // silence.
@@ -1125,7 +1132,7 @@ export class JotPlayer {
     }
 
     if (!this.ctx) return;
-    const start = this.timeline.bars[0]?.startSec ?? -this.drumsT0Sec;
+    const start = this.timeline.bars[0]?.startSec ?? this.songLeadInSec;
     let target = Math.max(seconds, start);
     const dur = this.timeline.totalDurationSec;
     if (dur > 0) target = Math.min(target, dur);
@@ -1147,7 +1154,7 @@ export class JotPlayer {
         now,
         target,
         this.playbackSpeed,
-        this.drumsT0Sec,
+        this.songLeadInSec,
         (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter)
       );
     }
@@ -1200,28 +1207,18 @@ export class JotPlayer {
 
       const timeline = tempo.timeline;
       const audioStartTime = ctx.currentTime + SCHEDULE_LEAD_SECONDS;
-      // `drumsT0Sec` on globalMetadata is the audio-time of jot-time 0 in
-      // the original recording — i.e. how much silence / non-drum intro
-      // preceded the first detected beat. Anchor jot time at -offset so
-      // the rAF loop's `jotTime > 0 ? jotTime : 0` clamp parks the
-      // playhead at position 0 during the lead-in, then it advances
-      // naturally once the first hit fires. Scheduling from -offset
-      // pushes every event's audio time forward by offset/speed so the
-      // drums come in delayed to match the original.
-      // The live offset (seeded from the jot's metadata by the store,
-      // tunable via the Offset control) is the source of truth — not a
-      // re-read of the metadata — so a user nudge survives stop/replay.
-      const drumsT0Sec = this.drumsT0Sec;
-      // Start from the click-to-seek cue if one is pending, otherwise
-      // from -drumsT0Sec so the rAF clamp parks the playhead at 0
-      // through the recording's lead-in (unchanged default behaviour).
-      // A cue (including a negative one parked in the lead-in) is
-      // honoured, clamped into [-drumsT0Sec, total]. No cue still
-      // means "start from the top of the lead-in" (-drumsT0Sec).
+      // Start from the click-to-seek cue if one is pending, otherwise from
+      // the rendered left edge (`fullLeadIn` = the first bar's startSec,
+      // which includes the view's virtual lead-in) so a no-cue play begins
+      // at the very top of the lead-in / count-in. A cue (including a
+      // negative one parked in the lead-in) is honoured, clamped into
+      // [fullLeadIn, total]. The live `songLeadInSec` (seeded from the jot's
+      // metadata, tunable via the Offset control) drives audio-track timing.
+      const fullLeadIn = timeline.bars[0]?.startSec ?? this.songLeadInSec;
       const anchorJot =
         cueSec !== undefined
-          ? Math.min(Math.max(cueSec, -drumsT0Sec), timeline.totalDurationSec)
-          : -drumsT0Sec;
+          ? Math.min(Math.max(cueSec, fullLeadIn), timeline.totalDurationSec)
+          : fullLeadIn;
       this.startContextTime = audioStartTime;
       this.startJotTime = anchorJot;
       const lastTime = this.scheduleEvents(anchorJot, audioStartTime);
@@ -1239,7 +1236,7 @@ export class JotPlayer {
         audioStartTime,
         anchorJot,
         this.playbackSpeed,
-        drumsT0Sec,
+        this.songLeadInSec,
         (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter)
       );
       // The stretch worklet preloads on first audio-track load; if it
@@ -1323,7 +1320,7 @@ export class JotPlayer {
         now,
         jotOffset,
         this.playbackSpeed,
-        this.drumsT0Sec,
+        this.songLeadInSec,
         (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter)
       );
     }
@@ -1343,8 +1340,8 @@ export class JotPlayer {
     this.audioTrackController = undefined;
     this.events = [];
     this.startJotTime = 0;
-    // `drumsT0Sec` is deliberately NOT reset here: it's the loaded
-    // jot's offset (seeded by the store, live-tunable via setDrumsT0Sec),
+    // `songLeadIn` is deliberately NOT reset here: it's the loaded
+    // jot's offset (seeded by the store, live-tunable via setSongLeadIn),
     // so it must survive stop()/replay. The store re-seeds it when a
     // different jot is loaded.
     this.pendingStartSec = undefined;
@@ -1398,10 +1395,10 @@ export class JotPlayer {
    * so 0 means "audio doesn't constrain the tail". */
   private computeAudioTracksEndTime(): number {
     if (!this.ctx || this.audioTracks.size === 0) return 0;
-    // Same `mediaOffset = max(0, jot + drumsT0Sec)` formula
+    // Same `mediaOffset = max(0, jot - songLeadIn)` formula
     // `AudioTrackPlaybackController.scheduleOne` uses, so the end time
     // here matches when the underlying `BufferSource` actually stops.
-    const mediaOffset = Math.max(0, this.startJotTime + this.drumsT0Sec);
+    const mediaOffset = Math.max(0, this.startJotTime - this.songLeadInSec);
     const speed = this.playbackSpeed;
     let maxEnd = 0;
     for (const track of this.audioTracks.values()) {
@@ -1529,16 +1526,17 @@ export class JotPlayer {
       // the AudioContext clock the drum scheduler uses; no drift
       // subsystem needed at any speed.
       runInAction(() => {
-        // Allow negative jot time during the recording's lead-in so the
-        // playhead travels the reserved pre-roll space (timeToX maps
-        // [-drumsT0Sec, 0) into the lead-in pixels). Clamp at
-        // -drumsT0Sec so it can't run off the left of the lead-in.
-        // The user's `audioLatencyMs` fine-tune and the auto-detected
-        // `internalLatencyMs` baseline are summed; both shift the
-        // visual ahead of the audio clock to compensate for perceived
-        // audio/visual sync drift.
+        // Allow negative jot time during the lead-in so the playhead travels
+        // the reserved pre-roll space (timeToX maps it into the lead-in
+        // pixels). Clamp at the rendered left edge (`fullLeadIn` = the first
+        // bar's startSec, incl. the view's virtual lead-in) so it can't run
+        // off the left of the lead-in. The user's `audioLatencyMs` fine-tune
+        // and the auto-detected `internalLatencyMs` baseline are summed; both
+        // shift the visual ahead of the audio clock to compensate for
+        // perceived audio/visual sync drift.
         const latencyShiftSec = (this.audioLatencyMs + this.internalLatencyMs) * 0.001;
-        this.currentTime = Math.max(jotTime + latencyShiftSec, -this.drumsT0Sec);
+        const fullLeadIn = this.timeline.bars[0]?.startSec ?? this.songLeadInSec;
+        this.currentTime = Math.max(jotTime + latencyShiftSec, fullLeadIn);
       });
       this.rafId = window.requestAnimationFrame(tick);
     };

@@ -60,7 +60,7 @@ export type WaveformWorkerRequest =
       id: string;
       bars: BarSlice[];
       totalWidthPx: number;
-      drumsT0Sec: number;
+      songLeadInSec: number;
     }
   | {
       kind: 'window';
@@ -84,7 +84,7 @@ export type WaveformWorkerRequest =
       height: number;
       backingW: number;
       backingH: number;
-      drumsT0Sec: number;
+      songLeadInSec: number;
       laneColor: string;
       ampScale: number;
     }
@@ -133,7 +133,7 @@ ctx.onmessage = (e: MessageEvent<WaveformWorkerRequest>) => {
         data,
         msg.bars,
         msg.totalWidthPx,
-        msg.drumsT0Sec,
+        msg.songLeadInSec,
       );
       reply({ kind: 'result', reqId: msg.reqId, peaks }, [peaks.buffer]);
       return;
@@ -189,13 +189,13 @@ function renderChunkInto(
   data: ChannelData,
   msg: Extract<WaveformWorkerRequest, { kind: 'renderChunk' }>,
 ): void {
-  const { bars, widthPx, height, backingW, backingH, drumsT0Sec, laneColor, ampScale } = msg;
+  const { bars, widthPx, height, backingW, backingH, songLeadInSec, laneColor, ampScale } = msg;
   if (widthPx <= 0 || height <= 0) return;
   canvas.width = backingW;
   canvas.height = backingH;
   const ctx2d = canvas.getContext('2d');
   if (!ctx2d) return;
-  const peaks = computeWaveformPeaksFromChannels(data, bars, widthPx, drumsT0Sec);
+  const peaks = computeWaveformPeaksFromChannels(data, bars, widthPx, songLeadInSec);
   ctx2d.imageSmoothingEnabled = false;
   ctx2d.setTransform(backingW / widthPx, 0, 0, backingH / height, 0, 0);
   ctx2d.clearRect(0, 0, widthPx, height);
