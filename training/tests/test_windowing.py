@@ -101,3 +101,34 @@ def test_window_specs_short_tail_loses_no_onsets(tmp_path):
     assert len(out) == 2
     recon = sorted(t + start for _a, o, _w, start, _l in out for t in o["k"])
     assert recon == [1.0, 31.0, 61.5]  # merged tail keeps its onset, reconstructs exactly
+
+
+def test_plan_cache_skips_audio_reread(tmp_path):
+    pytest.importorskip("soundfile")
+    p = _write(tmp_path, "pc.flac", 65.0, gaps=(30.0, 60.0))
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    out1 = train._window_specs([(p, {"k": [1.0]})], 30.0, 3.0, 0, plan_cache_dir=str(cache))
+    assert (cache / "_window_plan.json").exists()
+    # delete the audio: a re-plan would fail, so a matching result proves the cache hit
+    import os
+    os.remove(p)
+    out2 = train._window_specs([(p, {"k": [1.0]})], 30.0, 3.0, 0, plan_cache_dir=str(cache))
+    w1 = [(s, length) for _a, _o, _w, s, length in out1]
+    w2 = [(s, length) for _a, _o, _w, s, length in out2]
+    assert w1 == w2 and len(w1) >= 2
+
+
+def test_plan_cache_shared_across_max_windows(tmp_path):
+    pytest.importorskip("soundfile")
+    p = _write(tmp_path, "pc2.flac", 95.0)  # ceil(95/30)=4 windows
+    cache = tmp_path / "c2"
+    cache.mkdir()
+    full = train._window_specs([(p, {"k": [1.0]})], 30.0, 3.0, 0, plan_cache_dir=str(cache))  # caches full
+    import os
+    os.remove(p)  # now only the cache can serve
+    capped = train._window_specs([(p, {"k": [1.0]})], 30.0, 3.0, 2, plan_cache_dir=str(cache))
+    assert len(full) == 4 and len(capped) == 2
+    wf = [(s, length) for _a, _o, _w, s, length in full]
+    wc = [(s, length) for _a, _o, _w, s, length in capped]
+    assert wf[:2] == wc  # capped run = first 2 of the cached full plan (no re-read)

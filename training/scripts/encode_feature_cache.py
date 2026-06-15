@@ -259,8 +259,8 @@ def main():
 
     # FULL windowing (max_windows=0) for BOTH splits -- exactly what train.main() now does.
     win = args.max_seconds or 30.0
-    tr_w = train._window_specs(train_specs, win, args.window_search, 0)
-    va_w = train._window_specs(val_specs, win, args.window_search, 0)
+    tr_w = train._window_specs(train_specs, win, args.window_search, 0, plan_cache_dir=cache)
+    va_w = train._window_specs(val_specs, win, args.window_search, 0, plan_cache_dir=cache)
     print(f"\nfull windowing: {len(train_specs)} train clips -> {len(tr_w)} windows | "
           f"{len(val_specs)} val clips -> {len(va_w)} windows", flush=True)
     print(f"cache dir: {cache}  (resumable: already-cached windows are skipped)\n", flush=True)

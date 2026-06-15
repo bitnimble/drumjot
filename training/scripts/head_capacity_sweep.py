@@ -217,8 +217,8 @@ def main():
     # one materialize pass (features are head-size independent); reuse across arms.
     cfg0 = make_cfg(hiddens[0], args.layers)
     encoder = embeddings.make_encoder(cfg0.encoder, cfg0.encoder_layer)
-    tr_w = _window_specs(tr_specs, 30.0, 3.0, args.train_max_windows)
-    va_w = _window_specs(va_specs, 30.0, 3.0, args.val_max_windows)
+    tr_w = _window_specs(tr_specs, 30.0, 3.0, args.train_max_windows, plan_cache_dir=cache)
+    va_w = _window_specs(va_specs, 30.0, 3.0, args.val_max_windows, plan_cache_dir=cache)
     t0 = time.perf_counter()
     train_clips = materialize(tr_w, encoder, cfg0, cache, 30.0, "train", log)
     val_clips = materialize(va_w, encoder, cfg0, cache, 30.0, "val", log)

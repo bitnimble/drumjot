@@ -441,24 +441,60 @@ def plan_windows(
     return wins[:max_windows] if max_windows else wins
 
 
-def _window_specs(specs, window: float, search: float, max_windows: int) -> list[tuple]:
+def _window_specs(specs, window: float, search: float, max_windows: int,
+                  plan_cache_dir=None) -> list[tuple]:
     """Expand (audio, onsets[, weight_onsets]) specs into per-window specs
     (audio, onsets_rel, weight_rel_or_None, start, length): onsets sliced to each
     window and shifted to window-relative time. `max_windows == 1` keeps the
-    legacy single window (first `window`s only) with no audio read for planning."""
-    out: list[tuple] = []
+    legacy single window (first `window`s only) with no audio read for planning.
+
+    `plan_cache_dir`: memoize the (audio-derived RMS) window cuts to
+    `_window_plan.json` there. The cuts are deterministic, so repeat runs skip the
+    per-clip `librosa.load` + RMS (the GPU-idle "planning" phase) entirely. The
+    FULL window list is cached (keyed by audio+window+search) and sliced to
+    `max_windows` on read, so train (0) and val (N) share one entry per clip."""
+    import json
+    import os
+
+    plan: dict = {}
+    pcp = None
+    dirty = False
+    if plan_cache_dir is not None and max_windows != 1:
+        pcp = Path(plan_cache_dir) / "_window_plan.json"
+        try:
+            plan = json.loads(pcp.read_text()) if pcp.exists() else {}
+        except Exception:  # noqa: BLE001  corrupt cache -> rebuild
+            plan = {}
 
     def _slice(onsets, start, length):
         return {ln: [t - start for t in ts if start <= t < start + length]
                 for ln, ts in onsets.items()}
 
+    def _wins(audio):
+        nonlocal dirty
+        if max_windows == 1:
+            return [(0.0, window)]
+        if plan_cache_dir is None:
+            return plan_windows(audio, window, search, max_windows)
+        key = f"{Path(audio).expanduser().absolute()}|{window}|{search}"
+        full = plan.get(key)
+        if full is None:
+            full = [list(w) for w in plan_windows(audio, window, search, 0)]  # full list
+            plan[key] = full
+            dirty = True
+        return [tuple(w) for w in (full[:max_windows] if max_windows else full)]
+
+    out: list[tuple] = []
     for spec in specs:
         audio, onsets = spec[0], spec[1]
         weight = spec[2] if len(spec) > 2 else None
-        wins = [(0.0, window)] if max_windows == 1 else plan_windows(audio, window, search, max_windows)
-        for start, length in wins:
+        for start, length in _wins(audio):
             w = None if weight is None else _slice(weight, start, length)
             out.append((audio, _slice(onsets, start, length), w, start, length))
+    if dirty and pcp is not None:  # atomic write (ctrl-C must not corrupt the cache)
+        tmp = pcp.with_name(pcp.name + ".tmp")
+        tmp.write_text(json.dumps(plan))
+        os.replace(tmp, pcp)
     return out
 
 
@@ -1238,8 +1274,8 @@ def main(argv: list[str] | None = None) -> None:
     # comparable to each other, and it multiplies val onsets, tightening the noisy
     # rare-lane F1.
     win = args.max_seconds or 30.0
-    train_wspecs = _window_specs(train_specs, win, args.window_search, 0)
-    val_wspecs = _window_specs(val_specs, win, args.window_search, 0)
+    train_wspecs = _window_specs(train_specs, win, args.window_search, 0, plan_cache_dir=cache)
+    val_wspecs = _window_specs(val_specs, win, args.window_search, 0, plan_cache_dir=cache)
     extra = len(train_wspecs) - len(train_specs)
     print(
         f"dataset={args.dataset}  {len(train_specs)} train clips -> {len(train_wspecs)} windows "
