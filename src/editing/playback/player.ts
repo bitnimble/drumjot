@@ -1390,16 +1390,21 @@ export class JotPlayer {
    * so 0 means "audio doesn't constrain the tail". */
   private computeAudioTracksEndTime(): number {
     if (!this.ctx || this.audioTracks.size === 0) return 0;
-    // Same `mediaOffset = max(0, jot - songLeadIn)` formula
-    // `AudioTrackPlaybackController.scheduleOne` uses, so the end time
-    // here matches when the underlying `BufferSource` actually stops.
-    const mediaOffset = Math.max(0, this.startJotTime - this.songLeadInSec);
+    // Mirror `AudioTrackPlaybackController.scheduleOne`'s anchoring so the end
+    // time here matches when the underlying buffer actually stops: the buffer
+    // clamps to t=0 and the output is delayed by `leadInDelaySec` when the
+    // start sits before the audio's own t=0 (playhead in the pre-roll / virtual
+    // lead-in). Omitting the delay would under-count the tail and auto-stop
+    // could fire before the audio finishes.
+    const rawInput = this.startJotTime - this.songLeadInSec;
+    const mediaOffset = Math.max(0, rawInput);
     const speed = this.playbackSpeed;
+    const leadInDelaySec = rawInput < 0 ? -rawInput / speed : 0;
     let maxEnd = 0;
     for (const track of this.audioTracks.values()) {
       const remaining = track.durationSec - mediaOffset;
       if (remaining <= 0) continue;
-      const end = this.startContextTime + remaining / speed;
+      const end = this.startContextTime + leadInDelaySec + remaining / speed;
       if (end > maxEnd) maxEnd = end;
     }
     return maxEnd;

@@ -527,17 +527,26 @@ export class AudioTrackPlaybackController {
     songLeadInSec: number,
     gain: number,
   ): void {
-    // Input time = jot time - songLeadIn. A negative jot offset
-    // (lead-in) clamps to 0 so the recording's own intro is what plays
-    // during the lead-in, exactly as the legacy path did.
-    const inputTime = Math.max(0, jotOffsetSec - songLeadInSec);
+    // Input time = jot time - songLeadIn, i.e. the buffer position that
+    // lines up with the playhead's jot position. When the start sits BEFORE
+    // the audio's own t=0 (a negative raw input: the playhead is in the
+    // pre-roll / virtual lead-in, ahead of where the recording begins), the
+    // buffer clamps to 0 AND the output is delayed by the matching amount so
+    // the recording enters exactly when the playhead reaches `songLeadIn`.
+    // Without the delay the audio would start immediately at `audioStartTime`
+    // while the jot-anchored drums are still counting in, sliding the two out
+    // of sync by the lead-in remainder. The delay is in real time, so divide
+    // the jot-time gap by `speed` (buffer advances at `rate == speed`).
+    const rawInput = jotOffsetSec - songLeadInSec;
+    const inputTime = Math.max(0, rawInput);
+    const leadInDelaySec = rawInput < 0 ? -rawInput / speed : 0;
     const slot = this.ensureSlot(track);
     this.setSlotGain(slot, gain);
 
     // Supersede any in-flight schedule message that hasn't been posted
     // yet (e.g. one waiting on the initial node load).
     const gen = ++slot.gen;
-    const when = Math.max(audioStartTime, this.ctx.currentTime + SCHEDULE_PAD_SEC);
+    const when = Math.max(audioStartTime + leadInDelaySec, this.ctx.currentTime + SCHEDULE_PAD_SEC);
     void slot.node
       .then((node) => {
         if (slot.gen !== gen) return;
