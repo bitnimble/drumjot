@@ -9,6 +9,8 @@ import { JotEditorStore } from 'src/editing/jot_editor_store';
 import { EditingStore } from 'src/editing/editing_store';
 import { EditingPresenter } from 'src/editing/editing_presenter';
 import { SettingsStore } from 'src/settings/settings_store';
+import { SelectionStore } from 'src/editing/selection/selection';
+import { SelectionPresenter, orderedNotes } from 'src/editing/selection/selection_presenter';
 
 // One kick on each downbeat of two 4/4 bars.
 const SRC =
@@ -19,8 +21,18 @@ function setup() {
   store.loadSource(parse(SRC));
   const editingStore = new EditingStore();
   const settings = new SettingsStore();
-  const presenter = new EditingPresenter(editingStore, store, settings);
-  return { store, editingStore, settings, presenter };
+  const selection = new SelectionStore();
+  const selectionPresenter = new SelectionPresenter(selection, () =>
+    orderedNotes(store.structural?.musicalLayers ?? [])
+  );
+  const presenter = new EditingPresenter(
+    editingStore,
+    store,
+    settings,
+    selection,
+    selectionPresenter
+  );
+  return { store, editingStore, settings, selection, selectionPresenter, presenter };
 }
 
 describe('EditingPresenter', () => {
@@ -74,5 +86,63 @@ describe('EditingPresenter', () => {
     presenter.setMode('insert');
     presenter.movePlaceholder({ lane: 'k', barId: 'x', beat: 1.1, absBeat: 1.1, barBeats: 4 });
     expect(editingStore.placeholder!.beat).toBeCloseTo(1.1, 9);
+  });
+
+  const kicks = (store: ReturnType<typeof setup>['store']) =>
+    store.structural!.musicalLayers[0].bars;
+
+  it('deleteSelection removes every selected note and clears the selection', () => {
+    const { store, selection, selectionPresenter, presenter } = setup();
+    const k0 = kicks(store)[0].tracks['k'].notes[0];
+    selectionPresenter.replace(k0);
+    presenter.deleteSelection();
+    expect(kicks(store)[0].tracks['k']?.notes.length ?? 0).toBe(0);
+    expect(selection.selectedNotes.size).toBe(0);
+  });
+
+  it('moveSelection shifts a note within its bar', () => {
+    const { store, selectionPresenter, presenter } = setup();
+    const k0 = kicks(store)[0].tracks['k'].notes[0];
+    selectionPresenter.replace(k0);
+    presenter.moveSelection(k0, 1);
+    expect(kicks(store)[0].tracks['k'].notes.map((n) => n.beat)).toEqual([1]);
+  });
+
+  it('moveSelection re-homes a note across a bar boundary', () => {
+    const { store, selectionPresenter, presenter } = setup();
+    const k0 = kicks(store)[0].tracks['k'].notes[0];
+    selectionPresenter.replace(k0);
+    presenter.moveSelection(k0, 4); // bar0 beat0 -> bar1 beat0
+    expect(kicks(store)[0].tracks['k']?.notes.length ?? 0).toBe(0);
+    expect(kicks(store)[1].tracks['k'].notes.map((n) => n.beat).sort()).toEqual([0, 0]);
+  });
+
+  it('moveSelection preserves relative spacing across the group', () => {
+    const { store, selection, selectionPresenter, presenter } = setup();
+    const bars = kicks(store);
+    const k0 = bars[0].tracks['k'].notes[0];
+    const k1 = bars[1].tracks['k'].notes[0];
+    selection.state = { type: 'notes', notes: new Set([k0, k1]) };
+    presenter.moveSelection(k0, 0.5);
+    expect(kicks(store)[0].tracks['k'].notes.map((n) => n.beat)).toEqual([0.5]);
+    expect(kicks(store)[1].tracks['k'].notes.map((n) => n.beat)).toEqual([0.5]);
+  });
+
+  it('moveSelection snaps the anchor to the grid when snapping is on', () => {
+    const { store, selectionPresenter, presenter } = setup();
+    const k0 = kicks(store)[0].tracks['k'].notes[0];
+    selectionPresenter.replace(k0);
+    presenter.setSnapping(true); // default grid: main beats + 16ths
+    presenter.moveSelection(k0, 0.3); // 0.3 -> nearest 16th 0.25
+    expect(kicks(store)[0].tracks['k'].notes[0].beat).toBeCloseTo(0.25, 9);
+  });
+
+  it('moveSelection remaps lanes via laneMap (cross-lane move)', () => {
+    const { store, selectionPresenter, presenter } = setup();
+    const k0 = kicks(store)[0].tracks['k'].notes[0];
+    selectionPresenter.replace(k0);
+    presenter.moveSelection(k0, 0, () => 's');
+    expect(kicks(store)[0].tracks['k']?.notes.length ?? 0).toBe(0);
+    expect(kicks(store)[0].tracks['s'].notes.map((n) => n.beat)).toEqual([0]);
   });
 });
