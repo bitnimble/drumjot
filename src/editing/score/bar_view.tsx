@@ -432,6 +432,9 @@ const NoteView = observer(
         // Stable id hook for the marquee hit-test, drag-move transforms, and
         // the selection-frame bounding box (all read these off the DOM).
         data-note-id={note.id}
+        // Reflects selection state into the DOM so it's observable black-box
+        // (e2e) without scraping hashed CSS-module class names.
+        data-selected={selected || undefined}
         className={classNames(
           styles.note,
           isAccent && styles.accent,
