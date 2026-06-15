@@ -729,14 +729,13 @@ def train_loop(
                 vf1 = mean_f1(model, val_clips, cfg)
             history.setdefault("val_f1", []).append(vf1)
         dt = time.perf_counter() - ep_start
-        # print the first 3 epochs (immediate speed read), then every 10th + last
-        if epoch < 3 or (epoch + 1) % 10 == 0 or epoch == epochs - 1:
-            eta = (time.perf_counter() - t0) / (epoch + 1) * (epochs - epoch - 1)
-            msg = f"epoch {epoch:3d}  train_loss {avg:.4f}"
-            if val_clips:
-                msg += f"  val_macro_f1 {history['val_f1'][-1]:.3f}"
-            msg += f"  {dt:.1f}s/ep  eta {_fmt_eta(eta)}"
-            log(msg)
+        # runs are short (~40 epochs), so log every epoch for full live visibility
+        eta = (time.perf_counter() - t0) / (epoch + 1) * (epochs - epoch - 1)
+        msg = f"epoch {epoch:3d}  train_loss {avg:.4f}"
+        if val_clips:
+            msg += f"  val_macro_f1 {history['val_f1'][-1]:.3f}"
+        msg += f"  {dt:.1f}s/ep  eta {_fmt_eta(eta)}"
+        log(msg)
         # periodic safety checkpoint (untuned thresholds) for long unattended
         # runs; the final main() save overwrites this with tuned thresholds
         if out_dir and checkpoint_every and (epoch + 1) % checkpoint_every == 0 and epoch != epochs - 1:
