@@ -456,18 +456,16 @@ jitter<0.015, 8-ep window, 80-ep cap), h128, batch 8, 8 workers. The **only**
 knob is `--pool-cap`, now in WINDOW units. Caps: 1000 / 3000 / 0(full). Tuned
 per-lane keep_best F1.
 
-**cap-1000 (2563 train / 694 val windows; early-stop @ epoch 69):**
+**Data-scale progression (tuned per-lane keep_best F1):**
 
-| lane | cap-100^1 | cap-1000 | Δ |
-|---|---|---|---|
-| hc | 0.606 | 0.689 | +0.083 |
-| hp | 0.427 | 0.478 | +0.051 |
-| ho | 0.658 | 0.664 | +0.006 |
-| rd | 0.519 | 0.623 | +0.104 |
-| cr | 0.539 | 0.620 | +0.081 |
-| mc | 0.345 | 0.504 | +0.159 |
-| **cym macro (rd+cr+mc)** | **0.468** | **0.582** | **+0.114** |
-| all-6 macro | 0.516 | 0.596 | +0.080 |
+| cap | train win | stop ep | hc | hp | ho | rd | cr | mc | **cymMac** | allMac |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 100^1 | ~clip | 40(fix) | 0.606 | 0.427 | 0.658 | 0.519 | 0.539 | 0.345 | **0.468** | 0.516 |
+| 1000 | 2563 | 69 | 0.689 | 0.478 | 0.664 | 0.623 | 0.620 | 0.504 | **0.582** | 0.596 |
+| 3000 | 6559 | 62 | 0.702 | 0.507 | 0.661 | 0.607 | 0.656 | 0.509 | **0.591** | 0.607 |
+| 0(full) |, |, |, |, |, |, |, |, |, |, |
+
+cymMac slope: cap-100→1000 **+0.114**, cap-1000→3000 **+0.009** (2.5x data).
 
 ^1 Phase-1 convergence run; cap-100 was CLIP-unit (pre window-cap), so the cap
 *number* isn't 1:1 on the windows axis, but the val is identical (~700 windows)
@@ -478,9 +476,13 @@ load-bearing: late monotonic risers hc(best@68) / ho(@62); early-peak-then-decay
 (overfit) rd(@12) / cr(@15) / hp(@13); mid-late mc(@48). Early-stop @69 = global
 flatness (risers plateaued, overfitters bottomed out), NOT all-at-peak.
 
-**Headline: at h128 the cymbal ceiling is DATA-bound, not capacity-bound.** 10x
-data lifts every lane, cymbals most (mc +0.159, rd +0.104, cym macro +0.114).
-cap-3000 / cap-0 pending (running on the 1660) to find where h128 tapers.
+**Headline: at h128 the cymbal ceiling is DATA-bound, not capacity-bound.** The
+big lift is cap-100→cap-1000 (10x data, cym macro +0.114; mc +0.159, rd +0.104).
+**cap-1000→cap-3000 (2.5x more data) adds only +0.009 cym macro** -- the curve has
+nearly flattened, with the residual being internal reshuffling (cr +0.036, rd
+-0.016) not net lift. So h128 looks **near-saturated past ~cap-1000**. cap-0(full)
+pending to confirm the top; the saturation knee is likely ~cap-1000-2000 (binary
+search queued: if cap-0 ~= cap-3000, test cap-2000 next).
 
 ### Why this invalidates the Phase-1 width A/B
 
