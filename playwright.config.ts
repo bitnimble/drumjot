@@ -60,17 +60,17 @@ export default defineConfig({
         launchOptions: { args: ['--no-sandbox'] },
       },
     },
-    // Heavy specs load a real, full-length song (30 MB+ zip unpack + parallel
-    // multi-track audio decode), which pegs the CPU and would starve the
-    // timing-sensitive functional tests (zoom render-counts, scroll lockstep)
-    // if it raced them in the parallel pool. So, like `perf`, this project runs
-    // only AFTER `functional` finishes with the pool free, single-worker
-    // (`fullyParallel: false`). Opt a spec in with the `.heavy.e2e.ts` suffix.
+    // Perf specs measure per-frame timing against a tight 120fps budget, so
+    // they must NOT run alongside the parallel functional workers, their CPU
+    // contention inflates the medians and flakes the budget. `dependencies:
+    // ['functional']` runs this right after the functional pool frees (its
+    // validated, low-noise slot); the specs are already `mode: 'serial'` within
+    // the file, and `fullyParallel: false` keeps them on a single worker.
     // (Caveat: a functional failure skips this dependent project; fix
-    // functional first.)
+    // functional first, or run `bun run e2e:perf` to measure in isolation.)
     {
-      name: 'heavy',
-      testMatch: '**/*.heavy.e2e.ts',
+      name: 'perf',
+      testMatch: '**/perf.e2e.ts',
       fullyParallel: false,
       dependencies: ['functional'],
       use: {
@@ -78,20 +78,20 @@ export default defineConfig({
         launchOptions: { args: ['--no-sandbox'] },
       },
     },
-    // Perf specs measure per-frame timing against a tight 120fps budget, so
-    // they must NOT run alongside the parallel functional workers OR the heavy
-    // real-song decode, their CPU contention inflates the medians and flakes
-    // the budget. `dependencies: ['heavy']` chains this LAST (functional ->
-    // heavy -> perf), so all three serial phases stay off each other's backs;
-    // the specs are already `mode: 'serial'` within the file, and
-    // `fullyParallel: false` keeps them on a single worker. (Caveat: if an
-    // earlier project fails, Playwright skips this dependent project, fix
-    // those first, or run `bun run e2e:perf` to measure in isolation.)
+    // Heavy specs load a real, full-length song (30 MB+ zip unpack + parallel
+    // multi-track audio decode), which pegs the CPU and leaves GC/memory
+    // pressure that would both starve the parallel functional tests and
+    // perturb perf's per-frame medians. So it runs DEAD LAST, alone:
+    // `dependencies: ['perf']` chains functional -> perf -> heavy, so the heavy
+    // decode can't disturb either timing-sensitive phase before it. Opt a spec
+    // in with the `.heavy.e2e.ts` suffix. (Caveat: an earlier-phase failure
+    // skips this; run a `.heavy.e2e.ts` spec directly with `bun run e2e <spec>`
+    // to exercise it in isolation.)
     {
-      name: 'perf',
-      testMatch: '**/perf.e2e.ts',
+      name: 'heavy',
+      testMatch: '**/*.heavy.e2e.ts',
       fullyParallel: false,
-      dependencies: ['heavy'],
+      dependencies: ['perf'],
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: { args: ['--no-sandbox'] },
