@@ -126,6 +126,7 @@ export class EditingPresenter {
       snappedDelta = snapBeat(rawTarget, divisors, layout.total) - anchorAbs;
     }
 
+    const structural = this.jotEditorStore.structural;
     const updates: [string, Record<string, unknown>][] = [];
     for (const note of this.selectionStore.selectedNotes) {
       const el = jot.elements.get(note.id) as Element | undefined;
@@ -134,9 +135,20 @@ export class EditingPresenter {
       if (!cur) continue;
       const newAbs = Math.min(Math.max(cur.start + el.beat + snappedDelta, 0), layout.total);
       const dest = homeBar(layout.slots, newAbs);
+      const newLane = laneMap(el.lane);
+      // Re-home to the layer that owns the destination lane so a cross-lane
+      // move lands in the row clicked (a single-layer jot keeps `layerId`
+      // unset; an unowned/new lane keeps the note's current layer).
+      const owner = newLane === el.lane ? undefined : structural?.ownerLayerFor(newLane);
       updates.push([
         note.id,
-        { ...el, barId: dest.id, beat: newAbs - dest.start, lane: laneMap(el.lane) },
+        {
+          ...el,
+          barId: dest.id,
+          beat: newAbs - dest.start,
+          lane: newLane,
+          ...(owner !== undefined ? { layerId: owner } : {}),
+        },
       ]);
     }
     if (updates.length > 0) jot.elements.setAll(updates);
@@ -154,8 +166,12 @@ export class EditingPresenter {
     const id = crypto.randomUUID();
     // Single-layer jots declare no layers; the structure store treats that as
     // the synthetic primary layer, so we omit `layerId`. Multi-layer jots must
-    // tag the note with its owning layer or it won't render in any layer.
-    const layerId = primaryLayerId(jot);
+    // tag the note with the layer that OWNS the clicked lane (e.g. the kick's
+    // Feet layer in a hands/feet split) so it lands in the row clicked, not
+    // whichever layer happens to be first. Falls back to the primary layer for
+    // a brand-new lane no layer carries yet.
+    const layerId =
+      this.jotEditorStore.structural?.ownerLayerFor(placeholder.lane) ?? primaryLayerId(jot);
     const note: NoteElement = {
       id,
       barId: placeholder.barId,

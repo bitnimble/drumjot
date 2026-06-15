@@ -300,6 +300,39 @@ export class StructureStore {
     STRUCTURAL
   );
 
+  /** A lane's notes in one bar, UNIONED across every `||` layer that places a
+   *  note on that lane. The mixer renders one row per lane (not per
+   *  layer+lane), so a lane that lives in a non-first layer (e.g. the kick in a
+   *  hands/feet split) must still surface in its row. Single-layer jots collapse
+   *  to a single `trackFor`, so the common case is unchanged and stays granular.
+   *  Structurally gated by beat; a sibling-lane or sibling-layer edit that
+   *  leaves these notes alone doesn't notify. */
+  mergedTrackFor = computedFn((barId: string, lane: string): StructTrack => {
+    const layers = this.layerOrder;
+    if (layers.length <= 1) {
+      return this.trackFor(this.keyFor(barId, layers[0]?.id ?? ''), lane);
+    }
+    const notes: StructNote[] = [];
+    for (const layer of layers) {
+      notes.push(...this.trackFor(this.keyFor(barId, layer.id), lane).notes);
+    }
+    notes.sort((a, b) => a.beat - b.beat);
+    return { lane, notes };
+  }, STRUCTURAL);
+
+  /** The id of the layer that owns `lane`, the first `||` layer (in
+   *  {@link layerOrder}) that carries a note on it, for placing inserted /
+   *  moved notes so they land in the row the user clicked. `undefined` for a
+   *  single-layer jot (its notes carry no `layerId`) or a brand-new lane no
+   *  layer has yet; callers fall back accordingly. */
+  ownerLayerFor = computedFn((lane: string): string | undefined => {
+    if (this.singleLayer) return undefined;
+    for (const layer of this.layerOrder) {
+      if (this.lanesForLayer(layer.id).includes(lane)) return layer.id;
+    }
+    return undefined;
+  });
+
   /** A bar cell's lane-spanning chrome (pattern + tuplet brackets),
    *  structurally gated (a plain-note edit leaves it untouched). */
   spansFor = computedFn((key: string): { patternSpans: StructPatternSpan[]; tupletSpans: StructTupletSpan[] } => {

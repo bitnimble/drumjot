@@ -146,3 +146,67 @@ describe('EditingPresenter', () => {
     expect(kicks(store)[0].tracks['s'].notes.map((n) => n.beat)).toEqual([0]);
   });
 });
+
+// Hands (hi-hat) on layer 0, feet (kick) on layer 1, joined by `||`.
+const MULTI_SRC =
+  '{{ bpm: 120, time: "4/4", instrumentMapping: { h:{name:"HiHat"}, k:{name:"Kick"} } }} ' +
+  '| h . . . | || | k . . . |';
+
+function setupMulti() {
+  const store = new JotEditorStore();
+  store.loadSource(parse(MULTI_SRC));
+  const editingStore = new EditingStore();
+  const settings = new SettingsStore();
+  const selection = new SelectionStore();
+  const selectionPresenter = new SelectionPresenter(selection, () =>
+    orderedNotes(store.structural?.musicalLayers ?? [])
+  );
+  const presenter = new EditingPresenter(editingStore, store, settings, selection, selectionPresenter);
+  return { store, presenter, selection, selectionPresenter };
+}
+
+describe('EditingPresenter, multi-layer (hands/feet split)', () => {
+  const noteLayerIds = (store: JotEditorStore, lane: string) =>
+    [...store.jot!.elements.values()]
+      .filter((e) => (e as { kind: string; lane?: string }).kind === 'note' && (e as { lane?: string }).lane === lane)
+      .map((e) => (e as { layerId?: string }).layerId);
+
+  it('renders a lane that lives in the non-first layer (the kick row)', () => {
+    const { store } = setupMulti();
+    const kBar0 = store.structural!.barsForLane('k').bars.find((b) => b.tracks['k']?.notes.length);
+    expect(kBar0?.tracks['k'].notes.map((n) => n.beat)).toEqual([0]);
+  });
+
+  it('ownerLayerFor returns each lane its own layer', () => {
+    const { store } = setupMulti();
+    const hLayer = store.structural!.ownerLayerFor('h');
+    const kLayer = store.structural!.ownerLayerFor('k');
+    expect(hLayer).toBeDefined();
+    expect(kLayer).toBeDefined();
+    expect(hLayer).not.toBe(kLayer);
+  });
+
+  it('inserting into the kick lane tags the note with the kick layer', () => {
+    const { store, presenter } = setupMulti();
+    const kLayer = store.structural!.ownerLayerFor('k');
+    const bar0 = store.structural!.musicalLayers[0].bars[0];
+    presenter.setMode('insert');
+    presenter.movePlaceholder({ lane: 'k', barId: bar0.id, beat: 2, absBeat: 2, barBeats: 4 });
+    presenter.insertNote();
+    // Both kicks (original + inserted) carry the kick layer, none leak to hands.
+    expect(noteLayerIds(store, 'k')).toEqual([kLayer, kLayer]);
+  });
+
+  it('moving a hi-hat onto the kick lane re-homes it to the kick layer', () => {
+    const { store, selectionPresenter, presenter } = setupMulti();
+    const hBar = store.structural!.barsForLane('h').bars.find((b) => b.tracks['h']?.notes.length)!;
+    const h0 = hBar.tracks['h'].notes[0];
+    selectionPresenter.replace(h0);
+    presenter.moveSelection(h0, 0, () => 'k');
+    // The moved note now plays on the kick lane and carries the kick layer.
+    expect(noteLayerIds(store, 'k')).toEqual([
+      store.structural!.ownerLayerFor('k'),
+      store.structural!.ownerLayerFor('k'),
+    ]);
+  });
+});
