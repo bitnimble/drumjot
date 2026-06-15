@@ -50,6 +50,7 @@ import { EditingStore } from './editing_store';
 import { EditingPresenter } from './editing_presenter';
 import { EditingStoreContext, EditingPresenterContext } from './editing_contexts';
 import { EditingToolbar } from './editing_toolbar';
+import { useEditorKeymap } from './keyboard/keymap';
 import { VerticalScrollbar } from './viewport/vertical_scrollbar';
 import { PlaybackBar } from './playback/playback';
 import {
@@ -271,43 +272,13 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
       audioWorkletState !== 'available'
     );
 
-    // Spacebar = play / pause / resume, from anywhere on the page. Skip
-    // only when a text-entry control has focus (the user is typing) or
-    // a SELECT is focused (let space/arrows drive the native picker).
-    // A focused BUTTON deliberately falls through: preventDefault both
-    // stops the browser's space-to-scroll and suppresses the button's
-    // space-activation, so spacebar *always* toggles transport. A
-    // focused range slider (e.g. Zoom) also falls through — space has
-    // no native slider function, so swallowing it here would silently
-    // break play/pause until the user clicked elsewhere.
-    React.useEffect(() => {
-      // INPUT types where space is meaningful text/native input and the
-      // shortcut must yield. A range/checkbox/etc. input is not listed,
-      // so spacebar still toggles transport while it has focus.
-      const TEXT_ENTRY_INPUT_TYPES = new Set([
-        'text',
-        'search',
-        'email',
-        'url',
-        'tel',
-        'password',
-        'number',
-      ]);
-      const onKeyDown = (e: KeyboardEvent) => {
-        if (e.code !== 'Space' && e.key !== ' ') return;
-        const el = e.target as HTMLElement | null;
-        const tag = el?.tagName;
-        const isTextEntryInput =
-          tag === 'INPUT' && TEXT_ENTRY_INPUT_TYPES.has((el as HTMLInputElement).type);
-        if (isTextEntryInput || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) {
-          return;
-        }
-        e.preventDefault();
-        void playbackPresenter.togglePlayPause();
-      };
-      window.addEventListener('keydown', onKeyDown);
-      return () => window.removeEventListener('keydown', onKeyDown);
-    }, []);
+    // Global editor keyboard shortcuts, dispatched through the keymap →
+    // command layer (Space = play/pause from anywhere; Delete/Backspace =
+    // delete the selection). The dispatcher skips text-entry targets but lets
+    // a focused BUTTON / range slider fall through, so Space `preventDefault`
+    // both stops page scroll and the button's space-activation and always
+    // toggles transport. Keys are remappable by swapping the keymap.
+    useEditorKeymap({ editingPresenter, playbackPresenter });
 
     const provenanceContextValue = provenance.provenanceContextValue;
 
