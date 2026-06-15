@@ -36,6 +36,7 @@
  * mapping regardless of the bar's role.
  */
 import type { StructuralPresenter } from 'src/editing/structure/structural_presenter';
+import { toTempoBars } from 'src/editing/structure/structure_store';
 import { buildBarTempos } from 'src/schema/dsl/tempo';
 
 /**
@@ -116,7 +117,9 @@ export function buildChunkLayout(structural: StructuralPresenter): ChunkLayout {
   const structureLayer = structural.layers[0];
   if (!structureLayer || structureLayer.bars.length === 0) return EMPTY_LAYOUT;
 
-  const tempos = buildBarTempos(structural.source, structureLayer.bars);
+  // View bars include the synthetic virtual lead-in; flag it so tempo-event
+  // anchoring (indexed against the source bars) stays aligned.
+  const tempos = buildBarTempos(structural.source, toTempoBars(structureLayer.bars));
   const durations: number[] = new Array(structureLayer.bars.length);
   for (let i = 0; i < structureLayer.bars.length; i++) {
     durations[i] = tempos[i].durationSec;
