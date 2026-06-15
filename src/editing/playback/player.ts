@@ -1101,18 +1101,19 @@ export class JotPlayer {
    *    re-arms the tail timer from `tailAudioTime`.
    */
   seek(tempo: TempoPresenter, seconds: number): void {
-    // The recording's drumless lead-in is jot time [-drumsT0Sec, 0).
-    // Allow scrubbing back into it instead of clamping at 0 so the user
-    // can play the intro. `this.drumsT0Sec` is the live, user-tunable
-    // offset (seeded from the jot's metadata by the store), so it's the
-    // right bound for both idle and live seeks.
-    const drumsLeadInSec = this.drumsT0Sec;
-    let target = Math.max(seconds, -drumsLeadInSec);
-
+    // Lower-bound the seek at the left edge of the RENDERED timeline (the
+    // first bar's `startSec`), so the user can scrub all the way to the
+    // start of the lead-in. That left edge is the view's virtual lead-in
+    // bar (always at least one bar), which can sit further left than the
+    // audio pre-roll alone (`-drumsT0Sec`), clamping at the latter would
+    // strand the playhead short of the rendered left edge. The media
+    // mapping still clamps audio to >= 0, so the silent pre-bar scrubs in
+    // silence.
     if (this.state === 'idle') {
       const timeline = tempo.timeline;
       if (timeline.bars.length === 0) return;
-      target = Math.min(target, timeline.totalDurationSec);
+      const start = timeline.bars[0].startSec;
+      const target = Math.min(Math.max(seconds, start), timeline.totalDurationSec);
       this.pendingStartSec = target;
       this.startJotTime = target;
       runInAction(() => {
@@ -1124,6 +1125,8 @@ export class JotPlayer {
     }
 
     if (!this.ctx) return;
+    const start = this.timeline.bars[0]?.startSec ?? -this.drumsT0Sec;
+    let target = Math.max(seconds, start);
     const dur = this.timeline.totalDurationSec;
     if (dur > 0) target = Math.min(target, dur);
 
