@@ -77,6 +77,16 @@ export class SelectionStore {
     return s?.type === 'notes' ? s.notes : EMPTY_NOTES;
   }
 
+  /** Selected note ids (incl. marquee preview). Matching is by id, not object
+   *  identity, so a selection survives a structural recompute, the derived
+   *  `StructNote` objects are rebuilt on every edit (e.g. after a move), but
+   *  their ids are stable. */
+  get effectiveIds(): ReadonlySet<string> {
+    const out = new Set<string>();
+    for (const n of this.effectiveNotes) out.add(n.id);
+    return out;
+  }
+
   /**
    * The currently-selected note when exactly one is selected; otherwise
    * undefined. Drives the inline-label rendering, multi-note selections
@@ -88,9 +98,10 @@ export class SelectionStore {
     return notes.values().next().value;
   }
 
-  /** Whether a note is part of the current (or in-flight) selection. */
+  /** Whether a note is part of the current (or in-flight) selection. Matches
+   *  by id so it holds across structural recomputes. */
   isSelected(note: StructNote): boolean {
-    return this.effectiveNotes.has(note);
+    return this.effectiveIds.has(note.id);
   }
 
   /** Convenience: the currently-selected pattern name, if any. */

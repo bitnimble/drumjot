@@ -13,6 +13,7 @@ import { msOffsetToBeats } from 'src/schema/dsl/tempo';
 import { BarTimingsContext } from '../jot_editor_contexts';
 import { SelectionContext } from 'src/editing/selection/selection';
 import { SelectionPresenterContext } from 'src/editing/selection/selection_presenter';
+import { useNoteDrag } from './note_drag';
 import { NoteProvenanceContext } from '../provenance/provenance_contexts';
 import styles from './score.module.css';
 import { NoteProvenanceDetails } from './note_provenance_details';
@@ -386,6 +387,7 @@ const NoteView = observer(
     const badge = pickBadge(note);
     const selection = React.useContext(SelectionContext);
     const selectionPresenter = React.useContext(SelectionPresenterContext);
+    const { onPointerDown: onNotePointerDown, justDragged } = useNoteDrag();
     const selected = selection?.isSelected(note) ?? false;
     const [hovered, setHovered] = React.useState(false);
     const showLabel = selected || hovered;
@@ -427,6 +429,9 @@ const NoteView = observer(
         // own meaning (selection / hover label) instead of moving the
         // playhead.
         data-noseek="true"
+        // Stable id hook for the marquee hit-test, drag-move transforms, and
+        // the selection-frame bounding box (all read these off the DOM).
+        data-note-id={note.id}
         className={classNames(
           styles.note,
           isAccent && styles.accent,
@@ -460,8 +465,15 @@ const NoteView = observer(
         // press, which would wipe this note's selection before the
         // click ever fires.
         onMouseDown={(e) => e.stopPropagation()}
+        onPointerDown={(e) => onNotePointerDown(e, note)}
         onClick={(e) => {
           e.stopPropagation();
+          // A drag just committed a move; swallow the trailing click so it
+          // doesn't collapse the selection back to this one note.
+          if (justDragged.current) {
+            justDragged.current = false;
+            return;
+          }
           // ctrl/cmd = toggle individual; shift = extend range; plain = replace.
           if (e.ctrlKey || e.metaKey) selectionPresenter?.toggle(note);
           else if (e.shiftKey) selectionPresenter?.extendTo(note);

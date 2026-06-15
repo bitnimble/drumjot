@@ -5,6 +5,7 @@ import { Box, Point } from 'src/utils/geom';
 import { Jot } from 'src/schema/dsl/dsl';
 import type { StructuralPresenter } from 'src/editing/structure/structural_presenter';
 import type { StructNote } from 'src/editing/structure/structure_store';
+import { boundingBoxOfNotes, notesById, notesInBox } from 'src/editing/score/note_geometry';
 import type { TempoPresenter } from 'src/editing/playback/tempo_presenter';
 import type { PaletteStore } from 'src/editing/palette/palette_store';
 import { perfProbe } from 'src/utils/perf_probe';
@@ -156,11 +157,15 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     selectionPresenter
   );
 
-  // Marquee hit-test: which notes a rubber-band box (scrollViewport coords)
-  // encloses. Wired up with real geometry in the drag/coordinate layer; until
-  // then a marquee draws but selects nothing (prior behaviour).
-  const marqueeHitTest = (_box: Box): StructNote[] => [];
-  // Origin of the in-flight marquee drag (scrollViewport coords). Closure-local
+  // Marquee hit-test: which notes a rubber-band box (scroll-content coords)
+  // encloses, resolved to the current StructNotes. Reads the DOM, so it only
+  // runs from the pointer handlers below (never a render path).
+  const marqueeHitTest = (box: Box): StructNote[] => {
+    const layers = jotEditorStore.structural?.musicalLayers;
+    if (!layers) return [];
+    return notesInBox(box, notesById(layers));
+  };
+  // Origin of the in-flight marquee drag (scroll-content coords). Closure-local
   // transient interaction state, not persisted, not observed.
   let marqueeOrigin: Point | undefined;
 
@@ -196,7 +201,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
   const onMouseUp = () => {
     if (!marqueeOrigin) return;
     marqueeOrigin = undefined;
-    selectionPresenter.endMarquee();
+    const box = selection.marquee;
+    selectionPresenter.endMarquee(box ? marqueeHitTest(box) : []);
   };
 
   /**
@@ -1220,6 +1226,7 @@ const JotEditor = observer((props: JotEditorProps) => {
                   onResizeGutterStart={onResizeGutterStart}
                 />
                 <MarqueeOverlay />
+                <SelectionFrame />
               </div>
               <VerticalScrollbar viewport={viewport} viewportPresenter={viewportPresenter} />
             </div>
@@ -1699,6 +1706,34 @@ const MarqueeOverlay = observer(() => {
         width: marquee.width,
         height: marquee.height,
       }}
+    />
+  );
+});
+
+/**
+ * Subtle bounding box drawn around a multi-note selection (the "selection
+ * frame"). Lives inside the scroll-content wrapper so it scrolls with the
+ * notes for free; its pixel extents are read from the selected glyphs' DOM
+ * rects in a layout effect that re-runs when the selection or the zoom
+ * (`pxPerBeat`) changes, not on scroll. Hidden for 0 or 1 selected notes.
+ */
+const SelectionFrame = observer(() => {
+  const selection = React.useContext(SelectionContext);
+  const structural = React.useContext(StructuralContext);
+  const ids = selection?.effectiveIds;
+  const pxPerBeat = structural?.pxPerBeat ?? 0;
+  const show = (ids?.size ?? 0) >= 2;
+  const [box, setBox] = React.useState<Box | null>(null);
+  React.useLayoutEffect(() => {
+    setBox(show && ids ? boundingBoxOfNotes(ids) : null);
+  }, [show, ids, pxPerBeat]);
+  if (!box) return null;
+  return (
+    <div
+      className={styles.selectionFrame}
+      data-testid="selection-frame"
+      aria-hidden="true"
+      style={{ left: box.x, top: box.y, width: box.width, height: box.height }}
     />
   );
 });

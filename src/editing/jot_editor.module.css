@@ -328,6 +328,16 @@
     pointer-events: none;
 }
 
+/* Subtle bounding box around a multi-note selection. Dashed accent outline,
+   no fill, so it frames the notes without obscuring them. Non-interactive;
+   positioned in scroll-content coords (scrolls with the score). */
+.selectionFrame {
+    position: absolute;
+    border: 1px dashed var(--color-accent);
+    border-radius: 3px;
+    pointer-events: none;
+}
+
 /* Modal overlay shown over the whole appContainer while a file load is in
    flight. The lightly-transparent backdrop keeps the UI legible (so the
    user can see what's about to come back), and `pointer-events: auto`

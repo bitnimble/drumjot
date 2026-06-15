@@ -116,22 +116,23 @@ export class SelectionPresenter {
     this.store.marquee = Box.create(p, p);
   }
 
-  /** Update the in-flight marquee to span `from..p`, previewing `enclosed`
-   *  (computed by the caller from layout) as the transient selection. */
+  /** Update the in-flight marquee band to span `from..p`, previewing the
+   *  `enclosed` notes (computed by the caller from layout) as the transient
+   *  selection. */
   updateMarquee(from: Point, p: Point, enclosed: Iterable<StructNote>): void {
     this.store.marquee = Box.create(from, p);
     const set = new Set(enclosed);
     this.store.transientState = set.size > 0 ? { type: 'notes', notes: set } : undefined;
   }
 
-  /** Commit the marquee preview as the selection and clear the rubber band. */
-  endMarquee(): void {
-    if (this.store.transientState?.type === 'notes') {
-      this.store.state = this.store.transientState;
-      const pivot = this.store.state.notes.values().next().value;
-      this.store.anchor = pivot;
-      this.store.base = new Set(this.store.state.notes);
-    }
+  /** Commit `enclosed` as the selection and clear the rubber band. An empty
+   *  box (a plain click that never dragged) leaves the selection cleared. */
+  endMarquee(enclosed: Iterable<StructNote>): void {
+    const set = new Set(enclosed);
+    this.store.state = set.size > 0 ? { type: 'notes', notes: set } : undefined;
+    const pivot = set.size > 0 ? set.values().next().value : undefined;
+    this.store.anchor = pivot;
+    this.store.base = new Set(set);
     this.store.transientState = undefined;
     this.store.marquee = undefined;
   }
