@@ -11,6 +11,7 @@
  * the configured `TRANSCRIBER_URL`.
  */
 
+import { backendFetch } from 'src/net/backend_fetch';
 import type { LyricLine } from './lrc';
 
 const TRANSCRIBER_BASE = '/api';
@@ -82,7 +83,7 @@ export async function alignLyricsForced(
   if (req.realign.language !== undefined && req.realign.language.length > 0) {
     form.set('language', req.realign.language);
   }
-  const res = await fetch(`${TRANSCRIBER_BASE}/lyrics/align`, {
+  const res = await backendFetch(`${TRANSCRIBER_BASE}/lyrics/align`, {
     method: 'POST',
     body: form,
     signal: opts.signal,

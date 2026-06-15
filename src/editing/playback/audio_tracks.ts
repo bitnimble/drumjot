@@ -43,6 +43,7 @@ import {
   Track,
 } from 'src/editing/tracks/tracks';
 import { createStretchNode, preloadStretch, StretchNode } from './stretch_node';
+import { backendFetch } from 'src/net/backend_fetch';
 
 /**
  * Opaque per-track id. Every loaded audio track gets a fresh unique id
@@ -389,7 +390,7 @@ export async function decodeAudioTrackUrl(
   ctx: AudioContext,
   url: string,
 ): Promise<{ buffer: AudioBuffer; sourceBlob: Blob }> {
-  const res = await fetch(url);
+  const res = await backendFetch(url);
   if (!res.ok) {
     throw new Error(`Failed to fetch audio track (${res.status} ${res.statusText})`);
   }

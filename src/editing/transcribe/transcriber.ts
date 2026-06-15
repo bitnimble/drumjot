@@ -8,6 +8,8 @@
  * cross-origin CORS when the frontend and the transcriber sit on
  * different hosts (e.g. drumjot.kumo.dev vs. a LAN GPU box).
  */
+import { backendFetch } from 'src/net/backend_fetch';
+
 const TRANSCRIBER_BASE = '/api';
 
 export type BarSummary = {
@@ -343,7 +345,7 @@ export class TranscriberClient {
       form.append('debug', 'true');
     }
 
-    const res = await fetch(`${this.baseUrl}/transcribe`, {
+    const res = await backendFetch(`${this.baseUrl}/transcribe`, {
       method: 'POST',
       body: form,
       signal: options.signal,
@@ -365,7 +367,7 @@ export class TranscriberClient {
     form.append('resume_stage', options.resumeStage);
     this.appendTranscribeFields(form, options);
 
-    const res = await fetch(`${this.baseUrl}/transcribe/resume`, {
+    const res = await backendFetch(`${this.baseUrl}/transcribe/resume`, {
       method: 'POST',
       body: form,
       signal: options.signal,
@@ -381,7 +383,7 @@ export class TranscriberClient {
   async scoreParadb(pack: File, options: ScoreOptions = {}): Promise<AlignmentResult> {
     const form = new FormData();
     form.append('pack', pack);
-    const res = await fetch(`${this.baseUrl}/score`, {
+    const res = await backendFetch(`${this.baseUrl}/score`, {
       method: 'POST',
       body: form,
       signal: options.signal,
@@ -397,7 +399,7 @@ export class TranscriberClient {
     const form = new FormData();
     form.append('midi', midi);
     form.append('audio', audio);
-    const res = await fetch(`${this.baseUrl}/score`, {
+    const res = await backendFetch(`${this.baseUrl}/score`, {
       method: 'POST',
       body: form,
       signal: options.signal,
@@ -606,7 +608,11 @@ export class TranscriberClient {
    *  -run first. Returns an empty array when the debug base is missing or
    *  empty. */
   async listTranscriptions(): Promise<TranscriptionSummary[]> {
-    const res = await fetch(`${this.baseUrl}/transcribe/list`);
+    // Silent: this is a background refresh whose failures are logged, not
+    // toasted (see TranscribePresenter.refreshRecentTranscriptions).
+    const res = await backendFetch(`${this.baseUrl}/transcribe/list`, undefined, {
+      silent: true,
+    });
     if (!res.ok) {
       const detail = await safeReadError(res);
       throw new Error(`List transcriptions failed (${res.status}): ${detail}`);

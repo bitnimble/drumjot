@@ -12,6 +12,7 @@ import { jotPlayer } from 'src/editing/playback/player';
 import { loadParadbZip } from 'src/schema/rlrr/paradb';
 import { titleFromFilename, transcriber } from 'src/editing/transcribe/transcriber';
 import { toastStore } from '../ui/toasts/toasts';
+import { backendFetch, isBackendUnreachable } from 'src/net/backend_fetch';
 import { JotEditorStore } from './jot_editor_store';
 import { SettingsPresenter } from '../settings/settings_presenter';
 import { MixerPresenter } from './mixer/mixer_presenter';
@@ -315,6 +316,8 @@ export class JotEditorPresenter {
         // eslint-disable-next-line no-console
         console.log('Alignment score', file.name, result);
       } catch (err) {
+        // backendFetch already surfaced the generic "Server is down" toast.
+        if (isBackendUnreachable(err)) return;
         const message = err instanceof Error ? err.message : String(err);
         toastStore.showError(`Could not score ${file.name}: ${message}`);
       }
@@ -401,7 +404,7 @@ export class JotEditorPresenter {
   async loadDebugBundleFromUrl(url: string, fallbackName: string): Promise<void> {
     return this.withLoading(`Loading ${fallbackName}…`, async () => {
       try {
-        const res = await fetch(url);
+        const res = await backendFetch(url);
         if (!res.ok) {
           throw new Error(`fetch ${url} failed (${res.status})`);
         }
@@ -415,6 +418,8 @@ export class JotEditorPresenter {
           toastStore.showError(`Could not parse score from ${fallbackName}.`);
         }
       } catch (err) {
+        // backendFetch already surfaced the generic "Server is down" toast.
+        if (isBackendUnreachable(err)) return;
         const message = err instanceof Error ? err.message : String(err);
         toastStore.showError(`Could not load ${fallbackName}: ${message}`);
       }
@@ -556,7 +561,9 @@ export class JotEditorPresenter {
   ): Promise<boolean> {
     let bundle: Awaited<ReturnType<typeof loadDebugZip>>;
     try {
-      const res = await fetch(url, { signal });
+      // backendFetch surfaces "Server is down" on transport failure; the
+      // catch below still logs + returns false so the caller resets to idle.
+      const res = await backendFetch(url, { signal });
       if (!res.ok) {
         throw new Error(`fetch ${url} failed (${res.status})`);
       }

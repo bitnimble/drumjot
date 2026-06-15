@@ -11,6 +11,7 @@ import {
 } from 'src/editing/transcribe/transcriber';
 import { transcribeSuccessToastMessage } from '../../ui/toasts/toasts_messages';
 import { toastStore } from '../../ui/toasts/toasts';
+import { isBackendUnreachable } from 'src/net/backend_fetch';
 import { TranscribeStore } from './transcribe_store';
 import { JotEditorPresenter } from '../jot_editor_presenter';
 
@@ -243,6 +244,14 @@ export class TranscribePresenter {
     const isAbort =
       controller.signal.aborted || (err instanceof DOMException && err.name === 'AbortError');
     if (isAbort) {
+      runInAction(() => {
+        this.transcribe.transcribeStatus = { phase: 'idle' };
+      });
+      return;
+    }
+    // Transport failure: backendFetch already showed the generic "Server is
+    // down" toast, so just reset the pill instead of stacking a second toast.
+    if (isBackendUnreachable(err)) {
       runInAction(() => {
         this.transcribe.transcribeStatus = { phase: 'idle' };
       });

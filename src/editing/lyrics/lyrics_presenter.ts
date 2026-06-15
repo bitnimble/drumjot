@@ -5,6 +5,7 @@ import { LyricsSource, LyricsTrackId, lyricsStore } from 'src/lyrics/store';
 import { AudioTrackId } from 'src/editing/playback/audio_tracks';
 import { jotPlayer } from 'src/editing/playback/player';
 import { toastStore } from '../../ui/toasts/toasts';
+import { isBackendUnreachable } from 'src/net/backend_fetch';
 import { JotEditorStore } from '../jot_editor_store';
 import { LyricsAlignStore } from './lyrics_align_store';
 
@@ -351,10 +352,12 @@ export class LyricsPresenter {
         // idle for this track.
         return;
       }
-      const message = err instanceof Error ? err.message : String(err);
       runInAction(() => {
         this.lyricsAlign.lyricsAlignStatuses.delete(targetTrackId);
       });
+      // backendFetch already surfaced the generic "Server is down" toast.
+      if (isBackendUnreachable(err)) return;
+      const message = err instanceof Error ? err.message : String(err);
       toastStore.showError(`Lyrics align failed: ${message}`);
       return;
     } finally {
