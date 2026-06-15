@@ -6,7 +6,7 @@ import { LyricsStore, audioSecToBeat } from '../store';
  * Build a synthetic `JotTimeline` from a list of (`startSec`,
  * `durationSec`) tuples and a parallel `beats` list. The rendered jot
  * reference is intentionally `undefined`; `audioSecToBeat` reads only
- * the `bars` array, so the test doesn't need a real RenderedJot.
+ * the `bars` array, so the test doesn't need a real laid-out jot.
  */
 function fakeTimeline(
   rows: readonly { startSec: number; durationSec: number }[],

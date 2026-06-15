@@ -5,16 +5,16 @@
    limitation, not a destructive prompt. */
 
 .modalBackdrop {
-    composes: backdrop from '../components/modal.module.css';
+    composes: backdrop from '../../ui/modal/modal.module.css';
 }
 
 .modalPanel {
-    composes: panel from '../components/modal.module.css';
+    composes: panel from '../../ui/modal/modal.module.css';
     width: min(520px, 100%);
 }
 
 .modalHeader {
-    composes: header from '../components/modal.module.css';
+    composes: header from '../../ui/modal/modal.module.css';
 }
 
 .warningIcon {
@@ -24,7 +24,7 @@
 }
 
 .modalTitle {
-    composes: title from '../components/modal.module.css';
+    composes: title from '../../ui/modal/modal.module.css';
     /* The warning icon to the left of the title needs the title to take
        up the remaining row; the base modal title only owns the type
        chrome. */
@@ -32,11 +32,11 @@
 }
 
 .modalClose {
-    composes: close from '../components/button.module.css';
+    composes: close from '../../ui/button/button.module.css';
 }
 
 .modalBody {
-    composes: body from '../components/modal.module.css';
+    composes: body from '../../ui/modal/modal.module.css';
     gap: 10px;
     line-height: 1.5;
 }
@@ -71,6 +71,6 @@
 }
 
 .primaryButton {
-    composes: primary from '../components/button.module.css';
+    composes: primary from '../../ui/button/button.module.css';
     border-radius: var(--radius-sm);
 }

@@ -57,10 +57,11 @@ drumjot/
 │   │   ├── score.tsx               Timeline header, bars, notes, brackets,
 │   │   │                           note-label popovers, filtered-onset ghosts.
 │   │   ├── store.ts                JotViewStore (MobX) + TrackKey + constants.
-│   │   ├── contexts.ts             React contexts (NoteProvenanceContext, …).
-│   │   └── components/             Shared React UI primitives + design-system
-│   │                               module CSS (button, icon_button, modal, form,
-│   │                               spinner, dropdown, tabs, number_stepper, …).
+│   │   └── contexts.ts             React contexts (NoteProvenanceContext, …).
+│   ├── ui/                         Shared React UI primitives, one folder per
+│   │                               component (button, icon_button, modal, form,
+│   │                               spinner, dropdown, tabs, number_stepper, …)
+│   │                               + stories/.
 │   ├── fakes.ts                    EXAMPLE_JOTS (rockJot, tripletJot).
 │   ├── geom.ts                     Tiny Point/Box helpers.
 │   ├── selection.ts                Marquee + pattern selection store.

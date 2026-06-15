@@ -43,15 +43,16 @@
  *       read path so a round trip preserves the visible note.
  */
 import { writeMidi, MidiEvent } from 'midi-file';
-import { Jot, Volume } from 'src/dsl/dsl';
-import { RenderedJot, ResolvedNote, ResolvedTrack } from 'src/jot/resolved_jot';
+import { Instrument, Jot, Modifier, Volume } from 'src/schema/dsl/dsl';
+import { buildJotModel } from 'src/jot_view/jot_view_store';
+import type { StructNote } from 'src/jot_view/structure/structure_store';
 import {
   ACCENT_BOOST,
   DEFAULT_VELOCITY,
   GHOST_REDUCTION,
   VOLUME_TO_VELOCITY,
 } from 'src/dynamics/dynamics';
-import { resolveBpm } from 'src/tempo/tempo';
+import { resolveBpm } from 'src/schema/dsl/tempo';
 import { defaultMidiNote } from './gm';
 
 export type ToMidiOptions = {
@@ -77,8 +78,9 @@ export const TICKS_PER_BEAT = 480;
 /** Convert a Drumjot `Jot` into a MIDI byte buffer (Standard MIDI File). */
 export function toMidi(jot: Jot, options: ToMidiOptions = {}): Uint8Array {
   const opts = { ...DEFAULTS, ...options };
-  const rendered = new RenderedJot(jot);
-  const resolved = rendered.resolved;
+  const voices = buildJotModel(jot).structural.voices;
+  const instrumentFor = (pitch: string): Instrument =>
+    jot.globalMetadata.instrumentMapping?.[pitch] ?? { kind: 'custom' };
 
   type AbsEvent = {
     tick: number;
@@ -99,7 +101,7 @@ export function toMidi(jot: Jot, options: ToMidiOptions = {}): Uint8Array {
   // Compute each voice-0 bar's absolute tick offset; we'll resolve
   // `jot.tempoEvents` anchors against this. Bars are uniform in length
   // across voices (same time-signature sequence) so voice 0 is canonical.
-  const voice0 = resolved.voices[0];
+  const voice0 = voices[0];
   const barTickStart: number[] = [];
   if (voice0) {
     let cursor = 0;
@@ -144,33 +146,34 @@ export function toMidi(jot: Jot, options: ToMidiOptions = {}): Uint8Array {
   // count), and emitting the same meta event from every voice would
   // duplicate it on the merged track.
   let firstVoice = true;
-  for (const voice of resolved.voices) {
+  for (const voice of voices) {
     let barOffset = 0;
     let prevTime = jot.globalMetadata.time ?? { count: 4, unit: 4 };
     for (let bi = 0; bi < voice.bars.length; bi++) {
       const bar = voice.bars[bi];
       const barTicks = Math.max(1, Math.round(bar.beats * TICKS_PER_BEAT));
 
-      if (firstVoice && bi > 0 && (prevTime.count !== bar.time.count || prevTime.unit !== bar.time.unit)) {
+      if (firstVoice && bi > 0 && (prevTime.count !== bar.tsCount || prevTime.unit !== bar.tsUnit)) {
         tsChanges.push({
           tick: barOffset,
-          count: bar.time.count,
-          unit: bar.time.unit,
+          count: bar.tsCount,
+          unit: bar.tsUnit,
         });
       }
-      prevTime = bar.time;
+      prevTime = { count: bar.tsCount, unit: bar.tsUnit };
 
       for (const pitch of voice.pitches) {
         const track = bar.tracks[pitch];
         if (!track) continue;
+        const instrument = instrumentFor(pitch);
         for (const note of track.notes) {
-          const midiNote = resolveMidiNote(note, track);
+          const midiNote = resolveMidiNote(note, instrument);
           if (midiNote === undefined) continue;
           const velocity = clampVelocity(resolveVelocity(note, opts));
           const baseTick = barOffset + Math.round((note.beat / bar.beats) * barTicks);
           // Sub-slot timing offset (ms): nudge the emitted tick so swing /
           // off-grid feel survives the round trip. Absent offset = on-slot.
-          const offsetMs = note.source.offset;
+          const offsetMs = note.offsetMs;
           const offsetTicks =
             offsetMs !== undefined
               ? Math.round((offsetMs * TICKS_PER_BEAT * bpmAtTick(baseTick)) / 60_000)
@@ -310,32 +313,24 @@ export function toMidi(jot: Jot, options: ToMidiOptions = {}): Uint8Array {
 
 // ---------- Helpers ----------
 
-function resolveMidiNote(note: ResolvedNote, track: ResolvedTrack): number | undefined {
+function resolveMidiNote(note: StructNote, instrument: Instrument): number | undefined {
   // [B4] Per-note override wins.
-  const meta = note.source.metadata as { midi?: { note?: number } } | undefined;
-  if (meta?.midi?.note !== undefined) return meta.midi.note;
-  if (track.instrument.midi?.note !== undefined) return track.instrument.midi.note;
-  return defaultMidiNote(note.pitch, note.modifiers);
+  if (note.midiNote !== undefined) return note.midiNote;
+  if (instrument.midi?.note !== undefined) return instrument.midi.note;
+  return defaultMidiNote(note.pitch, new Set(note.modifiers as Modifier[]));
 }
 
-function resolveVelocity(note: ResolvedNote, opts: Required<ToMidiOptions>): number {
-  const meta = note.source.metadata as
-    | { midi?: { velocity?: number }; vol?: Volume | { start?: Volume; end: Volume } }
-    | undefined;
-  if (typeof meta?.midi?.velocity === 'number') return meta.midi.velocity;
+function resolveVelocity(note: StructNote, opts: Required<ToMidiOptions>): number {
+  if (typeof note.velocity === 'number') return note.velocity;
 
   let baseline = opts.defaultVelocity;
-  const vol = meta?.vol;
+  const vol = note.vol as Volume | undefined;
   if (typeof vol === 'string') {
     baseline = VOLUME_TO_VELOCITY[vol] ?? baseline;
-  } else if (vol && typeof vol === 'object') {
-    // [B5] Use start (or end) of a volume transition; no interpolation.
-    const v = vol.start ?? vol.end;
-    if (v) baseline = VOLUME_TO_VELOCITY[v] ?? baseline;
   }
 
-  if (note.modifiers.has('a')) baseline += opts.accentBoost;
-  if (note.modifiers.has('g')) baseline -= opts.ghostReduction;
+  if (note.modifiers.includes('a')) baseline += opts.accentBoost;
+  if (note.modifiers.includes('g')) baseline -= opts.ghostReduction;
 
   return baseline;
 }

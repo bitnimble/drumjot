@@ -5,7 +5,7 @@ import React from 'react';
 import { parseLrc } from 'src/lyrics/lrc';
 import { ciTrimEq, LrclibMatch, searchLrclib } from 'src/lyrics/lrclib';
 import { jotPlayer } from 'src/jot_view/playback/player';
-import { Checkbox } from '../components/checkbox';
+import { Checkbox } from 'src/ui/checkbox/checkbox';
 import styles from './lyrics_search_modal.module.css';
 import { LyricsPresenter } from './lyrics_presenter';
 

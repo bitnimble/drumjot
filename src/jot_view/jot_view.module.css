@@ -97,7 +97,7 @@
 }
 
 .emptyStatePrimary {
-    composes: primary sizeLg from './components/button.module.css';
+    composes: primary sizeLg from '../ui/button/button.module.css';
 }
 
 /* Sibling of `.emptyStatePrimary` that opens the recent-transcriptions
@@ -105,7 +105,7 @@
    accent-filled primary CTA, but matches its vertical metrics so the
    action row stays on a clean baseline. */
 .emptyStateSecondary {
-    composes: secondary sizeLg from './components/button.module.css';
+    composes: secondary sizeLg from '../ui/button/button.module.css';
 }
 
 .emptyStateHint {
@@ -138,7 +138,7 @@
 }
 
 .emptyStateExampleButton {
-    composes: secondary from './components/button.module.css';
+    composes: secondary from '../ui/button/button.module.css';
     composes: bodySm from '../typography.module.css';
     padding: 5px 12px;
     border-radius: var(--radius-pill);
@@ -349,7 +349,7 @@
 }
 
 .loadingSpinner {
-    composes: spinner from './components/spinner.module.css';
+    composes: spinner from '../ui/spinner/spinner.module.css';
     width: 44px;
     height: 44px;
     border-width: 4px;

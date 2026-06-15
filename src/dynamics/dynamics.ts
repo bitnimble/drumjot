@@ -3,7 +3,7 @@
  * note's volume marker (`pp`..`ff`), `:a` accent, and `:g` ghost map to a
  * MIDI velocity (1-127). Consumed by playback (`playback/events.ts`),
  * MIDI export (`midi/to_midi.ts`), MIDI import (`midi/from_midi.ts`), and
- * RLRR export (`rlrr/jot_to_rlrr.ts`).
+ * RLRR export (`schema/rlrr/writer.ts`).
  *
  * Keeping these in one place is load-bearing for round-trip fidelity: an
  * accent authored in the DSL must play back, export to MIDI, and export
@@ -12,7 +12,7 @@
  * own copy and the accent boost had drifted (playback/RLRR used 24, MIDI
  * used 36), so an accent sounded different from what it exported as.
  */
-import { Volume } from 'src/dsl/dsl';
+import { Volume } from 'src/schema/dsl/dsl';
 
 /** Velocity for a note with no explicit volume marker. */
 export const DEFAULT_VELOCITY = 80;

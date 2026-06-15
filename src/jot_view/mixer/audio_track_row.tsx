@@ -1,14 +1,14 @@
 import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
-import { RenderedJot } from 'src/jot/resolved_jot';
+import type { StructuralPresenter } from 'src/jot_view/structure/structural_presenter';
 import { AudioTrack, AudioTrackId } from 'src/jot_view/playback/audio_tracks';
 import { jotPlayer } from 'src/jot_view/playback/player';
 import { waveformWorker, BarSlice } from 'src/jot_view/playback/waveform_worker_client';
 import { BarBeat, WaveformChunk, buildChunkLayout } from './waveform_chunks';
-import { GutterResizeHandle } from '../components/gutter_resize_handle';
-import { MuteButton, SoloButton } from '../components/icon_button';
-import { RenderedJotContext } from '../document/document_contexts';
+import { GutterResizeHandle } from 'src/ui/gutter_resize_handle/gutter_resize_handle';
+import { MuteButton, SoloButton } from 'src/ui/icon_button/icon_button';
+import { StructuralContext } from '../jot_view_contexts';
 import { UniformWaveformsContext } from './mixer_contexts';
 import { MixerStoreContext } from './mixer_contexts';
 import { ViewportStoreContext } from '../viewport/viewport_contexts';
@@ -44,7 +44,6 @@ export const AudioTrackRow = observer(
   ({
     id,
     track,
-    jot,
     controls,
     onSeek,
     idx,
@@ -61,18 +60,17 @@ export const AudioTrackRow = observer(
   }: {
     id: AudioTrackId;
     track: AudioTrack;
-    jot: RenderedJot;
     controls: AudioTrackControls;
     onSeek: (x: number) => void;
   } & MixerRowDragProps) => {
+    const structural = React.useContext(StructuralContext);
     // Voice-level total beats for the bars-row width (in beats, the
     // row's pixel width is `voiceBeats × --px-per-beat` via CSS calc).
-    // `jot.voiceBeats` reads off the structural cache (not
-    // `jot.resolved`) so the value is stable across zoom changes; pixel
-    // width updates via CSS variable on the score root. The waveform
-    // canvas reads the zoom-dependent pixel width itself so only IT
-    // re-renders on zoom.
-    const voiceBeats = jot.voiceBeats;
+    // `voiceBeats` reads off the structural voices (not pixels) so the
+    // value is stable across zoom changes; pixel width updates via CSS
+    // variable on the score root. The waveform canvas reads the
+    // zoom-dependent pixel width itself so only IT re-renders on zoom.
+    const voiceBeats = structural?.voiceBeats ?? 0;
     const audible = controls.isAudioTrackAudible(id);
     const muted = controls.mutedAudioTracks.has(id);
     const soloed = controls.soloedAudioTracks.has(id);
@@ -182,14 +180,16 @@ export const AudioTrackRow = observer(
           style={
             {
               ['--voice-beats' as string]: voiceBeats,
-              ['--bars-row-width' as string]: barsRowWidthSeed(jot, voiceBeats),
+              ['--bars-row-width' as string]: structural
+                ? barsRowWidthSeed(structural, voiceBeats)
+                : '0px',
               height: AUDIO_TRACK_HEIGHT,
             } as React.CSSProperties
           }
           onClick={(e) => seekFromClick(e, onSeek)}
         >
           <AudioTrackWaveformCanvas
-            jot={jot}
+            structural={structural}
             track={track}
             height={AUDIO_TRACK_HEIGHT}
             dim={!audible}
@@ -222,13 +222,13 @@ const CHUNK_VIEWPORT_MARGIN_PX = 1200;
 
 const AudioTrackWaveformCanvas = observer(
   ({
-    jot,
+    structural,
     track,
     height,
     dim,
     testId,
   }: {
-    jot: RenderedJot;
+    structural: StructuralPresenter | null;
     track: AudioTrack;
     height: number;
     dim: boolean;
@@ -236,7 +236,7 @@ const AudioTrackWaveformCanvas = observer(
   }) => {
     const viewport = React.useContext(ViewportStoreContext);
     const uniformWaveforms = React.useContext(UniformWaveformsContext);
-    const padBeats = React.useContext(RenderedJotContext)?.config.barNotePaddingBeats ?? 0.125;
+    const padBeats = structural?.config.barNotePaddingBeats ?? 0.125;
     // Waveform tint reads straight off the AudioTrack instance; the
     // class's `color` getter resolves the user override -> grouped
     // instrument inheritance -> neutral chain itself (see
@@ -244,9 +244,12 @@ const AudioTrackWaveformCanvas = observer(
     // commits repaint chunks reactively. Always returns a `#rrggbb`
     // string the chunk worker can consume directly.
     const pitchColor = track.color;
-    // Beat-stable chunk layout (zoom-invariant). Memoed on `jot` so
+    // Beat-stable chunk layout (zoom-invariant). Memoed on `structural` so
     // scroll / zoom re-renders of this observer don't rebuild it.
-    const layout = React.useMemo(() => buildChunkLayout(jot), [jot]);
+    const layout = React.useMemo(
+      () => (structural ? buildChunkLayout(structural) : { bars: [], totalBeats: 0, chunks: [] }),
+      [structural]
+    );
     const livePxPerBeat = useLiveJotPxPerBeat();
 
     if (!viewport || layout.chunks.length === 0) return null;
@@ -341,7 +344,7 @@ const AudioTrackWaveformChunk = observer(
     // on the next rAF) when the user nudges the Offset control.
     const drumsT0Sec = jotPlayer.drumsT0Sec;
     const livePxPerBeat = useLiveJotPxPerBeat();
-    const padBeats = React.useContext(RenderedJotContext)?.config.barNotePaddingBeats ?? 0.125;
+    const padBeats = React.useContext(StructuralContext)?.config.barNotePaddingBeats ?? 0.125;
     // Globally-unique worker-side slot identifier for this tile.
     // `chunk.key` alone collides across audio tracks (it's
     // `startBeat / BEATS_PER_CHUNK`, defined per-voice); prefixing

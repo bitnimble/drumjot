@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
 import React from 'react';
 import { TranscriptionSummary } from 'src/jot_view/transcribe/transcriber';
-import { useParentSubmenuRegistry } from '../components/dropdown';
+import { useParentSubmenuRegistry } from 'src/ui/dropdown/dropdown';
 import styles from './recent_transcriptions.module.css';
 
 const LIMIT = 5;

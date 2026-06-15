@@ -1,4 +1,4 @@
-import type { Metadata } from 'src/dsl/dsl';
+import type { Metadata } from 'src/schema/dsl/dsl';
 
 /**
  * Grid density (1/N-of-a-whole-note) assumed when a jot carries no
@@ -9,9 +9,9 @@ import type { Metadata } from 'src/dsl/dsl';
 export const DEFAULT_GRID_DIVISION = 48;
 
 /**
- * Anything carrying `globalMetadata`, a raw {@link import('src/dsl/dsl').Jot}
- * or a `RenderedJot`. Kept structural so both work without importing the
- * rendered wrapper here.
+ * Anything carrying `globalMetadata`, a raw {@link import('src/schema/dsl/dsl').Jot}
+ * is the canonical source. Kept structural so callers can pass the source
+ * jot directly without importing a heavier wrapper here.
  */
 type HasGlobalMetadata = { globalMetadata: Metadata };
 

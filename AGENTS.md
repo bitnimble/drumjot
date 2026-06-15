@@ -60,7 +60,10 @@ request, and pull in the linked docs when a task touches that area.
   fails on hex / `rgb()`/`rgba()`/`hsl()`/`hsla()` in `src/**/*.css`
   outside `src/design_tokens.css`. Typography goes through `composes:`
   from `src/typography.module.css`; shared UI primitives live under
-  `src/jot_view/components/`. See [docs/design-system.md](docs/design-system.md).
+  `src/ui/<component>/` (each in its own folder, e.g.
+  `src/ui/dropdown/dropdown.tsx` + `dropdown.module.css`; CSS-only
+  primitives like `button`/`modal`/`spinner`/`form` too). See
+  [docs/design-system.md](docs/design-system.md).
 - **No DOM layout reads in hot paths**, never read `scrollLeft` /
   `clientWidth` / `getBoundingClientRect` / `getComputedStyle` (for
   layout) in any render, effect, MobX reaction, or per-frame/scroll/zoom
@@ -75,6 +78,18 @@ request, and pull in the linked docs when a task touches that area.
   `python3`. **Don't install/upgrade deps unprompted**, install ordering
   is fragile; flag dep changes and let the user run them.
 - **Don't read skill files with Read**, use the `Skill` tool.
+- **ALWAYS use the `LSP` tool to find symbols, never grep/text search.**
+  For any symbol-level question, where is this defined, who references
+  it, what's its type/signature, find every call site before a
+  rename/refactor, the `LSP` tool (`goToDefinition`, `findReferences`,
+  `hover`, `documentSymbol`, `workspaceSymbol`, `goToImplementation`,
+  call hierarchy) is the **mandatory** first move. It's dramatically
+  faster, more accurate, and far cheaper in tokens than sweeping the repo
+  with `git grep`/Grep, and it won't miss call sites or trip over
+  substring collisions (`parse` vs `JSON.parse`). Reserve text search for
+  genuinely text-shaped queries only (CSS class names, log strings,
+  cross-language DSL letters, vendored code). If you catch yourself
+  grepping for a function/class/variable/type name, stop and use `LSP`.
 - **Prefer built-in tools over ad-hoc bash.** Reach for `Read` / `Edit` /
   `Write` for files, the `LSP` tool for symbol-level questions
   (definition / references / hover), and the `Skill` tool for skills, before shelling out. Avoid ad-hoc shell scripting (`echo`/`printf`/`cat`/
@@ -85,14 +100,26 @@ request, and pull in the linked docs when a task touches that area.
 
 ### Frontend store / presenter / component architecture
 
-The frontend follows a strict three-layer split (the former monolithic
-`JotViewStore` was carved into per-domain data stores + presenters). Code
-is grouped by **feature folder** under `src/jot_view/<feature>/`, each
-folder holds that domain's `<feature>_store.ts` + `<feature>_presenter.ts`
-+ its view `.tsx`/`.css` (e.g. `mixer/`, `playback/`, `lyrics/`,
-`viewport/`, `transcribe/`, …). Shared UI primitives live in
-`components/`, truly-shared helpers in `utils/`, and the cross-cutting
-context registry + re-export barrel stay at `contexts.ts` / `store.ts`.
+The frontend follows a strict three-layer split: per-domain data stores +
+presenters + components. Code is grouped by **feature folder** under
+`src/jot_view/<feature>/`, each folder holds that domain's
+`<feature>_store.ts` + `<feature>_presenter.ts` + its view `.tsx`/`.css`
+(e.g. `mixer/`, `playback/`, `lyrics/`, `viewport/`, `transcribe/`,
+`structure/`, …). The loaded jot's composition root sits at the
+`jot_view/` root: `jot_view_store.ts` (`JotViewStore`, the data store +
+the `buildJotModel` peer constructor), `jot_view_presenter.ts`
+(`JotViewPresenter`, load orchestration), `jot_view_contexts.ts`. Shared
+UI primitives live in top-level `src/ui/<component>/` (one folder per
+component; stories in `src/ui/stories/`); the DSL layer (dsl / parser /
+tempo / element-metrics) lives under `src/schema/dsl/` and RLRR under
+`src/schema/rlrr/`; `settings/`, `toolbar/`, `ui/` are top-level peers of
+`jot_view/`.
+
+- **No barrel files.** Import every symbol straight from the module that
+  defines it; never add or import a re-export barrel (`index.ts` /
+  `store.ts`). Barrels hide the real dependency graph, invite import
+  cycles, and bloat what each consumer pulls in.
+
 When adding or moving frontend state/logic, follow it:
 
 - **Stores = data only.** A store holds MobX `observable`s and

@@ -2,10 +2,10 @@ import { comparer, makeAutoObservable, reaction } from 'mobx';
 import { lyricsStore, LyricsTrackId } from 'src/lyrics/store';
 import { AudioTrackId } from 'src/jot_view/playback/audio_tracks';
 import { jotPlayer } from 'src/jot_view/playback/player';
-import { buildDebugBundleTrackOrder, reorderTrackOrder, trackKeyEq, type TrackKey } from 'src/tracks/tracks';
-import { DocumentStore } from '../document/document_store';
+import { buildDebugBundleTrackOrder, reorderTrackOrder, trackKeyEq, type TrackKey } from 'src/jot_view/tracks/tracks';
+import { JotViewStore } from '../jot_view_store';
 import { MixerStore, clampVolume, collectJotPitches } from './mixer_store';
-import { toastStore } from '../toasts/toasts';
+import { toastStore } from '../../ui/toasts/toasts';
 
 /**
  * Mutations over {@link MixerStore}, per-row + master mute/solo/volume,
@@ -19,12 +19,12 @@ import { toastStore } from '../toasts/toasts';
  */
 export class MixerPresenter {
   readonly mixer: MixerStore;
-  readonly document: DocumentStore;
+  readonly jotViewStore: JotViewStore;
 
-  constructor(mixer: MixerStore, document: DocumentStore) {
+  constructor(mixer: MixerStore, jotViewStore: JotViewStore) {
     this.mixer = mixer;
-    this.document = document;
-    makeAutoObservable(this, { mixer: false, document: false });
+    this.jotViewStore = jotViewStore;
+    makeAutoObservable(this, { mixer: false, jotViewStore: false });
 
     // Wire the mixer store in as the player's mixer context so freshly-
     // constructed AudioTracks can resolve grouped-instrument colour
@@ -233,7 +233,7 @@ export class MixerPresenter {
   }
 
   /** Mute a batch of audio tracks. Used by the song loaders
-   * (DocumentPresenter) to default per-pitch stems / drum tracks to
+   * (JotViewPresenter) to default per-pitch stems / drum tracks to
    * muted so the audible drums come from the score scheduler. */
   muteAudioTracks(ids: readonly AudioTrackId[]): void {
     for (const id of ids) this.mixer.mutedAudioTracks.add(id);
@@ -300,10 +300,10 @@ export class MixerPresenter {
    * audio stem sits immediately above its instrument row, with any
    * unmatched audio at the top. The ordering itself is the pure
    * {@link buildDebugBundleTrackOrder}; this just feeds it the current
-   * jot's pitches. Called by the bundle loader (DocumentPresenter).
+   * jot's pitches. Called by the bundle loader (JotViewPresenter).
    */
   applyDebugBundleTrackOrder(loadedByKey: ReadonlyMap<string, AudioTrackId>): void {
-    const pitches = collectJotPitches(this.document.currentJot);
+    const pitches = collectJotPitches(this.jotViewStore.structural);
     this.mixer.trackOrder = buildDebugBundleTrackOrder(pitches, loadedByKey);
   }
 }

@@ -1,11 +1,13 @@
 import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
-import { RenderedJot, StructuralBar } from 'src/jot/resolved_jot';
-import { ViewConfig } from 'src/jot/view_config';
-import { InstrumentTrack } from 'src/tracks/tracks';
-import { GutterResizeHandle } from '../components/gutter_resize_handle';
-import { MuteButton, SoloButton } from '../components/icon_button';
+import { Instrument } from 'src/schema/dsl/dsl';
+import type { StructBar } from 'src/jot_view/structure/structure_store';
+import { ViewConfig } from 'src/jot_view/viewport/view_config';
+import { InstrumentTrack } from 'src/jot_view/tracks/tracks';
+import { GutterResizeHandle } from 'src/ui/gutter_resize_handle/gutter_resize_handle';
+import { MuteButton, SoloButton } from 'src/ui/icon_button/icon_button';
+import { StructuralContext } from '../jot_view_contexts';
 import { MixerStoreContext } from './mixer_contexts';
 import { NoteProvenanceContext } from '../provenance/provenance_contexts';
 import { ViewportStoreContext } from '../viewport/viewport_contexts';
@@ -52,9 +54,10 @@ const WindowedBarList = observer(function WindowedBarList({
   isPitchAudible,
   pitches,
   colorForPitch,
+  instrumentForPitch,
 }: {
   viewport: ViewportStore | null;
-  pitchBars: readonly StructuralBar[];
+  pitchBars: readonly StructBar[];
   startBeats: readonly number[];
   pitch: string;
   config: ViewConfig;
@@ -65,6 +68,7 @@ const WindowedBarList = observer(function WindowedBarList({
   isPitchAudible: (pitch: string) => boolean;
   pitches: string[];
   colorForPitch: (pitch: string) => string | undefined;
+  instrumentForPitch: (pitch: string) => Instrument;
 }) {
   const range = viewport?.visibleBeatRange ?? null;
   return (
@@ -87,6 +91,7 @@ const WindowedBarList = observer(function WindowedBarList({
             rowPitch={pitch}
             pitchOrder={pitchOrder}
             colorForPitch={colorForPitch}
+            instrumentForPitch={instrumentForPitch}
           />
         );
       })}
@@ -97,7 +102,6 @@ const WindowedBarList = observer(function WindowedBarList({
 export const InstrumentRow = observer(
   ({
     pitch,
-    jot,
     config,
     showBrackets,
     pitchOrder,
@@ -118,7 +122,6 @@ export const InstrumentRow = observer(
     onResizeGutterStart,
   }: {
     pitch: string;
-    jot: RenderedJot;
     config: ViewConfig;
     showBrackets: boolean;
     pitchOrder: readonly string[];
@@ -127,8 +130,9 @@ export const InstrumentRow = observer(
     onSeek: (x: number) => void;
     voiceControls: VoiceControls;
   } & MixerRowDragProps) => {
-    const voice0 = jot.primaryStructuralVoice;
-    if (!voice0) return null;
+    const structural = React.useContext(StructuralContext);
+    const voice0 = structural?.primaryVoice;
+    if (!structural || !voice0) return null;
     const trackHeight = config.trackHeight as number;
     // Per-pitch derived data (bars, voice-wide totals, cumulative
     // bar-start offsets, label color/instrument name); all memoised on
@@ -143,7 +147,7 @@ export const InstrumentRow = observer(
       barBeatStart,
       startBeats,
       instrumentName,
-    } = jot.barsForPitch(pitch);
+    } = structural.barsForPitch(pitch);
     // Resolve the row's note colour through the store-owned
     // `InstrumentTrack`. The structural `barsForPitch().pitchColor` is
     // now palette-only (overrides moved off the jot in the colour-
@@ -182,6 +186,11 @@ export const InstrumentRow = observer(
     const colorForPitch = React.useCallback(
       (p: string) => mixer?.getInstrumentTrack(p).color,
       [mixer]
+    );
+    const instrumentForPitch = React.useCallback(
+      (p: string): Instrument =>
+        structural.source.globalMetadata.instrumentMapping?.[p] ?? { kind: 'custom' },
+      [structural]
     );
     return (
       <div
@@ -253,7 +262,7 @@ export const InstrumentRow = observer(
           style={
             {
               ['--voice-beats' as string]: voiceBeats,
-              ['--bars-row-width' as string]: barsRowWidthSeed(jot, voiceBeats),
+              ['--bars-row-width' as string]: barsRowWidthSeed(structural, voiceBeats),
             } as React.CSSProperties
           }
           onClick={(e) => seekFromClick(e, onSeek)}
@@ -294,6 +303,7 @@ export const InstrumentRow = observer(
             isPitchAudible={voiceControls.isPitchAudible}
             pitches={pitchesMemo}
             colorForPitch={colorForPitch}
+            instrumentForPitch={instrumentForPitch}
           />
           {rejectedForPitch.map((entry, i) => {
             // The MIDI lays `leadBars` empty bar-0-sized blocks before

@@ -7,7 +7,7 @@
  * excluded because they aren't part of the rolling hand pattern.
  */
 import { effectiveLimbCategory } from 'src/instruments/instruments';
-import { Element, Modifier } from 'src/dsl/dsl';
+import { Element, Modifier } from 'src/schema/dsl/dsl';
 import { LintDiagnostic } from '../diagnostics';
 import { Rule } from '../rule';
 

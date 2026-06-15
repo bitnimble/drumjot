@@ -1,5 +1,5 @@
 /**
- * RenderedJot -> flat playback event list, keyed by DSL pitch.
+ * StructuralPresenter -> flat playback event list, keyed by DSL pitch.
  *
  * We walk the laid-out jot directly (rather than round-tripping through
  * `toMidi` + `parseMidi`) for two reasons:
@@ -14,8 +14,9 @@
  *     shared per-bar tempo helper so the playhead, audio waveform and
  *     scheduled drums all share one clock.
  */
-import { Volume } from 'src/dsl/dsl';
-import { RenderedJot, ResolvedNote, ResolvedTrack } from 'src/jot/resolved_jot';
+import { Instrument, Modifier, Volume } from 'src/schema/dsl/dsl';
+import type { StructuralPresenter } from 'src/jot_view/structure/structural_presenter';
+import type { StructNote } from 'src/jot_view/structure/structure_store';
 import {
   ACCENT_BOOST,
   DEFAULT_VELOCITY,
@@ -23,7 +24,7 @@ import {
   VOLUME_TO_VELOCITY,
 } from 'src/dynamics/dynamics';
 import { defaultMidiNote } from 'src/midi/gm';
-import { beatToSecWithinBar, buildBarTempos } from 'src/tempo/tempo';
+import { beatToSecWithinBar, buildBarTempos } from 'src/schema/dsl/tempo';
 
 export type PlaybackEvent = {
   /** Absolute time from the start of the jot, in seconds. */
@@ -53,9 +54,11 @@ const FLAM_GRACE_OFFSET_SEC = 0.03;
 // (rather than a fixed value) keeps an accented flam's grace proportional.
 const FLAM_GRACE_VELOCITY_RATIO = 0.9;
 
-export function jotToEvents(rendered: RenderedJot): PlaybackEvent[] {
-  const resolved = rendered.resolved;
+export function jotToEvents(structural: StructuralPresenter): PlaybackEvent[] {
+  const voices = structural.voices;
   const events: PlaybackEvent[] = [];
+  const instrumentFor = (pitch: string): Instrument =>
+    structural.source.globalMetadata.instrumentMapping?.[pitch] ?? { kind: 'custom' };
 
   // Bar 1 (= first non-lead-in bar) sits at jot time 0 by convention,
   // matching `buildTimeline`'s anchor. Pre-drum bars get a negative
@@ -69,7 +72,7 @@ export function jotToEvents(rendered: RenderedJot): PlaybackEvent[] {
   // (`drumsT0Sec` without `leadBars`) source shapes into the same
   // negative-indexed-bar form, so the scheduler reads only the
   // structure.
-  for (const voice of resolved.voices) {
+  for (const voice of voices) {
     let leadBars = 0;
     for (const b of voice.bars) {
       if (b.index >= 0) break;
@@ -79,7 +82,7 @@ export function jotToEvents(rendered: RenderedJot): PlaybackEvent[] {
     // intra-bar tempo curve. Each note's time is `barOffset +
     // beatToSecWithinBar(barTempos, note.beat)` so a note that sits
     // after a mid-bar tempo change picks up the post-change rate.
-    const tempos = buildBarTempos(rendered.source, voice.bars);
+    const tempos = buildBarTempos(structural.source, voice.bars);
     let leadOffsetSec = 0;
     for (let i = 0; i < leadBars; i++) leadOffsetSec += tempos[i].durationSec;
 
@@ -90,16 +93,17 @@ export function jotToEvents(rendered: RenderedJot): PlaybackEvent[] {
       for (const pitch of voice.pitches) {
         const track = bar.tracks[pitch];
         if (!track) continue;
+        const instrument = instrumentFor(pitch);
         for (const note of track.notes) {
-          const midiNote = resolveMidiNote(note, track);
+          const midiNote = resolveMidiNote(note, instrument);
           if (midiNote === undefined) continue;
           const velocity = resolveVelocity(note);
           // Sub-slot timing offset (ms) nudges the scheduled time directly;
           // it's already in real seconds so no tempo conversion is needed.
-          const offsetSec = (note.source.offset ?? 0) / 1000;
+          const offsetSec = (note.offsetMs ?? 0) / 1000;
           const time = barOffsetSec + beatToSecWithinBar(barTempos, note.beat) + offsetSec;
           events.push({ time, midiNote, velocity, pitch });
-          if (note.modifiers.has('fl')) {
+          if (note.modifiers.includes('fl')) {
             // The grace stroke clamps to -leadOffsetSec so it can't run
             // past the start of the pre-drum window (a flam on bar 1
             // beat 1 with no lead-in clamps to 0 = bar 1 downbeat). Above
@@ -121,31 +125,23 @@ export function jotToEvents(rendered: RenderedJot): PlaybackEvent[] {
   return events;
 }
 
-function resolveMidiNote(note: ResolvedNote, track: ResolvedTrack): number | undefined {
-  const meta = note.source.metadata as { midi?: { note?: number } } | undefined;
-  if (meta?.midi?.note !== undefined) return meta.midi.note;
-  if (track.instrument.midi?.note !== undefined) return track.instrument.midi.note;
-  return defaultMidiNote(note.pitch, note.modifiers);
+function resolveMidiNote(note: StructNote, instrument: Instrument): number | undefined {
+  if (note.midiNote !== undefined) return note.midiNote;
+  if (instrument.midi?.note !== undefined) return instrument.midi.note;
+  return defaultMidiNote(note.pitch, new Set(note.modifiers as Modifier[]));
 }
 
-function resolveVelocity(note: ResolvedNote): number {
-  const meta = note.source.metadata as
-    | { midi?: { velocity?: number }; vol?: Volume | { start?: Volume; end: Volume } }
-    | undefined;
-  if (typeof meta?.midi?.velocity === 'number') return clamp(Math.round(meta.midi.velocity));
+function resolveVelocity(note: StructNote): number {
+  if (typeof note.velocity === 'number') return clamp(Math.round(note.velocity));
 
   let baseline = DEFAULT_VELOCITY;
-  const vol = meta?.vol;
+  const vol = note.vol as Volume | undefined;
   if (typeof vol === 'string') {
     baseline = VOLUME_TO_VELOCITY[vol] ?? baseline;
-  } else if (vol && typeof vol === 'object') {
-    // Match to_midi: use start (or end) of a transition; no interpolation.
-    const v = vol.start ?? vol.end;
-    if (v) baseline = VOLUME_TO_VELOCITY[v] ?? baseline;
   }
 
-  if (note.modifiers.has('a')) baseline += ACCENT_BOOST;
-  if (note.modifiers.has('g')) baseline -= GHOST_REDUCTION;
+  if (note.modifiers.includes('a')) baseline += ACCENT_BOOST;
+  if (note.modifiers.includes('g')) baseline -= GHOST_REDUCTION;
 
   return clamp(Math.round(baseline));
 }

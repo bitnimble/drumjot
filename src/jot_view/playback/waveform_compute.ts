@@ -15,8 +15,9 @@
  * bar covers. Used by {@link computeWaveformPeaksFromChannels} to map
  * each pixel column back to the buffer-sample range it represents.
  *
- * Flattened off `RenderedJot` on the main thread so the worker doesn't
- * need to know about React / MobX. See `audio_tracks.ts::buildBarSlices`.
+ * Flattened off the structural voices on the main thread so the worker
+ * doesn't need to know about React / MobX. See
+ * `audio_tracks.ts::buildBarSlices`.
  */
 export type BarSlice = {
   x: number;

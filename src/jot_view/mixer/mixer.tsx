@@ -1,12 +1,11 @@
 import { observer } from 'mobx-react-lite';
 import React from 'react';
-import { RenderedJot } from 'src/jot/resolved_jot';
-import { ViewConfig } from 'src/jot/view_config';
+import { ViewConfig } from 'src/jot_view/viewport/view_config';
 import { jotPlayer } from 'src/jot_view/playback/player';
 import { MixerStoreContext } from './mixer_contexts';
 import { LyricsRow } from '../lyrics/lyrics_row';
 import styles from './mixer.module.css';
-import { TrackKey } from '../store';
+import { TrackKey } from 'src/jot_view/tracks/tracks';
 import { GutterMasterRow } from './gutter_controls';
 import { MixerEndDropZone } from './mixer_drag';
 import { InstrumentRow } from './instrument_row';
@@ -32,7 +31,6 @@ export type { VoiceControls, AudioTrackControls };
  */
 export const MixerView = observer(
   ({
-    jot,
     config,
     trackOrder,
     highlightedPattern,
@@ -43,7 +41,6 @@ export const MixerView = observer(
     audioTrackControls,
     onResizeGutterStart,
   }: {
-    jot: RenderedJot;
     config: ViewConfig;
     trackOrder: readonly TrackKey[];
     highlightedPattern: string | undefined;
@@ -158,7 +155,6 @@ export const MixerView = observer(
                 key={reactKey}
                 id={key.id}
                 track={track}
-                jot={jot}
                 controls={audioTrackControls}
                 onSeek={onSeek}
                 {...rowProps}
@@ -166,13 +162,12 @@ export const MixerView = observer(
             );
           }
           if (key.kind === 'lyrics') {
-            return <LyricsRow key={reactKey} id={key.id} jot={jot} onSeek={onSeek} {...rowProps} />;
+            return <LyricsRow key={reactKey} id={key.id} onSeek={onSeek} {...rowProps} />;
           }
           return (
             <InstrumentRow
               key={reactKey}
               pitch={key.pitch}
-              jot={jot}
               config={config}
               showBrackets={idx === firstInstrumentIdx}
               pitchOrder={pitchOrder}

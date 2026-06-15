@@ -4,21 +4,20 @@ import { LyricLine, stripLyricNoise } from 'src/lyrics/lrc';
 import { LyricsSource, LyricsTrackId, lyricsStore } from 'src/lyrics/store';
 import { AudioTrackId } from 'src/jot_view/playback/audio_tracks';
 import { jotPlayer } from 'src/jot_view/playback/player';
-import { buildTimeline } from 'src/jot_view/playback/timeline';
-import { toastStore } from '../toasts/toasts';
-import { DocumentStore } from '../document/document_store';
+import { toastStore } from '../../ui/toasts/toasts';
+import { JotViewStore } from '../jot_view_store';
 import { LyricsAlignStore } from './lyrics_align_store';
 
 /**
  * Orchestration over {@link LyricsAlignStore}: the lyrics-load flows
  * (LRCLIB picks, pasted plain text), per-track CTC forced-alignment, and
  * the modal-visibility flags. The sole owner of the per-track align
- * AbortControllers. Reads {@link DocumentStore} only to size the
+ * AbortControllers. Reads {@link JotViewStore} only to size the
  * plain-text spread against the current jot's timeline.
  */
 export class LyricsPresenter {
   readonly lyricsAlign: LyricsAlignStore;
-  readonly document: DocumentStore;
+  readonly jotViewStore: JotViewStore;
 
   /**
    * Per-track Whisper alignment state. Each row aligning at the same
@@ -34,12 +33,12 @@ export class LyricsPresenter {
    */
   lyricsAlignControllers: Map<LyricsTrackId, AbortController> = new Map();
 
-  constructor(lyricsAlign: LyricsAlignStore, document: DocumentStore) {
+  constructor(lyricsAlign: LyricsAlignStore, jotViewStore: JotViewStore) {
     this.lyricsAlign = lyricsAlign;
-    this.document = document;
+    this.jotViewStore = jotViewStore;
     makeAutoObservable(this, {
       lyricsAlign: false,
-      document: false,
+      jotViewStore: false,
       lyricsAlignControllers: false,
     });
   }
@@ -226,8 +225,8 @@ export class LyricsPresenter {
       if (t.durationSec > longestAudio) longestAudio = t.durationSec;
     }
     if (longestAudio > 0) return longestAudio;
-    if (this.document.currentJot) {
-      const tl = buildTimeline(this.document.currentJot);
+    if (this.jotViewStore.tempo) {
+      const tl = this.jotViewStore.tempo.timeline;
       if (tl.totalDurationSec > 0) return tl.totalDurationSec;
     }
     return 60;

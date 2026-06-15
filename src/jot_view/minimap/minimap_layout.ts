@@ -11,7 +11,7 @@ export type BarLayout = {
   x: number;
   /** Minimap-px width of the bar. */
   width: number;
-  /** Bar length in DSL beats (== `StructuralBar.beats`); used to map
+  /** Bar length in DSL beats (== `StructBar.beats`); used to map
    *  per-note `beat` positions onto the bar's minimap pixel range. */
   beats: number;
 };

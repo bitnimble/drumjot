@@ -7,20 +7,19 @@
  * as `toMidi`'s ticks would decode to.
  */
 import { describe, expect, it } from 'bun:test';
-import { parse } from 'src/parser/parser';
-import { Jot } from 'src/dsl/dsl';
-import { RenderedJot } from 'src/jot/resolved_jot';
+import { parse } from 'src/schema/dsl/parser/parser';
+import { Jot } from 'src/schema/dsl/dsl';
+import { buildJotModel } from 'src/jot_view/jot_view_store';
 import { buildTimeline } from '../timeline';
 import { jotToEvents } from '../events';
 
 function events(src: string) {
   const jot = parse(src);
-  const rendered = new RenderedJot(jot);
-  return jotToEvents(rendered);
+  return jotToEvents(buildJotModel(jot).structural);
 }
 
 function eventsFor(jot: Jot) {
-  return jotToEvents(new RenderedJot(jot));
+  return jotToEvents(buildJotModel(jot).structural);
 }
 
 /** A 4/4 @ 120 BPM jot whose only note is a kick on beat 1 with `offset` ms. */
@@ -144,8 +143,8 @@ describe('jotToEvents timing', () => {
       '{{ bpm: 60, time: "4/4", instrumentMapping: { k:{name:"Kick"}, s:{name:"Snare"} } }} ' +
         '| k . s . {{ bpm: 120 }} k . s . |'
     );
-    const rendered = new RenderedJot(jot);
-    const timeline = buildTimeline(rendered);
+    const structural = buildJotModel(jot).structural;
+    const timeline = buildTimeline(structural);
     expect(timeline.bars[0].durationSec).toBeCloseTo(3.0, 6);
   });
 
@@ -157,15 +156,15 @@ describe('jotToEvents timing', () => {
     const jot = parse(
       '{{ bpm: 120, time: "4/4", leadBars: 2, instrumentMapping: { k:{name:"Kick"} } }} | . . . . | . . . . | k . . . |',
     );
-    const rendered = new RenderedJot(jot);
-    const evs = jotToEvents(rendered);
+    const structural = buildJotModel(jot).structural;
+    const evs = jotToEvents(structural);
     expect(evs).toHaveLength(1);
     expect(evs[0].time).toBeCloseTo(0, 6);
     // The timeline mirrors that anchor: pre-drum bars sit at negative
     // startSec, bar 1 at 0, total playable jot duration spans the drum
     // bars only (the lead-in is reachable via negative seek but not
     // counted toward the end-of-playback sentinel).
-    const timeline = buildTimeline(rendered);
+    const timeline = buildTimeline(structural);
     expect(timeline.bars[0].startSec).toBeCloseTo(-4, 6);
     expect(timeline.bars[1].startSec).toBeCloseTo(-2, 6);
     expect(timeline.bars[2].startSec).toBeCloseTo(0, 6);

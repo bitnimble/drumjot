@@ -32,8 +32,9 @@
  * a visible indicator and the operator can inspect details.
  */
 import { makeAutoObservable, runInAction } from 'mobx';
-import { RenderedJot } from 'src/jot/resolved_jot';
-import { MixerContext } from 'src/tracks/tracks';
+import type { StructuralPresenter } from 'src/jot_view/structure/structural_presenter';
+import type { TempoPresenter } from 'src/jot_view/playback/tempo_presenter';
+import { MixerContext } from 'src/jot_view/tracks/tracks';
 import type { PlaybackStore } from './playback_store';
 import { jotToEvents, PlaybackEvent } from './events';
 import { GeneralUserGsKit, KitInfo } from './gm_kit';
@@ -1065,9 +1066,9 @@ export class JotPlayer {
    * is frozen, so the rescheduled notes line up against it and come alive
    * on resume (which re-arms the tail timer from `tailAudioTime`).
    */
-  refreshDrumSchedule(rendered: RenderedJot): void {
+  refreshDrumSchedule(structural: StructuralPresenter): void {
     if ((this.state !== 'playing' && this.state !== 'paused') || !this.ctx) return;
-    this.events = jotToEvents(rendered);
+    this.events = jotToEvents(structural);
     const now = this.ctx.currentTime;
     const jotOffset = this.currentJotTime(now);
     this.cancelScheduledStops();
@@ -1099,7 +1100,7 @@ export class JotPlayer {
    *    clock; the rescheduled notes stay silent until `resume()`, which
    *    re-arms the tail timer from `tailAudioTime`.
    */
-  seek(rendered: RenderedJot, seconds: number): void {
+  seek(tempo: TempoPresenter, seconds: number): void {
     // The recording's drumless lead-in is jot time [-drumsT0Sec, 0).
     // Allow scrubbing back into it instead of clamping at 0 so the user
     // can play the intro. `this.drumsT0Sec` is the live, user-tunable
@@ -1109,7 +1110,7 @@ export class JotPlayer {
     let target = Math.max(seconds, -drumsLeadInSec);
 
     if (this.state === 'idle') {
-      const timeline = rendered.timeline;
+      const timeline = tempo.timeline;
       if (timeline.bars.length === 0) return;
       target = Math.min(target, timeline.totalDurationSec);
       this.pendingStartSec = target;
@@ -1158,7 +1159,7 @@ export class JotPlayer {
     });
   }
 
-  async play(rendered: RenderedJot): Promise<void> {
+  async play(structural: StructuralPresenter, tempo: TempoPresenter): Promise<void> {
     // Capture the click-to-seek cue before stop() clears it.
     const cueSec = this.pendingStartSec;
     this.stop();
@@ -1189,12 +1190,12 @@ export class JotPlayer {
         void this.estimateInternalLatency();
       }
 
-      this.events = jotToEvents(rendered);
+      this.events = jotToEvents(structural);
       if (this.events.length === 0) {
         throw new Error('No playable notes in this jot.');
       }
 
-      const timeline = rendered.timeline;
+      const timeline = tempo.timeline;
       const audioStartTime = ctx.currentTime + SCHEDULE_LEAD_SECONDS;
       // `drumsT0Sec` on globalMetadata is the audio-time of jot-time 0 in
       // the original recording — i.e. how much silence / non-drum intro

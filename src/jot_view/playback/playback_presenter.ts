@@ -1,35 +1,34 @@
 import { comparer, makeAutoObservable, reaction } from 'mobx';
 import { jotPlayer } from 'src/jot_view/playback/player';
-import { buildTimeline, xToTime } from 'src/jot_view/playback/timeline';
-import { pickDominantBpmAndTime } from 'src/jot_view/playback/timeline';
-import { DocumentStore } from '../document/document_store';
+import { xToTime } from 'src/jot_view/playback/timeline';
+import { JotViewStore } from '../jot_view_store';
 import { PlaybackStore } from './playback_store';
 
 /**
  * Transport + playhead-follow orchestration over {@link PlaybackStore}.
  * The sole writer of the follow-playhead flags and the bridge between the
  * UI's transport controls and the {@link jotPlayer} singleton. Reads
- * {@link DocumentStore} for the current jot (play / seek / drum-offset all
- * need the laid-out `RenderedJot`).
+ * {@link JotViewStore} for the loaded song's peers (play / seek /
+ * drum-offset all need the laid-out `structural` + `tempo`).
  */
 export class PlaybackPresenter {
   readonly playback: PlaybackStore;
-  readonly document: DocumentStore;
+  readonly jotViewStore: JotViewStore;
 
-  constructor(playback: PlaybackStore, document: DocumentStore) {
+  constructor(playback: PlaybackStore, jotViewStore: JotViewStore) {
     this.playback = playback;
-    this.document = document;
-    makeAutoObservable(this, { playback: false, document: false });
+    this.jotViewStore = jotViewStore;
+    makeAutoObservable(this, { playback: false, jotViewStore: false });
     // Seed the player's live drum↔audio offset from each loaded jot's
     // transcribed lead-in (`globalMetadata.drumsT0Sec`). Tracking
-    // `currentJot` (an observable reference) re-fires whenever a new jot
-    // is loaded, resetting the offset to that recording's value; manual
+    // `document.source` (an observable reference) re-fires whenever a new
+    // jot is loaded, resetting the offset to that recording's value; manual
     // nudges via the Offset control persist until the next load. We read
-    // `globalMetadata` (the raw source) rather than `resolved` so seeding
+    // the raw `source.globalMetadata` (not a laid-out peer) so seeding
     // doesn't force a layout pass.
     reaction(
       () => {
-        const raw = this.document.currentJot?.globalMetadata.drumsT0Sec;
+        const raw = this.jotViewStore.source?.globalMetadata.drumsT0Sec;
         return typeof raw === 'number' && raw > 0 ? raw : 0;
       },
       (offsetSec) => jotPlayer.setDrumsT0Sec(offsetSec),
@@ -87,12 +86,12 @@ export class PlaybackPresenter {
   }
 
   async playCurrent(): Promise<void> {
-    const jot = this.document.currentJot;
-    if (!jot) return;
-    // Pass the laid-out RenderedJot (not its source) so the player's
-    // timeline reads live bar widths, the playhead then tracks correctly
-    // across zoom changes.
-    await jotPlayer.play(jot);
+    const { structural, tempo } = this.jotViewStore;
+    if (!structural || !tempo) return;
+    // Pass the laid-out structural presenter + tempo (not the raw source) so
+    // the player's timeline reads live bar widths, the playhead then tracks
+    // correctly across zoom changes.
+    await jotPlayer.play(structural, tempo);
   }
 
   stopPlayback(): void {
@@ -102,12 +101,12 @@ export class PlaybackPresenter {
   /**
    * Slide every drum note across the bar grid by `beats` quarter-note
    * beats to realign a consistently mis-detected groove (see
-   * `RenderedJot.drumOffsetBeats`). Reflows the score reactively and
+   * `StructuralPresenter.drumOffsetBeats`). Reflows the score reactively and
    * reschedules in-flight playback so the change is heard immediately.
    */
   setDrumOffset(beats: number): void {
-    const jot = this.document.currentJot;
-    if (!jot) return;
+    const { structural, tempo } = this.jotViewStore;
+    if (!structural || !tempo) return;
     // Slider semantics: the user is re-labeling note positions on the
     // notational grid (e.g. "this hit is on 1/48, not 3/48"), not
     // re-timing the drums against the audio recording. So when the
@@ -121,15 +120,15 @@ export class PlaybackPresenter {
     // value can be very different from the song's actual rate. Per-bar
     // tempo variation still leaves a few-ms-per-note residual; same
     // caveat as the Drum-offset row in the debug panel.
-    const deltaBeats = beats - jot.drumOffsetBeats;
+    const deltaBeats = beats - structural.drumOffsetBeats;
     if (Math.abs(deltaBeats) > 1e-12) {
-      const { dominantBpm } = pickDominantBpmAndTime(jot);
+      const { dominantBpm } = tempo.dominantBpmAndTime;
       const bpm = dominantBpm ?? 120;
       const deltaSec = (deltaBeats * 60) / bpm;
       jotPlayer.setDrumsT0Sec(jotPlayer.drumsT0Sec - deltaSec);
     }
-    jot.setDrumOffset(beats);
-    jotPlayer.refreshDrumSchedule(jot);
+    structural.setDrumOffset(beats);
+    jotPlayer.refreshDrumSchedule(structural);
   }
 
   /**
@@ -141,10 +140,10 @@ export class PlaybackPresenter {
    * mid-playback scrub reads the exact bars being played.
    */
   seekToX(x: number): void {
-    const jot = this.document.currentJot;
-    if (!jot) return;
-    const timeline = jotPlayer.timeline.bars.length > 0 ? jotPlayer.timeline : buildTimeline(jot);
-    jotPlayer.seek(jot, xToTime(timeline, x));
+    const { tempo } = this.jotViewStore;
+    if (!tempo) return;
+    const timeline = jotPlayer.timeline.bars.length > 0 ? jotPlayer.timeline : tempo.timeline;
+    jotPlayer.seek(tempo, xToTime(timeline, x));
   }
 
   /**

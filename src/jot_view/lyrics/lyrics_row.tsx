@@ -1,13 +1,13 @@
 import classNames from 'classnames';
 import { observer, useLocalObservable } from 'mobx-react-lite';
 import React from 'react';
-import { RenderedJot } from 'src/jot/resolved_jot';
+import { StructuralContext, TempoContext } from '../jot_view_contexts';
 import { furiganaAnnotator } from 'src/lyrics/furigana';
 import { activeLineIndexAt, activeWordIndexAt } from 'src/lyrics/lrc';
 import { LyricsTrackId, lyricsStore } from 'src/lyrics/store';
 import { jotPlayer } from 'src/jot_view/playback/player';
 import { LyricsPresenterContext, LyricsAlignStoreContext } from './lyrics_contexts';
-import { GutterResizeHandle } from '../components/gutter_resize_handle';
+import { GutterResizeHandle } from 'src/ui/gutter_resize_handle/gutter_resize_handle';
 import { MixerRowDragProps, useMixerRowDropTarget } from '../mixer/mixer_drag';
 import {
   LyricLineMeasureInput,
@@ -44,7 +44,6 @@ const LYRICS_ROW_HEIGHT = 64;
 export const LyricsRow = observer(
   ({
     id,
-    jot,
     onSeek,
     idx,
     dragFromIdx,
@@ -59,16 +58,19 @@ export const LyricsRow = observer(
     onResizeGutterStart,
   }: {
     id: LyricsTrackId;
-    jot: RenderedJot;
     onSeek: (x: number) => void;
   } & MixerRowDragProps) => {
     const presenter = React.useContext(LyricsPresenterContext);
     const lyricsAlign = React.useContext(LyricsAlignStoreContext);
+    const structural = React.useContext(StructuralContext);
+    const tempo = React.useContext(TempoContext);
     const track = lyricsStore.get(id);
     // Guard: the reaction in JotViewStore drops dead lyrics ids on the
     // same MobX tick a `remove()` happens, so this gap is one-frame at
-    // most. Render nothing rather than crash if the maps race.
-    if (!track) return null;
+    // most. Render nothing rather than crash if the maps race. `structural`
+    // / `tempo` are null only outside the View (never while a lyrics row
+    // is mounted in the mixer).
+    if (!track || !structural || !tempo) return null;
     const lines = track.lines;
     const offsetSec = track.offsetSec;
     const sourceLabel = track.sourceLabel;
@@ -83,7 +85,7 @@ export const LyricsRow = observer(
     // AudioTrackRow / InstrumentRow: read off the structural cache (zoom-
     // invariant) so this row doesn't re-render on every wheel tick;
     // CSS calc handles the per-zoom pixel scaling.
-    const structureVoice = jot.structure.voices[0];
+    const structureVoice = structural.voices[0];
     let voiceBeats = 0;
     if (structureVoice) {
       for (const b of structureVoice.bars) voiceBeats += b.beats;
@@ -94,13 +96,13 @@ export const LyricsRow = observer(
     );
 
     // The playback timeline is the canonical source for audio-sec → beat
-    // mapping. `jot.timeline` is a MobX computed that mirrors what the
-    // bars header / audio waveforms use; depending on `jot` (not on
+    // mapping. `jot.tempo.timeline` is a MobX computed that mirrors what
+    // the bars header / audio waveforms use; depending on `jot` (not on
     // `jotPlayer.timeline`) keeps this row off the per-frame playback
     // observable graph.
-    const timeline = jot.timeline;
+    const timeline = tempo.timeline;
     const drumsT0Sec = jotPlayer.drumsT0Sec;
-    const pxPerBeat = jot.pxPerBeat;
+    const pxPerBeat = structural.pxPerBeat;
 
     // Pre-compute each line's beat positions. For lines with `words`,
     // each word resolves to its own [startBeat, endBeat] cell; the
@@ -323,7 +325,7 @@ export const LyricsRow = observer(
           style={
             {
               ['--voice-beats' as string]: voiceBeats,
-              ['--bars-row-width' as string]: barsRowWidthSeed(jot, voiceBeats),
+              ['--bars-row-width' as string]: barsRowWidthSeed(structural, voiceBeats),
               height: LYRICS_ROW_HEIGHT,
             } as React.CSSProperties
           }

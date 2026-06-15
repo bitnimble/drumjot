@@ -1,6 +1,6 @@
 import { makeAutoObservable } from 'mobx';
-import { px } from 'src/jot/view_config';
-import { DocumentStore } from '../document/document_store';
+import { px } from 'src/jot_view/viewport/view_config';
+import { JotViewStore } from '../jot_view_store';
 import {
   BASE_BAR_WIDTH,
   MAX_GUTTER_WIDTH,
@@ -14,23 +14,23 @@ import {
 /**
  * Mutations over {@link ViewportStore}, zoom, the virtual scroll
  * offsets (clamped + device-pixel snapped), the cached viewport/content
- * extents, and the gutter width. Reads {@link DocumentStore} only to
+ * extents, and the gutter width. Reads {@link JotViewStore} only to
  * write the shared `viewConfig.barWidth` that zoom drives.
  */
 export class ViewportPresenter {
   readonly viewport: ViewportStore;
-  readonly document: DocumentStore;
+  readonly jotViewStore: JotViewStore;
 
-  constructor(viewport: ViewportStore, document: DocumentStore) {
+  constructor(viewport: ViewportStore, jotViewStore: JotViewStore) {
     this.viewport = viewport;
-    this.document = document;
-    makeAutoObservable(this, { viewport: false, document: false });
+    this.jotViewStore = jotViewStore;
+    makeAutoObservable(this, { viewport: false, jotViewStore: false });
   }
 
   setZoom(z: number) {
     const clamped = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
     this.viewport.zoom = clamped;
-    this.document.viewConfig.barWidth = px(BASE_BAR_WIDTH * clamped);
+    this.jotViewStore.viewConfig.barWidth = px(BASE_BAR_WIDTH * clamped);
   }
 
   /** Cache the score viewport's pixel dimensions. Fed by a ResizeObserver

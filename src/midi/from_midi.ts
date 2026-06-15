@@ -67,7 +67,7 @@ import {
   Simultaneity,
   TempoEvent,
   TimeSignature,
-} from 'src/dsl/dsl';
+} from 'src/schema/dsl/dsl';
 import { ACCENT_THRESHOLD, GHOST_THRESHOLD } from 'src/dynamics/dynamics';
 import { defaultKindForPitch } from 'src/instruments/instruments';
 import {

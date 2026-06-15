@@ -1,8 +1,8 @@
 import { makeAutoObservable } from 'mobx';
 import { computedFn } from 'mobx-utils';
-import { Instrument } from 'src/dsl/dsl';
+import { Instrument } from 'src/schema/dsl/dsl';
 import { DrumInstrumentKind, defaultKindForPitch } from 'src/instruments/instruments';
-import { RenderedJot } from 'src/jot/resolved_jot';
+import type { StructuralPresenter } from 'src/jot_view/structure/structural_presenter';
 import { AudioTrackFilter, AudioTrackId, isAudioTrackAudibleUnder } from 'src/jot_view/playback/audio_tracks';
 import { isAudibleUnder, PlayerFilter } from 'src/jot_view/playback/player';
 import {
@@ -10,8 +10,8 @@ import {
   InstrumentTrack,
   MixerContext,
   TrackKey,
-} from 'src/tracks/tracks';
-import { DocumentStore } from '../document/document_store';
+} from 'src/jot_view/tracks/tracks';
+import { JotViewStore } from '../jot_view_store';
 
 // Row volume faders are pure attenuation (0 = silent, 1 = unscaled).
 // The kit's overall loudness is handled by the drum master gain.
@@ -98,22 +98,25 @@ function defaultMixerSortKey(
  * once at its first appearance; ordering reads each pitch's resolved
  * `Instrument` (from the first bar that has a track for it).
  *
- * Reads the zoom-invariant structural cache (not `jot.resolved`) so the
+ * Reads the zoom-invariant structural voices (not pixels) so the
  * mixer-order reaction that wraps this doesn't re-evaluate on every wheel
  * tick; pitch identity is a function of the source DSL, not the layout.
  */
-export function collectJotPitches(jot: RenderedJot | undefined): string[] {
-  if (!jot) return [];
+export function collectJotPitches(structural: StructuralPresenter | undefined): string[] {
+  if (!structural) return [];
   const out: string[] = [];
   const instrumentByPitch = new Map<string, Instrument>();
-  for (const voice of jot.structure.voices) {
+  for (const voice of structural.voices) {
     for (const p of voice.pitches) {
       if (!out.includes(p)) out.push(p);
     }
     for (const bar of voice.bars) {
-      for (const [pitch, track] of Object.entries(bar.tracks)) {
+      for (const pitch of Object.keys(bar.tracks)) {
         if (!instrumentByPitch.has(pitch)) {
-          instrumentByPitch.set(pitch, track.instrument);
+          instrumentByPitch.set(
+            pitch,
+            structural.source.globalMetadata.instrumentMapping?.[pitch] ?? { kind: 'custom' }
+          );
         }
       }
     }
@@ -190,11 +193,11 @@ export class MixerStore implements MixerContext {
   audioTrackSplitStatuses: Map<AudioTrackId, AudioTrackSplitStatus> = new Map();
 
   /** Active jot, for the mixer-ordered pitch list. */
-  readonly document: DocumentStore;
+  readonly jotViewStore: JotViewStore;
 
-  constructor(document: DocumentStore) {
-    this.document = document;
-    makeAutoObservable(this, { document: false });
+  constructor(jotViewStore: JotViewStore) {
+    this.jotViewStore = jotViewStore;
+    makeAutoObservable(this, { jotViewStore: false });
   }
 
   /**
@@ -266,7 +269,7 @@ export class MixerStore implements MixerContext {
    * track a single MobX-memoised computed rather than re-walking the jot.
    */
   get jotPitches(): readonly string[] {
-    return collectJotPitches(this.document.currentJot);
+    return collectJotPitches(this.jotViewStore.structural);
   }
 
   /**
@@ -322,7 +325,7 @@ export class MixerStore implements MixerContext {
     if (track) return track;
     track = new InstrumentTrack(
       pitch,
-      () => this.document.currentJot?.defaultPaletteColorFor(pitch) ?? INSTRUMENT_FALLBACK_COLOR
+      () => this.jotViewStore.palette?.paletteColorFor(pitch) ?? INSTRUMENT_FALLBACK_COLOR
     );
     this.instrumentTracks.set(pitch, track);
     return track;

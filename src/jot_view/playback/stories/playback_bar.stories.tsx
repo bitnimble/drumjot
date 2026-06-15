@@ -1,13 +1,13 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { runInAction } from 'mobx';
 import React from 'react';
-import { RenderedJot } from 'src/jot/resolved_jot';
+import { buildJotModel } from '../../jot_view_store';
 import { rockJot } from 'src/fakes/fakes';
-import { DocumentStore } from '../../document/document_store';
+import { JotViewStore } from '../../jot_view_store';
 import { PlaybackStore } from '../playback_store';
 import { PlaybackPresenter } from '../playback_presenter';
 import { PlaybackBar } from '../playback';
-import { Gallery, Variant } from '../../components/stories/_variants';
+import { Gallery, Variant } from 'src/ui/stories/_variants';
 
 /**
  * The bottom transport bar, driven by REAL stores + presenter (the point
@@ -27,19 +27,23 @@ type Story = StoryObj;
 /** One PlaybackBar backed by a fresh document/playback store + presenter
  *  trio; `withJot` seeds a loaded jot so the transport controls light up. */
 function Bar({ withJot }: { withJot: boolean }) {
-  const { documentStore, playback, presenter } = React.useMemo(() => {
-    const documentStore = new DocumentStore();
-    const playback = new PlaybackStore(documentStore);
-    const presenter = new PlaybackPresenter(playback, documentStore);
+  const { jotViewStore, playback, presenter } = React.useMemo(() => {
+    const jotViewStore = new JotViewStore();
+    const playback = new PlaybackStore(jotViewStore);
+    const presenter = new PlaybackPresenter(playback, jotViewStore);
     if (withJot) {
+      const model = buildJotModel(rockJot, jotViewStore.viewConfig);
       runInAction(() => {
-        documentStore.currentJot = new RenderedJot(rockJot, documentStore.viewConfig);
+        jotViewStore.source = rockJot;
+        jotViewStore.structural = model.structural;
+        jotViewStore.palette = model.palette;
+        jotViewStore.tempo = model.tempo;
       });
     }
-    return { documentStore, playback, presenter };
+    return { jotViewStore, playback, presenter };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  return <PlaybackBar documentStore={documentStore} playback={playback} presenter={presenter} />;
+  return <PlaybackBar jotViewStore={jotViewStore} playback={playback} presenter={presenter} />;
 }
 
 /** Both transport states in one place. */

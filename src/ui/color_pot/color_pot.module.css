@@ -1,0 +1,37 @@
+/* Canonical colour-swatch button shape. One source of truth for every
+   chip-style colour affordance: overflow menu rows, palette presets
+   inside the picker popover, etc. Fixed square size so the menu row's
+   pot and the popover's palette pots read as the same widget at the
+   same scale. */
+
+.pot {
+    composes: reset from '../button/button.module.css';
+    /* Square 22px. Big enough for a comfortable click target on a
+       trackpad, small enough that 4 across (palette grid) fit inside
+       the picker's 240px panel with breathing room. */
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 2px solid transparent;
+    border-radius: var(--radius-sm);
+    /* Outer ring so a transparent default border doesn't read as
+       "no chrome" against the menu's cream paper. */
+    box-shadow: inset 0 0 0 1px var(--color-border);
+    /* `background` is set inline to the current colour. */
+}
+
+.pot:hover {
+    box-shadow: inset 0 0 0 1px var(--color-border-strong);
+}
+
+.pot:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
+.selected {
+    /* Accent ring overrides the neutral inset border to flag the
+       currently-effective colour. */
+    border-color: var(--color-accent);
+    box-shadow: inset 0 0 0 1px var(--color-bg-base);
+}

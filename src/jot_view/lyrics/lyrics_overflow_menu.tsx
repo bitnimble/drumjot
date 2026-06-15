@@ -1,8 +1,8 @@
 import { serializeEnhancedLrc } from 'src/lyrics/enhanced_lrc';
 import { LYRICS_OFFSET_MAX_SEC, LYRICS_OFFSET_MIN_SEC, LYRICS_OFFSET_STEP_SEC, LyricsTrackId, lyricsStore } from 'src/lyrics/store';
 import { downloadTextFile } from 'src/utils/download';
-import { DropdownButton, dropdownStyles } from '../components/dropdown';
-import { NumberStepper } from '../components/number_stepper';
+import { DropdownButton, dropdownStyles } from 'src/ui/dropdown/dropdown';
+import { NumberStepper } from 'src/ui/number_stepper/number_stepper';
 import mixerStyles from '../mixer/mixer.module.css';
 import styles from './lyrics_row.module.css';
 

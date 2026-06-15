@@ -1,0 +1,228 @@
+/* Shared button variants. Every `<button>` in the app composes one of
+   these classes (or another class that itself composes one) so the
+   reset (`font-family: inherit`, `cursor: pointer`, default focus
+   outline) and the standard primary/secondary/ghost/etc. chrome are
+   defined exactly once.
+
+   Adding a new visual variant: add a class here, compose it at the
+   call site via `composes: <variant> from '<rel>/ui/button/button.module.css'`
+   (e.g. `../../ui/button/button.module.css` from a jot_view feature folder).
+   Adding per-call-site overrides
+   (a tighter padding, a different color) is fine; but the base
+   reset and the variant's foundational chrome must come through the
+   composed class, not be re-declared in the consumer.
+
+   The associated stylelint rule (`scripts/lint/css/no-rogue-buttons.js`)
+   enforces that any selector targeting a `<button>` element has at
+   least one composed class from this file. */
+
+/* ─── Base reset ────────────────────────────────────────────────────── */
+
+/* Foundational reset applied to every <button>. All other variants
+   compose this; consumers rarely need to compose `reset` directly, but
+   when they do (an icon button cluster that has its own paint /
+   geometry), composing `reset` is the contract that says "I'm a real
+   button, not an ad-hoc element".
+
+   IMPORTANT; minimal-on-purpose. Vite's CSS-Modules implementation
+   emits a composed class's rules AFTER the composing class's rules in
+   the final bundle, so anything `reset` sets here OVERRIDES whatever
+   the variant set on the same property. That makes "additive" reset
+   safe (margin / cursor / font-family; variants never re-declare
+   these) but "subtractive" reset (border: 0, padding: 0, background:
+   transparent, color: inherit) catastrophic, since the variant's
+   explicit border / padding / background would lose to the reset's
+   blanker value. Variants that genuinely want no border / no padding
+   / transparent background must set those properties themselves; see
+   `.ghost` and `.close` below. */
+.reset {
+    appearance: none;
+    -webkit-appearance: none;
+    margin: 0;
+    cursor: pointer;
+    /* `<button>` defaults to its own UA font-family; force inherit so a
+       button inside body text reads in the surrounding typeface. */
+    font-family: inherit;
+}
+
+.reset:disabled {
+    cursor: not-allowed;
+}
+
+.reset:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
+/* ─── Primary CTA ───────────────────────────────────────────────────── */
+
+/* Accent-filled action button used for the dominant CTA in a region
+   (Transcribe, Load lyrics, modal "Load", LRCLIB search).
+   The 5px 12px padding is identical to `.secondary` / `.danger` so
+   the three variants line up at the same height when they share a
+   row; visual difference between variants is COLOR ONLY. Larger CTA
+   tiers (empty-state action row) compose `.sizeLg` below on top of
+   the color variant. */
+.primary {
+    composes: reset;
+    composes: bodyEmphasis from '../../typography.module.css';
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border: 1px solid var(--color-accent);
+    border-radius: var(--radius-md);
+    background: var(--color-accent);
+    color: var(--color-bg-base);
+}
+
+.primary:hover:not(:disabled) {
+    background: var(--color-accent-hover);
+    border-color: var(--color-accent-hover);
+}
+
+.primary:disabled {
+    background: var(--color-border);
+    border-color: var(--color-border);
+    /* `--color-text-disabled-strong` is ~1 step off `--color-border` in
+       both themes (#b9b0a0 / #4d473b vs #c9bfae / #4a4438) so it
+       disappears into this disabled background. Use the muted-alt
+       grey, which carries enough contrast on both surfaces to stay
+       readable while still reading as "inactive". */
+    color: var(--color-text-muted-alt);
+}
+
+/* ─── Secondary / neutral ───────────────────────────────────────────── */
+
+/* Neutral surface, 1px border, primary text. Used for the toolbar's
+   dropdown triggers ("File", "View", "Playback"), the "Cancel" /
+   modal-secondary actions, and the empty-state Recent button. */
+.secondary {
+    composes: reset;
+    composes: bodyEmphasis from '../../typography.module.css';
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-base);
+    color: var(--color-text);
+}
+
+.secondary:hover:not(:disabled) {
+    background: var(--color-bg-hover);
+    border-color: var(--color-border-strong);
+}
+
+.secondary:disabled {
+    color: var(--color-text-disabled-strong);
+}
+
+/* ─── Danger / destructive ──────────────────────────────────────────── */
+
+/* Like `.secondary`, but the text and the hover state lean on the
+   error palette to flag a stop/abort action (cancel an in-flight
+   transcribe, remove a track, etc.). Same padding as `.primary` /
+   `.secondary` so all three variants render at identical height. */
+.danger {
+    composes: reset;
+    composes: bodyEmphasis from '../../typography.module.css';
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-base);
+    color: var(--color-error);
+}
+
+.danger:hover:not(:disabled) {
+    background: var(--color-error-bg);
+    border-color: var(--color-error);
+}
+
+.danger:focus-visible {
+    outline-color: var(--color-error);
+}
+
+/* ─── Ghost / row item ──────────────────────────────────────────────── */
+
+/* Flush, no-border row used for dropdown items, recent-transcription
+   rows, the modal close affordance, and similar in-context controls
+   that should disappear into their surface until hovered. */
+.ghost {
+    composes: reset;
+    composes: bodyMd from '../../typography.module.css';
+    display: inline-flex;
+    align-items: center;
+    text-align: left;
+    padding: 7px 10px;
+    /* `.reset` no longer kills the UA-default border; ghost is the
+       canonical "no-border button" so it sets it explicitly. */
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--color-text);
+}
+
+.ghost:hover:not(:disabled) {
+    background: var(--color-bg-hover);
+}
+
+.ghost:disabled {
+    color: var(--color-text-disabled);
+    background: transparent;
+}
+
+/* ─── Modal close ───────────────────────────────────────────────────── */
+
+/* Headerless square close affordance at the top-right of every modal.
+   Hosts a lucide X icon; composes `reset` (not `ghost`) because the
+   chrome differs: no border-radius hover background, no body-md
+   text, just a tap target around the icon. inline-flex centers the
+   SVG vertically against the modal title's baseline. */
+.close {
+    composes: reset;
+    /* `.reset` no longer kills the UA defaults that an unstyled
+       <button> would inherit; declare the chrome explicitly. */
+    border: 0;
+    background: transparent;
+    padding: 0 6px;
+    color: var(--color-text-muted-alt);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
+.close:hover {
+    color: var(--color-text-strong);
+}
+
+/* ─── Size modifiers ────────────────────────────────────────────────── */
+
+/* Larger CTA tier, used on the empty-state action row where the
+   "Open .jot file" / "Open recent" buttons need to read as the
+   page's primary call-to-action. Consumers compose the color variant
+   AND `sizeLg` together; this class is defined AFTER the color
+   variants on purpose so that, when both end up in the consumer's
+   compose list, `.sizeLg`'s padding wins the cascade tie (later rule
+   in source order beats earlier rule at equal specificity).
+
+   Vertical padding scales the button's height (matched across both
+   variants); horizontal padding is kept generous so a short label
+   like "Open .jot file" still has breathing room.
+
+   ```css
+   .emptyStatePrimary {
+       composes: primary sizeLg from '...button.module.css';
+   }
+   ``` */
+.sizeLg {
+    padding: 8px 20px;
+}

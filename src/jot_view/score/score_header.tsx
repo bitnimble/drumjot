@@ -1,5 +1,7 @@
 import { observer } from 'mobx-react-lite';
-import { RenderedJot } from 'src/jot/resolved_jot';
+import { Jot } from 'src/schema/dsl/dsl';
+import type { TempoPresenter } from 'src/jot_view/playback/tempo_presenter';
+import type { PaletteStore } from 'src/jot_view/palette/palette_store';
 import sharedStyles from '../jot_view.module.css';
 
 /**
@@ -11,8 +13,8 @@ import sharedStyles from '../jot_view.module.css';
  * returns `undefined`, which makes the call site fall back to the
  * title alone.
  */
-export function extractArtist(jot: RenderedJot): string | undefined {
-  const meta = jot.globalMetadata as Record<string, unknown>;
+export function extractArtist(source: Jot): string | undefined {
+  const meta = source.globalMetadata as Record<string, unknown>;
   const direct = meta.artist;
   if (typeof direct === 'string' && direct.trim() !== '') return direct.trim();
   const rlrr = meta.rlrr as { recordingMetadata?: { artist?: unknown } } | undefined;
@@ -28,19 +30,19 @@ export function extractArtist(jot: RenderedJot): string | undefined {
  * alone. Empty when the jot has neither title nor artist; the caller
  * shows the "Untitled jot" placeholder in that case.
  */
-export function formatDisplayTitle(jot: RenderedJot): string {
-  const title = jot.title.trim();
-  const artist = extractArtist(jot);
+export function formatDisplayTitle(source: Jot): string {
+  const title = source.title.trim();
+  const artist = extractArtist(source);
   if (title && artist) return `${title} - ${artist}`;
   if (title) return title;
   if (artist) return artist;
   return '';
 }
 
-export function formatSubtitle(jot: RenderedJot): string {
+export function formatSubtitle(source: Jot, tempo: TempoPresenter): string {
   const parts: string[] = [];
-  const { bpm: globalBpm, time: globalTime, vol } = jot.globalMetadata;
-  const { dominantBpm, dominantTime } = jot.dominantBpmAndTime;
+  const { bpm: globalBpm, time: globalTime, vol } = source.globalMetadata;
+  const { dominantBpm, dominantTime } = tempo.dominantBpmAndTime;
 
   if (dominantBpm !== undefined) parts.push(`${dominantBpm} bpm`);
   else if (typeof globalBpm === 'number') parts.push(`${globalBpm} bpm`);
@@ -58,16 +60,25 @@ export function formatSubtitle(jot: RenderedJot): string {
  * pitches across all voices (in first-seen order, cached on the jot as
  * `legendPitches`).
  */
-export const Legend = observer(({ jot }: { jot: RenderedJot }) => {
-  const entries = jot.legendPitches;
+export const Legend = observer(({ palette }: { palette: PaletteStore }) => {
+  const entries = palette.legend;
   if (entries.length === 0) return null;
   return (
     <div className={sharedStyles.legend}>
       {entries.map(([pitch, info]) => (
-        <span key={pitch} className={sharedStyles.legendChip}>
-          <span className={sharedStyles.legendSwatch} style={{ background: info.color }} />
+        <span
+          key={pitch}
+          className={sharedStyles.legendChip}
+          data-testid="legend-chip"
+          data-pitch={pitch}
+        >
+          <span
+            className={sharedStyles.legendSwatch}
+            style={{ background: info.color }}
+            data-testid="legend-swatch"
+          />
           <strong>{pitch}</strong>
-          {info.name ? <span>{info.name}</span> : null}
+          {info.name ? <span data-testid="legend-name">{info.name}</span> : null}
         </span>
       ))}
     </div>

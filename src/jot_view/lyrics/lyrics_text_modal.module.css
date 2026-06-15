@@ -3,11 +3,11 @@
    body (textarea) and footer (file pick + Load) differ. */
 
 .modalBackdrop {
-    composes: backdrop from '../components/modal.module.css';
+    composes: backdrop from '../../ui/modal/modal.module.css';
 }
 
 .modalPanel {
-    composes: panel from '../components/modal.module.css';
+    composes: panel from '../../ui/modal/modal.module.css';
     width: min(640px, 100%);
     /* `dvh` recomputes against the visible viewport so the modal
        doesn't extend past a visible mobile address bar; `vh`
@@ -17,23 +17,23 @@
 }
 
 .modalHeader {
-    composes: header from '../components/modal.module.css';
+    composes: header from '../../ui/modal/modal.module.css';
 }
 
 .modalTitle {
-    composes: title from '../components/modal.module.css';
+    composes: title from '../../ui/modal/modal.module.css';
 }
 
 .modalClose {
-    composes: close from '../components/button.module.css';
+    composes: close from '../../ui/button/button.module.css';
 }
 
 .modalBody {
-    composes: body from '../components/modal.module.css';
+    composes: body from '../../ui/modal/modal.module.css';
 }
 
 .textarea {
-    composes: fieldBlock from '../components/form.module.css';
+    composes: fieldBlock from '../../ui/form/form.module.css';
     width: 100%;
     min-height: 280px;
     resize: vertical;
@@ -100,14 +100,14 @@
 }
 
 .secondaryButton {
-    composes: secondary from '../components/button.module.css';
+    composes: secondary from '../../ui/button/button.module.css';
     /* Modal footers prefer the tighter rounding of the input fields
        next to them, so step down from the default `.secondary` radius. */
     border-radius: var(--radius-sm);
 }
 
 .primaryButton {
-    composes: primary from '../components/button.module.css';
+    composes: primary from '../../ui/button/button.module.css';
     border-radius: var(--radius-sm);
 }
 

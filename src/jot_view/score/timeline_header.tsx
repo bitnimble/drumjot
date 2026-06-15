@@ -1,8 +1,8 @@
 import { observer } from 'mobx-react-lite';
 import React from 'react';
-import { RenderedJot } from 'src/jot/resolved_jot';
 import { jotPlayer } from 'src/jot_view/playback/player';
-import { GutterResizeHandle } from '../components/gutter_resize_handle';
+import { GutterResizeHandle } from 'src/ui/gutter_resize_handle/gutter_resize_handle';
+import { StructuralContext, TempoContext } from '../jot_view_contexts';
 import { ViewportStoreContext } from '../viewport/viewport_contexts';
 import { Playhead } from '../playback/playhead';
 import styles from './score.module.css';
@@ -24,36 +24,36 @@ import { seekFromClick } from './seek';
  */
 export const TimelineHeader = observer(
   ({
-    jot,
     onSeek,
     onResizeGutterStart,
   }: {
-    jot: RenderedJot;
     onSeek: (x: number) => void;
     /** Pointer-down handler for the gutter resize affordance rendered
      * on the right edge of this header's gutter. */
     onResizeGutterStart: (e: React.PointerEvent<HTMLDivElement>) => void;
   }) => {
-    // Reading the structural cache (not `jot.resolved`) keeps this
-    // header stable across zoom; the per-tick `--bar-start-beat` is
-    // set inline, and CSS calc() multiplies by the score-root's
-    // `--px-per-beat` to get the final pixel position. Without this
-    // the header re-rendered every wheel tick, re-creating 100+ tick
-    // marks just to reposition each by one calc-arithmetic step.
-    const voice = jot.primaryStructuralVoice;
-    if (!voice || voice.bars.length === 0) return null;
+    const structural = React.useContext(StructuralContext);
+    const tempo = React.useContext(TempoContext);
+    // Reading the structural voices (not pixels) keeps this header stable
+    // across zoom; the per-tick `--bar-start-beat` is set inline, and CSS
+    // calc() multiplies by the score-root's `--px-per-beat` to get the
+    // final pixel position. Without this the header re-rendered every wheel
+    // tick, re-creating 100+ tick marks just to reposition each by one
+    // calc-arithmetic step.
+    const voice = structural?.primaryVoice;
+    if (!structural || !tempo || !voice || voice.bars.length === 0) return null;
 
     const liveTimeline = jotPlayer.timeline;
     const timeline =
-      liveTimeline.bars.length > 0 && liveTimeline.rendered === jot
+      liveTimeline.bars.length > 0 && liveTimeline.rendered === structural
         ? liveTimeline
-        : jot.timeline;
+        : tempo.timeline;
 
     // Lead-in is materialised as negative-indexed bars by
     // `structureForVoice`, so a single sum over `bar.beats` covers
     // both pre-drum and drum content with no separate chrome offset.
     // Cached on the jot (`voiceBeats`) so all observers share one walk.
-    const voiceBeats = jot.voiceBeats;
+    const voiceBeats = structural.voiceBeats;
 
     // Effective tempo at each bar's downbeat, derived from the shared
     // tempo timeline. Mid-bar tempo changes inside a bar aren't shown
@@ -62,7 +62,7 @@ export const TimelineHeader = observer(
     // `barTempos` computed avoids rebuilding the layout on every
     // header render (the tempo timeline is structure-only input, so a
     // zoom tick doesn't invalidate it).
-    const tempos = jot.barTempos;
+    const tempos = tempo.barTempos;
 
     // Full (non-windowed) walk to build the per-bar tick descriptors.
     // The time-sig / bpm "changed since the previous bar" flags depend on
@@ -82,8 +82,8 @@ export const TimelineHeader = observer(
       const startBeat = cumBeats;
       cumBeats += bar.beats;
       const showTimeSig =
-        !prevTime || bar.time.count !== prevTime.count || bar.time.unit !== prevTime.unit;
-      prevTime = bar.time;
+        !prevTime || bar.tsCount !== prevTime.count || bar.tsUnit !== prevTime.unit;
+      prevTime = { count: bar.tsCount, unit: bar.tsUnit };
       // Walk the bar's tempo segments and emit a label whenever the
       // bpm changes (relative to the running bpm). The label at
       // segment.startBeat=0 sits in the bar tick's top row alongside
@@ -108,8 +108,8 @@ export const TimelineHeader = observer(
         beats: bar.beats,
         timeSec,
         showTimeSig,
-        timeCount: bar.time.count,
-        timeUnit: bar.time.unit,
+        timeCount: bar.tsCount,
+        timeUnit: bar.tsUnit,
         downbeatBpm,
         midBpmChanges,
       });
@@ -126,7 +126,7 @@ export const TimelineHeader = observer(
           style={
             {
               ['--voice-beats' as string]: voiceBeats,
-              ['--bars-row-width' as string]: barsRowWidthSeed(jot, voiceBeats),
+              ['--bars-row-width' as string]: barsRowWidthSeed(structural, voiceBeats),
             } as React.CSSProperties
           }
           onClick={(e) => seekFromClick(e, onSeek)}

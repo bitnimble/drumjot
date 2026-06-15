@@ -86,7 +86,7 @@
    automatically. The `role="status"` is on the JSX side; this is purely
    the visual. */
 .lyricsAlignSpinner {
-    composes: spinner from '../components/spinner.module.css';
+    composes: spinner from '../../ui/spinner/spinner.module.css';
     flex: 0 0 auto;
     width: 10px;
     height: 10px;

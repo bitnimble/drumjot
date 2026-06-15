@@ -4,12 +4,12 @@ import React from 'react';
 import { NotePosition } from 'src/jot_view/score/note_position';
 import { NoteProvenanceEntry } from 'src/jot_view/provenance/debug_zip';
 import { DEFAULT_GRID_DIVISION, gridDivisionFor } from 'src/grid/grid';
-import { StructuralBar, StructuralNote } from 'src/jot/resolved_jot';
+import type { StructBar, StructNote } from 'src/jot_view/structure/structure_store';
 import { TICKS_PER_BEAT } from 'src/midi/to_midi';
 import { AudioTrack } from 'src/jot_view/playback/audio_tracks';
 import { jotPlayer } from 'src/jot_view/playback/player';
 import { waveformWorker } from 'src/jot_view/playback/waveform_worker_client';
-import { BarTimingsContext, RenderedJotContext } from '../document/document_contexts';
+import { BarTimingsContext, StructuralContext } from '../jot_view_contexts';
 import { NoteProvenanceContextValue } from '../provenance/provenance_contexts';
 import styles from './score.module.css';
 import { WAVEFORM_PAINT_COLOR } from '../utils/waveform_color';
@@ -26,8 +26,8 @@ import { WAVEFORM_PAINT_COLOR } from '../utils/waveform_color';
  * rendered note) and the panel skips the rendered/snap rows.
  */
 type RenderedNoteContext = {
-  note: StructuralNote;
-  bar: StructuralBar;
+  note: StructNote;
+  bar: StructBar;
   provenance: NoteProvenanceContextValue;
 };
 
@@ -42,9 +42,9 @@ type RenderedNoteContext = {
  * `1 + note.beat × (time.count / bar.beats)` — equals
  * `1 + note.beat` in 4/4, scales correctly for 6/8, 7/8, etc.
  */
-function renderedBeatInBar(note: StructuralNote, bar: StructuralBar): number {
+function renderedBeatInBar(note: StructNote, bar: StructBar): number {
   if (bar.beats <= 0) return 1;
-  return 1 + (note.beat / bar.beats) * bar.time.count;
+  return 1 + (note.beat / bar.beats) * bar.tsCount;
 }
 
 /** Grid step in MIDI ticks for a given grid division, matching
@@ -336,7 +336,7 @@ const OnsetTimingVisualization = observer(
     const barBoundaries: { pct: number; label: number | null }[] = [];
     const gridLines: number[] = [];
     if (timeline.rendered) {
-      const structBars = timeline.rendered.structure.voices[0]?.bars ?? [];
+      const structBars = timeline.rendered.voices[0]?.bars ?? [];
       for (let i = 0; i < timeline.bars.length; i++) {
         const bar = timeline.bars[i]!;
         const structBar = structBars[i];
@@ -348,13 +348,13 @@ const OnsetTimingVisualization = observer(
         if (
           !structBar ||
           bar.durationSec <= 0 ||
-          structBar.time.unit <= 0 ||
+          structBar.tsUnit <= 0 ||
           barEnd < windowStart ||
           barStart > windowEnd
         ) {
           continue;
         }
-        const slots = Math.round((structBar.time.count * gridDivision) / structBar.time.unit);
+        const slots = Math.round((structBar.tsCount * gridDivision) / structBar.tsUnit);
         if (slots <= 0) continue;
         const slotDur = bar.durationSec / slots;
         // j starts at 1 so the bar-boundary line (j=0) isn't doubled up.
@@ -595,14 +595,14 @@ export const NoteProvenanceDetails = observer(
     // player's timeline is `EMPTY_TIMELINE`, but the math doesn't actually
     // need any playback state.
     const barTimings = React.useContext(BarTimingsContext);
-    // The current rendered jot — used to read `effectiveDrumOffsetBeats`,
+    // The current song's structure, used to read `effectiveDrumOffsetBeats`,
     // the user-applied Beat-offset slider value, as a labelled stage in
     // the detected → final timing-drift chain.
-    const renderedJot = React.useContext(RenderedJotContext);
+    const structural = React.useContext(StructuralContext);
     // Grid density the jot was produced at; drives every slot readout in
-    // this panel. Falls back to the default when no rendered jot is in
+    // this panel. Falls back to the default when no structure is in
     // context (filtered-ghost rendering).
-    const gridDivision = renderedJot ? gridDivisionFor(renderedJot) : DEFAULT_GRID_DIVISION;
+    const gridDivision = structural ? gridDivisionFor(structural.source) : DEFAULT_GRID_DIVISION;
     const slotsPerQuarterNote = gridDivision / 4;
 
     // Two coordinate frames are tracked here:
@@ -627,7 +627,7 @@ export const NoteProvenanceDetails = observer(
     let displayedBarIndex: number | undefined;
     let currentQuantizedBeat: number | undefined;
     let currentSecPerQuarterNote: number | undefined;
-    let originalBar: StructuralBar | undefined;
+    let originalBar: StructBar | undefined;
     let originalBarIndex: number | undefined;
     let originalSecPerQuarterNote: number | undefined;
     let originalQuantizedBeat: number | undefined;
@@ -667,7 +667,7 @@ export const NoteProvenanceDetails = observer(
       // `provenance.leadBars`, with or without the inflation. `applyDrumOffsetStructure`
       // shallow-clones bars and preserves both array order and `index`,
       // so this lookup is also drum-offset-invariant.
-      const structBars = renderedJot?.structure.voices[0]?.bars;
+      const structBars = structural?.voices[0]?.bars;
       const originalBarArrayPos = rendered.provenance.leadBars + entry.bar;
       originalBar =
         structBars && originalBarArrayPos >= 0 && originalBarArrayPos < structBars.length
@@ -697,7 +697,7 @@ export const NoteProvenanceDetails = observer(
         const postSnapTick = Math.round(entry.tick / gridTicks) * gridTicks;
         const snapDeltaQn = (postSnapTick - entry.tick) / TICKS_PER_BEAT;
         // qn → ts-beats: 1 ts-beat = 4/unit qn, so 1 qn = unit/4 ts-beats.
-        snapBeats = snapDeltaQn * (originalBar.time.unit / 4);
+        snapBeats = snapDeltaQn * (originalBar.tsUnit / 4);
         snapSec = snapDeltaQn * originalSecPerQuarterNote;
         snapMs = snapSec * 1000;
         // Post-Python-quantise position, sourced from the provenance
@@ -715,7 +715,7 @@ export const NoteProvenanceDetails = observer(
         const originalBarAudioStart = originalBarTiming.startSec + jotPlayer.drumsT0Sec;
         const intraBarQn =
           (quantSourceSec - originalBarAudioStart) / originalSecPerQuarterNote;
-        originalQuantizedBeat = 1 + intraBarQn * (originalBar.time.unit / 4);
+        originalQuantizedBeat = 1 + intraBarQn * (originalBar.tsUnit / 4);
         originalQuantizedSec = quantSourceSec;
       }
 
@@ -723,7 +723,7 @@ export const NoteProvenanceDetails = observer(
       // plays now after the slider has applied its shift.
       if (currentBarTiming && currentSecPerQuarterNote !== undefined) {
         const intra =
-          (currentQuantizedBeat - 1) * (4 / rendered.bar.time.unit) * currentSecPerQuarterNote;
+          (currentQuantizedBeat - 1) * (4 / rendered.bar.tsUnit) * currentSecPerQuarterNote;
         finalSec = currentBarTiming.startSec + intra + jotPlayer.drumsT0Sec;
       }
 
@@ -749,14 +749,14 @@ export const NoteProvenanceDetails = observer(
         // Where the detector says `originalBar` starts in audio time:
         // back out the intra-bar offset from the detected onset.
         const intraSecFromDetected =
-          (entry.beat_in_bar - 1) * (4 / originalBar.time.unit) * originalSecPerQuarterNote;
+          (entry.beat_in_bar - 1) * (4 / originalBar.tsUnit) * originalSecPerQuarterNote;
         const transcriberBarAudioTime = entry.detected_time_sec - intraSecFromDetected;
         // Where the JOT places that same bar in audio time.
         const jotBarAudioTime = originalBarTiming.startSec + jotPlayer.drumsT0Sec;
         const drift = jotBarAudioTime - transcriberBarAudioTime;
         if (Math.abs(drift) > 1e-6) {
           anchorDriftSec = drift;
-          anchorDriftBeats = (drift / originalSecPerQuarterNote) * (originalBar.time.unit / 4);
+          anchorDriftBeats = (drift / originalSecPerQuarterNote) * (originalBar.tsUnit / 4);
         }
       }
 
@@ -768,7 +768,7 @@ export const NoteProvenanceDetails = observer(
       // note's new intra-bar position is interpreted under. Cross-bar
       // shifts under a per-bar bpm change are approximate; the residual
       // surfaces in the Unknown-drift row.
-      const offsetQn = renderedJot?.effectiveDrumOffsetBeats;
+      const offsetQn = structural?.effectiveDrumOffsetBeats;
       if (typeof offsetQn === 'number' && Math.abs(offsetQn) > 1e-9) {
         drumOffsetBeats = offsetQn;
         if (currentSecPerQuarterNote !== undefined) {
@@ -865,7 +865,7 @@ export const NoteProvenanceDetails = observer(
       originalBar !== undefined &&
       originalSecPerQuarterNote !== undefined &&
       originalSecPerQuarterNote > 0
-        ? (sec / originalSecPerQuarterNote) * (originalBar.time.unit / 4)
+        ? (sec / originalSecPerQuarterNote) * (originalBar.tsUnit / 4)
         : undefined;
     // Integer slot count → audio seconds in the original bar's frame.
     // 1 slot = 1/(gridDivision/4) qn, so `slots / slotsPerQn × secPerQn`.
@@ -876,7 +876,7 @@ export const NoteProvenanceDetails = observer(
     // ts-beats → slot count, using `gridDivision / unit` slots-per-ts-beat.
     const origBeatsToSlots = (beats: number | undefined): number | undefined =>
       beats !== undefined && originalBar !== undefined
-        ? (beats * gridDivision) / originalBar.time.unit
+        ? (beats * gridDivision) / originalBar.tsUnit
         : undefined;
 
     // ─── Bar-grid frame shift attribution ───
@@ -1287,7 +1287,7 @@ function renderAcousticSection(entry: NoteProvenanceEntry): React.ReactNode {
 type DebugStageSectionsProps = {
   entry: NoteProvenanceEntry;
   rendered: RenderedNoteContext | undefined;
-  originalBar: StructuralBar | undefined;
+  originalBar: StructBar | undefined;
   originalBarIndex: number | undefined;
   originalQuantizedBeat: number | undefined;
   originalQuantizedSec: number | undefined;
@@ -1346,9 +1346,7 @@ function renderDebugStageSections(p: DebugStageSectionsProps): React.ReactNode {
     gridDivision, slotsPerQuarterNote, secToOrigBeats, origBeatsToSlots,
     renderSignedMs, renderSignedBeats, renderSignedSec, formatSlots,
   } = p;
-  const velocity = (
-    rendered?.note.source.metadata as { midi?: { velocity?: number } } | undefined
-  )?.midi?.velocity;
+  const velocity = rendered?.note.velocity;
 
   // Helper: render a `<dt>/<dd>` pair displaying a per-stage shift in
   // {beats, slots, ms} triple form. The `slots` annotation is omitted
@@ -1392,7 +1390,9 @@ function renderDebugStageSections(p: DebugStageSectionsProps): React.ReactNode {
               barIndex: originalBarIndex ?? entry.bar + 1,
               beatInBar: entry.beat_in_bar,
               slotsPerQuarter: slotsPerQuarterNote,
-              timeSig: originalBar?.time,
+              timeSig: originalBar
+                ? { count: originalBar.tsCount, unit: originalBar.tsUnit }
+                : undefined,
               audioSec: entry.detected_time_sec,
             }).toString()}
           </dd>
@@ -1536,7 +1536,9 @@ function renderDebugStageSections(p: DebugStageSectionsProps): React.ReactNode {
                     barIndex: originalBarIndex,
                     beatInBar: originalQuantizedBeat,
                     slotsPerQuarter: slotsPerQuarterNote,
-                    timeSig: originalBar?.time,
+                    timeSig: originalBar
+                ? { count: originalBar.tsCount, unit: originalBar.tsUnit }
+                : undefined,
                     audioSec: originalQuantizedSec,
                   }).toString()}
                 </dd>
@@ -1609,9 +1611,11 @@ function renderDebugStageSections(p: DebugStageSectionsProps): React.ReactNode {
                   barIndex: displayedBarIndex,
                   beatInBar: currentQuantizedBeat,
                   slotsPerQuarter: slotsPerQuarterNote,
-                  timeSig: rendered?.bar.time,
+                  timeSig: rendered
+                    ? { count: rendered.bar.tsCount, unit: rendered.bar.tsUnit }
+                    : undefined,
                   audioSec: finalSec,
-                  offsetMs: rendered?.note.source.offset,
+                  offsetMs: rendered?.note.offsetMs,
                 }).toString()}
               </dd>
             </dl>

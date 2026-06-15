@@ -21,8 +21,9 @@ into `bun run build`) catches.
   `labelSm`, `metaLabel`, `metaCaption`, `readout`, `readoutSm`,
   `subtle`, `mono`. Each bundles font-size + weight + letter-spacing +
   transform + line-height + family for its use case in one place.
-- **[src/jot_view/components/](../src/jot_view/components/)**, shared
-  React UI primitives + their module CSS:
+- **[src/ui/](../src/ui/)**, shared React UI primitives + their module
+  CSS, one folder per component (`src/ui/<name>/<name>.tsx` +
+  `<name>.module.css`; stories in `src/ui/stories/`):
   - `button.module.css`, `<button>` reset + variants (`reset`,
     `primary`, `secondary`, `danger`, `ghost`, `close`). Every
     page-level button composes one of these.
@@ -114,5 +115,5 @@ conventions like `composes:` and camelCase class names).
 2. *Typography use case* appearing in ≥2 places → add a class to
    `typography.module.css`, `composes:` it.
 3. *React UI widget* used by ≥2 pages → drop it under
-   `src/jot_view/components/`.
+   `src/ui/<name>/` (its own folder).
 4. Run `bun run lint:design` before committing.

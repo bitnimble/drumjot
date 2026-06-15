@@ -1,0 +1,60 @@
+/* Tab strip used today by the Transcribe dropdown to switch between
+   "New" and "Resume previous" flows while keeping the shared options
+   (Beat input, Model) above the strip. Two-tab default but the
+   component is generic so any DropdownButton panel can adopt it. */
+
+.tabs {
+    display: flex;
+    width: 100%;
+    border-bottom: 1px solid var(--color-border);
+    gap: 0;
+}
+
+.tab {
+    composes: reset from '../button/button.module.css';
+    composes: bodyMd from '../../typography.module.css';
+    flex: 1 1 0;
+    padding: 6px 12px;
+    /* `.reset` is additive only (see the docblock in button.module.css);
+       it leaves the UA-default `<button>` border / background untouched,
+       so without these explicit resets every tab paints its native grey
+       border and beige background inside the strip. Wipe both, then the
+       `border-bottom` below restores the underline track. */
+    border: 0;
+    background: transparent;
+    color: var(--color-text-muted);
+    /* Underline accent on the active tab; on inactive tabs the bar is
+       transparent but still claims the space so toggling active doesn't
+       reflow the row by 2px. */
+    border-bottom: 2px solid transparent;
+    /* Pull the underline down so it sits flush with the strip's
+       1px border instead of leaving a gap above it. */
+    margin-bottom: -1px;
+    text-align: center;
+}
+
+.tab:hover:not(:disabled) {
+    color: var(--color-text);
+}
+
+.tab:focus-visible {
+    outline-offset: -2px;
+    border-radius: var(--radius-sm);
+}
+
+.tab:disabled {
+    color: var(--color-text-disabled);
+}
+
+.tabActive {
+    /* Bold underlined active state; bodyMd doesn't include a weight, so
+       this override is intentional rather than a typography redundancy. */
+    color: var(--color-text);
+    border-bottom-color: var(--color-accent);
+    /* stylelint-disable-next-line property-disallowed-list -- weight bump on top of bodyMd to mark the active tab; not a standalone use case. */
+    font-weight: 600;
+}
+
+.tabActive:hover {
+    color: var(--color-text);
+}

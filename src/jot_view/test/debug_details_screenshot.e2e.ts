@@ -19,6 +19,10 @@ test('captures the debug-details timing visualization', async ({ page }) => {
   // left when the selected note sits a few hundred px from the gutter.
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.goto('/');
+  // Boot is async (reactive-doc WASM init); wait for the debug global.
+  await page.waitForFunction(
+    () => typeof (window as unknown as { drumjot?: { loadTestJot?: unknown } }).drumjot?.loadTestJot === 'function'
+  );
   await page.evaluate(() =>
     (window as unknown as { drumjot: { loadTestJot(): void } }).drumjot.loadTestJot()
   );
@@ -47,15 +51,15 @@ test('captures the debug-details timing visualization', async ({ page }) => {
   // four quantise passes, and a MIDI snap residual.
   await page.evaluate(() => {
     const provenance = (window as any).drumjot.provenance;
-    const jot = (window as any).drumjot.document.currentJot;
-    if (!jot) throw new Error('no rendered jot');
-    // Walk the structural cache: voices → bars → tracks[pitch] → notes,
-    // matching how the renderer locates notes (see `src/jot.ts`).
+    const structural = (window as any).drumjot.jotViewStore.structural;
+    if (!structural) throw new Error('no loaded jot');
+    // Walk the structure store's Struct* voices: voices → bars →
+    // tracks[pitch] → notes, matching how the renderer locates notes.
     // Pick a hi-hat note well past the gutter so the centered popover
     // doesn't clip on the left edge of the viewport. Falls back to the
     // first available `h` note if there aren't enough.
     const hiHats: any[] = [];
-    for (const voice of jot.structure.voices) {
+    for (const voice of structural.voices) {
       for (const bar of voice.bars) {
         const track = bar.tracks?.h;
         if (!track) continue;
@@ -64,11 +68,10 @@ test('captures the debug-details timing visualization', async ({ page }) => {
     }
     if (hiHats.length === 0) throw new Error('no hi-hat note found in current jot');
     const targetNote = hiHats[Math.min(6, hiHats.length - 1)];
-    const sourceNote = targetNote.source;
-    sourceNote.metadata = {
-      ...(sourceNote.metadata ?? {}),
-      midi: { ...(sourceNote.metadata?.midi ?? {}), tick: 100 },
-    };
+    // The renderer keys provenance off the note's flat MIDI tick; seed it
+    // on the cached Struct note (the `voices` computed is stable, so the
+    // mutation survives to the provenance-triggered re-render).
+    targetNote.midiTick = 100;
 
     provenance.noteProvenance = {
       format: 3,

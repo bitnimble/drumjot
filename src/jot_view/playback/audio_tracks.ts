@@ -41,7 +41,7 @@ import {
   MixerContext,
   resolveAudioInheritedColor,
   Track,
-} from 'src/tracks/tracks';
+} from 'src/jot_view/tracks/tracks';
 import { createStretchNode, preloadStretch, StretchNode } from './stretch_node';
 
 /**

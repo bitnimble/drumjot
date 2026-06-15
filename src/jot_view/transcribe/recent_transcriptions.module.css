@@ -19,7 +19,7 @@
    empty state. Composes `sizeLg` so the action row's two buttons
    line up at the same height. */
 .triggerCta {
-    composes: secondary sizeLg from '../components/button.module.css';
+    composes: secondary sizeLg from '../../ui/button/button.module.css';
     justify-content: space-between;
     gap: 8px;
 }
@@ -28,7 +28,7 @@
    ghost-row treatment as `.dropdownItem` so it visually nests with the
    rows above and below it. */
 .triggerMenu {
-    composes: ghost from '../components/button.module.css';
+    composes: ghost from '../../ui/button/button.module.css';
     justify-content: space-between;
     gap: 12px;
     width: 100%;
@@ -50,7 +50,7 @@
 }
 
 .panel {
-    composes: popoverPanel from '../components/dropdown.module.css';
+    composes: popoverPanel from '../../ui/dropdown/dropdown.module.css';
     position: absolute;
     z-index: 40;
     gap: 4px;
@@ -96,7 +96,7 @@
        padding that Vite emits AFTER any consumer override, which
        would crush the 22x22 box's content area to 0 and clip the
        refresh icon. */
-    composes: iconBox from '../components/icon_button.module.css';
+    composes: iconBox from '../../ui/icon_button/icon_button.module.css';
     width: 22px;
     height: 22px;
     color: var(--color-text-muted);
@@ -112,7 +112,7 @@
 }
 
 .item {
-    composes: ghost from '../components/button.module.css';
+    composes: ghost from '../../ui/button/button.module.css';
     /* Long filenames are common; ellipsis keeps rows on one line so the
        panel doesn't stretch to fit the longest entry. The full label
        remains available via the title tooltip. */
@@ -137,5 +137,5 @@
 }
 
 .spinner {
-    composes: statusPillSpinner from '../toolbar/toolbar.module.css';
+    composes: statusPillSpinner from '../../toolbar/toolbar.module.css';
 }

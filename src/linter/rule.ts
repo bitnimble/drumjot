@@ -7,7 +7,7 @@
  * resolved notes with their effective instrument kinds and source ranges,
  * etc.) so individual rules don't repeat the AST walk.
  */
-import { Bar, Element, Group, Jot, Modifier, Note, SourceRange, Voice } from 'src/dsl/dsl';
+import { Bar, Element, Group, Jot, Modifier, Note, SourceRange, Voice } from 'src/schema/dsl/dsl';
 import {
   DrumInstrumentKind,
   LimbCategory,

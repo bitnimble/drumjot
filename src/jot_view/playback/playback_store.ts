@@ -2,7 +2,7 @@ import { makeAutoObservable } from 'mobx';
 import type { MixerStore } from '../mixer/mixer_store';
 import { PASSTHROUGH_FILTER, type PlayerFilter } from './player';
 import { PASSTHROUGH_AUDIO_TRACK_FILTER, type AudioTrackFilter } from './audio_tracks';
-import { DocumentStore } from '../document/document_store';
+import { JotViewStore } from '../jot_view_store';
 
 /**
  * Transport / playhead-follow UI state, plus the engine-facing
@@ -46,20 +46,20 @@ export class PlaybackStore {
   followDisabledIsTransient: boolean = false;
 
   /** The active jot, for the drum-offset readout. */
-  readonly document: DocumentStore;
+  readonly jotViewStore: JotViewStore;
   /** Authoritative mute/solo/volume source for the filter computeds.
    *  Undefined in stories / a standalone engine → PASSTHROUGH filters. */
   readonly mixer: MixerStore | undefined;
 
-  constructor(document: DocumentStore, mixer?: MixerStore) {
-    this.document = document;
+  constructor(jotViewStore: JotViewStore, mixer?: MixerStore) {
+    this.jotViewStore = jotViewStore;
     this.mixer = mixer;
-    makeAutoObservable(this, { document: false, mixer: false });
+    makeAutoObservable(this, { jotViewStore: false, mixer: false });
   }
 
   /** Current beat-grid offset (quarter-note beats) on the loaded jot. */
   get drumOffsetBeats(): number {
-    return this.document.currentJot?.drumOffsetBeats ?? 0;
+    return this.jotViewStore.structural?.drumOffsetBeats ?? 0;
   }
 
   /**

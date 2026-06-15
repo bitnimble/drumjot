@@ -1,5 +1,5 @@
 import { makeAutoObservable, runInAction } from 'mobx';
-import { ParseError } from 'src/parser/errors';
+import { ParseError } from 'src/schema/dsl/parser/errors';
 import {
   BeatInput,
   DrumSeparator,
@@ -9,10 +9,10 @@ import {
   TranscribeProgress,
   TranscribeStage,
 } from 'src/jot_view/transcribe/transcriber';
-import { transcribeSuccessToastMessage } from '../toasts/toasts_messages';
-import { toastStore } from '../toasts/toasts';
+import { transcribeSuccessToastMessage } from '../../ui/toasts/toasts_messages';
+import { toastStore } from '../../ui/toasts/toasts';
 import { TranscribeStore } from './transcribe_store';
-import { DocumentPresenter } from '../document/document_presenter';
+import { JotViewPresenter } from '../jot_view_presenter';
 
 /**
  * Dependencies the transcribe presenter orchestrates over.
@@ -22,14 +22,14 @@ export type TranscribePresenterDeps = {
   /** Sibling presenter: the transcribe flow auto-loads its result bundle
    *  (score + audio + provenance) through the shared document loader, and
    *  the recent-runs picker reuses the loading overlay. */
-  documentPresenter: DocumentPresenter;
+  jotViewPresenter: JotViewPresenter;
 };
 
 /**
  * Transcribe orchestration for the jot viewer: the `/transcribe` and
  * `/resume` flows, the streamed-progress pill, the recent-runs picker,
  * and the transcribe form options. The post-run artifact load (score,
- * audio tracks, note provenance) is delegated to {@link DocumentPresenter}.
+ * audio tracks, note provenance) is delegated to {@link JotViewPresenter}.
  *
  * Formerly the catch-all `JotViewStore` orchestration; the per-domain
  * presenters (document / mixer / playback / provenance / lyrics /
@@ -46,15 +46,15 @@ export class TranscribePresenter {
   transcribeController: AbortController | undefined;
 
   readonly transcribe: TranscribeStore;
-  readonly documentPresenter: DocumentPresenter;
+  readonly jotViewPresenter: JotViewPresenter;
 
   constructor(deps: TranscribePresenterDeps) {
     this.transcribe = deps.transcribe;
-    this.documentPresenter = deps.documentPresenter;
+    this.jotViewPresenter = deps.jotViewPresenter;
     makeAutoObservable(this, {
       transcribeController: false,
       transcribe: false,
-      documentPresenter: false,
+      jotViewPresenter: false,
     });
   }
 
@@ -169,7 +169,7 @@ export class TranscribePresenter {
       toastStore.showError('Transcriber returned no debug bundle.');
       return;
     }
-    const ok = await this.documentPresenter.autoLoadDebugBundle(bundleUrl, fallbackName, signal);
+    const ok = await this.jotViewPresenter.autoLoadDebugBundle(bundleUrl, fallbackName, signal);
     if (!ok) {
       // The auto-loader already surfaced the specific failure as an
       // error toast; clear the busy pill back to idle and bail.
@@ -312,7 +312,7 @@ export class TranscribePresenter {
     if (!url) return;
     const summary = this.transcribe.recentTranscriptions.find((s) => s.folder === folder);
     const fallbackName = summary?.original_filename ?? folder;
-    return this.documentPresenter.loadDebugBundleFromUrl(url, fallbackName);
+    return this.jotViewPresenter.loadDebugBundleFromUrl(url, fallbackName);
   }
 
   /**

@@ -6,7 +6,7 @@
  * severity. The default config enables every rule at its declared
  * default severity.
  */
-import { Jot } from 'src/dsl/dsl';
+import { Jot } from 'src/schema/dsl/dsl';
 import { LintDiagnostic, LintResult, LintSeverity } from './diagnostics';
 import { Rule, buildLintContext } from './rule';
 import { ALL_RULES } from './rules/registry';

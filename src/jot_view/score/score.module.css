@@ -404,7 +404,7 @@
 }
 
 .patternLabel {
-    composes: reset from '../components/button.module.css';
+    composes: reset from '../../ui/button/button.module.css';
     position: absolute;
     top: -11px;
     left: 4px;
@@ -673,7 +673,7 @@
 }
 
 .debugDetailsToggle {
-    composes: reset from '../components/button.module.css';
+    composes: reset from '../../ui/button/button.module.css';
     composes: metaCaption from '../../typography.module.css';
     /* `.reset` no longer carries `background: transparent`; without an
        explicit declaration the UA-default `<button>` background paints

@@ -114,7 +114,7 @@
 }
 
 .transportButton {
-    composes: reset from '../components/button.module.css';
+    composes: reset from '../../ui/button/button.module.css';
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -129,7 +129,7 @@
 
 /* Spin the lucide Loader while the player is hydrating drum samples.
    The cadence intentionally matches `drumjot-spinner-spin` in
-   `src/jot_view/components/spinner.module.css` so every in-flight
+   `src/ui/spinner/spinner.module.css` so every in-flight
    indicator in the app rotates in lockstep; CSS-modules keyframes
    can't be `composes:`-shared across files, so the keyframes are
    locally re-declared. Keep the duration aligned with the shared
@@ -278,7 +278,7 @@
    is on, outlined when off; sized to sit between the 52px transport
    buttons and the inline label controls without dominating. */
 .followToggle {
-    composes: reset from '../components/button.module.css';
+    composes: reset from '../../ui/button/button.module.css';
     display: inline-flex;
     align-items: center;
     justify-content: center;

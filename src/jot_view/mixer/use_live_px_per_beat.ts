@@ -1,5 +1,5 @@
 import React from 'react';
-import { RenderedJotContext } from '../document/document_contexts';
+import { StructuralContext } from '../jot_view_contexts';
 
 /**
  * Read the live `pxPerBeat` off the active jot via the MobX scope
@@ -10,9 +10,9 @@ import { RenderedJotContext } from '../document/document_contexts';
  * field would dirty the chunks on every wheel tick).
  */
 export function useLiveJotPxPerBeat(): number {
-  // `RenderedJotContext` is provided at the JotView root; null only
+  // `StructuralContext` is provided at the JotView root; null only
   // outside the View (tests). In that case fall back to 1, which is
   // safe (chunks just don't render).
-  const jot = React.useContext(RenderedJotContext);
-  return jot?.pxPerBeat ?? 1;
+  const structural = React.useContext(StructuralContext);
+  return structural?.pxPerBeat ?? 1;
 }

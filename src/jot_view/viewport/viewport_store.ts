@@ -1,5 +1,5 @@
 import { makeAutoObservable } from 'mobx';
-import { DocumentStore } from '../document/document_store';
+import { JotViewStore } from '../jot_view_store';
 
 /**
  * Pixels-per-bar at zoom = 1. Same numeric value as `ViewConfig.barWidth`'s
@@ -79,11 +79,11 @@ export class ViewportStore {
 
   /** The active jot, for the zoom-driven `pxPerBeat` the visible-range
    *  math reads. */
-  readonly document: DocumentStore;
+  readonly jotViewStore: JotViewStore;
 
-  constructor(document: DocumentStore) {
-    this.document = document;
-    makeAutoObservable(this, { document: false });
+  constructor(jotViewStore: JotViewStore) {
+    this.jotViewStore = jotViewStore;
+    makeAutoObservable(this, { jotViewStore: false });
   }
 
   /**
@@ -102,7 +102,7 @@ export class ViewportStore {
    * environments still render the full score.
    */
   get visibleBeatRange(): { startBeat: number; endBeat: number } | null {
-    const ppb = this.document.currentJot?.pxPerBeat ?? 0;
+    const ppb = this.jotViewStore.structural?.pxPerBeat ?? 0;
     const vw = this._viewportWidth;
     if (ppb <= 0 || vw <= 0) return null;
     const buffer = vw;

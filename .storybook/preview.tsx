@@ -4,7 +4,7 @@ import type { Decorator, Preview } from '@storybook/react-vite';
 // stylesheet, exactly as the app loads it from src/index.tsx, so every
 // story's `var(--token)` resolves. The dark palette lives behind
 // `:root[data-theme='dark']`; the Theme toolbar toggle below sets that
-// attribute on the preview <html>, mirroring src/jot_view/settings/theme.ts.
+// attribute on the preview <html>, mirroring src/settings/theme.ts.
 import 'src/design_tokens.css';
 
 /**

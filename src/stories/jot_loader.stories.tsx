@@ -1,11 +1,10 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import React from 'react';
-import { RenderedJot } from 'src/jot/resolved_jot';
 import { createJotView } from 'src/jot_view/jot_view';
 import { fromMidi } from 'src/midi/from_midi';
-import { parse } from 'src/parser/parser';
+import { parse } from 'src/schema/dsl/parser/parser';
 import { rockJot, tripletJot } from 'src/fakes/fakes';
-import type { Jot } from 'src/dsl/dsl';
+import type { Jot } from 'src/schema/dsl/dsl';
 
 /**
  * Library sandbox for the front-end loaders, the DSL parser
@@ -22,9 +21,9 @@ import type { Jot } from 'src/dsl/dsl';
  */
 const JotLoaderSandbox = () => {
   // One real JotView instance for the lifetime of the story. createJotView
-  // wires up the stores + presenters; we drive it via documentPresenter.
+  // wires up the stores + presenters; we drive it via jotViewPresenter.
   const view = React.useMemo(() => createJotView({}), []);
-  const { View, document: documentStore, documentPresenter } = view;
+  const { View, jotViewStore, jotViewPresenter } = view;
   const [jotText, setJotText] = React.useState<string>('');
   const [error, setError] = React.useState<string | undefined>();
 
@@ -33,12 +32,12 @@ const JotLoaderSandbox = () => {
       setError(undefined);
       try {
         setJotText(JSON.stringify(jot, null, 2));
-        documentPresenter.setJot(new RenderedJot(jot, documentStore.viewConfig));
+        jotViewPresenter.setJot(jot);
       } catch (e) {
         setError(`${label}: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
-    [documentPresenter, documentStore],
+    [jotViewPresenter, jotViewStore],
   );
 
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {

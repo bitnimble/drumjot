@@ -19,8 +19,12 @@ import { expect, test, type Page } from '@playwright/test';
 
 async function loadRockJot(page: Page): Promise<void> {
   await page.goto('/');
-  // Boot starts on the empty state; load the built-in rock jot (h/s/k
-  // instrument rows) through the exposed debug global.
+  // Boot is async now (the reactive doc's WASM init is a top-level await),
+  // so wait for the debug global before driving it.
+  await page.waitForFunction(
+    () => typeof (window as unknown as { drumjot?: { loadTestJot?: unknown } }).drumjot?.loadTestJot === 'function'
+  );
+  // Load the built-in rock jot (h/s/k instrument rows) through the global.
   await page.evaluate(() => (window as unknown as { drumjot: { loadTestJot(): void } }).drumjot.loadTestJot());
   await expect(page.locator('h2')).toContainText('Simple rock loop');
   await page.waitForSelector('[data-testid^="instrument-row-"]');

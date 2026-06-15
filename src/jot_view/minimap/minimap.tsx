@@ -33,7 +33,7 @@ import { jotPlayer } from 'src/jot_view/playback/player';
 import { type BarSlice, waveformWorker } from 'src/jot_view/playback/waveform_worker_client';
 import styles from './minimap.module.css';
 import { WAVEFORM_PAINT_COLOR } from '../utils/waveform_color';
-import { DocumentStore } from '../document/document_store';
+import { JotViewStore } from '../jot_view_store';
 import { ViewportStore } from '../viewport/viewport_store';
 import { MixerStore } from '../mixer/mixer_store';
 import { ViewportPresenter } from '../viewport/viewport_presenter';
@@ -51,26 +51,27 @@ const TOTAL_CANVAS_H = NOTE_STRIP_H + WAVEFORM_H;
 
 export const Minimap = observer(
   ({
-    documentStore,
+    jotViewStore,
     viewport,
     viewportPresenter,
     mixer,
     playbackPresenter,
   }: {
-    documentStore: DocumentStore;
+    jotViewStore: JotViewStore;
     viewport: ViewportStore;
     viewportPresenter: ViewportPresenter;
     mixer: MixerStore;
     playbackPresenter: PlaybackPresenter;
   }) => {
-    const jot = documentStore.currentJot;
+    const structural = jotViewStore.structural;
+  const tempo = jotViewStore.tempo;
   const containerRef = React.useRef<HTMLDivElement>(null);
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
 
   // Width measurement. ResizeObserver fires synchronously on `observe`
   // so the first non-zero width arrives before paint. The deps include
-  // `jot` because the component returns `null` while `jot` is undefined
-  // (no DOM ref attached); the effect needs to re-run when the JSX
+  // `structural` because the component returns `null` while no song is
+  // loaded (no DOM ref attached); the effect needs to re-run when the JSX
   // first renders the container or it would stay attached to a stale
   // null ref and `width` would never leave 0.
   const [width, setWidth] = React.useState(0);
@@ -82,17 +83,17 @@ export const Minimap = observer(
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [jot]);
+  }, [structural]);
 
   // ─── Per-bar minimap layout (jot-time → minimap px) ────────────────
   const { bars, totalDuration, firstStartSec, hasContent } = React.useMemo(
     () =>
       computeBarLayouts(
-        jot?.timeline.bars ?? [],
-        jot?.structure.voices[0]?.bars ?? [],
+        tempo?.timeline.bars ?? [],
+        structural?.voices[0]?.bars ?? [],
         width
       ),
-    [jot, width]
+    [structural, tempo, width]
   );
 
   // ─── Waveform peaks (worker-computed at minimap resolution) ─────────
@@ -118,12 +119,12 @@ export const Minimap = observer(
       !hasContent ||
       width <= 0 ||
       bars.length === 0 ||
-      !jot
+      !tempo
     ) {
       setPeaks(null);
       return;
     }
-    const timeline = jot.timeline;
+    const timeline = tempo.timeline;
     const slices: BarSlice[] = timeline.bars.map((t, i) => ({
       x: bars[i]?.x ?? 0,
       width: bars[i]?.width ?? 0,
@@ -169,7 +170,7 @@ export const Minimap = observer(
     // its string key rather than the array itself; otherwise the effect
     // would refire on every Minimap render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [audibleAudioTrackIdsKey, bars, width, hasContent, drumsT0Sec, jot]);
+  }, [audibleAudioTrackIdsKey, bars, width, hasContent, drumsT0Sec, tempo]);
 
   // ─── Note marks (color-coded per pitch, plotted in minimap-px) ──────
   // Driven by a MobX `reaction` rather than computed in the render body so
@@ -185,13 +186,13 @@ export const Minimap = observer(
   // or recoloured.
   const [noteMarks, setNoteMarks] = React.useState<readonly NoteMark[]>(EMPTY_NOTE_MARKS);
   React.useEffect(() => {
-    if (!jot || !hasContent || width <= 0 || bars.length === 0) {
+    if (!structural || !hasContent || width <= 0 || bars.length === 0) {
       setNoteMarks(EMPTY_NOTE_MARKS);
       return;
     }
     return reaction(
       () => {
-        const structBars = jot.structure.voices[0]?.bars ?? [];
+        const structBars = structural.voices[0]?.bars ?? [];
         const out: NoteMark[] = [];
         for (let i = 0; i < structBars.length; i++) {
           const sb = structBars[i];
@@ -204,7 +205,7 @@ export const Minimap = observer(
             // the reaction to the underlying mute/solo observables, so
             // a toggle updates the ticks live.
             if (!mixer.isPitchAudible(pitch)) continue;
-            const color = mixer.getInstrumentTrack(pitch).color || track.color;
+            const color = mixer.getInstrumentTrack(pitch).color;
             for (const note of track.notes) {
               const frac = note.beat / sb.beats;
               out.push({ x: layout.x + frac * layout.width, color });
@@ -216,7 +217,7 @@ export const Minimap = observer(
       (next) => setNoteMarks(next),
       { fireImmediately: true, equals: noteMarksEqual }
     );
-  }, [jot, bars, width, hasContent, mixer]);
+  }, [structural, bars, width, hasContent, mixer]);
 
   // ─── Canvas paint (waveform + note ticks in one bitmap) ─────────────
   // Waveform and per-color note ticks are batched through a `Path2D` so
@@ -351,7 +352,7 @@ export const Minimap = observer(
     window.addEventListener('pointercancel', onUp);
   };
 
-  if (!jot) return null;
+  if (!structural || !tempo) return null;
 
   return (
     <div

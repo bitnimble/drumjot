@@ -1,18 +1,19 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { runInAction } from 'mobx';
 import React from 'react';
-import { RenderedJot } from 'src/jot/resolved_jot';
+import { buildJotModel } from '../../jot_view_store';
 import { rockJot } from 'src/fakes/fakes';
 import { fn } from 'storybook/test';
 import { MixerStoreContext } from '../mixer_contexts';
+import { StructuralContext } from '../../jot_view_contexts';
 import { ViewportStoreContext } from '../../viewport/viewport_contexts';
-import { DocumentStore } from '../../document/document_store';
+import { JotViewStore } from '../../jot_view_store';
 import { MixerStore } from '../mixer_store';
 import { ViewportStore } from '../../viewport/viewport_store';
-import type { TrackKey } from '../../store';
+import type { TrackKey } from 'src/jot_view/tracks/tracks';
 import type { VoiceControls } from '../mixer_controls';
 import { InstrumentRow } from '../instrument_row';
-import { Gallery, Variant } from '../../components/stories/_variants';
+import { Gallery, Variant } from 'src/ui/stories/_variants';
 
 /**
  * A single drum-instrument (note) row from the unified mixer: the gutter
@@ -53,13 +54,18 @@ const NOOP_DRAG = {
  *  first real pitch of the loaded jot. `muted` flips the row's audibility
  *  so the gutter renders its dimmed state. */
 function Row({ muted = false }: { muted?: boolean }) {
-  const { documentStore, mixer, viewport, pitch, voiceControls } = React.useMemo(() => {
-    const documentStore = new DocumentStore();
+  const { jotViewStore, structural, mixer, viewport, pitch, voiceControls } = React.useMemo(() => {
+    const jotViewStore = new JotViewStore();
+    const model = buildJotModel(rockJot, jotViewStore.viewConfig);
     runInAction(() => {
-      documentStore.currentJot = new RenderedJot(rockJot, documentStore.viewConfig);
+      jotViewStore.source = rockJot;
+      jotViewStore.structural = model.structural;
+      jotViewStore.palette = model.palette;
+      jotViewStore.tempo = model.tempo;
     });
-    const mixer = new MixerStore(documentStore);
-    const viewport = new ViewportStore(documentStore);
+    const { structural } = model;
+    const mixer = new MixerStore(jotViewStore);
+    const viewport = new ViewportStore(jotViewStore);
     const pitches = mixer.jotPitches;
     runInAction(() => {
       mixer.trackOrder = pitches.map((p): TrackKey => ({ kind: 'instrument', pitch: p }));
@@ -79,26 +85,27 @@ function Row({ muted = false }: { muted?: boolean }) {
       onToggleMasterMute: fn(),
       onToggleMasterSolo: fn(),
     };
-    return { documentStore, mixer, viewport, pitch, voiceControls };
+    return { jotViewStore, structural, mixer, viewport, pitch, voiceControls };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return (
-    <MixerStoreContext.Provider value={mixer}>
-      <ViewportStoreContext.Provider value={viewport}>
-        <InstrumentRow
-          pitch={pitch}
-          jot={documentStore.currentJot!}
-          config={documentStore.viewConfig}
-          showBrackets
-          pitchOrder={mixer.jotPitches}
-          highlightedPattern={undefined}
-          onPatternClick={fn()}
-          onSeek={fn()}
-          voiceControls={voiceControls}
-          {...NOOP_DRAG}
-        />
-      </ViewportStoreContext.Provider>
-    </MixerStoreContext.Provider>
+    <StructuralContext.Provider value={structural}>
+      <MixerStoreContext.Provider value={mixer}>
+        <ViewportStoreContext.Provider value={viewport}>
+          <InstrumentRow
+            pitch={pitch}
+            config={jotViewStore.viewConfig}
+            showBrackets
+            pitchOrder={mixer.jotPitches}
+            highlightedPattern={undefined}
+            onPatternClick={fn()}
+            onSeek={fn()}
+            voiceControls={voiceControls}
+            {...NOOP_DRAG}
+          />
+        </ViewportStoreContext.Provider>
+      </MixerStoreContext.Provider>
+    </StructuralContext.Provider>
   );
 }
 

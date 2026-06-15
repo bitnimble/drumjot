@@ -5,7 +5,7 @@
  * legitimate inputs.
  */
 import { describe, expect, it } from 'bun:test';
-import { parse } from 'src/parser/parser';
+import { parse } from 'src/schema/dsl/parser/parser';
 import { LintDiagnostic, LintSeverity } from 'src/linter/diagnostics';
 import { lint } from 'src/linter/lint';
 

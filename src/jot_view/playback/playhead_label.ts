@@ -24,14 +24,14 @@ export function formatPlayheadTime(seconds: number): string {
  * voice). Pure; unit-tested in `playhead_label.test.ts`.
  */
 export function playheadBarBeat(timeline: JotTimeline, jotTime: number): string | null {
-  const renderedBars = timeline.rendered?.structure.voices[0]?.bars ?? [];
+  const renderedBars = timeline.rendered?.voices[0]?.bars ?? [];
   if (renderedBars.length === 0 || timeline.bars.length === 0) return null;
   for (let i = 0; i < timeline.bars.length; i++) {
     const t = timeline.bars[i]!;
     if (jotTime < t.startSec + t.durationSec) {
       const rb = renderedBars[i];
       if (!rb || t.durationSec <= 0) return null;
-      const beatInBar = 1 + ((jotTime - t.startSec) / t.durationSec) * rb.time.count;
+      const beatInBar = 1 + ((jotTime - t.startSec) / t.durationSec) * rb.tsCount;
       // Truncate (not round) so the tail of a bar never rounds up to the
       // next bar's downbeat, e.g. 4/4 must go 4.99 → 1.00, never 5.00.
       const beatDisplay = (Math.floor(beatInBar * 100) / 100).toFixed(2);
@@ -42,5 +42,5 @@ export function playheadBarBeat(timeline: JotTimeline, jotTime: number): string 
   // doesn't blank out when scrubbing slightly past the score's tail.
   const last = renderedBars[renderedBars.length - 1];
   if (!last) return null;
-  return `Bar ${last.index}, ${(last.time.count + 0.99).toFixed(2)}b`;
+  return `Bar ${last.index}, ${(last.tsCount + 0.99).toFixed(2)}b`;
 }

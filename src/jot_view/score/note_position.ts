@@ -1,4 +1,4 @@
-import type { TimeSignature } from 'src/dsl/dsl';
+import type { TimeSignature } from 'src/schema/dsl/dsl';
 
 /**
  * A symbolic moment inside a Jot, with one internal data representation
@@ -17,7 +17,7 @@ import type { TimeSignature } from 'src/dsl/dsl';
  */
 
 export type NotePositionInput = {
-  /** 1-indexed; matches `StructuralBar.index` (anacrusis = 0). */
+  /** 1-indexed; matches `StructBar.index` (anacrusis = 0). */
   barIndex: number;
   /** 1-indexed within the bar, float. Downbeat = 1.0. */
   beatInBar: number;

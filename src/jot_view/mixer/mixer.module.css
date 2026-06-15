@@ -417,7 +417,7 @@
    track. Same shape/animation as the lyrics-align spinner so the two
    in-flight indicators read identically across track types. */
 .musicTrackSplitSpinner {
-    composes: spinner from '../components/spinner.module.css';
+    composes: spinner from '../../ui/spinner/spinner.module.css';
     flex: 0 0 auto;
     width: 10px;
     height: 10px;
@@ -438,7 +438,7 @@
    glyph itself reads better at body-md size than the bold 10px M/S
    labels, hence the bodyMd composition on top. */
 .overflowTrigger {
-    composes: iconBox from '../components/icon_button.module.css';
+    composes: iconBox from '../../ui/icon_button/icon_button.module.css';
     composes: bodyMd from '../../typography.module.css';
     width: 18px;
     height: 18px;

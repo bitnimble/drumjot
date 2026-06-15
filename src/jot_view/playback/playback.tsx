@@ -5,11 +5,11 @@ import React from 'react';
 import { DEFAULT_GRID_DIVISION, gridDivisionFor } from 'src/grid/grid';
 import { jotPlayer, PlayerState } from 'src/jot_view/playback/player';
 import sharedStyles from '../jot_view.module.css';
-import { NumberStepper } from '../components/number_stepper';
+import { NumberStepper } from 'src/ui/number_stepper/number_stepper';
 import { FollowPlayheadContext } from './playback_contexts';
 import styles from './playback.module.css';
-import { VOLUME_STEP } from '../store';
-import { DocumentStore } from '../document/document_store';
+import { VOLUME_STEP } from '../mixer/mixer_store';
+import { JotViewStore } from '../jot_view_store';
 import { PlaybackStore } from './playback_store';
 import { PlaybackPresenter } from './playback_presenter';
 
@@ -208,24 +208,24 @@ const PlaybackControls = observer(
  */
 export const PlaybackBar = observer(
   ({
-    documentStore,
+    jotViewStore,
     playback,
     presenter,
   }: {
-    documentStore: DocumentStore;
+    jotViewStore: JotViewStore;
     playback: PlaybackStore;
     presenter: PlaybackPresenter;
   }) => (
   <div className={styles.playbackBar}>
     <PlaybackControls
-      hasJot={!!documentStore.currentJot}
+      hasJot={!!jotViewStore.source}
       playerState={jotPlayer.state}
       playerError={jotPlayer.errorMessage}
       hasAudioTracks={jotPlayer.audioTracks.size > 0}
       audioOffsetSec={jotPlayer.drumsT0Sec}
       drumOffsetBeats={playback.drumOffsetBeats}
       gridDivision={
-        documentStore.currentJot ? gridDivisionFor(documentStore.currentJot) : DEFAULT_GRID_DIVISION
+        jotViewStore.source ? gridDivisionFor(jotViewStore.source) : DEFAULT_GRID_DIVISION
       }
       onTogglePlayPause={() => presenter.togglePlayPause()}
       onStop={() => presenter.stopPlayback()}

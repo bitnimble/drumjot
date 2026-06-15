@@ -14,7 +14,7 @@
  * mis-classifies are recoverable by explicit `@l`/`@r` annotation, which
  * the inferrer always honours.
  */
-import { Sticking } from 'src/dsl/dsl';
+import { Sticking } from 'src/schema/dsl/dsl';
 import { DrumInstrumentKind } from 'src/instruments/instruments';
 import { LintDiagnostic } from '../diagnostics';
 import { Rule, ResolvedNote } from '../rule';

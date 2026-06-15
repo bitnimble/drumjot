@@ -29,16 +29,14 @@ function fakeTimeline(): JotTimeline {
       { startSec: 2, durationSec: 2 },
     ],
     rendered: {
-      structure: {
-        voices: [
-          {
-            bars: [
-              { index: 1, time: { count: 4 } },
-              { index: 2, time: { count: 4 } },
-            ],
-          },
-        ],
-      },
+      voices: [
+        {
+          bars: [
+            { index: 1, tsCount: 4 },
+            { index: 2, tsCount: 4 },
+          ],
+        },
+      ],
     },
   } as unknown as JotTimeline;
 }

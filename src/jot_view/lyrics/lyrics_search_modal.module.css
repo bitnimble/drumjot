@@ -4,11 +4,11 @@
    of the app. */
 
 .modalBackdrop {
-    composes: backdrop from '../components/modal.module.css';
+    composes: backdrop from '../../ui/modal/modal.module.css';
 }
 
 .modalPanel {
-    composes: panel from '../components/modal.module.css';
+    composes: panel from '../../ui/modal/modal.module.css';
     width: min(560px, 100%);
     /* `dvh` recomputes against the visible viewport so the modal
        doesn't extend past a visible mobile address bar; `vh`
@@ -18,15 +18,15 @@
 }
 
 .modalHeader {
-    composes: header from '../components/modal.module.css';
+    composes: header from '../../ui/modal/modal.module.css';
 }
 
 .modalTitle {
-    composes: title from '../components/modal.module.css';
+    composes: title from '../../ui/modal/modal.module.css';
 }
 
 .modalClose {
-    composes: close from '../components/button.module.css';
+    composes: close from '../../ui/button/button.module.css';
 }
 
 .modalForm {
@@ -38,13 +38,13 @@
 }
 
 .field {
-    composes: field from '../components/form.module.css';
+    composes: field from '../../ui/form/form.module.css';
     flex: 1 1 0;
     min-width: 0;
 }
 
 .searchButton {
-    composes: primary from '../components/button.module.css';
+    composes: primary from '../../ui/button/button.module.css';
     flex: 0 0 auto;
     /* Tighter horizontal padding than the default `.primary` so the
        icon-only search trigger reads as a compact glyph button instead
@@ -63,7 +63,7 @@
    replaces) and `currentColor` tints so the spinner picks up the
    button's foreground. */
 .searchButtonSpinner {
-    composes: spinner from '../components/spinner.module.css';
+    composes: spinner from '../../ui/spinner/spinner.module.css';
     width: 16px;
     height: 16px;
     border-width: 1.5px;
@@ -109,10 +109,10 @@
 }
 
 .resultItem {
-    composes: reset from '../components/button.module.css';
+    composes: reset from '../../ui/button/button.module.css';
     width: 100%;
     /* `.reset` is additive only (see the docblock in
-       components/button.module.css); it leaves the UA-default
+       ui/button/button.module.css); it leaves the UA-default
        `<button>` border / background untouched, so without these
        explicit resets each row paints the native grey border on the
        top and right edges (the bottom is overridden by the row
@@ -200,7 +200,7 @@
 }
 
 .loadButton {
-    composes: primary from '../components/button.module.css';
+    composes: primary from '../../ui/button/button.module.css';
     flex: 0 0 auto;
     border-radius: var(--radius-sm);
 }

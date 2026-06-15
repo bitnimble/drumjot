@@ -1,0 +1,91 @@
+/* Compact 18x18 icon button shared by the mixer's M/S toggles, the
+   audio-track clear button, and the per-row overflow trigger. The base
+   `.iconBox` defines the 18x18 box, border, and default colors so any
+   row-level glyph button picks up the same geometry; `.iconButton`
+   layers on the M/S typography (small bold). `.clear` is a hover-only
+   marker (no base rule) that swaps the icon button's border + color
+   to the error palette so the affordance reads as destructive. */
+
+/* Chrome-only base (border + radius + hover treatment). Consumers
+   pick the size (`.iconButton` is 18x18, the mixer overflow trigger
+   is also 18x18, the Recent-transcriptions refresh button is 22x22)
+   so the box class itself stays size-agnostic.
+
+   IMPORTANT: do NOT bake `width` / `height` in here. Vite emits a
+   composed class's rules AFTER the composing class's, so any size
+   on this base would override the consumer's own width / height.
+   See the doc comment on `.reset` in button.module.css for the full
+   ordering rationale. */
+.iconBox {
+    composes: reset from '../button/button.module.css';
+    flex: 0 0 auto;
+    box-sizing: border-box;
+    padding: 0;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-base);
+    color: var(--color-text-faint-strong);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.iconBox:hover {
+    border-color: var(--color-text-faint-strong);
+    color: var(--color-text-secondary-alt);
+}
+
+.iconButton {
+    composes: iconBox;
+    /* The reset already supplies font-family inherit + cursor + focus
+       outline; the icon button adds the 18x18 box and its specific
+       label-size typography (10px / 700 / line-height 1). */
+    composes: labelSm from '../../typography.module.css';
+    width: 18px;
+    height: 18px;
+    /* `labelSm` sets `letter-spacing: 0.08em`, which adds trailing tracking
+       after the (single) glyph; flex-centering then centers glyph+trailing,
+       pushing the visible "M"/"S" half a step left of center. Indent by one
+       letter-spacing unit to cancel the trailing space and re-center. We
+       can't just zero `letter-spacing` here, the composed `labelSm` rule is
+       emitted after this one and would win (see the `.iconBox` note above).
+       Icon-only buttons reset this to 0 (`.clear`). */
+    text-indent: 0.08em;
+}
+
+.muteActive {
+    background: var(--color-error);
+    border-color: var(--color-error);
+    color: var(--color-bg-base);
+}
+
+.muteActive:hover {
+    background: var(--color-error-hover);
+    border-color: var(--color-error-hover);
+    color: var(--color-bg-base);
+}
+
+.soloActive {
+    background: var(--color-toggle-active);
+    border-color: var(--color-toggle-active-border);
+    color: var(--color-toggle-active-text);
+}
+
+.soloActive:hover {
+    background: var(--color-toggle-active-border);
+    border-color: var(--color-toggle-active-hover-border);
+}
+
+/* Clear holds an icon (lucide X), not letter-spaced text, so the
+   `.iconButton` trailing-tracking compensation would nudge it off-center;
+   reset the indent. */
+.clear {
+    text-indent: 0;
+}
+
+/* `.clear` is hover-only: the base look comes from `.iconButton`; this
+   rule only swaps the colors when the user is about to click. */
+.clear:hover {
+    border-color: var(--color-error);
+    color: var(--color-error);
+}

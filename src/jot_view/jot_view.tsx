@@ -2,11 +2,14 @@ import { untracked } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { Point } from 'src/utils/geom';
-import { RenderedJot } from 'src/jot/resolved_jot';
+import { Jot } from 'src/schema/dsl/dsl';
+import type { StructuralPresenter } from 'src/jot_view/structure/structural_presenter';
+import type { TempoPresenter } from 'src/jot_view/playback/tempo_presenter';
+import type { PaletteStore } from 'src/jot_view/palette/palette_store';
 import { perfProbe } from 'src/utils/perf_probe';
 import { jotPlayer } from 'src/jot_view/playback/player';
-import { BarTiming, buildTimeline, timeToX } from 'src/jot_view/playback/timeline';
-import { SelectionStore } from 'src/selection/selection';
+import { BarTiming, timeToX } from 'src/jot_view/playback/timeline';
+import { SelectionStore } from 'src/jot_view/selection/selection';
 import styles from './jot_view.module.css';
 import {
   AudioWorkletWarningModal,
@@ -14,9 +17,14 @@ import {
 } from './playback/audio_worklet_warning_modal';
 import { LyricsSearchModal } from './lyrics/lyrics_search_modal';
 import { LyricsTextLoadModal } from './lyrics/lyrics_text_modal';
-import { SelectionContext } from 'src/selection/selection';
-import { BarTimingsContext, RenderedJotContext } from './document/document_contexts';
-import { GridLineSettingsContext } from './settings/settings_contexts';
+import { SelectionContext } from 'src/jot_view/selection/selection';
+import {
+  BarTimingsContext,
+  StructuralContext,
+  TempoContext,
+  PaletteContext,
+} from './jot_view_contexts';
+import { GridLineSettingsContext } from '../settings/settings_contexts';
 import { MixerStoreContext, UniformWaveformsContext } from './mixer/mixer_contexts';
 import { ViewportStoreContext } from './viewport/viewport_contexts';
 import {
@@ -30,7 +38,7 @@ import {
 } from './provenance/provenance_contexts';
 import { FollowPlayheadContext } from './playback/playback_contexts';
 import { AudioTrackControls, MixerView, VoiceControls } from './mixer/mixer';
-import { Logo } from './components/logo';
+import { Logo } from 'src/ui/logo/logo';
 import { Minimap } from './minimap/minimap';
 import { VerticalScrollbar } from './viewport/vertical_scrollbar';
 import { PlaybackBar } from './playback/playback';
@@ -41,31 +49,32 @@ import {
   formatSubtitle,
 } from './score/score_header';
 import { TimelineHeader } from './score/timeline_header';
-import { GridLineSettings, TrackKey, snapToDevicePx } from './store';
-import { SettingsStore } from './settings/settings_store';
-import { DocumentStore } from './document/document_store';
+import type { TrackKey } from 'src/jot_view/tracks/tracks';
+import { SettingsStore, type GridLineSettings } from '../settings/settings_store';
+import { JotViewStore } from './jot_view_store';
 import { TranscribeStore } from './transcribe/transcribe_store';
 import { ProvenanceStore } from './provenance/provenance_store';
 import { LyricsAlignStore } from './lyrics/lyrics_align_store';
 import { PlaybackStore } from './playback/playback_store';
-import { ViewportStore } from './viewport/viewport_store';
+import { ViewportStore, snapToDevicePx } from './viewport/viewport_store';
 import { MixerStore } from './mixer/mixer_store';
-import { SettingsPresenter } from './settings/settings_presenter';
+import { SettingsPresenter } from '../settings/settings_presenter';
 import { ViewportPresenter } from './viewport/viewport_presenter';
 import { MixerPresenter } from './mixer/mixer_presenter';
 import { PlaybackPresenter } from './playback/playback_presenter';
 import { ProvenancePresenter } from './provenance/provenance_presenter';
 import { LyricsPresenter } from './lyrics/lyrics_presenter';
-import { DocumentPresenter } from './document/document_presenter';
+import { JotViewPresenter } from './jot_view_presenter';
 import { TranscribePresenter } from './transcribe/transcribe_presenter';
 import { RecentTranscriptionsPicker } from './transcribe/recent_transcriptions';
-import { ToastContainer } from './toasts/toast_container';
-import { Toolbar } from './toolbar/toolbar';
+import { ToastContainer } from '../ui/toasts/toast_container';
+import { Toolbar } from '../toolbar/toolbar';
 import { DebugPanel } from './provenance/debug_panel';
 import { ExampleJot } from 'src/fakes/fakes';
 
 export { TranscribePresenter } from './transcribe/transcribe_presenter';
-export type { TrackKey, TranscribeOptions, TranscribeStatus } from './store';
+export type { TrackKey } from 'src/jot_view/tracks/tracks';
+export type { TranscribeOptions, TranscribeStatus } from './transcribe/transcribe_store';
 
 type CreateJotViewOptions = {
   examples?: readonly ExampleJot[];
@@ -75,7 +84,7 @@ type CreateJotViewResult = {
   /** Data-only stores + the presenter. Exposed so the app shell (and
    *  e2e) can reach each peer directly; there is no single top-level
    *  store. */
-  document: DocumentStore;
+  jotViewStore: JotViewStore;
   settings: SettingsStore;
   transcribe: TranscribeStore;
   provenance: ProvenanceStore;
@@ -90,7 +99,7 @@ type CreateJotViewResult = {
   provenancePresenter: ProvenancePresenter;
   playbackPresenter: PlaybackPresenter;
   lyricsPresenter: LyricsPresenter;
-  documentPresenter: DocumentPresenter;
+  jotViewPresenter: JotViewPresenter;
   /** Transcribe presenter (`/transcribe` + `/resume` flows, progress
    *  pill, recent-runs picker, form options). */
   transcribePresenter: TranscribePresenter;
@@ -98,32 +107,32 @@ type CreateJotViewResult = {
 };
 
 export function createJotView(options: CreateJotViewOptions = {}): CreateJotViewResult {
-  const documentStore = new DocumentStore();
+  const jotViewStore = new JotViewStore();
   const settings = new SettingsStore();
   const transcribe = new TranscribeStore();
   const provenance = new ProvenanceStore();
   const lyricsAlign = new LyricsAlignStore();
-  const viewport = new ViewportStore(documentStore);
-  const mixer = new MixerStore(documentStore);
+  const viewport = new ViewportStore(jotViewStore);
+  const mixer = new MixerStore(jotViewStore);
   // PlaybackStore reads the mixer for the engine-facing filter computeds
   // the player pulls; construct the mixer first.
-  const playback = new PlaybackStore(documentStore, mixer);
+  const playback = new PlaybackStore(jotViewStore, mixer);
   const settingsPresenter = new SettingsPresenter(settings);
-  const viewportPresenter = new ViewportPresenter(viewport, documentStore);
-  const mixerPresenter = new MixerPresenter(mixer, documentStore);
+  const viewportPresenter = new ViewportPresenter(viewport, jotViewStore);
+  const mixerPresenter = new MixerPresenter(mixer, jotViewStore);
   const provenancePresenter = new ProvenancePresenter(provenance, viewport);
-  const playbackPresenter = new PlaybackPresenter(playback, documentStore);
-  const lyricsPresenter = new LyricsPresenter(lyricsAlign, documentStore);
-  const documentPresenter = new DocumentPresenter(
-    documentStore,
+  const playbackPresenter = new PlaybackPresenter(playback, jotViewStore);
+  const lyricsPresenter = new LyricsPresenter(lyricsAlign, jotViewStore);
+  const jotViewPresenter = new JotViewPresenter(
+    jotViewStore,
     settingsPresenter,
     mixerPresenter,
     provenancePresenter,
     lyricsPresenter
   );
-  const transcribePresenter = new TranscribePresenter({ transcribe, documentPresenter });
-  if (options.examples) documentPresenter.setExamples(options.examples);
-  const selection = new SelectionStore(documentStore);
+  const transcribePresenter = new TranscribePresenter({ transcribe, jotViewPresenter });
+  if (options.examples) jotViewPresenter.setExamples(options.examples);
+  const selection = new SelectionStore(jotViewStore);
 
   // Translate a click on `.jotContainer` into the marquee's coordinate
   // space (the inner `.scrollViewport` wrapper, which is where the
@@ -163,25 +172,25 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   const setZoomCentered = (z: number) => {
     const scroller = document.querySelector<HTMLElement>('[data-jot-scroller]');
     const barsRow = scroller?.querySelector<HTMLElement>('[data-bars-row]');
-    const j = documentStore.currentJot;
-    if (!scroller || !barsRow || !j) {
+    const s = jotViewStore.structural;
+    if (!scroller || !barsRow || !s) {
       viewportPresenter.setZoom(z);
       return;
     }
-    const pxPerBeatBefore = j.pxPerBeat;
-    const padLeft = j.config.barNotePaddingBeats * pxPerBeatBefore;
+    const pxPerBeatBefore = s.pxPerBeat;
+    const padLeft = s.config.barNotePaddingBeats * pxPerBeatBefore;
     const scrollerRect = scroller.getBoundingClientRect();
     const barsRowRect = barsRow.getBoundingClientRect();
     const anchorBarsRowX = scrollerRect.left + scrollerRect.width / 2 - barsRowRect.left;
     viewportPresenter.setZoom(z);
     if (pxPerBeatBefore <= 0) return;
-    const factor = j.pxPerBeat / pxPerBeatBefore;
+    const factor = s.pxPerBeat / pxPerBeatBefore;
     if (factor === 1) return;
     viewportPresenter.setScrollBy((anchorBarsRowX - padLeft) * (factor - 1), 0);
     // Same-tick scale + scroll write (cache-free; this runs outside the
     // component) so the slider never paints the post-zoom scroll offset at
     // the pre-zoom scale; see applyZoomVarsSync.
-    applyZoomVarsSync(scroller, null, j.pxPerBeat, j.voiceBeats, viewport.scrollX);
+    applyZoomVarsSync(scroller, null, s.pxPerBeat, s.voiceBeats, viewport.scrollX);
   };
 
   // Stable JotView callback identities. Each only ever delegates to the
@@ -212,7 +221,11 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   const audioWorkletState = detectAudioWorkletState();
 
   const View: React.FC = observer(() => {
-    const jot = documentStore.currentJot;
+    // The loaded song's peer domains (all set/cleared together; `structural`
+    // present implies the rest are). `structural` is the "is a song loaded"
+    // signal that gates JotView / the playback bar.
+    const structural = jotViewStore.structural;
+    const source = jotViewStore.source;
     // Modal opens on first mount whenever AudioWorklet is unavailable
     // and closes for the rest of the session once dismissed. A reload
     // re-shows it intentionally; the limitation is real and ongoing,
@@ -264,8 +277,8 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     // Lyrics modal visibility lives on the store so any TS consumer can
     // observe / drive it; the seeded title/artist fields are still local
     // (re-derived from the current jot on open).
-    const lyricsInitialTitle = jot?.title.trim() ?? '';
-    const lyricsInitialArtist = jot ? (extractArtist(jot) ?? '') : '';
+    const lyricsInitialTitle = source?.title.trim() ?? '';
+    const lyricsInitialArtist = source ? (extractArtist(source) ?? '') : '';
 
     const followPlayheadContextValue = React.useMemo(
       () => ({
@@ -353,20 +366,20 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                 <FollowPlayheadContext.Provider value={followPlayheadContextValue}>
                   <div className={styles.appContainer}>
                     <Toolbar
-                      examples={documentStore.examples}
-                      currentId={documentStore.currentExampleId}
-                      onSelect={(id) => documentPresenter.loadExample(id)}
+                      examples={jotViewStore.examples}
+                      currentId={jotViewStore.currentExampleId}
+                      onSelect={(id) => jotViewPresenter.loadExample(id)}
                       transcribeStatus={transcribe.transcribeStatus}
                       transcribeOptions={transcribe.transcribeOptions}
                       onTranscribe={(file) => transcribePresenter.transcribeAudio(file)}
                       onResumeTranscribe={(folder, stage) => transcribePresenter.resumeTranscribe(folder, stage)}
-                      onLoadJot={(file) => documentPresenter.loadJotFile(file)}
-                      onLoadMidi={(file) => documentPresenter.loadMidiFile(file)}
-                      onLoadParadb={(file) => documentPresenter.loadParadbMap(file)}
-                      onScoreParadb={(file) => documentPresenter.scoreParadbMap(file)}
-                      onLoadDebugBundle={(file) => documentPresenter.loadDebugBundleFile(file)}
-                      onLoadAudioTrack={(file) => documentPresenter.loadAudioTrack(file)}
-                      onLoadLyricsFile={(file) => documentPresenter.loadLyricsFile(file)}
+                      onLoadJot={(file) => jotViewPresenter.loadJotFile(file)}
+                      onLoadMidi={(file) => jotViewPresenter.loadMidiFile(file)}
+                      onLoadParadb={(file) => jotViewPresenter.loadParadbMap(file)}
+                      onScoreParadb={(file) => jotViewPresenter.scoreParadbMap(file)}
+                      onLoadDebugBundle={(file) => jotViewPresenter.loadDebugBundleFile(file)}
+                      onLoadAudioTrack={(file) => jotViewPresenter.loadAudioTrack(file)}
+                      onLoadLyricsFile={(file) => jotViewPresenter.loadLyricsFile(file)}
                       onOpenLyricsTextLoad={() => lyricsPresenter.setLyricsTextOpen(true)}
                       onOpenLyricsSearch={() => lyricsPresenter.setLyricsSearchOpen(true)}
                       onCancelTranscribe={() => transcribePresenter.cancelTranscribe()}
@@ -398,12 +411,15 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       transcribeMode={transcribe.transcribeMode}
                       onSetTranscribeMode={(m) => transcribePresenter.setTranscribeMode(m)}
                     />
-                    {jot ? (
+                    {structural ? (
                       <JotView
                         viewport={viewport}
                         viewportPresenter={viewportPresenter}
                         playbackPresenter={playbackPresenter}
-                        jot={jot}
+                        structural={structural}
+                        tempo={jotViewStore.tempo!}
+                        palette={jotViewStore.palette!}
+                        source={jotViewStore.source!}
                         highlightedPattern={selection.selectedPattern}
                         onPatternClick={onPatternClick}
                         onMouseDown={onMouseDown}
@@ -421,21 +437,21 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                     ) : (
                       <EmptyState
                         transcribePresenter={transcribePresenter}
-                        documentPresenter={documentPresenter}
-                        documentStore={documentStore}
+                        jotViewPresenter={jotViewPresenter}
+                        jotViewStore={jotViewStore}
                         transcribe={transcribe}
                       />
                     )}
                     <Minimap
-                      documentStore={documentStore}
+                      jotViewStore={jotViewStore}
                       viewport={viewport}
                       viewportPresenter={viewportPresenter}
                       mixer={mixer}
                       playbackPresenter={playbackPresenter}
                     />
-                    {jot && (
+                    {structural && (
                       <PlaybackBar
-                        documentStore={documentStore}
+                        jotViewStore={jotViewStore}
                         playback={playback}
                         presenter={playbackPresenter}
                       />
@@ -458,7 +474,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
                       open={audioWorkletWarningOpen}
                       onClose={() => setAudioWorkletWarningOpen(false)}
                     />
-                    <LoadingOverlay documentStore={documentStore} />
+                    <LoadingOverlay jotViewStore={jotViewStore} />
                     <ToastContainer />
                   </div>
                 </FollowPlayheadContext.Provider>
@@ -476,7 +492,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
   });
 
   return {
-    document: documentStore,
+    jotViewStore,
     settings,
     transcribe,
     provenance,
@@ -489,7 +505,7 @@ export function createJotView(options: CreateJotViewOptions = {}): CreateJotView
     provenancePresenter,
     playbackPresenter,
     lyricsPresenter,
-    documentPresenter,
+    jotViewPresenter,
     transcribePresenter,
     View,
   };
@@ -509,7 +525,11 @@ type JotViewProps = {
   /** Transport / follow-playhead mutations. JotView disengages follow on
    * pan / pinch gestures. */
   playbackPresenter: PlaybackPresenter;
-  jot: RenderedJot;
+  /** The loaded song's peer domains (provided to descendants via context). */
+  structural: StructuralPresenter;
+  tempo: TempoPresenter;
+  palette: PaletteStore;
+  source: Jot;
   highlightedPattern: string | undefined;
   onPatternClick: (name: string) => void;
   onMouseDown: (e: React.MouseEvent<HTMLDivElement>) => void;
@@ -549,7 +569,10 @@ const JotView = observer((props: JotViewProps) => {
     viewport,
     viewportPresenter,
     playbackPresenter,
-    jot,
+    structural,
+    tempo,
+    palette,
+    source,
     highlightedPattern,
     onPatternClick,
     onMouseDown,
@@ -568,14 +591,14 @@ const JotView = observer((props: JotViewProps) => {
   // `window.__perf` is set). Guards the invariant that zoom never
   // re-renders JotView; see `src/perf_probe.ts`.
   perfProbe('JotView');
-  // Intentionally NOT reading `jot.resolved` here. Every observable
-  // touched in this body triggers a JotView re-render on zoom, and the
-  // title / subtitle / Legend / mixer subtree all derive from zoom-
-  // invariant data via `jot.structure` / `jot.title` /
-  // `jot.globalMetadata`. JotView itself is then stable across zoom
+  // Intentionally NOT reading any zoom-dependent (pixel) observable here.
+  // Every observable touched in this body triggers a JotView re-render on
+  // zoom, and the title / subtitle / Legend / mixer subtree all derive from
+  // zoom-invariant data via `structural.voices` / `source.title` /
+  // `source.globalMetadata`. JotView itself is then stable across zoom
   // (ScoreZoomVar updates the one CSS variable that propagates the
   // new scale to every descendant via calc()).
-  const config = jot.config;
+  const config = structural.config;
   const containerRef = React.useRef<HTMLDivElement>(null);
   // Ref to the inner `.scrollViewport` wrapper. Its `offsetWidth` /
   // `offsetHeight` is the scroll-content's natural size (the analogue
@@ -639,8 +662,11 @@ const JotView = observer((props: JotViewProps) => {
   // we fall back to the viewport's horizontal centre.
   const onZoomByRef = React.useRef(onZoomBy);
   onZoomByRef.current = onZoomBy;
-  const jotRef = React.useRef(jot);
-  jotRef.current = jot;
+  // Stable ref to the live structural presenter for the non-React rAF
+  // closures (wheel / pinch zoom) that read `pxPerBeat` / `voiceBeats` /
+  // `config` outside the render path.
+  const structuralRef = React.useRef(structural);
+  structuralRef.current = structural;
   React.useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -671,12 +697,12 @@ const JotView = observer((props: JotViewProps) => {
       // musical point is `padLeft + (anchorX - padLeft) * actualFactor`;
       // adjusting scrollLeft by the delta keeps the on-screen position
       // pinned without waiting for layout.
-      const currentJot = jotRef.current;
-      const pxPerBeatBefore = currentJot.pxPerBeat;
+      const currentStructural = structuralRef.current;
+      const pxPerBeatBefore = currentStructural.pxPerBeat;
       // `padLeft` scales with `pxPerBeat` (see ViewConfig.barNotePaddingBeats);
       // anchor math reads the live pre-zoom value so the on-screen
       // musical point stays pinned across the zoom step.
-      const padLeft = currentJot.config.barNotePaddingBeats * pxPerBeatBefore;
+      const padLeft = currentStructural.config.barNotePaddingBeats * pxPerBeatBefore;
       const barsRow = el.querySelector<HTMLElement>('[data-bars-row]');
 
       let anchorBarsRowX: number | undefined;
@@ -697,7 +723,7 @@ const JotView = observer((props: JotViewProps) => {
       onZoomByRef.current(factor);
 
       if (anchorBarsRowX !== undefined && pxPerBeatBefore > 0) {
-        const actualFactor = currentJot.pxPerBeat / pxPerBeatBefore;
+        const actualFactor = currentStructural.pxPerBeat / pxPerBeatBefore;
         if (actualFactor !== 1) {
           const delta = (anchorBarsRowX - padLeft) * (actualFactor - 1);
           // Virtual scroll: write through the store instead of native
@@ -716,8 +742,8 @@ const JotView = observer((props: JotViewProps) => {
       applyZoomVarsSync(
         el,
         cacheRef.current,
-        currentJot.pxPerBeat,
-        currentJot.voiceBeats,
+        currentStructural.pxPerBeat,
+        currentStructural.voiceBeats,
         viewport.scrollX
       );
     };
@@ -886,9 +912,9 @@ const JotView = observer((props: JotViewProps) => {
     };
 
     const beginPinch = (a: Touch, b: Touch) => {
-      const j = jotRef.current;
-      const initPxPerBeat = j.pxPerBeat;
-      const initPadLeft = j.config.barNotePaddingBeats * initPxPerBeat;
+      const s = structuralRef.current;
+      const initPxPerBeat = s.pxPerBeat;
+      const initPadLeft = s.config.barNotePaddingBeats * initPxPerBeat;
       const midClientX = (a.clientX + b.clientX) / 2;
       const barsRow = el.querySelector<HTMLElement>('[data-bars-row]');
       let anchorBarsRowX: number;
@@ -969,7 +995,7 @@ const JotView = observer((props: JotViewProps) => {
         const dist = touchDistance(a, b);
         if (gesture.initDistance > 0 && gesture.initPxPerBeat > 0) {
           viewportPresenter.setZoom(gesture.initZoom * (dist / gesture.initDistance));
-          const actualFactor = jotRef.current.pxPerBeat / gesture.initPxPerBeat;
+          const actualFactor = structuralRef.current.pxPerBeat / gesture.initPxPerBeat;
           if (actualFactor !== 1) {
             viewportPresenter.setScrollX(
               gesture.initScrollX +
@@ -982,8 +1008,8 @@ const JotView = observer((props: JotViewProps) => {
           applyZoomVarsSync(
             el,
             cacheRef.current,
-            jotRef.current.pxPerBeat,
-            jotRef.current.voiceBeats,
+            structuralRef.current.pxPerBeat,
+            structuralRef.current.voiceBeats,
             viewport.scrollX
           );
         }
@@ -1093,15 +1119,15 @@ const JotView = observer((props: JotViewProps) => {
   // `buildTimeline` now reads zoom-invariant fields only, so calling
   // it here doesn't bind JotView's render to the zoom variable.
   const barTimings = React.useMemo<ReadonlyMap<number, BarTiming>>(() => {
-    const timeline = buildTimeline(jot);
-    const structBars = jot.structure.voices[0]?.bars ?? [];
+    const timeline = tempo.timeline;
+    const structBars = structural.voices[0]?.bars ?? [];
     const map = new Map<number, BarTiming>();
     for (let i = 0; i < structBars.length; i++) {
       const timing = timeline.bars[i];
       if (timing) map.set(structBars[i].index, timing);
     }
     return map;
-  }, [jot]);
+  }, [structural, tempo]);
   // The starting width is captured at the start of each drag (the
   // pointermove deltas then read against that snapshot) so an in-
   // flight resize stays anchored to where the user grabbed even
@@ -1128,61 +1154,64 @@ const JotView = observer((props: JotViewProps) => {
     target.addEventListener('pointercancel', onUp);
   };
   return (
-    <RenderedJotContext.Provider value={jot}>
-      <BarTimingsContext.Provider value={barTimings}>
-        <div
-          ref={containerRef}
-          className={styles.jotContainer}
-          // Stable hook for descendant popovers (note + filtered-onset
-          // labels) to find the scroll viewport's bottom edge and flip
-          // upward when the natural below-placement would overflow into
-          // the playback bar / debug panel below.
-          data-jot-scroller
-          style={containerStyle}
-          onMouseDown={onMouseDown}
-          onMouseMove={onMouseMove}
-          onMouseUp={onMouseUp}
-        >
-          <ScoreZoomVar jot={jot} containerRef={containerRef} />
-          <GutterWidthVar getGutterWidth={getGutterWidth} containerRef={containerRef} />
-          <GridLineVars containerRef={containerRef} />
-          <ScrollVar cacheRef={cacheRef} viewport={viewport} />
-          <PlayheadPosVar
-            cacheRef={cacheRef}
-            getGutterWidth={getGutterWidth}
-            viewport={viewport}
-            viewportPresenter={viewportPresenter}
-          />
-          <div
-            ref={viewportRef}
-            className={styles.scrollViewport}
-            // Stable hook used by JotView's content ResizeObserver and by
-            // the minimap (offsetWidth is the scroll-content's `scrollWidth`
-            // analogue in this no-native-scroll model).
-            data-jot-scroll-content
-          >
-            <h2 className={styles.title}>{formatDisplayTitle(jot) || 'Untitled jot'}</h2>
-            <p className={styles.subtitle}>{formatSubtitle(jot)}</p>
-            <Legend jot={jot} />
-            <TimelineHeader jot={jot} onSeek={onSeek} onResizeGutterStart={onResizeGutterStart} />
-            <MixerView
-              jot={jot}
-              config={config}
-              trackOrder={trackOrder}
-              highlightedPattern={highlightedPattern}
-              onPatternClick={onPatternClick}
-              onSeek={onSeek}
-              onMoveTrack={onMoveTrack}
-              voiceControls={voiceControls}
-              audioTrackControls={audioTrackControls}
-              onResizeGutterStart={onResizeGutterStart}
-            />
-            <MarqueeOverlay />
-          </div>
-          <VerticalScrollbar viewport={viewport} viewportPresenter={viewportPresenter} />
-        </div>
-      </BarTimingsContext.Provider>
-    </RenderedJotContext.Provider>
+    <StructuralContext.Provider value={structural}>
+      <TempoContext.Provider value={tempo}>
+        <PaletteContext.Provider value={palette}>
+          <BarTimingsContext.Provider value={barTimings}>
+            <div
+              ref={containerRef}
+              className={styles.jotContainer}
+              // Stable hook for descendant popovers (note + filtered-onset
+              // labels) to find the scroll viewport's bottom edge and flip
+              // upward when the natural below-placement would overflow into
+              // the playback bar / debug panel below.
+              data-jot-scroller
+              style={containerStyle}
+              onMouseDown={onMouseDown}
+              onMouseMove={onMouseMove}
+              onMouseUp={onMouseUp}
+            >
+              <ScoreZoomVar structural={structural} containerRef={containerRef} />
+              <GutterWidthVar getGutterWidth={getGutterWidth} containerRef={containerRef} />
+              <GridLineVars containerRef={containerRef} />
+              <ScrollVar cacheRef={cacheRef} viewport={viewport} />
+              <PlayheadPosVar
+                cacheRef={cacheRef}
+                getGutterWidth={getGutterWidth}
+                viewport={viewport}
+                viewportPresenter={viewportPresenter}
+              />
+              <div
+                ref={viewportRef}
+                className={styles.scrollViewport}
+                // Stable hook used by JotView's content ResizeObserver and by
+                // the minimap (offsetWidth is the scroll-content's `scrollWidth`
+                // analogue in this no-native-scroll model).
+                data-jot-scroll-content
+              >
+                <h2 className={styles.title}>{formatDisplayTitle(source) || 'Untitled jot'}</h2>
+                <p className={styles.subtitle}>{formatSubtitle(source, tempo)}</p>
+                <Legend palette={palette} />
+                <TimelineHeader onSeek={onSeek} onResizeGutterStart={onResizeGutterStart} />
+                <MixerView
+                  config={config}
+                  trackOrder={trackOrder}
+                  highlightedPattern={highlightedPattern}
+                  onPatternClick={onPatternClick}
+                  onSeek={onSeek}
+                  onMoveTrack={onMoveTrack}
+                  voiceControls={voiceControls}
+                  audioTrackControls={audioTrackControls}
+                  onResizeGutterStart={onResizeGutterStart}
+                />
+                <MarqueeOverlay />
+              </div>
+              <VerticalScrollbar viewport={viewport} viewportPresenter={viewportPresenter} />
+            </div>
+          </BarTimingsContext.Provider>
+        </PaletteContext.Provider>
+      </TempoContext.Provider>
+    </StructuralContext.Provider>
   );
 });
 
@@ -1204,9 +1233,15 @@ const JotView = observer((props: JotViewProps) => {
  * row on the first pass.
  */
 const ScoreZoomVar = observer(
-  ({ jot, containerRef }: { jot: RenderedJot; containerRef: React.RefObject<HTMLDivElement> }) => {
-    const pxPerBeat = jot.pxPerBeat;
-    const voiceBeats = jot.voiceBeats;
+  ({
+    structural,
+    containerRef,
+  }: {
+    structural: StructuralPresenter;
+    containerRef: React.RefObject<HTMLDivElement>;
+  }) => {
+    const pxPerBeat = structural.pxPerBeat;
+    const voiceBeats = structural.voiceBeats;
     React.useLayoutEffect(() => {
       // On the FIRST layout effect `containerRef.current` is still null:
       // a child's layout effect (this) runs before the parent fiber
@@ -1664,25 +1699,25 @@ const MarqueeOverlay = observer(() => {
 const EmptyState = observer(
   ({
     transcribePresenter,
-    documentPresenter,
-    documentStore,
+    jotViewPresenter,
+    jotViewStore,
     transcribe,
   }: {
     transcribePresenter: TranscribePresenter;
-    documentPresenter: DocumentPresenter;
-    documentStore: DocumentStore;
+    jotViewPresenter: JotViewPresenter;
+    jotViewStore: JotViewStore;
     transcribe: TranscribeStore;
   }) => {
   const jotInputRef = React.useRef<HTMLInputElement>(null);
   const paradbInputRef = React.useRef<HTMLInputElement>(null);
   const handleJotFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) documentPresenter.loadJotFile(file);
+    if (file) jotViewPresenter.loadJotFile(file);
     e.target.value = '';
   };
   const handleParadbFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) documentPresenter.loadParadbMap(file);
+    if (file) jotViewPresenter.loadParadbMap(file);
     e.target.value = '';
   };
   return (
@@ -1728,16 +1763,16 @@ const EmptyState = observer(
         <p className={styles.emptyStateHint}>
           For other formats, use the <b>File</b> or <b>Transcribe</b> menus in the toolbar above.
         </p>
-        {documentStore.examples.length > 0 && (
+        {jotViewStore.examples.length > 0 && (
           <div className={styles.emptyStateExamples}>
             <span className={styles.emptyStateExamplesLabel}>Or try an example</span>
             <div className={styles.emptyStateExampleRow}>
-              {documentStore.examples.map((ex) => (
+              {jotViewStore.examples.map((ex) => (
                 <button
                   key={ex.id}
                   type="button"
                   className={styles.emptyStateExampleButton}
-                  onClick={() => documentPresenter.loadExample(ex.id)}
+                  onClick={() => jotViewPresenter.loadExample(ex.id)}
                 >
                   {ex.label}
                 </button>
@@ -1773,8 +1808,8 @@ const EmptyState = observer(
  * `withLoading` counter, so nested loads (debug bundle → many audio
  * tracks) read as one continuous spinner.
  */
-const LoadingOverlay = observer(({ documentStore }: { documentStore: DocumentStore }) => {
-  if (!documentStore.isLoading) return null;
+const LoadingOverlay = observer(({ jotViewStore }: { jotViewStore: JotViewStore }) => {
+  if (!jotViewStore.isLoading) return null;
   return (
     <div
       className={styles.loadingOverlay}
@@ -1783,8 +1818,8 @@ const LoadingOverlay = observer(({ documentStore }: { documentStore: DocumentSto
       onMouseDown={(e) => e.stopPropagation()}
     >
       <div className={styles.loadingSpinner} aria-hidden="true" />
-      {documentStore.loadingLabel && (
-        <div className={styles.loadingLabel}>{documentStore.loadingLabel}</div>
+      {jotViewStore.loadingLabel && (
+        <div className={styles.loadingLabel}>{jotViewStore.loadingLabel}</div>
       )}
     </div>
   );

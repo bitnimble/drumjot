@@ -9,7 +9,7 @@
  */
 
 import { untracked } from 'mobx';
-import type { RenderedJot } from 'src/jot/resolved_jot';
+import type { StructuralPresenter } from 'src/jot_view/structure/structural_presenter';
 
 /** A half-open-ish quarter-note-beat window. Both ends inclusive (see
  *  {@link intersectsBeatRange}). */
@@ -33,8 +33,8 @@ export type BeatRange = { startBeat: number; endBeat: number };
  * correct). Mirrors how `--gutter-width` is seeded inline + updated by
  * `GutterWidthVar`.
  */
-export function barsRowWidthSeed(jot: RenderedJot, voiceBeats: number): string {
-  return `${untracked(() => jot.pxPerBeat) * voiceBeats}px`;
+export function barsRowWidthSeed(structural: StructuralPresenter, voiceBeats: number): string {
+  return `${untracked(() => structural.pxPerBeat) * voiceBeats}px`;
 }
 
 /**

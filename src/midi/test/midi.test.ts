@@ -3,8 +3,8 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MidiData, MidiEvent, parseMidi, writeMidi } from 'midi-file';
-import { Jot } from 'src/dsl/dsl';
-import { RenderedJot } from 'src/jot/resolved_jot';
+import { Jot } from 'src/schema/dsl/dsl';
+import { buildJotModel } from 'src/jot_view/jot_view_store';
 import { fromMidi } from 'src/midi/from_midi';
 import { allocatePitchesForMidi } from 'src/midi/gm';
 import { toMidi } from 'src/midi/to_midi';
@@ -512,13 +512,12 @@ describe('MIDI <-> Jot synthetic baseline', () => {
       bpm: 120,
       notes: [{ tick: tpq * 8, note: 36, velocity: 100 }],
     });
-    const rendered = new RenderedJot(fromMidi(bytes));
-    const bars = rendered.resolved.voices[0].bars;
+    const bars = buildJotModel(fromMidi(bytes)).structural.voices[0].bars;
     expect(bars.map((b) => b.index)).toEqual([-2, -1, 1]);
   });
 
   it('round-trips a Jot built from the DSL parser', async () => {
-    const { parse } = await import('src/parser/parser');
+    const { parse } = await import('src/schema/dsl/parser/parser');
     const src = `
       {{ bpm: 120, time: "4/4" }}
       | h:c h:c h:c h:c h:c h:c h:c h:c |

@@ -94,7 +94,7 @@ dev box port-forward 6006 to view it. Stories live next to the feature
 they cover, in `src/<feature>/stories/*.stories.tsx`, and cover three
 things:
 
-- **Primitives** (`components/stories/`) — IconButton, Checkbox,
+- **Primitives** (`src/ui/stories/`), IconButton, Checkbox,
   NumberStepper, Tabs, Logo, the colour picker, with handlers wired to the
   Actions panel.
 - **Feature components** — the PlaybackBar and a mixer InstrumentRow

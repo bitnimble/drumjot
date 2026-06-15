@@ -81,9 +81,9 @@ Numbers are only comparable **within the same block** below.
 |---|---------|
 | 5 | `.verticalScrollbar` |
 | 20 | `.toolbar` |
-| 30 / 40 | dropdown trigger / dropdown panel (`components/dropdown`) |
+| 30 / 40 | dropdown trigger / dropdown panel (`ui/dropdown`) |
 | 40 | `.recentTranscriptions` |
-| 100 | `.loadingOverlay`, modal backdrop (`components/modal`) |
+| 100 | `.loadingOverlay`, modal backdrop (`ui/modal`) |
 | 1000 | toasts |
 | 1050 | color picker popover |
 | 1100 | **`.noteLabel` / `.filteredOnsetLabel`** (portaled to `document.body`; §5) |

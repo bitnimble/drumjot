@@ -35,8 +35,8 @@
  * worker iterates bars, so each section gets its real audio-time
  * mapping regardless of the bar's role.
  */
-import { RenderedJot } from 'src/jot/resolved_jot';
-import { buildBarTempos } from 'src/tempo/tempo';
+import type { StructuralPresenter } from 'src/jot_view/structure/structural_presenter';
+import { buildBarTempos } from 'src/schema/dsl/tempo';
 
 /**
  * Beats per chunk. Chunks are sliced on this beat-aligned grid,
@@ -107,17 +107,16 @@ const EMPTY_LAYOUT: ChunkLayout = { bars: [], totalBeats: 0, chunks: [] };
  * Per-bar `{{ bpm }}` overrides are honoured the same way `events.ts`
  * / `buildTimeline` do: sticky until the next override.
  *
- * Reads ONLY `rendered.structure` (the zoom-invariant layout), so the
- * returned `bars[*].startBeat / .beats / .startSec / .durationSec` and
- * the derived `chunks[*]` are stable across zoom changes. Callers can
- * memo on `rendered.structure` and reuse the result across every
- * wheel tick.
+ * Reads ONLY the zoom-invariant structural voices, so the returned
+ * `bars[*].startBeat / .beats / .startSec / .durationSec` and the derived
+ * `chunks[*]` are stable across zoom changes. Callers can memo on the
+ * `StructuralPresenter` and reuse the result across every wheel tick.
  */
-export function buildChunkLayout(rendered: RenderedJot): ChunkLayout {
-  const structureVoice = rendered.structure.voices[0];
+export function buildChunkLayout(structural: StructuralPresenter): ChunkLayout {
+  const structureVoice = structural.voices[0];
   if (!structureVoice || structureVoice.bars.length === 0) return EMPTY_LAYOUT;
 
-  const tempos = buildBarTempos(rendered.source, structureVoice.bars);
+  const tempos = buildBarTempos(structural.source, structureVoice.bars);
   const durations: number[] = new Array(structureVoice.bars.length);
   for (let i = 0; i < structureVoice.bars.length; i++) {
     durations[i] = tempos[i].durationSec;

@@ -34,6 +34,10 @@ export async function loadDebugBundle(page: Page): Promise<void> {
   }
 
   await page.goto('/');
+  // Boot is async (reactive-doc WASM init); wait for the debug global.
+  await page.waitForFunction(
+    () => typeof (window as unknown as { drumjot?: { loadTestJot?: unknown } }).drumjot?.loadTestJot === 'function',
+  );
   await page.evaluate(() =>
     (
       window as unknown as { drumjot: { loadTestJot(): void } }

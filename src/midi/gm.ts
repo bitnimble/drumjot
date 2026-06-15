@@ -17,7 +17,7 @@
  *     modifier when rendered as `s:r`.
  *   - `p` for hand-clap, `b` for "bells/percussion" (tambourine, cowbell).
  */
-import { Modifier } from 'src/dsl/dsl';
+import { Modifier } from 'src/schema/dsl/dsl';
 import { DrumInstrumentKind } from 'src/instruments/instruments';
 
 export type Limb = 'lh' | 'rh' | 'lf' | 'rf';

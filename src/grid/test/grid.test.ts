@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { Jot } from 'src/dsl/dsl';
+import { Jot } from 'src/schema/dsl/dsl';
 import { DEFAULT_GRID_DIVISION, gridDivisionFor, slotsPerQuarter } from 'src/grid/grid';
 
 function jotWith(gridDivision?: number): Jot {

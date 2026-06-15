@@ -2,10 +2,10 @@ import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { jotPlayer } from 'src/jot_view/playback/player';
-import { GutterResizeHandle } from '../components/gutter_resize_handle';
-import { MuteButton, SoloButton } from '../components/icon_button';
+import { GutterResizeHandle } from 'src/ui/gutter_resize_handle/gutter_resize_handle';
+import { MuteButton, SoloButton } from 'src/ui/icon_button/icon_button';
 import styles from './mixer.module.css';
-import { VOLUME_STEP } from '../store';
+import { VOLUME_STEP } from './mixer_store';
 
 /**
  * A per-section master fader that sits in the sticky lane gutter,

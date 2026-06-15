@@ -1,12 +1,17 @@
 import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
-import { Instrument, Modifier, Sticking } from 'src/dsl/dsl';
-import { StructuralBar, StructuralNote, StructuralPatternSpan, StructuralTupletSpan } from 'src/jot/resolved_jot';
-import { ViewConfig } from 'src/jot/view_config';
-import { msOffsetToBeats } from 'src/tempo/tempo';
-import { BarTimingsContext } from '../document/document_contexts';
-import { SelectionContext } from 'src/selection/selection';
+import { Instrument, Modifier, Sticking } from 'src/schema/dsl/dsl';
+import type {
+  StructBar,
+  StructNote,
+  StructPatternSpan,
+  StructTupletSpan,
+} from 'src/jot_view/structure/structure_store';
+import { ViewConfig } from 'src/jot_view/viewport/view_config';
+import { msOffsetToBeats } from 'src/schema/dsl/tempo';
+import { BarTimingsContext } from '../jot_view_contexts';
+import { SelectionContext } from 'src/jot_view/selection/selection';
 import { NoteProvenanceContext } from '../provenance/provenance_contexts';
 import styles from './score.module.css';
 import { NoteProvenanceDetails } from './note_provenance_details';
@@ -23,7 +28,7 @@ import { PopoverPortal } from './popover_portal';
  * onset (see jot.ts); the final tuplet note sits exactly on it and is
  * still covered by the bracket.
  */
-function coveredByTuplet(bar: StructuralBar, beat: number): boolean {
+function coveredByTuplet(bar: StructBar, beat: number): boolean {
   const eps = 1e-6;
   return bar.tupletSpans.some((s) => beat >= s.startBeat - eps && beat <= s.endBeat + eps);
 }
@@ -42,8 +47,9 @@ export const BarView = observer(
     rowPitch,
     pitchOrder,
     colorForPitch,
+    instrumentForPitch,
   }: {
-    bar: StructuralBar;
+    bar: StructBar;
     /** Cumulative quarter-note position of this bar's left edge within
      *  the voice (sum of `beats` for every bar before this one). Drives
      *  the bar's absolute CSS left; see `.bar` in score.module.css. */
@@ -81,12 +87,12 @@ export const BarView = observer(
     /**
      * Optional per-pitch colour override. The unified mixer uses this to
      * layer the user's per-instrument-track colour pick on top of the
-     * jot's palette default; the jot's structural `track.color` is the
-     * palette-only baseline, and this resolver returns the same value
-     * augmented with the override (or undefined / empty when the row
-     * should fall through to the palette default).
+     * jot's palette default (undefined / empty falls through to a neutral).
      */
     colorForPitch?: (pitch: string) => string | undefined;
+    /** Per-pitch instrument (from the global mapping), for the note glyph's
+     *  hover/selection tooltip. */
+    instrumentForPitch: (pitch: string) => Instrument;
   }) => {
     // Inline style carries only zoom-invariant data so React's prop
     // diff sees no change on a zoom tick: `--bar-start-beat` /
@@ -178,9 +184,9 @@ export const BarView = observer(
                   key={i}
                   note={note}
                   bar={bar}
-                  color={colorForPitch?.(pitch) ?? track.color}
+                  color={colorForPitch?.(pitch) ?? 'var(--color-text-faint-strong)'}
                   config={config}
-                  instrument={track.instrument}
+                  instrument={instrumentForPitch(pitch)}
                   // A non-straight note already inside a tuplet bracket
                   // is explained by that bracket, so only flag the
                   // strays (e.g. an off-grid note not authored as a
@@ -224,7 +230,7 @@ export const BarView = observer(
 type BracketPosition = 'single' | 'top' | 'middle' | 'bottom' | 'hidden';
 
 function bracketPositionForRow(
-  span: StructuralPatternSpan,
+  span: StructPatternSpan,
   rowPitch: string | undefined,
   pitchOrder: readonly string[] | undefined
 ): BracketPosition {
@@ -283,7 +289,7 @@ const PatternBracket = observer(
     onClick,
     position,
   }: {
-    span: StructuralPatternSpan;
+    span: StructPatternSpan;
     highlighted: boolean;
     onClick: (name: string) => void;
     position: Exclude<BracketPosition, 'hidden'>;
@@ -333,7 +339,7 @@ const PatternBracket = observer(
  * with the slot count (3 = triplet, 5 = quintuplet, ...) on it. Purely
  * decorative — no interaction, unlike the pattern bracket.
  */
-const TupletBracket = observer(({ span }: { span: StructuralTupletSpan }) => (
+const TupletBracket = observer(({ span }: { span: StructTupletSpan }) => (
   <div
     className={styles.tupletBracket}
     style={
@@ -357,7 +363,7 @@ const NoteView = observer(
     instrument,
     offGrid,
   }: {
-    note: StructuralNote;
+    note: StructNote;
     /**
      * The bar this note lives in. Carried through so the `Debug details`
      * panel can compute the rendered (post-quantization) beat position
@@ -365,17 +371,17 @@ const NoteView = observer(
      * time signature is needed to convert into the 1-indexed
      * `beat_in_bar` convention the provenance entry uses.
      */
-    bar: StructuralBar;
+    bar: StructBar;
     color: string;
     config: ViewConfig;
     instrument: Instrument;
     offGrid: boolean;
   }) => {
-    const isAccent = note.modifiers.has('a');
-    const isGhost = note.modifiers.has('g');
-    const isFlam = note.modifiers.has('fl');
-    const isDrag = note.modifiers.has('dr');
-    const isCross = note.modifiers.has('x');
+    const isAccent = note.modifiers.includes('a');
+    const isGhost = note.modifiers.includes('g');
+    const isFlam = note.modifiers.includes('fl');
+    const isDrag = note.modifiers.includes('dr');
+    const isCross = note.modifiers.includes('x');
     const badge = pickBadge(note);
     const selection = React.useContext(SelectionContext);
     const selected = selection?.selectedNote === note;
@@ -396,7 +402,7 @@ const NoteView = observer(
     // ms offset is converted via the bar's local sec-per-beat (from the
     // eager per-bar timings, keyed by the clone-stable `bar.index`).
     const barTimings = React.useContext(BarTimingsContext);
-    const offsetMs = note.source.offset;
+    const offsetMs = note.offsetMs;
     let offsetBeats = 0;
     if (offsetMs !== undefined) {
       const timing = barTimings?.get(bar.index);
@@ -404,8 +410,7 @@ const NoteView = observer(
         offsetBeats = msOffsetToBeats(offsetMs, timing.durationSec / bar.beats);
       }
     }
-    const sourceMeta = note.source.metadata as { midi?: { tick?: number } } | undefined;
-    const tick = sourceMeta?.midi?.tick;
+    const tick = note.midiTick;
     const provenanceEntry =
       provenance && typeof tick === 'number'
         ? provenance.byTick.get(`${note.pitch}:${tick}`)
@@ -528,19 +533,19 @@ function DragGrace({ color, config }: { color: string; config: ViewConfig }) {
   );
 }
 
-function pickBadge(note: StructuralNote): string | undefined {
+function pickBadge(note: StructNote): string | undefined {
   const m = note.modifiers;
-  if (m.has('c')) return 'C';
-  if (m.has('o')) return 'O';
-  if (m.has('h')) return 'H';
-  if (m.has('f')) return 'F';
-  if (m.has('s')) return 'S';
-  if (m.has('r')) return 'R';
-  if (m.has('z')) return 'Z';
-  if (m.has('k')) return 'K';
-  if (m.has('m')) return 'M';
-  if (m.has('l')) return 'L';
-  if (m.has('rf')) return 'Ruff';
+  if (m.includes('c')) return 'C';
+  if (m.includes('o')) return 'O';
+  if (m.includes('h')) return 'H';
+  if (m.includes('f')) return 'F';
+  if (m.includes('s')) return 'S';
+  if (m.includes('r')) return 'R';
+  if (m.includes('z')) return 'Z';
+  if (m.includes('k')) return 'K';
+  if (m.includes('m')) return 'M';
+  if (m.includes('l')) return 'L';
+  if (m.includes('rf')) return 'Ruff';
   return undefined;
 }
 
@@ -554,14 +559,14 @@ function pickBadge(note: StructuralNote): string | undefined {
  *   `h:c`       -> "Hi-Hat (closed)"
  *   `c~_8:o`    -> "Crash (open, roll)"
  */
-function describeNote(note: StructuralNote, instrument: Instrument): string {
+function describeNote(note: StructNote, instrument: Instrument): string {
   const name = instrument.name ?? `Pitch ${note.pitch}`;
   const qualifiers: string[] = [];
   for (const mod of note.modifiers) {
-    qualifiers.push(MODIFIER_LABELS[mod] ?? mod);
+    qualifiers.push(MODIFIER_LABELS[mod as Modifier] ?? mod);
   }
   if (note.roll) qualifiers.push('roll');
-  if (note.sticking) qualifiers.push(STICKING_LABELS[note.sticking]);
+  if (note.sticking) qualifiers.push(STICKING_LABELS[note.sticking as Sticking]);
   return qualifiers.length > 0 ? `${name} (${qualifiers.join(', ')})` : name;
 }
 

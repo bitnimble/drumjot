@@ -19,18 +19,32 @@
  * present, is itself drum content; under the drums-t0 convention it
  * sits at jot 0 alongside bar 1's downbeat.
  *
- * Pixel offsets are looked up against the LIVE `RenderedJot` on every call
- * to {@link timeToX}, not cached at build time, so the playhead stays in
- * sync with the score even when the user zooms during playback (the
- * `ViewConfig.barWidth` change reflows the rendered bars reactively and
- * the playhead re-reads their new `x` / `width`).
+ * Pixel offsets are looked up against the LIVE {@link LaidOutJot} (the
+ * `StructuralPresenter`) on every call to {@link timeToX}, not cached at
+ * build time, so the playhead stays in sync with the score even when the
+ * user zooms during playback (the `ViewConfig.barWidth` change reflows the
+ * layout reactively and the playhead re-reads the new `pxPerBeat`).
  */
-import { TimeSignature } from 'src/dsl/dsl';
-import { RenderedJot } from 'src/jot/resolved_jot';
-import { Pixels, px } from 'src/jot/view_config';
-import { buildBarTempos, resolveBpm } from 'src/tempo/tempo';
+import { Jot, TimeSignature } from 'src/schema/dsl/dsl';
+import type { StructVoice } from 'src/jot_view/structure/structure_store';
+import { Pixels, px, type ViewConfig } from 'src/jot_view/viewport/view_config';
+import { buildBarTempos, resolveBpm } from 'src/schema/dsl/tempo';
 
 export { resolveBpm };
+
+/**
+ * The minimal laid-out-jot surface the timeline maths needs: the
+ * zoom-invariant `voices` + `source` for the tempo walk, and the pixel
+ * scale + `config` for the playhead mapping. {@link StructuralPresenter}
+ * satisfies this structurally, so the timeline (and everything that holds a
+ * {@link JotTimeline}) depends on this interface rather than the concrete
+ * presenter. */
+export interface LaidOutJot {
+  voices: readonly StructVoice[];
+  source: Jot;
+  pxPerBeat: number;
+  config: ViewConfig;
+}
 
 /**
  * Pick the BPM and time signature the song spends the largest proportion
@@ -43,11 +57,11 @@ export { resolveBpm };
  * fires), which for transcribed bundles is the back-solved lead-in
  * tempo and can differ markedly from the song's playing tempo.
  */
-export function pickDominantBpmAndTime(jot: RenderedJot): {
+export function pickDominantBpmAndTime(jot: LaidOutJot): {
   dominantBpm: number | undefined;
   dominantTime: TimeSignature | undefined;
 } {
-  const voice = jot.structure.voices[0];
+  const voice = jot.voices[0];
   if (!voice || voice.bars.length === 0) {
     return { dominantBpm: undefined, dominantTime: undefined };
   }
@@ -63,10 +77,14 @@ export function pickDominantBpmAndTime(jot: RenderedJot): {
       const bpmKey = Math.round(seg.bpm);
       bpmDur.set(bpmKey, (bpmDur.get(bpmKey) ?? 0) + segDuration);
     }
-    const timeKey = `${bar.time.count}/${bar.time.unit}`;
+    const timeKey = `${bar.tsCount}/${bar.tsUnit}`;
     const prev = timeDur.get(timeKey);
     if (prev) prev.duration += barTempos.durationSec;
-    else timeDur.set(timeKey, { time: bar.time, duration: barTempos.durationSec });
+    else
+      timeDur.set(timeKey, {
+        time: { count: bar.tsCount, unit: bar.tsUnit },
+        duration: barTempos.durationSec,
+      });
   }
   let dominantBpm: number | undefined;
   let bestBpmDur = -Infinity;
@@ -102,7 +120,7 @@ export type JotTimeline = {
    *
    * `undefined` only on {@link EMPTY_TIMELINE}.
    */
-  rendered: RenderedJot | undefined;
+  rendered: LaidOutJot | undefined;
 };
 
 export const EMPTY_TIMELINE: JotTimeline = {
@@ -111,7 +129,7 @@ export const EMPTY_TIMELINE: JotTimeline = {
   rendered: undefined,
 };
 
-export function buildTimeline(rendered: RenderedJot): JotTimeline {
+export function buildTimeline(rendered: LaidOutJot): JotTimeline {
   // The audio-time fields we need (`bar.beats`, `bar.index`,
   // `jot.tempoEvents`, `globalMetadata.bpm`) all live on the structural
   // cache or on the source jot, which are zoom-invariant. Reading from
@@ -119,10 +137,9 @@ export function buildTimeline(rendered: RenderedJot): JotTimeline {
   // calling `buildTimeline` don't pick up a spurious dependency on
   // `viewConfig.barWidth`, so the per-bar timings stay stable across
   // wheel ticks.
-  const structure = rendered.structure;
   // All voices in a Jot share the same bar grid (they're laid out from the
   // same global metadata), so the first voice's timing is canonical.
-  const voice = structure.voices[0];
+  const voice = rendered.voices[0];
   if (!voice || voice.bars.length === 0) return EMPTY_TIMELINE;
 
   // Per-bar tempo segments come from `jot.tempoEvents`. Mid-bar tempo
@@ -178,7 +195,7 @@ export function buildTimeline(rendered: RenderedJot): JotTimeline {
 export function timeToX(timeline: JotTimeline, seconds: number): Pixels {
   const rendered = timeline.rendered;
   if (!rendered) return px(0);
-  const voice = rendered.structure.voices[0];
+  const voice = rendered.voices[0];
   const structBars = voice?.bars ?? [];
   const bars = timeline.bars;
   if (bars.length === 0 || structBars.length === 0) return px(0);
@@ -228,7 +245,7 @@ export function timeToX(timeline: JotTimeline, seconds: number): Pixels {
 export function xToTime(timeline: JotTimeline, x: number): number {
   const rendered = timeline.rendered;
   if (!rendered) return 0;
-  const voice = rendered.structure.voices[0];
+  const voice = rendered.voices[0];
   const structBars = voice?.bars ?? [];
   const bars = timeline.bars;
   if (bars.length === 0 || structBars.length === 0) return 0;

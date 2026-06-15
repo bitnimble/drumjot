@@ -1,0 +1,78 @@
+/* Colour-picker popover. Renders through a portal anchored to the
+   colour pot the user clicked; floats above the host dropdown menu
+   (z-index above panel surface) so it remains visible when the
+   overflow menu would otherwise clip it. */
+
+.panel {
+    /* Above the dropdown panel (z 1000) but still below modal dialogs
+       (z 1100+). */
+    z-index: 1050;
+    width: 240px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: var(--color-bg-cream);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    color: var(--color-text);
+}
+
+/* ─── Palette pot row ───────────────────────────────────────────────── */
+
+/* Auto-fit a flex row of fixed-size {@link ColorPot}s so the palette
+   pots match the menu-row pot pixel-for-pixel. Wraps to the next line
+   if the palette grows past what fits in the panel width. */
+.swatches {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+/* ─── HSL wheel ─────────────────────────────────────────────────────── */
+
+/* `react-colorful` ships its own absolutely-positioned thumb / pointer
+   chrome; we just size the root and let the library paint the rest.
+   Width matches the panel inner width so the wheel + S/L square take
+   the full space. */
+.wheel {
+    width: 100% !important;
+    height: 160px !important;
+}
+
+/* ─── Footer (hex input + reset) ────────────────────────────────────── */
+
+.footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.hexInput {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 8px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-base);
+    color: var(--color-text);
+    font-family: inherit;
+}
+
+.hexInput:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
+.reset {
+    composes: ghost from '../button/button.module.css';
+    composes: bodySm from '../../typography.module.css';
+    padding: 3px 8px;
+    color: var(--color-text-muted-alt);
+}
+
+.reset:disabled {
+    color: var(--color-text-disabled);
+    cursor: not-allowed;
+}
