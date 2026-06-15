@@ -4,7 +4,7 @@ import { downloadTextFile } from 'src/utils/download';
 import { DropdownButton, dropdownStyles } from 'src/ui/dropdown/dropdown';
 import { NumberStepper } from 'src/ui/number_stepper/number_stepper';
 import mixerStyles from '../mixer/mixer.module.css';
-import styles from './lyrics_row.module.css';
+import styles from './lyrics_track_view.module.css';
 
 /** Build a filesystem-friendly `.lrc` name from a track's source label.
  *  Drops a leading `Source · ` prefix, strips an existing `.lrc`

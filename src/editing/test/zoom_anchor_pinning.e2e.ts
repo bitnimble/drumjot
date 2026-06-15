@@ -27,7 +27,7 @@ test('cursor-anchored zoom keeps the anchor pinned, scale+scroll in lockstep', a
   await page.goto('/');
   await page.waitForFunction(() => typeof (window as any).drumjot?.loadDsl === 'function');
   await page.evaluate((src) => (window as any).drumjot.loadDsl(src), JOT);
-  await page.waitForSelector('[data-testid^="instrument-row-"]');
+  await page.waitForSelector('[data-testid^="instrument-track-"]');
 
   const result = await page.evaluate(async () => {
     const w = window as any;

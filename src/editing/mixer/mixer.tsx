@@ -3,17 +3,17 @@ import React from 'react';
 import { ViewConfig } from 'src/editing/viewport/view_config';
 import { jotPlayer } from 'src/editing/playback/player';
 import { MixerStoreContext } from './mixer_contexts';
-import { LyricsRow } from '../lyrics/lyrics_row';
+import { LyricsTrackView } from '../lyrics/lyrics_track_view';
 import styles from './mixer.module.css';
 import { TrackKey } from 'src/editing/tracks/tracks';
 import { GutterMasterRow } from './gutter_controls';
 import { MixerEndDropZone } from './mixer_drag';
-import { InstrumentRow } from './instrument_row';
+import { InstrumentTrackView } from './instrument_track_view';
 
 import type { LayerControls, AudioTrackControls } from './mixer_controls';
 // Re-exported so existing `from '.../mixer/mixer'` importers (jot_editor) keep
 // working; the definitions live in the leaf `mixer_controls.ts`.
-import { AudioTrackRow } from './audio_track_row';
+import { AudioTrackView } from './audio_track_view';
 export type { LayerControls, AudioTrackControls };
 
 
@@ -151,7 +151,7 @@ export const MixerView = observer(
             // nothing rather than crash if the maps race.
             if (!track) return null;
             return (
-              <AudioTrackRow
+              <AudioTrackView
                 key={reactKey}
                 id={key.id}
                 track={track}
@@ -162,10 +162,10 @@ export const MixerView = observer(
             );
           }
           if (key.kind === 'lyrics') {
-            return <LyricsRow key={reactKey} id={key.id} onSeek={onSeek} {...rowProps} />;
+            return <LyricsTrackView key={reactKey} id={key.id} onSeek={onSeek} {...rowProps} />;
           }
           return (
-            <InstrumentRow
+            <InstrumentTrackView
               key={reactKey}
               lane={key.lane}
               config={config}

@@ -11,7 +11,7 @@ import { MixerStore } from '../mixer_store';
 import { ViewportStore } from '../../viewport/viewport_store';
 import type { TrackKey } from 'src/editing/tracks/tracks';
 import type { LayerControls } from '../mixer_controls';
-import { InstrumentRow } from '../instrument_row';
+import { InstrumentTrackView } from '../instrument_track_view';
 import { Gallery, Variant } from 'src/ui/stories/_variants';
 
 /**
@@ -27,7 +27,7 @@ import { Gallery, Variant } from 'src/ui/stories/_variants';
  * everything" path) rather than an empty strip.
  */
 const meta: Meta = {
-  title: 'Mixer/InstrumentRow',
+  title: 'Mixer/InstrumentTrackView',
   parameters: { layout: 'fullscreen' },
 };
 export default meta;
@@ -49,7 +49,7 @@ const NOOP_DRAG = {
   onResizeGutterStart: fn(),
 };
 
-/** One InstrumentRow backed by a fresh real store trio, pointed at the
+/** One InstrumentTrackView backed by a fresh real store trio, pointed at the
  *  first real lane of the loaded jot. `muted` flips the row's audibility
  *  so the gutter renders its dimmed state. */
 function Row({ muted = false }: { muted?: boolean }) {
@@ -85,7 +85,7 @@ function Row({ muted = false }: { muted?: boolean }) {
     <StructuralContext.Provider value={structural}>
       <MixerStoreContext.Provider value={mixer}>
         <ViewportStoreContext.Provider value={viewport}>
-          <InstrumentRow
+          <InstrumentTrackView
             lane={lane}
             config={jotEditorStore.viewConfig}
             showBrackets

@@ -7,7 +7,7 @@ import { ViewportStoreContext } from '../viewport/viewport_contexts';
 import { intersectsBeatRange } from '../utils/windowing';
 import { PositionedLine, PositionedWord } from './lyric_layout';
 import { lyricShiftKey } from './lyrics_measure';
-import styles from './lyrics_row.module.css';
+import styles from './lyrics_track_view.module.css';
 
 /** Treat sub-millisecond gaps between rendered and raw model times as
  *  noise (floating-point round-trip through JSON, tiny rounding inside
@@ -229,7 +229,7 @@ type LyricsPlayhead = {
 };
 
 /**
- * Windowed DOM for the lyric-line chips. Split out of `LyricsRow`
+ * Windowed DOM for the lyric-line chips. Split out of `LyricsTrackView`
  * so a scroll / zoom tick re-renders only this map, not the row gutter
  * (label, controls, overflow menu). Renders only lines whose beat span
  * intersects {@link JotEditorStore.visibleBeatRange}. Reads the row's

@@ -22,7 +22,7 @@ export const ProvenancePresenterContext =
 /**
  * Routes the loaded debug bundle's per-note provenance to two deep
  * consumers: `NoteView` (looks up its own entry via `byTick` to render
- * the `Debug details` collapsible in the selection label) and `InstrumentRow`
+ * the `Debug details` collapsible in the selection label) and `InstrumentTrackView`
  * (reads `rejectedByLane` + `leadBars` + `showFiltered` to render
  * filtered onsets as ghost overlays). `null` outside the View, or when
  * no bundle is loaded — both consumers no-op in that case.
@@ -31,7 +31,7 @@ export type NoteProvenanceContextValue = {
   /** Keyed by `${lane}:${tick}` — exact-match lookup from NoteView. */
   byTick: Map<string, NoteProvenanceEntry>;
   /**
-   * Per-lane rejected onsets used by InstrumentRow to render the dashed
+   * Per-lane rejected onsets used by InstrumentTrackView to render the dashed
    * ghost overlays. Out-of-range entries are pre-filtered out (they
    * have no anchored bar to render against).
    */

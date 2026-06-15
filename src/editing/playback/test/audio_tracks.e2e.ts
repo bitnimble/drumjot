@@ -30,7 +30,7 @@ function trackIds(page: Page): Promise<string[]> {
 async function loadRockLoop(page: Page): Promise<void> {
   await page.goto('/');
   await page.getByRole('button', { name: 'Simple rock loop' }).click();
-  await page.waitForSelector('[data-testid^="instrument-row-"]');
+  await page.waitForSelector('[data-testid^="instrument-track-"]');
 }
 
 /**

@@ -31,7 +31,7 @@ test('enhanced-LRC import → export round-trips word durations + offset', async
   await page.goto('/');
   // Need a score on screen for the mixer (and the lyrics row) to exist.
   await page.getByRole('button', { name: 'Simple rock loop' }).click();
-  await page.waitForSelector('[data-testid^="instrument-row-"]');
+  await page.waitForSelector('[data-testid^="instrument-track-"]');
 
   // Import the word-aligned file through the existing file loader.
   await openLyricsMenu(page);
@@ -45,7 +45,7 @@ test('enhanced-LRC import → export round-trips word durations + offset', async
     buffer: Buffer.from(ENHANCED_LRC, 'utf-8'),
   });
 
-  const row = page.getByTestId('lyrics-row');
+  const row = page.getByTestId('lyrics-track');
   await expect(row).toBeVisible();
   await expect(row.getByText(/File · roundtrip\.lrc/)).toBeVisible();
 

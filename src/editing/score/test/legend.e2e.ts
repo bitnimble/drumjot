@@ -24,7 +24,7 @@ test('legend renders lanes in order, with names and distinct colours', async ({ 
   await page.goto('/');
   await page.waitForFunction(() => typeof (window as any).drumjot?.loadDsl === 'function');
   await page.evaluate((src) => (window as any).drumjot.loadDsl(src), JOT);
-  await page.waitForSelector('[data-testid^="instrument-row-"]');
+  await page.waitForSelector('[data-testid^="instrument-track-"]');
 
   const chips = page.locator('[data-testid="legend-chip"]');
   await expect(chips).toHaveCount(3);

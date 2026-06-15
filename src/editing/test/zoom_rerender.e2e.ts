@@ -4,7 +4,7 @@ import { expect, test } from '@playwright/test';
  * Regression guard for the zoom-performance fix.
  *
  * Zooming must NOT re-render `JotEditor` (and therefore not its score
- * subtree: mixer → every InstrumentRow → BarViews → NoteViews). Two
+ * subtree: mixer → every InstrumentTrackView → BarViews → NoteViews). Two
  * mechanisms keep it off the React render path:
  *   1. positions flow through the `--px-per-beat` CSS variable, not props;
  *   2. `createJotEditor` hands `JotEditor` referentially-stable props, and the
@@ -30,7 +30,7 @@ test('zoom does not re-render JotEditor', async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => typeof (window as any).drumjot?.loadDsl === 'function');
   await page.evaluate((src) => (window as any).drumjot.loadDsl(src), JOT);
-  await page.waitForSelector('[data-testid^="instrument-row-"]');
+  await page.waitForSelector('[data-testid^="instrument-track-"]');
 
   const result = await page.evaluate(async () => {
     const w = window as any;
@@ -100,7 +100,7 @@ test('zoom does not re-render hidden note popovers', async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => typeof (window as any).drumjot?.loadDsl === 'function');
   await page.evaluate((src) => (window as any).drumjot.loadDsl(src), DENSE_JOT);
-  await page.waitForSelector('[data-testid^="instrument-row-"]');
+  await page.waitForSelector('[data-testid^="instrument-track-"]');
 
   const settle = async () => {
     // Two RAFs to let MobX reactions + React commit flush.

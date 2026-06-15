@@ -21,14 +21,14 @@ import { EditingStoreContext, EditingPresenterContext } from '../editing_context
 import type { PlaceholderNote } from '../editing_store';
 import { ViewportStore } from '../viewport/viewport_store';
 import { barsRowWidthSeed, intersectsBeatRange } from '../utils/windowing';
-import { InstrumentRowOverflowMenu } from './overflow_menus';
+import { InstrumentTrackOverflowMenu } from './overflow_menus';
 import { RowVolumeSlider } from './gutter_controls';
 import { MixerRowDragProps, useMixerRowDropTarget, MixerDragHandle } from './mixer_drag';
 import type { LayerControls } from './mixer_controls';
 
 /**
  * The windowed bar list for one instrument row. Split out of
- * {@link InstrumentRow} so the only thing that re-renders on a scroll /
+ * {@link InstrumentTrackView} so the only thing that re-renders on a scroll /
  * zoom tick is this bar map, the row gutter (label, fader, M/S, overflow
  * menu) reads no scroll observable and stays put. Mirrors the
  * waveform-chunk visibility pattern ({@link AudioTrackWaveformCanvas}):
@@ -102,7 +102,7 @@ const WindowedBarList = observer(function WindowedBarList({
   );
 });
 
-export const InstrumentRow = observer(
+export const InstrumentTrackView = observer(
   ({
     lane,
     config,
@@ -245,7 +245,7 @@ export const InstrumentRow = observer(
     return (
       <div
         className={classNames(
-          styles.instrumentRow,
+          styles.instrumentTrack,
           groupStart && styles.mixerRowGroupStart,
           groupEnd && styles.mixerRowGroupEnd,
           inGroup && styles.mixerRowInGroup,
@@ -253,12 +253,12 @@ export const InstrumentRow = observer(
           drop.isDropIndicatorAbove && styles.mixerDropIndicatorAbove,
           drop.isDropIndicatorBelow && styles.mixerDropIndicatorBelow
         )}
-        data-testid={`instrument-row-${lane}`}
+        data-testid={`instrument-track-${lane}`}
         onDragOver={drop.onDragOver}
         onDragLeave={drop.onDragLeave}
         onDrop={drop.onDrop}
       >
-        <div className={styles.instrumentRowGutter}>
+        <div className={styles.instrumentTrackGutter}>
           <MixerDragHandle
             idx={idx}
             onDragStartIdx={onDragStartIdx}
@@ -269,23 +269,23 @@ export const InstrumentRow = observer(
           {/* Two-row stack mirroring the audio-track row: header (label +
               overflow trigger) on top, slider + M/S on a second line
               below. */}
-          <div className={styles.instrumentRowContent}>
-            <div className={styles.instrumentRowHeader}>
+          <div className={styles.instrumentTrackContent}>
+            <div className={styles.instrumentTrackHeader}>
               <div
-                className={classNames(styles.instrumentRowLabel, !audible && styles.musicTrackLabelDim)}
+                className={classNames(styles.instrumentTrackLabel, !audible && styles.musicTrackLabelDim)}
                 title={instrumentName ? `${instrumentName} (lane ${lane})` : `Lane ${lane}`}
               >
                 <span className={styles.gutterLane}>{lane}</span>
-                {instrumentName && <span className={styles.instrumentRowName}>{instrumentName}</span>}
+                {instrumentName && <span className={styles.instrumentTrackName}>{instrumentName}</span>}
               </div>
               {instrumentTrack && (
-                <InstrumentRowOverflowMenu
+                <InstrumentTrackOverflowMenu
                   instrumentTrack={instrumentTrack}
                   trackLabel={labelText}
                 />
               )}
             </div>
-            <div className={styles.instrumentRowControls}>
+            <div className={styles.instrumentTrackControls}>
               <RowVolumeSlider
                 value={layerControls.volumeFor(lane)}
                 onChange={(v) => layerControls.onSetVolume(lane, v)}

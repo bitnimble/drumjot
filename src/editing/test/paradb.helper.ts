@@ -40,7 +40,7 @@ export async function loadParadbZip(page: Page): Promise<void> {
   await page.evaluate(() =>
     (window as unknown as { drumjot: { loadTestJot(): void } }).drumjot.loadTestJot(),
   );
-  await page.waitForSelector('[data-testid^="instrument-row-"]');
+  await page.waitForSelector('[data-testid^="instrument-track-"]');
 
   await page.getByRole('button', { name: 'File', exact: true }).click();
   await page.getByRole('button', { name: 'Load', exact: true }).click();
@@ -63,5 +63,5 @@ export async function loadParadbZip(page: Page): Promise<void> {
     null,
     { timeout: 90_000 },
   );
-  await page.waitForSelector('[data-testid^="instrument-row-"]');
+  await page.waitForSelector('[data-testid^="instrument-track-"]');
 }

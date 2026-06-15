@@ -32,7 +32,7 @@ test('loads a .jot song from disk and renders it', async ({ page }) => {
 
   await expect(page.locator('h2')).toContainText('Smoke Test Song');
   // The chart uses six kit pieces; each becomes its own instrument row.
-  const rows = page.locator('[data-testid^="instrument-row-"]');
+  const rows = page.locator('[data-testid^="instrument-track-"]');
   await expect.poll(() => rows.count()).toBeGreaterThanOrEqual(4);
   // And it actually rendered notes (not just empty lanes).
   await expect.poll(() => page.locator('[data-noseek="true"]').count()).toBeGreaterThan(8);
@@ -42,5 +42,5 @@ test('loads a built-in example from the empty-state picker', async ({ page }) =>
   await page.goto('/');
   await page.getByRole('button', { name: 'Simple rock loop' }).click();
   await expect(page.locator('h2')).toContainText('Simple rock loop');
-  await page.waitForSelector('[data-testid^="instrument-row-"]');
+  await page.waitForSelector('[data-testid^="instrument-track-"]');
 });

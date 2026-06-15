@@ -20,7 +20,7 @@ import { PopoverPortal } from './popover_portal';
 // Bars-row rendering: a single bar (BarView) and everything it draws, 
 // note glyphs (NoteView + flam/drag grace), pattern/tuplet brackets, and
 // the note-description helpers behind the selection-label tooltip. Split
-// out of score.tsx; consumed by the mixer’s InstrumentRow.
+// out of score.tsx; consumed by the mixer’s InstrumentTrackView.
 
 /**
  * True when `beat` falls inside any tuplet bracket on this bar. The

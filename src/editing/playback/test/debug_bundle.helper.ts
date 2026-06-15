@@ -43,7 +43,7 @@ export async function loadDebugBundle(page: Page): Promise<void> {
       window as unknown as { drumjot: { loadTestJot(): void } }
     ).drumjot.loadTestJot(),
   );
-  await page.waitForSelector('[data-testid^="instrument-row-"]');
+  await page.waitForSelector('[data-testid^="instrument-track-"]');
 
   await page.getByRole('button', { name: 'File', exact: true }).click();
   await page.getByRole('button', { name: 'Load', exact: true }).click();

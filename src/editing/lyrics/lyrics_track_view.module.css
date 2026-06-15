@@ -3,7 +3,7 @@
    by --layer-beats × --px-per-beat) so the row aligns flush with audio
    tracks and instrument rows above/below. */
 
-.lyricsRow {
+.lyricsTrack {
     position: relative;
     display: flex;
     min-width: max-content;
@@ -256,7 +256,7 @@
    `--lyric-word-beat-offset` and `--lyric-word-beat-width` come from
    React; the row's --px-per-beat root var scales them with zoom.
    `--lyric-word-shift` is a JS-applied per-word px offset (see the
-   layout effect in lyrics_row.tsx) that handles glyph-level collisions
+   layout effect in lyrics_track_view.tsx) that handles glyph-level collisions
    when two start times are close enough that the previous word's text
    would overlap. The shift is added to `left` AND subtracted from
    `width`, so the right edge stays anchored to the word's end time -
@@ -317,7 +317,7 @@
 }
 
 /* Furigana mode: at least one word in the track carries a hiragana reading
-   (toggled from lyrics_row.tsx). Native <ruby> places its reading in the
+   (toggled from lyrics_track_view.tsx). Native <ruby> places its reading in the
    line's leading and only grows the line box if the leading can't contain
    it - so with a normal line-height the annotated words get taller than the
    plain ones beside them and their kanji drop off the shared baseline. Open
@@ -335,7 +335,7 @@
 
 /* Furigana ruby. Kanji runs in Japanese lyrics carry a hiragana reading
    stacked above them via the native <ruby>/<rt> element (see
-   lyrics_row.tsx::WordText). The base run inherits the row's variable-font
+   lyrics_track_view.tsx::WordText). The base run inherits the row's variable-font
    axes; the annotation column is fixed and small. */
 .ruby {
     ruby-position: over;

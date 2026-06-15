@@ -74,7 +74,7 @@ function makeRow(overrides: Partial<LrclibRow> = {}): LrclibRow {
 async function loadRockLoop(page: Page): Promise<void> {
   await page.goto('/');
   await page.getByRole('button', { name: 'Simple rock loop' }).click();
-  await page.waitForSelector('[data-testid^="instrument-row-"]');
+  await page.waitForSelector('[data-testid^="instrument-track-"]');
 }
 
 /** Open File → Lyrics so the lyrics loaders are reachable. */
@@ -93,7 +93,7 @@ async function openLoadMenu(page: Page): Promise<void> {
  *  remove live in this portaled panel). */
 async function openLyricsOverflow(page: Page): Promise<void> {
   await page
-    .getByTestId('lyrics-row')
+    .getByTestId('lyrics-track')
     .locator('button[title="More actions for this lyrics track"]')
     .click();
 }
@@ -128,7 +128,7 @@ test('LRCLIB single result still requires explicit Load click', async ({ page })
   await page.getByTestId('lyrics-search-load').click();
   await expect(page.getByTestId('lyrics-search-loaded')).toBeVisible();
   await expect(page.getByTestId('lyrics-search-modal')).toHaveCount(0);
-  await expect(page.getByTestId('lyrics-row')).toBeVisible();
+  await expect(page.getByTestId('lyrics-track')).toBeVisible();
   await expect(page.getByTestId('lyrics-line-0')).toBeVisible();
 });
 
@@ -179,7 +179,7 @@ test('Load lyrics from file populates the row + clears via the overflow menu', a
   await loadRockLoop(page);
   await loadSampleLrcFromFile(page);
 
-  const row = page.getByTestId('lyrics-row');
+  const row = page.getByTestId('lyrics-track');
   await expect(row).toBeVisible();
   await expect(row.getByText(/File · example\.lrc/)).toBeVisible();
   await expect(page.getByTestId('lyrics-line-0')).toBeVisible();
@@ -194,7 +194,7 @@ test('Load lyrics from file populates the row + clears via the overflow menu', a
 test('Offset input accepts a value', async ({ page }) => {
   await loadRockLoop(page);
   await loadSampleLrcFromFile(page);
-  await expect(page.getByTestId('lyrics-row')).toBeVisible();
+  await expect(page.getByTestId('lyrics-track')).toBeVisible();
 
   await openLyricsOverflow(page);
   const input = page.locator('input[data-testid^="lyrics-offset-input-"]');
@@ -206,7 +206,7 @@ test('Offset input accepts a value', async ({ page }) => {
 test('Loading a new jot drops previously-loaded lyrics', async ({ page }) => {
   await loadRockLoop(page);
   await loadSampleLrcFromFile(page);
-  await expect(page.getByTestId('lyrics-row')).toBeVisible();
+  await expect(page.getByTestId('lyrics-track')).toBeVisible();
 
   // Loading an audio track is additive and must NOT clear lyrics.
   await openLoadMenu(page);
@@ -215,7 +215,7 @@ test('Loading a new jot drops previously-loaded lyrics', async ({ page }) => {
     page.getByRole('button', { name: 'Load audio track(s)' }).click(),
   ]);
   await chooser2.setFiles(TONE_WAV);
-  await expect(page.getByTestId('lyrics-row')).toBeVisible();
+  await expect(page.getByTestId('lyrics-track')).toBeVisible();
 
   // A wholesale song change (loading a different example) clears them.
   await page.evaluate(() => {
@@ -225,5 +225,5 @@ test('Loading a new jot drops previously-loaded lyrics', async ({ page }) => {
     const other = examples.find((e) => e.id !== doc.currentExampleId);
     if (other) jotEditorPresenter.loadExample(other.id);
   });
-  await expect(page.getByTestId('lyrics-row')).toHaveCount(0);
+  await expect(page.getByTestId('lyrics-track')).toHaveCount(0);
 });

@@ -27,7 +27,7 @@ test('insert mode: hover previews a placeholder, click commits a note', async ({
   await expect(page.getByTestId('mode-insert')).toHaveAttribute('aria-pressed', 'true');
 
   // Hovering the sparse Crash lane's bars row shows the placeholder preview.
-  const crashBars = page.locator('[data-testid="instrument-row-c"] [data-bars-row]');
+  const crashBars = page.locator('[data-testid="instrument-track-c"] [data-bars-row]');
   await crashBars.hover({ position: { x: 250, y: 15 } });
   await expect(page.getByTestId('placeholder-note')).toBeVisible();
 

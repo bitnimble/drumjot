@@ -8,7 +8,7 @@
  * (`shifts: Map<key, px>`) is the source of truth; the renderer writes
  * each value into `--lyric-word-shift` as a render sink.
  *
- * CSS axis formulas (must stay in lockstep with `lyrics_row.module.css`):
+ * CSS axis formulas (must stay in lockstep with `lyrics_track_view.module.css`):
  *   letter-spacing: clamp(-0.6, (pxPerBeat - 224) * 0.6/179, 0)   px
  *   --lyric-wdth  : clamp(75,   75 + (pxPerBeat - 45) * 25/179, 100)
  *   --lyric-wght  : clamp(300, 300 + (pxPerBeat - 45) * 100/179, 400)
@@ -19,7 +19,7 @@
  * Canvas font shorthand carries `wdth` via `font-stretch <percent>` and
  * `wght` via the numeric `font-weight`. Variable axes other than these
  * two would need `font-variation-settings`, which canvas 2D doesn't
- * expose, but lyrics_row only animates wdth/wght so the canvas form
+ * expose, but lyrics_track_view only animates wdth/wght so the canvas form
  * round-trips faithfully on Chromium / Firefox / Safari ≥ 16.
  *
  * Font loading: `document.fonts.ready` flips `fontReady` true once
@@ -35,12 +35,12 @@ import { RubySegment } from 'src/lyrics/furigana';
 const FONT_FAMILY =
   "'Bricolage Grotesque', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
 /** Font size inherited from `.lyricLine`. Keep in lockstep with
- *  `lyrics_row.module.css::.lyricLine { font-size: 22px }`. */
+ *  `lyrics_track_view.module.css::.lyricLine { font-size: 22px }`. */
 const LYRIC_FONT_SIZE_PX = 22;
 const ACTIVE_FONT_WEIGHT = 800;
 const MIN_GAP_PX = 4;
 /** Furigana annotation font. Keep in lockstep with
- *  `lyrics_row.module.css::.lyricWordText rt`: 0.65em of the 22px base =
+ *  `lyrics_track_view.module.css::.lyricWordText rt`: 0.65em of the 22px base =
  *  14.3px (the `--lyric-rt-size` var), weight 400, default (100%) width,
  *  the `rt` rule re-declares `font-variation-settings` to `wght 400`, which
  *  also resets `wdth` to the font's 100 default. */

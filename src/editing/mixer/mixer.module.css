@@ -97,7 +97,7 @@
 /* Drum-instrument row in the unified mixer. Same gutter geometry as
    .musicTrack so audio and drum rows look like siblings (same sticky
    132px gutter, matching control column on the right). */
-.instrumentRow {
+.instrumentTrack {
     position: relative;
     display: flex;
     min-width: max-content;
@@ -105,14 +105,14 @@
     background: var(--color-bg-cream-strong);
 }
 
-.instrumentRow:first-of-type,
-.musicTrack + .instrumentRow,
-.gutterMasterRow + .instrumentRow,
+.instrumentTrack:first-of-type,
+.musicTrack + .instrumentTrack,
+.gutterMasterRow + .instrumentTrack,
 /* A group-start instrument row sits 12px below the previous row's
    border-bottom (see .mixerRowGroupStart), so it needs its own
    border-top; otherwise its upper edge floats in the gap with no
    visible separator. */
-.instrumentRow.mixerRowGroupStart {
+.instrumentTrack.mixerRowGroupStart {
     border-top: 1px solid var(--color-border);
 }
 
@@ -122,7 +122,7 @@
    instrument row that STARTS a new group (different groupId from the
    audio above it) keeps its top border so the cluster boundary still
    reads. */
-.musicTrack + .instrumentRow:not(.mixerRowGroupStart) {
+.musicTrack + .instrumentTrack:not(.mixerRowGroupStart) {
     border-top: none;
 }
 
@@ -140,7 +140,7 @@
     border-bottom-width: 2px;
 }
 
-.instrumentRowGutter {
+.instrumentTrackGutter {
     composes: scrollStickyHorizontal from '../jot_editor.module.css';
     z-index: 6;
     flex: 0 0 auto;
@@ -159,7 +159,7 @@
    `musicTrackContent` so audio and drum rows have the same right-hand-
    side anatomy; the stacking is what lets the label use the full gutter
    width instead of sharing it with the controls. */
-.instrumentRowContent {
+.instrumentTrackContent {
     flex: 1 1 auto;
     min-width: 0;
     display: flex;
@@ -179,7 +179,7 @@
    its own line when the label's intrinsic-content width nudged past
    the column. Pinning the wrap + shrink behaviour keeps both children
    on one row regardless of how long the instrument name is. */
-.instrumentRowHeader {
+.instrumentTrackHeader {
     display: flex;
     flex-direction: row;
     flex-wrap: nowrap;
@@ -195,11 +195,11 @@
    space, and the shrinkable trigger collapses to zero width before
    wrap kicks in. Pin its basis to its content size so the 18×18
    trigger always renders at its intrinsic width. */
-.instrumentRowHeader > :last-child {
+.instrumentTrackHeader > :last-child {
     flex: 0 0 auto;
 }
 
-.instrumentRowLabel {
+.instrumentTrackLabel {
     composes: bodySm from '../../typography.module.css';
     display: flex;
     flex-direction: row;
@@ -215,7 +215,7 @@
     transition: opacity 120ms ease;
 }
 
-.instrumentRowControls {
+.instrumentTrackControls {
     display: flex;
     flex-direction: row;
     align-items: center;
@@ -224,7 +224,7 @@
     flex: 0 0 auto;
 }
 
-.instrumentRowName {
+.instrumentTrackName {
     composes: bodySm from '../../typography.module.css';
     color: var(--color-text-faint-strong);
     /* stylelint-disable-next-line property-disallowed-list -- mid-weight 500 sits between bodySm's default and the parent label's 600 so the instrument's full name reads as a softer secondary line. */

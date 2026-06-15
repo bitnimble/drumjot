@@ -204,7 +204,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
   // (rather than as inline arrows in `View`'s render) keeps their
   // reference identity constant across `View` re-renders. That's load-
   // bearing: `JotEditor` is `observer`-wrapped (React.memo), and on a long
-  // song its subtree (mixer → every InstrumentRow → BarViews → NoteViews)
+  // song its subtree (mixer → every InstrumentTrackView → BarViews → NoteViews)
   // is the expensive reconciliation. A fresh closure prop on any `View`
   // re-render (e.g. the zoom slider writing `store.zoom`) would defeat
   // that memo and reconcile the whole score; stable props let the memo

@@ -123,7 +123,7 @@ export class SelectionStore {
 /**
  * Routes the active {@link SelectionStore} to deep score chrome (today:
  * `NoteView`) without threading props through `JotEditor → MixerView →
- * InstrumentRow → BarView`. `null` outside the view so a `NoteView`
+ * InstrumentTrackView → BarView`. `null` outside the view so a `NoteView`
  * rendered in isolation just no-ops the click-to-select interaction.
  */
 export const SelectionContext = React.createContext<SelectionStore | null>(null);

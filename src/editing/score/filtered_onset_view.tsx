@@ -9,7 +9,7 @@ import { PopoverPortal } from './popover_portal';
 
 /**
  * Renders one rejected onset as a dashed ghost circle at its detected
- * `(bar, beat_in_bar)` position inside an `InstrumentRow`'s bars row.
+ * `(bar, beat_in_bar)` position inside an `InstrumentTrackView`'s bars row.
  * Absolutely positioned via the same `--note-pad-px` / `--px-per-beat`
  * CSS vars the real notes use, but with `--filtered-beat` = the
  * onset's cumulative beat offset from the start of the row (lead-in +

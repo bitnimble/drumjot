@@ -6,7 +6,7 @@
 
 /* Sticky-gutter ruler above the audio tracks / score that labels each
    bar boundary with bar number and playback time. Same sticky gutter
-   width as `.musicTrackGutter` / `.instrumentRowGutter` (`--gutter-width`,
+   width as `.musicTrackGutter` / `.instrumentTrackGutter` (`--gutter-width`,
    driven by the resize handle) so the column stays pinned during
    horizontal scroll exactly like the rows below it. */
 .timelineHeader {
@@ -593,11 +593,11 @@
 }
 
 /* Lift any note that's currently rendering its `.noteLabel` (hover OR
-   selection) above sibling `.instrumentRow`s in the mixer; the inline
+   selection) above sibling `.instrumentTrack`s in the mixer; the inline
    label extends below the note, and without this the later-painted
-   `.instrumentRow` below would cover it (only the bottommost row,
+   `.instrumentTrack` below would cover it (only the bottommost row,
    typically the kick, escapes that). The lane chain (.lane / .bar /
-   .barsRow / .instrumentRow) is all `position: relative; z-index:
+   .barsRow / .instrumentTrack) is all `position: relative; z-index:
    auto`, so any positive z-index here outranks them. */
 .note.noteShowingLabel {
     z-index: 20;

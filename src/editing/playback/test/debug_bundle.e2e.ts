@@ -18,8 +18,8 @@ test('full debug bundle loads and renders the complete viewer', async ({
   await loadDebugBundle(page);
 
   // Score rendered: at least one instrument row.
-  const instrumentRows = page.locator('[data-testid^="instrument-row-"]');
-  await expect.poll(() => instrumentRows.count()).toBeGreaterThanOrEqual(1);
+  const instrumentTracks = page.locator('[data-testid^="instrument-track-"]');
+  await expect.poll(() => instrumentTracks.count()).toBeGreaterThanOrEqual(1);
 
   // Per-stem audio mounted: at least one audio-track row.
   const audioRows = page.locator('[data-testid^="audio-track-row-"]');

@@ -142,7 +142,7 @@ export const AudioTrackOverflowMenu = observer(({
  *  {@link AudioTrackOverflowMenu} so future additions (per-lane
  *  velocity scale, label rename, etc.) drop in without an entirely
  *  new affordance. */
-export const InstrumentRowOverflowMenu = observer(({
+export const InstrumentTrackOverflowMenu = observer(({
   instrumentTrack,
   trackLabel,
 }: {

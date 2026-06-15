@@ -40,7 +40,7 @@ function audioTrackLabel(filename: string): string {
   return filename.replace(/\.[^./\\]+$/, '') || filename;
 }
 
-export const AudioTrackRow = observer(
+export const AudioTrackView = observer(
   ({
     id,
     track,
@@ -204,7 +204,7 @@ export const AudioTrackRow = observer(
 
 /**
  * One drum-instrument row in the unified mixer; exactly one DSL lane
- * (kick, snare, hi-hat, …). Mirrors `AudioTrackRow`: same gutter
+ * (kick, snare, hi-hat, …). Mirrors `AudioTrackView`: same gutter
  * geometry, M/S/volume controls, drag handle, bars-row + barlines +
  * beat dividers; the lane content is this lane's notes (drawn through
  * `BarView` with `lanes=[lane]`). The topmost instrument row in the

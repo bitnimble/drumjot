@@ -17,7 +17,7 @@ import {
 import { positionLyricLines } from './lyric_layout';
 import { WindowedLines } from './lyric_chips';
 import { LyricsOverflowMenu } from './lyrics_overflow_menu';
-import styles from './lyrics_row.module.css';
+import styles from './lyrics_track_view.module.css';
 import { Playhead } from '../playback/playhead';
 import { seekFromClick } from '../score/seek';
 import { barsRowWidthSeed } from '../utils/windowing';
@@ -29,7 +29,7 @@ const LYRICS_ROW_HEIGHT = 64;
 
 /**
  * The time-aligned lyrics row in the unified mixer. Same gutter geometry
- * as `AudioTrackRow` / `InstrumentRow`: drag handle on the leftmost edge, a
+ * as `AudioTrackView` / `InstrumentTrackView`: drag handle on the leftmost edge, a
  * stacked label + controls column on the right, sticky-left so it stays
  * pinned during horizontal scroll. The right-hand bars row carries one
  * `<span>` per lyric line, absolutely positioned at the beat offset
@@ -41,7 +41,7 @@ const LYRICS_ROW_HEIGHT = 64;
  * "wholesale song change" loaders, so a stale lyric set can't bleed
  * onto a new song.
  */
-export const LyricsRow = observer(
+export const LyricsTrackView = observer(
   ({
     id,
     onSeek,
@@ -82,7 +82,7 @@ export const LyricsRow = observer(
         : 'Aligning lyrics to audio';
 
     // Layer-level total beats for the bars-row width. Same pattern as
-    // AudioTrackRow / InstrumentRow: read off the structural cache (zoom-
+    // AudioTrackView / InstrumentTrackView: read off the structural cache (zoom-
     // invariant) so this row doesn't re-render on every wheel tick;
     // CSS calc handles the per-zoom pixel scaling.
     const structureLayer = structural.layers[0];
@@ -210,7 +210,7 @@ export const LyricsRow = observer(
     }, [positioned, furiganaRevision]);
 
     // Reactive active-line/word state. Reading `playhead.activeLineIdx`
-    // here re-renders `LyricsRow` only when the active line index *flips*
+    // here re-renders `LyricsTrackView` only when the active line index *flips*
     // (a few times per second), not on every `currentTime` tick - the
     // computed dedupes by output value. Child chips are `observer`s
     // wrapped in `React.memo`, so identical props bail; only the two
@@ -249,7 +249,7 @@ export const LyricsRow = observer(
     return (
       <div
         className={classNames(
-          styles.lyricsRow,
+          styles.lyricsTrack,
           groupStart && styles.mixerRowGroupStart,
           groupEnd && styles.mixerRowGroupEnd,
           inGroup && styles.mixerRowInGroup,
@@ -257,7 +257,7 @@ export const LyricsRow = observer(
           drop.isDropIndicatorAbove && styles.mixerDropIndicatorAbove,
           drop.isDropIndicatorBelow && styles.mixerDropIndicatorBelow,
         )}
-        data-testid="lyrics-row"
+        data-testid="lyrics-track"
         onDragOver={drop.onDragOver}
         onDragLeave={drop.onDragLeave}
         onDrop={drop.onDrop}

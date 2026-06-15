@@ -27,7 +27,7 @@ async function loadRockJot(page: Page): Promise<void> {
   // Load the built-in rock jot (h/s/k instrument rows) through the global.
   await page.evaluate(() => (window as unknown as { drumjot: { loadTestJot(): void } }).drumjot.loadTestJot());
   await expect(page.locator('h2')).toContainText('Simple rock loop');
-  await page.waitForSelector('[data-testid^="instrument-row-"]');
+  await page.waitForSelector('[data-testid^="instrument-track-"]');
 }
 
 /**
@@ -79,7 +79,7 @@ async function selectNoteAndProbe(page: Page, rowTestId: string) {
 
 test('note label popover paints over the track below it (top row)', async ({ page }) => {
   await loadRockJot(page);
-  const probe = await selectNoteAndProbe(page, 'instrument-row-h');
+  const probe = await selectNoteAndProbe(page, 'instrument-track-h');
 
   // Sanity: the popover must actually extend past its own row, otherwise
   // the "overlaps the track below" assertion is vacuous.
@@ -94,7 +94,7 @@ test('note label popover paints over the track below it (top row)', async ({ pag
 
 test('note label popover paints over the track below it (middle row)', async ({ page }) => {
   await loadRockJot(page);
-  const probe = await selectNoteAndProbe(page, 'instrument-row-s');
+  const probe = await selectNoteAndProbe(page, 'instrument-track-s');
 
   expect(probe.labelBottom).toBeGreaterThan(probe.rowBottom);
   expect(probe.samples.some((s) => s.belowRow)).toBe(true);

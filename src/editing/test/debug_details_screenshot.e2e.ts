@@ -27,7 +27,7 @@ test('captures the debug-details timing visualization', async ({ page }) => {
     (window as unknown as { drumjot: { loadTestJot(): void } }).drumjot.loadTestJot()
   );
   await expect(page.locator('h2')).toContainText('Simple rock loop');
-  await page.waitForSelector('[data-testid="instrument-row-h"]');
+  await page.waitForSelector('[data-testid="instrument-track-h"]');
 
   // Load the 0.5 s tone fixture as the only audio track. We set files
   // directly on the hidden `<input type="file" accept="audio/*,.flac">`
@@ -114,7 +114,7 @@ test('captures the debug-details timing visualization', async ({ page }) => {
   // to click the Nth `[data-noseek="true"]` inside the hi-hat row, where
   // N matches the index we picked above (6, capped to row length).
   await page.evaluate(() => {
-    const row = document.querySelector('[data-testid="instrument-row-h"]')!;
+    const row = document.querySelector('[data-testid="instrument-track-h"]')!;
     const notes = row.querySelectorAll('[data-noseek="true"]');
     if (notes.length === 0) throw new Error('no hi-hat note in row');
     const idx = Math.min(6, notes.length - 1);

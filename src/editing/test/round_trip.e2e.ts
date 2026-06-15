@@ -82,7 +82,7 @@ test('a rich song survives an import -> export-to-DSL -> reimport round-trip', a
 
   // Import + render.
   await page.evaluate((src) => (window as any).drumjot.loadDsl(src), SONG);
-  await page.waitForSelector('[data-testid^="instrument-row-"]');
+  await page.waitForSelector('[data-testid^="instrument-track-"]');
   const gridBefore = (await page.evaluate(READ_GRID)) as Array<{
     bars: Array<{
       tracks: Record<string, Array<{ mods: string[] }>>;
@@ -106,7 +106,7 @@ test('a rich song survives an import -> export-to-DSL -> reimport round-trip', a
   const dsl1 = await page.evaluate(() => (window as any).drumjot.toDsl() as string);
   expect(dsl1).toContain('title: "Round Trip"');
   await page.evaluate((src) => (window as any).drumjot.loadDsl(src), dsl1);
-  await page.waitForSelector('[data-testid^="instrument-row-"]');
+  await page.waitForSelector('[data-testid^="instrument-track-"]');
   const gridAfter = await page.evaluate(READ_GRID);
   const dsl2 = await page.evaluate(() => (window as any).drumjot.toDsl() as string);
 
@@ -149,7 +149,7 @@ test('a full debug-bundle song survives an export-to-DSL -> reimport round-trip'
   const dsl1 = await page.evaluate(() => (window as any).drumjot.toDsl() as string);
   expect(dsl1.length).toBeGreaterThan(0);
   await page.evaluate((src) => (window as any).drumjot.loadDsl(src), dsl1);
-  await page.waitForSelector('[data-testid^="instrument-row-"]');
+  await page.waitForSelector('[data-testid^="instrument-track-"]');
   const gridAfter = await page.evaluate(READ_GRID);
 
   // The whole rendered structure (every note position, modifier, tuplet +
@@ -193,7 +193,7 @@ test('a ParaDB pack survives an export-to-DSL -> reimport round-trip', async ({ 
   const dsl1 = await page.evaluate(() => (window as any).drumjot.toDsl() as string);
   expect(dsl1.length).toBeGreaterThan(0);
   await page.evaluate((src) => (window as any).drumjot.loadDsl(src), dsl1);
-  await page.waitForSelector('[data-testid^="instrument-row-"]');
+  await page.waitForSelector('[data-testid^="instrument-track-"]');
   const gridAfter = await page.evaluate(READ_GRID);
 
   // Whole rendered structure identical across the trip (text fixpoint
