@@ -104,6 +104,11 @@ type CreateJotEditorResult = {
   playback: PlaybackStore;
   viewport: ViewportStore;
   mixer: MixerStore;
+  /** Selection + editing peers, exposed for console / e2e. */
+  selection: SelectionStore;
+  selectionPresenter: SelectionPresenter;
+  editingStore: EditingStore;
+  editingPresenter: EditingPresenter;
   /** Per-domain presenters split out of the catch-all. Exposed for
    *  console / e2e. */
   viewportPresenter: ViewportPresenter;
@@ -521,6 +526,10 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     playback,
     viewport,
     mixer,
+    selection,
+    selectionPresenter,
+    editingStore,
+    editingPresenter,
     viewportPresenter,
     mixerPresenter,
     provenancePresenter,
@@ -1719,14 +1728,24 @@ const MarqueeOverlay = observer(() => {
  */
 const SelectionFrame = observer(() => {
   const selection = React.useContext(SelectionContext);
-  const structural = React.useContext(StructuralContext);
   const ids = selection?.effectiveIds;
+  // Bail BEFORE reading any zoom observable when there's no multi-selection,
+  // so this component never re-renders on a zoom tick in the common (no
+  // selection) case, keeping the 120fps zoom path free of a per-frame render.
+  if (!ids || ids.size < 2) return null;
+  return <SelectionFrameBox ids={ids} />;
+});
+
+/** The frame box itself, mounted only for a ≥2-note selection. Reads
+ *  `pxPerBeat` so the box re-measures on zoom; that subscription is scoped to
+ *  the (rare) selected state by {@link SelectionFrame}'s early return. */
+const SelectionFrameBox = observer(({ ids }: { ids: ReadonlySet<string> }) => {
+  const structural = React.useContext(StructuralContext);
   const pxPerBeat = structural?.pxPerBeat ?? 0;
-  const show = (ids?.size ?? 0) >= 2;
   const [box, setBox] = React.useState<Box | null>(null);
   React.useLayoutEffect(() => {
-    setBox(show && ids ? boundingBoxOfNotes(ids) : null);
-  }, [show, ids, pxPerBeat]);
+    setBox(boundingBoxOfNotes(ids));
+  }, [ids, pxPerBeat]);
   if (!box) return null;
   return (
     <div
