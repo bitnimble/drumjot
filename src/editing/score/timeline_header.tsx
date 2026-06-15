@@ -34,14 +34,14 @@ export const TimelineHeader = observer(
   }) => {
     const structural = React.useContext(StructuralContext);
     const tempo = React.useContext(TempoContext);
-    // Reading the structural voices (not pixels) keeps this header stable
+    // Reading the structural layers (not pixels) keeps this header stable
     // across zoom; the per-tick `--bar-start-beat` is set inline, and CSS
     // calc() multiplies by the score-root's `--px-per-beat` to get the
     // final pixel position. Without this the header re-rendered every wheel
     // tick, re-creating 100+ tick marks just to reposition each by one
     // calc-arithmetic step.
-    const voice = structural?.primaryVoice;
-    if (!structural || !tempo || !voice || voice.bars.length === 0) return null;
+    const layer = structural?.primaryLayer;
+    if (!structural || !tempo || !layer || layer.bars.length === 0) return null;
 
     const liveTimeline = jotPlayer.timeline;
     const timeline =
@@ -50,10 +50,10 @@ export const TimelineHeader = observer(
         : tempo.timeline;
 
     // Lead-in is materialised as negative-indexed bars by
-    // `structureForVoice`, so a single sum over `bar.beats` covers
+    // `structureForLayer`, so a single sum over `bar.beats` covers
     // both pre-drum and drum content with no separate chrome offset.
-    // Cached on the jot (`voiceBeats`) so all observers share one walk.
-    const voiceBeats = structural.voiceBeats;
+    // Cached on the jot (`layerBeats`) so all observers share one walk.
+    const layerBeats = structural.layerBeats;
 
     // Effective tempo at each bar's downbeat, derived from the shared
     // tempo timeline. Mid-bar tempo changes inside a bar aren't shown
@@ -75,8 +75,8 @@ export const TimelineHeader = observer(
     // Rounded so float jitter (119.97 vs 120.03) doesn't paint a change.
     let prevBpm: number | undefined;
     const ticks: TickDescriptor[] = [];
-    for (let i = 0; i < voice.bars.length; i++) {
-      const bar = voice.bars[i];
+    for (let i = 0; i < layer.bars.length; i++) {
+      const bar = layer.bars[i];
       const timing = timeline.bars[i];
       const timeSec = timing?.startSec ?? 0;
       const startBeat = cumBeats;
@@ -125,8 +125,8 @@ export const TimelineHeader = observer(
           data-bars-row
           style={
             {
-              ['--voice-beats' as string]: voiceBeats,
-              ['--bars-row-width' as string]: barsRowWidthSeed(structural, voiceBeats),
+              ['--layer-beats' as string]: layerBeats,
+              ['--bars-row-width' as string]: barsRowWidthSeed(structural, layerBeats),
             } as React.CSSProperties
           }
           onClick={(e) => seekFromClick(e, onSeek)}

@@ -28,7 +28,7 @@
  *    chunk's CSS position is driven in JS from its `startBeat` × the
  *    live `pxPerBeat`.
  *
- * The lead-in (negative-indexed bars at the front of `voice.bars`) is
+ * The lead-in (negative-indexed bars at the front of `layer.bars`) is
  * absorbed transparently: its bars contribute to `startBeat` and
  * `startSec` like any other bar. A chunk that straddles the lead-in /
  * drum-content boundary is fine; the per-pixel mapping inside the
@@ -55,13 +55,13 @@ import { buildBarTempos } from 'src/schema/dsl/tempo';
 export const BEATS_PER_CHUNK = 4;
 
 /**
- * Zoom-invariant per-bar layout: where the bar sits in the voice's
+ * Zoom-invariant per-bar layout: where the bar sits in the layer's
  * cumulative beat axis (used to position chunks via JS), the bar's own
  * beat count, and the jot-time window the bar covers (used by the
  * worker to map each chunk pixel column back to an audio sample range).
  */
 export type BarBeat = {
-  /** Sum of `beats` for every bar before this one in the voice. */
+  /** Sum of `beats` for every bar before this one in the layer. */
   startBeat: number;
   /** This bar's own beat count. */
   beats: number;
@@ -84,7 +84,7 @@ export type BarBeat = {
 export type WaveformChunk = {
   /** Stable React key: `startBeat / BEATS_PER_CHUNK`. */
   key: number;
-  /** Beat position of the chunk's left edge in the voice. */
+  /** Beat position of the chunk's left edge in the layer. */
   startBeat: number;
   /** Beat span the chunk covers (`BEATS_PER_CHUNK`, or smaller for the trailing chunk). */
   totalBeats: number;
@@ -102,39 +102,39 @@ export type ChunkLayout = {
 const EMPTY_LAYOUT: ChunkLayout = { bars: [], totalBeats: 0, chunks: [] };
 
 /**
- * Walk the structural voice once, accumulating beat and jot-time
+ * Walk the structural layer once, accumulating beat and jot-time
  * cursors, then slice the beat axis into `BEATS_PER_CHUNK` windows.
  * Per-bar `{{ bpm }}` overrides are honoured the same way `events.ts`
  * / `buildTimeline` do: sticky until the next override.
  *
- * Reads ONLY the zoom-invariant structural voices, so the returned
+ * Reads ONLY the zoom-invariant structural layers, so the returned
  * `bars[*].startBeat / .beats / .startSec / .durationSec` and the derived
  * `chunks[*]` are stable across zoom changes. Callers can memo on the
  * `StructuralPresenter` and reuse the result across every wheel tick.
  */
 export function buildChunkLayout(structural: StructuralPresenter): ChunkLayout {
-  const structureVoice = structural.voices[0];
-  if (!structureVoice || structureVoice.bars.length === 0) return EMPTY_LAYOUT;
+  const structureLayer = structural.layers[0];
+  if (!structureLayer || structureLayer.bars.length === 0) return EMPTY_LAYOUT;
 
-  const tempos = buildBarTempos(structural.source, structureVoice.bars);
-  const durations: number[] = new Array(structureVoice.bars.length);
-  for (let i = 0; i < structureVoice.bars.length; i++) {
+  const tempos = buildBarTempos(structural.source, structureLayer.bars);
+  const durations: number[] = new Array(structureLayer.bars.length);
+  for (let i = 0; i < structureLayer.bars.length; i++) {
     durations[i] = tempos[i].durationSec;
   }
 
   let leadBars = 0;
-  for (const b of structureVoice.bars) {
+  for (const b of structureLayer.bars) {
     if (b.index >= 0) break;
     leadBars++;
   }
   let leadOffsetSec = 0;
   for (let i = 0; i < leadBars; i++) leadOffsetSec += durations[i];
 
-  const bars: BarBeat[] = new Array(structureVoice.bars.length);
+  const bars: BarBeat[] = new Array(structureLayer.bars.length);
   let cursorBeat = 0;
   let cursorSec = -leadOffsetSec;
-  for (let i = 0; i < structureVoice.bars.length; i++) {
-    const sb = structureVoice.bars[i];
+  for (let i = 0; i < structureLayer.bars.length; i++) {
+    const sb = structureLayer.bars[i];
     bars[i] = {
       startBeat: cursorBeat,
       beats: sb.beats,

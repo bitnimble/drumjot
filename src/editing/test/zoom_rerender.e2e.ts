@@ -13,10 +13,10 @@ import { expect, test } from '@playwright/test';
  *
  * The test counts `JotEditor` renders via the `window.__perf` hook
  * (src/perf_probe.ts). Toggling the drum MASTER mute is used as a
- * POSITIVE CONTROL: it flips a boolean that's a `voiceControls` memo dep,
+ * POSITIVE CONTROL: it flips a boolean that's a `layerControls` memo dep,
  * so the bundle's identity changes and `JotEditor` legitimately re-renders.
  * That proves the counter is wired, so a future change that deletes the
- * probe can't make this test pass vacuously. (A per-pitch mute would NOT
+ * probe can't make this test pass vacuously. (A per-lane mute would NOT
  * re-render JotEditor; it mutates a Set in place, leaving the memo dep
  * unchanged, and only the affected leaf rows re-render. That's by design.)
  */
@@ -44,7 +44,7 @@ test('zoom does not re-render JotEditor', async ({ page }) => {
     };
     await settle();
 
-    // POSITIVE CONTROL: a master-mute toggle changes a voiceControls memo
+    // POSITIVE CONTROL: a master-mute toggle changes a layerControls memo
     // dep, so it must re-render JotEditor; proving the counter is live.
     w.__perf = {};
     mixerPresenter.toggleDrumMasterMute();

@@ -10,8 +10,8 @@
  *   - Global metadata block on its own line.
  *   - Each pattern definition on its own line.
  *   - Each bar on its own line, wrapped in `| ... |`.
- *   - Each `||` voice separator on its own line.
- *   - An anacrusis (pickup) sits on its own line above its voice's bars.
+ *   - Each `||` layer separator on its own line.
+ *   - An anacrusis (pickup) sits on its own line above its layer's bars.
  *
  * The formatter is deliberately minimal: it emits a single canonical suffix
  * ordering (`:mods @stick ~ _weight *repeat {meta}`) rather than trying to
@@ -27,7 +27,7 @@ import {
   PatternSubstitution,
   TempoEvent,
   TimeSignature,
-  Voice,
+  Layer,
 } from 'src/schema/dsl/dsl';
 
 /** Format a whole Jot as DSL source text. */
@@ -53,7 +53,7 @@ export function writeDsl(jot: Jot): string {
   // The parser snapshots the active `time` onto every bar, so a bar's
   // metadata only deserves its own `{{...}}` line when it *changes* the
   // value already in effect. `time` propagates textually across the
-  // whole document (including past `||`), so this state is voice-spanning.
+  // whole document (including past `||`), so this state is layer-spanning.
   // `bpm` follows the same propagation rule but comes from
   // `jot.tempoEvents` (the post-parse SoT) rather than per-bar metadata.
   const active: { time?: unknown; bpm?: unknown } = {
@@ -61,8 +61,8 @@ export function writeDsl(jot: Jot): string {
     bpm: jot.globalMetadata.bpm,
   };
 
-  // Tempo events live at the Jot level and feed only into voice 0's
-  // output (tempo is global; voices 1+ would emit duplicates).
+  // Tempo events live at the Jot level and feed only into layer 0's
+  // output (tempo is global; layers 1+ would emit duplicates).
   const eventsByBar = new Map<number, TempoEvent[]>();
   for (const ev of jot.tempoEvents ?? []) {
     const arr = eventsByBar.get(ev.barIndex) ?? [];
@@ -71,29 +71,29 @@ export function writeDsl(jot: Jot): string {
   }
   for (const arr of eventsByBar.values()) arr.sort((a, b) => a.beat - b.beat);
 
-  // Voices, separated by `||` on its own line.
-  jot.voices.forEach((voice, i) => {
+  // Layers, separated by `||` on its own line.
+  jot.layers.forEach((layer, i) => {
     if (i > 0) lines.push('||');
-    lines.push(...formatVoice(voice, active, i === 0 ? eventsByBar : undefined));
+    lines.push(...formatLayer(layer, active, i === 0 ? eventsByBar : undefined));
   });
 
   return lines.join('\n') + '\n';
 }
 
-// ---------- Voices & bars ----------
+// ---------- Layers & bars ----------
 
-function formatVoice(
-  voice: Voice,
+function formatLayer(
+  layer: Layer,
   active: { time?: unknown; bpm?: unknown },
   eventsByBar: Map<number, TempoEvent[]> | undefined
 ): string[] {
   const lines: string[] = [];
-  if (voice.anacrusis && voice.anacrusis.length > 0) {
+  if (layer.anacrusis && layer.anacrusis.length > 0) {
     // Content before the first `|` is the anacrusis; emit it unwrapped.
-    lines.push(formatSequence(voice.anacrusis));
+    lines.push(formatSequence(layer.anacrusis));
   }
-  for (let i = 0; i < voice.bars.length; i++) {
-    const b = voice.bars[i];
+  for (let i = 0; i < layer.bars.length; i++) {
+    const b = layer.bars[i];
     const delta: Metadata = {};
     if (b.metadata?.time !== undefined && !sameValue(b.metadata.time, active.time)) {
       delta.time = b.metadata.time;
@@ -173,7 +173,7 @@ function formatSequence(els: Element[]): string {
 function formatElement(el: Element): string {
   switch (el.kind) {
     case 'note': {
-      let s = el.pitch;
+      let s = el.lane;
       for (const m of el.modifiers ?? []) s += `:${m}`;
       if (el.sticking) s += `@${el.sticking}`;
       if (el.roll) s += '~';

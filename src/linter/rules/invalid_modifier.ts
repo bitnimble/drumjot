@@ -27,11 +27,11 @@ export const invalidModifierRule: Rule = {
           kind: 'instrument',
           message:
             `':${mod}' is not a valid modifier for ${meta.label.toLowerCase()} ` +
-            `(pitch '${note.pitch}', kind '${note.kind}'). ` +
+            `(lane '${note.lane}', kind '${note.kind}'). ` +
             `Remove the modifier or change the note's instrument kind.`,
           range: note.range,
           barIndex: note.barIndex,
-          voiceIndex: note.voiceIndex,
+          layerIndex: note.layerIndex,
           suggestedFix: `Remove ':${mod}' from this note.`,
         });
       }

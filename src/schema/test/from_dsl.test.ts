@@ -19,7 +19,7 @@ const META = {
 
 describe('dslToReactive', () => {
   it('carries metadata + instruments', () => {
-    const { model } = structureOf({ title: 'T', globalMetadata: META, voices: [{ bars: [] }] });
+    const { model } = structureOf({ title: 'T', globalMetadata: META, layers: [{ bars: [] }] });
     expect(model.title).toBe('T');
     expect(model.bpm).toBe(120);
     expect(model.instruments.get('k')!.name).toBe('Kick');
@@ -29,9 +29,9 @@ describe('dslToReactive', () => {
     const jot: DslJot = {
       title: '',
       globalMetadata: META,
-      voices: [{ bars: [bar(note('k'), note('s'), note('k'), note('s'))] }],
+      layers: [{ bars: [bar(note('k'), note('s'), note('k'), note('s'))] }],
     };
-    const b = structureOf(jot).structure.voices[0].bars[0];
+    const b = structureOf(jot).structure.layers[0].bars[0];
     expect(b.index).toBe(1);
     expect(b.tracks['k'].notes.map((n) => n.beat)).toEqual([0, 2]);
     expect(b.tracks['s'].notes.map((n) => n.beat)).toEqual([1, 3]);
@@ -41,9 +41,9 @@ describe('dslToReactive', () => {
     const jot: DslJot = {
       title: '',
       globalMetadata: META,
-      voices: [{ bars: [bar(group([note('k'), note('k'), note('k')]))] }],
+      layers: [{ bars: [bar(group([note('k'), note('k'), note('k')]))] }],
     };
-    const b = structureOf(jot).structure.voices[0].bars[0];
+    const b = structureOf(jot).structure.layers[0].bars[0];
     expect(b.tupletSpans).toEqual([{ count: 3, startBeat: 0, endBeat: 4 }]);
     const beats = b.tracks['k'].notes.map((n) => n.beat);
     expect(beats[0]).toBeCloseTo(0);
@@ -55,9 +55,9 @@ describe('dslToReactive', () => {
     const jot: DslJot = {
       title: '',
       globalMetadata: META,
-      voices: [{ bars: [bar(note('s', { modifiers: ['a'], sticking: 'r' }))] }],
+      layers: [{ bars: [bar(note('s', { modifiers: ['a'], sticking: 'r' }))] }],
     };
-    const note0 = structureOf(jot).structure.voices[0].bars[0].tracks['s'].notes[0];
+    const note0 = structureOf(jot).structure.layers[0].bars[0].tracks['s'].notes[0];
     expect(note0.modifiers).toEqual(['a']);
     expect(note0.sticking).toBe('r');
   });

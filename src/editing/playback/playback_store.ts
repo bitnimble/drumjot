@@ -13,7 +13,7 @@ import { JotEditorStore } from '../jot_editor_store';
  * the reactions that re-apply the filter to the audio graph live on the
  * presenter; this store only derives state.
  *
- * The filter getters ({@link pitchFilter} / {@link audioTrackFilter} /
+ * The filter getters ({@link laneFilter} / {@link audioTrackFilter} /
  * the section-audible booleans) are computed over the {@link MixerStore}'s
  * authoritative mute/solo/volume state. `jotPlayer` reads them directly
  * (via {@link JotPlayer.attachPlayback}); a `PlaybackPresenter` reaction
@@ -67,11 +67,11 @@ export class PlaybackStore {
    * mixer (which owns the build + also consumes it for its own
    * per-row-audibility computeds). PASSTHROUGH when no mixer is wired.
    */
-  get pitchFilter(): PlayerFilter {
-    return this.mixer?.pitchFilter ?? PASSTHROUGH_FILTER;
+  get laneFilter(): PlayerFilter {
+    return this.mixer?.laneFilter ?? PASSTHROUGH_FILTER;
   }
 
-  /** Mirror of {@link pitchFilter} for the audio-track domain. */
+  /** Mirror of {@link laneFilter} for the audio-track domain. */
   get audioTrackFilter(): AudioTrackFilter {
     return this.mixer?.audioTrackFilter ?? PASSTHROUGH_AUDIO_TRACK_FILTER;
   }

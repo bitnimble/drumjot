@@ -139,7 +139,7 @@ export const AudioTrackOverflowMenu = observer(({
 
 /** Per-instrument-row overflow menu. Currently hosts only the note-
  *  colour picker; the chrome stays consistent with
- *  {@link AudioTrackOverflowMenu} so future additions (per-pitch
+ *  {@link AudioTrackOverflowMenu} so future additions (per-lane
  *  velocity scale, label rename, etc.) drop in without an entirely
  *  new affordance. */
 export const InstrumentRowOverflowMenu = observer(({

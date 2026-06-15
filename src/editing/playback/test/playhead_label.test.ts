@@ -20,7 +20,7 @@ describe('formatPlayheadTime', () => {
 });
 
 // Minimal stand-in for the fields `playheadBarBeat` reads: per-bar audio
-// timings + the rendered structure's first voice bars (index + beat count).
+// timings + the rendered structure's first layer bars (index + beat count).
 // Two 4/4 bars, each 2s long, lead-in handled by the caller.
 function fakeTimeline(): JotTimeline {
   return {
@@ -29,7 +29,7 @@ function fakeTimeline(): JotTimeline {
       { startSec: 2, durationSec: 2 },
     ],
     rendered: {
-      voices: [
+      layers: [
         {
           bars: [
             { index: 1, tsCount: 4 },

@@ -8,7 +8,7 @@
  * segments so the playhead, the audio-track waveform and the scheduled
  * drums all share one clock.
  *
- * Jot-time anchor: bar 1 (= the first drum bar, `voice.bars[leadBars]`)
+ * Jot-time anchor: bar 1 (= the first drum bar, `layer.bars[leadBars]`)
  * sits at jot time 0 by construction. That coincides with the audio time
  * stored in `globalMetadata.drumsT0Sec` so the player's
  * `media = jot + drumsT0Sec` identity lines the synth drums up with the
@@ -26,7 +26,7 @@
  * layout reactively and the playhead re-reads the new `pxPerBeat`).
  */
 import { Jot, TimeSignature } from 'src/schema/dsl/dsl';
-import type { StructVoice } from 'src/editing/structure/structure_store';
+import type { StructLayer } from 'src/editing/structure/structure_store';
 import { Pixels, px, type ViewConfig } from 'src/editing/viewport/view_config';
 import { buildBarTempos, resolveBpm } from 'src/schema/dsl/tempo';
 
@@ -34,13 +34,13 @@ export { resolveBpm };
 
 /**
  * The minimal laid-out-jot surface the timeline maths needs: the
- * zoom-invariant `voices` + `source` for the tempo walk, and the pixel
+ * zoom-invariant `layers` + `source` for the tempo walk, and the pixel
  * scale + `config` for the playhead mapping. {@link StructuralPresenter}
  * satisfies this structurally, so the timeline (and everything that holds a
  * {@link JotTimeline}) depends on this interface rather than the concrete
  * presenter. */
 export interface LaidOutJot {
-  voices: readonly StructVoice[];
+  layers: readonly StructLayer[];
   source: Jot;
   pxPerBeat: number;
   config: ViewConfig;
@@ -61,15 +61,15 @@ export function pickDominantBpmAndTime(jot: LaidOutJot): {
   dominantBpm: number | undefined;
   dominantTime: TimeSignature | undefined;
 } {
-  const voice = jot.voices[0];
-  if (!voice || voice.bars.length === 0) {
+  const layer = jot.layers[0];
+  if (!layer || layer.bars.length === 0) {
     return { dominantBpm: undefined, dominantTime: undefined };
   }
-  const tempos = buildBarTempos(jot.source, voice.bars);
+  const tempos = buildBarTempos(jot.source, layer.bars);
   const bpmDur = new Map<number, number>();
   const timeDur = new Map<string, { time: TimeSignature; duration: number }>();
-  for (let i = 0; i < voice.bars.length; i++) {
-    const bar = voice.bars[i];
+  for (let i = 0; i < layer.bars.length; i++) {
+    const bar = layer.bars[i];
     if (bar.index < 0) continue;
     const barTempos = tempos[i];
     for (const seg of barTempos.segments) {
@@ -137,17 +137,17 @@ export function buildTimeline(rendered: LaidOutJot): JotTimeline {
   // calling `buildTimeline` don't pick up a spurious dependency on
   // `viewConfig.barWidth`, so the per-bar timings stay stable across
   // wheel ticks.
-  // All voices in a Jot share the same bar grid (they're laid out from the
-  // same global metadata), so the first voice's timing is canonical.
-  const voice = rendered.voices[0];
-  if (!voice || voice.bars.length === 0) return EMPTY_TIMELINE;
+  // All layers in a Jot share the same bar grid (they're laid out from the
+  // same global metadata), so the first layer's timing is canonical.
+  const layer = rendered.layers[0];
+  if (!layer || layer.bars.length === 0) return EMPTY_TIMELINE;
 
   // Per-bar tempo segments come from `jot.tempoEvents`. Mid-bar tempo
   // changes are honoured natively: each bar's `durationSec` is the sum
   // of its constant-tempo intra-bar segments.
-  const tempos = buildBarTempos(rendered.source, voice.bars);
-  const durations: number[] = new Array(voice.bars.length);
-  for (let i = 0; i < voice.bars.length; i++) durations[i] = tempos[i].durationSec;
+  const tempos = buildBarTempos(rendered.source, layer.bars);
+  const durations: number[] = new Array(layer.bars.length);
+  for (let i = 0; i < layer.bars.length; i++) durations[i] = tempos[i].durationSec;
 
   // Anchor bar 1 (= the first non-lead-in bar) at jot time 0, so the
   // audio scheduler's "media = jot + drumsT0Sec" identity lines up the
@@ -157,22 +157,22 @@ export function buildTimeline(rendered: LaidOutJot): JotTimeline {
   // pre-roll scrub, and `timeToX` resolves them via the per-bar loop.
   // Lead-in count is read directly from the structure (counting the
   // leading run of negative-indexed bars) rather than from
-  // `globalMetadata.leadBars`: `structureForVoice` materialises both
+  // `globalMetadata.leadBars`: `structureForLayer` materialises both
   // the explicit-leadBars and the chrome-only (`drumsT0Sec` without
   // `leadBars`) source shapes into the same negative-indexed-bar form,
   // so reading the count from the bars themselves keeps the timeline
   // path single-source-of-truth.
   let leadBars = 0;
-  for (const b of voice.bars) {
+  for (const b of layer.bars) {
     if (b.index >= 0) break;
     leadBars++;
   }
   let leadOffsetSec = 0;
   for (let i = 0; i < leadBars; i++) leadOffsetSec += durations[i];
 
-  const bars: BarTiming[] = new Array(voice.bars.length);
+  const bars: BarTiming[] = new Array(layer.bars.length);
   let cursor = -leadOffsetSec;
-  for (let i = 0; i < voice.bars.length; i++) {
+  for (let i = 0; i < layer.bars.length; i++) {
     bars[i] = { startSec: cursor, durationSec: durations[i] };
     cursor += durations[i];
   }
@@ -184,19 +184,19 @@ export function buildTimeline(rendered: LaidOutJot): JotTimeline {
 
 /**
  * Map an absolute playback time (seconds from start) to the playhead's
- * pixel x within a voice's `barsRow`. Derives bar widths on the fly from
+ * pixel x within a layer's `barsRow`. Derives bar widths on the fly from
  * `structure.bars[i].beats * pxPerBeat`, deliberately avoiding
  * `rendered.resolved`: `timeToX` is called from non-reactive useLayoutEffect
  * contexts (PlayheadPosVar), where the MobX `computed` cache for `resolved`
  * is not kept warm, so each call would otherwise re-run the full pixel pass
- * (layoutJot → pixelVoice for every voice, every frame). Clamps to the bar
+ * (layoutJot → pixelLayer for every layer, every frame). Clamps to the bar
  * grid at both ends so the playhead never escapes the score.
  */
 export function timeToX(timeline: JotTimeline, seconds: number): Pixels {
   const rendered = timeline.rendered;
   if (!rendered) return px(0);
-  const voice = rendered.voices[0];
-  const structBars = voice?.bars ?? [];
+  const layer = rendered.layers[0];
+  const structBars = layer?.bars ?? [];
   const bars = timeline.bars;
   if (bars.length === 0 || structBars.length === 0) return px(0);
   const pxPerBeat = rendered.pxPerBeat;
@@ -205,7 +205,7 @@ export function timeToX(timeline: JotTimeline, seconds: number): Pixels {
   // grid, not the time-anchored bar box; every branch below adds `pad`
   // so it lands on the note instead of a constant `pad` px to its left.
   const pad = rendered.config.barNotePaddingBeats * pxPerBeat;
-  // Lead-in (when present) lives in `voice.bars` as negative-indexed
+  // Lead-in (when present) lives in `layer.bars` as negative-indexed
   // bars with negative `startSec`, so the per-bar loop below resolves
   // negative seek targets that fall inside them without a separate
   // chrome branch.
@@ -233,7 +233,7 @@ export function timeToX(timeline: JotTimeline, seconds: number): Pixels {
 }
 
 /**
- * Inverse of {@link timeToX}: map a pixel x within the voice's
+ * Inverse of {@link timeToX}: map a pixel x within the layer's
  * `barsRow` (same coordinate space `bar.x` is in; origin at the left
  * edge of the bars region, *after* the gutter) back to an absolute
  * playback time in seconds. Used for click-to-seek on the score and
@@ -245,8 +245,8 @@ export function timeToX(timeline: JotTimeline, seconds: number): Pixels {
 export function xToTime(timeline: JotTimeline, x: number): number {
   const rendered = timeline.rendered;
   if (!rendered) return 0;
-  const voice = rendered.voices[0];
-  const structBars = voice?.bars ?? [];
+  const layer = rendered.layers[0];
+  const structBars = layer?.bars ?? [];
   const bars = timeline.bars;
   if (bars.length === 0 || structBars.length === 0) return 0;
   const pxPerBeat = rendered.pxPerBeat;

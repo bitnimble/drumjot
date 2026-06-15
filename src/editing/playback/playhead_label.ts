@@ -21,10 +21,10 @@ export function formatPlayheadTime(seconds: number): string {
  * find the bar containing `jotTime`, then computes beat-in-bar in the
  * bar's time-signature beats (1-indexed at the downbeat). Returns
  * `null` when no bar can be resolved (empty timeline / no rendered
- * voice). Pure; unit-tested in `playhead_label.test.ts`.
+ * layer). Pure; unit-tested in `playhead_label.test.ts`.
  */
 export function playheadBarBeat(timeline: JotTimeline, jotTime: number): string | null {
-  const renderedBars = timeline.rendered?.voices[0]?.bars ?? [];
+  const renderedBars = timeline.rendered?.layers[0]?.bars ?? [];
   if (renderedBars.length === 0 || timeline.bars.length === 0) return null;
   for (let i = 0; i < timeline.bars.length; i++) {
     const t = timeline.bars[i]!;

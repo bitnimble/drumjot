@@ -20,7 +20,7 @@
  * GM percussion key through the bank/preset with `getKeyData(key, bank,
  * preset)` and build one region per key pointing at its sample.
  *
- * Each region is `keyRange:[n,n]` with `pitch:n`, i.e. the sample plays
+ * Each region is `keyRange:[n,n]` with `lane:n`, i.e. the sample plays
  * at its recorded rate with no key-tracking or looping — correct for
  * drum one-shots (SF2 fine/coarse-tune generators are intentionally
  * ignored; the recorded sound is what matters for practice).

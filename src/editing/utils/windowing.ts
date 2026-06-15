@@ -16,7 +16,7 @@ import type { StructuralPresenter } from 'src/editing/structure/structural_prese
 export type BeatRange = { startBeat: number; endBeat: number };
 
 /**
- * Inline seed for a bars-row's `--bars-row-width` (`voiceBeats ×
+ * Inline seed for a bars-row's `--bars-row-width` (`layerBeats ×
  * pxPerBeat`, in px). Every beat-anchored child sizes/positions itself
  * as a percentage of this width, so a row with the var unset collapses to
  * 0.
@@ -33,8 +33,8 @@ export type BeatRange = { startBeat: number; endBeat: number };
  * correct). Mirrors how `--gutter-width` is seeded inline + updated by
  * `GutterWidthVar`.
  */
-export function barsRowWidthSeed(structural: StructuralPresenter, voiceBeats: number): string {
-  return `${untracked(() => structural.pxPerBeat) * voiceBeats}px`;
+export function barsRowWidthSeed(structural: StructuralPresenter, layerBeats: number): string {
+  return `${untracked(() => structural.pxPerBeat) * layerBeats}px`;
 }
 
 /**

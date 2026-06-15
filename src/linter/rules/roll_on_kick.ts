@@ -29,7 +29,7 @@ export const rollOnKickRule: Rule = {
           `Confirm the pattern actually rolls, or replace with discrete kick hits.`,
         range: note.range,
         barIndex: note.barIndex,
-        voiceIndex: note.voiceIndex,
+        layerIndex: note.layerIndex,
       });
     }
     return out;

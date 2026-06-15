@@ -52,7 +52,7 @@
 /* One tick per bar boundary; sits on the same x as the score's barline
    below. Labels are pointer-events:none so click-to-seek hits the row.
    `--bar-start-beat` is the cumulative-beat offset of this bar's left
-   edge from the voice's start (lead-in + sum of previous bar lengths);
+   edge from the layer's start (lead-in + sum of previous bar lengths);
    set inline per tick at render time, zoom-invariant. */
 .timelineHeaderTick {
     position: absolute;
@@ -60,7 +60,7 @@
     bottom: 0;
     border-left: 1px solid var(--color-border);
     padding-left: 4px;
-    left: calc(var(--bar-start-beat) / var(--voice-beats) * 100%);
+    left: calc(var(--bar-start-beat) / var(--layer-beats) * 100%);
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -114,7 +114,7 @@
     top: 0;
     bottom: 0;
     padding-left: 4px;
-    left: calc(var(--bar-start-beat) / var(--voice-beats) * 100%);
+    left: calc(var(--bar-start-beat) / var(--layer-beats) * 100%);
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -140,19 +140,19 @@
        directly via calc gives each bar a precise sub-pixel left and
        matches the pattern used by `.timelineHeaderTick`,
        `.musicTrackWaveformChunk`, `.lyricWord`, etc. top:0/bottom:0
-       stretches the bar to the bars row's full height (the pitch
+       stretches the bar to the bars row's full height (the lane
        gutter is taller than a single lane) so the right-edge barline
        reads as one continuous line down to the row separator. */
     position: absolute;
     top: 0;
     bottom: 0;
     /* Positioned + sized as a PERCENTAGE of the bars-row width (which is
-       `voiceBeats × pxPerBeat`, set per row via `--bars-row-width`), so a
+       `layerBeats × pxPerBeat`, set per row via `--bars-row-width`), so a
        zoom only changes the row's width and the browser relayouts the
        bars from these zoom-invariant inline `--bar-*` vars; no
        `--px-per-beat` style-recalc cascade. `--bar-start-beat` /
        `--bar-beats` are set inline per BarView. */
-    left: calc(var(--bar-start-beat) / var(--voice-beats) * 100%);
+    left: calc(var(--bar-start-beat) / var(--layer-beats) * 100%);
     /* border-box so the barline draws INSIDE the bar's width. With
      the default content-box the border added its width to every bar's
      flow footprint, accumulating per-bar against the border-free model
@@ -167,7 +167,7 @@
        centred via the flex-column above. Pattern brackets and tuplet
        brackets remain absolute-positioned children of `.bar` (their
        `top` offsets sit slightly outside the bar's top edge). */
-    width: calc(var(--bar-beats) / var(--voice-beats) * 100%);
+    width: calc(var(--bar-beats) / var(--layer-beats) * 100%);
     /* No `content-visibility` / `overflow-clip-margin`: long-song
        virtualization is now done in React (only bars whose beat span
        intersects the viewport are mounted; see `WindowedBarList` and
@@ -291,7 +291,7 @@
 }
 
 /* Negative-indexed bar (audio pre-roll absorbed into the score by
-   `structureForVoice`, either from `globalMetadata.leadBars` or
+   `structureForLayer`, either from `globalMetadata.leadBars` or
    synthesised from a chrome-only `globalMetadata.drumsT0Sec`). Hatched
    so the operator reads bars -N..-1 as "this is the recording's intro"
    rather than "extra real bars they need to count from". Internal
@@ -1085,7 +1085,7 @@
        (the lane below otherwise consumes them). */
     pointer-events: auto;
     z-index: 4;
-    left: calc((var(--note-pad-beats) + var(--filtered-beat)) / var(--voice-beats) * 100%);
+    left: calc((var(--note-pad-beats) + var(--filtered-beat)) / var(--layer-beats) * 100%);
     transition: opacity 120ms ease;
 }
 

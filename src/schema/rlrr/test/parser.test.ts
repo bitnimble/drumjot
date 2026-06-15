@@ -39,7 +39,7 @@ describe('parseRlrr lead-in handling', () => {
     expect(jot.globalMetadata.drumsT0Sec).toBeCloseTo(2.625, 6);
     expect(jot.globalMetadata.bpm).toBeCloseTo(90.859977722167969, 6);
     // The hit rebases to beat 0 — first slot of bar 0 is the note, not a rest.
-    expect(jot.voices[0].bars[0].elements[0].kind).toBe('note');
+    expect(jot.layers[0].bars[0].elements[0].kind).toBe('note');
   });
 
   it('collapses the plan example (120 placeholder then 174 at 1.0s)', () => {
@@ -55,7 +55,7 @@ describe('parseRlrr lead-in handling', () => {
 
     expect(jot.globalMetadata.drumsT0Sec).toBeCloseTo(1.0, 6);
     expect(jot.globalMetadata.bpm).toBe(174);
-    expect(jot.voices[0].bars[0].elements[0].kind).toBe('note');
+    expect(jot.layers[0].bars[0].elements[0].kind).toBe('note');
   });
 
   it('uses first-drum-onset as the lead-in even when only the placeholder bpm exists', () => {

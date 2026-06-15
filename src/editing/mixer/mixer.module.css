@@ -1,10 +1,10 @@
-/* The unified mixer (interleaved audio tracks + drum-instrument pitch
+/* The unified mixer (interleaved audio tracks + drum-instrument lane
    rows): row containers, sticky gutters, mute/solo/volume controls,
    drag handles, drop indicators, the audio/drums section masters in
    the gutter, and the per-row bars row (the score-aligned strip the
    notes / waveforms paint into). */
 
-/* Unified mixer — audio tracks and drum-instrument pitches interleaved
+/* Unified mixer — audio tracks and drum-instrument lanes interleaved
    in user-defined order. Each row sets its own height (audio rows are
    ~56px, instrument rows are ~36px); they're separated visually by their
    gutter borders, so no flex gap. */
@@ -311,7 +311,7 @@
 .musicTrack {
     position: relative;
     display: flex;
-    /* Same border treatment as the voiceStaff so the music tracks read
+    /* Same border treatment as the layerStaff so the music tracks read
      as part of the same vertical stack — distinct row, same grid. */
     min-width: max-content;
     border-top: 1px solid var(--color-border);
@@ -322,7 +322,7 @@
 .musicTrackGutter {
     /* Same width and pinned-at-viewport-left behaviour as the score's
      laneGutter, so the stem labels stay pinned during horizontal scroll
-     exactly like the pitch labels do below. Top-level row layout puts
+     exactly like the lane labels do below. Top-level row layout puts
      the drag handle on the left and a stacked label/buttons column on
      the right (the `.musicTrackContent` child); kept in row layout so
      the handle can `align-self: stretch` to the row's full height for
@@ -508,17 +508,17 @@
     filter: saturate(0.25) brightness(1.35) opacity(0.7);
 }
 
-.gutterPitch {
+.gutterLane {
     flex: 0 0 auto;
-    /* stylelint-disable-next-line property-disallowed-list -- single-letter pitch ID; tabular-nums keeps it aligned with the readouts above/below. */
+    /* stylelint-disable-next-line property-disallowed-list -- single-letter lane ID; tabular-nums keeps it aligned with the readouts above/below. */
     font-variant-numeric: tabular-nums;
     color: var(--color-text-muted-alt);
     /* The instrument-name span beside it takes the rest of the row, so
        the letter just needs to claim its own column width. */
 }
 
-/* Per-row volume fader, shared by the pitch gutter and the stem gutter.
-   On its own line in the pitch gutter, so it grows to fill the available
+/* Per-row volume fader, shared by the lane gutter and the stem gutter.
+   On its own line in the lane gutter, so it grows to fill the available
    width on the left of the M/S buttons; in the audio-track gutter it
    sits inline with M/S/Clear and grows the same way. */
 .rowVolume {
@@ -562,14 +562,14 @@
    this overlay just adds the centered "lead-in" caption without
    blocking the bars' click-to-seek + waveform space.
    Width is set via `--lead-in-bars-beats` (the cumulative quarter-note
-   span of all negative-indexed bars in `voice.bars`) as a percentage of
+   span of all negative-indexed bars in `layer.bars`) as a percentage of
    the bars-row width, the same way the bars themselves scale with zoom. */
 .leadInOverlay {
     position: absolute;
     left: 0;
     top: 0;
     bottom: 0;
-    width: calc(var(--lead-in-bars-beats) / var(--voice-beats) * 100%);
+    width: calc(var(--lead-in-bars-beats) / var(--layer-beats) * 100%);
     display: flex;
     align-items: center;
     justify-content: center;

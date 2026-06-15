@@ -7,11 +7,11 @@
  * resolved notes with their effective instrument kinds and source ranges,
  * etc.) so individual rules don't repeat the AST walk.
  */
-import { Bar, Element, Group, Jot, Modifier, Note, SourceRange, Voice } from 'src/schema/dsl/dsl';
+import { Bar, Element, Group, Jot, Modifier, Note, SourceRange, Layer } from 'src/schema/dsl/dsl';
 import {
   DrumInstrumentKind,
   LimbCategory,
-  defaultKindForPitch,
+  defaultKindForLane,
   effectiveLimbCategory,
 } from 'src/instruments/instruments';
 import { LintDiagnostic, LintKind, LintSeverity } from './diagnostics';
@@ -39,7 +39,7 @@ export type Rule = {
 
 /**
  * Resolved note: a single Note from the AST flattened to include its
- * containing voice/bar indices, the effective instrument kind looked up
+ * containing layer/bar indices, the effective instrument kind looked up
  * via the active mapping, and (when available) a source range.
  *
  * Pre-flattening like this lets each rule operate on a list rather than
@@ -49,12 +49,12 @@ export type Rule = {
  */
 export type ResolvedNote = {
   note: Note;
-  pitch: string;
+  lane: string;
   kind: DrumInstrumentKind;
   modifiers: ReadonlySet<Modifier>;
   /** Hand vs foot vs either, after applying foot-modifier overrides. */
   limbCategory: LimbCategory;
-  voiceIndex: number;
+  layerIndex: number;
   barIndex: number;
   /** Onset bucket within the bar — notes inside the same Simultaneity share an id. */
   simulId: number;
@@ -65,7 +65,7 @@ export type ResolvedNote = {
 /** Group-level reference; preserved separately from `ResolvedNote`. */
 export type ResolvedGroup = {
   group: Group;
-  voiceIndex: number;
+  layerIndex: number;
   barIndex: number;
   /** Each child note's `kind` (so roll-on-multi-instrument can be detected). */
   childKinds: Set<DrumInstrumentKind>;
@@ -98,29 +98,29 @@ export function buildLintContext(jot: Jot, source: string): LintContext {
   const mapping = jot.globalMetadata.instrumentMapping ?? {};
   let simulCounter = 0;
 
-  const kindFor = (pitch: string): DrumInstrumentKind => {
-    const entry = mapping[pitch];
+  const kindFor = (lane: string): DrumInstrumentKind => {
+    const entry = mapping[lane];
     if (entry) return entry.kind;
-    return defaultKindForPitch(pitch);
+    return defaultKindForLane(lane);
   };
 
   const visit = (
     el: Element,
-    voiceIndex: number,
+    layerIndex: number,
     barIndex: number,
     simulId: number | null
   ): void => {
     if (el.kind === 'note') {
       const id = simulId ?? simulCounter++;
       const mods = new Set<Modifier>(el.modifiers ?? []);
-      const kind = kindFor(el.pitch);
+      const kind = kindFor(el.lane);
       notes.push({
         note: el,
-        pitch: el.pitch,
+        lane: el.lane,
         kind,
         modifiers: mods,
         limbCategory: effectiveLimbCategory(kind, mods),
-        voiceIndex,
+        layerIndex,
         barIndex,
         simulId: id,
         range: el.range,
@@ -131,26 +131,26 @@ export function buildLintContext(jot: Jot, source: string): LintContext {
     if (el.kind === 'simul') {
       const id = simulCounter++;
       for (const child of el.elements) {
-        visit(child, voiceIndex, barIndex, id);
+        visit(child, layerIndex, barIndex, id);
       }
       return;
     }
     if (el.kind === 'group') {
       const childKinds = new Set<DrumInstrumentKind>();
       const collect = (inner: Element): void => {
-        if (inner.kind === 'note') childKinds.add(kindFor(inner.pitch));
+        if (inner.kind === 'note') childKinds.add(kindFor(inner.lane));
         else if (inner.kind === 'simul') inner.elements.forEach(collect);
         else if (inner.kind === 'group') inner.elements.forEach(collect);
       };
       el.elements.forEach(collect);
       groups.push({
         group: el,
-        voiceIndex,
+        layerIndex,
         barIndex,
         childKinds,
         range: el.range,
       });
-      for (const child of el.elements) visit(child, voiceIndex, barIndex, simulId);
+      for (const child of el.elements) visit(child, layerIndex, barIndex, simulId);
       return;
     }
     if (el.kind === 'patternRef') {
@@ -161,24 +161,24 @@ export function buildLintContext(jot: Jot, source: string): LintContext {
     }
   };
 
-  const visitBar = (bar: Bar, voiceIndex: number, barIndex: number) => {
-    for (const el of bar.elements) visit(el, voiceIndex, barIndex, null);
+  const visitBar = (bar: Bar, layerIndex: number, barIndex: number) => {
+    for (const el of bar.elements) visit(el, layerIndex, barIndex, null);
   };
 
-  jot.voices.forEach((voice: Voice, voiceIndex: number) => {
-    if (voice.anacrusis) {
-      for (const el of voice.anacrusis) visit(el, voiceIndex, -1, null);
+  jot.layers.forEach((layer: Layer, layerIndex: number) => {
+    if (layer.anacrusis) {
+      for (const el of layer.anacrusis) visit(el, layerIndex, -1, null);
     }
-    voice.bars.forEach((bar, barIndex) => visitBar(bar, voiceIndex, barIndex));
+    layer.bars.forEach((bar, barIndex) => visitBar(bar, layerIndex, barIndex));
   });
 
   if (jot.patterns) {
     for (const [name, pat] of Object.entries(jot.patterns)) {
-      // Synthetic voice/bar indices for pattern notes so they don't collide
-      // with real-voice indices in downstream grouping. The negative
-      // ranges are enough for rules that key off voice/bar identity.
-      const voiceIndex = -1 - name.length;
-      for (const el of pat.elements) visit(el, voiceIndex, -1, null);
+      // Synthetic layer/bar indices for pattern notes so they don't collide
+      // with real-layer indices in downstream grouping. The negative
+      // ranges are enough for rules that key off layer/bar identity.
+      const layerIndex = -1 - name.length;
+      for (const el of pat.elements) visit(el, layerIndex, -1, null);
     }
   }
 

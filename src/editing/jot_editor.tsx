@@ -37,7 +37,7 @@ import {
   ProvenanceStoreContext,
 } from './provenance/provenance_contexts';
 import { FollowPlayheadContext } from './playback/playback_contexts';
-import { AudioTrackControls, MixerView, VoiceControls } from './mixer/mixer';
+import { AudioTrackControls, MixerView, LayerControls } from './mixer/mixer';
 import { Logo } from 'src/ui/logo/logo';
 import { Minimap } from './minimap/minimap';
 import { VerticalScrollbar } from './viewport/vertical_scrollbar';
@@ -190,7 +190,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     // Same-tick scale + scroll write (cache-free; this runs outside the
     // component) so the slider never paints the post-zoom scroll offset at
     // the pre-zoom scale; see applyZoomVarsSync.
-    applyZoomVarsSync(scroller, null, s.pxPerBeat, s.voiceBeats, viewport.scrollX);
+    applyZoomVarsSync(scroller, null, s.pxPerBeat, s.layerBeats, viewport.scrollX);
   };
 
   // Stable JotEditor callback identities. Each only ever delegates to the
@@ -297,18 +297,18 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     // `store.zoom` for the toolbar slider) but must NOT churn `JotEditor`'s
     // props. The mute/solo toggles still rebuild the bundle (deps change)
     // so the mixer updates; per-row volume / audibility stays reactive
-    // because the consumer rows call `isPitchAudible` / `volumeFor`
+    // because the consumer rows call `isLaneAudible` / `volumeFor`
     // (which read the store) inside their own `observer` bodies, so they
     // re-render regardless of the bundle's identity.
-    const voiceControls: VoiceControls = React.useMemo(
+    const layerControls: LayerControls = React.useMemo(
       () => ({
-        mutedPitches: mixer.mutedPitches,
-        soloedPitches: mixer.soloedPitches,
-        isPitchAudible: mixer.isPitchAudible,
-        volumeFor: (pitch) => mixer.pitchVolume(pitch),
-        onSetVolume: (pitch, v) => mixerPresenter.setPitchVolume(pitch, v),
-        onToggleMute: (pitch) => mixerPresenter.toggleMute(pitch),
-        onToggleSolo: (pitch) => mixerPresenter.toggleSolo(pitch),
+        mutedLanes: mixer.mutedLanes,
+        soloedLanes: mixer.soloedLanes,
+        isLaneAudible: mixer.isLaneAudible,
+        volumeFor: (lane) => mixer.laneVolume(lane),
+        onSetVolume: (lane, v) => mixerPresenter.setLaneVolume(lane, v),
+        onToggleMute: (lane) => mixerPresenter.toggleMute(lane),
+        onToggleSolo: (lane) => mixerPresenter.toggleSolo(lane),
         masterMuted: mixer.drumMasterMuted,
         masterSoloed: mixer.drumMasterSoloed,
         masterAudible: mixer.isDrumSectionAudible,
@@ -317,8 +317,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
       }),
       // eslint-disable-next-line react-hooks/exhaustive-deps -- observable snapshots; observer wrapper rebuilds when any of these change.
       [
-        mixer.mutedPitches,
-        mixer.soloedPitches,
+        mixer.mutedLanes,
+        mixer.soloedLanes,
         mixer.drumMasterMuted,
         mixer.drumMasterSoloed,
         mixer.isDrumSectionAudible,
@@ -429,7 +429,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                         onZoomBy={onZoomBy}
                         trackOrder={mixer.trackOrder}
                         onMoveTrack={onMoveTrack}
-                        voiceControls={voiceControls}
+                        layerControls={layerControls}
                         audioTrackControls={audioTrackControls}
                         getGutterWidth={getGutterWidth}
                         onSetGutterWidth={onSetGutterWidth}
@@ -551,7 +551,7 @@ type JotEditorProps = {
   trackOrder: readonly TrackKey[];
   /** Move the row at `from` to position `to` (drag-and-drop / Alt+arrow). */
   onMoveTrack: (from: number, to: number) => void;
-  voiceControls: VoiceControls;
+  layerControls: LayerControls;
   audioTrackControls: AudioTrackControls;
   /** Read the current sticky-gutter width (px). A getter (not a value)
    * so the parent View doesn't reactively re-render on every resize
@@ -582,7 +582,7 @@ const JotEditor = observer((props: JotEditorProps) => {
     onZoomBy,
     trackOrder,
     onMoveTrack,
-    voiceControls,
+    layerControls,
     audioTrackControls,
     getGutterWidth,
     onSetGutterWidth,
@@ -594,7 +594,7 @@ const JotEditor = observer((props: JotEditorProps) => {
   // Intentionally NOT reading any zoom-dependent (pixel) observable here.
   // Every observable touched in this body triggers a JotEditor re-render on
   // zoom, and the title / subtitle / Legend / mixer subtree all derive from
-  // zoom-invariant data via `structural.voices` / `source.title` /
+  // zoom-invariant data via `structural.layers` / `source.title` /
   // `source.globalMetadata`. JotEditor itself is then stable across zoom
   // (ScoreZoomVar updates the one CSS variable that propagates the
   // new scale to every descendant via calc()).
@@ -663,7 +663,7 @@ const JotEditor = observer((props: JotEditorProps) => {
   const onZoomByRef = React.useRef(onZoomBy);
   onZoomByRef.current = onZoomBy;
   // Stable ref to the live structural presenter for the non-React rAF
-  // closures (wheel / pinch zoom) that read `pxPerBeat` / `voiceBeats` /
+  // closures (wheel / pinch zoom) that read `pxPerBeat` / `layerBeats` /
   // `config` outside the render path.
   const structuralRef = React.useRef(structural);
   structuralRef.current = structural;
@@ -743,7 +743,7 @@ const JotEditor = observer((props: JotEditorProps) => {
         el,
         cacheRef.current,
         currentStructural.pxPerBeat,
-        currentStructural.voiceBeats,
+        currentStructural.layerBeats,
         viewport.scrollX
       );
     };
@@ -1009,7 +1009,7 @@ const JotEditor = observer((props: JotEditorProps) => {
             el,
             cacheRef.current,
             structuralRef.current.pxPerBeat,
-            structuralRef.current.voiceBeats,
+            structuralRef.current.layerBeats,
             viewport.scrollX
           );
         }
@@ -1120,7 +1120,7 @@ const JotEditor = observer((props: JotEditorProps) => {
   // it here doesn't bind JotEditor's render to the zoom variable.
   const barTimings = React.useMemo<ReadonlyMap<number, BarTiming>>(() => {
     const timeline = tempo.timeline;
-    const structBars = structural.voices[0]?.bars ?? [];
+    const structBars = structural.layers[0]?.bars ?? [];
     const map = new Map<number, BarTiming>();
     for (let i = 0; i < structBars.length; i++) {
       const timing = timeline.bars[i];
@@ -1200,7 +1200,7 @@ const JotEditor = observer((props: JotEditorProps) => {
                   onPatternClick={onPatternClick}
                   onSeek={onSeek}
                   onMoveTrack={onMoveTrack}
-                  voiceControls={voiceControls}
+                  layerControls={layerControls}
                   audioTrackControls={audioTrackControls}
                   onResizeGutterStart={onResizeGutterStart}
                 />
@@ -1218,7 +1218,7 @@ const JotEditor = observer((props: JotEditorProps) => {
 /**
  * Side-effect-only observer that writes each bars-row's pixel width (the
  * one quantity zoom mutates) whenever the zoom-derived pixel-per-beat or
- * the voice length changes. Isolated so reading `jot.pxPerBeat` (a
+ * the layer length changes. Isolated so reading `jot.pxPerBeat` (a
  * zoom-dependent observable) doesn't re-render JotEditor, the writes go
  * out via `setBarsRowVars` (DOM `setProperty` on the few `[data-bars-row]`
  * elements), then CSS percentages reposition every bar / note / bracket
@@ -1241,7 +1241,7 @@ const ScoreZoomVar = observer(
     containerRef: React.RefObject<HTMLDivElement>;
   }) => {
     const pxPerBeat = structural.pxPerBeat;
-    const voiceBeats = structural.voiceBeats;
+    const layerBeats = structural.layerBeats;
     React.useLayoutEffect(() => {
       // On the FIRST layout effect `containerRef.current` is still null:
       // a child's layout effect (this) runs before the parent fiber
@@ -1251,8 +1251,8 @@ const ScoreZoomVar = observer(
       // (which also collapses the ResizeObserver's content-width read).
       const el = containerRef.current ?? document.querySelector<HTMLElement>('[data-jot-scroller]');
       if (!el) return;
-      setBarsRowVars(el, pxPerBeat, voiceBeats);
-    }, [pxPerBeat, voiceBeats, containerRef]);
+      setBarsRowVars(el, pxPerBeat, layerBeats);
+    }, [pxPerBeat, layerBeats, containerRef]);
     return null;
   }
 );
@@ -1465,7 +1465,7 @@ function setScrollY(cache: DomTargetCache, y: number): void {
 
 /**
  * Write the one quantity zoom mutates - each bars-row's pixel width
- * (`voiceBeats × pxPerBeat`) - onto every `[data-bars-row]` under `root`.
+ * (`layerBeats × pxPerBeat`) - onto every `[data-bars-row]` under `root`.
  * Replaces the old single inherited `--px-per-beat` on the score
  * container: every beat-anchored element now sizes/positions itself as a
  * PERCENTAGE of its bars-row, so only the ~handful of row elements need
@@ -1482,8 +1482,8 @@ function setScrollY(cache: DomTargetCache, y: number): void {
  * tiny, so a `querySelectorAll` is cheap and sidesteps the
  * mount-ordering between this and `DomTargetCache`.
  */
-function setBarsRowVars(root: HTMLElement, pxPerBeat: number, voiceBeats: number): void {
-  const width = `${pxPerBeat * voiceBeats}px`;
+function setBarsRowVars(root: HTMLElement, pxPerBeat: number, layerBeats: number): void {
+  const width = `${pxPerBeat * layerBeats}px`;
   const ppb = String(pxPerBeat);
   for (const el of root.querySelectorAll<HTMLElement>('[data-bars-row]')) {
     el.style.setProperty('--bars-row-width', width);
@@ -1516,10 +1516,10 @@ function applyZoomVarsSync(
   scroller: HTMLElement,
   cache: DomTargetCache | null,
   pxPerBeat: number,
-  voiceBeats: number,
+  layerBeats: number,
   scrollX: number
 ): void {
-  setBarsRowVars(scroller, pxPerBeat, voiceBeats);
+  setBarsRowVars(scroller, pxPerBeat, layerBeats);
   if (cache) {
     setScrollX(cache, scrollX);
     return;

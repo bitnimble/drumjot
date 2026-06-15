@@ -23,7 +23,7 @@ import { PARADB_ZIP_PATH, loadParadbZip } from './paradb.helper';
  * The song deliberately exercises a lot of DSL surface (all fragments are
  * taken from writer.test's round-trip-stable cases): a pattern def + usage,
  * a weighted tuplet of simultaneities, an explicit repeat, flam/accent
- * modifiers + L/R sticking, an open roll, a 3:4 polyrhythm, and two voices.
+ * modifiers + L/R sticking, an open roll, a 3:4 polyrhythm, and two layers.
  */
 const SONG = `{{ title: "Round Trip", bpm: 120, time: "4/4",
   instrumentMapping: { k:{name:"Kick"}, s:{name:"Snare"}, h:{name:"HiHat"}, c:{name:"Crash"}, a:{name:"TomA"}, b:{name:"TomB"} } }}
@@ -43,8 +43,8 @@ const SONG = `{{ title: "Round Trip", bpm: 120, time: "4/4",
 const GRID_FN = `() => {
   const r = (x) => Math.round(x * 1e4) / 1e4;
   const structural = window.drumjot.jotEditorStore.structural;
-  return structural.voices.map((v) => ({
-    pitches: v.pitches,
+  return structural.layers.map((v) => ({
+    lanes: v.lanes,
     bars: v.bars.map((bar) => ({
       index: bar.index,
       beats: r(bar.beats),
@@ -94,7 +94,7 @@ test('a rich song survives an import -> export-to-DSL -> reimport round-trip', a
   // Sanity: the snapshot actually captured the rich structure, so the
   // equality assertions below can't pass vacuously by comparing two empty
   // grids (e.g. if a future change silently rendered nothing).
-  expect(gridBefore.length).toBe(2); // two voices
+  expect(gridBefore.length).toBe(2); // two layers
   const allBars = gridBefore.flatMap((v) => v.bars);
   const allNotes = allBars.flatMap((b) => Object.values(b.tracks).flat());
   expect(allNotes.length).toBeGreaterThan(10);
@@ -122,7 +122,7 @@ test('a rich song survives an import -> export-to-DSL -> reimport round-trip', a
 /**
  * The same round-trip, but on a REAL full song: a complete transcriber
  * debug bundle (pointed to by `E2E_DEBUG_BUNDLE`). This is the realistic
- * stress case, dozens of bars, real tempo/time content, the full pitch
+ * stress case, dozens of bars, real tempo/time content, the full lane
  * vocabulary, so it catches structure/derivation regressions the small
  * synthetic song can't reach. Skipped when the env var is unset (the
  * bundle is large + machine-local, never committed), same convention as

@@ -14,7 +14,7 @@ const TIMELINE: JotTimeline = {
   rendered: undefined,
 };
 const STRUCT_BEATS = [4, 4];
-const VOICE_BEATS = 8;
+const LAYER_BEATS = 8;
 
 // Project just the comparable fields of each word cell (the `source`
 // back-reference is identity-only, asserted separately where it matters).
@@ -27,14 +27,14 @@ const cells = (line: { wordPositions: { sourceIdx: number; text: string; beatOff
   }));
 
 function position(lines: LyricLine[], offsetSec = 0, drumsT0Sec = 0) {
-  return positionLyricLines(lines, TIMELINE, drumsT0Sec, STRUCT_BEATS, offsetSec, VOICE_BEATS);
+  return positionLyricLines(lines, TIMELINE, drumsT0Sec, STRUCT_BEATS, offsetSec, LAYER_BEATS);
 }
 
 describe('positionLyricLines (word-less / LRCLIB-style)', () => {
-  it('bounds a lone line by the whole voice', () => {
+  it('bounds a lone line by the whole layer', () => {
     const out = position([{ startSec: 0, text: 'hello' }]);
     expect(out).toHaveLength(1);
-    expect(out[0]).toMatchObject({ i: 0, text: 'hello', startBeat: 0, endBeat: VOICE_BEATS });
+    expect(out[0]).toMatchObject({ i: 0, text: 'hello', startBeat: 0, endBeat: LAYER_BEATS });
     expect(out[0].wordPositions).toBeUndefined();
   });
 

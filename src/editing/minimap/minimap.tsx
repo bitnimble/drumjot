@@ -90,7 +90,7 @@ export const Minimap = observer(
     () =>
       computeBarLayouts(
         tempo?.timeline.bars ?? [],
-        structural?.voices[0]?.bars ?? [],
+        structural?.layers[0]?.bars ?? [],
         width
       ),
     [structural, tempo, width]
@@ -172,14 +172,14 @@ export const Minimap = observer(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [audibleAudioTrackIdsKey, bars, width, hasContent, drumsT0Sec, tempo]);
 
-  // ─── Note marks (color-coded per pitch, plotted in minimap-px) ──────
+  // ─── Note marks (color-coded per lane, plotted in minimap-px) ──────
   // Driven by a MobX `reaction` rather than computed in the render body so
   // the array identity stays stable when the underlying data hasn't
   // changed. Computing in-render gave a fresh array every render, and
   // even a Minimap re-render triggered by some other observable (e.g. a
   // stem-mute toggle, a colour pick) refired the canvas paint effect
   // below because its deps array saw a new `noteMarks` reference. The
-  // reaction tracks the per-pitch `store.getInstrumentTrack(pitch).color`
+  // reaction tracks the per-lane `store.getInstrumentTrack(lane).color`
   // observable that a useMemo dep array couldn't capture, and
   // `noteMarksEqual` collapses content-identical results to the same
   // reference so the canvas paint only refires when notes actually moved
@@ -192,20 +192,20 @@ export const Minimap = observer(
     }
     return reaction(
       () => {
-        const structBars = structural.voices[0]?.bars ?? [];
+        const structBars = structural.layers[0]?.bars ?? [];
         const out: NoteMark[] = [];
         for (let i = 0; i < structBars.length; i++) {
           const sb = structBars[i];
           const layout = bars[i];
           if (!layout || sb.beats <= 0) continue;
-          for (const [pitch, track] of Object.entries(sb.tracks)) {
-            // Skip muted / solo-excluded / master-muted pitches so the
+          for (const [lane, track] of Object.entries(sb.tracks)) {
+            // Skip muted / solo-excluded / master-muted lanes so the
             // minimap reads as the audible mix, mirroring the audio
-            // waveform path. Tracking `isPitchAudible` here subscribes
+            // waveform path. Tracking `isLaneAudible` here subscribes
             // the reaction to the underlying mute/solo observables, so
             // a toggle updates the ticks live.
-            if (!mixer.isPitchAudible(pitch)) continue;
-            const color = mixer.getInstrumentTrack(pitch).color;
+            if (!mixer.isLaneAudible(lane)) continue;
+            const color = mixer.getInstrumentTrack(lane).color;
             for (const note of track.notes) {
               const frac = note.beat / sb.beats;
               out.push({ x: layout.x + frac * layout.width, color });

@@ -57,27 +57,27 @@ export function formatSubtitle(source: Jot, tempo: TempoPresenter): string {
 
 /**
  * Per-jot colour/name legend shown above the score. Aggregates unique
- * pitches across all voices (in first-seen order, cached on the jot as
- * `legendPitches`).
+ * lanes across all layers (in first-seen order, cached on the jot as
+ * `legendLanes`).
  */
 export const Legend = observer(({ palette }: { palette: PaletteStore }) => {
   const entries = palette.legend;
   if (entries.length === 0) return null;
   return (
     <div className={sharedStyles.legend}>
-      {entries.map(([pitch, info]) => (
+      {entries.map(([lane, info]) => (
         <span
-          key={pitch}
+          key={lane}
           className={sharedStyles.legendChip}
           data-testid="legend-chip"
-          data-pitch={pitch}
+          data-lane={lane}
         >
           <span
             className={sharedStyles.legendSwatch}
             style={{ background: info.color }}
             data-testid="legend-swatch"
           />
-          <strong>{pitch}</strong>
+          <strong>{lane}</strong>
           {info.name ? <span data-testid="legend-name">{info.name}</span> : null}
         </span>
       ))}

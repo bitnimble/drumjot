@@ -48,7 +48,7 @@ export class PlaybackPresenter {
     // `fireImmediately` seeds the graph; all four are no-ops until a
     // context / playback exists.
     jotPlayer.attachPlayback(this.playback);
-    reaction(() => this.playback.pitchFilter, () => jotPlayer.applyPitchFilter(), {
+    reaction(() => this.playback.laneFilter, () => jotPlayer.applyLaneFilter(), {
       fireImmediately: true,
       equals: comparer.structural,
     });

@@ -1,7 +1,7 @@
 import { makeAutoObservable } from 'mobx';
 import { computedFn } from 'mobx-utils';
 import { Instrument } from 'src/schema/dsl/dsl';
-import { DrumInstrumentKind, defaultKindForPitch } from 'src/instruments/instruments';
+import { DrumInstrumentKind, defaultKindForLane } from 'src/instruments/instruments';
 import type { StructuralPresenter } from 'src/editing/structure/structural_presenter';
 import { AudioTrackFilter, AudioTrackId, isAudioTrackAudibleUnder } from 'src/editing/playback/audio_tracks';
 import { isAudibleUnder, PlayerFilter } from 'src/editing/playback/player';
@@ -26,7 +26,7 @@ export function clampVolume(v: number): number {
  * Default top-to-bottom mixer ordering for drum-instrument kinds when
  * the user hasn't manually reordered rows: top-of-kit cymbals first,
  * then drums from high to low, with kick last. `custom` falls to the very
- * bottom. Drives {@link collectJotPitches}.
+ * bottom. Drives {@link collectJotLanes}.
  */
 const DEFAULT_MIXER_KIND_ORDER: readonly DrumInstrumentKind[] = [
   'crash',
@@ -59,23 +59,23 @@ function inferKindFromInstrumentName(name: string | undefined): DrumInstrumentKi
 
 /**
  * Floor toms render below regular toms within the tom group. Detected
- * from the instrument name; pitch letter `f` is the GM importer's
+ * from the instrument name; lane letter `f` is the GM importer's
  * convention for the floor tom so it counts even with no display name.
  */
-function isFloorTom(instrument: Instrument | undefined, pitch: string): boolean {
+function isFloorTom(instrument: Instrument | undefined, lane: string): boolean {
   if (instrument?.name && /floor/i.test(instrument.name)) return true;
-  return pitch === 'f';
+  return lane === 'f';
 }
 
 /**
  * Sort tuple for the default mixer order: [kind rank, intra-kind rank,
- * pitch]. Kind comes from the parsed `Instrument` when available;
- * `kind: 'custom'` falls back to a name heuristic, then to the pitch
+ * lane]. Kind comes from the parsed `Instrument` when available;
+ * `kind: 'custom'` falls back to a name heuristic, then to the lane
  * letter's default kind. Intra-kind rank only matters for toms today
  * (regular before floor).
  */
 function defaultMixerSortKey(
-  pitch: string,
+  lane: string,
   instrument: Instrument | undefined
 ): [number, number, string] {
   let kind: DrumInstrumentKind = instrument?.kind ?? 'custom';
@@ -84,46 +84,46 @@ function defaultMixerSortKey(
     if (fromName) kind = fromName;
   }
   if (kind === 'custom') {
-    const fromLetter = defaultKindForPitch(pitch);
+    const fromLetter = defaultKindForLane(lane);
     if (fromLetter !== 'custom') kind = fromLetter;
   }
   const kindRank = DEFAULT_MIXER_KIND_ORDER.indexOf(kind);
-  const subRank = kind === 'tom' && isFloorTom(instrument, pitch) ? 1 : 0;
-  return [kindRank === -1 ? DEFAULT_MIXER_KIND_ORDER.length : kindRank, subRank, pitch];
+  const subRank = kind === 'tom' && isFloorTom(instrument, lane) ? 1 : 0;
+  return [kindRank === -1 ? DEFAULT_MIXER_KIND_ORDER.length : kindRank, subRank, lane];
 }
 
 /**
- * Pitches that appear anywhere in the rendered jot, sorted into the
- * default mixer ordering. A pitch that shows up in two voices is listed
- * once at its first appearance; ordering reads each pitch's resolved
+ * Lanes that appear anywhere in the rendered jot, sorted into the
+ * default mixer ordering. A lane that shows up in two layers is listed
+ * once at its first appearance; ordering reads each lane's resolved
  * `Instrument` (from the first bar that has a track for it).
  *
- * Reads the zoom-invariant structural voices (not pixels) so the
+ * Reads the zoom-invariant structural layers (not pixels) so the
  * mixer-order reaction that wraps this doesn't re-evaluate on every wheel
- * tick; pitch identity is a function of the source DSL, not the layout.
+ * tick; lane identity is a function of the source DSL, not the layout.
  */
-export function collectJotPitches(structural: StructuralPresenter | undefined): string[] {
+export function collectJotLanes(structural: StructuralPresenter | undefined): string[] {
   if (!structural) return [];
   const out: string[] = [];
-  const instrumentByPitch = new Map<string, Instrument>();
-  for (const voice of structural.voices) {
-    for (const p of voice.pitches) {
+  const instrumentByLane = new Map<string, Instrument>();
+  for (const layer of structural.layers) {
+    for (const p of layer.lanes) {
       if (!out.includes(p)) out.push(p);
     }
-    for (const bar of voice.bars) {
-      for (const pitch of Object.keys(bar.tracks)) {
-        if (!instrumentByPitch.has(pitch)) {
-          instrumentByPitch.set(
-            pitch,
-            structural.source.globalMetadata.instrumentMapping?.[pitch] ?? { kind: 'custom' }
+    for (const bar of layer.bars) {
+      for (const lane of Object.keys(bar.tracks)) {
+        if (!instrumentByLane.has(lane)) {
+          instrumentByLane.set(
+            lane,
+            structural.source.globalMetadata.instrumentMapping?.[lane] ?? { kind: 'custom' }
           );
         }
       }
     }
   }
   out.sort((a, b) => {
-    const ka = defaultMixerSortKey(a, instrumentByPitch.get(a));
-    const kb = defaultMixerSortKey(b, instrumentByPitch.get(b));
+    const ka = defaultMixerSortKey(a, instrumentByLane.get(a));
+    const kb = defaultMixerSortKey(b, instrumentByLane.get(b));
     if (ka[0] !== kb[0]) return ka[0] - kb[0];
     if (ka[1] !== kb[1]) return ka[1] - kb[1];
     return ka[2].localeCompare(kb[2]);
@@ -136,7 +136,7 @@ export function collectJotPitches(structural: StructuralPresenter | undefined): 
 export type AudioTrackSplitStatus = { phase: 'splitting'; kind: 'mix' | 'pieces' };
 
 /**
- * Mixer state: per-row mute/solo/volume (drum pitches + audio tracks),
+ * Mixer state: per-row mute/solo/volume (drum lanes + audio tracks),
  * section masters, per-instrument colour view-models, and the
  * user-customisable row order. Implements {@link MixerContext} so the
  * player's audio-track colour inheritance can resolve through it.
@@ -147,14 +147,14 @@ export type AudioTrackSplitStatus = { phase: 'splitting'; kind: 'mix' | 'pieces'
  * presenter.
  */
 export class MixerStore implements MixerContext {
-  /** DSL pitches the user has muted via the row-gutter M button. */
-  mutedPitches: Set<string> = new Set();
-  /** DSL pitches the user has soloed. When non-empty, ONLY these rows are
+  /** DSL lanes the user has muted via the row-gutter M button. */
+  mutedLanes: Set<string> = new Set();
+  /** DSL lanes the user has soloed. When non-empty, ONLY these rows are
    *  audible (cross-domain with audio tracks via {@link soloActive}). */
-  soloedPitches: Set<string> = new Set();
+  soloedLanes: Set<string> = new Set();
   /** Audio-track ids the user has muted via the gutter M button. */
   mutedAudioTracks: Set<AudioTrackId> = new Set();
-  /** Soloed audio-track ids; same semantics as {@link soloedPitches}. */
+  /** Soloed audio-track ids; same semantics as {@link soloedLanes}. */
   soloedAudioTracks: Set<AudioTrackId> = new Set();
   /**
    * Section-master mute / solo. These act on the whole bus, not by
@@ -168,21 +168,21 @@ export class MixerStore implements MixerContext {
   drumMasterSoloed: boolean = false;
   /**
    * Per-row volume faders, 0..1 (1 = full). Sparse: a row absent from the
-   * map plays at full volume. Pitch volumes scale note velocity; audio
+   * map plays at full volume. Lane volumes scale note velocity; audio
    * volumes scale the track's GainNode.
    */
-  pitchVolumes: Map<string, number> = new Map();
+  laneVolumes: Map<string, number> = new Map();
   audioTrackVolumes: Map<AudioTrackId, number> = new Map();
   /**
-   * Per-pitch {@link InstrumentTrack} view-models keyed by DSL pitch
+   * Per-lane {@link InstrumentTrack} view-models keyed by DSL lane
    * letter (per-instrument note-colour override). Survives jot reloads;
-   * the presenter prunes entries for pitches no longer present.
+   * the presenter prunes entries for lanes no longer present.
    */
   instrumentTracks: Map<string, InstrumentTrack> = new Map();
   /**
    * User-customizable order of mixer rows. Each entry is a loaded audio
-   * track id, a DSL pitch letter, or a lyrics track; the mixer renders
-   * rows in this exact order. Kept in sync with the live track/pitch set
+   * track id, a DSL lane letter, or a lyrics track; the mixer renders
+   * rows in this exact order. Kept in sync with the live track/lane set
    * by the presenter.
    */
   trackOrder: TrackKey[] = [];
@@ -192,7 +192,7 @@ export class MixerStore implements MixerContext {
    */
   audioTrackSplitStatuses: Map<AudioTrackId, AudioTrackSplitStatus> = new Map();
 
-  /** Active jot, for the mixer-ordered pitch list. */
+  /** Active jot, for the mixer-ordered lane list. */
   readonly jotEditorStore: JotEditorStore;
 
   constructor(jotEditorStore: JotEditorStore) {
@@ -201,13 +201,13 @@ export class MixerStore implements MixerContext {
   }
 
   /**
-   * Solo is one global mode across both the pitch and audio-track domains:
+   * Solo is one global mode across both the lane and audio-track domains:
    * any soloed row (drum OR music) puts every non-soloed row into the
    * "solo-excluded" state. The two section-master solos count too.
    */
   get soloActive(): boolean {
     return (
-      this.soloedPitches.size > 0 ||
+      this.soloedLanes.size > 0 ||
       this.soloedAudioTracks.size > 0 ||
       this.audioMasterSoloed ||
       this.drumMasterSoloed
@@ -229,29 +229,29 @@ export class MixerStore implements MixerContext {
   get isDrumSectionAudible(): boolean {
     if (this.drumMasterMuted) return false;
     if (!this.soloActive) return true;
-    return this.drumMasterSoloed || this.soloedPitches.size > 0;
+    return this.drumMasterSoloed || this.soloedLanes.size > 0;
   }
 
   /**
-   * Live {@link PlayerFilter} view onto the per-pitch mute/solo/volume
+   * Live {@link PlayerFilter} view onto the per-lane mute/solo/volume
    * state. Sets and Maps are *snapshotted* on each read so the downstream
    * `reaction(..., comparer.structural)` that pushes this to the player
    * can actually detect changes; sharing the live references would
    * defeat the comparer (prev and next would point at the same mutated
    * instance).
    */
-  get pitchFilter(): PlayerFilter {
+  get laneFilter(): PlayerFilter {
     return {
-      mutedPitches: new Set(this.mutedPitches),
-      soloedPitches: new Set(this.soloedPitches),
+      mutedLanes: new Set(this.mutedLanes),
+      soloedLanes: new Set(this.soloedLanes),
       soloActive: this.soloActive,
       sectionMasterMuted: this.drumMasterMuted,
       sectionMasterSoloed: this.drumMasterSoloed,
-      volumes: new Map(this.pitchVolumes),
+      volumes: new Map(this.laneVolumes),
     };
   }
 
-  /** Mirror of {@link pitchFilter} for the audio-track domain. */
+  /** Mirror of {@link laneFilter} for the audio-track domain. */
   get audioTrackFilter(): AudioTrackFilter {
     return {
       mutedAudioTracks: new Set(this.mutedAudioTracks),
@@ -264,21 +264,21 @@ export class MixerStore implements MixerContext {
   }
 
   /**
-   * Pitches that appear anywhere in the rendered jot, in the default mixer
-   * ordering. Thin wrapper over {@link collectJotPitches} so consumers
+   * Lanes that appear anywhere in the rendered jot, in the default mixer
+   * ordering. Thin wrapper over {@link collectJotLanes} so consumers
    * track a single MobX-memoised computed rather than re-walking the jot.
    */
-  get jotPitches(): readonly string[] {
-    return collectJotPitches(this.jotEditorStore.structural);
+  get jotLanes(): readonly string[] {
+    return collectJotLanes(this.jotEditorStore.structural);
   }
 
   /**
-   * Drum-pitch lane order derived from {@link trackOrder}, dropping audio
+   * Drum-lane lane order derived from {@link trackOrder}, dropping audio
    * + lyrics rows. Pattern brackets use this to know whether a row is the
    * topmost / bottommost participant of a pattern span.
    */
-  get pitchOrder(): readonly string[] {
-    return this.trackOrder.flatMap((k) => (k.kind === 'instrument' ? [k.pitch] : []));
+  get laneOrder(): readonly string[] {
+    return this.trackOrder.flatMap((k) => (k.kind === 'instrument' ? [k.lane] : []));
   }
 
   /**
@@ -291,21 +291,21 @@ export class MixerStore implements MixerContext {
   }
 
   /**
-   * Whether a drum pitch is audible under the live mute/solo/volume state.
+   * Whether a drum lane is audible under the live mute/solo/volume state.
    * `computedFn` memoises per-argument, so a per-row gutter observer only
-   * re-renders when its own pitch's audibility flips.
+   * re-renders when its own lane's audibility flips.
    */
-  isPitchAudible = computedFn((pitch: string): boolean => {
-    return isAudibleUnder(pitch, this.pitchFilter);
+  isLaneAudible = computedFn((lane: string): boolean => {
+    return isAudibleUnder(lane, this.laneFilter);
   });
 
-  /** Mirror of {@link isPitchAudible} for the audio-track domain. */
+  /** Mirror of {@link isLaneAudible} for the audio-track domain. */
   isAudioTrackAudible = computedFn((id: AudioTrackId): boolean => {
     return isAudioTrackAudibleUnder(id, this.audioTrackFilter);
   });
 
-  pitchVolume(pitch: string): number {
-    return this.pitchVolumes.get(pitch) ?? 1;
+  laneVolume(lane: string): number {
+    return this.laneVolumes.get(lane) ?? 1;
   }
 
   audioTrackVolume(id: AudioTrackId): number {
@@ -313,21 +313,21 @@ export class MixerStore implements MixerContext {
   }
 
   /**
-   * Lazily-constructed {@link InstrumentTrack} for a DSL pitch. The
+   * Lazily-constructed {@link InstrumentTrack} for a DSL lane. The
    * track's fallback closure reads the active jot's palette default, so a
    * jot reload that re-shuffles palette slots updates unfilled tracks
    * automatically. Memoised in {@link instrumentTracks} so every callsite
    * reads/writes the same observable; the presenter prunes dead entries.
    * Also serves the {@link MixerContext} the player calls back into.
    */
-  getInstrumentTrack(pitch: string): InstrumentTrack {
-    let track = this.instrumentTracks.get(pitch);
+  getInstrumentTrack(lane: string): InstrumentTrack {
+    let track = this.instrumentTracks.get(lane);
     if (track) return track;
     track = new InstrumentTrack(
-      pitch,
-      () => this.jotEditorStore.palette?.paletteColorFor(pitch) ?? INSTRUMENT_FALLBACK_COLOR
+      lane,
+      () => this.jotEditorStore.palette?.paletteColorFor(lane) ?? INSTRUMENT_FALLBACK_COLOR
     );
-    this.instrumentTracks.set(pitch, track);
+    this.instrumentTracks.set(lane, track);
     return track;
   }
 }

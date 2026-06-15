@@ -53,14 +53,14 @@ test('captures the debug-details timing visualization', async ({ page }) => {
     const provenance = (window as any).drumjot.provenance;
     const structural = (window as any).drumjot.jotEditorStore.structural;
     if (!structural) throw new Error('no loaded jot');
-    // Walk the structure store's Struct* voices: voices → bars →
-    // tracks[pitch] → notes, matching how the renderer locates notes.
+    // Walk the structure store's Struct* layers: layers → bars →
+    // tracks[lane] → notes, matching how the renderer locates notes.
     // Pick a hi-hat note well past the gutter so the centered popover
     // doesn't clip on the left edge of the viewport. Falls back to the
     // first available `h` note if there aren't enough.
     const hiHats: any[] = [];
-    for (const voice of structural.voices) {
-      for (const bar of voice.bars) {
+    for (const layer of structural.layers) {
+      for (const bar of layer.bars) {
         const track = bar.tracks?.h;
         if (!track) continue;
         for (const n of track.notes) hiHats.push(n);
@@ -69,7 +69,7 @@ test('captures the debug-details timing visualization', async ({ page }) => {
     if (hiHats.length === 0) throw new Error('no hi-hat note found in current jot');
     const targetNote = hiHats[Math.min(6, hiHats.length - 1)];
     // The renderer keys provenance off the note's flat MIDI tick; seed it
-    // on the cached Struct note (the `voices` computed is stable, so the
+    // on the cached Struct note (the `layers` computed is stable, so the
     // mutation survives to the provenance-triggered re-render).
     targetNote.midiTick = 100;
 
@@ -79,10 +79,10 @@ test('captures the debug-details timing visualization', async ({ page }) => {
       beat_alignment_offset_sec: 0.011,
       beat_align_coarse_offset_sec: 0.006,
       beat_align_fine_offset_sec: 0.005,
-      per_pitch: {
+      per_lane: {
         h: [
           {
-            pitch: 'h',
+            lane: 'h',
             midi_note: 42,
             tick: 100,
             detected_time_sec: 0.512,

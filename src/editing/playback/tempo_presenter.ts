@@ -30,7 +30,7 @@ export class TempoPresenter {
   }
 
   get barTempos(): readonly BarTempos[] {
-    const bars = this.jot.voices[0]?.bars;
+    const bars = this.jot.layers[0]?.bars;
     if (!bars) return [];
     return buildBarTempos(this.jot.source, bars);
   }

@@ -171,10 +171,10 @@ export const INSTRUMENT_METADATA: Readonly<
   },
 };
 
-// ---------- Pitch-letter defaults ----------
+// ---------- Lane-letter defaults ----------
 
 /**
- * Auto-fill mapping from the canonical Drumjot pitch letter to its instrument
+ * Auto-fill mapping from the canonical Drumjot lane letter to its instrument
  * kind. This matches the transcriber pipeline's `STEM_NAME_TO_PITCH` so
  * round-trips through MIDI / RLRR / transcription land on consistent kinds.
  *
@@ -192,8 +192,8 @@ const DEFAULT_PITCH_TO_KIND: Readonly<Record<string, DrumInstrumentKind>> = {
   f: 'tom',     // floor tom letter in gm.ts
 };
 
-export function defaultKindForPitch(pitch: string): DrumInstrumentKind {
-  return DEFAULT_PITCH_TO_KIND[pitch] ?? 'custom';
+export function defaultKindForLane(lane: string): DrumInstrumentKind {
+  return DEFAULT_PITCH_TO_KIND[lane] ?? 'custom';
 }
 
 // ---------- Helpers ----------

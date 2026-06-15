@@ -11,11 +11,11 @@ import type { PaletteStore } from 'src/editing/palette/palette_store';
  * outside the View (e.g. tests / a filtered-ghost render); consumers fall back
  * to a sensible default in that case.
  *
- * - {@link StructuralContext}: structure / layout (`pxPerBeat`, `voices`,
- *   `voiceBeats`, `barsForPitch`) + the user-applied Beat-offset
+ * - {@link StructuralContext}: structure / layout (`pxPerBeat`, `layers`,
+ *   `layerBeats`, `barsForLane`) + the user-applied Beat-offset
  *   (`effectiveDrumOffsetBeats`) the provenance drift visualisation reads.
  * - {@link TempoContext}: per-bar tempos + the audio timeline.
- * - {@link PaletteContext}: per-pitch colours + the legend.
+ * - {@link PaletteContext}: per-lane colours + the legend.
  */
 export const StructuralContext = React.createContext<StructuralPresenter | null>(null);
 export const TempoContext = React.createContext<TempoPresenter | null>(null);
@@ -37,7 +37,7 @@ export const PaletteContext = React.createContext<PaletteStore | null>(null);
  * walk down to NoteView. `bar.index` is preserved across those clones
  * and across `drumOffsetBeats` reflows, so it's the stable key.
  *
- * `null` outside the View or when the jot has no voices/bars.
+ * `null` outside the View or when the jot has no layers/bars.
  */
 export const BarTimingsContext = React.createContext<
   ReadonlyMap<number, BarTiming> | null

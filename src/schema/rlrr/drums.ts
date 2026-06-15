@@ -1,11 +1,11 @@
 /**
  * Bidirectional mapping between Paradiddle drum classes (`BP_<Class>_C`),
- * Drumjot DSL pitches, and General-MIDI percussion note numbers.
+ * Drumjot DSL lanes, and General-MIDI percussion note numbers.
  *
  * Drum class names come from
  * https://github.com/emretanirgan/ParadiddleUtilities/blob/master/PDUtilities/drum_sets/defaultset.rlrr
  * and the upstream `midi_mapping.yaml`. We pick a stable single letter per
- * class to satisfy the DSL constraint that pitches are `a`-`z`.
+ * class to satisfy the DSL constraint that lanes are `a`-`z`.
  *
  * Where a single DSL letter collapses several classes (e.g. all crashes ->
  * `c`), the converter preserves the original drum class on the produced
@@ -14,8 +14,8 @@
 import { Modifier } from 'src/schema/dsl/dsl';
 
 export type DrumDescriptor = {
-  /** Single-letter pitch for the DSL. */
-  pitch: string;
+  /** Single-letter lane for the DSL. */
+  lane: string;
   /** Modifiers to attach when materialising a note for this class. */
   modifiers?: Modifier[];
   /** Default GM percussion MIDI note for this class. */
@@ -25,31 +25,31 @@ export type DrumDescriptor = {
 };
 
 export const CLASS_TO_DRUM: Readonly<Record<string, DrumDescriptor>> = {
-  BP_HiHat_C: { pitch: 'h', modifiers: ['c'], midi: 42, name: 'Hi-Hat' },
-  BP_Snare_C: { pitch: 's', midi: 38, name: 'Snare' },
-  BP_Kick_C: { pitch: 'k', midi: 36, name: 'Kick' },
-  BP_Crash13_C: { pitch: 'c', midi: 49, name: 'Crash 13"' },
-  BP_Crash15_C: { pitch: 'c', midi: 49, name: 'Crash 15"' },
-  BP_Crash17_C: { pitch: 'c', midi: 57, name: 'Crash 17"' },
-  BP_China15_C: { pitch: 'c', midi: 52, name: 'China 15"' },
-  BP_FloorTom_C: { pitch: 'f', midi: 41, name: 'Floor Tom' },
-  BP_Ride17_C: { pitch: 'd', midi: 51, name: 'Ride 17"' },
-  BP_Ride20_C: { pitch: 'd', midi: 59, name: 'Ride 20"' },
-  BP_Tom1_C: { pitch: 't', midi: 48, name: 'Tom 1' },
-  BP_Tom2_C: { pitch: 't', midi: 47, name: 'Tom 2' },
-  BP_Timpani1_C: { pitch: 'i', midi: 47, name: 'Timpani 1' },
-  BP_Timpani2_C: { pitch: 'i', midi: 48, name: 'Timpani 2' },
-  BP_Timpani3_C: { pitch: 'i', midi: 50, name: 'Timpani 3' },
-  BP_Triangle_C: { pitch: 'n', midi: 81, name: 'Triangle' },
-  BP_BongoH_C: { pitch: 'n', midi: 60, name: 'Bongo (High)' },
-  BP_BongoL_C: { pitch: 'n', midi: 61, name: 'Bongo (Low)' },
-  BP_Xylophone_C: { pitch: 'y', midi: 72, name: 'Xylophone' },
-  BP_Marimba_C: { pitch: 'y', midi: 72, name: 'Marimba' },
-  BP_Glockenspiel_C: { pitch: 'e', midi: 84, name: 'Glockenspiel' },
-  BP_Gong_C: { pitch: 'q', midi: 52, name: 'Gong' },
-  BP_Tambourine1_C: { pitch: 'b', midi: 54, name: 'Tambourine 1' },
-  BP_Tambourine2_C: { pitch: 'b', midi: 54, name: 'Tambourine 2' },
-  BP_Cowbell_C: { pitch: 'b', midi: 56, name: 'Cowbell' },
+  BP_HiHat_C: { lane: 'h', modifiers: ['c'], midi: 42, name: 'Hi-Hat' },
+  BP_Snare_C: { lane: 's', midi: 38, name: 'Snare' },
+  BP_Kick_C: { lane: 'k', midi: 36, name: 'Kick' },
+  BP_Crash13_C: { lane: 'c', midi: 49, name: 'Crash 13"' },
+  BP_Crash15_C: { lane: 'c', midi: 49, name: 'Crash 15"' },
+  BP_Crash17_C: { lane: 'c', midi: 57, name: 'Crash 17"' },
+  BP_China15_C: { lane: 'c', midi: 52, name: 'China 15"' },
+  BP_FloorTom_C: { lane: 'f', midi: 41, name: 'Floor Tom' },
+  BP_Ride17_C: { lane: 'd', midi: 51, name: 'Ride 17"' },
+  BP_Ride20_C: { lane: 'd', midi: 59, name: 'Ride 20"' },
+  BP_Tom1_C: { lane: 't', midi: 48, name: 'Tom 1' },
+  BP_Tom2_C: { lane: 't', midi: 47, name: 'Tom 2' },
+  BP_Timpani1_C: { lane: 'i', midi: 47, name: 'Timpani 1' },
+  BP_Timpani2_C: { lane: 'i', midi: 48, name: 'Timpani 2' },
+  BP_Timpani3_C: { lane: 'i', midi: 50, name: 'Timpani 3' },
+  BP_Triangle_C: { lane: 'n', midi: 81, name: 'Triangle' },
+  BP_BongoH_C: { lane: 'n', midi: 60, name: 'Bongo (High)' },
+  BP_BongoL_C: { lane: 'n', midi: 61, name: 'Bongo (Low)' },
+  BP_Xylophone_C: { lane: 'y', midi: 72, name: 'Xylophone' },
+  BP_Marimba_C: { lane: 'y', midi: 72, name: 'Marimba' },
+  BP_Glockenspiel_C: { lane: 'e', midi: 84, name: 'Glockenspiel' },
+  BP_Gong_C: { lane: 'q', midi: 52, name: 'Gong' },
+  BP_Tambourine1_C: { lane: 'b', midi: 54, name: 'Tambourine 1' },
+  BP_Tambourine2_C: { lane: 'b', midi: 54, name: 'Tambourine 2' },
+  BP_Cowbell_C: { lane: 'b', midi: 56, name: 'Cowbell' },
 };
 
 /** Default-difficulty MIDI note -> drum class map, ported from midi_mapping.yaml. */
@@ -85,7 +85,7 @@ export function describeDrum(instanceName: string): DrumDescriptor | undefined {
 }
 
 /**
- * Inverse of `CLASS_TO_DRUM`: pick a Paradiddle class for a `(pitch, modifiers)`
+ * Inverse of `CLASS_TO_DRUM`: pick a Paradiddle class for a `(lane, modifiers)`
  * combination. Returns `undefined` if there is no reasonable mapping; callers
  * should then drop the note or apply their own fallback.
  *
@@ -95,8 +95,8 @@ export function describeDrum(instanceName: string): DrumDescriptor | undefined {
  *    disambiguate at the RLRR layer. The MIDI round-trip uses the `event.midi`
  *    extension to preserve the original note number.
  */
-export function pitchToClass(pitch: string, mods: ReadonlySet<Modifier>): string | undefined {
-  switch (pitch) {
+export function laneToClass(lane: string, mods: ReadonlySet<Modifier>): string | undefined {
+  switch (lane) {
     case 'k':
       return 'BP_Kick_C';
     case 's':

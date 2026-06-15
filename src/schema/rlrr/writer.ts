@@ -15,14 +15,14 @@
  *         (a) `note.metadata.rlrr.name`                (exact round-trip),
  *         (b) `track.instrument.midi.note` matched to an instrument in the
  *             kit via the GM table,
- *         (c) `pitchToClass(pitch, modifiers)` then pick the first
+ *         (c) `laneToClass(lane, modifiers)` then pick the first
  *             instrument of that class in the kit.
  *       Notes that don't resolve to any kit instrument are dropped.
  *  [S4] Velocity comes from `metadata.rlrr.vel` if present, else
  *       `metadata.midi.velocity`, else the `vol`-bucket mapping with
  *       `:a` / `:g` adjustments.
- *  [S5] All voices in the Jot collapse onto a single RLRR event stream;
- *       Paradiddle has no concept of independent voices.
+ *  [S5] All layers in the Jot collapse onto a single RLRR event stream;
+ *       Paradiddle has no concept of independent layers.
  *  [S6] `audioFileData` and `recordingMetadata` are taken from
  *       `globalMetadata.rlrr` when present; the Jot's `title` always
  *       overrides `recordingMetadata.title`.
@@ -40,7 +40,7 @@ import { beatToSecWithinBar, buildBarTempos, initialBpm, resolveBpm } from 'src/
 import {
   CLASS_TO_DRUM,
   describeDrum,
-  pitchToClass,
+  laneToClass,
 } from './drums';
 import {
   DEFAULT_INSTRUMENTS,
@@ -85,21 +85,21 @@ type Sidecar = {
 
 export function writeRlrr(jot: Jot, options: JotToRlrrOptions = {}): RlrrFile {
   const opts = { ...DEFAULTS, ...options };
-  const voices = buildJotModel(jot).structural.voices;
-  const instrumentFor = (pitch: string): Instrument =>
-    jot.globalMetadata.instrumentMapping?.[pitch] ?? { kind: 'custom' };
+  const layers = buildJotModel(jot).structural.layers;
+  const instrumentFor = (lane: string): Instrument =>
+    jot.globalMetadata.instrumentMapping?.[lane] ?? { kind: 'custom' };
 
   const sidecar = (jot.globalMetadata.rlrr ?? {}) as Sidecar;
   const instruments: RlrrInstrument[] =
     options.instruments ?? sidecar.instruments ?? [...DEFAULT_INSTRUMENTS];
 
-  // Voice 0 is canonical for tempo (its bar grid is shared across voices).
+  // Layer 0 is canonical for tempo (its bar grid is shared across layers).
   // `buildBarTempos` produces per-bar `durationSec` + within-bar segments
   // so a note at `note.beat` resolves via `beatToSecWithinBar` even when
   // its bar contains mid-bar tempo changes.
-  const voice0 = voices[0];
-  const barTempos = voice0 ? buildBarTempos(jot, voice0.bars) : [];
-  const barStartSec: number[] = new Array(voice0?.bars.length ?? 0);
+  const layer0 = layers[0];
+  const barTempos = layer0 ? buildBarTempos(jot, layer0.bars) : [];
+  const barStartSec: number[] = new Array(layer0?.bars.length ?? 0);
   {
     let cursor = 0;
     for (let i = 0; i < barStartSec.length; i++) {
@@ -109,16 +109,16 @@ export function writeRlrr(jot: Jot, options: JotToRlrrOptions = {}): RlrrFile {
   }
 
   const events: RlrrEvent[] = [];
-  // [S5] Merge all voices. All voices share voice 0's bar timing.
-  for (const voice of voices) {
-    for (let bi = 0; bi < voice.bars.length; bi++) {
-      const bar = voice.bars[bi];
+  // [S5] Merge all layers. All layers share layer 0's bar timing.
+  for (const layer of layers) {
+    for (let bi = 0; bi < layer.bars.length; bi++) {
+      const bar = layer.bars[bi];
       const tempos = barTempos[bi];
       const startSec = barStartSec[bi] ?? 0;
-      for (const pitch of voice.pitches) {
-        const track = bar.tracks[pitch];
+      for (const lane of layer.lanes) {
+        const track = bar.tracks[lane];
         if (!track) continue;
-        const instrument = instrumentFor(pitch);
+        const instrument = instrumentFor(lane);
         for (const note of track.notes) {
           const target = resolveInstrument(note, instrument, instruments);
           if (!target) continue;
@@ -214,8 +214,8 @@ function resolveInstrument(
     }
   }
 
-  // [S3](c) pitch+modifiers heuristic.
-  const cls = pitchToClass(note.pitch, new Set(note.modifiers as Modifier[]));
+  // [S3](c) lane+modifiers heuristic.
+  const cls = laneToClass(note.lane, new Set(note.modifiers as Modifier[]));
   if (cls) {
     const found = kit.find((i) => i.class === cls);
     if (found) return found;

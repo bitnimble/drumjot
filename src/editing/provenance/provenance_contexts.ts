@@ -23,19 +23,19 @@ export const ProvenancePresenterContext =
  * Routes the loaded debug bundle's per-note provenance to two deep
  * consumers: `NoteView` (looks up its own entry via `byTick` to render
  * the `Debug details` collapsible in the selection label) and `InstrumentRow`
- * (reads `rejectedByPitch` + `leadBars` + `showFiltered` to render
+ * (reads `rejectedByLane` + `leadBars` + `showFiltered` to render
  * filtered onsets as ghost overlays). `null` outside the View, or when
  * no bundle is loaded — both consumers no-op in that case.
  */
 export type NoteProvenanceContextValue = {
-  /** Keyed by `${pitch}:${tick}` — exact-match lookup from NoteView. */
+  /** Keyed by `${lane}:${tick}` — exact-match lookup from NoteView. */
   byTick: Map<string, NoteProvenanceEntry>;
   /**
-   * Per-pitch rejected onsets used by InstrumentRow to render the dashed
+   * Per-lane rejected onsets used by InstrumentRow to render the dashed
    * ghost overlays. Out-of-range entries are pre-filtered out (they
    * have no anchored bar to render against).
    */
-  rejectedByPitch: Map<string, NoteProvenanceEntry[]>;
+  rejectedByLane: Map<string, NoteProvenanceEntry[]>;
   /**
    * The `lead_bars` field from the provenance file. The MIDI lays
    * `lead_bars` empty bar-0-sized blocks before bar 0 to absorb the
@@ -65,17 +65,17 @@ export type NoteProvenanceContextValue = {
    * `null` like {@link beatAlignCoarseOffsetSec}. */
   beatAlignFineOffsetSec: number | null;
   /**
-   * Bundle-manifest mapping from pitch letter (and the synthetic
+   * Bundle-manifest mapping from lane letter (and the synthetic
    * `no_drums` key) to the audio filename inside the bundle, e.g.
    * `k` → `stem_k.mp3`. Sourced from `DebugBundleManifest.mapping`.
    * Used by the per-onset timing visualization to pick the right
-   * loaded audio track for a given pitch (the isolated stem shows
+   * loaded audio track for a given lane (the isolated stem shows
    * the drum hit far more clearly than the full mix or the
    * `no_drums` backing). Empty when the bundle didn't ship a mapping
    * — the visualization falls back to filename heuristics in that
    * case.
    */
-  audioFilenameByPitch: ReadonlyMap<string, string>;
+  audioFilenameByLane: ReadonlyMap<string, string>;
 };
 
 export const NoteProvenanceContext =

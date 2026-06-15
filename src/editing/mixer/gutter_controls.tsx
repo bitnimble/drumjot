@@ -96,7 +96,7 @@ export const GutterMasterRow = observer(
 );
 
 /**
- * Compact horizontal volume fader shared by the pitch gutter and the
+ * Compact horizontal volume fader shared by the lane gutter and the
  * audio-track gutter. Range is 0..1 (pure attenuation). All mouse events are
  * kept from bubbling so dragging the fader doesn't start the page-level
  * marquee selection or trip the seek-on-click handler.

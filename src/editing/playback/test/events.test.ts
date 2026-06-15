@@ -27,12 +27,12 @@ function kickWithOffset(offset: number | undefined): Jot {
   return {
     title: '',
     globalMetadata: { bpm: 120, time: { count: 4, unit: 4 }, instrumentMapping: { k: { kind: 'kick', name: 'Kick' } } },
-    voices: [
+    layers: [
       {
         bars: [
           {
             elements: [
-              { kind: 'note', pitch: 'k', ...(offset !== undefined ? { offset } : {}) },
+              { kind: 'note', lane: 'k', ...(offset !== undefined ? { offset } : {}) },
               { kind: 'rest' },
               { kind: 'rest' },
               { kind: 'rest' },
@@ -150,7 +150,7 @@ describe('jotToEvents timing', () => {
 
   it('anchors bar 1 at jot 0 when leadBars shifts bars[0] into the pre-drum window', () => {
     // Two empty lead-in bars then a kick on bar-1 downbeat at 120 BPM:
-    // bar 1 (= voice.bars[2]) lives at jot 0, so the kick fires at t=0,
+    // bar 1 (= layer.bars[2]) lives at jot 0, so the kick fires at t=0,
     // even though the rendered jot has two preceding (empty) bars at
     // negative jot time.
     const jot = parse(

@@ -4,7 +4,7 @@ import type { StructureStore } from 'src/editing/structure/structure_store';
 /**
  * Beat→pixel layout derived from the score structure + the active bar
  * width, the pixel layer that used to be `ResolvedJot` (`layoutJot` /
- * `pixelVoice` / density). Belongs to the viewport / coordinate-system
+ * `pixelLayer` / density). Belongs to the viewport / coordinate-system
  * domain: it owns `pxPerBeat` (the single multiplier the renderer exposes
  * as `--px-per-beat`), the onset-density width scaling, the engraving
  * inset, and per-bar pixel offsets.
@@ -47,18 +47,18 @@ export class LayoutStore {
     });
   }
 
-  /** Whole-song width scale from onset density (max over voices), clamped.
+  /** Whole-song width scale from onset density (max over layers), clamped.
    *  A "column" is a distinct onset beat within a bar (a simultaneity is
    *  one column), matching the legacy `countOnsets`. */
   get densityFactor(): number {
     let maxRatio = 0;
-    for (const voice of this.structure.voices) {
+    for (const layer of this.structure.layers) {
       let onsets = 0;
       let beats = 0;
-      for (const bar of voice.bars) {
+      for (const bar of layer.bars) {
         const cols = new Set<number>();
-        for (const pitch of Object.keys(bar.tracks)) {
-          for (const note of bar.tracks[pitch].notes) cols.add(note.beat);
+        for (const lane of Object.keys(bar.tracks)) {
+          for (const note of bar.tracks[lane].notes) cols.add(note.beat);
         }
         onsets += cols.size;
         beats += bar.beats;
@@ -82,16 +82,16 @@ export class LayoutStore {
     return this.getNotePadBeats() * this.pxPerBeat;
   }
 
-  /** Per-bar pixel layout for the shared bar grid (all voices tile the
-   *  same grid; read the primary voice). */
+  /** Per-bar pixel layout for the shared bar grid (all layers tile the
+   *  same grid; read the primary layer). */
   get bars(): LayoutBar[] {
-    const voice = this.structure.voices[0];
-    if (!voice) return [];
+    const layer = this.structure.layers[0];
+    if (!layer) return [];
     const pxPerBeat = this.pxPerBeat;
     const out: LayoutBar[] = [];
     let startBeat = 0;
     let x = 0;
-    for (const bar of voice.bars) {
+    for (const bar of layer.bars) {
       const width = bar.beats * pxPerBeat;
       out.push({ id: bar.id, index: bar.index, beats: bar.beats, startBeat, x, width });
       startBeat += bar.beats;

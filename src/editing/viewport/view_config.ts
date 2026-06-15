@@ -10,10 +10,10 @@ export const px = (n: number) => n as Pixels;
 export class ViewConfig {
   /** Pixel width of one whole bar at default zoom. */
   barWidth = px(448);
-  /** Vertical height of one rendered pitch track. */
+  /** Vertical height of one rendered lane track. */
   trackHeight = px(36);
-  /** Padding above/below each voice block. */
-  voicePadding = px(12);
+  /** Padding above/below each layer block. */
+  layerPadding = px(12);
   /** Note dot diameter. */
   noteDiameter = px(14);
   /**
@@ -34,7 +34,7 @@ export class ViewConfig {
    * beats) so `padLeft = pxPerBeat/24 = P/2`.
    */
   barNotePaddingBeats = 1 / 24;
-  /** Palette used when a pitch has no explicit colour. Mirrors the
+  /** Palette used when a lane has no explicit colour. Mirrors the
    *  shared {@link PICKER_PALETTE} so a colour the user picks from the
    *  picker's first swatch row matches a lane that landed on the same
    *  palette slot. */

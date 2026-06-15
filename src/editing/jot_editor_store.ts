@@ -15,7 +15,7 @@ import { TempoPresenter } from 'src/editing/playback/tempo_presenter';
  * {@link structural} (structure / layout / drum-offset), {@link palette}
  * (colours / legend), {@link tempo} (bar tempos / timeline). Every other
  * store reads the peer it needs off this one (viewport reads
- * `structural.pxPerBeat`, the mixer reads `palette` + pitches, playback reads
+ * `structural.pxPerBeat`, the mixer reads `palette` + lanes, playback reads
  * `tempo`); those stores take a reference to this one. The four fields are
  * always set / cleared together by the presenter (a single atomic load), so
  * any one being defined implies all are.
@@ -31,7 +31,7 @@ export class JotEditorStore {
   source: Jot | undefined;
   /** Structure / layout / pixels / drum-offset for the loaded song. */
   structural: StructuralPresenter | undefined;
-  /** Per-pitch colours + legend for the loaded song. */
+  /** Per-lane colours + legend for the loaded song. */
   palette: PaletteStore | undefined;
   /** Per-bar tempo segments, dominant bpm/time, and the audio timeline. */
   tempo: TempoPresenter | undefined;

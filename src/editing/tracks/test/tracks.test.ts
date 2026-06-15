@@ -1,19 +1,19 @@
 import { describe, expect, test } from 'bun:test';
 import {
   buildDebugBundleTrackOrder,
-  groupInstrumentPitches,
+  groupInstrumentLanes,
   reorderTrackOrder,
   resolveAudioInheritedColor,
   type MixerContext,
   type TrackKey,
 } from 'src/editing/tracks/tracks';
 
-/** Collapse the order to a compact `audio:<id>` / `instr:<pitch>` form
+/** Collapse the order to a compact `audio:<id>` / `instr:<lane>` form
  *  so assertions read as the rendered row sequence. */
 function asKeys(order: ReturnType<typeof buildDebugBundleTrackOrder>): string[] {
   return order.map((k) => {
     if (k.kind === 'audio') return `audio:${k.id}`;
-    if (k.kind === 'instrument') return `instr:${k.pitch}`;
+    if (k.kind === 'instrument') return `instr:${k.lane}`;
     return `lyrics:${k.id}`;
   });
 }
@@ -23,15 +23,15 @@ function dupes(keys: string[]): string[] {
 }
 
 describe('buildDebugBundleTrackOrder', () => {
-  test('pairs each per-pitch stem above its instrument, unmatched stems on top', () => {
-    const pitches = ['k', 's', 'h'];
+  test('pairs each per-lane stem above its instrument, unmatched stems on top', () => {
+    const lanes = ['k', 's', 'h'];
     const loadedByKey = new Map<string, string>([
       ['no_drums', 'track-1'],
       ['k', 'track-2'],
       ['s', 'track-3'],
       ['h', 'track-4'],
     ]);
-    expect(asKeys(buildDebugBundleTrackOrder(pitches, loadedByKey))).toEqual([
+    expect(asKeys(buildDebugBundleTrackOrder(lanes, loadedByKey))).toEqual([
       'audio:track-1',
       'audio:track-2',
       'instr:k',
@@ -42,45 +42,45 @@ describe('buildDebugBundleTrackOrder', () => {
     ]);
   });
 
-  test('a stem shared by two jot pitches renders once, both pitches under it', () => {
+  test('a stem shared by two jot lanes renders once, both lanes under it', () => {
     // Cymbal split: stem_c.mp3 declared for both crash (c) and ride (d),
     // and the jot contains both.
-    const pitches = ['c', 'd'];
+    const lanes = ['c', 'd'];
     const loadedByKey = new Map<string, string>([
       ['c', 'track-5'],
       ['d', 'track-5'],
     ]);
-    const keys = asKeys(buildDebugBundleTrackOrder(pitches, loadedByKey));
+    const keys = asKeys(buildDebugBundleTrackOrder(lanes, loadedByKey));
     expect(dupes(keys)).toEqual([]);
     expect(keys).toEqual(['audio:track-5', 'instr:c', 'instr:d']);
   });
 
-  test('a stem shared by a present and an absent jot pitch is not duplicated', () => {
+  test('a stem shared by a present and an absent jot lane is not duplicated', () => {
     // Regression: stem_c.mp3 declared for crash (c) AND ride (d), but the
     // song has crash hits and no ride, so the jot contains only `c`. The
     // `d` key is then "unmatched"; the stem must still pair with `c` and
     // appear exactly once, not once as an unmatched top stem AND once
     // paired with `c`.
-    const pitches = ['c'];
+    const lanes = ['c'];
     const loadedByKey = new Map<string, string>([
       ['no_drums', 'track-1'],
       ['c', 'track-2'],
       ['d', 'track-2'],
     ]);
-    const keys = asKeys(buildDebugBundleTrackOrder(pitches, loadedByKey));
+    const keys = asKeys(buildDebugBundleTrackOrder(lanes, loadedByKey));
     expect(dupes(keys)).toEqual([]);
     expect(keys).toEqual(['audio:track-1', 'audio:track-2', 'instr:c']);
   });
 
   test('a stem mapped only to non-jot keys stays a single unmatched top row', () => {
-    const pitches = ['k'];
+    const lanes = ['k'];
     const loadedByKey = new Map<string, string>([
       ['no_drums', 'track-1'],
       ['x', 'track-9'],
       ['y', 'track-9'], // same unused stem under two non-jot keys
       ['k', 'track-2'],
     ]);
-    const keys = asKeys(buildDebugBundleTrackOrder(pitches, loadedByKey));
+    const keys = asKeys(buildDebugBundleTrackOrder(lanes, loadedByKey));
     expect(dupes(keys)).toEqual([]);
     expect(keys).toEqual(['audio:track-1', 'audio:track-9', 'audio:track-2', 'instr:k']);
   });
@@ -89,13 +89,13 @@ describe('buildDebugBundleTrackOrder', () => {
 /** The reorder behind drag-and-drop. `toIdx` is the insertion gap in the
  *  current list (0 = before first row, length = after last). */
 describe('reorderTrackOrder (drag-and-drop)', () => {
-  const I = (pitch: string, groupId?: string): TrackKey => ({ kind: 'instrument', pitch, groupId });
-  // `kind:id-or-pitch` plus `#groupId` when grouped, so assertions read as
+  const I = (lane: string, groupId?: string): TrackKey => ({ kind: 'instrument', lane, groupId });
+  // `kind:id-or-lane` plus `#groupId` when grouped, so assertions read as
   // the rendered row sequence + grouping.
   const summary = (order: readonly TrackKey[]): string[] =>
     order.map((k) => {
       const tag =
-        k.kind === 'instrument' ? `instr:${k.pitch}` : k.kind === 'audio' ? `audio:${k.id}` : `lyrics:${k.id}`;
+        k.kind === 'instrument' ? `instr:${k.lane}` : k.kind === 'audio' ? `audio:${k.id}` : `lyrics:${k.id}`;
       return k.groupId ? `${tag}#${k.groupId}` : tag;
     });
 
@@ -134,7 +134,7 @@ describe('reorderTrackOrder (drag-and-drop)', () => {
     expect(summary(reorderTrackOrder(order, 2, 1))).toEqual(['instr:a#g1', 'instr:z', 'instr:b#g2']);
   });
 
-  test('preserves the moved row kind + identity (audio id, not just pitch)', () => {
+  test('preserves the moved row kind + identity (audio id, not just lane)', () => {
     const order = [{ kind: 'audio', id: 'a1' } as TrackKey, I('k'), I('s')];
     const out = reorderTrackOrder(order, 0, 3);
     expect(out[2]).toMatchObject({ kind: 'audio', id: 'a1' });
@@ -142,38 +142,38 @@ describe('reorderTrackOrder (drag-and-drop)', () => {
   });
 });
 
-describe('groupInstrumentPitches', () => {
+describe('groupInstrumentLanes', () => {
   const ctx = (order: TrackKey[]): MixerContext => ({
     trackOrder: order,
-    // Unused by groupInstrumentPitches; throws if a test accidentally relies on it.
+    // Unused by groupInstrumentLanes; throws if a test accidentally relies on it.
     getInstrumentTrack: () => {
       throw new Error('getInstrumentTrack should not be called here');
     },
   });
 
-  test('returns the paired instrument pitch for a grouped audio row', () => {
+  test('returns the paired instrument lane for a grouped audio row', () => {
     const order: TrackKey[] = [
       { kind: 'audio', id: 'a1', groupId: 'pair:k' },
-      { kind: 'instrument', pitch: 'k', groupId: 'pair:k' },
+      { kind: 'instrument', lane: 'k', groupId: 'pair:k' },
     ];
-    expect(groupInstrumentPitches('a1', ctx(order))).toEqual(['k']);
+    expect(groupInstrumentLanes('a1', ctx(order))).toEqual(['k']);
   });
 
   test('returns every instrument sharing the group, in row order', () => {
     const order: TrackKey[] = [
       { kind: 'audio', id: 'a1', groupId: 'pair:c' },
-      { kind: 'instrument', pitch: 'c', groupId: 'pair:c' },
-      { kind: 'instrument', pitch: 'd', groupId: 'pair:c' },
+      { kind: 'instrument', lane: 'c', groupId: 'pair:c' },
+      { kind: 'instrument', lane: 'd', groupId: 'pair:c' },
     ];
-    expect(groupInstrumentPitches('a1', ctx(order))).toEqual(['c', 'd']);
+    expect(groupInstrumentLanes('a1', ctx(order))).toEqual(['c', 'd']);
   });
 
   test('is empty for a solo (ungrouped) audio row', () => {
     const order: TrackKey[] = [
       { kind: 'audio', id: 'a1' },
-      { kind: 'instrument', pitch: 'k', groupId: 'pair:k' },
+      { kind: 'instrument', lane: 'k', groupId: 'pair:k' },
     ];
-    expect(groupInstrumentPitches('a1', ctx(order))).toEqual([]);
+    expect(groupInstrumentLanes('a1', ctx(order))).toEqual([]);
   });
 
   test('is empty when the group holds no instrument rows', () => {
@@ -181,38 +181,38 @@ describe('groupInstrumentPitches', () => {
       { kind: 'audio', id: 'a1', groupId: 'g' },
       { kind: 'audio', id: 'a2', groupId: 'g' },
     ];
-    expect(groupInstrumentPitches('a1', ctx(order))).toEqual([]);
+    expect(groupInstrumentLanes('a1', ctx(order))).toEqual([]);
   });
 
   test('is empty when the audio id is absent', () => {
-    const order: TrackKey[] = [{ kind: 'instrument', pitch: 'k', groupId: 'pair:k' }];
-    expect(groupInstrumentPitches('missing', ctx(order))).toEqual([]);
+    const order: TrackKey[] = [{ kind: 'instrument', lane: 'k', groupId: 'pair:k' }];
+    expect(groupInstrumentLanes('missing', ctx(order))).toEqual([]);
   });
 });
 
 describe('resolveAudioInheritedColor', () => {
   const ctxWith = (order: TrackKey[], colors: Record<string, string>): MixerContext => ({
     trackOrder: order,
-    getInstrumentTrack: (pitch: string) =>
-      ({ color: colors[pitch] ?? '#000000' }) as ReturnType<MixerContext['getInstrumentTrack']>,
+    getInstrumentTrack: (lane: string) =>
+      ({ color: colors[lane] ?? '#000000' }) as ReturnType<MixerContext['getInstrumentTrack']>,
   });
 
-  test('inherits the matched-pitch instrument colour as the tiebreaker', () => {
+  test('inherits the matched-lane instrument colour as the tiebreaker', () => {
     const order: TrackKey[] = [
       { kind: 'audio', id: 'a1', groupId: 'pair:c' },
-      { kind: 'instrument', pitch: 'c', groupId: 'pair:c' },
-      { kind: 'instrument', pitch: 'd', groupId: 'pair:c' },
+      { kind: 'instrument', lane: 'c', groupId: 'pair:c' },
+      { kind: 'instrument', lane: 'd', groupId: 'pair:c' },
     ];
-    // audioPitch 'd' is a group member -> picks d's colour, not the first.
+    // audioLane 'd' is a group member -> picks d's colour, not the first.
     expect(resolveAudioInheritedColor('a1', 'd', ctxWith(order, { c: '#111', d: '#222' }))).toBe(
       '#222',
     );
   });
 
-  test('falls back to the first grouped instrument when the pitch is not a member', () => {
+  test('falls back to the first grouped instrument when the lane is not a member', () => {
     const order: TrackKey[] = [
       { kind: 'audio', id: 'a1', groupId: 'pair:c' },
-      { kind: 'instrument', pitch: 'c', groupId: 'pair:c' },
+      { kind: 'instrument', lane: 'c', groupId: 'pair:c' },
     ];
     expect(resolveAudioInheritedColor('a1', 'zzz', ctxWith(order, { c: '#111' }))).toBe('#111');
   });

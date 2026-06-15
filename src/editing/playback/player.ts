@@ -58,19 +58,19 @@ import { waveformWorker } from './waveform_worker_client';
 export type PlayerState = 'idle' | 'loading' | 'playing' | 'paused';
 
 export type PlayerFilter = {
-  mutedPitches: ReadonlySet<string>;
+  mutedLanes: ReadonlySet<string>;
   /**
-   * When solo is active, ONLY these pitches are audible (others behave
+   * When solo is active, ONLY these lanes are audible (others behave
    * as if muted). Soloed-AND-muted = muted; explicit mute always wins so
    * the user can keep solo on while temporarily silencing a soloed row.
    */
-  soloedPitches: ReadonlySet<string>;
+  soloedLanes: ReadonlySet<string>;
   /**
    * True when a solo is engaged *anywhere*, on an instrument row OR an
    * audio track. Solo is a single global mode shared across both
    * domains: as soon as the user solos any row, every non-soloed row
    * (drums *and* music) drops out. Computed by the store, which is the
-   * only place that sees both the pitch and audio-track solo sets.
+   * only place that sees both the lane and audio-track solo sets.
    */
   soloActive: boolean;
   /**
@@ -84,34 +84,34 @@ export type PlayerFilter = {
    * True when this section's master solo is engaged. Acts as if every
    * row in the section were soloed (only for the purpose of the solo
    * exclusion rule); without this, soloing Drums master would set
-   * `soloActive` but leave `soloedPitches` empty, silencing every drum
+   * `soloActive` but leave `soloedLanes` empty, silencing every drum
    * row.
    */
   sectionMasterSoloed: boolean;
-  /** Per-pitch volume multiplier in [0, 1]; missing = full (1). */
+  /** Per-lane volume multiplier in [0, 1]; missing = full (1). */
   volumes: ReadonlyMap<string, number>;
 };
 
 export const PASSTHROUGH_FILTER: PlayerFilter = {
-  mutedPitches: new Set(),
-  soloedPitches: new Set(),
+  mutedLanes: new Set(),
+  soloedLanes: new Set(),
   soloActive: false,
   sectionMasterMuted: false,
   sectionMasterSoloed: false,
   volumes: new Map(),
 };
 
-export function isAudibleUnder(pitch: string, filter: PlayerFilter): boolean {
+export function isAudibleUnder(lane: string, filter: PlayerFilter): boolean {
   if (filter.sectionMasterMuted) return false;
-  if (filter.mutedPitches.has(pitch)) return false;
+  if (filter.mutedLanes.has(lane)) return false;
   if (
     filter.soloActive &&
     !filter.sectionMasterSoloed &&
-    !filter.soloedPitches.has(pitch)
+    !filter.soloedLanes.has(lane)
   ) {
     return false;
   }
-  if ((filter.volumes.get(pitch) ?? 1) <= 0) return false;
+  if ((filter.volumes.get(lane) ?? 1) <= 0) return false;
   return true;
 }
 
@@ -151,7 +151,7 @@ function clampMasterVolume(v: number): number {
   return Math.max(0, Math.min(1, v));
 }
 // Per-row loudness trim applied on top of the user's volume fader,
-// keyed by DSL pitch letter ('k' = kick, 'h' = hi-hat, …). The GM
+// keyed by DSL lane letter ('k' = kick, 'h' = hi-hat, …). The GM
 // SoundFont's hats are hot and the kick is weak relative to a real
 // kit / backing track, so we duck the hats and lift the kick by
 // default. Rows not listed play at their native velocity (1.0).
@@ -176,7 +176,7 @@ const MIN_PLAYBACK_VELOCITY = 50;
 // Minimum effective per-row volume for any non-zero slider position. The
 // raw fader [0, 1] is remapped to {0} ∪ [MIDI_VOLUME_FLOOR, 1] so the
 // smallest audible setting still sits at a useful level against a
-// backing track, below this, GM voices vanish into the mix. 0 still
+// backing track, below this, GM layers vanish into the mix. 0 still
 // silences the row.
 const MIDI_VOLUME_FLOOR = 0.4;
 // Small lead time so the first hit doesn't race the audio thread.
@@ -191,7 +191,7 @@ const PLAYBACK_TAIL_SECONDS = 1.0;
 // hit resolves long before this.
 const LOAD_TIMEOUT_SECONDS = 120;
 // Brief settle window after `drums.load` resolves on the cold path. The
-// SoundFont is parsed but smplr's per-note pipeline (zone lookup, voice
+// SoundFont is parsed but smplr's per-note pipeline (zone lookup, layer
 // allocation) needs a moment before its first scheduled hit lands
 // reliably; without this the very first note of a fresh-session play
 // occasionally drops. Only paid on the one-time load (`ensureLoaded`
@@ -313,7 +313,7 @@ export class JotPlayer {
   cued: boolean = false;
   /**
    * Tempo multiplier applied to scheduled events and the playhead. 1.0 =
-   * native tempo; 0.5 = half speed (notes still sound at the same pitch
+   * native tempo; 0.5 = half speed (notes still sound at the same lane
    * because we space scheduled `drums.start` times further apart rather
    * than touching sample playback rate). Persists across plays.
    */
@@ -358,7 +358,7 @@ export class JotPlayer {
 
   /**
    * Late-bound transport store. The engine PULLS its mute/solo/volume
-   * filter and section-audibility from here (see {@link pitchFilter} etc.
+   * filter and section-audibility from here (see {@link laneFilter} etc.
    * below) rather than having them pushed in, so the mixer state has a
    * single home. Bound once at view construction via
    * {@link attachPlayback}; undefined for a standalone engine (tests /
@@ -414,8 +414,8 @@ export class JotPlayer {
 
   /**
    * The track the minimap picks for its waveform: prefer the first
-   * non-pitch backing track (a `no_drums` / song stem) and fall back to
-   * the first loaded track if every track has a pitch (e.g. only
+   * non-lane backing track (a `no_drums` / song stem) and fall back to
+   * the first loaded track if every track has a lane (e.g. only
    * isolated drum stems are loaded). `undefined` when no tracks are
    * loaded. Mirrors `pickWaveformTrack` in `minimap.tsx` so consumers
    * can read the choice straight off the player instead of re-deriving
@@ -426,14 +426,14 @@ export class JotPlayer {
     let first: AudioTrack | undefined;
     for (const t of this.audioTracks.values()) {
       if (!first) first = t;
-      if (!t.pitch && !backing) backing = t;
+      if (!t.lane && !backing) backing = t;
     }
     return backing ?? first;
   }
 
   /**
    * Audio tracks indexed by lowercased filename, for O(1) filename
-   * lookups (e.g. matching a debug bundle's per-pitch manifest entry to
+   * lookups (e.g. matching a debug bundle's per-lane manifest entry to
    * the matching loaded track). Computed once per `audioTracks` change
    * so per-onset callers in the timing-visualization don't each rebuild
    * an `Array.from(…).find(…)` walk on every render.
@@ -467,7 +467,7 @@ export class JotPlayer {
    * Audio-graph bus, built once with the AudioContext and living for its
    * lifetime:
    *
-   *   smplr drum voices ─▶ drumGain ──┐
+   *   smplr drum layers ─▶ drumGain ──┐
    *   per audio-track GainNode ─▶ audioBusGain ──┤
    *                                              ├─▶ pageGain ─▶ destination
    *
@@ -555,11 +555,11 @@ export class JotPlayer {
    * are upcoming. Empty while idle.
    */
   events: PlaybackEvent[] = [];
-  /** Pitch-side mute/solo/volume filter the scheduler runs under, pulled
+  /** Lane-side mute/solo/volume filter the scheduler runs under, pulled
    *  live from {@link PlaybackStore} (PASSTHROUGH when no store is wired).
    *  Same computed/pull rationale as {@link currentAudioTrackFilter}. */
   get currentFilter(): PlayerFilter {
-    return this.playback?.pitchFilter ?? PASSTHROUGH_FILTER;
+    return this.playback?.laneFilter ?? PASSTHROUGH_FILTER;
   }
   /**
    * Jot-time (seconds) the next `play()` should start from, set by a
@@ -580,7 +580,7 @@ export class JotPlayer {
   }
 
   /**
-   * Re-apply the (pulled) pitch mute/solo filter to the live schedule. If
+   * Re-apply the (pulled) lane mute/solo filter to the live schedule. If
    * playback is in flight OR paused, every scheduled note is cancelled and
    * the remaining events (those whose audio time hasn't elapsed) are
    * re-scheduled against the current filter; so toggling M or S takes
@@ -599,13 +599,13 @@ export class JotPlayer {
    * to it and come alive when the context resumes (same approach as
    * `seek`).
    */
-  applyPitchFilter(): void {
+  applyLaneFilter(): void {
     if ((this.state !== 'playing' && this.state !== 'paused') || !this.ctx) return;
 
     const now = this.ctx.currentTime;
     const jotOffset = this.currentJotTime(now);
     // `cancelScheduledStops()` alone is not enough: the per-note stopFns
-    // are no-ops for voices smplr hasn't instantiated yet (it only
+    // are no-ops for layers smplr hasn't instantiated yet (it only
     // builds the BufferSourceNode when the scheduled time arrives), so
     // the still-pending notes — including the row the user just muted —
     // would keep firing alongside the rescheduled set and the toggle
@@ -740,7 +740,7 @@ export class JotPlayer {
    * Re-apply the drum bus gain from the pulled {@link drumMasterAudible}.
    * False pins `drumGain` at 0 regardless of the fader (so master mute /
    * cross-domain solo silences every drum row at once at the bus, not by
-   * editing the per-pitch mute/solo state); true restores the fader value.
+   * editing the per-lane mute/solo state); true restores the fader value.
    * Public so a `PlaybackPresenter` reaction can call it when the pulled
    * audibility changes; also called internally by the fader setter.
    */
@@ -789,7 +789,7 @@ export class JotPlayer {
 
   async loadAudioTrack(
     file: File,
-    pitch?: string,
+    lane?: string,
     role?: AudioTrackRole,
   ): Promise<AudioTrackId> {
     runInAction(() => {
@@ -806,7 +806,7 @@ export class JotPlayer {
       preloadStretch(ctx);
       const { buffer, sourceBlob } = await decodeAudioTrackFile(ctx, file);
       const id = this.allocateAudioTrackId();
-      this.installAudioTrack(id, file.name, buffer, sourceBlob, pitch, role);
+      this.installAudioTrack(id, file.name, buffer, sourceBlob, lane, role);
       return id;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -821,7 +821,7 @@ export class JotPlayer {
   async loadAudioTrackFromUrl(
     url: string,
     filename: string,
-    pitch?: string,
+    lane?: string,
     role?: AudioTrackRole,
   ): Promise<AudioTrackId> {
     runInAction(() => {
@@ -835,7 +835,7 @@ export class JotPlayer {
       preloadStretch(ctx);
       const { buffer, sourceBlob } = await decodeAudioTrackUrl(ctx, url);
       const id = this.allocateAudioTrackId();
-      this.installAudioTrack(id, filename, buffer, sourceBlob, pitch, role);
+      this.installAudioTrack(id, filename, buffer, sourceBlob, lane, role);
       return id;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -869,7 +869,7 @@ export class JotPlayer {
     filename: string,
     buffer: AudioBuffer,
     sourceBlob: Blob,
-    pitch?: string,
+    lane?: string,
     role?: AudioTrackRole,
   ): void {
     const prev = this.audioTracks.get(id);
@@ -880,7 +880,7 @@ export class JotPlayer {
         buffer,
         sourceBlob,
         durationSec: buffer.duration,
-        pitch,
+        lane,
         role,
       },
       () => this.mixerContext,
@@ -947,7 +947,7 @@ export class JotPlayer {
    * cancel every scheduled note, and reschedule remaining notes at their
    * new audio times under the new spacing.
    *
-   * Sample pitch is unchanged — drum samples still play at native rate.
+   * Sample lane is unchanged — drum samples still play at native rate.
    * Slowing down just spaces successive `drums.start` calls further
    * apart, which is exactly what you want for practicing along to a
    * complex fill at half speed.
@@ -970,8 +970,8 @@ export class JotPlayer {
     const jotOffset = this.currentJotTime(now);
 
     // Kill the old DRUM schedule before laying down the new one. The
-    // per-voice stopFns returned by `drums.start({ time: <future> })`
-    // don't actually cancel a voice that hasn't begun yet; smplr only
+    // per-layer stopFns returned by `drums.start({ time: <future> })`
+    // don't actually cancel a layer that hasn't begun yet; smplr only
     // instantiates the BufferSourceNode when the scheduled time
     // arrives, so calling stopFn early is a no-op. The global
     // `drums.stop()` clears the entire pending queue, which is what we
@@ -1415,7 +1415,7 @@ export class JotPlayer {
    * seconds) to play at `audioStartTime + (event.time - fromOffset) /
    * playbackSpeed` on the audio context. The speed division spaces
    * successive hits further apart in real time at sub-1x speeds without
-   * touching sample pitch — drums still sound like drums at half speed,
+   * touching sample lane — drums still sound like drums at half speed,
    * they just play more slowly.
    *
    * Events filtered out by `currentFilter` are skipped.
@@ -1447,7 +1447,7 @@ export class JotPlayer {
         silentlySkipped++;
         continue;
       }
-      if (!isAudibleUnder(ev.pitch, this.currentFilter)) {
+      if (!isAudibleUnder(ev.lane, this.currentFilter)) {
         mutedFiltered++;
         continue;
       }
@@ -1462,9 +1462,9 @@ export class JotPlayer {
       // relative dynamics. isAudibleUnder already rejected vol <= 0.
       // The DEFAULT_PITCH_GAIN trim stacks on top so hats/kick sit
       // right out of the box even before the user touches a fader.
-      const rawVol = this.currentFilter.volumes.get(ev.pitch) ?? 1;
+      const rawVol = this.currentFilter.volumes.get(ev.lane) ?? 1;
       const vol = rawVol <= 0 ? 0 : MIDI_VOLUME_FLOOR + rawVol * (1 - MIDI_VOLUME_FLOOR);
-      const defaultGain = DEFAULT_PITCH_GAIN[ev.pitch] ?? 1;
+      const defaultGain = DEFAULT_PITCH_GAIN[ev.lane] ?? 1;
       const floored = Math.max(MIN_PLAYBACK_VELOCITY, Math.round(ev.velocity * defaultGain));
       const velocity = Math.max(1, Math.min(127, Math.round(floored * vol)));
       const t = audioStartTime + (ev.time - fromOffset) / speed;

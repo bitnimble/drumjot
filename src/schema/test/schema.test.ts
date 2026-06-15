@@ -23,11 +23,11 @@ type NoteInfer = Infer<typeof NoteElementSchema>;
 type ExpectedNote = {
   kind: 'note';
   id: string;
-  voiceId?: string;
+  layerId?: string;
   barId?: string;
   beat: number;
   duration: number;
-  pitch: string;
+  lane: string;
   modifiers: Modifier[];
   sticking?: Sticking;
   roll?: boolean;
@@ -61,7 +61,7 @@ describe('JotSchema shape', () => {
 
   it('the note variant is a record of registers', () => {
     expect(NoteElementSchema.fields.beat.kind).toBe('reg');
-    expect(NoteElementSchema.fields.pitch.kind).toBe('reg');
+    expect(NoteElementSchema.fields.lane.kind).toBe('reg');
     expect(NoteElementSchema.fields.kind.kind).toBe('reg'); // discriminant
   });
 
@@ -82,14 +82,14 @@ describe('NoteElementSchema round-trips through a reactive doc', () => {
         id: 'n1',
         beat: 1.5,
         duration: 0.5,
-        pitch: 'h',
+        lane: 'h',
         modifiers: ['a', 'o'],
         sticking: 'r',
       });
     });
     const n = model.els.get('n1')!;
     expect(n.beat).toBe(1.5);
-    expect(n.pitch).toBe('h');
+    expect(n.lane).toBe('h');
     expect(n.modifiers).toEqual(['a', 'o']);
     expect(n.sticking).toBe('r');
     expect(n.roll).toBeUndefined();
@@ -106,8 +106,8 @@ describe('createReactiveJot', () => {
         { id: 'b2', tsCount: 4, tsUnit: 4, tempoBpm: 180 },
       ],
       elements: {
-        n1: { kind: 'note', id: 'n1', barId: 'b1', beat: 0, duration: 1, pitch: 'k', modifiers: [] },
-        n2: { kind: 'note', id: 'n2', barId: 'b1', beat: 2, duration: 1, pitch: 's', modifiers: ['a'] },
+        n1: { kind: 'note', id: 'n1', barId: 'b1', beat: 0, duration: 1, lane: 'k', modifiers: [] },
+        n2: { kind: 'note', id: 'n2', barId: 'b1', beat: 2, duration: 1, lane: 's', modifiers: ['a'] },
       },
       instruments: { k: { kind: 'kick', name: 'Kick' }, s: { kind: 'snare' } },
     });
@@ -127,28 +127,28 @@ describe('createReactiveJot', () => {
     expect(model.elements.size).toBe(0);
   });
 
-  it('edits round-trip (a top-level note element pitch is one write)', () => {
+  it('edits round-trip (a top-level note element lane is one write)', () => {
     const { model } = createReactiveJot({
       title: '',
       bpm: 120,
       bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
       elements: {
-        n1: { kind: 'note', id: 'n1', barId: 'b1', beat: 0, duration: 1, pitch: 'cr', modifiers: [] },
+        n1: { kind: 'note', id: 'n1', barId: 'b1', beat: 0, duration: 1, lane: 'cr', modifiers: [] },
       },
       instruments: {},
     });
     const n = model.elements.get('n1') as NoteElement;
     runInAction(() => {
-      n.pitch = 'rd';
+      n.lane = 'rd';
     });
-    expect((model.elements.get('n1') as NoteElement).pitch).toBe('rd');
+    expect((model.elements.get('n1') as NoteElement).lane).toBe('rd');
   });
 
-  it('deep-initializes voices, tempo events, a pattern def, and a nested group', () => {
+  it('deep-initializes layers, tempo events, a pattern def, and a nested group', () => {
     const { model } = createReactiveJot({
       title: 'x',
       bpm: 120,
-      voices: { v0: { id: 'v0', name: 'Hands' } },
+      layers: { v0: { id: 'v0', name: 'Hands' } },
       bars: [
         { id: 'b0', tsCount: 4, tsUnit: 4, anacrusis: true },
         { id: 'b1', tsCount: 4, tsUnit: 4 },
@@ -158,13 +158,13 @@ describe('createReactiveJot', () => {
         g1: {
           kind: 'group',
           id: 'g1',
-          voiceId: 'v0',
+          layerId: 'v0',
           barId: 'b1',
           beat: 0,
           duration: 1,
           children: {
-            c1: { kind: 'note', id: 'c1', beat: 0, duration: 0.5, pitch: 'k', modifiers: [] },
-            c2: { kind: 'note', id: 'c2', beat: 0.5, duration: 0.5, pitch: 's', modifiers: [] },
+            c1: { kind: 'note', id: 'c1', beat: 0, duration: 0.5, lane: 'k', modifiers: [] },
+            c2: { kind: 'note', id: 'c2', beat: 0.5, duration: 0.5, lane: 's', modifiers: [] },
           },
         },
       },
@@ -172,12 +172,12 @@ describe('createReactiveJot', () => {
       tempoEvents: { t1: { id: 't1', barId: 'b1', beat: 0, bpm: 140 } },
       patterns: { p1: { id: 'p1', name: 'groove', body: {} } },
     });
-    expect(model.voices.get('v0')!.name).toBe('Hands');
+    expect(model.layers.get('v0')!.name).toBe('Hands');
     expect(model.bars.at(0)!.anacrusis).toBe(true);
     const g = model.elements.get('g1') as GroupElement;
     expect(g.kind).toBe('group');
     expect(g.children.size).toBe(2);
-    expect((g.children.get('c1') as NoteElement).pitch).toBe('k');
+    expect((g.children.get('c1') as NoteElement).lane).toBe('k');
     expect(model.tempoEvents.get('t1')!.bpm).toBe(140);
     expect(model.patterns.get('p1')!.name).toBe('groove');
   });

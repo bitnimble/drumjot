@@ -1,7 +1,7 @@
 /**
  * Collision-aware allocation of DSL letters for RLRR drum classes that are
  * not present in `CLASS_TO_DRUM`. The same problem and shape as
- * `allocatePitchesForMidi` in src/midi/gm.ts: the converter has to map
+ * `allocateLanesForMidi` in src/midi/gm.ts: the converter has to map
  * arbitrary instrument-instance names to single letters without colliding
  * with the canonical kit mapping or with each other.
  *
@@ -13,8 +13,8 @@
 import { CLASS_TO_DRUM, instanceNameToClass } from './drums';
 
 /**
- * Build a per-song `instanceName -> pitch` map. Drum classes already
- * present in `CLASS_TO_DRUM` use their canonical pitch; everything else
+ * Build a per-song `instanceName -> lane` map. Drum classes already
+ * present in `CLASS_TO_DRUM` use their canonical lane; everything else
  * is allocated a unique fallback letter.
  *
  * Returns a `Map` (rather than a Record) so callers can distinguish "no
@@ -32,8 +32,8 @@ export function allocateFallbackLetters(
     if (cls) {
       const descriptor = CLASS_TO_DRUM[cls];
       if (descriptor) {
-        out.set(name, descriptor.pitch);
-        claimed.add(descriptor.pitch);
+        out.set(name, descriptor.lane);
+        claimed.add(descriptor.lane);
       }
     }
   }

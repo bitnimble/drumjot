@@ -1,7 +1,7 @@
 /**
  * Unified `Track` abstraction. Every mixer row, regardless of kind, is a
  * `Track` with at least an observable `color`. This file defines the
- * shared interface, the {@link InstrumentTrack} class (per-pitch view-
+ * shared interface, the {@link InstrumentTrack} class (per-lane view-
  * model for the score's note-colour override), the {@link MixerContext}
  * the rest of the app uses to wire audio-track colour inheritance back
  * to the active instrument tracks, and the {@link TrackKey} identity
@@ -43,7 +43,7 @@ export const PICKER_PALETTE: readonly string[] = [
 /** Neutral grey for instrument tracks with no palette default available. */
 export const INSTRUMENT_FALLBACK_COLOR = '#7e7e7e';
 /** Neutral blue for audio tracks with no override and no grouped instrument
- *  to inherit from. Matches the legacy `pitchColor ?? '#5BA8E8'` waveform
+ *  to inherit from. Matches the legacy `laneColor ?? '#5BA8E8'` waveform
  *  fallback the chunk worker has baked in. */
 export const AUDIO_FALLBACK_COLOR = '#5BA8E8';
 /** Lyrics tracks have no visible colour today; constant neutral so the
@@ -66,7 +66,7 @@ export interface Track {
  * Identity tag for a mixer row. Distinct from the track instance itself
  * because the row order is persisted as an array of these (small,
  * serializable, stable across reloads); the actual {@link Track}
- * instance is looked up lazily by id/pitch on render.
+ * instance is looked up lazily by id/lane on render.
  *
  * `groupId` is a UI-only clustering tag; consecutive entries that share
  * the same id render flush (no inter-row gap); a transition to a
@@ -74,114 +74,114 @@ export interface Track {
  * gap. The audio-track colour inheritance uses it as the "which
  * instrument tracks count as 'grouped' with me" lookup key (see
  * {@link resolveAudioInheritedColor}). Identity for sync/move purposes
- * is `kind + id/pitch` only; `trackKeyEq` ignores `groupId`.
+ * is `kind + id/lane` only; `trackKeyEq` ignores `groupId`.
  */
 export type TrackKey =
   | { kind: 'audio'; id: AudioTrackId; groupId?: string }
-  | { kind: 'instrument'; pitch: string; groupId?: string }
+  | { kind: 'instrument'; lane: string; groupId?: string }
   | { kind: 'lyrics'; id: LyricsTrackId; groupId?: string };
 
 export function trackKeyEq(a: TrackKey, b: TrackKey): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === 'audio') return a.id === (b as { kind: 'audio'; id: AudioTrackId }).id;
   if (a.kind === 'instrument') {
-    return a.pitch === (b as { kind: 'instrument'; pitch: string }).pitch;
+    return a.lane === (b as { kind: 'instrument'; lane: string }).lane;
   }
   return a.id === (b as { kind: 'lyrics'; id: LyricsTrackId }).id;
 }
 
 /**
  * Build the mixer row order applied right after a debug bundle (or a
- * transcribe with per-pitch stems) is loaded: each per-pitch audio stem
- * sits immediately above its instrument row (sharing a `pair:<pitch>`
+ * transcribe with per-lane stems) is loaded: each per-lane audio stem
+ * sits immediately above its instrument row (sharing a `pair:<lane>`
  * groupId so the mixer draws them flush), with any audio that doesn't
- * back a jot pitch (`no_drums`, or a stem for a pitch this song doesn't
+ * back a jot lane (`no_drums`, or a stem for a lane this song doesn't
  * contain) as an ungrouped block on top.
  *
  * Pure (no store / observable / DOM access) so the ordering is unit-
- * testable; the store wraps it with `collectJotPitches(structural)` and
+ * testable; the store wraps it with `collectJotLanes(structural)` and
  * assigns the result to `trackOrder`.
  *
  * Layout (top → bottom):
  *
- *   audio: <unmatched-stem>   ← e.g. no_drums, or a stem for a pitch the
+ *   audio: <unmatched-stem>   ← e.g. no_drums, or a stem for a lane the
  *   ...                          loaded jot doesn't actually contain
- *   ┌ audio: <pitch-1>        ┐
- *   └ instr: <pitch-1>        ┘ paired, share groupId `pair:<pitch-1>`
+ *   ┌ audio: <lane-1>        ┐
+ *   └ instr: <lane-1>        ┘ paired, share groupId `pair:<lane-1>`
  *   ...
  */
 export function buildDebugBundleTrackOrder(
-  pitches: readonly string[],
+  lanes: readonly string[],
   loadedByKey: ReadonlyMap<string, AudioTrackId>,
 ): TrackKey[] {
-  // A single audio track can serve multiple pitches when the manifest
-  // maps several pitch keys onto one stem file; e.g. the cymbal split
+  // A single audio track can serve multiple lanes when the manifest
+  // maps several lane keys onto one stem file; e.g. the cymbal split
   // emits a `c` (crash) AND `d` (ride) onset stream against the single
   // combined `stem_c.mp3` and the bundle's manifest declares both
   // `c → stem_c.mp3` and `d → stem_c.mp3`. The bundle loader dedupes by
   // filename so both keys resolve to the same `AudioTrackId`; the
-  // grouping here picks one pitch as the "primary" (the first the jot
+  // grouping here picks one lane as the "primary" (the first the jot
   // mentions) and slots the others as sibling instrument rows
   // immediately after the pair, sharing the same `groupId`, so the
-  // mixer renders the shared audio + all its pitches as one contiguous
+  // mixer renders the shared audio + all its lanes as one contiguous
   // cluster.
-  const pitchesByAudioId = new Map<AudioTrackId, string[]>();
-  for (const pitch of pitches) {
-    const id = loadedByKey.get(pitch);
+  const lanesByAudioId = new Map<AudioTrackId, string[]>();
+  for (const lane of lanes) {
+    const id = loadedByKey.get(lane);
     if (id === undefined) continue;
-    const list = pitchesByAudioId.get(id) ?? [];
-    list.push(pitch);
-    pitchesByAudioId.set(id, list);
+    const list = lanesByAudioId.get(id) ?? [];
+    list.push(lane);
+    lanesByAudioId.set(id, list);
   }
-  // Primary pitch = the first jot pitch (in jot order) that maps to a
+  // Primary lane = the first jot lane (in jot order) that maps to a
   // given audio id; the rest are folded in as siblings of the pair.
   const folded = new Set<string>();
-  for (const pitchList of pitchesByAudioId.values()) {
-    for (let i = 1; i < pitchList.length; i++) folded.add(pitchList[i]);
+  for (const laneList of lanesByAudioId.values()) {
+    for (let i = 1; i < laneList.length; i++) folded.add(laneList[i]);
   }
 
   const next: TrackKey[] = [];
 
-  // 1) Audio that doesn't back any pitch in the loaded jot (`no_drums`
-  //    always; also any per-pitch stem the score didn't end up using)
+  // 1) Audio that doesn't back any lane in the loaded jot (`no_drums`
+  //    always; also any per-lane stem the score didn't end up using)
   //    sits at the top, in the manifest's mapping order, ungrouped.
   //    Keyed on the audio *id*, not the manifest key: a stem can be
   //    reachable through several keys (the shared cymbal stem under both
-  //    `c` and `d`), so a per-key "is this key a jot pitch?" test would
+  //    `c` and `d`), so a per-key "is this key a jot lane?" test would
   //    wrongly treat the stem as unmatched whenever ONE of its keys is
   //    absent from the jot (crash present, ride absent) and emit it here
   //    AND again paired in step 2, a duplicate `audio:<id>` row, which
   //    collides on its React key so one of the two waveforms never
-  //    renders. Skipping any id a jot pitch maps to keeps each stem in
+  //    renders. Skipping any id a jot lane maps to keeps each stem in
   //    exactly one place.
   const seenAudioIds = new Set<AudioTrackId>();
   for (const id of loadedByKey.values()) {
     if (seenAudioIds.has(id)) continue;
-    if (pitchesByAudioId.has(id)) continue;
+    if (lanesByAudioId.has(id)) continue;
     next.push({ kind: 'audio', id });
     seenAudioIds.add(id);
   }
 
-  // 2) For each pitch in the jot, slot its audio (if any) directly above
-  //    the instrument row. Folded (non-primary) pitches are skipped here
+  // 2) For each lane in the jot, slot its audio (if any) directly above
+  //    the instrument row. Folded (non-primary) lanes are skipped here
   //    and emitted inline alongside their primary so the cluster stays
   //    contiguous for the mixer's groupStart/end logic.
-  for (const pitch of pitches) {
-    if (folded.has(pitch)) continue;
-    const id = loadedByKey.get(pitch);
+  for (const lane of lanes) {
+    if (folded.has(lane)) continue;
+    const id = loadedByKey.get(lane);
     if (id !== undefined) {
-      const groupId = `pair:${pitch}`;
+      const groupId = `pair:${lane}`;
       next.push({ kind: 'audio', id, groupId });
-      next.push({ kind: 'instrument', pitch, groupId });
-      // Pitches that share this audio track (siblings via the manifest's
+      next.push({ kind: 'instrument', lane, groupId });
+      // Lanes that share this audio track (siblings via the manifest's
       // many-keys-one-file mapping) ride here with the same `groupId`.
-      const sharing = pitchesByAudioId.get(id) ?? [];
+      const sharing = lanesByAudioId.get(id) ?? [];
       for (const sibling of sharing) {
-        if (sibling === pitch) continue;
-        next.push({ kind: 'instrument', pitch: sibling, groupId });
+        if (sibling === lane) continue;
+        next.push({ kind: 'instrument', lane: sibling, groupId });
       }
     } else {
-      next.push({ kind: 'instrument', pitch });
+      next.push({ kind: 'instrument', lane });
     }
   }
 
@@ -200,7 +200,7 @@ export function buildDebugBundleTrackOrder(
  * neighbours: dropped strictly *inside* a group (the rows immediately
  * above and below share a defined `groupId`) joins that group; dropped at
  * a group boundary, the top, or the bottom clears it (the row goes solo).
- * The row's identity (`kind` + id/pitch) is preserved; only `groupId`
+ * The row's identity (`kind` + id/lane) is preserved; only `groupId`
  * changes. Pure (no store / observable / DOM); unit-tested in
  * `tracks.test.ts`. This is the logic behind drag-and-drop track
  * reordering; `MixerPresenter.moveTrack` is the thin observable wrapper.
@@ -226,7 +226,7 @@ export function reorderTrackOrder(
   if (moved.kind === 'audio') {
     repositioned = { kind: 'audio', id: moved.id, groupId: newGroupId };
   } else if (moved.kind === 'instrument') {
-    repositioned = { kind: 'instrument', pitch: moved.pitch, groupId: newGroupId };
+    repositioned = { kind: 'instrument', lane: moved.lane, groupId: newGroupId };
   } else {
     repositioned = { kind: 'lyrics', id: moved.id, groupId: newGroupId };
   }
@@ -247,20 +247,20 @@ export interface MixerContext {
    *  to find instrument keys sharing the same `groupId`. Trivially small
    *  in practice (<20 entries), so the cost is negligible. */
   readonly trackOrder: readonly TrackKey[];
-  /** Get (or lazily create) the {@link InstrumentTrack} for a DSL pitch.
+  /** Get (or lazily create) the {@link InstrumentTrack} for a DSL lane.
    *  Used as the terminal step of the audio-track inheritance chain so
    *  the inherited colour stays reactive to per-instrument overrides. */
-  getInstrumentTrack(pitch: string): InstrumentTrack;
+  getInstrumentTrack(lane: string): InstrumentTrack;
 }
 
 /**
- * Per-pitch view-model for the score's note-colour override. Lives in
- * the UI store keyed by DSL pitch letter; survives jot reloads (override
+ * Per-lane view-model for the score's note-colour override. Lives in
+ * the UI store keyed by DSL lane letter; survives jot reloads (override
  * is store-owned, not jot-owned), so a kit colour customisation persists
  * across song loads.
  *
  * The fallback closure is supplied at construction by the store and
- * resolves the active jot's palette default for this pitch on every
+ * resolves the active jot's palette default for this lane on every
  * read; so loading a new jot with a different palette assignment for
  * the same letter automatically updates the unfilled track without any
  * imperative refresh from the store side.
@@ -268,18 +268,18 @@ export interface MixerContext {
 export class InstrumentTrack implements Track {
   readonly kind = 'instrument' as const;
   /** Per-track user override (`#rrggbb`). `undefined` means "fall back
-   *  to the active jot's palette assignment for this pitch". */
+   *  to the active jot's palette assignment for this lane". */
   _color: string | undefined = undefined;
 
   /**
-   * @param pitch       DSL pitch letter this row represents.
+   * @param lane       DSL lane letter this row represents.
    * @param fallback    Producer of the default colour to use when no
    *                    override is set. Called on every read of
    *                    {@link color}; closes over the active jot so a
    *                    jot replace re-reads automatically.
    */
   constructor(
-    readonly pitch: string,
+    readonly lane: string,
     private readonly fallback: () => string,
   ) {
     makeAutoObservable<this, 'fallback'>(this, { fallback: false });
@@ -312,7 +312,7 @@ export class InstrumentTrack implements Track {
  *   1. Find the audio's `TrackKey` in `ctx.trackOrder`. If it has no
  *      `groupId`, return undefined (no group means no inheritance).
  *   2. Collect instrument keys sharing the same `groupId`. If the audio
- *      track has an explicit `pitch` link that matches one of them, use
+ *      track has an explicit `lane` link that matches one of them, use
  *      that instrument's `color`. Otherwise use the first instrument
  *      in the group (by `trackOrder` index).
  *   3. If no instrument keys are in the group, return undefined.
@@ -323,11 +323,11 @@ export class InstrumentTrack implements Track {
  * to.
  */
 /**
- * Instrument pitches sharing an audio track's mixer group, in `trackOrder`
+ * Instrument lanes sharing an audio track's mixer group, in `trackOrder`
  * row order. Empty when the audio row is solo (no `groupId`) or its group
  * holds no instrument rows. The single source of truth for "which
  * instrument(s) is this audio track paired with" — both the audio track's
- * own derived `pitch` and {@link resolveAudioInheritedColor} read it.
+ * own derived `lane` and {@link resolveAudioInheritedColor} read it.
  *
  * Pure, but reads `ctx.trackOrder`, so calling it inside a MobX
  * derivation (a computed / observer) makes that derivation react to row
@@ -335,7 +335,7 @@ export class InstrumentTrack implements Track {
  * the read); that's why it lives here as a free function rather than a
  * method on the observable AudioTrack.
  */
-export function groupInstrumentPitches(audioId: AudioTrackId, ctx: MixerContext): string[] {
+export function groupInstrumentLanes(audioId: AudioTrackId, ctx: MixerContext): string[] {
   let groupId: string | undefined;
   for (const k of ctx.trackOrder) {
     if (k.kind === 'audio' && k.id === audioId) {
@@ -346,20 +346,20 @@ export function groupInstrumentPitches(audioId: AudioTrackId, ctx: MixerContext)
   if (groupId === undefined) return [];
   const out: string[] = [];
   for (const k of ctx.trackOrder) {
-    if (k.kind === 'instrument' && k.groupId === groupId) out.push(k.pitch);
+    if (k.kind === 'instrument' && k.groupId === groupId) out.push(k.lane);
   }
   return out;
 }
 
 export function resolveAudioInheritedColor(
   audioId: AudioTrackId,
-  audioPitch: string | undefined,
+  audioLane: string | undefined,
   ctx: MixerContext,
 ): string | undefined {
-  const instrumentsInGroup = groupInstrumentPitches(audioId, ctx);
+  const instrumentsInGroup = groupInstrumentLanes(audioId, ctx);
   if (instrumentsInGroup.length === 0) return undefined;
-  if (audioPitch !== undefined && instrumentsInGroup.includes(audioPitch)) {
-    return ctx.getInstrumentTrack(audioPitch).color;
+  if (audioLane !== undefined && instrumentsInGroup.includes(audioLane)) {
+    return ctx.getInstrumentTrack(audioLane).color;
   }
   return ctx.getInstrumentTrack(instrumentsInGroup[0]).color;
 }

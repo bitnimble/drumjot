@@ -8,11 +8,11 @@ export type ExampleJot = {
 };
 
 /**
- * Simple rock loop, adapted from SPEC.md example 1. Authored as two voices
+ * Simple rock loop, adapted from SPEC.md example 1. Authored as two layers
  * joined by `||`, split by limb group:
  *
- *   - Voice 1 ("Hands"): hi-hat eighths plus snare backbeats.
- *   - Voice 2 ("Feet"):  kick pattern.
+ *   - Layer 1 ("Hands"): hi-hat eighths plus snare backbeats.
+ *   - Layer 2 ("Feet"):  kick pattern.
  *
  * Roughly:
  * ```
@@ -27,7 +27,7 @@ export type ExampleJot = {
  * hi-hat). Bar 2 ends with an open hi-hat + snare on the left hand, an
  * idiomatic lead-in back to bar 1.
  *
- * Within each voice, lane order comes from
+ * Within each layer, lane order comes from
  * `globalMetadata.instrumentMapping` declaration order ({ h, s, k }), so
  * the hands staff stacks hi-hat on top of snare and the feet staff renders
  * the kick on its own lane below.
@@ -43,7 +43,7 @@ export const rockJot: Jot = {
       k: { kind: 'kick', name: 'Kick', limb: 'rf' },
     },
   },
-  voices: [
+  layers: [
     {
       name: 'Hands',
       bars: [
@@ -143,7 +143,7 @@ export const tripletJot: Jot = {
       ],
     },
   },
-  voices: [
+  layers: [
     {
       bars: [
         bar(patternRef('Groove')),
@@ -169,7 +169,7 @@ export const tripletJot: Jot = {
 };
 
 /**
- * Demonstrates two patterns whose pitch sets share one instrument but
+ * Demonstrates two patterns whose lane sets share one instrument but
  * differ on the other — so the bracketed outline must span a different
  * set of rows per pattern, and where they overlap in time the brackets
  * stack on the shared row.
@@ -227,7 +227,7 @@ export const patternOverlapJot: Jot = {
       ],
     },
   },
-  voices: [
+  layers: [
     {
       bars: [
         bar(patternRef('Riff1')),

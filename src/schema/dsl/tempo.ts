@@ -88,7 +88,7 @@ function sortedEvents(jot: Jot): TempoEvent[] {
 
 /**
  * Build the per-bar tempo layout for a sequence of bars (typically
- * `voices[0].bars` lengths in quarter-note beats). Walks `tempoEvents`
+ * `layers[0].bars` lengths in quarter-note beats). Walks `tempoEvents`
  * once forward, switching tempos at each event's `(barIndex, beat)`
  * anchor and accumulating per-bar durations.
  *

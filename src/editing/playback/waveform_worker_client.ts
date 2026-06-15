@@ -305,7 +305,7 @@ class WaveformWorkerClient {
     backingW: number,
     backingH: number,
     drumsT0Sec: number,
-    pitchColor: string,
+    laneColor: string,
     ampScale: number,
   ): void {
     const owner = this.chunkOwner.get(chunkKey);
@@ -321,7 +321,7 @@ class WaveformWorkerClient {
       backingW,
       backingH,
       drumsT0Sec,
-      pitchColor,
+      laneColor,
       ampScale,
     });
   }

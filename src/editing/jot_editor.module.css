@@ -234,13 +234,13 @@
        waveform tiles, lyric words, ticks, the playhead) anchor inside.
      - `flex: 0 0 auto` so the row keeps its natural width inside the
        parent flex (no shrinking when the gutter is wide).
-     - Explicit `width: var(--bars-row-width)` (= `voiceBeats ×
+     - Explicit `width: var(--bars-row-width)` (= `layerBeats ×
        pxPerBeat`, in px) so the row has a defined bounding box across
        the full song. This per-row width is the ONE quantity zoom
        mutates; `setBarsRowVars` (jot_editor.tsx) writes it on each
        bars-row imperatively (no React re-render). Every beat-anchored
        child positions/sizes itself as a percentage of this width
-       (`--voice-beats` set inline per row drives the divisor), so a
+       (`--layer-beats` set inline per row drives the divisor), so a
        zoom relayouts the row's children without a `--px-per-beat`
        style-recalc cascade.
 

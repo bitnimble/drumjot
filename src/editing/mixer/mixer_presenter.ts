@@ -4,14 +4,14 @@ import { AudioTrackId } from 'src/editing/playback/audio_tracks';
 import { jotPlayer } from 'src/editing/playback/player';
 import { buildDebugBundleTrackOrder, reorderTrackOrder, trackKeyEq, type TrackKey } from 'src/editing/tracks/tracks';
 import { JotEditorStore } from '../jot_editor_store';
-import { MixerStore, clampVolume, collectJotPitches } from './mixer_store';
+import { MixerStore, clampVolume, collectJotLanes } from './mixer_store';
 import { toastStore } from '../../ui/toasts/toasts';
 
 /**
  * Mutations over {@link MixerStore}, per-row + master mute/solo/volume,
  * the user-customisable row order, and the audio-track split stubs. Owns
  * the reaction that keeps the row order synced with the live
- * track/pitch/lyrics set and the instrument-track prune, and wires the
+ * track/lane/lyrics set and the instrument-track prune, and wires the
  * store in as the player's {@link MixerContext} for audio-track colour
  * inheritance. The engine's mute/solo/volume filter is no longer pushed
  * from here; the player pulls it off the PlaybackStore computeds (see
@@ -32,17 +32,17 @@ export class MixerPresenter {
     // made during the same tick see a populated context.
     jotPlayer.attachMixerContext(this.mixer);
 
-    // Prune instrument-track view-models for pitches no longer present in
+    // Prune instrument-track view-models for lanes no longer present in
     // the active jot. The override is store-owned and survives jot
-    // reloads, so a pitch that comes back in a later jot picks up its
-    // previous override; we only forget pitches that disappeared from the
+    // reloads, so a lane that comes back in a later jot picks up its
+    // previous override; we only forget lanes that disappeared from the
     // current jot to keep the map from growing unboundedly across a long
     // session. `fireImmediately` runs the prune once on boot.
     reaction(
-      () => new Set(this.mixer.jotPitches),
-      (pitches) => {
+      () => new Set(this.mixer.jotLanes),
+      (lanes) => {
         for (const p of Array.from(this.mixer.instrumentTracks.keys())) {
-          if (!pitches.has(p)) this.mixer.instrumentTracks.delete(p);
+          if (!lanes.has(p)) this.mixer.instrumentTracks.delete(p);
         }
       },
       { fireImmediately: true, equals: comparer.structural }
@@ -50,49 +50,49 @@ export class MixerPresenter {
 
     // NOTE: the engine no longer has mixer state pushed into it here. The
     // player PULLS its mute/solo/volume filter + section-audibility off the
-    // PlaybackStore computeds (which delegate to this store's `pitchFilter`
+    // PlaybackStore computeds (which delegate to this store's `laneFilter`
     // / `audioTrackFilter` / `isAudio|DrumSectionAudible`); the reactions
     // that fire the imperative audio-graph re-apply live in
     // `PlaybackPresenter`.
 
     // Keep `trackOrder` synced with the live audio-track set and the
-    // current jot's pitches. Dropped rows are removed; newly-discovered
+    // current jot's lanes. Dropped rows are removed; newly-discovered
     // rows are slotted at a sensible default position so the user's
     // drag-and-drop ordering of surviving rows is preserved.
     reaction(
       () => ({
         audioIds: Array.from(jotPlayer.audioTracks.keys()),
-        pitches: this.mixer.jotPitches,
+        lanes: this.mixer.jotLanes,
         lyricsIds: lyricsStore.trackIds.slice(),
       }),
-      ({ audioIds, pitches, lyricsIds }) => this.syncTrackOrder(audioIds, pitches, lyricsIds),
+      ({ audioIds, lanes, lyricsIds }) => this.syncTrackOrder(audioIds, lanes, lyricsIds),
       { fireImmediately: true }
     );
   }
 
   /**
    * Drop entries from {@link MixerStore.trackOrder} that no longer
-   * correspond to a live audio track, jot pitch, or lyrics track; then
+   * correspond to a live audio track, jot lane, or lyrics track; then
    * append the missing ones at a sensible default position so the row
    * appears immediately:
    *   - new audio track  → after the last existing audio entry (or top of
    *     the list if no audio entries exist yet)
-   *   - new pitch        → end of the list
+   *   - new lane        → end of the list
    *   - new lyrics row   → just after the last existing lyrics row,
    *     keeping the lyrics group contiguous (top of list when none exist).
    *
    * Existing entries keep their relative order so a user drag survives an
-   * audio-track add/remove or a jot reload that didn't change the pitches.
+   * audio-track add/remove or a jot reload that didn't change the lanes.
    */
   private syncTrackOrder(
     audioIds: AudioTrackId[],
-    pitches: readonly string[],
+    lanes: readonly string[],
     lyricsIds: readonly LyricsTrackId[]
   ): void {
     const wanted: TrackKey[] = [
       ...lyricsIds.map((id) => ({ kind: 'lyrics' as const, id })),
       ...audioIds.map((id) => ({ kind: 'audio' as const, id })),
-      ...pitches.map((pitch) => ({ kind: 'instrument' as const, pitch })),
+      ...lanes.map((lane) => ({ kind: 'instrument' as const, lane })),
     ];
     const next: TrackKey[] = this.mixer.trackOrder.filter((k) =>
       wanted.some((w) => trackKeyEq(w, k))
@@ -156,13 +156,13 @@ export class MixerPresenter {
     // so this only writes (and wakes observers) on a real reorder.
     if (next === prev) return;
     // If the reorder pulled an audio row out of its group (grouped ->
-    // solo), bake the group-derived pitch into the track's own state
+    // solo), bake the group-derived lane into the track's own state
     // before the group is gone, so it keeps its instrument association.
     const movedPrev = prev[fromIdx];
     if (movedPrev?.kind === 'audio' && movedPrev.groupId !== undefined) {
       const movedNext = next.find((k) => k.kind === 'audio' && k.id === movedPrev.id);
       if (movedNext && movedNext.groupId === undefined) {
-        jotPlayer.audioTracks.get(movedPrev.id)?.detachPitch();
+        jotPlayer.audioTracks.get(movedPrev.id)?.detachLane();
       }
     }
     this.mixer.trackOrder = next as TrackKey[];
@@ -196,22 +196,22 @@ export class MixerPresenter {
     }
   }
 
-  toggleMute(pitch: string) {
-    if (this.mixer.mutedPitches.has(pitch)) this.mixer.mutedPitches.delete(pitch);
-    else this.mixer.mutedPitches.add(pitch);
+  toggleMute(lane: string) {
+    if (this.mixer.mutedLanes.has(lane)) this.mixer.mutedLanes.delete(lane);
+    else this.mixer.mutedLanes.add(lane);
   }
 
-  toggleSolo(pitch: string) {
-    if (this.mixer.soloedPitches.has(pitch)) {
-      this.mixer.soloedPitches.delete(pitch);
+  toggleSolo(lane: string) {
+    if (this.mixer.soloedLanes.has(lane)) {
+      this.mixer.soloedLanes.delete(lane);
     } else {
-      this.mixer.soloedPitches.add(pitch);
-      this.mixer.mutedPitches.delete(pitch);
+      this.mixer.soloedLanes.add(lane);
+      this.mixer.mutedLanes.delete(lane);
     }
   }
 
-  setPitchVolume(pitch: string, v: number) {
-    this.mixer.pitchVolumes.set(pitch, clampVolume(v));
+  setLaneVolume(lane: string, v: number) {
+    this.mixer.laneVolumes.set(lane, clampVolume(v));
   }
 
   toggleAudioTrackMute(id: AudioTrackId) {
@@ -233,7 +233,7 @@ export class MixerPresenter {
   }
 
   /** Mute a batch of audio tracks. Used by the song loaders
-   * (JotEditorPresenter) to default per-pitch stems / drum tracks to
+   * (JotEditorPresenter) to default per-lane stems / drum tracks to
    * muted so the audible drums come from the score scheduler. */
   muteAudioTracks(ids: readonly AudioTrackId[]): void {
     for (const id of ids) this.mixer.mutedAudioTracks.add(id);
@@ -286,24 +286,24 @@ export class MixerPresenter {
     }
   }
 
-  /** Reset the per-pitch mixer (mute/solo/volume). Keyed by DSL pitch
+  /** Reset the per-lane mixer (mute/solo/volume). Keyed by DSL lane
    * letter, not by song, so without this a setting on one song bleeds onto
    * the next song's matching rows. */
-  resetPitchMixer(): void {
-    this.mixer.mutedPitches.clear();
-    this.mixer.soloedPitches.clear();
-    this.mixer.pitchVolumes.clear();
+  resetLaneMixer(): void {
+    this.mixer.mutedLanes.clear();
+    this.mixer.soloedLanes.clear();
+    this.mixer.laneVolumes.clear();
   }
 
   /**
-   * Re-order the mixer after a debug bundle is loaded so each per-pitch
+   * Re-order the mixer after a debug bundle is loaded so each per-lane
    * audio stem sits immediately above its instrument row, with any
    * unmatched audio at the top. The ordering itself is the pure
    * {@link buildDebugBundleTrackOrder}; this just feeds it the current
-   * jot's pitches. Called by the bundle loader (JotEditorPresenter).
+   * jot's lanes. Called by the bundle loader (JotEditorPresenter).
    */
   applyDebugBundleTrackOrder(loadedByKey: ReadonlyMap<string, AudioTrackId>): void {
-    const pitches = collectJotPitches(this.jotEditorStore.structural);
-    this.mixer.trackOrder = buildDebugBundleTrackOrder(pitches, loadedByKey);
+    const lanes = collectJotLanes(this.jotEditorStore.structural);
+    this.mixer.trackOrder = buildDebugBundleTrackOrder(lanes, loadedByKey);
   }
 }

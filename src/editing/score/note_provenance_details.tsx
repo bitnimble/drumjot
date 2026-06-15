@@ -212,13 +212,13 @@ const OnsetTimingVisualization = observer(
     const timeToPct = (t: number): number => ((t - windowStart) / windowDur) * 100;
 
     // Pick the audio track most likely to expose this onset clearly.
-    // The debug bundle's manifest carries an authoritative pitch →
+    // The debug bundle's manifest carries an authoritative lane →
     // audio-filename map (set up server-side in
     // `transcriber/app/debug_bundle.py`); the isolated stem for the
-    // note's pitch is the right source; it isolates the drum we're
+    // note's lane is the right source; it isolates the drum we're
     // inspecting from the rest of the kit. Fallback chain when the
     // mapping doesn't resolve (legacy bundle, manual file load, etc.):
-    //   1. Any other mapped stem, still a per-pitch isolated source.
+    //   1. Any other mapped stem, still a per-lane isolated source.
     //   2. Any loaded track other than `no_drums.mp3`; `no_drums` by
     //      definition has the drum content removed and shows nothing.
     //   3. Whatever's loaded.
@@ -231,15 +231,15 @@ const OnsetTimingVisualization = observer(
     // we recompute here is the small mapping-derived state, memoized
     // on the per-onset inputs.
     const audioTracksByFilename = jotPlayer.audioTracksByFilename;
-    const mapping = rendered.provenance.audioFilenameByPitch;
+    const mapping = rendered.provenance.audioFilenameByLane;
     const audioTrack = React.useMemo<AudioTrack | undefined>(() => {
       if (audioTracksByFilename.size === 0) return undefined;
-      const wantedFilename = mapping.get(entry.pitch);
+      const wantedFilename = mapping.get(entry.lane);
       if (wantedFilename) {
         const exact = audioTracksByFilename.get(wantedFilename.toLowerCase());
         if (exact) return exact;
       }
-      // Any other mapped per-pitch stem; skip `no_drums`, which is the
+      // Any other mapped per-lane stem; skip `no_drums`, which is the
       // backing track and won't show drum hits.
       for (const [key, filename] of mapping.entries()) {
         if (key === 'no_drums') continue;
@@ -252,7 +252,7 @@ const OnsetTimingVisualization = observer(
       }
       // Last fallback: whatever's loaded (first by insertion order).
       return audioTracksByFilename.values().next().value;
-    }, [audioTracksByFilename, mapping, entry.pitch]);
+    }, [audioTracksByFilename, mapping, entry.lane]);
 
     // Always uniform-normalise the snippet: the debug-details popover is
     // a fixed-size inspector window the user can't enlarge to compensate
@@ -336,7 +336,7 @@ const OnsetTimingVisualization = observer(
     const barBoundaries: { pct: number; label: number | null }[] = [];
     const gridLines: number[] = [];
     if (timeline.rendered) {
-      const structBars = timeline.rendered.voices[0]?.bars ?? [];
+      const structBars = timeline.rendered.layers[0]?.bars ?? [];
       for (let i = 0; i < timeline.bars.length; i++) {
         const bar = timeline.bars[i]!;
         const structBar = structBars[i];
@@ -667,7 +667,7 @@ export const NoteProvenanceDetails = observer(
       // `provenance.leadBars`, with or without the inflation. `applyDrumOffsetStructure`
       // shallow-clones bars and preserves both array order and `index`,
       // so this lookup is also drum-offset-invariant.
-      const structBars = structural?.voices[0]?.bars;
+      const structBars = structural?.layers[0]?.bars;
       const originalBarArrayPos = rendered.provenance.leadBars + entry.bar;
       originalBar =
         structBars && originalBarArrayPos >= 0 && originalBarArrayPos < structBars.length
@@ -1205,8 +1205,8 @@ export const NoteProvenanceDetails = observer(
   }
 );
 
-/** Per-pitch acoustic measurements the cymbal_split + hihat_split
- *  passes capture. `null`/`undefined` everywhere else (other pitches,
+/** Per-lane acoustic measurements the cymbal_split + hihat_split
+ *  passes capture. `null`/`undefined` everywhere else (other lanes,
  *  bundles predating v4). At least one populated field means the
  *  "Acoustic properties" subsection is worth surfacing. */
 function entryHasAcousticFields(entry: NoteProvenanceEntry): boolean {

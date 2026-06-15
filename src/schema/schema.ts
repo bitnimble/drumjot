@@ -4,7 +4,7 @@
  * This is the canonical, editable, conflict-free representation a song; * deliberately FLAT and value-addressed, not the nested DSL weight-tree
  * (which stays an export-only serialization target). A note's musical
  * position is plain LWW register fields (`barId` + `beat`) and its lane is
- * a `pitch` field, so every core edit, add, move along a track, move
+ * a `lane` field, so every core edit, add, move along a track, move
  * track A→B, delete, is a register write or a keyed add/remove, and
  * rendering order is a deterministic sort rather than any CRDT sequence.
  *
@@ -59,14 +59,14 @@ export const INSTRUMENT_KIND = z.enum(['kick', 'snare', 'hihat', 'ride', 'crash'
 /**
  * Positional fields every element shares. Coordinates are RELATIVE to the
  * immediate container's space: top-level elements are positioned from
- * their bar's downbeat (and carry `barId`/`voiceId`); a group's children
+ * their bar's downbeat (and carry `barId`/`layerId`); a group's children
  * are positioned in the group's own internal space (no `barId`; the
  * derivation converts to global time via the group's duration scaling).
  */
 const elementBase = {
   id: z.string(),
-  /** Owning `||` voice (top-level only; nested elements inherit). */
-  voiceId: z.string().optional(),
+  /** Owning `||` layer (top-level only; nested elements inherit). */
+  layerId: z.string().optional(),
   /** Owning bar (top-level only; nested elements live in their group's space). */
   barId: z.string().optional(),
   /** Position in the immediate container's coordinate space. */
@@ -75,11 +75,11 @@ const elementBase = {
   duration: z.number(),
 };
 
-/** A single drum hit. `pitch` is the lane; dynamics via `vol` + modifiers. */
+/** A single drum hit. `lane` is the lane; dynamics via `vol` + modifiers. */
 export const NoteElementSchema = record({
   ...elementBase,
   kind: z.literal('note'),
-  pitch: z.string(),
+  lane: z.string(),
   /** Whole-array LWW register (rarely concurrent; merge the set atomically). */
   modifiers: z.array(MODIFIER),
   sticking: STICKING.optional(),
@@ -89,7 +89,7 @@ export const NoteElementSchema = record({
   offsetMs: z.number().optional(),
   /** Explicit MIDI velocity override; absent = derive from `vol`/modifiers. */
   velocity: z.number().optional(),
-  /** Explicit MIDI note override; absent = derive from instrument/pitch. */
+  /** Explicit MIDI note override; absent = derive from instrument/lane. */
   midiNote: z.number().optional(),
   /** Raw MIDI tick from a transcribed/imported source (provenance key). */
   midiTick: z.number().optional(),
@@ -145,18 +145,18 @@ export const BarSchema = record({
   tsUnit: z.number(),
   /** Per-bar tempo override in BPM; absent = inherit the running tempo. */
   tempoBpm: z.number().optional(),
-  /** Anacrusis / pickup bar (DSL `voice.anacrusis`). Its length is sized to
+  /** Anacrusis / pickup bar (DSL `layer.anacrusis`). Its length is sized to
    *  its content rather than the time signature; the derivation numbers it
    *  bar 0. Absent = a normal bar. */
   anacrusis: z.boolean().optional(),
 });
 
 /**
- * One `||` voice. Voices share the bar grid; they differ only in which
- * notes they own (`note.voiceId`). `name` is a display hint ("Hands" /
+ * One `||` layer. Layers share the bar grid; they differ only in which
+ * notes they own (`note.layerId`). `name` is a display hint ("Hands" /
  * "Feet"), not parseable from DSL.
  */
-export const VoiceSchema = record({
+export const LayerSchema = record({
   id: z.string(),
   name: z.string().optional(),
 });
@@ -195,8 +195,8 @@ export const PatternDefSchema = record({
 });
 
 /**
- * Display + playback info for a pitch lane, keyed in the `instruments`
- * idMap by the DSL pitch letter. Mirrors `dsl.ts` `Instrument`.
+ * Display + playback info for a lane lane, keyed in the `instruments`
+ * idMap by the DSL lane letter. Mirrors `dsl.ts` `Instrument`.
  */
 export const InstrumentSchema = record({
   kind: INSTRUMENT_KIND,
@@ -209,7 +209,7 @@ export const InstrumentSchema = record({
 /**
  * The whole song. Global tempo/timeline live as top-level registers; the
  * collections are the editable entities. The bar grid is shared across
- * voices. Deferred to the editing-features phase: pattern definition
+ * layers. Deferred to the editing-features phase: pattern definition
  * bodies (see {@link PatternSchema}).
  */
 export const JotSchema = record({
@@ -224,12 +224,12 @@ export const JotSchema = record({
   leadBars: z.number().optional(),
   /** Producer grid density (1/N-of-a-whole-note); advisory. */
   gridDivision: z.number().optional(),
-  /** `||` voices by id; a single-voice jot has one (or none → primary). */
-  voices: idMap(VoiceSchema),
+  /** `||` layers by id; a single-layer jot has one (or none → primary). */
+  layers: idMap(LayerSchema),
   bars: movableList(BarSchema),
   /** The note | group | pattern tree, top-level entries keyed by id. */
   elements: idMap(ElementSchema),
-  /** Pitch letter → instrument display/playback info. */
+  /** Lane letter → instrument display/playback info. */
   instruments: idMap(InstrumentSchema),
   /** Sticky tempo changes by id (sorted by bar order + beat at read time). */
   tempoEvents: idMap(TempoEventSchema),
@@ -249,14 +249,14 @@ export type DrumInstrumentKind = z.infer<typeof INSTRUMENT_KIND>;
 
 type ElementCommon = {
   id: string;
-  voiceId?: string;
+  layerId?: string;
   barId?: string;
   beat: number;
   duration: number;
 };
 export type NoteElement = ElementCommon & {
   kind: 'note';
-  pitch: string;
+  lane: string;
   modifiers: Modifier[];
   sticking?: Sticking;
   roll?: boolean;
@@ -279,14 +279,14 @@ export type PatternDef = { id: string; name: string; body: ReactiveMap<Element> 
 
 export type Bar = Infer<typeof BarSchema>;
 export type Instrument = Infer<typeof InstrumentSchema>;
-export type Voice = Infer<typeof VoiceSchema>;
+export type Layer = Infer<typeof LayerSchema>;
 export type TempoEvent = Infer<typeof TempoEventSchema>;
 export type Jot = Infer<typeof JotSchema>;
 
 /**
  * Create a reactive Jot document backed by Loro, optionally seeded from a
  * plain Jot object (bars as an array, notes/instruments as records keyed
- * by id/pitch). The returned `model` is the deeply-observable MobX
+ * by id/lane). The returned `model` is the deeply-observable MobX
  * projection; reads/writes are ordinary property access.
  */
 export function createReactiveJot(initial?: Init<typeof JotSchema>): ReactiveDoc<typeof JotSchema> {

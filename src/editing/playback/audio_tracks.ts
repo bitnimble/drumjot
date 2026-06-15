@@ -37,7 +37,7 @@
 import { makeAutoObservable, runInAction } from 'mobx';
 import {
   AUDIO_FALLBACK_COLOR,
-  groupInstrumentPitches,
+  groupInstrumentLanes,
   MixerContext,
   resolveAudioInheritedColor,
   Track,
@@ -84,7 +84,7 @@ export type AudioTrackRole =
 /**
  * One loaded audio (backing) track. Observable so the mixer can react
  * to in-place colour overrides without reloading the track. Identity
- * (id, filename, buffer, sourceBlob, durationSec, pitch, role) is
+ * (id, filename, buffer, sourceBlob, durationSec, lane, role) is
  * fixed at construction; the only mutable field is the colour override
  * the row's overflow menu writes into.
  *
@@ -116,14 +116,14 @@ export class AudioTrack implements Track {
   readonly sourceBlob: Blob;
   readonly durationSec: number;
   /**
-   * Own-state fallback for {@link pitch}. Holds the load-time mapping
+   * Own-state fallback for {@link lane}. Holds the load-time mapping
    * (a debug bundle's `mapping` entry) and the value baked in by
-   * {@link detachPitch} when the row is dragged out of a group. The
-   * effective pitch is normally *derived* from the mixer group (see
-   * {@link pitch}); this only takes over when the track is solo.
+   * {@link detachLane} when the row is dragged out of a group. The
+   * effective lane is normally *derived* from the mixer group (see
+   * {@link lane}); this only takes over when the track is solo.
    * Undefined for ad-hoc / drumless tracks that were never mapped.
    */
-  private _pitchOverride: string | undefined = undefined;
+  private _laneOverride: string | undefined = undefined;
   /**
    * What the loader believes the audio is. Drives the per-row overflow
    * menu's enable matrix. Undefined is treated as `unknown`.
@@ -147,7 +147,7 @@ export class AudioTrack implements Track {
       buffer: AudioBuffer;
       sourceBlob: Blob;
       durationSec: number;
-      pitch?: string;
+      lane?: string;
       role?: AudioTrackRole;
     },
     private readonly getCtx: () => MixerContext | undefined,
@@ -157,10 +157,10 @@ export class AudioTrack implements Track {
     this.buffer = fields.buffer;
     this.sourceBlob = fields.sourceBlob;
     this.durationSec = fields.durationSec;
-    this._pitchOverride = fields.pitch;
+    this._laneOverride = fields.lane;
     this.role = fields.role;
-    // `_color` + `_pitchOverride` are the mutable observable fields and
-    // `pitch` is a computed (derives from the mixer group); the buffer /
+    // `_color` + `_laneOverride` are the mutable observable fields and
+    // `lane` is a computed (derives from the mixer group); the buffer /
     // blob are large immutables that don't need MobX wrappers.
     makeAutoObservable<
       this,
@@ -180,7 +180,7 @@ export class AudioTrack implements Track {
     if (this._color !== undefined) return this._color;
     const ctx = this.getCtx();
     if (!ctx) return AUDIO_FALLBACK_COLOR;
-    return resolveAudioInheritedColor(this.id, this.pitch, ctx) ?? AUDIO_FALLBACK_COLOR;
+    return resolveAudioInheritedColor(this.id, this.lane, ctx) ?? AUDIO_FALLBACK_COLOR;
   }
 
   set color(c: string) {
@@ -193,52 +193,52 @@ export class AudioTrack implements Track {
   }
 
   /**
-   * Instrument pitches sharing this audio track's mixer group, in row
+   * Instrument lanes sharing this audio track's mixer group, in row
    * order. Empty when solo. Delegates to the shared free function (NOT a
    * method) so the read of `trackOrder` stays tracked when called from
-   * the `pitch` / `color` computeds, see its note in `tracks.ts`.
+   * the `lane` / `color` computeds, see its note in `tracks.ts`.
    */
-  private get inGroupPitches(): string[] {
+  private get inGroupLanes(): string[] {
     const ctx = this.getCtx();
-    return ctx ? groupInstrumentPitches(this.id, ctx) : [];
+    return ctx ? groupInstrumentLanes(this.id, ctx) : [];
   }
 
   /**
-   * DSL pitch letter (e.g. `k`, `s`, `h`) this audio track is the
+   * DSL lane letter (e.g. `k`, `s`, `h`) this audio track is the
    * isolated stem of. **Derived from the mixer group** (the user's own
    * drag-and-drop grouping is the source of truth): when the track shares
-   * a group with one or more instrument rows it reports that pitch, so
+   * a group with one or more instrument rows it reports that lane, so
    * regrouping the row to a different instrument retints it correctly
    * instead of clinging to the load-time mapping. The load-time mapping
-   * (kept in {@link _pitchOverride}) only acts as the tiebreaker when one
-   * audio file maps to several pitches in the same group, and as the
+   * (kept in {@link _laneOverride}) only acts as the tiebreaker when one
+   * audio file maps to several lanes in the same group, and as the
    * fallback when the track is solo. Undefined for ad-hoc / drumless
    * tracks that were never mapped or grouped.
    */
-  get pitch(): string | undefined {
-    const inGroup = this.inGroupPitches;
+  get lane(): string | undefined {
+    const inGroup = this.inGroupLanes;
     if (inGroup.length > 0) {
-      if (this._pitchOverride !== undefined && inGroup.includes(this._pitchOverride)) {
-        return this._pitchOverride;
+      if (this._laneOverride !== undefined && inGroup.includes(this._laneOverride)) {
+        return this._laneOverride;
       }
       return inGroup[0];
     }
-    return this._pitchOverride;
+    return this._laneOverride;
   }
 
   /**
-   * Bake the current group-derived pitch into {@link _pitchOverride} so a
+   * Bake the current group-derived lane into {@link _laneOverride} so a
    * row dragged out of its group keeps its instrument association as its
    * own state. Called by the mixer the moment a reorder clears this row's
    * group — while the old group is still live — so the association isn't
    * lost. No-op for a track that wasn't grouped.
    */
-  detachPitch(): void {
-    const inGroup = this.inGroupPitches;
+  detachLane(): void {
+    const inGroup = this.inGroupLanes;
     if (inGroup.length === 0) return;
-    this._pitchOverride =
-      this._pitchOverride !== undefined && inGroup.includes(this._pitchOverride)
-        ? this._pitchOverride
+    this._laneOverride =
+      this._laneOverride !== undefined && inGroup.includes(this._laneOverride)
+        ? this._laneOverride
         : inGroup[0];
   }
 
@@ -287,12 +287,12 @@ type ActiveAudioTrack = {
   gen: number;
 };
 
-/** Filter for audio-track mute/solo, parallel to {@link PlayerFilter} for pitches. */
+/** Filter for audio-track mute/solo, parallel to {@link PlayerFilter} for lanes. */
 export type AudioTrackFilter = {
   mutedAudioTracks: ReadonlySet<AudioTrackId>;
   soloedAudioTracks: ReadonlySet<AudioTrackId>;
   /**
-   * True when a solo is engaged anywhere; on an audio track OR a pitch
+   * True when a solo is engaged anywhere; on an audio track OR a lane
    * row. Solo is one global mode shared across both domains, so soloing
    * a drum instrument silences the audio tracks too (and vice versa).
    * The store computes this since it owns both solo sets.

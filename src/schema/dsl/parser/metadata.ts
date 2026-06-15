@@ -2,7 +2,7 @@ import { Instrument, Metadata, TimeSignature, Volume } from 'src/schema/dsl/dsl'
 import {
   ALL_DRUM_INSTRUMENT_KINDS,
   DrumInstrumentKind,
-  defaultKindForPitch,
+  defaultKindForLane,
 } from 'src/instruments/instruments';
 import { Cursor } from './cursor';
 import { ParseError } from './errors';
@@ -166,7 +166,7 @@ function parseArray(c: Cursor): unknown[] {
  * Coerce well-known top-level metadata keys into their typed forms. `time`
  * arrives as a string ("4/4") in the DSL but is exposed as a structured
  * TimeSignature object on the Metadata type. `instrumentMapping` entries get
- * their `kind` field auto-filled from the pitch letter (or from an explicit
+ * their `kind` field auto-filled from the lane letter (or from an explicit
  * `kind:` in the DSL, if the user supplied one) so downstream consumers can
  * rely on a first-class instrument taxonomy.
  */
@@ -186,8 +186,8 @@ function normalizeMetadataValue(key: string, value: unknown, c: Cursor): unknown
 }
 
 /**
- * Per-pitch fill of the `kind` field. If the DSL supplied `kind` explicitly,
- * validate it against the enum; otherwise look up the default for the pitch
+ * Per-lane fill of the `kind` field. If the DSL supplied `kind` explicitly,
+ * validate it against the enum; otherwise look up the default for the lane
  * letter (`k → kick`, `s → snare`, ...) and fall back to `custom`.
  */
 function normalizeInstrumentMapping(
@@ -195,10 +195,10 @@ function normalizeInstrumentMapping(
   c: Cursor
 ): Record<string, Instrument> {
   const out: Record<string, Instrument> = {};
-  for (const [pitch, entryRaw] of Object.entries(raw)) {
+  for (const [lane, entryRaw] of Object.entries(raw)) {
     if (!entryRaw || typeof entryRaw !== 'object') {
       throw new ParseError(
-        `instrumentMapping['${pitch}'] must be an object`,
+        `instrumentMapping['${lane}'] must be an object`,
         c.src,
         c.pos
       );
@@ -208,7 +208,7 @@ function normalizeInstrumentMapping(
     if (typeof entry.kind === 'string') {
       if (!(ALL_DRUM_INSTRUMENT_KINDS as readonly string[]).includes(entry.kind)) {
         throw new ParseError(
-          `Unknown instrument kind '${entry.kind}' for pitch '${pitch}'; ` +
+          `Unknown instrument kind '${entry.kind}' for lane '${lane}'; ` +
             `expected one of: ${ALL_DRUM_INSTRUMENT_KINDS.join(', ')}`,
           c.src,
           c.pos
@@ -216,7 +216,7 @@ function normalizeInstrumentMapping(
       }
       kind = entry.kind as DrumInstrumentKind;
     } else {
-      kind = defaultKindForPitch(pitch);
+      kind = defaultKindForLane(lane);
     }
     const instrument: Instrument = { kind };
     if (typeof entry.name === 'string') instrument.name = entry.name;
@@ -235,7 +235,7 @@ function normalizeInstrumentMapping(
         }
       }
     }
-    out[pitch] = instrument;
+    out[lane] = instrument;
   }
   return out;
 }

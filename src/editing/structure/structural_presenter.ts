@@ -1,8 +1,8 @@
 /**
  * Structural view-model over the reactive document: exposes the store-native
- * `Struct*` voices (from {@link StructureStore}) with the interactive drum
+ * `Struct*` layers (from {@link StructureStore}) with the interactive drum
  * beat-grid offset applied, plus the layout scale (`pxPerBeat`) and the
- * per-pitch row data the mixer reads. Colours come from {@link PaletteStore}
+ * per-lane row data the mixer reads. Colours come from {@link PaletteStore}
  * and instruments from the global mapping; pixels live in `LayoutStore`.
  *
  * Owns the drum-offset state (the only mutable bit) and reads everything else
@@ -18,7 +18,7 @@ import type { LaidOutJot } from 'src/editing/playback/timeline';
 import {
   type StructBar,
   type StructTrack,
-  type StructVoice,
+  type StructLayer,
   type StructureStore,
 } from './structure_store';
 import type { PaletteStore } from 'src/editing/palette/palette_store';
@@ -40,10 +40,10 @@ export class StructuralPresenter implements LaidOutJot {
       drumOffsetBeatsBaseline: observable,
       setDrumOffset: action,
       setDrumOffsetBaseline: action,
-      voices: computed,
+      layers: computed,
       pxPerBeat: computed,
-      voiceBeats: computed,
-      primaryVoice: computed,
+      layerBeats: computed,
+      primaryLayer: computed,
     });
   }
 
@@ -65,50 +65,50 @@ export class StructuralPresenter implements LaidOutJot {
     return this.viewConfig;
   }
 
-  /** The store-native `Struct*` voices, drum-offset applied. The canonical
+  /** The store-native `Struct*` layers, drum-offset applied. The canonical
    *  beat-addressed structure consumers read. */
-  get voices(): StructVoice[] {
-    const base = this.structureStore.voices;
+  get layers(): StructLayer[] {
+    const base = this.structureStore.layers;
     const eff = this.effectiveDrumOffsetBeats;
-    return eff === 0 ? base : applyOffsetToStructVoices(base, eff);
+    return eff === 0 ? base : applyOffsetToStructLayers(base, eff);
   }
 
   get pxPerBeat(): number {
     return ((this.viewConfig.barWidth as number) * this.layoutStore.densityFactor) / 4;
   }
 
-  get voiceBeats(): number {
-    const bars = this.voices[0]?.bars;
+  get layerBeats(): number {
+    const bars = this.layers[0]?.bars;
     if (!bars) return 0;
     let total = 0;
     for (const b of bars) total += b.beats;
     return total;
   }
 
-  get primaryVoice(): StructVoice | undefined {
-    return this.voices[0];
+  get primaryLayer(): StructLayer | undefined {
+    return this.layers[0];
   }
 
-  /** Instrument for a pitch from the global mapping. */
-  private instrumentFor(pitch: string): Instrument {
-    return this.source.globalMetadata.instrumentMapping?.[pitch] ?? { kind: 'custom' };
+  /** Instrument for a lane from the global mapping. */
+  private instrumentFor(lane: string): Instrument {
+    return this.source.globalMetadata.instrumentMapping?.[lane] ?? { kind: 'custom' };
   }
 
-  barsForPitch = computedFn(
+  barsForLane = computedFn(
     (
-      pitch: string
+      lane: string
     ): {
       bars: readonly StructBar[];
-      voiceBeats: number;
+      layerBeats: number;
       leadInBarsBeats: number;
       barBeatStart: readonly number[];
       startBeats: readonly number[];
-      pitchColor: string;
+      laneColor: string;
       instrumentName: string | undefined;
     } => {
-      const voice = this.voices[0];
-      const bars = voice?.bars ?? [];
-      let voiceBeats = 0;
+      const layer = this.layers[0];
+      const bars = layer?.bars ?? [];
+      let layerBeats = 0;
       let leadInBarsBeats = 0;
       let countedLeadIn = true;
       const barBeatStart: number[] = new Array(bars.length);
@@ -117,23 +117,23 @@ export class StructuralPresenter implements LaidOutJot {
         barBeatStart[i] = cursor;
         const b = bars[i];
         cursor += b.beats;
-        voiceBeats += b.beats;
+        layerBeats += b.beats;
         if (countedLeadIn) {
           if (b.index < 0) leadInBarsBeats += b.beats;
           else countedLeadIn = false;
         }
       }
-      // Colour + instrument are jot-wide functions of the pitch (palette
+      // Colour + instrument are jot-wide functions of the lane (palette
       // slot + the instrument mapping), no longer per-track.
-      const pitchColor = this.paletteStore.colorForPitch(pitch);
-      const instrumentName = this.instrumentFor(pitch).name;
+      const laneColor = this.paletteStore.colorForLane(lane);
+      const instrumentName = this.instrumentFor(lane).name;
       return {
         bars,
-        voiceBeats,
+        layerBeats,
         leadInBarsBeats,
         barBeatStart,
         startBeats: barBeatStart,
-        pitchColor,
+        laneColor,
         instrumentName,
       };
     }
@@ -142,16 +142,16 @@ export class StructuralPresenter implements LaidOutJot {
 
 // ---------- Drum beat-grid offset ----------
 
-function applyOffsetToStructVoices(voices: StructVoice[], offsetBeats: number): StructVoice[] {
-  return voices.map((v) => shiftStructVoice(v, offsetBeats));
+function applyOffsetToStructLayers(layers: StructLayer[], offsetBeats: number): StructLayer[] {
+  return layers.map((v) => shiftStructLayer(v, offsetBeats));
 }
 
 /** Slide every note across the fixed bar grid by `offsetBeats`, re-homing
  *  notes that cross a barline. Pattern/tuplet spans are cleared (their
  *  geometry no longer matches the shifted notes). */
-function shiftStructVoice(voice: StructVoice, offsetBeats: number): StructVoice {
-  const bars = voice.bars;
-  if (bars.length === 0) return voice;
+function shiftStructLayer(layer: StructLayer, offsetBeats: number): StructLayer {
+  const bars = layer.bars;
+  if (bars.length === 0) return layer;
 
   const barStart: number[] = new Array(bars.length);
   let acc = 0;
@@ -160,7 +160,7 @@ function shiftStructVoice(voice: StructVoice, offsetBeats: number): StructVoice 
     acc += bars[i].beats;
   }
   const total = acc;
-  if (total <= 0) return voice;
+  if (total <= 0) return layer;
 
   const newBars: StructBar[] = bars.map((b) => ({
     ...b,
@@ -178,8 +178,8 @@ function shiftStructVoice(voice: StructVoice, offsetBeats: number): StructVoice 
 
   for (let i = 0; i < bars.length; i++) {
     const srcBar = bars[i];
-    for (const pitch of Object.keys(srcBar.tracks)) {
-      const srcTrack = srcBar.tracks[pitch];
+    for (const lane of Object.keys(srcBar.tracks)) {
+      const srcTrack = srcBar.tracks[lane];
       for (const note of srcTrack.notes) {
         const newAbs = barStart[i] + note.beat + offsetBeats;
         if (newAbs < 0 || newAbs >= total) continue;
@@ -187,10 +187,10 @@ function shiftStructVoice(voice: StructVoice, offsetBeats: number): StructVoice 
         if (j < 0) continue;
         const within = newAbs - barStart[j];
         const destBar = newBars[j];
-        let destTrack: StructTrack = destBar.tracks[pitch];
+        let destTrack: StructTrack = destBar.tracks[lane];
         if (!destTrack) {
-          destTrack = { pitch, notes: [] };
-          destBar.tracks[pitch] = destTrack;
+          destTrack = { lane, notes: [] };
+          destBar.tracks[lane] = destTrack;
         }
         destTrack.notes.push({ ...note, beat: within, straight: isDyadic(within) });
       }
@@ -198,10 +198,10 @@ function shiftStructVoice(voice: StructVoice, offsetBeats: number): StructVoice 
   }
 
   for (const bar of newBars) {
-    for (const pitch of Object.keys(bar.tracks)) {
-      bar.tracks[pitch].notes.sort((a, b) => a.beat - b.beat);
+    for (const lane of Object.keys(bar.tracks)) {
+      bar.tracks[lane].notes.sort((a, b) => a.beat - b.beat);
     }
   }
 
-  return { ...voice, bars: newBars };
+  return { ...layer, bars: newBars };
 }

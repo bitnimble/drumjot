@@ -4,15 +4,15 @@ import { expect, test } from '@playwright/test';
  * Guards the per-jot colour/name legend (`Legend` in score_header.tsx,
  * fed by `jot.palette.legend`). This pins the exact equivalence surface a
  * palette-decomposition step could silently break:
- *   - the PITCH ORDER of the chips,
+ *   - the LANE ORDER of the chips,
  *   - the instrument NAME shown on each chip, and
- *   - that mapped pitches get distinct, non-empty swatch colours.
+ *   - that mapped lanes get distinct, non-empty swatch colours.
  * No prior spec asserted legend order/colour, so a refactor touching the
  * legend's source could pass CI while changing what's painted.
  *
  * Legend order comes from the structure walk's per-bar track-record
  * insertion order (here: s, h, k), which is NOT the same as the jot-wide
- * pitch list (`PaletteStore.jotPitches`) or the mixer row order, so
+ * lane list (`PaletteStore.jotLanes`) or the mixer row order, so
  * `PaletteStore.legend` deliberately walks the structure to preserve it.
  */
 const JOT = `{{ bpm: 120, time: "4/4", title: "Legend Order",
@@ -20,7 +20,7 @@ const JOT = `{{ bpm: 120, time: "4/4", title: "Legend Order",
 (h s k h s k)
 `;
 
-test('legend renders pitches in order, with names and distinct colours', async ({ page }) => {
+test('legend renders lanes in order, with names and distinct colours', async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => typeof (window as any).drumjot?.loadDsl === 'function');
   await page.evaluate((src) => (window as any).drumjot.loadDsl(src), JOT);
@@ -29,11 +29,11 @@ test('legend renders pitches in order, with names and distinct colours', async (
   const chips = page.locator('[data-testid="legend-chip"]');
   await expect(chips).toHaveCount(3);
 
-  // Pitch order as the structure walk currently emits it: s, h, k.
-  const pitches = await chips.evaluateAll((els) =>
-    els.map((el) => el.getAttribute('data-pitch'))
+  // Lane order as the structure walk currently emits it: s, h, k.
+  const lanes = await chips.evaluateAll((els) =>
+    els.map((el) => el.getAttribute('data-lane'))
   );
-  expect(pitches).toEqual(['s', 'h', 'k']);
+  expect(lanes).toEqual(['s', 'h', 'k']);
 
   // Names come through from the instrument mapping, per chip, in that order.
   const names = await chips
@@ -42,7 +42,7 @@ test('legend renders pitches in order, with names and distinct colours', async (
   expect(names).toEqual(['Snare', 'HiHat', 'Kick']);
 
   // Each swatch has a real colour and the three are mutually distinct
-  // (the palette assigns a different slot per jot-wide pitch).
+  // (the palette assigns a different slot per jot-wide lane).
   const colours = await chips
     .locator('[data-testid="legend-swatch"]')
     .evaluateAll((els) => els.map((el) => getComputedStyle(el).backgroundColor));
@@ -56,7 +56,7 @@ test('legend renders pitches in order, with names and distinct colours', async (
   // so a future change to the getter can't drift from what's painted.
   const fromModel = await page.evaluate(() =>
     (window as any).drumjot.jotEditorStore.palette.legend.map(
-      ([pitch]: [string, unknown]) => pitch
+      ([lane]: [string, unknown]) => lane
     )
   );
   expect(fromModel).toEqual(['s', 'h', 'k']);

@@ -64,13 +64,13 @@ export const AudioTrackRow = observer(
     onSeek: (x: number) => void;
   } & MixerRowDragProps) => {
     const structural = React.useContext(StructuralContext);
-    // Voice-level total beats for the bars-row width (in beats, the
-    // row's pixel width is `voiceBeats × --px-per-beat` via CSS calc).
-    // `voiceBeats` reads off the structural voices (not pixels) so the
+    // Layer-level total beats for the bars-row width (in beats, the
+    // row's pixel width is `layerBeats × --px-per-beat` via CSS calc).
+    // `layerBeats` reads off the structural layers (not pixels) so the
     // value is stable across zoom changes; pixel width updates via CSS
     // variable on the score root. The waveform canvas reads the
     // zoom-dependent pixel width itself so only IT re-renders on zoom.
-    const voiceBeats = structural?.voiceBeats ?? 0;
+    const layerBeats = structural?.layerBeats ?? 0;
     const audible = controls.isAudioTrackAudible(id);
     const muted = controls.mutedAudioTracks.has(id);
     const soloed = controls.soloedAudioTracks.has(id);
@@ -179,9 +179,9 @@ export const AudioTrackRow = observer(
           data-bars-row
           style={
             {
-              ['--voice-beats' as string]: voiceBeats,
+              ['--layer-beats' as string]: layerBeats,
               ['--bars-row-width' as string]: structural
-                ? barsRowWidthSeed(structural, voiceBeats)
+                ? barsRowWidthSeed(structural, layerBeats)
                 : '0px',
               height: AUDIO_TRACK_HEIGHT,
             } as React.CSSProperties
@@ -203,20 +203,20 @@ export const AudioTrackRow = observer(
 );
 
 /**
- * One drum-instrument row in the unified mixer; exactly one DSL pitch
+ * One drum-instrument row in the unified mixer; exactly one DSL lane
  * (kick, snare, hi-hat, …). Mirrors `AudioTrackRow`: same gutter
  * geometry, M/S/volume controls, drag handle, bars-row + barlines +
- * beat dividers; the lane content is this pitch's notes (drawn through
- * `BarView` with `pitches=[pitch]`). The topmost instrument row in the
+ * beat dividers; the lane content is this lane's notes (drawn through
+ * `BarView` with `lanes=[lane]`). The topmost instrument row in the
  * mixer (`showBrackets={true}`) also paints the pattern + tuplet
  * brackets so the score chrome stays visible regardless of where the
  * user has dragged the rows.
  *
- * Multi-voice jots: pitches can belong to any voice (e.g. kick lives in
- * the "Feet" voice). The bar geometry is taken from voice[0] (every voice
+ * Multi-layer jots: lanes can belong to any layer (e.g. kick lives in
+ * the "Feet" layer). The bar geometry is taken from layer[0] (every layer
  * shares the same bar grid), and per-bar tracks are looked up across all
- * voices for this pitch, so the row works whether the pitch lives in
- * voice 0 or 1.
+ * layers for this lane, so the row works whether the lane lives in
+ * layer 0 or 1.
  */
 const CHUNK_VIEWPORT_MARGIN_PX = 1200;
 
@@ -243,7 +243,7 @@ const AudioTrackWaveformCanvas = observer(
     // `resolveAudioInheritedColor`), and is MobX-observable so picker
     // commits repaint chunks reactively. Always returns a `#rrggbb`
     // string the chunk worker can consume directly.
-    const pitchColor = track.color;
+    const laneColor = track.color;
     // Beat-stable chunk layout (zoom-invariant). Memoed on `structural` so
     // scroll / zoom re-renders of this observer don't rebuild it.
     const layout = React.useMemo(
@@ -294,7 +294,7 @@ const AudioTrackWaveformCanvas = observer(
             bars={layout.bars}
             height={height}
             dim={dim}
-            pitchColor={pitchColor}
+            laneColor={laneColor}
             ampScale={ampScale}
             testId={i === 0 ? testId : undefined}
           />
@@ -326,7 +326,7 @@ const AudioTrackWaveformChunk = observer(
     bars,
     height,
     dim,
-    pitchColor,
+    laneColor,
     ampScale,
     testId,
   }: {
@@ -335,7 +335,7 @@ const AudioTrackWaveformChunk = observer(
     bars: BarBeat[];
     height: number;
     dim: boolean;
-    pitchColor: string | undefined;
+    laneColor: string | undefined;
     ampScale: number;
     testId?: string;
   }) => {
@@ -347,7 +347,7 @@ const AudioTrackWaveformChunk = observer(
     const padBeats = React.useContext(StructuralContext)?.config.barNotePaddingBeats ?? 0.125;
     // Globally-unique worker-side slot identifier for this tile.
     // `chunk.key` alone collides across audio tracks (it's
-    // `startBeat / BEATS_PER_CHUNK`, defined per-voice); prefixing
+    // `startBeat / BEATS_PER_CHUNK`, defined per-layer); prefixing
     // with `track.id` (a string per audio track) disambiguates.
     const chunkKey = `${track.id}:${chunk.key}`;
 
@@ -452,7 +452,7 @@ const AudioTrackWaveformChunk = observer(
           backingW,
           backingH,
           drumsT0Sec,
-          pitchColor ?? '#5BA8E8',
+          laneColor ?? '#5BA8E8',
           ampScale,
         );
       };
@@ -470,7 +470,7 @@ const AudioTrackWaveformChunk = observer(
       height,
       drumsT0Sec,
       livePxPerBeat,
-      pitchColor,
+      laneColor,
       ampScale,
       chunkLayout.width,
     ]);

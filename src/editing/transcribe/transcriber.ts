@@ -31,7 +31,7 @@ export type TranscribeMetadata = {
 export type TranscribeResponse = {
   metadata: TranscribeMetadata;
   /**
-   * Onset candidates that fed the filter LLM, per pitch. Only populated
+   * Onset candidates that fed the filter LLM, per lane. Only populated
    * when the request set `include_candidates=true`. `bar` is 0-indexed;
    * `beat_in_bar` is a 1-indexed float (integer part = beat number,
    * fraction = position inside the beat). Both are -1 / -1.0 for onsets

@@ -37,62 +37,62 @@ export const BarView = observer(
   ({
     bar,
     barStartBeat,
-    pitches,
+    lanes,
     config,
     isAnacrusis,
     highlightedPattern,
     onPatternClick,
-    isPitchAudible,
+    isLaneAudible,
     showBrackets = true,
-    rowPitch,
-    pitchOrder,
-    colorForPitch,
-    instrumentForPitch,
+    rowLane,
+    laneOrder,
+    colorForLane,
+    instrumentForLane,
   }: {
     bar: StructBar;
     /** Cumulative quarter-note position of this bar's left edge within
-     *  the voice (sum of `beats` for every bar before this one). Drives
+     *  the layer (sum of `beats` for every bar before this one). Drives
      *  the bar's absolute CSS left; see `.bar` in score.module.css. */
     barStartBeat: number;
-    pitches: string[];
+    lanes: string[];
     config: ViewConfig;
     isAnacrusis: boolean;
     highlightedPattern: string | undefined;
     onPatternClick: (name: string) => void;
-    isPitchAudible: (pitch: string) => boolean;
+    isLaneAudible: (lane: string) => boolean;
     /**
      * Whether to draw bar chrome that belongs to the score as a whole
      * (tuplet brackets and lead-in label). Pattern brackets are drawn
-     * per-row instead — see {@link rowPitch} — so this flag doesn't
+     * per-row instead — see {@link rowLane} — so this flag doesn't
      * gate them.
      */
     showBrackets?: boolean;
     /**
-     * In the unified mixer, the DSL pitch this BarView's row represents.
-     * Pattern brackets only render when this pitch is in the span's
-     * `pitches` set — rows for pitches the pattern doesn't play get no
+     * In the unified mixer, the DSL lane this BarView's row represents.
+     * Pattern brackets only render when this lane is in the span's
+     * `lanes` set — rows for lanes the pattern doesn't play get no
      * bracket on that span, so the outline visually "skips" them.
      * Undefined falls back to drawing every span (label always shown).
      */
-    rowPitch?: string;
+    rowLane?: string;
     /**
-     * Drum pitches in mixer-row order. Used together with {@link rowPitch}
+     * Drum lanes in mixer-row order. Used together with {@link rowLane}
      * to decide which row is the topmost / bottommost contributor for a
      * given span; the topmost shows the pattern label and the top edge
      * of the bracket, the bottommost shows the bottom edge, middles show
      * only the left/right sides so the outline reads as one connected
      * box across all participating rows.
      */
-    pitchOrder?: readonly string[];
+    laneOrder?: readonly string[];
     /**
-     * Optional per-pitch colour override. The unified mixer uses this to
+     * Optional per-lane colour override. The unified mixer uses this to
      * layer the user's per-instrument-track colour pick on top of the
      * jot's palette default (undefined / empty falls through to a neutral).
      */
-    colorForPitch?: (pitch: string) => string | undefined;
-    /** Per-pitch instrument (from the global mapping), for the note glyph's
+    colorForLane?: (lane: string) => string | undefined;
+    /** Per-lane instrument (from the global mapping), for the note glyph's
      *  hover/selection tooltip. */
-    instrumentForPitch: (pitch: string) => Instrument;
+    instrumentForLane: (lane: string) => Instrument;
   }) => {
     // Inline style carries only zoom-invariant data so React's prop
     // diff sees no change on a zoom tick: `--bar-start-beat` /
@@ -104,11 +104,11 @@ export const BarView = observer(
     // ticks, waveform chunks, and lyric words. `minHeight` is
     // config-derived; the bar stretches top:0/bottom:0 to the bars
     // row's full height so the right-edge barline reaches the row
-    // separator (the pitch gutter is taller than a single lane).
+    // separator (the lane gutter is taller than a single lane).
     const barStyle = {
       ['--bar-start-beat' as string]: barStartBeat,
       ['--bar-beats' as string]: bar.beats,
-      minHeight: pitches.length * (config.trackHeight as number),
+      minHeight: lanes.length * (config.trackHeight as number),
     } as React.CSSProperties;
     const isLeadIn = bar.index < 0;
     // `bar.index === -1` is the last lead-in bar (lead-in indices count
@@ -170,12 +170,12 @@ export const BarView = observer(
             <div className={styles.gridLayerSubBeat48} aria-hidden="true" />
           </>
         )}
-        {pitches.map((pitch) => {
-          const track = bar.tracks[pitch];
-          const dim = !isPitchAudible(pitch);
+        {lanes.map((lane) => {
+          const track = bar.tracks[lane];
+          const dim = !isLaneAudible(lane);
           return (
             <div
-              key={pitch}
+              key={lane}
               className={classNames(styles.lane, dim && styles.laneDim)}
               style={{ height: config.trackHeight }}
             >
@@ -184,9 +184,9 @@ export const BarView = observer(
                   key={i}
                   note={note}
                   bar={bar}
-                  color={colorForPitch?.(pitch) ?? 'var(--color-text-faint-strong)'}
+                  color={colorForLane?.(lane) ?? 'var(--color-text-faint-strong)'}
                   config={config}
-                  instrument={instrumentForPitch(pitch)}
+                  instrument={instrumentForLane(lane)}
                   // A non-straight note already inside a tuplet bracket
                   // is explained by that bracket, so only flag the
                   // strays (e.g. an off-grid note not authored as a
@@ -198,7 +198,7 @@ export const BarView = observer(
           );
         })}
         {bar.patternSpans.map((span, i) => {
-          const position = bracketPositionForRow(span, rowPitch, pitchOrder);
+          const position = bracketPositionForRow(span, rowLane, laneOrder);
           if (position === 'hidden') return null;
           return (
             <PatternBracket
@@ -225,34 +225,34 @@ export const BarView = observer(
  *   - `middle`: a contributor between top and bottom — render sides only;
  *               the bracket reads as continuous across stacked rows.
  *   - `bottom`: the bottommost contributor — render bottom edge + sides.
- *   - `hidden`: this row's pitch isn't in the pattern — render nothing.
+ *   - `hidden`: this row's lane isn't in the pattern — render nothing.
  */
 type BracketPosition = 'single' | 'top' | 'middle' | 'bottom' | 'hidden';
 
 function bracketPositionForRow(
   span: StructPatternSpan,
-  rowPitch: string | undefined,
-  pitchOrder: readonly string[] | undefined
+  rowLane: string | undefined,
+  laneOrder: readonly string[] | undefined
 ): BracketPosition {
   // No row context (non-mixer caller) → render as a self-contained box,
   // same as the pre-mixer behaviour.
-  if (rowPitch === undefined || !pitchOrder) return 'single';
-  if (!span.pitches.has(rowPitch)) return 'hidden';
+  if (rowLane === undefined || !laneOrder) return 'single';
+  if (!span.lanes.has(rowLane)) return 'hidden';
   let firstIdx = -1;
   let lastIdx = -1;
-  for (let i = 0; i < pitchOrder.length; i++) {
-    if (span.pitches.has(pitchOrder[i])) {
+  for (let i = 0; i < laneOrder.length; i++) {
+    if (span.lanes.has(laneOrder[i])) {
       if (firstIdx === -1) firstIdx = i;
       lastIdx = i;
     }
   }
-  // The pattern body could in principle include pitches the mixer doesn't
-  // surface (e.g. a brand-new pitch type that hasn't been added to the
+  // The pattern body could in principle include lanes the mixer doesn't
+  // surface (e.g. a brand-new lane type that hasn't been added to the
   // row order yet). Treat the row as a single contributor in that case
   // rather than silently producing an open-ended bracket.
   if (firstIdx === -1 || lastIdx === -1) return 'single';
   if (firstIdx === lastIdx) return 'single';
-  const myIdx = pitchOrder.indexOf(rowPitch);
+  const myIdx = laneOrder.indexOf(rowLane);
   if (myIdx === firstIdx) return 'top';
   if (myIdx === lastIdx) return 'bottom';
   return 'middle';
@@ -413,7 +413,7 @@ const NoteView = observer(
     const tick = note.midiTick;
     const provenanceEntry =
       provenance && typeof tick === 'number'
-        ? provenance.byTick.get(`${note.pitch}:${tick}`)
+        ? provenance.byTick.get(`${note.lane}:${tick}`)
         : undefined;
 
     const noteRef = React.useRef<HTMLDivElement>(null);
@@ -560,7 +560,7 @@ function pickBadge(note: StructNote): string | undefined {
  *   `c~_8:o`    -> "Crash (open, roll)"
  */
 function describeNote(note: StructNote, instrument: Instrument): string {
-  const name = instrument.name ?? `Pitch ${note.pitch}`;
+  const name = instrument.name ?? `Lane ${note.lane}`;
   const qualifiers: string[] = [];
   for (const mod of note.modifiers) {
     qualifiers.push(MODIFIER_LABELS[mod as Modifier] ?? mod);

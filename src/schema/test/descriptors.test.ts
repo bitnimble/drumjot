@@ -9,7 +9,7 @@ describe('record() normalization', () => {
   });
 
   it('leaves a higher-order container descriptor as-is', () => {
-    const Note = record({ pitch: z.string() });
+    const Note = record({ lane: z.string() });
     const s = record({ notes: idMap(Note), bars: movableList(Note) });
     expect(s.fields.notes.kind).toBe('idMap');
     expect(s.fields.bars.kind).toBe('movableList');

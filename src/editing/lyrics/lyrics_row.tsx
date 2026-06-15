@@ -81,18 +81,18 @@ export const LyricsRow = observer(
         ? 'Queued, waiting for the GPU'
         : 'Aligning lyrics to audio';
 
-    // Voice-level total beats for the bars-row width. Same pattern as
+    // Layer-level total beats for the bars-row width. Same pattern as
     // AudioTrackRow / InstrumentRow: read off the structural cache (zoom-
     // invariant) so this row doesn't re-render on every wheel tick;
     // CSS calc handles the per-zoom pixel scaling.
-    const structureVoice = structural.voices[0];
-    let voiceBeats = 0;
-    if (structureVoice) {
-      for (const b of structureVoice.bars) voiceBeats += b.beats;
+    const structureLayer = structural.layers[0];
+    let layerBeats = 0;
+    if (structureLayer) {
+      for (const b of structureLayer.bars) layerBeats += b.beats;
     }
     const structuralBeats = React.useMemo(
-      () => (structureVoice?.bars ?? []).map((b) => b.beats),
-      [structureVoice],
+      () => (structureLayer?.bars ?? []).map((b) => b.beats),
+      [structureLayer],
     );
 
     // The playback timeline is the canonical source for audio-sec → beat
@@ -123,9 +123,9 @@ export const LyricsRow = observer(
           drumsT0Sec,
           structuralBeats,
           offsetSec,
-          voiceBeats,
+          layerBeats,
         ),
-      [lines, timeline, drumsT0Sec, structuralBeats, offsetSec, voiceBeats],
+      [lines, timeline, drumsT0Sec, structuralBeats, offsetSec, layerBeats],
     );
 
     // Word-collision avoidance. Word spans are absolutely positioned at
@@ -324,8 +324,8 @@ export const LyricsRow = observer(
           data-lyrics-bars-row="1"
           style={
             {
-              ['--voice-beats' as string]: voiceBeats,
-              ['--bars-row-width' as string]: barsRowWidthSeed(structural, voiceBeats),
+              ['--layer-beats' as string]: layerBeats,
+              ['--bars-row-width' as string]: barsRowWidthSeed(structural, layerBeats),
               height: LYRICS_ROW_HEIGHT,
             } as React.CSSProperties
           }

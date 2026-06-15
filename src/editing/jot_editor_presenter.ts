@@ -26,7 +26,7 @@ import { LyricsPresenter } from './lyrics/lyrics_presenter';
  * loading-overlay counter.
  *
  * A wholesale song replace touches several other domains (drop stale
- * audio tracks + pitch mixer, clear lyrics, reset per-note provenance,
+ * audio tracks + lane mixer, clear lyrics, reset per-note provenance,
  * pick the transcribe grid). Rather than write those stores directly,
  * this delegates to the owning sibling presenters so each store keeps a
  * single writer.
@@ -92,12 +92,12 @@ export class JotEditorPresenter {
    */
   async loadAudioTrack(
     file: File,
-    pitch?: string,
+    lane?: string,
     role?: AudioTrackRole
   ): Promise<AudioTrackId | undefined> {
     return this.withLoading(`Loading ${file.name}…`, async () => {
       try {
-        return await jotPlayer.loadAudioTrack(file, pitch, role);
+        return await jotPlayer.loadAudioTrack(file, lane, role);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         toastStore.showError(`Audio track load failed: ${message}`);
@@ -267,10 +267,10 @@ export class JotEditorPresenter {
       runInAction(() => {
         // Replace the song wholesale: drop any audio tracks from a
         // previously loaded map/transcription so they don't play over
-        // the new pack's tracks, and reset the per-pitch mixer so an
+        // the new pack's tracks, and reset the per-lane mixer so an
         // old song's mute/solo/faders don't bleed onto the new rows.
         this.mixerPresenter.clearAllAudioTracks();
-        this.mixerPresenter.resetPitchMixer();
+        this.mixerPresenter.resetLaneMixer();
         this.installJot(jot);
         this.jotEditorStore.currentExampleId = undefined;
         this.provenancePresenter.clearNoteProvenance();
@@ -375,12 +375,12 @@ export class JotEditorPresenter {
    * store so the {@link DebugPanel} can show it.
    *
    * Behaves like {@link loadParadbMap}: replaces the current song
-   * wholesale (drops previously loaded audio tracks, resets the pitch
+   * wholesale (drops previously loaded audio tracks, resets the lane
    * mixer), runs entirely client-side, and surfaces errors on the
    * shared status pill.
    *
    * The `no_drums` entry (drumless backing audio) is auto-defaulted to
-   * unmuted; the per-pitch stems are defaulted to muted, mirroring the
+   * unmuted; the per-lane stems are defaulted to muted, mirroring the
    * "drum tracks are reference-only, you're playing them" convention
    * from the ParaDB loader, the drums you hear should be the smplr-
    * scheduled ones from the score, not a re-decoded stem layered on top.
@@ -453,7 +453,7 @@ export class JotEditorPresenter {
   ): Promise<boolean> {
     runInAction(() => {
       this.mixerPresenter.clearAllAudioTracks();
-      this.mixerPresenter.resetPitchMixer();
+      this.mixerPresenter.resetLaneMixer();
       this.lyricsPresenter.clearLyrics();
       // Mount the manifest + per-note provenance (or clear it when the
       // bundle didn't ship one) and reset the ghost-overlay toggle.
@@ -500,7 +500,7 @@ export class JotEditorPresenter {
     // turn what used to be a one-by-one wait into a single combined
     // wait. `Promise.all` preserves input order so the resolved array
     // still matches `bundle.audioTracks` (which is already in manifest
-    // order; `no_drums` first, then pitch letters), keeping the
+    // order; `no_drums` first, then lane letters), keeping the
     // post-load pair-with-instrument-row logic stable. The bundle
     // loader dedupes by filename, so each `track` here represents one
     // unique file; we bind every key in `track.keys` to the resulting
@@ -509,15 +509,15 @@ export class JotEditorPresenter {
     // up under either key.
     const resolved = await Promise.all(
       bundle.audioTracks.map(async (track) => {
-        // The audio-row's `pitch` (used by the mixer for waveform
+        // The audio-row's `lane` (used by the mixer for waveform
         // tinting) takes the first non-`no_drums` key; for a stem
-        // shared across pitches, this picks the first-mentioned pitch
+        // shared across lanes, this picks the first-mentioned lane
         // in the manifest, which is good enough since the tint is
         // cosmetic and both siblings live in the same colour family.
         const primaryKey = track.keys.find((k) => k !== NO_DRUMS_KEY);
         // Role classification: any track whose only key is `no_drums`
         // is the Demucs drumless mix; everything else came from the
-        // per-pitch split (a key shared between multiple pitches still
+        // per-lane split (a key shared between multiple lanes still
         // counts as a single drum piece for menu purposes).
         const role: AudioTrackRole = primaryKey === undefined ? 'no-drums' : 'drum-piece';
         const id = await this.loadAudioTrack(track.file, primaryKey, role);
@@ -531,7 +531,7 @@ export class JotEditorPresenter {
       let muteThis = false;
       for (const key of keys) {
         loadedByKey.set(key, id);
-        // Mute the per-pitch stems by default so the (audible) drums
+        // Mute the per-lane stems by default so the (audible) drums
         // come from the smplr score scheduler; the drumless backing
         // stays unmuted. Multiple keys → still one mute, since they
         // share the same `id`.

@@ -13,7 +13,7 @@
  *    ├── prediction.mid
  *    ├── note_provenance.json
  *    ├── no_drums.mp3
- *    ├── stem_<pitch>.mp3 ...
+ *    ├── stem_<lane>.mp3 ...
  *    └── debug.json            # see DebugBundleManifest below
  *
  * The audio tracks come out of here as typed `File`s so the existing
@@ -28,10 +28,10 @@ import {
 } from 'src/utils/zip';
 
 /**
- * The manifest's `mapping` field. Maps drum pitch letter (e.g. `k`,
+ * The manifest's `mapping` field. Maps drum lane letter (e.g. `k`,
  * `s`, `h`, …) — and the synthetic `no_drums` key for the drumless
  * backing audio — to the filename of the corresponding MP3 inside the
- * zip. The keys are also the DSL pitch letters used by the renderer.
+ * zip. The keys are also the DSL lane letters used by the renderer.
  */
 export const NO_DRUMS_KEY = 'no_drums';
 
@@ -56,7 +56,7 @@ export type DebugBundleManifest = {
   started_at?: string;
   elapsed_seconds?: number;
   options?: Record<string, unknown>;
-  /** Pitch letter (or `no_drums`) -> MP3 filename inside the zip. */
+  /** Lane letter (or `no_drums`) -> MP3 filename inside the zip. */
   mapping: Record<string, string>;
   /** Filename inside the zip of the predicted-onsets MIDI file. The UI
    *  rehydrates the score from this MIDI via `src/midi/from_midi.ts`. */
@@ -77,7 +77,7 @@ export type DebugBundleManifest = {
  * {@link NoteProvenanceFile} guards against silent drift).
  */
 export type NoteProvenanceEntry = {
-  pitch: string;
+  lane: string;
   midi_note: number | null;
   /**
    * Unique identifier. The MIDI tick this kept onset was emitted at;
@@ -132,7 +132,7 @@ export type NoteProvenanceEntry = {
    * {@link amplitude}; see that field for the split. */
   strength: number;
   /** Raw audio amplitude (|sample| in [0, 1]) in a ±20ms window around
-   * the onset, on the source stem. Drives the per-pitch
+   * the onset, on the source stem. Drives the per-lane
    * percentile-normalised MIDI velocity mapping (so a quieter hit gets
    * a lower velocity even if the model is confidently identifying the
    * lane). `null` for non-ADTOF detection paths and re-loaded bundles
@@ -220,22 +220,22 @@ export type NoteProvenanceFile = {
    * jot have `bar.index` in `[-lead_bars, -1]`.
    */
   lead_bars: number;
-  per_pitch: Record<string, NoteProvenanceEntry[]>;
+  per_lane: Record<string, NoteProvenanceEntry[]>;
 };
 
 /** A single audio track extracted from the bundle, in the order the
  * caller should load them (drumless backing first if present, then the
- * per-pitch stems by pitch letter).
+ * per-lane stems by lane letter).
  *
  * `keys` is plural because the manifest's `mapping` can point multiple
- * pitch letters at the same stem file (e.g. when the cymbal split
+ * lane letters at the same stem file (e.g. when the cymbal split
  * keeps both `c` crash and `d` ride against the single combined
  * cymbals stem, the manifest emits both `c → stem_c.mp3` and
  * `d → stem_c.mp3`). The bundle loader dedupes by filename and emits
  * one track per unique file, so the consumer loads the file once and
  * binds every key in `keys` to the same resulting `AudioTrackId`. */
 export type DebugBundleAudioTrack = {
-  /** Pitch letters (or `no_drums`) that point at this file in the
+  /** Lane letters (or `no_drums`) that point at this file in the
    * manifest's `mapping`, in first-mentioned order. Always non-empty. */
   keys: string[];
   file: File;
@@ -330,7 +330,7 @@ export async function loadDebugZip(file: File): Promise<DebugBundle> {
         await inflateEntry(bytes, provenanceEntry),
       );
       const parsed = JSON.parse(text) as NoteProvenanceFile;
-      if (parsed && typeof parsed === 'object' && parsed.per_pitch) {
+      if (parsed && typeof parsed === 'object' && parsed.per_lane) {
         noteProvenance = parsed;
       }
     } catch (err) {
@@ -340,13 +340,13 @@ export async function loadDebugZip(file: File): Promise<DebugBundle> {
     }
   }
 
-  // Dedupe by filename first: when the manifest maps several pitch
+  // Dedupe by filename first: when the manifest maps several lane
   // letters at the same stem file (e.g. crash `c` + ride `d` both at
   // `stem_c.mp3` after the cymbal split), we only want to inflate and
   // decode that file ONCE, the consumer will then bind every key in
   // `keys` to the resulting `AudioTrackId`. We preserve first-mention
   // order on `keys` so the audio row in the mixer ends up under the
-  // first-mentioned pitch (the natural "primary").
+  // first-mentioned lane (the natural "primary").
   const keysByFilename = new Map<string, string[]>();
   const filenameOrder: string[] = [];
   for (const [key, filename] of Object.entries(manifest.mapping)) {
@@ -366,7 +366,7 @@ export async function loadDebugZip(file: File): Promise<DebugBundle> {
   // the number of tracks. Manifest order is restored afterwards so the
   // audio-track gutter in the UI still lays them out the way the
   // transcriber emitted them (no_drums first if present, then drums
-  // in pitch-letter order).
+  // in lane-letter order).
   const pending = filenameOrder.map(async (filename) => {
     const entry = byBasename.get(filename.toLowerCase())!;
     const data = await inflateEntry(bytes, entry);

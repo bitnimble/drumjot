@@ -60,7 +60,7 @@ describe('writeDsl', () => {
     expect(out.split('\n')[0]).toContain('time: "7/8"');
   });
 
-  it('round-trips voices joined by ||, on their own line', () => {
+  it('round-trips layers joined by ||, on their own line', () => {
     const out = expectStable(
       '| h:c h:c h:c h:c |\n||\n| k . s . |'
     );

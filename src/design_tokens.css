@@ -299,7 +299,7 @@
     inherits: false;
     initial-value: 0;
 }
-/* Per-bars-row pixel width (`voiceBeats × pxPerBeat`). Replaces the old
+/* Per-bars-row pixel width (`layerBeats × pxPerBeat`). Replaces the old
    inherited `--px-per-beat` as the one quantity zoom mutates: instead of
    a root custom property that cascades a style recalc across every bar /
    note / grid layer on each wheel tick (~the dominant cost of a zoom

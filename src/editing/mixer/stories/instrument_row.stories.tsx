@@ -11,7 +11,7 @@ import { JotEditorStore } from '../../jot_editor_store';
 import { MixerStore } from '../mixer_store';
 import { ViewportStore } from '../../viewport/viewport_store';
 import type { TrackKey } from 'src/editing/tracks/tracks';
-import type { VoiceControls } from '../mixer_controls';
+import type { LayerControls } from '../mixer_controls';
 import { InstrumentRow } from '../instrument_row';
 import { Gallery, Variant } from 'src/ui/stories/_variants';
 
@@ -20,7 +20,7 @@ import { Gallery, Variant } from 'src/ui/stories/_variants';
  * (drag handle, label, volume + mute/solo) on the left and the notated
  * bars on the right. Driven by REAL Document/Mixer/Viewport stores so the
  * label colour + overflow menu resolve through the store the way they do
- * in the app; the per-pitch M/S/volume contract (`voiceControls`) is
+ * in the app; the per-lane M/S/volume contract (`layerControls`) is
  * stubbed so its callbacks report to the Actions panel.
  *
  * The viewport is left unsized, so `visibleBeatRange` is null and the row
@@ -51,10 +51,10 @@ const NOOP_DRAG = {
 };
 
 /** One InstrumentRow backed by a fresh real store trio, pointed at the
- *  first real pitch of the loaded jot. `muted` flips the row's audibility
+ *  first real lane of the loaded jot. `muted` flips the row's audibility
  *  so the gutter renders its dimmed state. */
 function Row({ muted = false }: { muted?: boolean }) {
-  const { jotEditorStore, structural, mixer, viewport, pitch, voiceControls } = React.useMemo(() => {
+  const { jotEditorStore, structural, mixer, viewport, lane, layerControls } = React.useMemo(() => {
     const jotEditorStore = new JotEditorStore();
     const model = buildJotModel(rockJot, jotEditorStore.viewConfig);
     runInAction(() => {
@@ -66,15 +66,15 @@ function Row({ muted = false }: { muted?: boolean }) {
     const { structural } = model;
     const mixer = new MixerStore(jotEditorStore);
     const viewport = new ViewportStore(jotEditorStore);
-    const pitches = mixer.jotPitches;
+    const lanes = mixer.jotLanes;
     runInAction(() => {
-      mixer.trackOrder = pitches.map((p): TrackKey => ({ kind: 'instrument', pitch: p }));
+      mixer.trackOrder = lanes.map((p): TrackKey => ({ kind: 'instrument', lane: p }));
     });
-    const pitch = pitches[0];
-    const voiceControls: VoiceControls = {
-      mutedPitches: muted ? new Set([pitch]) : new Set(),
-      soloedPitches: new Set(),
-      isPitchAudible: () => !muted,
+    const lane = lanes[0];
+    const layerControls: LayerControls = {
+      mutedLanes: muted ? new Set([lane]) : new Set(),
+      soloedLanes: new Set(),
+      isLaneAudible: () => !muted,
       volumeFor: () => 1,
       onSetVolume: fn(),
       onToggleMute: fn(),
@@ -85,7 +85,7 @@ function Row({ muted = false }: { muted?: boolean }) {
       onToggleMasterMute: fn(),
       onToggleMasterSolo: fn(),
     };
-    return { jotEditorStore, structural, mixer, viewport, pitch, voiceControls };
+    return { jotEditorStore, structural, mixer, viewport, lane, layerControls };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return (
@@ -93,14 +93,14 @@ function Row({ muted = false }: { muted?: boolean }) {
       <MixerStoreContext.Provider value={mixer}>
         <ViewportStoreContext.Provider value={viewport}>
           <InstrumentRow
-            pitch={pitch}
+            lane={lane}
             config={jotEditorStore.viewConfig}
             showBrackets
-            pitchOrder={mixer.jotPitches}
+            laneOrder={mixer.jotLanes}
             highlightedPattern={undefined}
             onPatternClick={fn()}
             onSeek={fn()}
-            voiceControls={voiceControls}
+            layerControls={layerControls}
             {...NOOP_DRAG}
           />
         </ViewportStoreContext.Provider>

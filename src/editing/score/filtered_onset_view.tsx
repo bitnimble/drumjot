@@ -31,14 +31,14 @@ export const FilteredOnsetView = observer(({
    * cumulative bar beats + (beat_in_bar - 1)). The CSS calc derives
    * the pixel `left` from this and the score-root's `--px-per-beat`. */
   beatOffset: number;
-  /** Pitch lane colour. Mirrors what the real notes use; falls back to
-   * a neutral grey for filtered-only pitches with no rendered notes. */
+  /** Lane lane colour. Mirrors what the real notes use; falls back to
+   * a neutral grey for filtered-only lanes with no rendered notes. */
   color: string;
   trackHeight: number;
 }) => {
   const provenance = React.useContext(ProvenanceStoreContext);
   const presenter = React.useContext(ProvenancePresenterContext);
-  const pinnedKey = `${entry.pitch}:${entry.detected_time_sec}`;
+  const pinnedKey = `${entry.lane}:${entry.detected_time_sec}`;
   const clicked = provenance?.pinnedFilteredOnsetKey === pinnedKey;
   const [hovered, setHovered] = React.useState(false);
   const show = hovered || clicked;
@@ -92,7 +92,7 @@ export const FilteredOnsetView = observer(({
       }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      title={`Filtered onset · pitch ${entry.pitch} · bar ${entry.bar} beat ${entry.beat_in_bar.toFixed(2)}`}
+      title={`Filtered onset · lane ${entry.lane} · bar ${entry.bar} beat ${entry.beat_in_bar.toFixed(2)}`}
     >
       <PopoverPortal
         anchorRef={anchorRef}

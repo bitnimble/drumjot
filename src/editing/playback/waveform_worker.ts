@@ -85,7 +85,7 @@ export type WaveformWorkerRequest =
       backingW: number;
       backingH: number;
       drumsT0Sec: number;
-      pitchColor: string;
+      laneColor: string;
       ampScale: number;
     }
   | { kind: 'releaseChunk'; chunkKey: string };
@@ -189,7 +189,7 @@ function renderChunkInto(
   data: ChannelData,
   msg: Extract<WaveformWorkerRequest, { kind: 'renderChunk' }>,
 ): void {
-  const { bars, widthPx, height, backingW, backingH, drumsT0Sec, pitchColor, ampScale } = msg;
+  const { bars, widthPx, height, backingW, backingH, drumsT0Sec, laneColor, ampScale } = msg;
   if (widthPx <= 0 || height <= 0) return;
   canvas.width = backingW;
   canvas.height = backingH;
@@ -199,7 +199,7 @@ function renderChunkInto(
   ctx2d.imageSmoothingEnabled = false;
   ctx2d.setTransform(backingW / widthPx, 0, 0, backingH / height, 0, 0);
   ctx2d.clearRect(0, 0, widthPx, height);
-  ctx2d.fillStyle = pitchColor;
+  ctx2d.fillStyle = laneColor;
   const mid = height / 2;
   const yScale = mid * 0.95 * ampScale;
   // No skip-zero shortcut: silent columns still paint a 1 px

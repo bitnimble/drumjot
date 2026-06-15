@@ -4,14 +4,14 @@ import { Box, Point } from 'src/utils/geom';
 import type {
   StructBar,
   StructNote,
-  StructVoice,
+  StructLayer,
 } from 'src/editing/structure/structure_store';
 import { JotEditorStore } from 'src/editing/jot_editor_store';
 
 export type SelectionState =
   | { type: 'notes'; notes: Set<StructNote> }
   | { type: 'bars'; bars: StructBar[] }
-  | { type: 'voice'; voice: StructVoice }
+  | { type: 'layer'; layer: StructLayer }
   /**
    * A pattern is "selected" when its definition + all usages should be
    * visually highlighted. Created by clicking a pattern bracket label.
@@ -113,7 +113,7 @@ export class SelectionStore {
 
   private getSelectionForMarquee(): SelectionState | undefined {
     // TODO: project the marquee Box into the resolved jot's coordinate space
-    // and pick notes / bars / voices it encloses. Returning undefined is fine
+    // and pick notes / bars / layers it encloses. Returning undefined is fine
     // until that is implemented; the marquee still renders.
     void this.jotEditorStore;
     return undefined;

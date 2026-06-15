@@ -21,7 +21,7 @@ import { barsRowWidthSeed, intersectsBeatRange } from '../utils/windowing';
 import { InstrumentRowOverflowMenu } from './overflow_menus';
 import { RowVolumeSlider } from './gutter_controls';
 import { MixerRowDragProps, useMixerRowDropTarget, MixerDragHandle } from './mixer_drag';
-import type { VoiceControls } from './mixer_controls';
+import type { LayerControls } from './mixer_controls';
 
 /**
  * The windowed bar list for one instrument row. Split out of
@@ -37,43 +37,43 @@ import type { VoiceControls } from './mixer_controls';
  * the window sliding by one bar reuses every surviving bar's DOM instead
  * of re-keying the whole list. The per-bar props handed to {@link
  * BarView} are referentially stable across scroll (the caller memoises
- * `pitches` / `colorForPitch`), so `BarView`'s `observer` memo holds and
+ * `lanes` / `colorForLane`), so `BarView`'s `observer` memo holds and
  * an unchanged visible bar pays nothing on a scroll tick that doesn't
  * move the window, only newly-revealed bars mount.
  */
 const WindowedBarList = observer(function WindowedBarList({
   viewport,
-  pitchBars,
+  laneBars,
   startBeats,
-  pitch,
+  lane,
   config,
   showBrackets,
-  pitchOrder,
+  laneOrder,
   highlightedPattern,
   onPatternClick,
-  isPitchAudible,
-  pitches,
-  colorForPitch,
-  instrumentForPitch,
+  isLaneAudible,
+  lanes,
+  colorForLane,
+  instrumentForLane,
 }: {
   viewport: ViewportStore | null;
-  pitchBars: readonly StructBar[];
+  laneBars: readonly StructBar[];
   startBeats: readonly number[];
-  pitch: string;
+  lane: string;
   config: ViewConfig;
   showBrackets: boolean;
-  pitchOrder: readonly string[];
+  laneOrder: readonly string[];
   highlightedPattern: string | undefined;
   onPatternClick: (name: string) => void;
-  isPitchAudible: (pitch: string) => boolean;
-  pitches: string[];
-  colorForPitch: (pitch: string) => string | undefined;
-  instrumentForPitch: (pitch: string) => Instrument;
+  isLaneAudible: (lane: string) => boolean;
+  lanes: string[];
+  colorForLane: (lane: string) => string | undefined;
+  instrumentForLane: (lane: string) => Instrument;
 }) {
   const range = viewport?.visibleBeatRange ?? null;
   return (
     <>
-      {pitchBars.map((bar, i) => {
+      {laneBars.map((bar, i) => {
         const startBeat = startBeats[i];
         if (!intersectsBeatRange(range, startBeat, bar.beats)) return null;
         return (
@@ -81,17 +81,17 @@ const WindowedBarList = observer(function WindowedBarList({
             key={bar.index}
             bar={bar}
             barStartBeat={startBeat}
-            pitches={pitches}
+            lanes={lanes}
             config={config}
             isAnacrusis={bar.index === 0}
             highlightedPattern={highlightedPattern}
             onPatternClick={onPatternClick}
-            isPitchAudible={isPitchAudible}
+            isLaneAudible={isLaneAudible}
             showBrackets={showBrackets}
-            rowPitch={pitch}
-            pitchOrder={pitchOrder}
-            colorForPitch={colorForPitch}
-            instrumentForPitch={instrumentForPitch}
+            rowLane={lane}
+            laneOrder={laneOrder}
+            colorForLane={colorForLane}
+            instrumentForLane={instrumentForLane}
           />
         );
       })}
@@ -101,14 +101,14 @@ const WindowedBarList = observer(function WindowedBarList({
 
 export const InstrumentRow = observer(
   ({
-    pitch,
+    lane,
     config,
     showBrackets,
-    pitchOrder,
+    laneOrder,
     highlightedPattern,
     onPatternClick,
     onSeek,
-    voiceControls,
+    layerControls,
     idx,
     dragFromIdx,
     dropTargetIdx,
@@ -121,35 +121,35 @@ export const InstrumentRow = observer(
     inGroup,
     onResizeGutterStart,
   }: {
-    pitch: string;
+    lane: string;
     config: ViewConfig;
     showBrackets: boolean;
-    pitchOrder: readonly string[];
+    laneOrder: readonly string[];
     highlightedPattern: string | undefined;
     onPatternClick: (name: string) => void;
     onSeek: (x: number) => void;
-    voiceControls: VoiceControls;
+    layerControls: LayerControls;
   } & MixerRowDragProps) => {
     const structural = React.useContext(StructuralContext);
-    const voice0 = structural?.primaryVoice;
-    if (!structural || !voice0) return null;
+    const layer0 = structural?.primaryLayer;
+    if (!structural || !layer0) return null;
     const trackHeight = config.trackHeight as number;
-    // Per-pitch derived data (bars, voice-wide totals, cumulative
+    // Per-lane derived data (bars, layer-wide totals, cumulative
     // bar-start offsets, label color/instrument name); all memoised on
-    // the jot via `barsForPitch(pitch)`, so each row reads its slice
+    // the jot via `barsForLane(lane)`, so each row reads its slice
     // from the MobX cache instead of recomputing on every render.
     // `barBeatStart` and `startBeats` are the same array; the keyed
     // names just disambiguate the two historical use sites.
     const {
-      bars: pitchBars,
-      voiceBeats,
+      bars: laneBars,
+      layerBeats,
       leadInBarsBeats,
       barBeatStart,
       startBeats,
       instrumentName,
-    } = structural.barsForPitch(pitch);
+    } = structural.barsForLane(lane);
     // Resolve the row's note colour through the store-owned
-    // `InstrumentTrack`. The structural `barsForPitch().pitchColor` is
+    // `InstrumentTrack`. The structural `barsForLane().laneColor` is
     // now palette-only (overrides moved off the jot in the colour-
     // picker refactor), so layering happens here: the InstrumentTrack
     // returns the override if set, otherwise the jot's palette default,
@@ -158,18 +158,18 @@ export const InstrumentRow = observer(
     // user picks a new colour.
     const mixer = React.useContext(MixerStoreContext);
     const viewport = React.useContext(ViewportStoreContext);
-    const instrumentTrack = mixer?.getInstrumentTrack(pitch);
-    const pitchColor = instrumentTrack?.color ?? 'var(--color-text-faint-strong)';
+    const instrumentTrack = mixer?.getInstrumentTrack(lane);
+    const laneColor = instrumentTrack?.color ?? 'var(--color-text-faint-strong)';
 
     // Filtered-onset ghost overlays (debug bundle + checkbox gated).
     // Resolve once per row so the per-entry render below is just a map.
     const provenance = React.useContext(NoteProvenanceContext);
     const showFiltered = provenance?.showFiltered ?? false;
-    const rejectedForPitch = showFiltered ? (provenance!.rejectedByPitch.get(pitch) ?? []) : [];
+    const rejectedForLane = showFiltered ? (provenance!.rejectedByLane.get(lane) ?? []) : [];
 
-    const audible = voiceControls.isPitchAudible(pitch);
-    const muted = voiceControls.mutedPitches.has(pitch);
-    const soloed = voiceControls.soloedPitches.has(pitch);
+    const audible = layerControls.isLaneAudible(lane);
+    const muted = layerControls.mutedLanes.has(lane);
+    const soloed = layerControls.soloedLanes.has(lane);
     const drop = useMixerRowDropTarget({
       idx,
       dragFromIdx,
@@ -179,15 +179,15 @@ export const InstrumentRow = observer(
       onResetDrag,
     });
     const isDragging = dragFromIdx === idx;
-    const labelText = instrumentName ?? `Pitch ${pitch}`;
+    const labelText = instrumentName ?? `Lane ${lane}`;
     // Stable per-bar props so the windowed bar list's scroll re-renders
     // don't bust `BarView`'s observer memo for bars that didn't move.
-    const pitchesMemo = React.useMemo(() => [pitch], [pitch]);
-    const colorForPitch = React.useCallback(
+    const lanesMemo = React.useMemo(() => [lane], [lane]);
+    const colorForLane = React.useCallback(
       (p: string) => mixer?.getInstrumentTrack(p).color,
       [mixer]
     );
-    const instrumentForPitch = React.useCallback(
+    const instrumentForLane = React.useCallback(
       (p: string): Instrument =>
         structural.source.globalMetadata.instrumentMapping?.[p] ?? { kind: 'custom' },
       [structural]
@@ -203,7 +203,7 @@ export const InstrumentRow = observer(
           drop.isDropIndicatorAbove && styles.mixerDropIndicatorAbove,
           drop.isDropIndicatorBelow && styles.mixerDropIndicatorBelow
         )}
-        data-testid={`instrument-row-${pitch}`}
+        data-testid={`instrument-row-${lane}`}
         onDragOver={drop.onDragOver}
         onDragLeave={drop.onDragLeave}
         onDrop={drop.onDrop}
@@ -223,9 +223,9 @@ export const InstrumentRow = observer(
             <div className={styles.instrumentRowHeader}>
               <div
                 className={classNames(styles.instrumentRowLabel, !audible && styles.musicTrackLabelDim)}
-                title={instrumentName ? `${instrumentName} (pitch ${pitch})` : `Pitch ${pitch}`}
+                title={instrumentName ? `${instrumentName} (lane ${lane})` : `Lane ${lane}`}
               >
-                <span className={styles.gutterPitch}>{pitch}</span>
+                <span className={styles.gutterLane}>{lane}</span>
                 {instrumentName && <span className={styles.instrumentRowName}>{instrumentName}</span>}
               </div>
               {instrumentTrack && (
@@ -237,21 +237,21 @@ export const InstrumentRow = observer(
             </div>
             <div className={styles.instrumentRowControls}>
               <RowVolumeSlider
-                value={voiceControls.volumeFor(pitch)}
-                onChange={(v) => voiceControls.onSetVolume(pitch, v)}
+                value={layerControls.volumeFor(lane)}
+                onChange={(v) => layerControls.onSetVolume(lane, v)}
                 label={labelText}
               />
               <MuteButton
                 active={muted}
-                onToggle={() => voiceControls.onToggleMute(pitch)}
-                offTitle={`Mute ${pitch}`}
-                onTitle={`Unmute ${pitch}`}
+                onToggle={() => layerControls.onToggleMute(lane)}
+                offTitle={`Mute ${lane}`}
+                onTitle={`Unmute ${lane}`}
               />
               <SoloButton
                 active={soloed}
-                onToggle={() => voiceControls.onToggleSolo(pitch)}
-                offTitle={`Solo ${pitch}`}
-                onTitle={`Unsolo ${pitch}`}
+                onToggle={() => layerControls.onToggleSolo(lane)}
+                offTitle={`Solo ${lane}`}
+                onTitle={`Unsolo ${lane}`}
               />
             </div>
           </div>
@@ -261,8 +261,8 @@ export const InstrumentRow = observer(
           data-bars-row
           style={
             {
-              ['--voice-beats' as string]: voiceBeats,
-              ['--bars-row-width' as string]: barsRowWidthSeed(structural, voiceBeats),
+              ['--layer-beats' as string]: layerBeats,
+              ['--bars-row-width' as string]: barsRowWidthSeed(structural, layerBeats),
             } as React.CSSProperties
           }
           onClick={(e) => seekFromClick(e, onSeek)}
@@ -286,32 +286,32 @@ export const InstrumentRow = observer(
             </div>
           )}
           {/* Cumulative quarter-note position of each bar's left edge
-              within the voice (drives the bar's absolute left via
+              within the layer (drives the bar's absolute left via
               `--bar-start-beat`; see `.bar` in score.module.css) is
-              precomputed by `jot.barsForPitch(pitch)` as `startBeats`,
+              precomputed by `jot.barsForLane(lane)` as `startBeats`,
               so this map is just a render. */}
           <WindowedBarList
             viewport={viewport ?? null}
-            pitchBars={pitchBars}
+            laneBars={laneBars}
             startBeats={startBeats}
-            pitch={pitch}
+            lane={lane}
             config={config}
             showBrackets={showBrackets}
-            pitchOrder={pitchOrder}
+            laneOrder={laneOrder}
             highlightedPattern={highlightedPattern}
             onPatternClick={onPatternClick}
-            isPitchAudible={voiceControls.isPitchAudible}
-            pitches={pitchesMemo}
-            colorForPitch={colorForPitch}
-            instrumentForPitch={instrumentForPitch}
+            isLaneAudible={layerControls.isLaneAudible}
+            lanes={lanesMemo}
+            colorForLane={colorForLane}
+            instrumentForLane={instrumentForLane}
           />
-          {rejectedForPitch.map((entry, i) => {
+          {rejectedForLane.map((entry, i) => {
             // The MIDI lays `leadBars` empty bar-0-sized blocks before
             // struct bar 0, so the struct bar index maps to the
             // rendered jot's bars array as `leadBars + entry.bar`.
             // Out-of-range entries are already filtered out upstream.
             const barIdx = provenance!.leadBars + entry.bar;
-            if (barIdx < 0 || barIdx >= pitchBars.length) return null;
+            if (barIdx < 0 || barIdx >= laneBars.length) return null;
             // beat_in_bar is 1-indexed in the provenance (per the
             // transcriber's OnsetCandidate convention); the CSS calc
             // expects a 0-indexed beat offset within the bar.
@@ -322,7 +322,7 @@ export const InstrumentRow = observer(
                 key={`f-${entry.bar}-${i}-${entry.detected_time_sec}`}
                 entry={entry}
                 beatOffset={beatOffset}
-                color={pitchColor}
+                color={laneColor}
                 trackHeight={trackHeight as number}
               />
             );

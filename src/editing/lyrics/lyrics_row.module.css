@@ -1,6 +1,6 @@
 /* Time-aligned lyrics row in the unified mixer. Geometry mirrors
    `mixer.module.css::musicTrack` (sticky gutter, bars-row width driven
-   by --voice-beats × --px-per-beat) so the row aligns flush with audio
+   by --layer-beats × --px-per-beat) so the row aligns flush with audio
    tracks and instrument rows above/below. */
 
 .lyricsRow {

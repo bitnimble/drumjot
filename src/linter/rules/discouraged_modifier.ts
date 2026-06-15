@@ -32,7 +32,7 @@ export const discouragedModifierRule: Rule = {
             `but uncommon — confirm this is intentional.`,
           range: note.range,
           barIndex: note.barIndex,
-          voiceIndex: note.voiceIndex,
+          layerIndex: note.layerIndex,
         });
       }
     }

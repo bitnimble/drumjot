@@ -3,7 +3,7 @@
  * same explicit hand (or same foot) via `@l` / `@r` / `@lf` / `@rf`.
  *
  * For notes WITHOUT explicit sticking the linter runs a coarse inference
- * (`assignPreferredHands`): per voice, assign each unique hand instrument
+ * (`assignPreferredHands`): per layer, assign each unique hand instrument
  * a "preferred hand" based on overall note count (densest → right hand).
  * Notes without `@` then get the preferred hand of their instrument. Two
  * notes at one onset that resolve to the same hand → error.
@@ -33,7 +33,7 @@ function stickingToResolution(stk: Sticking | undefined): LimbResolution | null 
 }
 
 /**
- * Assign each hand-instrument kind in a voice a "preferred hand" based on
+ * Assign each hand-instrument kind in a layer a "preferred hand" based on
  * count. Densest plays right; sparsest plays left. Ties resolve
  * alphabetically by kind for determinism.
  */
@@ -66,9 +66,9 @@ function resolveLimb(
   // Explicit sticking always wins.
   const fromStk = stickingToResolution(note.note.sticking);
   if (fromStk) return fromStk;
-  // Instrument mapping limb (instrumentMapping[pitch].limb) is the next
-  // strongest signal — but it's already only set on the per-pitch
-  // mapping, not on individual notes. Look it up via the note's pitch.
+  // Instrument mapping limb (instrumentMapping[lane].limb) is the next
+  // strongest signal — but it's already only set on the per-lane
+  // mapping, not on individual notes. Look it up via the note's lane.
   // For now we just consult preferred-hand inference; the mapping limb
   // is consulted via ResolvedNote.limbCategory.
   if (note.limbCategory === 'foot') {
@@ -92,18 +92,18 @@ export const sameHandConflictRule: Rule = {
   description: 'Two simultaneous notes resolve to the same hand or foot.',
   check: (ctx, severity) => {
     const out: LintDiagnostic[] = [];
-    // Assign preferred hands per voice. Voice-scoping matters: ||-split
-    // jots typically have hands in one voice and feet in another, and we
+    // Assign preferred hands per layer. Layer-scoping matters: ||-split
+    // jots typically have hands in one layer and feet in another, and we
     // don't want a global tally to confuse the inferrer.
-    const notesByVoice = new Map<number, ResolvedNote[]>();
+    const notesByLayer = new Map<number, ResolvedNote[]>();
     for (const n of ctx.notes) {
-      const arr = notesByVoice.get(n.voiceIndex);
+      const arr = notesByLayer.get(n.layerIndex);
       if (arr) arr.push(n);
-      else notesByVoice.set(n.voiceIndex, [n]);
+      else notesByLayer.set(n.layerIndex, [n]);
     }
-    const preferredByVoice = new Map<number, Map<DrumInstrumentKind, HandSide>>();
-    for (const [v, ns] of notesByVoice) {
-      preferredByVoice.set(v, assignPreferredHands(ns));
+    const preferredByLayer = new Map<number, Map<DrumInstrumentKind, HandSide>>();
+    for (const [v, ns] of notesByLayer) {
+      preferredByLayer.set(v, assignPreferredHands(ns));
     }
 
     for (const [, notes] of ctx.notesBySimul) {
@@ -111,7 +111,7 @@ export const sameHandConflictRule: Rule = {
       const seen = new Map<string, ResolvedNote>();
       for (const n of notes) {
         const preferred =
-          preferredByVoice.get(n.voiceIndex) ?? new Map<DrumInstrumentKind, HandSide>();
+          preferredByLayer.get(n.layerIndex) ?? new Map<DrumInstrumentKind, HandSide>();
         const res = resolveLimb(n, preferred);
         if (res.kind === 'unknown') continue;
         const key = res.kind === 'hand' ? `hand:${res.side}` : `foot:${res.side}`;
@@ -130,11 +130,11 @@ export const sameHandConflictRule: Rule = {
             kind: 'performance',
             message:
               `Two simultaneous notes assigned to the same ${res.kind} ` +
-              `(${res.side}): pitch '${prior.pitch}' and '${n.pitch}'. ` +
+              `(${res.side}): lane '${prior.lane}' and '${n.lane}'. ` +
               `Change one's sticking (@l / @r) or remove the conflict.`,
             range: n.range,
             barIndex: n.barIndex,
-            voiceIndex: n.voiceIndex,
+            layerIndex: n.layerIndex,
           });
         } else {
           seen.set(key, n);

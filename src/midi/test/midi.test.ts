@@ -6,7 +6,7 @@ import { MidiData, MidiEvent, parseMidi, writeMidi } from 'midi-file';
 import { Jot } from 'src/schema/dsl/dsl';
 import { buildJotModel } from 'src/editing/jot_editor_store';
 import { fromMidi } from 'src/midi/from_midi';
-import { allocatePitchesForMidi } from 'src/midi/gm';
+import { allocateLanesForMidi } from 'src/midi/gm';
 import { toMidi } from 'src/midi/to_midi';
 
 const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
@@ -142,7 +142,7 @@ function buildMidi(opts: {
 // ---------- synthetic baseline tests ----------
 
 describe('MIDI <-> Jot synthetic baseline', () => {
-  it('reads a simple 4/4 backbeat into a single voice with one bar', () => {
+  it('reads a simple 4/4 backbeat into a single layer with one bar', () => {
     const tpq = 480;
     const bytes = buildMidi({
       ticksPerBeat: tpq,
@@ -158,10 +158,10 @@ describe('MIDI <-> Jot synthetic baseline', () => {
     const jot = fromMidi(bytes);
     expect(jot.globalMetadata.bpm).toBe(120);
     expect(jot.globalMetadata.time).toEqual({ count: 4, unit: 4 });
-    expect(jot.voices).toHaveLength(1);
-    expect(jot.voices[0].bars).toHaveLength(1);
+    expect(jot.layers).toHaveLength(1);
+    expect(jot.layers[0].bars).toHaveLength(1);
 
-    const els = jot.voices[0].bars[0].elements;
+    const els = jot.layers[0].bars[0].elements;
     // Default 1/48 grid (12 slots per quarter): kicks on slot 0/24,
     // snares on slot 12/36.
     expect(els).toHaveLength(48);
@@ -180,11 +180,11 @@ describe('MIDI <-> Jot synthetic baseline', () => {
       ],
     });
     const jot = fromMidi(bytes);
-    const first = jot.voices[0].bars[0].elements[0];
+    const first = jot.layers[0].bars[0].elements[0];
     expect(first.kind).toBe('simul');
   });
 
-  it('round-trips note count and pitches losslessly', () => {
+  it('round-trips note count and lanes losslessly', () => {
     const tpq = 480;
     const inputNotes: DrumNote[] = [
       { tick: 0, note: 36, velocity: 100 },
@@ -271,9 +271,9 @@ describe('MIDI <-> Jot synthetic baseline', () => {
     const reBytes = new Uint8Array(writeMidi(parsed));
     const jot = fromMidi(reBytes);
     // Default 1/48 grid: 4/4 -> 48 slots, 3/4 -> 36 slots.
-    expect(jot.voices[0].bars[0].elements).toHaveLength(48);
-    expect(jot.voices[0].bars[1].metadata?.time).toEqual({ count: 3, unit: 4 });
-    expect(jot.voices[0].bars[1].elements).toHaveLength(36);
+    expect(jot.layers[0].bars[0].elements).toHaveLength(48);
+    expect(jot.layers[0].bars[1].metadata?.time).toEqual({ count: 3, unit: 4 });
+    expect(jot.layers[0].bars[1].elements).toHaveLength(36);
   });
 
   it('lifts a mid-bar setTempo into jot.tempoEvents at the snapped (bar, beat)', () => {
@@ -392,7 +392,7 @@ describe('MIDI <-> Jot synthetic baseline', () => {
     const jot = fromMidi(bytes, { gridDivision: 96 });
     expect(jot.globalMetadata.gridDivision).toBe(96);
     // 4/4 at 1/96 -> 96 slots per bar; quarter beat = 24 slots.
-    const els = jot.voices[0].bars[0].elements;
+    const els = jot.layers[0].bars[0].elements;
     expect(els).toHaveLength(96);
     expect(els[0].kind).toBe('note');
     expect(els[24].kind).toBe('note');
@@ -425,7 +425,7 @@ describe('MIDI <-> Jot synthetic baseline', () => {
       notes: [{ tick: 12, note: 36, velocity: 100 }],
     });
     const jot = fromMidi(bytes);
-    const el = jot.voices[0].bars[0].elements[0];
+    const el = jot.layers[0].bars[0].elements[0];
     expect(el.kind).toBe('note');
     const offset = (el as { offset?: number }).offset;
     // 12 ticks at 120 BPM = 12 / 480 * 500 ms = 12.5 ms.
@@ -440,7 +440,7 @@ describe('MIDI <-> Jot synthetic baseline', () => {
       notes: [{ tick: 2, note: 36, velocity: 100 }],
     });
     const jot = fromMidi(bytes);
-    const el = jot.voices[0].bars[0].elements[0];
+    const el = jot.layers[0].bars[0].elements[0];
     expect(el.kind).toBe('note');
     expect((el as { offset?: number }).offset).toBeUndefined();
   });
@@ -452,12 +452,12 @@ describe('MIDI <-> Jot synthetic baseline', () => {
     const jot: Jot = {
       title: '',
       globalMetadata: { bpm: 120, time: { count: 4, unit: 4 }, gridDivision: 48 },
-      voices: [
+      layers: [
         {
           bars: [
             {
               elements: [
-                { kind: 'note', pitch: 'k', offset: 20, metadata: { midi: { note: 36, velocity: 100 } } },
+                { kind: 'note', lane: 'k', offset: 20, metadata: { midi: { note: 36, velocity: 100 } } },
                 ...Array.from({ length: 47 }, () => ({ kind: 'rest' as const })),
               ],
             },
@@ -466,7 +466,7 @@ describe('MIDI <-> Jot synthetic baseline', () => {
       ],
     };
     const reread = fromMidi(toMidi(jot));
-    const el = reread.voices[0].bars[0].elements[0];
+    const el = reread.layers[0].bars[0].elements[0];
     expect(el.kind).toBe('note');
     expect((el as { offset?: number }).offset).toBeCloseTo(20, 0);
   });
@@ -487,10 +487,10 @@ describe('MIDI <-> Jot synthetic baseline', () => {
     expect(jot.globalMetadata.leadBars).toBe(2);
     expect(jot.globalMetadata.drumsT0Sec).toBeCloseTo(4.0, 6);
     // First non-rest bar is bars[2].
-    expect(jot.voices[0].bars).toHaveLength(3);
-    expect(jot.voices[0].bars[0].elements.every((e) => e.kind === 'rest')).toBe(true);
-    expect(jot.voices[0].bars[1].elements.every((e) => e.kind === 'rest')).toBe(true);
-    expect(jot.voices[0].bars[2].elements[0].kind).toBe('note');
+    expect(jot.layers[0].bars).toHaveLength(3);
+    expect(jot.layers[0].bars[0].elements.every((e) => e.kind === 'rest')).toBe(true);
+    expect(jot.layers[0].bars[1].elements.every((e) => e.kind === 'rest')).toBe(true);
+    expect(jot.layers[0].bars[2].elements[0].kind).toBe('note');
   });
 
   it('omits leadBars / drumsT0Sec when drums start at tick 0', () => {
@@ -512,7 +512,7 @@ describe('MIDI <-> Jot synthetic baseline', () => {
       bpm: 120,
       notes: [{ tick: tpq * 8, note: 36, velocity: 100 }],
     });
-    const bars = buildJotModel(fromMidi(bytes)).structural.voices[0].bars;
+    const bars = buildJotModel(fromMidi(bytes)).structural.layers[0].bars;
     expect(bars.map((b) => b.index)).toEqual([-2, -1, 1]);
   });
 
@@ -536,7 +536,7 @@ describe('MIDI <-> Jot synthetic baseline', () => {
     // 60 (% 26 = 8, hint = 'r') and 86 (% 26 = 8, hint = 'r') share a hint.
     // Both are outside GM_PERCUSSION, so the allocator must give them
     // different letters.
-    const map = allocatePitchesForMidi([60, 86, 36]);
+    const map = allocateLanesForMidi([60, 86, 36]);
     const a = map.get(60);
     const b = map.get(86);
     expect(a).toBeDefined();
@@ -544,8 +544,8 @@ describe('MIDI <-> Jot synthetic baseline', () => {
     expect(a).not.toBe(b);
     // The GM-mapped note (36 -> kick -> 'k') wins for that entry.
     expect(map.get(36)).toBe('k');
-    // Neither fallback may collide with a canonical pitch from
-    // GM_PERCUSSION (e.g. 'k' for kick) when that pitch is in use.
+    // Neither fallback may collide with a canonical lane from
+    // GM_PERCUSSION (e.g. 'k' for kick) when that lane is in use.
     expect(a).not.toBe('k');
     expect(b).not.toBe('k');
   });
@@ -594,10 +594,10 @@ describe('MIDI <-> Jot synthetic baseline', () => {
     );
     const jot = fromMidi(bytes);
     // The piano hit (channel 1) is dropped; only the kick survives.
-    const all = jot.voices[0].bars.flatMap((b) => b.elements);
+    const all = jot.layers[0].bars.flatMap((b) => b.elements);
     const notesOnly = all.filter((e) => e.kind === 'note');
     expect(notesOnly).toHaveLength(1);
-    expect((notesOnly[0] as { pitch: string }).pitch).toBe('k');
+    expect((notesOnly[0] as { lane: string }).lane).toBe('k');
   });
 });
 
@@ -622,7 +622,7 @@ describe('MIDI fixture round trips', () => {
 
       it('parses without throwing', () => {
         const jot = fromMidi(bytes);
-        expect(jot.voices.length).toBeGreaterThan(0);
+        expect(jot.layers.length).toBeGreaterThan(0);
       });
 
       it('preserves first tempo and time signature', () => {

@@ -1,10 +1,10 @@
 /**
- * StructuralPresenter -> flat playback event list, keyed by DSL pitch.
+ * StructuralPresenter -> flat playback event list, keyed by DSL lane.
  *
  * We walk the laid-out jot directly (rather than round-tripping through
  * `toMidi` + `parseMidi`) for two reasons:
  *
- *  1. The DSL pitch letter ('k', 's', 'h', ...) survives end-to-end. The
+ *  1. The DSL lane letter ('k', 's', 'h', ...) survives end-to-end. The
  *     scheduler uses it to filter by mute/solo row; MIDI bytes don't
  *     carry that information.
  *
@@ -33,8 +33,8 @@ export type PlaybackEvent = {
   midiNote: number;
   /** MIDI velocity (1-127). */
   velocity: number;
-  /** DSL pitch letter the note was written under; used by mute/solo. */
-  pitch: string;
+  /** DSL lane letter the note was written under; used by mute/solo. */
+  lane: string;
 };
 
 // Velocity defaults (DEFAULT_VELOCITY / ACCENT_BOOST / GHOST_REDUCTION /
@@ -43,8 +43,8 @@ export type PlaybackEvent = {
 // `.rlrr` file.
 
 // Flam = a grace stroke shortly before the main hit on the same drum.
-// Acoustic flams sit ~25-35 ms apart, but two SF2 voices that close on the
-// same key get swallowed by voice-stealing / overlapping attack envelopes
+// Acoustic flams sit ~25-35 ms apart, but two SF2 layers that close on the
+// same key get swallowed by layer-stealing / overlapping attack envelopes
 // and read as one strike. 50 ms is the standard "wide flam" — clearly two
 // hits and survives smplr retriggering.
 const FLAM_GRACE_OFFSET_SEC = 0.03;
@@ -55,10 +55,10 @@ const FLAM_GRACE_OFFSET_SEC = 0.03;
 const FLAM_GRACE_VELOCITY_RATIO = 0.9;
 
 export function jotToEvents(structural: StructuralPresenter): PlaybackEvent[] {
-  const voices = structural.voices;
+  const layers = structural.layers;
   const events: PlaybackEvent[] = [];
-  const instrumentFor = (pitch: string): Instrument =>
-    structural.source.globalMetadata.instrumentMapping?.[pitch] ?? { kind: 'custom' };
+  const instrumentFor = (lane: string): Instrument =>
+    structural.source.globalMetadata.instrumentMapping?.[lane] ?? { kind: 'custom' };
 
   // Bar 1 (= first non-lead-in bar) sits at jot time 0 by convention,
   // matching `buildTimeline`'s anchor. Pre-drum bars get a negative
@@ -67,14 +67,14 @@ export function jotToEvents(structural: StructuralPresenter): PlaybackEvent[] {
   // generator stamps drums into a pre-drum bar) fires its events at
   // negative jot time; at media `jot + drumsT0Sec >= 0` in audio time,
   // which is still valid. Lead-in count comes from the structure
-  // (counting leading negative-indexed bars); `structureForVoice`
+  // (counting leading negative-indexed bars); `structureForLayer`
   // materialises both the explicit-leadBars and the chrome-only
   // (`drumsT0Sec` without `leadBars`) source shapes into the same
   // negative-indexed-bar form, so the scheduler reads only the
   // structure.
-  for (const voice of voices) {
+  for (const layer of layers) {
     let leadBars = 0;
-    for (const b of voice.bars) {
+    for (const b of layer.bars) {
       if (b.index >= 0) break;
       leadBars++;
     }
@@ -82,18 +82,18 @@ export function jotToEvents(structural: StructuralPresenter): PlaybackEvent[] {
     // intra-bar tempo curve. Each note's time is `barOffset +
     // beatToSecWithinBar(barTempos, note.beat)` so a note that sits
     // after a mid-bar tempo change picks up the post-change rate.
-    const tempos = buildBarTempos(structural.source, voice.bars);
+    const tempos = buildBarTempos(structural.source, layer.bars);
     let leadOffsetSec = 0;
     for (let i = 0; i < leadBars; i++) leadOffsetSec += tempos[i].durationSec;
 
     let barOffsetSec = -leadOffsetSec;
-    for (let i = 0; i < voice.bars.length; i++) {
-      const bar = voice.bars[i];
+    for (let i = 0; i < layer.bars.length; i++) {
+      const bar = layer.bars[i];
       const barTempos = tempos[i];
-      for (const pitch of voice.pitches) {
-        const track = bar.tracks[pitch];
+      for (const lane of layer.lanes) {
+        const track = bar.tracks[lane];
         if (!track) continue;
-        const instrument = instrumentFor(pitch);
+        const instrument = instrumentFor(lane);
         for (const note of track.notes) {
           const midiNote = resolveMidiNote(note, instrument);
           if (midiNote === undefined) continue;
@@ -102,7 +102,7 @@ export function jotToEvents(structural: StructuralPresenter): PlaybackEvent[] {
           // it's already in real seconds so no tempo conversion is needed.
           const offsetSec = (note.offsetMs ?? 0) / 1000;
           const time = barOffsetSec + beatToSecWithinBar(barTempos, note.beat) + offsetSec;
-          events.push({ time, midiNote, velocity, pitch });
+          events.push({ time, midiNote, velocity, lane });
           if (note.modifiers.includes('fl')) {
             // The grace stroke clamps to -leadOffsetSec so it can't run
             // past the start of the pre-drum window (a flam on bar 1
@@ -113,7 +113,7 @@ export function jotToEvents(structural: StructuralPresenter): PlaybackEvent[] {
             const graceFloor = -leadOffsetSec;
             const graceTime = Math.max(graceFloor, time - FLAM_GRACE_OFFSET_SEC);
             const graceVel = Math.max(1, Math.round(velocity * FLAM_GRACE_VELOCITY_RATIO));
-            events.push({ time: graceTime, midiNote, velocity: graceVel, pitch });
+            events.push({ time: graceTime, midiNote, velocity: graceVel, lane });
           }
         }
       }
@@ -128,7 +128,7 @@ export function jotToEvents(structural: StructuralPresenter): PlaybackEvent[] {
 function resolveMidiNote(note: StructNote, instrument: Instrument): number | undefined {
   if (note.midiNote !== undefined) return note.midiNote;
   if (instrument.midi?.note !== undefined) return instrument.midi.note;
-  return defaultMidiNote(note.pitch, new Set(note.modifiers as Modifier[]));
+  return defaultMidiNote(note.lane, new Set(note.modifiers as Modifier[]));
 }
 
 function resolveVelocity(note: StructNote): number {

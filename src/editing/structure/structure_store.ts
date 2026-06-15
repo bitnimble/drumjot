@@ -10,7 +10,7 @@ import type { Element, Jot, PatternDef } from 'src/schema/schema';
  * with coordinates RELATIVE to their container; this store walks it,
  * converting to bar-absolute beats (a group of `duration` D whose children
  * span an internal length L scales them by D/L, that's the tuplet ratio),
- * and flattens it into per-bar, per-pitch tracks plus tuplet + pattern
+ * and flattens it into per-bar, per-lane tracks plus tuplet + pattern
  * spans. All MobX computeds off the observable jot, so an edit reflows it.
  *
  * Pixels, palette colours, tempo and the drum-offset transform are NOT
@@ -21,7 +21,7 @@ const EPS = 1e-9;
 
 export type StructNote = {
   id: string;
-  pitch: string;
+  lane: string;
   /** Quarter-note beats from the owning bar's downbeat (absolute). */
   beat: number;
   duration: number;
@@ -40,13 +40,13 @@ export type StructNote = {
   vol?: string;
 };
 
-export type StructTrack = { pitch: string; notes: StructNote[] };
+export type StructTrack = { lane: string; notes: StructNote[] };
 
 export type StructPatternSpan = {
   name: string;
   startBeat: number;
   endBeat: number;
-  pitches: ReadonlySet<string>;
+  lanes: ReadonlySet<string>;
   colorIndex: number;
 };
 
@@ -70,14 +70,14 @@ export type StructBar = {
   tupletSpans: StructTupletSpan[];
 };
 
-export type StructVoice = {
+export type StructLayer = {
   id: string;
   name?: string;
   bars: StructBar[];
-  pitches: string[];
+  lanes: string[];
 };
 
-export const PRIMARY_VOICE = 'primary';
+export const PRIMARY_LAYER = 'primary';
 
 type BarContents = {
   notes: StructNote[];
@@ -87,24 +87,24 @@ type BarContents = {
 
 export class StructureStore {
   constructor(private readonly getJot: () => Jot | undefined) {
-    makeObservable(this, { voices: computed });
+    makeObservable(this, { layers: computed });
   }
 
-  get voices(): StructVoice[] {
+  get layers(): StructLayer[] {
     const jot = this.getJot();
     if (!jot) return [];
 
     const tops = [...jot.elements.values()] as Element[];
     // idMap iteration order isn't the authoring order (Loro keys aren't
-    // insertion-ordered), but `voices[0]` must be the first `||` voice (the
-    // renderer's per-pitch path reads voice 0). The converter assigns ids
+    // insertion-ordered), but `layers[0]` must be the first `||` layer (the
+    // renderer's per-lane path reads layer 0). The converter assigns ids
     // `v0`, `v1`, … in source order, so a numeric id-sort restores it.
-    // (A dedicated order field / ordered voice list is the cleaner fix.)
-    const declared = [...jot.voices.values()].sort((a, b) =>
+    // (A dedicated order field / ordered layer list is the cleaner fix.)
+    const declared = [...jot.layers.values()].sort((a, b) =>
       a.id.localeCompare(b.id, undefined, { numeric: true })
     );
     const single = declared.length === 0;
-    const voiceList = single ? [{ id: PRIMARY_VOICE, name: undefined }] : declared;
+    const layerList = single ? [{ id: PRIMARY_LAYER, name: undefined }] : declared;
 
     const mappedOrder = [...jot.instruments.keys()];
     const leadBars = jot.leadBars ?? 0;
@@ -113,7 +113,7 @@ export class StructureStore {
     // Pattern name -> colour slot, shared across the whole jot.
     const colorByName = new Map<string, number>();
 
-    return voiceList.map((voice) => {
+    return layerList.map((layer) => {
       const bars: StructBar[] = [];
       let gridPos = 0;
       for (const bar of barList) {
@@ -126,7 +126,7 @@ export class StructureStore {
         if (!anacrusis) gridPos++;
 
         const mine = tops.filter(
-          (el) => el.barId === bar.id && (single || el.voiceId === voice.id)
+          (el) => el.barId === bar.id && (single || el.layerId === layer.id)
         );
         const out: BarContents = { notes: [], tuplets: [], patternSpans: [] };
         for (const el of mine) {
@@ -136,15 +136,15 @@ export class StructureStore {
 
         const tracks: Record<string, StructTrack> = {};
         for (const note of out.notes) {
-          let track = tracks[note.pitch];
+          let track = tracks[note.lane];
           if (!track) {
-            track = { pitch: note.pitch, notes: [] };
-            tracks[note.pitch] = track;
+            track = { lane: note.lane, notes: [] };
+            tracks[note.lane] = track;
           }
           track.notes.push(note);
         }
-        for (const pitch of Object.keys(tracks)) {
-          tracks[pitch].notes.sort((a, b) => a.beat - b.beat);
+        for (const lane of Object.keys(tracks)) {
+          tracks[lane].notes.sort((a, b) => a.beat - b.beat);
         }
 
         const beats = anacrusis ? anacrusisBeats(mine) : (bar.tsCount * 4) / bar.tsUnit;
@@ -160,7 +160,7 @@ export class StructureStore {
           tupletSpans: out.tuplets,
         });
       }
-      return { id: voice.id, name: voice.name, bars, pitches: orderPitches(bars, mappedOrder) };
+      return { id: layer.id, name: layer.name, bars, lanes: orderLanes(bars, mappedOrder) };
     });
   }
 }
@@ -181,7 +181,7 @@ function flattenInto(
   if (el.kind === 'note') {
     out.notes.push({
       id: el.id,
-      pitch: el.pitch,
+      lane: el.lane,
       beat: absBeat,
       duration: absDur,
       modifiers: el.modifiers,
@@ -213,9 +213,9 @@ function flattenInto(
   // pattern: instantiate the referenced definition, scaled to this usage.
   const def = jot.patterns.get(el.patternId) as PatternDef | undefined;
   if (!def) return;
-  const pitches = new Set<string>();
+  const lanes = new Set<string>();
   const body = [...def.body.values()] as Element[];
-  collectPitches(body, jot, pitches);
+  collectLanes(body, jot, lanes);
   let colorIndex = colorByName.get(def.name);
   if (colorIndex === undefined) {
     colorIndex = colorByName.size;
@@ -225,7 +225,7 @@ function flattenInto(
     name: def.name,
     startBeat: absBeat,
     endBeat: absBeat + absDur,
-    pitches,
+    lanes,
     colorIndex,
   });
   const internalLen = naturalSpan(body);
@@ -249,23 +249,23 @@ function anacrusisBeats(elements: readonly Element[]): number {
   return end;
 }
 
-/** Pitches a subtree plays, for a pattern span's lane set. */
-function collectPitches(elements: readonly Element[], jot: Jot, into: Set<string>): void {
+/** Lanes a subtree plays, for a pattern span's lane set. */
+function collectLanes(elements: readonly Element[], jot: Jot, into: Set<string>): void {
   for (const el of elements) {
-    if (el.kind === 'note') into.add(el.pitch);
-    else if (el.kind === 'group') collectPitches([...el.children.values()] as Element[], jot, into);
+    if (el.kind === 'note') into.add(el.lane);
+    else if (el.kind === 'group') collectLanes([...el.children.values()] as Element[], jot, into);
     else {
       const def = jot.patterns.get(el.patternId) as PatternDef | undefined;
-      if (def) collectPitches([...def.body.values()] as Element[], jot, into);
+      if (def) collectLanes([...def.body.values()] as Element[], jot, into);
     }
   }
 }
 
-function orderPitches(bars: readonly StructBar[], mappedOrder: readonly string[]): string[] {
+function orderLanes(bars: readonly StructBar[], mappedOrder: readonly string[]): string[] {
   const seen: string[] = [];
   for (const bar of bars) {
-    for (const pitch of Object.keys(bar.tracks)) {
-      if (!seen.includes(pitch)) seen.push(pitch);
+    for (const lane of Object.keys(bar.tracks)) {
+      if (!seen.includes(lane)) seen.push(lane);
     }
   }
   const out: string[] = [];

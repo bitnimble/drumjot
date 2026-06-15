@@ -32,9 +32,9 @@ import {
   Simultaneity,
   TempoEvent,
   TimeSignature,
-  Voice,
+  Layer,
 } from 'src/schema/dsl/dsl';
-import { defaultKindForPitch } from 'src/instruments/instruments';
+import { defaultKindForLane } from 'src/instruments/instruments';
 import { CLASS_TO_DRUM, describeDrum, instanceNameToClass } from './drums';
 import { allocateFallbackLetters } from './fallback';
 import {
@@ -90,10 +90,10 @@ export function parseRlrr(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
   const slots = new Map<number, Map<number, SlotNote[]>>();
   const usedClasses = new Set<string>();
 
-  // Per-song deterministic allocation of `instanceName -> pitch`. Unknown
+  // Per-song deterministic allocation of `instanceName -> lane`. Unknown
   // drum classes get unique fallback letters that don't collide with
   // CLASS_TO_DRUM or with one another.
-  const pitchByName = allocateFallbackLetters(rlrr.events.map((e) => e.name));
+  const laneByName = allocateFallbackLetters(rlrr.events.map((e) => e.name));
 
   for (const event of rlrr.events) {
     // Times are rebased so the real-tempo downbeat sits at beat 0; the
@@ -106,7 +106,7 @@ export function parseRlrr(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
 
     const cls = instanceNameToClass(event.name);
     if (cls) usedClasses.add(cls);
-    const note = buildNote(event, pitchByName.get(event.name));
+    const note = buildNote(event, laneByName.get(event.name));
     const sortKey = `${cls ?? 'zzz'}:${event.name}`;
 
     let bucket = slots.get(barIdx);
@@ -168,23 +168,23 @@ export function parseRlrr(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
 
   // Build an instrument mapping. Canonical CLASS_TO_DRUM entries win; any
   // unknown instances get a friendly fallback entry that reuses the
-  // allocated letter (so the inline pitches and the mapping agree).
+  // allocated letter (so the inline lanes and the mapping agree).
   const instrumentMapping: Record<string, Instrument> = {};
   for (const cls of usedClasses) {
     const descriptor = CLASS_TO_DRUM[cls];
-    if (descriptor && !instrumentMapping[descriptor.pitch]) {
-      instrumentMapping[descriptor.pitch] = {
-        kind: defaultKindForPitch(descriptor.pitch),
+    if (descriptor && !instrumentMapping[descriptor.lane]) {
+      instrumentMapping[descriptor.lane] = {
+        kind: defaultKindForLane(descriptor.lane),
         name: descriptor.name,
         midi: { note: descriptor.midi },
       };
     }
   }
-  for (const [name, pitch] of pitchByName) {
-    if (instrumentMapping[pitch]) continue;
+  for (const [name, lane] of laneByName) {
+    if (instrumentMapping[lane]) continue;
     const cls = instanceNameToClass(name);
-    instrumentMapping[pitch] = {
-      kind: defaultKindForPitch(pitch),
+    instrumentMapping[lane] = {
+      kind: defaultKindForLane(lane),
       name: cls ?? name,
     };
   }
@@ -209,11 +209,11 @@ export function parseRlrr(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
     ...(drumsT0Sec > 0 ? { drumsT0Sec } : {}),
   };
 
-  const voice: Voice = { bars };
+  const layer: Layer = { bars };
   const jot: Jot = {
     title: rlrr.recordingMetadata?.title ?? '',
     globalMetadata,
-    voices: [voice],
+    layers: [layer],
   };
   if (tempoEvents.length > 0) jot.tempoEvents = tempoEvents;
   return jot;
@@ -314,21 +314,21 @@ function secondsToBeats(seconds: number, timeline: TempoSegment[]): number {
 
 function buildNote(
   event: { name: string; vel: number; loc: number; midi?: number },
-  allocatedPitch: string | undefined
+  allocatedLane: string | undefined
 ): Note {
   const descriptor = describeDrum(event.name);
   // [R5] If neither the canonical map nor the per-song allocator has a
-  // pitch for this instrument we fall back to `z`. The allocator should
+  // lane for this instrument we fall back to `z`. The allocator should
   // always have an entry though - it's seeded from the event list - so
   // this is purely defensive.
-  const pitch = descriptor?.pitch ?? allocatedPitch ?? 'z';
+  const lane = descriptor?.lane ?? allocatedLane ?? 'z';
   const modifiers: Modifier[] = descriptor?.modifiers ? [...descriptor.modifiers] : [];
 
   // [R7] Velocity-driven accents/ghosts, mirroring the MIDI converter's policy.
   if (event.vel >= 100 && !modifiers.includes('a')) modifiers.push('a');
   else if (event.vel < 40 && !modifiers.includes('g')) modifiers.push('g');
 
-  const note: Note = { kind: 'note', pitch };
+  const note: Note = { kind: 'note', lane };
   if (modifiers.length > 0) note.modifiers = modifiers;
   // Preserve everything we'd need to reconstruct an identical RLRR event.
   note.metadata = {
