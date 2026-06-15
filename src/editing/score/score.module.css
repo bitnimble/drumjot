@@ -1095,6 +1095,22 @@
     z-index: 25;
 }
 
+/* Insert-mode placeholder: a translucent preview of the note that would be
+   committed at the cursor, positioned in the bars row by its cumulative beat
+   offset (the same calc the filtered-onset overlay uses). Diameter / vertical
+   centre / colour are set inline (lane colour, config note size); purely a
+   preview, so it never takes pointer events. */
+.placeholderNote {
+    position: absolute;
+    border-radius: var(--radius-circle);
+    background: currentColor;
+    transform: translate(-50%, -50%);
+    opacity: 0.4;
+    pointer-events: none;
+    z-index: 4;
+    left: calc((var(--note-pad-beats) + var(--placeholder-beat)) / var(--layer-beats) * 100%);
+}
+
 /* Inline popover for a filtered onset, portaled to `document.body` by
    `PopoverPortal` (score.tsx) so it can escape the score's clipping
    and paint over the minimap / playback chrome. Wraps the shared

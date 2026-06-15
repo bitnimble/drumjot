@@ -15,7 +15,10 @@ import styles from './mixer.module.css';
 import { Playhead } from '../playback/playhead';
 import { seekFromClick } from '../score/seek';
 import { FilteredOnsetView } from '../score/filtered_onset_view';
+import { PlaceholderNoteView } from '../score/placeholder_note';
 import { BarView } from '../score/bar_view';
+import { EditingStoreContext, EditingPresenterContext } from '../editing_contexts';
+import type { PlaceholderNote } from '../editing_store';
 import { ViewportStore } from '../viewport/viewport_store';
 import { barsRowWidthSeed, intersectsBeatRange } from '../utils/windowing';
 import { InstrumentRowOverflowMenu } from './overflow_menus';
@@ -161,6 +164,53 @@ export const InstrumentRow = observer(
     const instrumentTrack = mixer?.getInstrumentTrack(lane);
     const laneColor = instrumentTrack?.color ?? 'var(--color-text-faint-strong)';
 
+    // Insert-mode plumbing. Read off context as plain objects (not tracked
+    // MobX reads), so the row never re-renders on a mode toggle or a cursor
+    // move; `editing.mode` is read only inside the event handlers (untracked),
+    // and the placeholder preview re-renders in its own isolated observer.
+    const editing = React.useContext(EditingStoreContext);
+    const editingPresenter = React.useContext(EditingPresenterContext);
+    // Bars-row left edge, cached lazily on the first pointer move of a hover
+    // session and cleared on leave, so the per-move x→beat math never reads
+    // layout (no `getBoundingClientRect` per pointer move; see AGENTS.md §5.9).
+    const barsRowLeftRef = React.useRef<number | null>(null);
+    const placeholderAt = (clientX: number, left: number): PlaceholderNote | undefined => {
+      const px = structural.pxPerBeat;
+      if (px <= 0) return undefined;
+      // Invert the note `left` calc: x = (notePadBeats + absBeat) * px.
+      const cont = (clientX - left) / px - (config.barNotePaddingBeats as number);
+      for (let i = 0; i < laneBars.length; i++) {
+        const start = startBeats[i];
+        if (cont < start + laneBars[i].beats || i === laneBars.length - 1) {
+          const beat = Math.min(Math.max(cont - start, 0), laneBars[i].beats);
+          return { lane, barId: laneBars[i].id, beat, absBeat: start + beat };
+        }
+      }
+      return undefined;
+    };
+    const onBarsRowPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+      if (editing?.mode !== 'insert' || !editingPresenter) return;
+      let left = barsRowLeftRef.current;
+      if (left === null) {
+        left = e.currentTarget.getBoundingClientRect().left;
+        barsRowLeftRef.current = left;
+      }
+      const placeholder = placeholderAt(e.clientX, left);
+      if (placeholder) editingPresenter.movePlaceholder(placeholder);
+      else editingPresenter.clearPlaceholder();
+    };
+    const onBarsRowPointerLeave = () => {
+      barsRowLeftRef.current = null;
+      if (editing?.mode === 'insert') editingPresenter?.clearPlaceholder();
+    };
+    const onBarsRowClick = (e: React.MouseEvent<HTMLDivElement>) => {
+      if (editing?.mode === 'insert' && editingPresenter) {
+        editingPresenter.insertNote();
+        return;
+      }
+      seekFromClick(e, onSeek);
+    };
+
     // Filtered-onset ghost overlays (debug bundle + checkbox gated).
     // Resolve once per row so the per-entry render below is just a map.
     const provenance = React.useContext(NoteProvenanceContext);
@@ -265,7 +315,9 @@ export const InstrumentRow = observer(
               ['--bars-row-width' as string]: barsRowWidthSeed(structural, layerBeats),
             } as React.CSSProperties
           }
-          onClick={(e) => seekFromClick(e, onSeek)}
+          onClick={onBarsRowClick}
+          onPointerMove={onBarsRowPointerMove}
+          onPointerLeave={onBarsRowPointerLeave}
         >
           {/* Lead-in label overlay floating across the negative-indexed
               bars. The bars themselves carry the hatched background
@@ -327,6 +379,12 @@ export const InstrumentRow = observer(
               />
             );
           })}
+          <PlaceholderNoteView
+            rowLane={lane}
+            color={laneColor}
+            trackHeight={trackHeight as number}
+            noteDiameter={config.noteDiameter as number}
+          />
           <Playhead onSeek={onSeek} />
         </div>
       </div>

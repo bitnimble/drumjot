@@ -40,6 +40,10 @@ import { FollowPlayheadContext } from './playback/playback_contexts';
 import { AudioTrackControls, MixerView, LayerControls } from './mixer/mixer';
 import { Logo } from 'src/ui/logo/logo';
 import { Minimap } from './minimap/minimap';
+import { EditingStore } from './editing_store';
+import { EditingPresenter } from './editing_presenter';
+import { EditingStoreContext, EditingPresenterContext } from './editing_contexts';
+import { EditingToolbar } from './editing_toolbar';
 import { VerticalScrollbar } from './viewport/vertical_scrollbar';
 import { PlaybackBar } from './playback/playback';
 import {
@@ -133,6 +137,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
   const transcribePresenter = new TranscribePresenter({ transcribe, jotEditorPresenter });
   if (options.examples) jotEditorPresenter.setExamples(options.examples);
   const selection = new SelectionStore(jotEditorStore);
+  const editingStore = new EditingStore();
+  const editingPresenter = new EditingPresenter(editingStore, jotEditorStore);
 
   // Translate a click on `.jotContainer` into the marquee's coordinate
   // space (the inner `.scrollViewport` wrapper, which is where the
@@ -360,6 +366,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
         <ViewportStoreContext.Provider value={viewport}>
         <MixerStoreContext.Provider value={mixer}>
         <SelectionContext.Provider value={selection}>
+        <EditingStoreContext.Provider value={editingStore}>
+        <EditingPresenterContext.Provider value={editingPresenter}>
           <NoteProvenanceContext.Provider value={provenanceContextValue}>
             <GridLineSettingsContext.Provider value={settings.gridLines}>
               <UniformWaveformsContext.Provider value={settings.uniformWaveforms}>
@@ -456,6 +464,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                         presenter={playbackPresenter}
                       />
                     )}
+                    {structural && <EditingToolbar />}
                     <DebugPanel provenance={provenance} presenter={provenancePresenter} />
                     <LyricsSearchModal
                       open={lyricsAlign.lyricsSearchOpen}
@@ -481,6 +490,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
               </UniformWaveformsContext.Provider>
             </GridLineSettingsContext.Provider>
           </NoteProvenanceContext.Provider>
+        </EditingPresenterContext.Provider>
+        </EditingStoreContext.Provider>
         </SelectionContext.Provider>
         </MixerStoreContext.Provider>
         </ViewportStoreContext.Provider>
