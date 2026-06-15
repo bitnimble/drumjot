@@ -202,3 +202,41 @@ describe('pattern spans', () => {
     expect(bar.tracks['s'].notes[0].beat).toBe(1);
   });
 });
+
+describe('lead-in', () => {
+  it('synthesizes a negative-indexed lead-in bar from drumsT0Sec when no explicit lead bars', () => {
+    const { model } = createReactiveJot({
+      title: '',
+      bpm: 120,
+      drumsT0Sec: 3, // 3s @ 120bpm = 6 quarter-note beats of pre-roll
+      bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
+      elements: {
+        n1: { kind: 'note', id: 'n1', barId: 'b1', beat: 0, duration: 1, lane: 'k', modifiers: [] },
+      },
+      instruments: {},
+    });
+    const bars = store(model).layers[0].bars;
+    expect(bars[0].index).toBe(-1); // synthetic lead-in is the first bar
+    expect(bars[0].beats).toBeCloseTo(6, 6);
+    expect(bars[1].index).toBe(1); // the real first bar still follows
+  });
+
+  it('does not double up the lead-in when explicit lead bars already exist', () => {
+    const { model } = createReactiveJot({
+      title: '',
+      bpm: 120,
+      drumsT0Sec: 3,
+      leadBars: 1,
+      bars: [
+        { id: 'b0', tsCount: 4, tsUnit: 4 },
+        { id: 'b1', tsCount: 4, tsUnit: 4 },
+      ],
+      elements: {
+        n1: { kind: 'note', id: 'n1', barId: 'b1', beat: 0, duration: 1, lane: 'k', modifiers: [] },
+      },
+      instruments: {},
+    });
+    const leadIns = store(model).layers[0].bars.filter((b) => b.index < 0);
+    expect(leadIns).toHaveLength(1);
+  });
+});

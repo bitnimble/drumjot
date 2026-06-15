@@ -79,6 +79,11 @@ export type StructLayer = {
 
 export const PRIMARY_LAYER = 'primary';
 
+/** Stable id for the synthesized chrome-only lead-in bar (one with no
+ *  corresponding entry in `jot.bars`; it exists only in the derived
+ *  structure). Distinct from any real bar id so consumers can recognise it. */
+export const LEAD_IN_BAR_ID = '__leadin__';
+
 type BarContents = {
   notes: StructNote[];
   tuplets: StructTupletSpan[];
@@ -160,6 +165,35 @@ export class StructureStore {
           tupletSpans: out.tuplets,
         });
       }
+
+      // Chrome-only lead-in: `drumsT0Sec` is set but no negative-indexed
+      // bars were materialised (the source carried the pre-roll only as an
+      // audio offset, not as explicit `leadBars` rest bars, e.g. RLRR /
+      // some debug bundles). Synthesize one empty bar at index -1 covering
+      // the pre-roll so rendering, playback, and waveform alignment all see
+      // lead-in uniformly as "the first negative-indexed bar", with no
+      // separate chrome path. Its beat count is back-solved against the
+      // global bpm so `beats * 60 / bpm == drumsT0Sec`; the time signature
+      // mirrors the first real bar so the decorative grid looks right.
+      // (Restores behaviour dropped in the RenderedJot→StructureStore
+      // refactor; the negative-indexed-bar contract is documented on
+      // `buildTimeline` / `jotToEvents`.)
+      const drumsT0Sec = jot.drumsT0Sec ?? 0;
+      if (drumsT0Sec > 0 && !bars.some((b) => b.index < 0)) {
+        const firstReal = bars.find((b) => b.index === 1) ?? bars[0];
+        bars.unshift({
+          id: LEAD_IN_BAR_ID,
+          index: -1,
+          beats: (drumsT0Sec * jot.bpm) / 60,
+          tsCount: firstReal?.tsCount ?? 4,
+          tsUnit: firstReal?.tsUnit ?? 4,
+          anacrusis: false,
+          tracks: {},
+          patternSpans: [],
+          tupletSpans: [],
+        });
+      }
+
       return { id: layer.id, name: layer.name, bars, lanes: orderLanes(bars, mappedOrder) };
     });
   }
