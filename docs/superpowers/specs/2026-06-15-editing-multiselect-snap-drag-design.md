@@ -91,10 +91,16 @@ Split it:
   lifecycle (`beginMarquee/moveMarquee/endMarquee`). Replaces the
   existing in-store mutation methods.
 
-`extendTo` selects the contiguous run of notes between `anchor` and the
-clicked note in document order within the relevant lane(s); exact
-ordering rule documented at implementation time against `StructNote`
-ordering.
+`extendTo` copies **Windows File Explorer list-view selection
+semantics**: a pivot/anchor is set by a plain click or ctrl-click;
+shift-click selects the contiguous run from anchor to target, *replacing*
+the previous shift-range (re-shift-clicking recomputes from the same
+anchor rather than accumulating); ctrl-click toggles an individual note
+and moves the anchor to it. The mixed case (shift-select a range,
+ctrl-deselect one in the middle, then shift-click further down) mirrors
+Explorer's behaviour exactly, match it rather than inventing our own.
+"Contiguous run" is over the editor's note ordering (absolute-beat order;
+exact tie-break across lanes documented at implementation time).
 
 ### 3. Selection frame
 
@@ -146,13 +152,18 @@ into `toolbar.tsx`.
   reading `SelectionStore`):
   - `deleteSelection()` → `jot.elements.delete(...selectedIds)`, then
     clears selection.
-  - `moveSelection(deltaBeat, targetLane)` → compute each selected note's
-    new position: the **anchor note snaps** to the grid (when enabled),
-    all others move by the **same delta** (relative spacing preserved).
-    **Cross-bar moves re-home `barId`** with a corrected bar-relative
-    beat when a note crosses a bar boundary. Lane reassigned to
-    `targetLane` (the currently-rendered instrument track under the
-    pointer's y). Commit via a single `jot.elements.setAll(updates)`.
+  - `moveSelection(deltaAbsBeat, targetLane)` → all math happens in the
+    **absolute-beat coordinate** (cumulative sum of each bar's `beats`;
+    meter-aware, tempo-independent). The **anchor note snaps** in beat
+    space (grid subdivisions are beat fractions; a 16th is 0.25 beat in
+    every bar, fast or slow), all others move by the **same absBeat
+    delta** (relative spacing preserved). Each note then **re-homes
+    independently** (absBeat → owning bar via cumulative `startBeats` →
+    `barId` + bar-relative beat), so a group straddling a boundary lands
+    partly in each bar, on the beat in both, with no special-casing.
+    Lane reassigned to `targetLane` (the currently-rendered instrument
+    track under the pointer's y). Commit via a single
+    `jot.elements.setAll(updates)`.
 - **Drag interaction** (pointer handlers on notes / bars row): a small px
   threshold distinguishes click-select from drag-move. In-flight drag
   offset is **transient interaction state**, a presenter observable for
@@ -219,7 +230,28 @@ no store depends on a presenter; graph stays acyclic.
 
 ## Risks / open details (resolve at implementation time)
 
-- Exact contiguous-run ordering rule for shift-`extendTo` across
-  multi-lane selections.
+- Exact tie-break for the contiguous-run order in shift-`extendTo` when
+  notes across lanes share an absolute beat.
 - Selection-frame placement against the score-stacking contract.
-- Cross-bar re-home math at tempo/meter changes (bar geometry varies).
+- Per-bar `pxPerBeat` (densityFactor) makes px↔absBeat piecewise; reuse
+  the existing `placeholderAt` `startBeats` iteration in the shared
+  coordinate helper.
+
+## Tempo / meter: why beat-space movement is sufficient
+
+Notes are stored as `barId` + bar-relative `beat` in **quarter-note beat
+units**, which are tempo-independent. Because both storage and
+`moveSelection` work in beat space:
+
+- **Meter changes** fall out for free: 4 quarter notes dragged into a 7/4
+  bar are still 4 quarter notes, now filling 4/7 of the bar's duration, no rescaling.
+- **Discrete tempo changes** (at a bar boundary or mid-bar, the math is
+  barline-agnostic) fall out for free: the notes keep their beat spacing;
+  they simply play faster/slower because **beat→time** conversion (a
+  function of bpm, owned by the playback engine and MIDI converter) is a
+  separate downstream concern that movement never touches.
+- **Interpolated (gradual) bpm transitions**: out of scope here and, per
+  the same reasoning, automatically unaffected by movement, they only
+  change beat→time, not beat positions. (The TS beat→time converter does
+  not yet implement interpolated bpm; that remains a separate future
+  to-do, independent of this work.)
