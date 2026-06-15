@@ -1,15 +1,21 @@
 import { untracked } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
-import { Point } from 'src/utils/geom';
+import { Box, Point } from 'src/utils/geom';
 import { Jot } from 'src/schema/dsl/dsl';
 import type { StructuralPresenter } from 'src/editing/structure/structural_presenter';
+import type { StructNote } from 'src/editing/structure/structure_store';
 import type { TempoPresenter } from 'src/editing/playback/tempo_presenter';
 import type { PaletteStore } from 'src/editing/palette/palette_store';
 import { perfProbe } from 'src/utils/perf_probe';
 import { jotPlayer } from 'src/editing/playback/player';
 import { BarTiming, timeToX } from 'src/editing/playback/timeline';
 import { SelectionStore } from 'src/editing/selection/selection';
+import {
+  SelectionPresenter,
+  SelectionPresenterContext,
+  orderedNotes,
+} from 'src/editing/selection/selection_presenter';
 import styles from './jot_editor.module.css';
 import {
   AudioWorkletWarningModal,
@@ -136,9 +142,20 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
   );
   const transcribePresenter = new TranscribePresenter({ transcribe, jotEditorPresenter });
   if (options.examples) jotEditorPresenter.setExamples(options.examples);
-  const selection = new SelectionStore(jotEditorStore);
+  const selection = new SelectionStore();
+  const selectionPresenter = new SelectionPresenter(selection, () =>
+    orderedNotes(jotEditorStore.structural?.layers ?? [])
+  );
   const editingStore = new EditingStore();
   const editingPresenter = new EditingPresenter(editingStore, jotEditorStore);
+
+  // Marquee hit-test: which notes a rubber-band box (scrollViewport coords)
+  // encloses. Wired up with real geometry in the drag/coordinate layer; until
+  // then a marquee draws but selects nothing (prior behaviour).
+  const marqueeHitTest = (_box: Box): StructNote[] => [];
+  // Origin of the in-flight marquee drag (scrollViewport coords). Closure-local
+  // transient interaction state, not persisted, not observed.
+  let marqueeOrigin: Point | undefined;
 
   // Translate a click on `.jotContainer` into the marquee's coordinate
   // space (the inner `.scrollViewport` wrapper, which is where the
@@ -161,10 +178,18 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
   const onMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     e.preventDefault();
-    selection.beginSelection(containerPoint(e));
+    marqueeOrigin = containerPoint(e);
+    selectionPresenter.beginMarquee(marqueeOrigin);
   };
   const onMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    selection.moveSelection(containerPoint(e));
+    if (!marqueeOrigin) return;
+    const p = containerPoint(e);
+    selectionPresenter.updateMarquee(marqueeOrigin, p, marqueeHitTest(Box.create(marqueeOrigin, p)));
+  };
+  const onMouseUp = () => {
+    if (!marqueeOrigin) return;
+    marqueeOrigin = undefined;
+    selectionPresenter.endMarquee();
   };
 
   /**
@@ -213,7 +238,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
   // the mute/solo snapshots) still flow through props/memo below and stay
   // reactive. Reads of `store.*` inside these bodies run at call time, not
   // render time, so they don't subscribe createJotEditor to anything.
-  const onPatternClick = (name: string) => selection.togglePattern(name);
+  const onPatternClick = (name: string) => selectionPresenter.togglePattern(name);
   const onSeek = (x: number) => playbackPresenter.seekToX(x);
   const onZoomBy = (factor: number) => viewportPresenter.setZoom(viewport.zoom * factor);
   const onMoveTrack = (from: number, to: number) => mixerPresenter.moveTrack(from, to);
@@ -366,6 +391,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
         <ViewportStoreContext.Provider value={viewport}>
         <MixerStoreContext.Provider value={mixer}>
         <SelectionContext.Provider value={selection}>
+        <SelectionPresenterContext.Provider value={selectionPresenter}>
         <EditingStoreContext.Provider value={editingStore}>
         <EditingPresenterContext.Provider value={editingPresenter}>
           <NoteProvenanceContext.Provider value={provenanceContextValue}>
@@ -432,7 +458,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                         onPatternClick={onPatternClick}
                         onMouseDown={onMouseDown}
                         onMouseMove={onMouseMove}
-                        onMouseUp={selection.endSelection}
+                        onMouseUp={onMouseUp}
                         onSeek={onSeek}
                         onZoomBy={onZoomBy}
                         trackOrder={mixer.trackOrder}
@@ -492,6 +518,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
           </NoteProvenanceContext.Provider>
         </EditingPresenterContext.Provider>
         </EditingStoreContext.Provider>
+        </SelectionPresenterContext.Provider>
         </SelectionContext.Provider>
         </MixerStoreContext.Provider>
         </ViewportStoreContext.Provider>

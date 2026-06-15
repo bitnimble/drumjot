@@ -12,6 +12,7 @@ import { ViewConfig } from 'src/editing/viewport/view_config';
 import { msOffsetToBeats } from 'src/schema/dsl/tempo';
 import { BarTimingsContext } from '../jot_editor_contexts';
 import { SelectionContext } from 'src/editing/selection/selection';
+import { SelectionPresenterContext } from 'src/editing/selection/selection_presenter';
 import { NoteProvenanceContext } from '../provenance/provenance_contexts';
 import styles from './score.module.css';
 import { NoteProvenanceDetails } from './note_provenance_details';
@@ -384,7 +385,8 @@ const NoteView = observer(
     const isCross = note.modifiers.includes('x');
     const badge = pickBadge(note);
     const selection = React.useContext(SelectionContext);
-    const selected = selection?.selectedNote === note;
+    const selectionPresenter = React.useContext(SelectionPresenterContext);
+    const selected = selection?.isSelected(note) ?? false;
     const [hovered, setHovered] = React.useState(false);
     const showLabel = selected || hovered;
     const description = offGrid
@@ -460,7 +462,10 @@ const NoteView = observer(
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => {
           e.stopPropagation();
-          selection?.selectNote(note);
+          // ctrl/cmd = toggle individual; shift = extend range; plain = replace.
+          if (e.ctrlKey || e.metaKey) selectionPresenter?.toggle(note);
+          else if (e.shiftKey) selectionPresenter?.extendTo(note);
+          else selectionPresenter?.replace(note);
         }}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
