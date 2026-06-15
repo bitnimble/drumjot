@@ -30,8 +30,10 @@ import type { Element, Jot, PatternDef } from 'src/schema/schema';
  */
 
 const EPS = 1e-9;
-/** NUL separates barId from layerId in a bar-cell key (can't occur in an id). */
-const KEY_SEP = '\u0000';
+/** Separates barId from layerId in a bar-cell key. Bar and layer ids are
+ *  converter-generated slugs (`b0`, `v0`, `primary`, …) that never contain a
+ *  colon, so this can't produce an ambiguous key. */
+const KEY_SEP = ':';
 const EMPTY_IDS: readonly string[] = Object.freeze([]);
 /** Pass to a `computedFn` so unchanged content (by value) doesn't notify
  *  observers, even when the upstream bar cell recomputed. */
