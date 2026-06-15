@@ -1,0 +1,102 @@
+name: Build and deploy to R2
+description: >
+  Build the Drumjot frontend (Vite) and sync dist/ to a Cloudflare R2 bucket
+  under the given prefix, then purge the HTML entrypoint (<base>/ and
+  <base>/index.html) from the Cloudflare cache. Content-hashed assets
+  (Vite emits hashed filenames under dist/assets/) are never purged.
+
+inputs:
+  prefix:
+    description: Object key prefix within the bucket. Must be non-empty; include a trailing slash.
+    required: true
+  purge-base-url:
+    description: Public base URL whose / and /index.html are purged after upload.
+    required: true
+  account-id:
+    description: Cloudflare account ID (used to build the R2 S3 endpoint).
+    required: true
+  bucket:
+    description: Target R2 bucket name.
+    required: true
+  zone-id:
+    description: Cloudflare Zone ID for the cache purge.
+    required: true
+  access-key-id:
+    description: R2 API token access key ID.
+    required: true
+  secret-access-key:
+    description: R2 API token secret access key.
+    required: true
+  purge-token:
+    description: Cloudflare API token scoped to Cache Purge.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: latest
+
+    - name: Install dependencies
+      shell: bash
+      run: bun install --frozen-lockfile
+
+    - name: Build
+      shell: bash
+      # `bun run build` = lint:design + tsc --noEmit + `vite build`, which
+      # writes the static site to dist/. This is a static bundle: it talks to
+      # the transcriber backend only at runtime via /api, and degrades
+      # gracefully (a "Server is down" toast) when that backend is absent, so
+      # the deployed preview is fine for loading/editing local files.
+      run: bun run build
+
+    - name: Upload dist/ to R2
+      shell: bash
+      env:
+        # R2 is S3-compatible; the AWS CLI talks to it via the account endpoint.
+        AWS_ACCESS_KEY_ID: ${{ inputs.access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.secret-access-key }}
+        AWS_DEFAULT_REGION: auto
+        R2_ACCOUNT_ID: ${{ inputs.account-id }}
+        R2_BUCKET: ${{ inputs.bucket }}
+        R2_PREFIX: ${{ inputs.prefix }}
+      run: |
+        set -euo pipefail
+        # A non-empty prefix keeps `--delete` scoped to this deploy, never the
+        # whole bucket.
+        : "${R2_BUCKET:?bucket input is required}"
+        : "${R2_ACCOUNT_ID:?account-id input is required}"
+        : "${R2_PREFIX:?prefix input is required (must be non-empty)}"
+        aws s3 sync dist/ "s3://${R2_BUCKET}/${R2_PREFIX}" \
+          --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+          --delete \
+          --no-progress
+
+    - name: Purge HTML entrypoint from Cloudflare cache
+      shell: bash
+      env:
+        CF_ZONE_ID: ${{ inputs.zone-id }}
+        CF_PURGE_TOKEN: ${{ inputs.purge-token }}
+        PURGE_BASE_URL: ${{ inputs.purge-base-url }}
+      run: |
+        set -euo pipefail
+        : "${CF_ZONE_ID:?zone-id input is required}"
+        : "${PURGE_BASE_URL:?purge-base-url input is required}"
+        # Strip a trailing slash so we don't build "<base>//".
+        url="${PURGE_BASE_URL%/}"
+        # Build the JSON payload with jq so URL contents can't break the JSON.
+        payload=$(jq -n --arg root "${url}/" --arg index "${url}/index.html" \
+          '{files: [$root, $index]}')
+        status=$(curl -sS -o response.json -w '%{http_code}' -X POST \
+          "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/purge_cache" \
+          -H "Authorization: Bearer ${CF_PURGE_TOKEN}" \
+          -H "Content-Type: application/json" \
+          --data "$payload")
+        cat response.json
+        # Cloudflare can return HTTP 200 with {"success": false}; check both.
+        if [ "$status" != "200" ] || [ "$(jq -r '.success' response.json)" != "true" ]; then
+          echo "::error::Cloudflare purge failed (HTTP $status)"
+          exit 1
+        fi
