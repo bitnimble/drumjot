@@ -36,7 +36,7 @@ if [ "$running" != "true" ]; then
         echo "error: container '$CONTAINER' does not exist. Create it with:" >&2
         echo >&2
         echo "  ${DOCKER[*]} run -d --name $CONTAINER \\" >&2
-        echo "      --gpus all \\" >&2
+        echo "      --gpus all --shm-size=2g \\" >&2
         echo "      -v /codebox-workspace:/codebox-workspace \\" >&2
         echo "      -v $REPO:$REPO \\" >&2
         echo "      drumjot-sandbox" >&2

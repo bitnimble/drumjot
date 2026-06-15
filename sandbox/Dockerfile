@@ -31,10 +31,12 @@
 # Run (detached + idle, then exec a shell in):
 #
 #   docker run -d --name drumjot-sandbox \
-#       --gpus all \
+#       --gpus all --shm-size=2g \
 #       -v /codebox-workspace:/codebox-workspace \
 #       drumjot-sandbox
 #   docker exec -it drumjot-sandbox bash
+#
+# (--shm-size=2g: default 64MB /dev/shm hangs DataLoader num_workers>0.)
 #
 # Drop `--gpus all` to run CPU-only. Mount /codebox-workspace read-only
 # (append `:ro`) if you only want to inspect prior output without risking

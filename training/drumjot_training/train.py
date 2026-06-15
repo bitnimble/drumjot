@@ -503,6 +503,26 @@ def _fmt_eta(seconds: float) -> str:
     return f"{s // 3600}:{(s % 3600) // 60:02d}:{s % 60:02d}"
 
 
+def _lane_converged(curve, window: int, slope_thr: float, jitter_thr: float) -> bool:
+    """Has one lane's per-epoch val-F1 `curve` converged over its last `window`
+    epochs? Two conditions, BOTH required:
+    - **trend flat**: the least-squares slope is ~0 (|slope| < `slope_thr`, F1 per
+      epoch) -- it "stopped increasing".
+    - **low jitter**: the residual std *around that trend line* is small (<
+      `jitter_thr`) -- it's not still bouncing up and down.
+    Measuring jitter as the residual (not raw std) separates the two cleanly: a
+    still-climbing lane fails on slope; an early lane oscillating around a flat mean
+    fails on jitter (so we keep training until it settles). Returns False until at
+    least `window` points exist."""
+    if len(curve) < window:
+        return False
+    y = np.asarray(curve[-window:], dtype=float)
+    x = np.arange(len(y), dtype=float)
+    slope, intercept = np.polyfit(x, y, 1)
+    jitter = float(np.std(y - (slope * x + intercept)))
+    return abs(float(slope)) < slope_thr and jitter < jitter_thr
+
+
 def train_loop(
     model,
     clips,
@@ -519,6 +539,11 @@ def train_loop(
     warmup_steps: int = 0,
     loss_fn: str = "bce",
     keep_best: bool = False,
+    early_stop: bool = False,
+    es_window: int = 8,
+    es_slope: float = 0.002,
+    es_jitter: float = 0.015,
+    es_min_epochs: int = 20,
     log: Callable[[str], None] = print,
 ) -> dict:
     """Train `model` on `clips` in padded mini-batches of `batch_size` (clips
@@ -528,7 +553,15 @@ def train_loop(
     `clips` is any indexable+sized clip source (an in-RAM `list[Clip]` or a
     streaming `CachedClips`); `num_workers` > 0 lets the DataLoader prefetch
     batches from the SSD in parallel with GPU compute. `pos_weight` may be a
-    scalar or a per-lane array (length n_lanes)."""
+    scalar or a per-lane array (length n_lanes).
+
+    `early_stop` ends training once EVERY lane (with val onsets) has converged --
+    `_lane_converged` over the last `es_window` epochs (|slope| < `es_slope` AND
+    residual jitter < `es_jitter`) -- so a single still-climbing lane (e.g.
+    open-hat) keeps the whole run going. `epochs` is the absolute cap, and nothing
+    stops before `es_min_epochs`. Records `history["stopped_epoch"]`. Uses the
+    per-lane val curves, which it computes when `early_stop` even without
+    `keep_best`."""
     import math
 
     import torch
@@ -632,9 +665,10 @@ def train_loop(
         avg = total / max(1, n_batches)
         history["train_loss"].append(avg)
         if val_clips:
-            if keep_best:
+            if keep_best or early_stop:
                 # one eval pass -> per-clip per-lane F1; derive the clip-macro (for
-                # the log, matching mean_f1) AND track each lane's own best epoch.
+                # the log, matching mean_f1), the per-lane curves (early-stop +
+                # keep_best read them), AND track each lane's own best epoch.
                 per = [evaluate_clip(model, c, cfg) for c in val_clips]
                 clip_macros = []
                 for c, pl in zip(val_clips, per, strict=True):
@@ -642,14 +676,14 @@ def train_loop(
                     if present:
                         clip_macros.append(sum(present) / len(present))
                 vf1 = sum(clip_macros) / len(clip_macros) if clip_macros else 0.0
-                sd = model.state_dict()
+                sd = model.state_dict() if keep_best else None
                 for lane in cfg.lanes:
                     vals = [per[i][lane] for i, c in enumerate(val_clips) if c.onsets_by_lane.get(lane)]
                     if not vals:
                         continue
                     lf = sum(vals) / len(vals)
                     history.setdefault(f"vf1_{lane}", []).append(lf)  # per-epoch per-lane curve
-                    if lf > best_lane_f1[lane]:
+                    if keep_best and lf > best_lane_f1[lane]:
                         best_lane_f1[lane], best_lane_epoch[lane] = lf, epoch
                         pref = f"heads.{lane}."
                         for k, v in sd.items():
@@ -673,6 +707,19 @@ def train_loop(
             checkpoint.save(out_dir, model, cfg, {ln: cfg.peak_threshold for ln in cfg.lanes},
                             in_dim=embeddings.feat_dim(cfg.high_band))
             log(f"  checkpoint saved @ epoch {epoch} (untuned) -> {out_dir}")
+        # convergence early-stop: stop once EVERY lane with val onsets is converged
+        # (so a still-climbing lane blocks it); `epochs` is the absolute cap and we
+        # never stop before `es_min_epochs`.
+        if early_stop and val_clips and (epoch + 1) >= es_min_epochs:
+            tracked = [ln for ln in cfg.lanes if history.get(f"vf1_{ln}")]
+            if tracked and all(
+                _lane_converged(history[f"vf1_{ln}"], es_window, es_slope, es_jitter)
+                for ln in tracked
+            ):
+                history["stopped_epoch"] = float(epoch)
+                log(f"  early stop @ epoch {epoch}: all {len(tracked)} lanes converged "
+                    f"(|slope|<{es_slope}, jitter<{es_jitter}, last {es_window} ep)")
+                break
     if keep_best and best_lane_state:
         # load each lane's head from its own best epoch (strict=False: lanes with no
         # val onsets aren't in best_lane_state and keep their final-epoch weights).
@@ -1132,6 +1179,14 @@ def main(argv: list[str] | None = None) -> None:
                     help="restore each lane's head from the epoch where THAT lane's val F1 "
                     "peaked (per-lane early stopping; lanes overfit at different times -- "
                     "cymbals early, hats late); --no-keep-best keeps the final epoch (legacy)")
+    ap.add_argument("--early-stop", default=True, action=argparse.BooleanOptionalAction,
+                    help="end training once EVERY lane's val F1 has converged (flat trend + low "
+                    "jitter over --es-window epochs); --epochs is the absolute cap. "
+                    "--no-early-stop trains the full --epochs (reproduces fixed-length runs)")
+    ap.add_argument("--es-window", type=int, default=8, help="epochs in the convergence window")
+    ap.add_argument("--es-slope", type=float, default=0.002, help="max |val-F1 slope|/epoch to be 'flat'")
+    ap.add_argument("--es-jitter", type=float, default=0.015, help="max residual std around the trend")
+    ap.add_argument("--es-min-epochs", type=int, default=20, help="never stop before this many epochs")
     ap.add_argument("--sib-neg-weight", type=float, default=Config.sib_neg_weight,
                     help="loss multiplier on hard negatives (confusable sibling active, "
                     "this lane silent); 1 disables")
@@ -1220,6 +1275,8 @@ def main(argv: list[str] | None = None) -> None:
         out_dir=args.out, checkpoint_every=10,
         lr_schedule=args.lr_schedule, warmup_steps=args.warmup_steps, loss_fn=args.loss,
         keep_best=args.keep_best,
+        early_stop=args.early_stop, es_window=args.es_window, es_slope=args.es_slope,
+        es_jitter=args.es_jitter, es_min_epochs=args.es_min_epochs,
         log=lambda s: print(s, flush=True),
     )
     thresholds = tune_thresholds(model, val_clips, cfg)

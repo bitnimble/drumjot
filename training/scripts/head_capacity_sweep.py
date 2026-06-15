@@ -173,7 +173,14 @@ def main():
     ap.add_argument("--hidden", default="128,512", help="comma list of head hidden sizes to sweep")
     ap.add_argument("--layers", type=int, default=2)
     ap.add_argument("--seeds", default="0")
-    ap.add_argument("--epochs", type=int, default=40)
+    ap.add_argument("--epochs", type=int, default=80, help="absolute epoch cap (early-stop ends sooner)")
+    ap.add_argument("--early-stop", default=True, action=argparse.BooleanOptionalAction,
+                    help="stop each arm once every lane's val-F1 has converged (flat trend + low "
+                    "jitter over --es-window epochs); --epochs is the cap. --no-early-stop = fixed epochs")
+    ap.add_argument("--es-window", type=int, default=8, help="epochs in the convergence window")
+    ap.add_argument("--es-slope", type=float, default=0.002, help="max |val-F1 slope| (per epoch) to be 'flat'")
+    ap.add_argument("--es-jitter", type=float, default=0.015, help="max residual std around the trend")
+    ap.add_argument("--es-min-epochs", type=int, default=20, help="never stop before this many epochs")
     ap.add_argument("--batch", type=int, default=8, help="held constant across arms (fair capacity A/B)")
     ap.add_argument("--num-workers", type=int, default=8,
                     help="DataLoader prefetch workers: stream .npy from the (NFS) cache in parallel "
@@ -258,7 +265,10 @@ def main():
             t1 = time.perf_counter()
             hist = train_loop(model, train_clips, cfg, epochs=args.epochs, pos_weight=pos_w,
                               batch_size=args.batch, num_workers=args.num_workers,
-                              val_clips=val_clips, keep_best=True, log=log)
+                              val_clips=val_clips, keep_best=True, log=log,
+                              early_stop=args.early_stop, es_window=args.es_window,
+                              es_slope=args.es_slope, es_jitter=args.es_jitter,
+                              es_min_epochs=args.es_min_epochs)
             thr = tune_thresholds(model, val_clips, cfg)
             f1 = eval_per_lane(model, val_clips, cfg, thr)
             # dense per-epoch curves (UNTUNED 0.5-thr val F1, every epoch) -> tell if a
