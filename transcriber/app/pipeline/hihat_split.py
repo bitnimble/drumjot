@@ -34,10 +34,11 @@ Architectural notes:
 * **Synthetic pitch `H` for open hi-hat.** Drumjot's DSL has only one
   notational hi-hat pitch (`h`) with `:o` / `:c` modifiers, so `H` is an
   *internal* routing key for the transcribe pass; it must not leak as a
-  permanent extra voice in finished transcriptions. Today the backend
+  permanent extra layer in finished transcriptions. Today the backend
   emits `H` as a distinct MIDI note (46 = GM open hi-hat) and the
-  frontend folds it back via `canonicalProvenancePitch` in
-  `src/jot_view/store.ts` plus the GM table in `src/midi/from_midi.ts`.
+  frontend folds it back via `canonicalProvenanceLane` in
+  `src/editing/provenance/provenance_store.ts` plus the GM table in
+  `src/midi/from_midi.ts`.
   The notation-correct follow-up is to fold `H` → `h:o` backend-side
   before MIDI emission so `note_provenance.json` carries the canonical
   pitch directly (eliminates the asymmetric coupling). See
