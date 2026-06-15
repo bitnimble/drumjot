@@ -127,7 +127,7 @@ past the score's bottom edge to overlap the minimap or playback bar
 below; flipping above (`usePopoverFlipAbove`) only worked when the
 anchor was near the bottom.
 
-`PopoverPortal` (`src/jot_view/score.tsx`) renders the popover into
+`PopoverPortal` (`src/editing/score.tsx`) renders the popover into
 `document.body` via `createPortal`. Position is set inline at render
 time from the anchor's `getBoundingClientRect()` and applied as
 `position: fixed`; the wrapping `observer(...)` HOC subscribes to

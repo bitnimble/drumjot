@@ -14,7 +14,7 @@ import {
 } from 'src/schema/descriptors';
 import { createReactiveDoc } from 'src/schema/reactive_doc';
 
-const Note = record({ pitch: z.string(), beat: z.number() });
+const Note = record({ lane: z.string(), beat: z.number() });
 
 describe('register fields', () => {
   it('reads the hydrated default and reflects a write', () => {
@@ -54,10 +54,10 @@ describe('idMap', () => {
     const Song = record({ notes: idMap(Note) });
     const { model } = createReactiveDoc(Song);
     runInAction(() => {
-      model.notes.set('n1', { pitch: 'h', beat: 0 });
+      model.notes.set('n1', { lane: 'h', beat: 0 });
     });
     expect(model.notes.size).toBe(1);
-    expect(model.notes.get('n1')!.pitch).toBe('h');
+    expect(model.notes.get('n1')!.lane).toBe('h');
     expect(model.notes.get('n1')!.beat).toBe(0);
   });
 
@@ -65,13 +65,13 @@ describe('idMap', () => {
     const Song = record({ notes: idMap(Note) });
     const { model } = createReactiveDoc(Song);
     runInAction(() => {
-      model.notes.set('n1', { pitch: 'h', beat: 0 });
+      model.notes.set('n1', { lane: 'h', beat: 0 });
     });
     const note = model.notes.get('n1')!;
     const seen: string[] = [];
-    const dispose = autorun(() => seen.push(note.pitch));
+    const dispose = autorun(() => seen.push(note.lane));
     runInAction(() => {
-      note.pitch = 'rd';
+      note.lane = 'rd';
     });
     dispose();
     expect(seen).toEqual(['h', 'rd']);
@@ -83,7 +83,7 @@ describe('idMap', () => {
     const sizes: number[] = [];
     const dispose = autorun(() => sizes.push(model.notes.size));
     runInAction(() => {
-      model.notes.set('n1', { pitch: 'h', beat: 0 });
+      model.notes.set('n1', { lane: 'h', beat: 0 });
     });
     runInAction(() => {
       model.notes.delete('n1');
@@ -224,7 +224,7 @@ describe('deep initialization', () => {
     });
     const { model } = createReactiveDoc(Doc, {
       meta: { title: 'song' },
-      notes: { n1: { pitch: 'h', beat: 0 }, n2: { pitch: 'k', beat: 1 } },
+      notes: { n1: { lane: 'h', beat: 0 }, n2: { lane: 'k', beat: 1 } },
     });
     expect(model.meta.title).toBe('song');
     expect(model.notes.size).toBe(2);
@@ -238,11 +238,11 @@ describe('convergence', () => {
     const a = createReactiveDoc(Song);
     const b = createReactiveDoc(Song);
     runInAction(() => {
-      a.model.notes.set('n1', { pitch: 'h', beat: 0 });
+      a.model.notes.set('n1', { lane: 'h', beat: 0 });
     });
     b.doc.import(a.doc.export({ mode: 'update' }));
     expect(b.model.notes.size).toBe(1);
-    expect(b.model.notes.get('n1')!.pitch).toBe('h');
+    expect(b.model.notes.get('n1')!.lane).toBe('h');
   });
 
   it('concurrent adds in different docs both survive the merge', () => {
@@ -250,17 +250,17 @@ describe('convergence', () => {
     const a = createReactiveDoc(Song);
     const b = createReactiveDoc(Song);
     runInAction(() => {
-      a.model.notes.set('na', { pitch: 'h', beat: 0 });
+      a.model.notes.set('na', { lane: 'h', beat: 0 });
     });
     runInAction(() => {
-      b.model.notes.set('nb', { pitch: 'k', beat: 1 });
+      b.model.notes.set('nb', { lane: 'k', beat: 1 });
     });
     a.doc.import(b.doc.export({ mode: 'update' }));
     b.doc.import(a.doc.export({ mode: 'update' }));
     expect(a.model.notes.size).toBe(2);
     expect(b.model.notes.size).toBe(2);
-    expect(a.model.notes.get('nb')!.pitch).toBe('k');
-    expect(b.model.notes.get('na')!.pitch).toBe('h');
+    expect(a.model.notes.get('nb')!.lane).toBe('k');
+    expect(b.model.notes.get('na')!.lane).toBe('h');
   });
 });
 
@@ -277,15 +277,15 @@ describe('robustness / API surface', () => {
   });
 
   it('set replaces the entry, dropping fields absent from the new value', () => {
-    const Stickable = record({ pitch: z.string(), sticking: z.string().optional() });
+    const Stickable = record({ lane: z.string(), sticking: z.string().optional() });
     const Song = record({ notes: idMap(Stickable) });
     const { model } = createReactiveDoc(Song);
     runInAction(() => {
-      model.notes.set('n1', { pitch: 'h', sticking: 'r' });
+      model.notes.set('n1', { lane: 'h', sticking: 'r' });
     });
     expect(model.notes.get('n1')!.sticking).toBe('r');
     runInAction(() => {
-      model.notes.set('n1', { pitch: 'h' });
+      model.notes.set('n1', { lane: 'h' });
     });
     expect(model.notes.get('n1')!.sticking).toBeUndefined();
   });
@@ -308,7 +308,7 @@ describe('robustness / API surface', () => {
     const rd = createReactiveDoc(Doc);
     const base = rd.containerCount();
     runInAction(() => {
-      rd.model.notes.set('n1', { pitch: 'h', beat: 0 });
+      rd.model.notes.set('n1', { lane: 'h', beat: 0 });
     });
     expect(rd.containerCount()).toBe(base + 1);
     runInAction(() => {
@@ -321,11 +321,11 @@ describe('robustness / API surface', () => {
     const Song = record({ notes: idMap(Note) });
     const { model } = createReactiveDoc(Song);
     runInAction(() => {
-      model.notes.set('n1', { pitch: 'h', beat: 0 });
-      model.notes.set('n2', { pitch: 'k', beat: 1 });
+      model.notes.set('n1', { lane: 'h', beat: 0 });
+      model.notes.set('n2', { lane: 'k', beat: 1 });
     });
     expect(
-      [...model.notes.values()].map((n) => n.pitch).sort()
+      [...model.notes.values()].map((n) => n.lane).sort()
     ).toEqual(['h', 'k']);
     expect([...model.notes.keys()].sort()).toEqual(['n1', 'n2']);
     expect([...model.notes].map(([id]) => id).sort()).toEqual(['n1', 'n2']);

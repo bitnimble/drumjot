@@ -31,7 +31,7 @@ function omitUndef(o: Obj): Obj {
 
 type Ctx = {
   ids: { n: number };
-  voiceId?: string;
+  layerId?: string;
   barId?: string;
   patternIdByName: Record<string, string>;
 };
@@ -57,7 +57,7 @@ function convertElement(
   ctx: Ctx,
   topLevel: boolean
 ): Array<[string, Obj]> {
-  const anchor = topLevel ? omitUndef({ barId: ctx.barId, voiceId: ctx.voiceId }) : {};
+  const anchor = topLevel ? omitUndef({ barId: ctx.barId, layerId: ctx.layerId }) : {};
   switch (el.kind) {
     case 'rest':
       return [];
@@ -72,7 +72,7 @@ function convertElement(
             ...anchor,
             beat,
             duration,
-            pitch: el.pitch,
+            lane: el.lane,
             modifiers: el.modifiers ?? [],
             sticking: el.sticking,
             roll: el.roll ? true : undefined,
@@ -170,18 +170,18 @@ export function dslToInit(jot: DslJot): Init<typeof JotSchema> {
     };
   }
 
-  // Voices (always at least one explicit voice).
-  const voices: Obj = {};
-  const voiceIds: string[] = [];
-  const dslVoices = jot.voices.length > 0 ? jot.voices : [{ bars: [] }];
-  dslVoices.forEach((v, i) => {
+  // Layers (always at least one explicit layer).
+  const layers: Obj = {};
+  const layerIds: string[] = [];
+  const dslLayers = jot.layers.length > 0 ? jot.layers : [{ bars: [] }];
+  dslLayers.forEach((v, i) => {
     const id = `v${i}`;
-    voiceIds[i] = id;
-    voices[id] = omitUndef({ id, name: v.name });
+    layerIds[i] = id;
+    layers[id] = omitUndef({ id, name: v.name });
   });
 
-  // Bar grid from voice 0 (shared); prepend an anacrusis bar if present.
-  const grid = dslVoices[0];
+  // Bar grid from layer 0 (shared); prepend an anacrusis bar if present.
+  const grid = dslLayers[0];
   const realBars = grid.bars;
   const realBarIds: string[] = [];
   const bars: Obj[] = [];
@@ -199,10 +199,10 @@ export function dslToInit(jot: DslJot): Init<typeof JotSchema> {
     bars.push({ id, tsCount: t.count, tsUnit: t.unit });
   }
 
-  // Elements: every voice's bars (+ anacrusis) flattened into one map.
+  // Elements: every layer's bars (+ anacrusis) flattened into one map.
   const elements: Obj = {};
-  dslVoices.forEach((v, vi) => {
-    const ctx = (barId: string): Ctx => ({ ids, voiceId: voiceIds[vi], barId, patternIdByName });
+  dslLayers.forEach((v, vi) => {
+    const ctx = (barId: string): Ctx => ({ ids, layerId: layerIds[vi], barId, patternIdByName });
     if (anacrusisBarId && v.anacrusis && v.anacrusis.length > 0) {
       Object.assign(
         elements,
@@ -226,10 +226,10 @@ export function dslToInit(jot: DslJot): Init<typeof JotSchema> {
     tempoEvents[id] = { id, barId, beat: ev.beat, bpm: ev.bpm };
   }
 
-  // Instruments by pitch letter.
+  // Instruments by lane letter.
   const instruments: Obj = {};
-  for (const [pitch, inst] of Object.entries(gm.instrumentMapping ?? {})) {
-    instruments[pitch] = omitUndef({
+  for (const [lane, inst] of Object.entries(gm.instrumentMapping ?? {})) {
+    instruments[lane] = omitUndef({
       kind: inst.kind,
       name: inst.name,
       limb: inst.limb,
@@ -240,11 +240,10 @@ export function dslToInit(jot: DslJot): Init<typeof JotSchema> {
   return omitUndef({
     title: jot.title,
     bpm: initialBpm(jot),
-    drumsT0Sec: gm.drumsT0Sec,
-    signalT0Sec: gm.signalT0Sec,
+    songLeadIn: gm.songLeadIn,
     leadBars: gm.leadBars,
     gridDivision: gm.gridDivision,
-    voices,
+    layers,
     bars,
     elements,
     instruments,

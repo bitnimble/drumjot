@@ -4,7 +4,7 @@
  * Design decisions / assumptions (each tagged [B#] inline below):
  *
  *  [B1] We always emit a single Format-1 track on the drum channel (default
- *       10). All voices in the source Jot are merged onto that track because
+ *       10). All layers in the source Jot are merged onto that track because
  *       `||` global simultaneity in the DSL is about timing, not about
  *       distinct MIDI tracks.
  *
@@ -18,8 +18,8 @@
  *
  *  [B4] Per-note `metadata.midi.note` and `metadata.midi.velocity` win when
  *       present (this is the channel the reader uses to preserve fidelity).
- *       Otherwise we fall back to `instrumentMapping[pitch].midi` and, for
- *       unknown pitches, to a heuristic in `defaultMidiNote`.
+ *       Otherwise we fall back to `instrumentMapping[lane].midi` and, for
+ *       unknown lanes, to a heuristic in `defaultMidiNote`.
  *
  *  [B5] When no velocity is supplied we map `vol` buckets to GM-ish values
  *       and apply `:a` / `:g` adjustments. Volume transitions
@@ -44,8 +44,8 @@
  */
 import { writeMidi, MidiEvent } from 'midi-file';
 import { Instrument, Jot, Modifier, Volume } from 'src/schema/dsl/dsl';
-import { buildJotModel } from 'src/jot_view/jot_view_store';
-import type { StructNote } from 'src/jot_view/structure/structure_store';
+import { buildStructural } from 'src/editing/jot_editor_store';
+import type { StructNote } from 'src/editing/structure/structure_store';
 import {
   ACCENT_BOOST,
   DEFAULT_VELOCITY,
@@ -78,9 +78,10 @@ export const TICKS_PER_BEAT = 480;
 /** Convert a Drumjot `Jot` into a MIDI byte buffer (Standard MIDI File). */
 export function toMidi(jot: Jot, options: ToMidiOptions = {}): Uint8Array {
   const opts = { ...DEFAULTS, ...options };
-  const voices = buildJotModel(jot).structural.voices;
-  const instrumentFor = (pitch: string): Instrument =>
-    jot.globalMetadata.instrumentMapping?.[pitch] ?? { kind: 'custom' };
+  // Musical structure only, the view-only virtual lead-in is never exported.
+  const layers = buildStructural(jot).musicalLayers;
+  const instrumentFor = (lane: string): Instrument =>
+    jot.globalMetadata.instrumentMapping?.[lane] ?? { kind: 'custom' };
 
   type AbsEvent = {
     tick: number;
@@ -98,14 +99,14 @@ export function toMidi(jot: Jot, options: ToMidiOptions = {}): Uint8Array {
   const tempoChanges: TempoChange[] = [];
   const globalBpm = resolveBpm(jot.globalMetadata.bpm, 120);
 
-  // Compute each voice-0 bar's absolute tick offset; we'll resolve
+  // Compute each layer-0 bar's absolute tick offset; we'll resolve
   // `jot.tempoEvents` anchors against this. Bars are uniform in length
-  // across voices (same time-signature sequence) so voice 0 is canonical.
-  const voice0 = voices[0];
+  // across layers (same time-signature sequence) so layer 0 is canonical.
+  const layer0 = layers[0];
   const barTickStart: number[] = [];
-  if (voice0) {
+  if (layer0) {
     let cursor = 0;
-    for (const bar of voice0.bars) {
+    for (const bar of layer0.bars) {
       barTickStart.push(cursor);
       cursor += Math.max(1, Math.round(bar.beats * TICKS_PER_BEAT));
     }
@@ -140,20 +141,20 @@ export function toMidi(jot: Jot, options: ToMidiOptions = {}): Uint8Array {
     return result > 0 ? result : 120;
   };
 
-  // [B1] Merge all voices onto one MIDI stream.
-  // tsChanges are collected on the first voice only; bar tick offsets
-  // are identical across voices (same time-signature sequence and bar
-  // count), and emitting the same meta event from every voice would
+  // [B1] Merge all layers onto one MIDI stream.
+  // tsChanges are collected on the first layer only; bar tick offsets
+  // are identical across layers (same time-signature sequence and bar
+  // count), and emitting the same meta event from every layer would
   // duplicate it on the merged track.
-  let firstVoice = true;
-  for (const voice of voices) {
+  let firstLayer = true;
+  for (const layer of layers) {
     let barOffset = 0;
     let prevTime = jot.globalMetadata.time ?? { count: 4, unit: 4 };
-    for (let bi = 0; bi < voice.bars.length; bi++) {
-      const bar = voice.bars[bi];
+    for (let bi = 0; bi < layer.bars.length; bi++) {
+      const bar = layer.bars[bi];
       const barTicks = Math.max(1, Math.round(bar.beats * TICKS_PER_BEAT));
 
-      if (firstVoice && bi > 0 && (prevTime.count !== bar.tsCount || prevTime.unit !== bar.tsUnit)) {
+      if (firstLayer && bi > 0 && (prevTime.count !== bar.tsCount || prevTime.unit !== bar.tsUnit)) {
         tsChanges.push({
           tick: barOffset,
           count: bar.tsCount,
@@ -162,10 +163,10 @@ export function toMidi(jot: Jot, options: ToMidiOptions = {}): Uint8Array {
       }
       prevTime = { count: bar.tsCount, unit: bar.tsUnit };
 
-      for (const pitch of voice.pitches) {
-        const track = bar.tracks[pitch];
+      for (const lane of layer.lanes) {
+        const track = bar.tracks[lane];
         if (!track) continue;
-        const instrument = instrumentFor(pitch);
+        const instrument = instrumentFor(lane);
         for (const note of track.notes) {
           const midiNote = resolveMidiNote(note, instrument);
           if (midiNote === undefined) continue;
@@ -191,7 +192,7 @@ export function toMidi(jot: Jot, options: ToMidiOptions = {}): Uint8Array {
       }
       barOffset += barTicks;
     }
-    firstVoice = false;
+    firstLayer = false;
   }
 
   // Sort: by tick, noteOff before noteOn when ticks collide so any same-tick
@@ -317,7 +318,7 @@ function resolveMidiNote(note: StructNote, instrument: Instrument): number | und
   // [B4] Per-note override wins.
   if (note.midiNote !== undefined) return note.midiNote;
   if (instrument.midi?.note !== undefined) return instrument.midi.note;
-  return defaultMidiNote(note.pitch, new Set(note.modifiers as Modifier[]));
+  return defaultMidiNote(note.lane, new Set(note.modifiers as Modifier[]));
 }
 
 function resolveVelocity(note: StructNote, opts: Required<ToMidiOptions>): number {

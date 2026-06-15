@@ -24,7 +24,7 @@ export const tooManyHandsRule: Rule = {
     for (const [simulId, notes] of ctx.notesBySimul) {
       const hands = notes.filter(isHandStroke);
       if (hands.length <= 2) continue;
-      const pitches = hands.map((n) => `${n.pitch}(${n.kind})`).join(', ');
+      const lanes = hands.map((n) => `${n.lane}(${n.kind})`).join(', ');
       // Prefer the first note's range for the diagnostic anchor — it's
       // the most useful "click here" target for an editor.
       out.push({
@@ -32,12 +32,12 @@ export const tooManyHandsRule: Rule = {
         severity,
         kind: 'performance',
         message:
-          `${hands.length} hand-instrument hits stacked at one onset: ${pitches}. ` +
+          `${hands.length} hand-instrument hits stacked at one onset: ${lanes}. ` +
           `Humans have two hands; drop the least likely hit or move one to a foot ` +
           `instrument (e.g. hi-hat with ':f' / ':s').`,
         range: hands[0].range,
         barIndex: hands[0].barIndex,
-        voiceIndex: hands[0].voiceIndex,
+        layerIndex: hands[0].layerIndex,
       });
       void simulId;
     }

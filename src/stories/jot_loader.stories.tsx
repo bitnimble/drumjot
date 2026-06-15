@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import React from 'react';
-import { createJotView } from 'src/jot_view/jot_view';
+import { createJotEditor } from 'src/editing/jot_editor';
 import { fromMidi } from 'src/midi/from_midi';
 import { parse } from 'src/schema/dsl/parser/parser';
 import { rockJot, tripletJot } from 'src/fakes/fakes';
@@ -13,17 +13,17 @@ import type { Jot } from 'src/schema/dsl/dsl';
  * Pick a `.jot` / `.txt` (DSL) or `.mid` / `.midi` file, or load one of
  * the built-in examples; the harness runs it through the real conversion
  * path and shows (a) the resulting Jot as pretty-printed text and (b) a
- * live JotView rendered from it. The point is to exercise one specific
+ * live JotEditor rendered from it. The point is to exercise one specific
  * part of the product (the loader/converter) in isolation, without the
  * rest of the app's chrome getting in the way.
  *
  * This is NOT a production component, it lives only in Storybook.
  */
 const JotLoaderSandbox = () => {
-  // One real JotView instance for the lifetime of the story. createJotView
-  // wires up the stores + presenters; we drive it via jotViewPresenter.
-  const view = React.useMemo(() => createJotView({}), []);
-  const { View, jotViewStore, jotViewPresenter } = view;
+  // One real JotEditor instance for the lifetime of the story. createJotEditor
+  // wires up the stores + presenters; we drive it via jotEditorPresenter.
+  const view = React.useMemo(() => createJotEditor({}), []);
+  const { View, jotEditorStore, jotEditorPresenter } = view;
   const [jotText, setJotText] = React.useState<string>('');
   const [error, setError] = React.useState<string | undefined>();
 
@@ -32,12 +32,12 @@ const JotLoaderSandbox = () => {
       setError(undefined);
       try {
         setJotText(JSON.stringify(jot, null, 2));
-        jotViewPresenter.setJot(jot);
+        jotEditorPresenter.setJot(jot);
       } catch (e) {
         setError(`${label}: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
-    [jotViewPresenter, jotViewStore],
+    [jotEditorPresenter, jotEditorStore],
   );
 
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {

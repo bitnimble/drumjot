@@ -30,7 +30,7 @@
  *
  * True one-off typography (the tuplet bracket's italic numeral, the
  * 22px transport-button glyph, single-use sizes on patternLabel /
- * instrumentRowName / modifierBadge / timelineHeaderTime) deliberately stays
+ * instrumentTrackName / modifierBadge / timelineHeaderTime) deliberately stays
  * inline in its owning module — promoting a class for a single caller
  * adds indirection without consolidation.
  */

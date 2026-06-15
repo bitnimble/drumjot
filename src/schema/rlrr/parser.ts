@@ -32,9 +32,9 @@ import {
   Simultaneity,
   TempoEvent,
   TimeSignature,
-  Voice,
+  Layer,
 } from 'src/schema/dsl/dsl';
-import { defaultKindForPitch } from 'src/instruments/instruments';
+import { defaultKindForLane } from 'src/instruments/instruments';
 import { CLASS_TO_DRUM, describeDrum, instanceNameToClass } from './drums';
 import { allocateFallbackLetters } from './fallback';
 import {
@@ -63,15 +63,15 @@ type TempoSegment = {
 export function parseRlrr(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
   const opts = { ...DEFAULTS, ...options };
 
-  // drumsT0Sec is literally the audio time of the first drum onset —
+  // preRollSec is literally the audio time of the first drum onset —
   // the three-epoch model the rest of the codebase agrees on. The
   // initial bpm is the most recent tempo event at or before that point;
-  // that's what governs bar 1's downbeat. See `computeDrumsT0Sec` and
+  // that's what governs bar 1's downbeat. See `computePreRollSec` and
   // `chooseInitialBpm` for the detailed rationale (a placeholder 120-bpm
   // event during a guitar intro must not become the drum-grid anchor).
-  const drumsT0Sec = computeDrumsT0Sec(rlrr);
-  const initialBpm = chooseInitialBpm(rlrr, drumsT0Sec);
-  const tempoTimeline = buildTempoTimeline(rlrr, drumsT0Sec, initialBpm);
+  const preRollSec = computePreRollSec(rlrr);
+  const initialBpm = chooseInitialBpm(rlrr, preRollSec);
+  const tempoTimeline = buildTempoTimeline(rlrr, preRollSec, initialBpm);
 
   const time = opts.timeSignature;
   const barBeats = (time.count * 4) / time.unit;
@@ -90,15 +90,15 @@ export function parseRlrr(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
   const slots = new Map<number, Map<number, SlotNote[]>>();
   const usedClasses = new Set<string>();
 
-  // Per-song deterministic allocation of `instanceName -> pitch`. Unknown
+  // Per-song deterministic allocation of `instanceName -> lane`. Unknown
   // drum classes get unique fallback letters that don't collide with
   // CLASS_TO_DRUM or with one another.
-  const pitchByName = allocateFallbackLetters(rlrr.events.map((e) => e.name));
+  const laneByName = allocateFallbackLetters(rlrr.events.map((e) => e.name));
 
   for (const event of rlrr.events) {
     // Times are rebased so the real-tempo downbeat sits at beat 0; the
-    // dropped intro is reinstated as `drumsT0Sec` on global metadata below.
-    const seconds = Math.max(0, eventTimeSeconds(event) - drumsT0Sec);
+    // dropped intro is reinstated as `preRollSec` on global metadata below.
+    const seconds = Math.max(0, eventTimeSeconds(event) - preRollSec);
     const beats = secondsToBeats(seconds, tempoTimeline);
     const snapped = Math.round(beats / gridBeats) * gridBeats;
     const barIdx = Math.max(0, Math.floor(snapped / barBeats));
@@ -106,7 +106,7 @@ export function parseRlrr(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
 
     const cls = instanceNameToClass(event.name);
     if (cls) usedClasses.add(cls);
-    const note = buildNote(event, pitchByName.get(event.name));
+    const note = buildNote(event, laneByName.get(event.name));
     const sortKey = `${cls ?? 'zzz'}:${event.name}`;
 
     let bucket = slots.get(barIdx);
@@ -168,23 +168,23 @@ export function parseRlrr(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
 
   // Build an instrument mapping. Canonical CLASS_TO_DRUM entries win; any
   // unknown instances get a friendly fallback entry that reuses the
-  // allocated letter (so the inline pitches and the mapping agree).
+  // allocated letter (so the inline lanes and the mapping agree).
   const instrumentMapping: Record<string, Instrument> = {};
   for (const cls of usedClasses) {
     const descriptor = CLASS_TO_DRUM[cls];
-    if (descriptor && !instrumentMapping[descriptor.pitch]) {
-      instrumentMapping[descriptor.pitch] = {
-        kind: defaultKindForPitch(descriptor.pitch),
+    if (descriptor && !instrumentMapping[descriptor.lane]) {
+      instrumentMapping[descriptor.lane] = {
+        kind: defaultKindForLane(descriptor.lane),
         name: descriptor.name,
         midi: { note: descriptor.midi },
       };
     }
   }
-  for (const [name, pitch] of pitchByName) {
-    if (instrumentMapping[pitch]) continue;
+  for (const [name, lane] of laneByName) {
+    if (instrumentMapping[lane]) continue;
     const cls = instanceNameToClass(name);
-    instrumentMapping[pitch] = {
-      kind: defaultKindForPitch(pitch),
+    instrumentMapping[lane] = {
+      kind: defaultKindForLane(lane),
       name: cls ?? name,
     };
   }
@@ -203,17 +203,18 @@ export function parseRlrr(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
     time,
     instrumentMapping,
     rlrr: rlrrSidecar,
-    // Recording's intro before the real-tempo downbeat: playback delays its
-    // schedule by this so the drums hit at the same wall-clock offset as the
-    // audio (and the audio plays its own intro during the lead-in).
-    ...(drumsT0Sec > 0 ? { drumsT0Sec } : {}),
+    // Recording's intro before the real-tempo downbeat, as a jot-time audio
+    // start (negative): playback offsets by this so the drums hit at the same
+    // wall-clock offset as the audio (and the audio plays its own intro
+    // during the lead-in).
+    ...(preRollSec > 0 ? { songLeadIn: -preRollSec } : {}),
   };
 
-  const voice: Voice = { bars };
+  const layer: Layer = { bars };
   const jot: Jot = {
     title: rlrr.recordingMetadata?.title ?? '',
     globalMetadata,
-    voices: [voice],
+    layers: [layer],
   };
   if (tempoEvents.length > 0) jot.tempoEvents = tempoEvents;
   return jot;
@@ -222,7 +223,7 @@ export function parseRlrr(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
 // ---------- helpers ----------
 
 /**
- * `drumsT0Sec` per the three-epoch model: literally the audio time of
+ * `preRollSec` per the three-epoch model: literally the audio time of
  * the first drum onset, period. RLRR has no separate "drum start"
  * signal, so we infer it from the earliest drum event in the file.
  *
@@ -236,7 +237,7 @@ export function parseRlrr(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
  *
  * A chart whose first drum sits at time 0 returns 0 — no lead-in.
  */
-function computeDrumsT0Sec(rlrr: RlrrFile): number {
+function computePreRollSec(rlrr: RlrrFile): number {
   const events = rlrr.events ?? [];
   if (events.length === 0) return 0;
   let firstEventSec = Number.POSITIVE_INFINITY;
@@ -249,22 +250,22 @@ function computeDrumsT0Sec(rlrr: RlrrFile): number {
 
 /**
  * The bpm in effect at bar 1's downbeat — the bpm of the latest tempo
- * event at or before `drumsT0Sec`. Paradiddle charts commonly carry a
+ * event at or before `preRollSec`. Paradiddle charts commonly carry a
  * placeholder `{ bpm: 120, time: 0 }` left by the authoring tool with
  * the song's real tempo appearing as a later bpm event at (or just
  * before) the first drum. Choosing the latest-at-or-before-drums event
  * picks the real tempo and ignores the placeholder.
  *
  * Falls back to 120 if no bpm event exists or none is at-or-before
- * drumsT0Sec (which means the first bpm event is itself a pickup after
+ * preRollSec (which means the first bpm event is itself a pickup after
  * the first drum — rare, but treat as standard 120-bpm until that event
  * lands).
  */
-function chooseInitialBpm(rlrr: RlrrFile, drumsT0Sec: number): number {
+function chooseInitialBpm(rlrr: RlrrFile, preRollSec: number): number {
   let bpm = 120;
   let bestTime = Number.NEGATIVE_INFINITY;
   for (const ev of rlrr.bpmEvents ?? []) {
-    if (ev.time <= drumsT0Sec + 1e-6 && ev.time > bestTime) {
+    if (ev.time <= preRollSec + 1e-6 && ev.time > bestTime) {
       bestTime = ev.time;
       bpm = ev.bpm;
     }
@@ -274,25 +275,25 @@ function chooseInitialBpm(rlrr: RlrrFile, drumsT0Sec: number): number {
 
 function buildTempoTimeline(
   rlrr: RlrrFile,
-  drumsT0Sec: number,
+  preRollSec: number,
   initialBpm: number,
 ): TempoSegment[] {
   const out: TempoSegment[] = [];
   let beats = 0;
   let lastSeconds = 0;
   let lastBpm = initialBpm;
-  // Drop bpm events strictly before drumsT0Sec — those govern the
+  // Drop bpm events strictly before preRollSec — those govern the
   // pre-drum lead-in audio that isn't represented in the bar grid. The
-  // event AT drumsT0Sec (if any) collapses with the synthesised t=0
+  // event AT preRollSec (if any) collapses with the synthesised t=0
   // bootstrap below. Subsequent bpm events get rebased so the timeline's
   // origin is bar 1's downbeat.
   const events = [...(rlrr.bpmEvents ?? [])]
-    .filter((e) => e.time > drumsT0Sec + 1e-6)
-    .map((e) => ({ bpm: e.bpm, time: Math.max(0, e.time - drumsT0Sec) }))
+    .filter((e) => e.time > preRollSec + 1e-6)
+    .map((e) => ({ bpm: e.bpm, time: Math.max(0, e.time - preRollSec) }))
     .sort((a, b) => a.time - b.time);
   // Synthesise a t=0 segment carrying `initialBpm` so secondsToBeats /
   // bpmAtBeat always have a starting tempo to anchor against, even
-  // when no original bpm event sat at-or-before drumsT0Sec.
+  // when no original bpm event sat at-or-before preRollSec.
   out.push({ startSeconds: 0, startBeats: 0, bpm: initialBpm });
   for (const ev of events) {
     const dt = ev.time - lastSeconds;
@@ -314,21 +315,21 @@ function secondsToBeats(seconds: number, timeline: TempoSegment[]): number {
 
 function buildNote(
   event: { name: string; vel: number; loc: number; midi?: number },
-  allocatedPitch: string | undefined
+  allocatedLane: string | undefined
 ): Note {
   const descriptor = describeDrum(event.name);
   // [R5] If neither the canonical map nor the per-song allocator has a
-  // pitch for this instrument we fall back to `z`. The allocator should
+  // lane for this instrument we fall back to `z`. The allocator should
   // always have an entry though - it's seeded from the event list - so
   // this is purely defensive.
-  const pitch = descriptor?.pitch ?? allocatedPitch ?? 'z';
+  const lane = descriptor?.lane ?? allocatedLane ?? 'z';
   const modifiers: Modifier[] = descriptor?.modifiers ? [...descriptor.modifiers] : [];
 
   // [R7] Velocity-driven accents/ghosts, mirroring the MIDI converter's policy.
   if (event.vel >= 100 && !modifiers.includes('a')) modifiers.push('a');
   else if (event.vel < 40 && !modifiers.includes('g')) modifiers.push('g');
 
-  const note: Note = { kind: 'note', pitch };
+  const note: Note = { kind: 'note', lane };
   if (modifiers.length > 0) note.modifiers = modifiers;
   // Preserve everything we'd need to reconstruct an identical RLRR event.
   note.metadata = {

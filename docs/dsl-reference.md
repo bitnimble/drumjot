@@ -5,7 +5,7 @@ authoritative *examples* are the parser tests:
 [src/parser/__tests__/parser.test.ts](../src/parser/__tests__/parser.test.ts).
 This page is the at-a-glance summary.
 
-Single-letter pitches `a`–`z` resolve to instruments via
+Single-letter lanes `a`–`z` resolve to instruments via
 `globalMetadata.instrumentMapping`. Suffixes attach to a primary element
 tightly (no whitespace is canonical, but whitespace is allowed):
 
@@ -25,7 +25,7 @@ Top-level structure:
 [Pattern=(...)] (silent definitions; play via [Pattern] references)
 | bar1 elements | bar2 elements |
 ||
-| voice 2 bar 1 | voice 2 bar 2 |
+| layer 2 bar 1 | layer 2 bar 2 |
 ```
 
 Fiddly things that matter:
@@ -39,7 +39,7 @@ Fiddly things that matter:
   `[Name=(...)][Name]`. (The older `?`-prefixed silent form is removed.)
 - **The `time` key** in metadata is written as a string (`"4/4"`) in DSL
   but normalises to `{ count, unit }` in the AST.
-- **Voice == one side of `||`.** Nothing else is a "voice".
+- **Layer == one side of `||`.** Nothing else is a "layer".
 - **Per-bar metadata** lives in `Bar.metadata` (parser snapshot logic);
   consumers fall back to `globalMetadata`. If you add a `Metadata` field
   that needs per-bar propagation (beyond `time` + `bpm`), update the

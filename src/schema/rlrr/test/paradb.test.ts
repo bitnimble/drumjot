@@ -145,7 +145,7 @@ describe('loadParadbZip', () => {
     const map = await loadParadbZip(zipFile(bytes));
 
     expect(map.rlrrName).toBe('Song_Expert.rlrr');
-    expect(map.jot.voices.length).toBeGreaterThan(0);
+    expect(map.jot.layers.length).toBeGreaterThan(0);
 
     expect(map.audioTracks).toHaveLength(2);
     expect(map.audioTracks[0].file.name).toBe('song.ogg');
@@ -247,7 +247,7 @@ describe('loadParadbZip', () => {
       { name: 'drums.ogg', data: DRUMS },
     ]);
     const map = await loadParadbZip(zipFile(bytes));
-    expect(map.jot.voices.length).toBeGreaterThan(0);
+    expect(map.jot.layers.length).toBeGreaterThan(0);
     expect(map.audioTracks).toHaveLength(2);
   });
 
@@ -258,7 +258,7 @@ describe('loadParadbZip', () => {
       { name: 'drums.ogg', data: DRUMS },
     ]);
     const map = await loadParadbZip(zipFile(bytes));
-    expect(map.jot.voices.length).toBeGreaterThan(0);
+    expect(map.jot.layers.length).toBeGreaterThan(0);
   });
 
   it('parses .rlrr written as UTF-8 with a BOM', async () => {
@@ -268,7 +268,7 @@ describe('loadParadbZip', () => {
       { name: 'drums.ogg', data: DRUMS },
     ]);
     const map = await loadParadbZip(zipFile(bytes));
-    expect(map.jot.voices.length).toBeGreaterThan(0);
+    expect(map.jot.layers.length).toBeGreaterThan(0);
   });
 
   it('throws a helpful error when an .rlrr is absent', async () => {

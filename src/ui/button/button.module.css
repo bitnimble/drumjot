@@ -6,7 +6,7 @@
 
    Adding a new visual variant: add a class here, compose it at the
    call site via `composes: <variant> from '<rel>/ui/button/button.module.css'`
-   (e.g. `../../ui/button/button.module.css` from a jot_view feature folder).
+   (e.g. `../../ui/button/button.module.css` from a jot_editor feature folder).
    Adding per-call-site overrides
    (a tighter padding, a different color) is fine; but the base
    reset and the variant's foundational chrome must come through the

@@ -13,8 +13,8 @@ import {
   LlmModel,
   TranscribeStage,
   TranscriptionSummary,
-} from 'src/jot_view/transcribe/transcriber';
-import sharedStyles from '../jot_view/jot_view.module.css';
+} from 'src/editing/transcribe/transcriber';
+import sharedStyles from '../editing/jot_editor.module.css';
 import {
   DropdownButton,
   DropdownSection,
@@ -25,10 +25,10 @@ import {
 import { Checkbox } from 'src/ui/checkbox/checkbox';
 import { Logo } from 'src/ui/logo/logo';
 import { Tabs } from 'src/ui/tabs/tabs';
-import { formatTranscriptionSummary, RecentTranscriptionsPicker } from '../jot_view/transcribe/recent_transcriptions';
+import { formatTranscriptionSummary, RecentTranscriptionsPicker } from '../editing/transcribe/recent_transcriptions';
 import styles from './toolbar.module.css';
 import type { GridLineSettings } from 'src/settings/settings_store';
-import type { TranscribeOptions, TranscribeStatus } from 'src/jot_view/transcribe/transcribe_store';
+import type { TranscribeOptions, TranscribeStatus } from 'src/editing/transcribe/transcribe_store';
 import { PlaybackKitSubmenu, PlaybackSpeedItem, AudioLatencyItem } from './playback_menu';
 import { ZoomControl, ThemeSection } from './view_menu';
 import { DrumLoadingIndicator, LyricsAlignBusyPill, TranscribeBusyPill } from './toolbar_status';
@@ -155,7 +155,7 @@ export const Toolbar = observer(
     /** Aggregate lyrics-alignment state, for the toolbar busy pill (which
      *  doesn't display *which* row; the per-row spinner does). `queued`
      *  means waiting behind another GPU job; `aligning` means actively
-     *  running. See `JotViewStore.lyricsAlignBusyPhase`. */
+     *  running. See `JotEditorStore.lyricsAlignBusyPhase`. */
     lyricsAlignBusyPhase: 'idle' | 'queued' | 'aligning';
     onSetBeatInput: (input: BeatInput) => void;
     onSetDrumSeparator: (separator: DrumSeparator) => void;

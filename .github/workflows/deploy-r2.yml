@@ -1,0 +1,33 @@
+name: Deploy to R2
+
+# Manual-only: trigger from the Actions tab.
+on:
+  workflow_dispatch:
+
+# No write access to repo contents is needed; drop the default token scope.
+permissions:
+  contents: read
+
+# Two manual runs must not race `aws s3 sync --delete` against the same bucket.
+concurrency:
+  group: deploy-r2
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and deploy to R2
+        uses: ./.github/actions/deploy-to-r2
+        with:
+          prefix: ${{ vars.R2_PREFIX }}
+          purge-base-url: ${{ vars.CF_SITE_URL }}
+          account-id: ${{ vars.R2_ACCOUNT_ID }}
+          bucket: ${{ vars.R2_BUCKET }}
+          zone-id: ${{ vars.CF_ZONE_ID }}
+          access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          purge-token: ${{ secrets.CF_PURGE_TOKEN }}

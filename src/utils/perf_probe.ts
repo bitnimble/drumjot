@@ -7,9 +7,9 @@
  * a measured interaction.
  *
  * Used by `e2e/zoom-rerender.spec.ts` to guard the invariant that zooming
- * does NOT re-render `JotView` (and therefore not its score subtree). The
+ * does NOT re-render `JotEditor` (and therefore not its score subtree). The
  * `--px-per-beat` CSS-variable design plus the stable-prop isolation in
- * `createJotView` keep zoom off the React render path; this hook lets the
+ * `createJotEditor` keep zoom off the React render path; this hook lets the
  * test fail loudly if a future change reintroduces the cascade. Keep call
  * sites minimal, add one only when there's a test asserting on it.
  */

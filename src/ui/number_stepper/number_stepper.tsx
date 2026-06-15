@@ -11,7 +11,7 @@ import styles from './number_stepper.module.css';
  * only the native spinner UI is hidden via CSS.
  *
  * State semantics mirror the original buffered inputs in
- * `playback.tsx::OffsetControl` and `lyrics_row.tsx::OffsetInput`: a
+ * `playback.tsx::OffsetControl` and `lyrics_track_view.tsx::OffsetInput`: a
  * local text buffer lets the user clear the field or type a leading
  * `-` without the parent's value clamp snapping mid-keystroke, and the
  * buffer re-syncs from `value` whenever the input isn't focused (so a

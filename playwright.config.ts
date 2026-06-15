@@ -50,29 +50,48 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   projects: [
-    // Functional specs: everything except the per-frame perf suite, run
-    // fully in parallel across the worker pool.
+    // Functional specs: everything except the per-frame perf suite and the
+    // decode-heavy real-song specs, run fully in parallel across the pool.
     {
       name: 'functional',
-      testIgnore: '**/perf.e2e.ts',
+      testIgnore: ['**/perf.e2e.ts', '**/*.heavy.e2e.ts'],
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: { args: ['--no-sandbox'] },
       },
     },
     // Perf specs measure per-frame timing against a tight 120fps budget, so
-    // they must NOT run alongside the parallel functional workers, their
-    // CPU contention inflates the medians and flakes the budget. `dependencies`
-    // makes this project run only AFTER `functional` completes, with the pool
-    // free; the specs are already `mode: 'serial'` within the file, and
-    // `fullyParallel: false` keeps them on a single worker. (Caveat: if a
-    // functional spec fails, Playwright skips this dependent project, fix
+    // they must NOT run alongside the parallel functional workers, their CPU
+    // contention inflates the medians and flakes the budget. `dependencies:
+    // ['functional']` runs this right after the functional pool frees (its
+    // validated, low-noise slot); the specs are already `mode: 'serial'` within
+    // the file, and `fullyParallel: false` keeps them on a single worker.
+    // (Caveat: a functional failure skips this dependent project; fix
     // functional first, or run `bun run e2e:perf` to measure in isolation.)
     {
       name: 'perf',
       testMatch: '**/perf.e2e.ts',
       fullyParallel: false,
       dependencies: ['functional'],
+      use: {
+        ...devices['Desktop Chrome'],
+        launchOptions: { args: ['--no-sandbox'] },
+      },
+    },
+    // Heavy specs load a real, full-length song (30 MB+ zip unpack + parallel
+    // multi-track audio decode), which pegs the CPU and leaves GC/memory
+    // pressure that would both starve the parallel functional tests and
+    // perturb perf's per-frame medians. So it runs DEAD LAST, alone:
+    // `dependencies: ['perf']` chains functional -> perf -> heavy, so the heavy
+    // decode can't disturb either timing-sensitive phase before it. Opt a spec
+    // in with the `.heavy.e2e.ts` suffix. (Caveat: an earlier-phase failure
+    // skips this; run a `.heavy.e2e.ts` spec directly with `bun run e2e <spec>`
+    // to exercise it in isolation.)
+    {
+      name: 'heavy',
+      testMatch: '**/*.heavy.e2e.ts',
+      fullyParallel: false,
+      dependencies: ['perf'],
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: { args: ['--no-sandbox'] },

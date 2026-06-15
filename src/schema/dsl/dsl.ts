@@ -38,13 +38,13 @@ export type Limb = 'lh' | 'rh' | 'lf' | 'rf';
 
 /**
  * One drum-kit instrument (kick, snare, hi-hat, ...). The DSL's
- * `instrumentMapping` is a `Record<pitch, Instrument>` that resolves each
- * single-letter pitch to an instrument with a first-class `kind` (used by
+ * `instrumentMapping` is a `Record<lane, Instrument>` that resolves each
+ * single-letter lane to an instrument with a first-class `kind` (used by
  * the linter), an optional human-readable display label, optional limb
  * assignment, and an optional default MIDI note.
  *
  * `kind` is required — see `src/instruments.ts` for the enum and defaults.
- * For pitches outside the canonical kit, set `kind: 'custom'`; the linter
+ * For lanes outside the canonical kit, set `kind: 'custom'`; the linter
  * treats those as unrestricted.
  */
 export type Instrument = {
@@ -56,20 +56,20 @@ export type Instrument = {
 
 /**
  * Sticky tempo change anchored to a precise (bar, beat) position within
- * voice 0's bar timeline. The single source of truth for tempo at
+ * layer 0's bar timeline. The single source of truth for tempo at
  * runtime; readers walk `Jot.tempoEvents` forward and the tempo at any
  * (bar, beat) is the most recent event at or before that position,
  * falling back to `globalMetadata.bpm` (else 120) for the pre-first-event
  * span.
  *
- * Anchored by array index into `voices[0].bars[]` (NOT the renderer's
+ * Anchored by array index into `layers[0].bars[]` (NOT the renderer's
  * 1-based `index` field) so the position survives lead-in synthesis,
  * anacrusis insertion, and drum-offset shifts. Tempo is jot-global (a
- * single MIDI tempo track on output), so anchoring against voice 0 is
- * sufficient; additional voices share the same bar grid.
+ * single MIDI tempo track on output), so anchoring against layer 0 is
+ * sufficient; additional layers share the same bar grid.
  */
 export type TempoEvent = {
-  /** 0-based index into voices[0].bars. */
+  /** 0-based index into layers[0].bars. */
   barIndex: number;
   /** Beat-within-bar offset of the anchor (quarter notes from bar start). 0 = downbeat. */
   beat: number;
@@ -92,7 +92,7 @@ export type Metadata = {
   bpm?: number | BpmTransition;
   vol?: Volume | VolTransition;
   time?: TimeSignature;
-  /** Maps each pitch letter to an Instrument. Order is the rendered lane order. */
+  /** Maps each lane letter to an Instrument. Order is the rendered lane order. */
   instrumentMapping?: Record<string, Instrument>;
   comment?: string;
   /**
@@ -103,21 +103,15 @@ export type Metadata = {
    */
   title?: string;
   /**
-   * Three timeline epochs the playback / score / waveform code coordinates
-   * around. All are seconds, measured forward from t=0 of the loaded audio
-   * file (`audioT0`, which has no field because it's the origin by
-   * definition). The expected ordering is
-   * `audioT0 (=0) <= signalT0Sec <= drumsT0Sec`.
-   *
-   * - `drumsT0Sec` — audio time of the first drum onset. Bar 1 of the
-   *   score sits exactly here; the player delays its schedule by this much
-   *   so rendered drums hit at the same wall-clock offset as in the source
-   *   audio. Replaces the previous `startOffset` field. Optional —
-   *   undefined / 0 mean drums start at the file head.
-   * - `signalT0Sec` — audio time of the first non-silent sample (e.g. a
-   *   vocal pickup, a guitar intro). Strictly informational today; the
-   *   waveform + debug overlays may use it to show "music starts here"
-   *   distinct from "drums start here". Optional.
+   * Jot-time (score-time, bar-1 downbeat = 0) anchor for the recorded
+   * audio's lead-in. `songLeadIn` is the jot time at which the loaded audio
+   * file begins (the audio time of the first drum onset, negated into jot
+   * time). So with a 5.3s pre-drum intro, `songLeadIn` is
+   * `-5.3`: bar 1 sits at jot 0, and `media = jot - songLeadIn` lines the
+   * rendered drums up with the recorded ones. Optional, undefined / 0 mean
+   * the audio starts at bar 1 (no pre-drum intro). The full set of derived
+   * time anchors (incl. the view-only virtual lead-in) is the runtime
+   * `Epochs` record; only this persisted alignment lives here.
    *
    * Pre-drum bars (audio that exists before the first drum hit) get
    * negative `bar.index` in the rendered jot. `leadBars` counts how many
@@ -125,8 +119,7 @@ export type Metadata = {
    * provenance, etc.) don't have to recount the leading rest bars
    * themselves.
    */
-  drumsT0Sec?: number;
-  signalT0Sec?: number;
+  songLeadIn?: number;
   leadBars?: number;
   /**
    * Grid density chosen by whichever producer built this jot, expressed
@@ -169,7 +162,7 @@ export type Sticking = 'r' | 'l' | 'rf' | 'lf';
 /**
  * Half-open byte range `[start, end)` into the original DSL source string.
  * Populated by the parser for elements where the linter needs to point at a
- * specific span (`Note`, `Group`, `Bar`, `Voice`). Manually-authored Jot
+ * specific span (`Note`, `Group`, `Bar`, `Layer`). Manually-authored Jot
  * objects (e.g. in `src/fakes.ts`) leave it undefined; the linter degrades
  * gracefully when ranges are absent (it surfaces diagnostics without
  * position info rather than crashing).
@@ -184,7 +177,7 @@ export type SourceRange = {
 export type Note = {
   kind: 'note';
   /** Single lowercase letter a-z; resolved via the active `instrumentMapping`. */
-  pitch: string;
+  lane: string;
   /**
    * Signed sub-slot timing offset in milliseconds, relative to the note's
    * natural (slot-aligned) position. Lets a hit render and play between
@@ -268,7 +261,7 @@ export type PatternRef = {
 
 export type Element = Note | Rest | Simultaneity | Group | PatternRef;
 
-// ---------- Bars, voices, patterns, jot ----------
+// ---------- Bars, layers, patterns, jot ----------
 
 /**
  * Mid-bar tempo marker anchored at an element index within a bar's
@@ -302,22 +295,22 @@ export type Bar = {
 };
 
 /**
- * One side of a global simultaneity (`||`). Multiple voices play in parallel
- * from a common start; the track length equals the longest voice. The DSL
- * surface syntax for joining voices is the `||` operator; nothing else in the
- * codebase should use the term "voice" for any other concept.
+ * One side of a global simultaneity (`||`). Multiple layers play in parallel
+ * from a common start; the track length equals the longest layer. The DSL
+ * surface syntax for joining layers is the `||` operator; nothing else in the
+ * codebase should use the term "layer" for any other concept.
  *
  * `name` is purely a display hint (the renderer uses it instead of
- * "Voice 1/2/..." when present); it has no spec representation since DSL
+ * "Layer 1/2/..." when present); it has no spec representation since DSL
  * source can't name a `||` side.
  */
-export type Voice = {
+export type Layer = {
   /** Optional display label, e.g. "Hands" / "Feet". Not parseable from DSL. */
   name?: string;
   /** Anacrusis/pickup elements before the first `|`. Not length-checked. */
   anacrusis?: Element[];
   bars: Bar[];
-  /** Source range spanning the voice (from start to next `||` or EOF). */
+  /** Source range spanning the layer (from start to next `||` or EOF). */
   range?: SourceRange;
 };
 
@@ -333,8 +326,8 @@ export type Jot = {
   globalMetadata: Metadata;
   /** Named patterns keyed by identifier (without the `[]`). */
   patterns?: Record<string, Pattern>;
-  /** Voices laid out in parallel via `||`. A single-voice jot has length 1. */
-  voices: Voice[];
+  /** Layers laid out in parallel via `||`. A single-layer jot has length 1. */
+  layers: Layer[];
   /**
    * Sticky tempo changes (mid-bar OK) sorted by (barIndex, beat). The
    * sole runtime source of truth for tempo; consumers walk this list
@@ -347,9 +340,9 @@ export type Jot = {
 
 // ---------- Convenience helpers ----------
 
-export const note = (pitch: string, opts: Omit<Note, 'kind' | 'pitch'> = {}): Note => ({
+export const note = (lane: string, opts: Omit<Note, 'kind' | 'lane'> = {}): Note => ({
   kind: 'note',
-  pitch,
+  lane,
   ...opts,
 });
 

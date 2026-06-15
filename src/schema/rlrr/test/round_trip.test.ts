@@ -85,9 +85,9 @@ describe('parseRlrr / writeRlrr', () => {
       120
     );
     const jot = parseRlrr(rlrr);
-    expect(jot.voices).toHaveLength(1);
-    expect(jot.voices[0].bars).toHaveLength(1);
-    const els = jot.voices[0].bars[0].elements;
+    expect(jot.layers).toHaveLength(1);
+    expect(jot.layers[0].bars).toHaveLength(1);
+    const els = jot.layers[0].bars[0].elements;
     expect(els).toHaveLength(16);
     expect(els[0].kind).toBe('note');
     expect(els[4].kind).toBe('note');
@@ -101,7 +101,7 @@ describe('parseRlrr / writeRlrr', () => {
       { name: 'BP_HiHat_C_1', vel: 100, time: '0.0000' },
     ]);
     const jot = parseRlrr(rlrr);
-    expect(jot.voices[0].bars[0].elements[0].kind).toBe('simul');
+    expect(jot.layers[0].bars[0].elements[0].kind).toBe('simul');
   });
 
   it('round-trips RLRR events losslessly through Jot', () => {
@@ -137,7 +137,7 @@ describe('parseRlrr / writeRlrr', () => {
 
   it('assigns unique fallback letters to unknown instrument instances', () => {
     // Two synthetic instance names that share a hash hint must end up on
-    // different letters, and neither may collide with canonical pitches
+    // different letters, and neither may collide with canonical lanes
     // (kick = 'k') in use.
     const map = allocateFallbackLetters([
       'BP_Kick_C_1',
@@ -193,12 +193,12 @@ describe('parseRlrr / writeRlrr', () => {
         time: { count: 4, unit: 4 },
         instrumentMapping: { k: { kind: 'kick', name: 'Kick', midi: { note: 36 } } },
       },
-      voices: [
+      layers: [
         {
           bars: [
             {
               elements: [
-                { kind: 'note', pitch: 'k', offset: 30 },
+                { kind: 'note', lane: 'k', offset: 30 },
                 { kind: 'rest' },
                 { kind: 'rest' },
                 { kind: 'rest' },
@@ -222,7 +222,7 @@ describe('parseRlrr / writeRlrr', () => {
     `;
     const jot = parse(src);
     const rlrr = writeRlrr(jot);
-    // 8 hi-hats + 4 kick/snare hits per the snippet (single voice).
+    // 8 hi-hats + 4 kick/snare hits per the snippet (single layer).
     expect(rlrr.events.length).toBeGreaterThanOrEqual(4);
     const classes = new Set(rlrr.events.map((e) => e.name.replace(/_\d+$/, '')));
     expect(classes.has('BP_Kick_C')).toBe(true);
@@ -250,7 +250,7 @@ describe('RLRR fixture round trips', () => {
 
       it('parses without throwing', () => {
         const jot = parseRlrr(rlrr);
-        expect(jot.voices.length).toBeGreaterThan(0);
+        expect(jot.layers.length).toBeGreaterThan(0);
       });
 
       it('Jot round trip preserves note count exactly', () => {

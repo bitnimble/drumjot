@@ -11,7 +11,7 @@ import { Element, Modifier } from 'src/schema/dsl/dsl';
 import { LintDiagnostic } from '../diagnostics';
 import { Rule } from '../rule';
 
-function collectHandPitches(el: Element, modCtx: ReadonlySet<Modifier>): string[] {
+function collectHandLanes(el: Element, modCtx: ReadonlySet<Modifier>): string[] {
   // Walk a group's children counting distinct hand-instrument kinds. The
   // outer modifier context propagates inwards so a group with `:f` flips
   // its hi-hat children's limb category to foot.
@@ -20,15 +20,15 @@ function collectHandPitches(el: Element, modCtx: ReadonlySet<Modifier>): string[
       ...(el.modifiers ?? []),
       ...modCtx,
     ]);
-    return [el.pitch];
+    return [el.lane];
   }
   if (el.kind === 'rest') return [];
   if (el.kind === 'simul') {
-    return el.elements.flatMap((c) => collectHandPitches(c, modCtx));
+    return el.elements.flatMap((c) => collectHandLanes(c, modCtx));
   }
   if (el.kind === 'group') {
     const inner = new Set<Modifier>([...(el.modifiers ?? []), ...modCtx]);
-    return el.elements.flatMap((c) => collectHandPitches(c, inner));
+    return el.elements.flatMap((c) => collectHandLanes(c, inner));
   }
   return [];
 }
@@ -66,7 +66,7 @@ export const rollOnMultiInstrumentRule: Rule = {
             `split this into per-instrument rolls or replace with discrete hits.`,
           range: g.range,
           barIndex: g.barIndex,
-          voiceIndex: g.voiceIndex,
+          layerIndex: g.layerIndex,
         });
       }
     }

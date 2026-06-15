@@ -13,7 +13,7 @@ import {
   PatternSubstitution,
   Simultaneity,
   Sticking,
-  Voice,
+  Layer,
 } from 'src/schema/dsl/dsl';
 import { Cursor } from './cursor';
 import { ParseError } from './errors';
@@ -41,7 +41,7 @@ export function parse(src: string): Jot {
   return jot;
 }
 
-// ---------- Top-level: voices, bars, patterns, global metadata ----------
+// ---------- Top-level: layers, bars, patterns, global metadata ----------
 
 /**
  * Subset of `Metadata` that propagates from inline `{{...}}` blocks down to
@@ -58,9 +58,9 @@ type BarMeta = Pick<Metadata, 'time' | 'bpm'>;
 type Item =
   | { kind: 'el'; el: Element }
   | { kind: 'bar'; activeMeta: BarMeta; pos: number }
-  | { kind: 'voice' }
+  | { kind: 'layer' }
   /**
-   * A mid-track `{{bpm: X}}`. `buildVoice` attaches each marker to the
+   * A mid-track `{{bpm: X}}`. `buildLayer` attaches each marker to the
    * next element pushed into the current bar (its index in
    * `bar.elements`). Markers seen before the first `|` (anacrusis
    * section) are dropped; the global / bar-opening tempo path already
@@ -90,14 +90,14 @@ function parseJot(c: Cursor): Jot {
         barActive = { ...barActive, bpm: meta.bpm };
         // Emit a marker so a `{{bpm}}` between elements in the same bar
         // anchors at the next element's onset. Markers before the first
-        // `|` are silently dropped by `buildVoice`.
+        // `|` are silently dropped by `buildLayer`.
         items.push({ kind: 'tempoMarker', bpm: meta.bpm });
       }
       continue;
     }
     if (c.match('||')) {
       c.advance(2);
-      items.push({ kind: 'voice' });
+      items.push({ kind: 'layer' });
       continue;
     }
     if (c.peek() === '|') {
@@ -117,19 +117,19 @@ function parseJot(c: Cursor): Jot {
     items.push({ kind: 'el', el: parseElement(c) });
   }
 
-  // Slice items into voices (split on `||`) and bars (split on `|`).
+  // Slice items into layers (split on `||`) and bars (split on `|`).
   const srcLength = c.src.length;
-  const voices: Voice[] = [];
-  let voiceItems: Array<Exclude<Item, { kind: 'voice' }>> = [];
+  const layers: Layer[] = [];
+  let layerItems: Array<Exclude<Item, { kind: 'layer' }>> = [];
   for (const it of items) {
-    if (it.kind === 'voice') {
-      voices.push(buildVoice(voiceItems, srcLength));
-      voiceItems = [];
+    if (it.kind === 'layer') {
+      layers.push(buildLayer(layerItems, srcLength));
+      layerItems = [];
     } else {
-      voiceItems.push(it);
+      layerItems.push(it);
     }
   }
-  voices.push(buildVoice(voiceItems, srcLength));
+  layers.push(buildLayer(layerItems, srcLength));
 
   const title = typeof globalMetadata.title === 'string' ? globalMetadata.title : '';
   const restMeta: Metadata = { ...globalMetadata };
@@ -138,16 +138,16 @@ function parseJot(c: Cursor): Jot {
   const jot: Jot = {
     title,
     globalMetadata: restMeta,
-    voices,
+    layers,
   };
   if (Object.keys(patterns).length > 0) jot.patterns = patterns;
   return jot;
 }
 
-function buildVoice(
-  items: Array<Exclude<Item, { kind: 'voice' }>>,
+function buildLayer(
+  items: Array<Exclude<Item, { kind: 'layer' }>>,
   srcLength: number
-): Voice {
+): Layer {
   const bars: Bar[] = [];
   let anacrusis: Element[] | undefined;
   let current: Element[] = [];
@@ -160,14 +160,14 @@ function buildVoice(
   // the first `|` is seen; the linter degrades gracefully when this is
   // absent (e.g. inline jots with no bar separator at all).
   let barOpeningPos: number | null = null;
-  // Source range for the voice as a whole; set lazily when we see the
+  // Source range for the layer as a whole; set lazily when we see the
   // first item, extended as we go.
-  let voiceStart: number | null = null;
-  let voiceEnd = 0;
+  let layerStart: number | null = null;
+  let layerEnd = 0;
   // Mid-bar `{{bpm}}` markers issued since the last element was pushed,
   // waiting for the next element to anchor against. They survive `|`
   // boundaries (a marker between bars attaches to the first element of
-  // the next bar at beat 0); they're dropped at the start of the voice
+  // the next bar at beat 0); they're dropped at the start of the layer
   // (before the first `|`) since the anacrusis isn't part of the
   // bar-indexed tempo timeline.
   let pendingTempoMarkers: Array<number | BpmTransition> = [];
@@ -192,8 +192,8 @@ function buildVoice(
 
   for (const it of items) {
     if (it.kind === 'bar') {
-      if (voiceStart === null) voiceStart = it.pos;
-      voiceEnd = Math.max(voiceEnd, it.pos);
+      if (layerStart === null) layerStart = it.pos;
+      layerEnd = Math.max(layerEnd, it.pos);
       if (!seenBarSep) {
         if (current.length > 0) anacrusis = current;
         current = [];
@@ -217,8 +217,8 @@ function buildVoice(
     } else {
       const range = elementRange(it.el);
       if (range) {
-        if (voiceStart === null) voiceStart = range.start;
-        voiceEnd = Math.max(voiceEnd, range.end);
+        if (layerStart === null) layerStart = range.start;
+        layerEnd = Math.max(layerEnd, range.end);
       }
       if (seenBarSep && pendingTempoMarkers.length > 0) {
         const elementIndex = current.length;
@@ -236,12 +236,12 @@ function buildVoice(
     commit(current, barOpeningMeta, barOpeningPos, srcLength, barTempoSources);
   }
 
-  const voice: Voice = { bars };
-  if (anacrusis) voice.anacrusis = anacrusis;
-  if (voiceStart !== null) {
-    voice.range = { start: voiceStart, end: Math.max(voiceEnd, srcLength) };
+  const layer: Layer = { bars };
+  if (anacrusis) layer.anacrusis = anacrusis;
+  if (layerStart !== null) {
+    layer.range = { start: layerStart, end: Math.max(layerEnd, srcLength) };
   }
-  return voice;
+  return layer;
 }
 
 function elementRange(el: Element): { start: number; end: number } | undefined {
@@ -351,7 +351,7 @@ function parsePrimary(c: Cursor): Element {
   c.skipWs();
   const ch = c.peek();
   if (/[a-z]/.test(ch)) {
-    const note: Note = { kind: 'note', pitch: ch };
+    const note: Note = { kind: 'note', lane: ch };
     c.advance();
     return note;
   }

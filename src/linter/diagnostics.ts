@@ -45,8 +45,8 @@ export type LintDiagnostic = {
    * audio time.
    */
   barIndex?: number;
-  /** Jot voice index the offending element sits in. */
-  voiceIndex?: number;
+  /** Jot layer index the offending element sits in. */
+  layerIndex?: number;
   /**
    * Optional suggested fix as a free-form string. Surfaced verbatim to
    * the LLM during refinement; not applied automatically.

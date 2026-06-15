@@ -4,7 +4,7 @@ import styles from './gutter_resize_handle.module.css';
 /**
  * A 6px-wide vertical strip parked on the right edge of each sticky
  * gutter element. Pointer-down on the strip starts the gutter resize
- * (the actual pointer-move/up logic lives in JotView — captured at drag
+ * (the actual pointer-move/up logic lives in JotEditor — captured at drag
  * start so deltas stay anchored to the grab point); this component just
  * renders the affordance.
  *

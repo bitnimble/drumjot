@@ -11,6 +11,7 @@
  * the configured `TRANSCRIBER_URL`.
  */
 
+import { backendFetch } from 'src/net/backend_fetch';
 import type { LyricLine } from './lrc';
 
 const TRANSCRIBER_BASE = '/api';
@@ -58,7 +59,7 @@ export type AlignLyricsOptions = {
  * Non-terminal envelopes drive `opts.onProgress` so the caller can show
  * a wait state; the `result` lines (shape `{lines: LyricLine[]}`, an
  * exact match for our in-memory type) go straight into
- * `lyricsStore.replace(id, ...)` via `JotViewStore.alignLyricsForced`.
+ * `lyricsStore.replace(id, ...)` via `JotEditorStore.alignLyricsForced`.
  *
  * Input-validation failures arrive as a real 4xx (before any stream
  * bytes) and surface here as the server's `detail` message, same as
@@ -82,7 +83,7 @@ export async function alignLyricsForced(
   if (req.realign.language !== undefined && req.realign.language.length > 0) {
     form.set('language', req.realign.language);
   }
-  const res = await fetch(`${TRANSCRIBER_BASE}/lyrics/align`, {
+  const res = await backendFetch(`${TRANSCRIBER_BASE}/lyrics/align`, {
     method: 'POST',
     body: form,
     signal: opts.signal,

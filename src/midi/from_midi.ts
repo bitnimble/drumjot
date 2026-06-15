@@ -38,7 +38,7 @@
  *  [A6] Velocity is preserved exactly via a custom per-note metadata key
  *       `metadata.midi = { note, velocity }`. The writer prefers this over
  *       the volume bucket so that round-trips through DSL <-> MIDI are
- *       lossless for note pitch and dynamic.
+ *       lossless for note lane and dynamic.
  *
  *  [A7] Velocity is ALSO mapped to display modifiers: very loud notes
  *       (>= 100) gain `:a` and very soft notes (< 40) gain `:g`. This is
@@ -69,11 +69,11 @@ import {
   TimeSignature,
 } from 'src/schema/dsl/dsl';
 import { ACCENT_THRESHOLD, GHOST_THRESHOLD } from 'src/dynamics/dynamics';
-import { defaultKindForPitch } from 'src/instruments/instruments';
+import { defaultKindForLane } from 'src/instruments/instruments';
 import {
   GENERIC_INSTRUMENT_NAME_BY_PITCH,
   GM_PERCUSSION,
-  allocatePitchesForMidi,
+  allocateLanesForMidi,
 } from './gm';
 
 export type FromMidiOptions = {
@@ -193,15 +193,15 @@ export function fromMidi(
   // [A5] Compute bar boundaries from time-signature changes.
   const barSpans = computeBarSpans(timeSigChanges, drumNotes, ticksPerBeat);
 
-  // Per-song allocation of `midi -> pitch` so unknown drums get unique
+  // Per-song allocation of `midi -> lane` so unknown drums get unique
   // fallback letters that don't collide with GM_PERCUSSION or with each
-  // other. See `allocatePitchesForMidi`.
-  const pitchByMidi = allocatePitchesForMidi(drumNotes.map((d) => d.note));
+  // other. See `allocateLanesForMidi`.
+  const laneByMidi = allocateLanesForMidi(drumNotes.map((d) => d.note));
 
   // Index drum notes into (bar, slot) buckets.
   type Slot = {
     notes: Array<{
-      pitch: string;
+      lane: string;
       modifiers: Modifier[];
       midi: number;
       velocity: number;
@@ -209,7 +209,7 @@ export function fromMidi(
        * Original absolute MIDI tick this note came from (pre-quantization).
        * Preserved on `note.metadata.midi.tick` so per-note debug provenance
        * sidecars (e.g. `note_provenance.json` from filter-mode transcribe)
-       * can key by the unique `(tick, pitch)` identifier.
+       * can key by the unique `(tick, lane)` identifier.
        */
       tick: number;
       /** Sub-slot timing residual in ms, or undefined when within tolerance. */
@@ -247,7 +247,7 @@ export function fromMidi(
       Math.abs(residualMs) >= opts.offsetToleranceMs ? residualMs : undefined;
 
     const entry = GM_PERCUSSION[dn.note];
-    const pitch = pitchByMidi.get(dn.note) ?? entry?.pitch ?? 'z';
+    const lane = laneByMidi.get(dn.note) ?? entry?.lane ?? 'z';
     const modifiers = entry?.modifiers ? [...entry.modifiers] : [];
 
     let bucket = slotsByBar.get(barIdx);
@@ -261,7 +261,7 @@ export function fromMidi(
       bucket.set(slotIdx, slot);
     }
     slot.notes.push({
-      pitch,
+      lane,
       modifiers,
       midi: dn.note,
       velocity: dn.velocity,
@@ -315,7 +315,7 @@ export function fromMidi(
         continue;
       }
       const notes: Note[] = slot.notes.map((s) =>
-        buildNote(s.pitch, s.modifiers, s.midi, s.velocity, s.tick, s.offsetMs, opts)
+        buildNote(s.lane, s.modifiers, s.midi, s.velocity, s.tick, s.offsetMs, opts)
       );
       if (notes.length === 1) {
         elements.push(notes[0]);
@@ -356,7 +356,7 @@ export function fromMidi(
   // pre-drum audio still has a position on the timeline — but their count
   // is surfaced on `globalMetadata.leadBars` so consumers don't have to
   // recount them, and their cumulative audio duration becomes
-  // `globalMetadata.drumsT0Sec` so playback / waveform alignment match the
+  // `globalMetadata.preRollSec` so playback / waveform alignment match the
   // transcriber's RLRR/DSL paths.
   let leadBars = 0;
   while (
@@ -366,12 +366,12 @@ export function fromMidi(
     leadBars++;
   }
   // If the whole jot is rests (no drums in the file at all) we leave
-  // leadBars = 0 / drumsT0Sec undefined — there's no "bar 1" to anchor
+  // leadBars = 0 / preRollSec undefined — there's no "bar 1" to anchor
   // against and emitting a giant pre-drum offset would just hide the
   // entire content.
   if (leadBars >= bars.length) leadBars = 0;
 
-  let drumsT0Sec = 0;
+  let preRollSec = 0;
   if (leadBars > 0) {
     // Walk the pre-drum bars in lockstep with the tempo timeline (same
     // attribution rule as the main bar loop: "most recent tempo at or
@@ -391,15 +391,15 @@ export function fromMidi(
       const barBpm = tempoChanges[leadTempoIdx]?.bpm ?? initialBpm;
       const barBeats = (span.time.count * 4) / span.time.unit;
       if (barBpm > 0) {
-        drumsT0Sec += (barBeats * 60) / barBpm;
+        preRollSec += (barBeats * 60) / barBpm;
       }
     }
   }
 
   // Build an instrument mapping from the MIDI notes we actually observed.
   // Reuse the per-song letter allocation so the mapping and the inline
-  // pitches agree letter-for-letter even when fallback letters were used.
-  const instrumentMapping = buildInstrumentMap(pitchByMidi);
+  // lanes agree letter-for-letter even when fallback letters were used.
+  const instrumentMapping = buildInstrumentMap(laneByMidi);
 
   const globalMetadata: Metadata = {
     bpm,
@@ -410,17 +410,18 @@ export function fromMidi(
     // math) read the real resolution instead of assuming 48.
     gridDivision: opts.gridDivision,
     ...(leadBars > 0 ? { leadBars } : {}),
-    ...(drumsT0Sec > 0 ? { drumsT0Sec } : {}),
+    // Jot-time audio start = negative of the pre-drum audio duration.
+    ...(preRollSec > 0 ? { songLeadIn: -preRollSec } : {}),
   };
 
   // [A9] No anacrusis is inferred; bars run from tick 0 onward. Pre-drum
   // bars are preserved in `bars[0..leadBars-1]` and surfaced via
-  // `globalMetadata.leadBars` / `globalMetadata.drumsT0Sec` so the
+  // `globalMetadata.leadBars` / `globalMetadata.preRollSec` so the
   // renderer can label them with negative indices.
   const jot: Jot = {
     title: '',
     globalMetadata,
-    voices: [{ bars }],
+    layers: [{ bars }],
   };
   if (tempoEvents.length > 0) jot.tempoEvents = tempoEvents;
   return jot;
@@ -490,7 +491,7 @@ function locateBar(spans: BarSpan[], tick: number): number {
 }
 
 function buildNote(
-  pitch: string,
+  lane: string,
   baseModifiers: Modifier[],
   midi: number,
   velocity: number,
@@ -505,47 +506,47 @@ function buildNote(
   } else if (velocity < opts.ghostThreshold && !modifiers.includes('g')) {
     modifiers.push('g');
   }
-  const note: Note = { kind: 'note', pitch };
+  const note: Note = { kind: 'note', lane };
   if (modifiers.length > 0) note.modifiers = modifiers;
   if (offsetMs !== undefined) note.offset = offsetMs;
   // [A6] Stash raw MIDI specifics for lossless round-trip. `tick` is the
   // original absolute tick the noteOn arrived at (before grid snapping); it
   // is *not* written back by `to_midi.ts` (which recomputes tick from the
   // jot layout) and is purely diagnostic — it lets per-note debug
-  // provenance sidecars key by the unique `(tick, pitch)` identifier.
+  // provenance sidecars key by the unique `(tick, lane)` identifier.
   note.metadata = { midi: { note: midi, velocity, tick } } as Metadata;
   return note;
 }
 
 function buildInstrumentMap(
-  pitchByMidi: ReadonlyMap<number, string>
+  laneByMidi: ReadonlyMap<number, string>
 ): Record<string, Instrument> {
   const out: Record<string, Instrument> = {};
-  // Count how many distinct MIDI notes mapped to each pitch; when a
-  // pitch has more than one (e.g. 42 closed + 46 open hi-hat both →
-  // pitch `h`, with the variant carried per-note as `:c` / `:o`), the
+  // Count how many distinct MIDI notes mapped to each lane; when a
+  // lane has more than one (e.g. 42 closed + 46 open hi-hat both →
+  // lane `h`, with the variant carried per-note as `:c` / `:o`), the
   // instrument-row label has to cover both, so we fall back to a
   // generic display name from `GENERIC_INSTRUMENT_NAME_BY_PITCH`
   // instead of whichever single GM entry happened to win the
   // first-iteration race.
-  const midiCountByPitch = new Map<string, number>();
-  for (const pitch of pitchByMidi.values()) {
-    midiCountByPitch.set(pitch, (midiCountByPitch.get(pitch) ?? 0) + 1);
+  const midiCountByLane = new Map<string, number>();
+  for (const lane of laneByMidi.values()) {
+    midiCountByLane.set(lane, (midiCountByLane.get(lane) ?? 0) + 1);
   }
   // Iterate in sorted MIDI order so the resulting mapping is stable.
-  const midis = Array.from(pitchByMidi.keys()).sort((a, b) => a - b);
+  const midis = Array.from(laneByMidi.keys()).sort((a, b) => a - b);
   for (const midi of midis) {
-    const pitch = pitchByMidi.get(midi);
-    if (!pitch || out[pitch]) continue;
+    const lane = laneByMidi.get(midi);
+    if (!lane || out[lane]) continue;
     const entry = GM_PERCUSSION[midi];
-    const hasMultipleVariants = (midiCountByPitch.get(pitch) ?? 0) > 1;
+    const hasMultipleVariants = (midiCountByLane.get(lane) ?? 0) > 1;
     const name = hasMultipleVariants
-      ? GENERIC_INSTRUMENT_NAME_BY_PITCH[pitch] ?? entry?.name ?? `MIDI ${midi}`
+      ? GENERIC_INSTRUMENT_NAME_BY_PITCH[lane] ?? entry?.name ?? `MIDI ${midi}`
       : entry?.name ?? `MIDI ${midi}`;
-    out[pitch] = {
+    out[lane] = {
       // GM entries carry an explicit kind; unknown MIDI notes get the
-      // pitch-letter default (which falls back to `custom`).
-      kind: entry?.kind ?? defaultKindForPitch(pitch),
+      // lane-letter default (which falls back to `custom`).
+      kind: entry?.kind ?? defaultKindForLane(lane),
       name,
       ...(entry?.limb ? { limb: entry.limb } : {}),
       midi: { note: midi },

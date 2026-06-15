@@ -67,7 +67,7 @@ request, and pull in the linked docs when a task touches that area.
 - **No DOM layout reads in hot paths**, never read `scrollLeft` /
   `clientWidth` / `getBoundingClientRect` / `getComputedStyle` (for
   layout) in any render, effect, MobX reaction, or per-frame/scroll/zoom
-  path; read from `JotViewStore` observables instead. See
+  path; read from `JotEditorStore` observables instead. See
   [docs/architecture.md](docs/architecture.md#frontend-performance-model).
 - **Frame budget is 120 fps / 8.3 ms**, not 60 fps (165 Hz monitor).
 - **Browsers: evergreen, last 2 years** (`package.json` `browserslist`).
@@ -102,18 +102,18 @@ request, and pull in the linked docs when a task touches that area.
 
 The frontend follows a strict three-layer split: per-domain data stores +
 presenters + components. Code is grouped by **feature folder** under
-`src/jot_view/<feature>/`, each folder holds that domain's
+`src/editing/<feature>/`, each folder holds that domain's
 `<feature>_store.ts` + `<feature>_presenter.ts` + its view `.tsx`/`.css`
 (e.g. `mixer/`, `playback/`, `lyrics/`, `viewport/`, `transcribe/`,
 `structure/`, …). The loaded jot's composition root sits at the
-`jot_view/` root: `jot_view_store.ts` (`JotViewStore`, the data store +
-the `buildJotModel` peer constructor), `jot_view_presenter.ts`
-(`JotViewPresenter`, load orchestration), `jot_view_contexts.ts`. Shared
+`editing/` root: `jot_editor_store.ts` (`JotEditorStore`, the data store +
+the `buildJotModel` peer constructor), `jot_editor_presenter.ts`
+(`JotEditorPresenter`, load orchestration), `jot_editor_contexts.ts`. Shared
 UI primitives live in top-level `src/ui/<component>/` (one folder per
 component; stories in `src/ui/stories/`); the DSL layer (dsl / parser /
 tempo / element-metrics) lives under `src/schema/dsl/` and RLRR under
 `src/schema/rlrr/`; `settings/`, `toolbar/`, `ui/` are top-level peers of
-`jot_view/`.
+`editing/`.
 
 - **No barrel files.** Import every symbol straight from the module that
   defines it; never add or import a re-export barrel (`index.ts` /

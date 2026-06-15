@@ -19,8 +19,8 @@
  */
 
 import { makeAutoObservable } from 'mobx';
-import { JotTimeline } from 'src/jot_view/playback/timeline';
-import { LYRICS_FALLBACK_COLOR } from 'src/jot_view/tracks/tracks';
+import { JotTimeline } from 'src/editing/playback/timeline';
+import { LYRICS_FALLBACK_COLOR } from 'src/editing/tracks/tracks';
 import { LyricLine } from './lrc';
 
 export type LyricsSource = 'lrclib' | 'file' | 'plaintext';
@@ -39,7 +39,7 @@ export type LyricsTrack = {
   readonly sourceLabel: string;
   readonly offsetSec: number;
   /**
-   * Satisfies the unified {@link import('src/jot_view/tracks/tracks').Track} interface.
+   * Satisfies the unified {@link import('src/editing/tracks/tracks').Track} interface.
    * Lyrics rows have no visible per-row colour today; the fixed neutral
    * value here is enough to let downstream code (the picker, future
    * tinting) treat every mixer row uniformly. The overflow menu
@@ -50,7 +50,7 @@ export type LyricsTrack = {
 };
 
 /** Slider bounds for the user-facing time-offset nudger. Mirrors the
- *  drumsT0Sec / drum-offset pattern: a single uniform shift across one
+ *  songLeadIn / drum-offset pattern: a single uniform shift across one
  *  lyric row, expressed in audio seconds. ±60s covers the realistic
  *  range of nudges (file-loaded LRC from a different cut, LRCLIB match
  *  against a remaster/edit) while still acting as a sanity tripwire for
@@ -170,7 +170,7 @@ export const lyricsStore = new LyricsStore();
 /**
  * Convert an audio-time second to a beat offset on the row's bars-row.
  * Mirrors how `AudioTrackWaveformCanvas` maps bar slices: the audio
- * recording's `t` lands at jot time `t - drumsT0Sec`; that jot time is
+ * recording's `t` lands at jot time `t + songLeadIn`; that jot time is
  * looked up against the per-bar `BarTiming` table, linearly interpolated
  * within its bar, and the resulting fraction is converted back to beats
  * by walking the structural bars' `beats` sums.
@@ -183,10 +183,11 @@ export const lyricsStore = new LyricsStore();
 export function audioSecToBeat(
   audioTimeSec: number,
   timeline: JotTimeline,
-  drumsT0Sec: number,
+  songLeadIn: number,
   structuralBeats: readonly number[],
 ): number | undefined {
-  const jotTime = audioTimeSec - drumsT0Sec;
+  // jot = media + songLeadIn (the inverse of media = jot - songLeadIn).
+  const jotTime = audioTimeSec + songLeadIn;
   const bars = timeline.bars;
   if (bars.length === 0 || structuralBeats.length !== bars.length) return undefined;
   const first = bars[0];

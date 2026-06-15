@@ -273,7 +273,7 @@
    property change on `.jotContainer` invalidates style on every
    descendant in the score subtree (~22ms recalc on a long song). The
    consumer CSS rules already pair these with `will-change: transform`,
-   so paint stays composite-only. Writers live in jot_view.tsx:
+   so paint stays composite-only. Writers live in jot_editor.tsx:
    `setPlayheadVar`, `setScrollVars`. */
 @property --playhead-x {
     syntax: '<length>';
@@ -287,7 +287,7 @@
    budget during playback. The trade-off is that the JS writing the
    var must target every consumer explicitly, including any that
    mount AFTER the var was last set; see the `MutationObserver` in
-   `ScrollVar` (jot_view.tsx) that watches for new sticky elements
+   `ScrollVar` (jot_editor.tsx) that watches for new sticky elements
    and seeds them with the current scroll position. */
 @property --scroll-x {
     syntax: '<number>';
@@ -299,14 +299,14 @@
     inherits: false;
     initial-value: 0;
 }
-/* Per-bars-row pixel width (`voiceBeats × pxPerBeat`). Replaces the old
+/* Per-bars-row pixel width (`layerBeats × pxPerBeat`). Replaces the old
    inherited `--px-per-beat` as the one quantity zoom mutates: instead of
    a root custom property that cascades a style recalc across every bar /
    note / grid layer on each wheel tick (~the dominant cost of a zoom
    frame on a long song), each beat-anchored element now sizes/positions
    itself as a PERCENTAGE of its bars-row, and only the row's own width
    changes on zoom. `inherits: false` so writing it per row (see
-   `setBarsRowVars` in jot_view.tsx) invalidates only that row element,
+   `setBarsRowVars` in jot_editor.tsx) invalidates only that row element,
    not its subtree; the percentage children relayout (cheap, windowed)
    with no style-recalc cascade. The score's lyrics rows keep a scoped
    `--px-per-beat` (written on the lyrics bars-row only) for their

@@ -1,17 +1,17 @@
 /**
- * General MIDI percussion mapping (MIDI note number <-> Drumjot DSL pitch).
+ * General MIDI percussion mapping (MIDI note number <-> Drumjot DSL lane).
  *
- * The DSL only allows single-letter pitches `a`-`z`, so several MIDI notes
+ * The DSL only allows single-letter lanes `a`-`z`, so several MIDI notes
  * share a letter and are disambiguated via:
  *   - modifiers (e.g. `:o` for open hi-hat),
- *   - `instrumentMapping[pitch].midi.note` (declares the default MIDI note
+ *   - `instrumentMapping[lane].midi.note` (declares the default MIDI note
  *     for a letter),
  *   - per-note `metadata.midi.note` overrides (used by the converter to preserve
  *     the exact source note for round-trip fidelity).
  *
  * The choice of letters here is deliberate:
  *   - `r`/`x`/`o`/`c`/`h`/`f`/`a`/`g` are reserved as DSL modifiers; using them
- *     as pitches would still parse, but to avoid visual clashes we prefer
+ *     as lanes would still parse, but to avoid visual clashes we prefer
  *     other letters for cymbals and toms.
  *   - `d` (instead of `r`) for Ride to avoid clashing with the rim-shot
  *     modifier when rendered as `s:r`.
@@ -23,7 +23,7 @@ import { DrumInstrumentKind } from 'src/instruments/instruments';
 export type Limb = 'lh' | 'rh' | 'lf' | 'rf';
 
 export type GmEntry = {
-  pitch: string;
+  lane: string;
   /** First-class instrument kind for the linter / lint-aware tooling. */
   kind: DrumInstrumentKind;
   modifiers?: Modifier[];
@@ -31,42 +31,42 @@ export type GmEntry = {
   limb?: Limb;
 };
 
-/** Read-side mapping: MIDI note number -> DSL pitch + display data. */
+/** Read-side mapping: MIDI note number -> DSL lane + display data. */
 export const GM_PERCUSSION: Readonly<Record<number, GmEntry>> = {
-  35: { pitch: 'k', kind: 'kick', name: 'Acoustic Bass Drum', limb: 'rf' },
-  36: { pitch: 'k', kind: 'kick', name: 'Kick', limb: 'rf' },
-  37: { pitch: 's', kind: 'snare', modifiers: ['x'], name: 'Side Stick', limb: 'lh' },
-  38: { pitch: 's', kind: 'snare', name: 'Snare', limb: 'lh' },
-  39: { pitch: 'p', kind: 'custom', name: 'Hand Clap', limb: 'lh' },
-  40: { pitch: 's', kind: 'snare', name: 'Electric Snare', limb: 'lh' },
-  41: { pitch: 'f', kind: 'tom', name: 'Low Floor Tom' },
-  42: { pitch: 'h', kind: 'hihat', modifiers: ['c'], name: 'Closed Hi-Hat', limb: 'rh' },
-  43: { pitch: 'f', kind: 'tom', name: 'High Floor Tom' },
-  44: { pitch: 'h', kind: 'hihat', modifiers: ['f'], name: 'Pedal Hi-Hat', limb: 'lf' },
-  45: { pitch: 't', kind: 'tom', name: 'Low Tom' },
-  46: { pitch: 'h', kind: 'hihat', modifiers: ['o'], name: 'Open Hi-Hat', limb: 'rh' },
-  47: { pitch: 't', kind: 'tom', name: 'Low-Mid Tom' },
-  48: { pitch: 't', kind: 'tom', name: 'Hi-Mid Tom' },
-  49: { pitch: 'c', kind: 'crash', name: 'Crash Cymbal 1', limb: 'rh' },
-  50: { pitch: 't', kind: 'tom', name: 'High Tom' },
-  51: { pitch: 'd', kind: 'ride', name: 'Ride Cymbal 1', limb: 'rh' },
-  52: { pitch: 'c', kind: 'crash', name: 'Chinese Cymbal', limb: 'rh' },
-  53: { pitch: 'd', kind: 'ride', name: 'Ride Bell', limb: 'rh' },
-  54: { pitch: 'b', kind: 'custom', name: 'Tambourine' },
-  55: { pitch: 'c', kind: 'crash', name: 'Splash Cymbal', limb: 'rh' },
-  56: { pitch: 'b', kind: 'custom', name: 'Cowbell' },
-  57: { pitch: 'c', kind: 'crash', name: 'Crash Cymbal 2', limb: 'rh' },
-  59: { pitch: 'd', kind: 'ride', name: 'Ride Cymbal 2', limb: 'rh' },
+  35: { lane: 'k', kind: 'kick', name: 'Acoustic Bass Drum', limb: 'rf' },
+  36: { lane: 'k', kind: 'kick', name: 'Kick', limb: 'rf' },
+  37: { lane: 's', kind: 'snare', modifiers: ['x'], name: 'Side Stick', limb: 'lh' },
+  38: { lane: 's', kind: 'snare', name: 'Snare', limb: 'lh' },
+  39: { lane: 'p', kind: 'custom', name: 'Hand Clap', limb: 'lh' },
+  40: { lane: 's', kind: 'snare', name: 'Electric Snare', limb: 'lh' },
+  41: { lane: 'f', kind: 'tom', name: 'Low Floor Tom' },
+  42: { lane: 'h', kind: 'hihat', modifiers: ['c'], name: 'Closed Hi-Hat', limb: 'rh' },
+  43: { lane: 'f', kind: 'tom', name: 'High Floor Tom' },
+  44: { lane: 'h', kind: 'hihat', modifiers: ['f'], name: 'Pedal Hi-Hat', limb: 'lf' },
+  45: { lane: 't', kind: 'tom', name: 'Low Tom' },
+  46: { lane: 'h', kind: 'hihat', modifiers: ['o'], name: 'Open Hi-Hat', limb: 'rh' },
+  47: { lane: 't', kind: 'tom', name: 'Low-Mid Tom' },
+  48: { lane: 't', kind: 'tom', name: 'Hi-Mid Tom' },
+  49: { lane: 'c', kind: 'crash', name: 'Crash Cymbal 1', limb: 'rh' },
+  50: { lane: 't', kind: 'tom', name: 'High Tom' },
+  51: { lane: 'd', kind: 'ride', name: 'Ride Cymbal 1', limb: 'rh' },
+  52: { lane: 'c', kind: 'crash', name: 'Chinese Cymbal', limb: 'rh' },
+  53: { lane: 'd', kind: 'ride', name: 'Ride Bell', limb: 'rh' },
+  54: { lane: 'b', kind: 'custom', name: 'Tambourine' },
+  55: { lane: 'c', kind: 'crash', name: 'Splash Cymbal', limb: 'rh' },
+  56: { lane: 'b', kind: 'custom', name: 'Cowbell' },
+  57: { lane: 'c', kind: 'crash', name: 'Crash Cymbal 2', limb: 'rh' },
+  59: { lane: 'd', kind: 'ride', name: 'Ride Cymbal 2', limb: 'rh' },
 };
 
 /**
  * Generic display name to use when multiple GM entries with different
- * `modifiers` map to the same DSL pitch. Drumjot's instrument row holds
- * every variant of a pitch together (notes carry `:o` / `:c` / `:f`
+ * `modifiers` map to the same DSL lane. Drumjot's instrument row holds
+ * every variant of a lane together (notes carry `:o` / `:c` / `:f`
  * modifiers per-hit), so a variant-specific name like "Closed Hi-Hat"
  * reads wrong on a row that also contains open hits. `buildInstrumentMap`
  * substitutes from this map when the source MIDI has more than one
- * `GM_PERCUSSION` entry on the same pitch; single-variant rows keep the
+ * `GM_PERCUSSION` entry on the same lane; single-variant rows keep the
  * GM entry's specific name (a row with only MIDI 42 still reads "Closed
  * Hi-Hat"; the generic is only for the mixed case).
  */
@@ -82,18 +82,18 @@ export const GENERIC_INSTRUMENT_NAME_BY_PITCH: Readonly<Record<string, string>> 
 };
 
 /**
- * Pick a default MIDI note for a (pitch, modifiers) combination. Used when
+ * Pick a default MIDI note for a (lane, modifiers) combination. Used when
  * writing a Drumjot Note to MIDI and neither the note's own
  * `metadata.midi.note` nor the instrument mapping's `midi.note` is set.
  *
- * Returns `undefined` for unknown pitches; callers must decide whether to
+ * Returns `undefined` for unknown lanes; callers must decide whether to
  * skip the note or substitute another value.
  */
 export function defaultMidiNote(
-  pitch: string,
+  lane: string,
   modifiers: ReadonlySet<Modifier>
 ): number | undefined {
-  switch (pitch) {
+  switch (lane) {
     case 'k':
       return 36;
     case 's':
@@ -160,7 +160,7 @@ export function deriveLetterFromMidi(
  * else gets a fallback letter that doesn't collide with the canonical
  * mappings or with any previously-assigned fallback.
  */
-export function allocatePitchesForMidi(
+export function allocateLanesForMidi(
   used: Iterable<number>
 ): Map<number, string> {
   const out = new Map<number, string>();
@@ -170,8 +170,8 @@ export function allocatePitchesForMidi(
   for (const midi of uniqueSorted) {
     const entry = GM_PERCUSSION[midi];
     if (entry) {
-      out.set(midi, entry.pitch);
-      claimed.add(entry.pitch);
+      out.set(midi, entry.lane);
+      claimed.add(entry.lane);
     }
   }
   for (const midi of uniqueSorted) {

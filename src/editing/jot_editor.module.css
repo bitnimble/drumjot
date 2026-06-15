@@ -1,0 +1,513 @@
+/* Shared app-shell + cross-module form chrome.
+   - App layout (appContainer / jotContainer / title / subtitle / legend)
+   - Full-app modals + overlays (loading, marquee)
+   - Form patterns shared by ≥2 component modules (toolbarCheckbox,
+     samplesSelect, statusPill*).
+   Per-component chrome (toolbar buttons/pills, transport, mixer rows,
+   note/bar styles) lives in the corresponding *.module.css under
+   editing/.  */
+
+.appContainer {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+}
+
+/* First-load welcome screen shown when no jot is loaded. Centred card on
+   the same cream-paper neutral the rest of the app sits on; the toolbar
+   above remains the canonical surface for non-.jot formats. */
+.emptyState {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 48px 24px;
+    min-height: 0;
+    overflow: auto;
+}
+
+.emptyStateCard {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 14px;
+    max-width: 520px;
+    padding: 44px 40px;
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-md);
+}
+
+.emptyStateIcon {
+    color: var(--color-accent);
+    opacity: 0.9;
+    line-height: 0;
+}
+
+.emptyStateTitle {
+    composes: heading from '../typography.module.css';
+    margin: 0;
+    color: var(--color-text);
+}
+
+.emptyStateBody {
+    composes: body from '../typography.module.css';
+    color: var(--color-text-secondary);
+    margin: 0;
+    line-height: 1.5;
+    max-width: 42ch;
+}
+
+/* `composes:` can only target a single bare class selector (see the
+   docblock in typography.module.css), so the `mono` use case is inlined
+   here. Keep in sync with `.mono` if it changes. */
+.emptyStateBody code {
+    /* stylelint-disable-next-line declaration-property-value-allowed-list -- inlined mirror of `.mono`; composes doesn't work on compound selectors. */
+    font-family: 'SF Mono', 'Menlo', monospace;
+    /* stylelint-disable-next-line property-disallowed-list -- inlined mirror of `.mono`; sized relative to the surrounding body text. */
+    font-size: 0.92em;
+    padding: 1px 5px;
+    background: var(--color-bg-hover);
+    border-radius: var(--radius-sm);
+}
+
+/* Stacked: the primary ".jot" CTA sits on its own row so it reads as the
+   dominant action, with the alternate-entry buttons (ParaDB, Recent)
+   gathered into a secondary row below. Keeps any one row from running
+   wider than the primary CTA. */
+.emptyStateActions {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    margin-top: 6px;
+}
+
+.emptyStateAltActions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.emptyStatePrimary {
+    composes: primary sizeLg from '../ui/button/button.module.css';
+}
+
+/* Sibling of `.emptyStatePrimary` that opens the recent-transcriptions
+   popover. Outlined / neutral so it reads as secondary next to the
+   accent-filled primary CTA, but matches its vertical metrics so the
+   action row stays on a clean baseline. */
+.emptyStateSecondary {
+    composes: secondary sizeLg from '../ui/button/button.module.css';
+}
+
+.emptyStateHint {
+    composes: bodySm from '../typography.module.css';
+    color: var(--color-text-faint-strong);
+    margin: 0;
+}
+
+.emptyStateExamples {
+    width: 100%;
+    margin-top: 6px;
+    padding-top: 20px;
+    border-top: 1px solid var(--color-border-soft);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+}
+
+.emptyStateExamplesLabel {
+    composes: metaLabel from '../typography.module.css';
+    color: var(--color-text-faint-strong);
+}
+
+.emptyStateExampleRow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+}
+
+.emptyStateExampleButton {
+    composes: secondary from '../ui/button/button.module.css';
+    composes: bodySm from '../typography.module.css';
+    padding: 5px 12px;
+    border-radius: var(--radius-pill);
+}
+
+.emptyStateExampleButton:focus {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
+.emptyStateFileInput {
+    display: none;
+}
+
+.jotContainer {
+    position: relative;
+    width: 100%;
+    flex: 1 1 auto;
+    min-height: 0;
+    /* Native scroll is disabled (overflow: hidden) so we can drive both
+       axes via a CSS `transform` on `.scrollViewport` below; that gets
+       subpixel-smooth horizontal motion during auto-follow (browsers
+       integer-snap `scrollLeft`, which made the playhead wobble 1px
+       against the bars). The horizontal Minimap below remains the
+       canonical scroll affordance; vertical scroll is middle-button pan.
+       Padding moves to the wrapper (so the inset translates away under
+       the scroll, matching how the old scrollbar would have shown
+       padding above-the-fold only on initial scroll position). */
+    overflow: hidden;
+    box-sizing: border-box;
+    user-select: none;
+    /* Disable the browser's own touch-driven pan / pinch-zoom inside the
+       score so the touch effect in jot_editor.tsx owns both gestures: one
+       finger pans (mirrors middle-mouse drag), two fingers pinch-zoom
+       the score (mirrors the zoom slider). Range inputs and buttons in
+       the mixer chrome still receive their own touch / click events
+       (touch-action: none only suppresses the browser's pan/zoom
+       gestures, not event dispatch), and the touch handler bails on
+       targets inside interactive controls so the native slider drag
+       keeps working. */
+    touch-action: none;
+}
+
+/* Single scroll-translated wrapper inside `.jotContainer`. Sized to its
+   content via `width: max-content`; its `offsetHeight` is the natural
+   stack of all children. Per-frame motion is a `transform:
+   translate3d(...)` driven by two CSS variables that `ScrollVar` (in
+   jot_editor.tsx) writes from `store.scrollX` / `store.scrollY`. Promoted
+   to its own compositor layer via `will-change: transform` so updating
+   either var is a compose-only paint; no re-rasterisation of the
+   bars/notes below. Padding here used to live on `.jotContainer`; moved
+   so it translates with the content (and the scroll-content extent for
+   the clamp math comes out right). */
+.scrollViewport {
+    position: relative;
+    /* `max-content` so the wrapper's `offsetWidth` reflects the natural
+       content extent (the analogue of `scrollWidth` in the old
+       native-overflow model). JotEditor's ResizeObserver feeds it to
+       `store.setContentSize` for scroll clamping. */
+    width: max-content;
+    /* Mirror the original `.jotContainer` vertical padding so the score
+       has the same top inset on initial paint. No horizontal padding;
+       the per-block inset (`padding: 0 24px` on title/subtitle/legend)
+       keeps the text content indented while leaving gutters flush with
+       the viewport's left edge, matching the previous layout. */
+    padding: 32px 0;
+    box-sizing: border-box;
+    transform: translate3d(calc(var(--scroll-x, 0) * -1px), calc(var(--scroll-y, 0) * -1px), 0);
+    will-change: transform;
+}
+
+/* Counter-transform for the elements that used to be
+   `position: sticky; left: 0` against the native scroller. The wrapper
+   above translates everything by `-scrollX`; this transform adds
+   `+scrollX` back, so the element's visual screen-x stays where it
+   would have sat without horizontal scroll (effectively pinned at the
+   viewport's left edge for any element whose layout puts it at
+   content-x = 0, matching the previous sticky behaviour). Vertical
+   motion is left to the wrapper transform (sticky was only horizontal
+   before). The consumers set their own z-index since `transform`
+   creates a new stacking context. */
+.scrollStickyHorizontal {
+    position: relative;
+    transform: translate3d(calc(var(--scroll-x, 0) * 1px), 0, 0);
+    will-change: transform;
+}
+
+/* Shared geometry for every beat-anchored bars-row in the score
+   (timeline header, instrument rows, audio-track waveform, lyrics). All
+   four are flex siblings of a sticky gutter inside `.scrollViewport`,
+   so they need:
+     - `position: relative` so absolutely-positioned children (bars,
+       waveform tiles, lyric words, ticks, the playhead) anchor inside.
+     - `flex: 0 0 auto` so the row keeps its natural width inside the
+       parent flex (no shrinking when the gutter is wide).
+     - Explicit `width: var(--bars-row-width)` (= `layerBeats ×
+       pxPerBeat`, in px) so the row has a defined bounding box across
+       the full song. This per-row width is the ONE quantity zoom
+       mutates; `setBarsRowVars` (jot_editor.tsx) writes it on each
+       bars-row imperatively (no React re-render). Every beat-anchored
+       child positions/sizes itself as a percentage of this width
+       (`--layer-beats` set inline per row drives the divisor), so a
+       zoom relayouts the row's children without a `--px-per-beat`
+       style-recalc cascade.
+
+   No `will-change: transform` or `transform: translateZ(0)` here.
+   `.scrollViewport` (the single ancestor that owns the scroll
+   transform) already promotes itself to a compositor layer with an
+   explicit `transform: translate3d(...)`; everything below it - bars,
+   waveform tiles, ticks, lyric words, the playheads - paints into
+   that one bitmap and translates with it as a unit. Adding a
+   per-row layer here was the previous design, but it makes each row
+   its own nested compositor layer, and Chrome integer-snaps each
+   nested layer's position independently while the parent translates
+   sub-pixel. That surfaces as the audio waveform tiles and barlines
+   wobbling ~1px back-and-forth against each other during auto-follow
+   scroll. Letting the rows paint into the parent layer locks them
+   together: the scrollViewport's single sub-pixel translate moves the
+   whole bitmap, and nothing inside can shift independently.
+   Scroll perf is unchanged - scrollViewport's compositor translate is
+   still GPU-only (no repaint); we just don't fragment that one
+   translate across N child layers.
+
+   Consumers `composes:` this and add row-specific chrome (background,
+   borders, z-index, font tracking). */
+.barsRowBase {
+    position: relative;
+    flex: 0 0 auto;
+    width: var(--bars-row-width);
+}
+
+/* Compose the counter-transform above so these blocks stay pinned at
+   the viewport's left edge as the wrapper scrolls horizontally;
+   matches the previous `position: sticky; left: 0` semantics.
+   `width: fit-content` keeps the pinned box narrow so it doesn't span
+   the full scroll width and create stray hit areas / overlap
+   downstream sticky chrome. */
+.title {
+    composes: heading from '../typography.module.css';
+    composes: scrollStickyHorizontal;
+    margin: 0 0 4px 0;
+    padding: 0 24px;
+    width: fit-content;
+}
+
+.subtitle {
+    composes: body from '../typography.module.css';
+    composes: scrollStickyHorizontal;
+    color: var(--color-text-muted-alt);
+    margin: 0 0 20px 0;
+    padding: 0 24px;
+    width: fit-content;
+}
+
+.legend {
+    composes: body from '../typography.module.css';
+    composes: scrollStickyHorizontal;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+    padding: 0 24px;
+    width: fit-content;
+}
+
+.legendChip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px 2px 4px;
+    border-radius: var(--radius-pill);
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border-soft);
+}
+
+.legendSwatch {
+    width: 10px;
+    height: 10px;
+    border-radius: var(--radius-circle);
+    display: inline-block;
+}
+
+.marquee {
+    position: absolute;
+    box-shadow: 0 0 0 1px var(--color-accent);
+    background: var(--color-accent-overlay-light);
+    pointer-events: none;
+}
+
+/* Modal overlay shown over the whole appContainer while a file load is in
+   flight. The lightly-transparent backdrop keeps the UI legible (so the
+   user can see what's about to come back), and `pointer-events: auto`
+   (default) plus full coverage blocks every click underneath until the
+   load resolves. Sits above the playback bar / debug panel but below
+   browser-level UI (no `position: fixed` — confined to the app shell). */
+.loadingOverlay {
+    position: absolute;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    background: var(--color-bg-cream-translucent);
+    backdrop-filter: blur(2px);
+    user-select: none;
+}
+
+.loadingSpinner {
+    composes: spinner from '../ui/spinner/spinner.module.css';
+    width: 44px;
+    height: 44px;
+    border-width: 4px;
+    border-color: var(--color-border-translucent);
+    border-top-color: var(--color-accent);
+}
+
+.loadingLabel {
+    composes: bodyMd from '../typography.module.css';
+    color: var(--color-text-secondary);
+    /* stylelint-disable-next-line property-disallowed-list -- tiny tracking on top of bodyMd; not common enough to be its own use case. */
+    letter-spacing: 0.02em;
+    background: var(--color-bg-overlay-strong);
+    padding: 4px 12px;
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--color-border);
+    box-shadow: var(--shadow-sm);
+    white-space: nowrap;
+    max-width: 70vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ─── Shared form chrome (used by toolbar + playback) ───────────────── */
+
+.toolbarCheckbox {
+    composes: body from '../typography.module.css';
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--color-text-secondary);
+    user-select: none;
+    cursor: pointer;
+}
+
+.toolbarCheckbox input[type='checkbox'] {
+    accent-color: var(--color-accent);
+    cursor: pointer;
+}
+
+.toolbarCheckbox input:disabled {
+    cursor: not-allowed;
+}
+
+/* App-wide range slider chrome. The default browser thumb overflows the
+   track top/bottom — restyle so the thumb sits flush inside the track.
+   Per-instance widths/heights still live on their owning module classes.
+   Rules use the `:global(...)` parentheses form rather than a `:global { }`
+   block so esbuild's CSS minifier doesn't trip on the nested syntax.
+
+   The "filled to the thumb" track look is driven by `--value` (0..1) set
+   inline on the <input> at the consumer site — see e.g.
+   MasterVolumeSlider in src/editing/playback.tsx. The fallback `0` keeps
+   any future un-prefilled slider looking sane (all-grey track). */
+:global(input[type='range']) {
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    padding: 0;
+    cursor: pointer;
+}
+
+:global(input[type='range']:focus) {
+    outline: none;
+}
+
+:global(input[type='range']::-webkit-slider-runnable-track) {
+    height: 8px;
+    border-radius: var(--radius-md);
+    background: linear-gradient(
+        to right,
+        var(--color-accent) 0%,
+        var(--color-accent) calc(var(--value, 0) * 100%),
+        var(--color-border-soft) calc(var(--value, 0) * 100%),
+        var(--color-border-soft) 100%
+    );
+}
+
+:global(input[type='range']::-moz-range-track) {
+    height: 8px;
+    border-radius: var(--radius-md);
+    background: linear-gradient(
+        to right,
+        var(--color-accent) 0%,
+        var(--color-accent) calc(var(--value, 0) * 100%),
+        var(--color-border-soft) calc(var(--value, 0) * 100%),
+        var(--color-border-soft) 100%
+    );
+    border: none;
+}
+
+:global(input[type='range']::-webkit-slider-thumb) {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 10px;
+    height: 10px;
+    border-radius: var(--radius-circle);
+    /* White knob with a hairline accent border so it pops on the
+       accent-filled portion of the track AND stays visible on the
+       grey unfilled portion. The 1px hairline gives the knob a
+       defined edge without competing with the track colour. */
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border-strong);
+    box-shadow: var(--shadow-sm);
+}
+
+:global(input[type='range']::-moz-range-thumb) {
+    width: 10px;
+    height: 10px;
+    border-radius: var(--radius-circle);
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border-strong);
+    box-shadow: var(--shadow-sm);
+}
+
+.samplesSelect {
+    composes: body from '../typography.module.css';
+    padding: 2px 6px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-base);
+    color: var(--color-text);
+    cursor: pointer;
+}
+
+.statusPill {
+    composes: bodySm from '../typography.module.css';
+    padding: 4px 10px;
+    border-radius: var(--radius-pill);
+    /* stylelint-disable-next-line property-disallowed-list -- tiny tracking on top of bodySm so the pill text reads more deliberately than running body text. */
+    letter-spacing: 0.02em;
+    /* Render the full label by default; only truncate when the toolbar
+       actually runs out of room. `min-width: 0` lets the pill participate
+       in flex shrinking (a flex item's default min-width is its content,
+       which would otherwise force the toolbar to overflow horizontally). */
+    min-width: 0;
+    flex: 0 1 auto;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.statusPillBusy {
+    background: var(--color-busy-bg);
+    color: var(--color-accent-busy);
+    border: 1px solid var(--color-busy-border);
+}
+
+.statusPillError {
+    background: var(--color-error-bg);
+    color: var(--color-error);
+    border: 1px solid var(--color-error-border);
+    cursor: pointer;
+}
+
+.statusPillSuccess {
+    background: var(--color-success-bg);
+    color: var(--color-success);
+    border: 1px solid var(--color-success-border);
+    cursor: pointer;
+}

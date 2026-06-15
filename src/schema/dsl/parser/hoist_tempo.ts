@@ -37,7 +37,7 @@ export function hoistTempoEvents(jot: Jot): void {
   let currentBpm = resolveBpm(jot.globalMetadata.bpm, DEFAULT_BPM);
   let initialBpmCaptured = false;
 
-  // The initial tempo: the very first bpm value encountered (in voice 0,
+  // The initial tempo: the very first bpm value encountered (in layer 0,
   // bar 0). If no bar carries an opening bpm, the existing
   // `globalMetadata.bpm` (else default) stands.
   const setInitial = (bpm: BpmField) => {
@@ -55,15 +55,15 @@ export function hoistTempoEvents(jot: Jot): void {
     currentBpm = resolved;
   };
 
-  // We canonicalize tempo against voice 0. Voices 1+ share the same bar
+  // We canonicalize tempo against layer 0. Layers 1+ share the same bar
   // grid (the parser's `barActive` propagates across `||`), and any
-  // genuinely per-voice element-level bpm is uncommon and would already
+  // genuinely per-layer element-level bpm is uncommon and would already
   // be ignored by today's downstream MIDI path. Strip bpm from those
-  // voices defensively so the post-hoist invariant ("no bpm on element
+  // layers defensively so the post-hoist invariant ("no bpm on element
   // metadata") holds everywhere.
-  const voice0 = jot.voices[0];
-  if (voice0) {
-    const bars = voice0.bars;
+  const layer0 = jot.layers[0];
+  if (layer0) {
+    const bars = layer0.bars;
 
     // Pre-pass: lift bar 0's opening bpm into globalMetadata.bpm as the
     // initial tempo. The parser stamps every bar with its barActive
@@ -79,8 +79,8 @@ export function hoistTempoEvents(jot: Jot): void {
     }
   }
 
-  for (let v = 1; v < jot.voices.length; v++) {
-    for (const bar of jot.voices[v].bars) {
+  for (let v = 1; v < jot.layers.length; v++) {
+    for (const bar of jot.layers[v].bars) {
       stripBarTempo(bar, jot.patterns ?? {});
     }
   }

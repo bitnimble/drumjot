@@ -6,7 +6,7 @@ function jotWith(gridDivision?: number): Jot {
   return {
     title: '',
     globalMetadata: { bpm: 120, time: { count: 4, unit: 4 }, ...(gridDivision !== undefined ? { gridDivision } : {}) },
-    voices: [{ bars: [] }],
+    layers: [{ bars: [] }],
   };
 }
 
