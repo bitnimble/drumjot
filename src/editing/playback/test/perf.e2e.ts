@@ -220,3 +220,122 @@ test.describe('per-frame performance', () => {
     await page.evaluate(() => (window as any).drumjot.playbackPresenter.stopPlayback());
   });
 });
+
+/**
+ * Insert-note interaction latency on the heavy debug-bundle song, scrolled to
+ * mid-song. Measures the time from a click in insert mode to the new note's
+ * glyph committing to the DOM. This is the metric the granular structure
+ * derivation (per-(bar, lane) computeds) exists to keep flat: a note add must
+ * re-render only the touched bar+lane, never the whole score, so this stays low
+ * regardless of song length or scroll position.
+ *
+ * Click -> DOM-commit is measured with a `MutationObserver` that catches the
+ * new `--note-beat` glyph (the placeholder uses `--placeholder-beat`, so it's
+ * not mistaken for a committed note). That captures the main-thread work; the
+ * actual paint lands one vsync later. The clock is driven entirely in-page via
+ * synthetic pointermove (to set the placeholder) + click dispatched straight at
+ * the bars row, so there's no Playwright IPC in the measured window and no
+ * hit-testing against the note/placeholder overlays.
+ */
+// Median click->note-commit budget. Measured ~13-19ms median / ~17-21ms p95 on
+// headless software-rendered Chromium (slower than a real GPU); 30ms is ~1.5-2x
+// headroom over the worst observed median, so it won't flake on a loaded box
+// yet still trips on any real regression (the pre-granular monolithic
+// derivation re-renders the whole song = hundreds of ms here).
+const INSERT_LATENCY_BUDGET_MS = 30;
+
+async function measureInsertLatencyMs(
+  page: import('@playwright/test').Page,
+  samples: number,
+): Promise<number[]> {
+  return page.evaluate(async ({ samples }) => {
+    const track = document.querySelector('[data-testid^="instrument-track-"]') as HTMLElement | null;
+    if (!track) throw new Error('no instrument track rendered');
+    const barsRow = track.querySelector('[data-bars-row]') as HTMLElement | null;
+    if (!barsRow) throw new Error('no bars row in the first instrument track');
+    // Committed note glyphs carry `--note-beat`; the insert-mode placeholder
+    // carries `--placeholder-beat`, so this selector counts only real notes.
+    const NOTE = '[style*="--note-beat"]';
+    const rect = barsRow.getBoundingClientRect();
+    const clientY = rect.top + rect.height / 2;
+    // Two rAFs: let React commit + the browser settle between samples.
+    const flush = () =>
+      new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+    const out: number[] = [];
+    for (let i = 0; i < samples; i++) {
+      // A point near the viewport centre is over the (mid-song) bars, past the
+      // sticky gutter; the row handler maps clientX -> the bar under it via the
+      // bars row's own (scrolled, negative) left edge.
+      const clientX = window.innerWidth / 2 + i * 30;
+      barsRow.dispatchEvent(
+        new PointerEvent('pointermove', { bubbles: true, clientX, clientY, pointerId: 1 }),
+      );
+      await flush();
+      if (!track.querySelector('[data-testid="placeholder-note"]')) {
+        throw new Error('placeholder did not appear; insert mode not active?');
+      }
+      const before = track.querySelectorAll(NOTE).length;
+      let obs: MutationObserver | undefined;
+      const appeared = new Promise<number>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          obs?.disconnect();
+          reject(new Error('note glyph did not appear within 3s of the click'));
+        }, 3000);
+        obs = new MutationObserver(() => {
+          if (track.querySelectorAll(NOTE).length > before) {
+            const t = performance.now();
+            clearTimeout(timer);
+            obs?.disconnect();
+            resolve(t);
+          }
+        });
+        obs.observe(track, { childList: true, subtree: true });
+      });
+      const t0 = performance.now();
+      barsRow.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      const t1 = await appeared;
+      out.push(t1 - t0);
+      await flush();
+    }
+    return out;
+  }, { samples });
+}
+
+test.describe('insert-note latency', () => {
+  test.describe.configure({ mode: 'serial' });
+  test.skip(!DEBUG_BUNDLE_PATH, 'E2E_DEBUG_BUNDLE not set');
+
+  test('adding a note mid-song commits fast (granular re-render)', async ({ page }) => {
+    test.setTimeout(180_000); // large zip unpack + multi-track audio decode
+    await loadDebugBundle(page);
+    await page.evaluate(() => (window as any).drumjot.viewportPresenter.setZoom(1));
+
+    // Scroll to ~halfway through the song, so the insert lands on a mid-song
+    // bar with many bars before and after it (the granular-update stress case:
+    // a monolithic derivation would re-render every one of them).
+    await page.evaluate(() => {
+      const s = (window as any).drumjot.jotEditorStore.structural;
+      (window as any).drumjot.viewportPresenter.setScrollX((s.layerBeats * s.pxPerBeat) / 2);
+    });
+
+    // Enter insert mode via the floating toolbar (the editing store isn't on
+    // `window.drumjot`, so go through the real UI).
+    await page.getByTestId('mode-insert').click();
+    await page.waitForTimeout(150); // let the scroll/window + mode toggle settle
+
+    const samples = await measureInsertLatencyMs(page, 12);
+    expect(samples.length).toBe(12);
+    // Drop the first (cold) sample; report the steady-state distribution.
+    const steady = samples.slice(1);
+    const median = pct(steady, 0.5);
+    const msg =
+      `insert-latency: median ${median}ms, p95 ${pct(steady, 0.95)}ms, ` +
+      `max ${Math.round(Math.max(...steady) * 100) / 100}ms, ` +
+      `min ${Math.round(Math.min(...steady) * 100) / 100}ms (n=${steady.length})`;
+    // Surfaced in the test output so the real threshold can be set from data.
+    console.log(`[PERF] ${msg}`);
+    expect(median, `${msg} - click->note-commit must stay snappy`).toBeLessThan(
+      INSERT_LATENCY_BUDGET_MS,
+    );
+  });
+});
