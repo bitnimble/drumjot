@@ -32,7 +32,6 @@
  * a visible indicator and the operator can inspect details.
  */
 import { makeAutoObservable, runInAction } from 'mobx';
-import { type Epochs, makeEpochs } from './epochs';
 import type { StructuralPresenter } from 'src/editing/structure/structural_presenter';
 import type { TempoPresenter } from 'src/editing/playback/tempo_presenter';
 import { MixerContext } from 'src/editing/tracks/tracks';
@@ -503,18 +502,16 @@ export class JotPlayer {
    * it pulls them together. Drum scheduling is in jot-time and doesn't depend
    * on this, so a change only repositions the audio tracks.
    *
-   * Observable and user-adjustable live via {@link setSongLeadIn} (the
-   * transport bar's Offset control); the store seeds it from each loaded
-   * jot's `globalMetadata.songLeadIn`, after which manual nudges persist until
-   * a different jot is loaded. The full derived anchor set is {@link epochs}.
+   * Read-only mirror: the source of truth is {@link PlaybackStore.songLeadInSec}
+   * (seeded + nudged by `PlaybackPresenter`, where the full {@link Epochs}
+   * record also lives). The engine reads it from the attached store and falls
+   * back to 0 for a standalone engine (tests / stories with no store). After
+   * a change the presenter calls {@link repositionAudioForOffset} to slide the
+   * audio tracks; it stays a getter so every existing `jotPlayer.songLeadInSec`
+   * read keeps reacting to the store observable.
    */
-  songLeadInSec: number = 0;
-
-  /** The song's time anchors (jot seconds): the live {@link songLeadInSec}
-   *  plus the rendered left edge (`fullLeadIn`) from the current timeline.
-   *  `fullLeadIn` falls back to `songLeadIn` before a timeline is built. */
-  get epochs(): Epochs {
-    return makeEpochs(this.songLeadInSec, this.timeline.bars[0]?.startSec ?? this.songLeadInSec);
+  get songLeadInSec(): number {
+    return this.playback?.songLeadInSec ?? 0;
   }
 
   /**
@@ -540,7 +537,7 @@ export class JotPlayer {
   // Audio-context time of the last drum event scheduled by the most
   // recent `scheduleEvents` call. Tracked separately from
   // `tailAudioTime` (which already takes the max with audio-track
-  // endings) so callers that don't reschedule drums; `setSongLeadIn`
+  // endings) so callers that don't reschedule drums; `repositionAudioForOffset`
   // is the only one today; can recompute the tail when only the
   // audio side moves.
   private lastScheduledDrumTime: number = 0;
@@ -1016,23 +1013,21 @@ export class JotPlayer {
   }
 
   /**
-   * Set the drum↔audio offset (lead-in) in seconds. Takes effect
-   * immediately, including mid-playback and while paused: the drums and
-   * playhead are anchored in jot-time and don't move, so we only reseek
-   * the audio tracks to their new media position (`currentJotTime +
-   * offset`). While paused the AudioContext clock is frozen, so the
-   * rescheduled elements stay silent (their `play()` no-ops against a
-   * suspended context) and realign on resume — same approach as `seek`.
+   * Reposition the audio tracks to the current {@link songLeadInSec} (the
+   * drum↔audio offset / lead-in). Called by `PlaybackPresenter` after it
+   * writes the new offset into {@link PlaybackStore.songLeadInSec}. Takes
+   * effect immediately, including mid-playback and while paused: the drums
+   * and playhead are anchored in jot-time and don't move, so we only reseek
+   * the audio tracks to their new media position (`currentJotTime + offset`).
+   * While paused the AudioContext clock is frozen, so the rescheduled
+   * elements stay silent (their `play()` no-ops against a suspended context)
+   * and realign on resume, same approach as `seek`. No-op unless playing or
+   * paused with a live context + audio controller.
    *
-   * Clamped at 0 (songLeadIn <= 0): the audio can't start *after* bar 1,
-   * so a positive lead-in has no meaning (the audio would just clamp to
-   * its own t=0).
+   * (The value itself is clamped to <= 0 by the presenter: the audio can't
+   * start *after* bar 1, so a positive lead-in has no meaning.)
    */
-  setSongLeadIn(sec: number): void {
-    const clamped = Number.isFinite(sec) ? Math.min(0, sec) : 0;
-    runInAction(() => {
-      this.songLeadInSec = clamped;
-    });
+  repositionAudioForOffset(): void {
     if ((this.state !== 'playing' && this.state !== 'paused') || !this.ctx) return;
     if (!this.audioTrackController) return;
     const now = this.ctx.currentTime;
@@ -1045,7 +1040,7 @@ export class JotPlayer {
       now,
       jotOffset,
       this.playbackSpeed,
-      clamped,
+      this.songLeadInSec,
       (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter)
     );
     // The auto-stop fires when the latest of (last drum event, last
@@ -1340,10 +1335,10 @@ export class JotPlayer {
     this.audioTrackController = undefined;
     this.events = [];
     this.startJotTime = 0;
-    // `songLeadIn` is deliberately NOT reset here: it's the loaded
-    // jot's offset (seeded by the store, live-tunable via setSongLeadIn),
-    // so it must survive stop()/replay. The store re-seeds it when a
-    // different jot is loaded.
+    // `songLeadIn` needs no reset here: it lives on PlaybackStore (the
+    // loaded jot's offset, seeded + live-tuned by PlaybackPresenter), not on
+    // the engine, so it naturally survives stop()/replay. The store re-seeds
+    // it when a different jot is loaded.
     this.pendingStartSec = undefined;
     runInAction(() => {
       if (this.state !== 'idle') this.state = 'idle';

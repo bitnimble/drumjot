@@ -3,6 +3,7 @@ import type { MixerStore } from '../mixer/mixer_store';
 import { PASSTHROUGH_FILTER, type PlayerFilter } from './player';
 import { PASSTHROUGH_AUDIO_TRACK_FILTER, type AudioTrackFilter } from './audio_tracks';
 import { JotEditorStore } from '../jot_editor_store';
+import { type Epochs, makeEpochs } from './epochs';
 
 /**
  * Transport / playhead-follow UI state, plus the engine-facing
@@ -45,6 +46,20 @@ export class PlaybackStore {
    */
   followDisabledIsTransient: boolean = false;
 
+  /**
+   * The `songLeadIn` epoch (jot seconds, <= 0): the jot time at which the
+   * recorded audio begins, i.e. the recording's pre-drum lead-in. The live,
+   * user-tunable audio↔drum alignment. The audio engine reads it (mirrored as
+   * `jotPlayer.songLeadInSec`) and maps every audio track via `media = jot -
+   * songLeadIn`; the renderer/waveform/lyrics read it for the same mapping.
+   *
+   * The single source of truth: seeded from each loaded jot's
+   * `globalMetadata.songLeadIn` and nudged by the Offset / Beat-offset
+   * controls, both through `PlaybackPresenter.setSongLeadIn` (the only
+   * writer, which clamps to <= 0 and asks the engine to reposition audio).
+   */
+  songLeadInSec: number = 0;
+
   /** The active jot, for the drum-offset readout. */
   readonly jotEditorStore: JotEditorStore;
   /** Authoritative mute/solo/volume source for the filter computeds.
@@ -60,6 +75,24 @@ export class PlaybackStore {
   /** Current beat-grid offset (quarter-note beats) on the loaded jot. */
   get drumOffsetBeats(): number {
     return this.jotEditorStore.structural?.drumOffsetBeats ?? 0;
+  }
+
+  /**
+   * The song's time anchors in jot seconds (bar-1 downbeat = 0):
+   * `{ drums: 0, songLeadIn, fullLeadIn }`, with `fullLeadIn <= songLeadIn
+   * <= drums`. The named replacement for the old scattered `drumsT0Sec`
+   * arithmetic; map audio↔jot with `jotToMedia` / `mediaToJot`.
+   *
+   *  - `songLeadIn` is the live {@link songLeadInSec} (audio start).
+   *  - `fullLeadIn` is the rendered left edge, the first bar's start in the
+   *    tempo timeline, which includes the view-only virtual lead-in bar, and
+   *    is the leftmost seekable / visible point. It falls back to `songLeadIn`
+   *    before a timeline exists. Read from the `tempo` peer (always available,
+   *    unlike the engine's live timeline which is empty while idle).
+   */
+  get epochs(): Epochs {
+    const fullLeadIn = this.jotEditorStore.tempo?.timeline.bars[0]?.startSec ?? this.songLeadInSec;
+    return makeEpochs(this.songLeadInSec, fullLeadIn);
   }
 
   /**

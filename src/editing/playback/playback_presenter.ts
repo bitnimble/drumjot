@@ -31,7 +31,7 @@ export class PlaybackPresenter {
         const raw = this.jotEditorStore.source?.globalMetadata.songLeadIn;
         return typeof raw === 'number' && raw < 0 ? raw : 0;
       },
-      (songLeadIn) => jotPlayer.setSongLeadIn(songLeadIn),
+      (songLeadIn) => this.setSongLeadIn(songLeadIn),
       { fireImmediately: true }
     );
 
@@ -127,10 +127,25 @@ export class PlaybackPresenter {
       const deltaSec = (deltaBeats * 60) / bpm;
       // Shift songLeadIn the opposite way to the note shift so the audio
       // waveform tracks the noteheads instead of sliding out from under them.
-      jotPlayer.setSongLeadIn(jotPlayer.songLeadInSec + deltaSec);
+      this.setSongLeadIn(this.playback.songLeadInSec + deltaSec);
     }
     structural.setDrumOffset(beats);
     jotPlayer.refreshDrumSchedule(structural);
+  }
+
+  /**
+   * Set the live `songLeadIn` epoch (audio↔drum offset / lead-in), in jot
+   * seconds. The sole writer of {@link PlaybackStore.songLeadInSec}: clamps to
+   * <= 0 (the audio can't start after bar 1, so a positive lead-in has no
+   * meaning) and then asks the engine to slide the audio tracks to the new
+   * media position. Drum scheduling + playhead are jot-anchored and unaffected,
+   * so this only repositions audio. Drives the transport bar's Offset control,
+   * the seed-on-load reaction, and the Beat-offset compensation above.
+   */
+  setSongLeadIn(sec: number): void {
+    const clamped = Number.isFinite(sec) ? Math.min(0, sec) : 0;
+    this.playback.songLeadInSec = clamped;
+    jotPlayer.repositionAudioForOffset();
   }
 
   /**
