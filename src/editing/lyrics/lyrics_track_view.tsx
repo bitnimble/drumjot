@@ -85,15 +85,12 @@ export const LyricsTrackView = observer(
     // AudioTrackView / InstrumentTrackView: read off the structural cache (zoom-
     // invariant) so this row doesn't re-render on every wheel tick;
     // CSS calc handles the per-zoom pixel scaling.
-    const structureLayer = structural.layers[0];
-    let layerBeats = 0;
-    if (structureLayer) {
-      for (const b of structureLayer.bars) layerBeats += b.beats;
-    }
-    const structuralBeats = React.useMemo(
-      () => (structureLayer?.bars ?? []).map((b) => b.beats),
-      [structureLayer],
-    );
+    // Read the stable geometry spine (`viewGeometry` is `computed.struct`) +
+    // the cached `layerBeats` scalar, so this row doesn't re-render on a note
+    // edit (which never changes bar geometry) any more than on a wheel tick.
+    const geometry = structural.viewGeometry;
+    const layerBeats = structural.layerBeats;
+    const structuralBeats = React.useMemo(() => geometry.map((b) => b.beats), [geometry]);
 
     // The playback timeline is the canonical source for audio-sec → beat
     // mapping. `jot.tempo.timeline` is a MobX computed that mirrors what

@@ -134,8 +134,11 @@ export const InstrumentTrackView = observer(
     layerControls: LayerControls;
   } & MixerRowDragProps) => {
     const structural = React.useContext(StructuralContext);
-    const layer0 = structural?.primaryLayer;
-    if (!structural || !layer0) return null;
+    // `hasContent` is a stable boolean (it reads the geometry spine, not the
+    // note-content `layers`), so this row never re-renders just because some
+    // OTHER bar/lane changed; the per-lane `barsForLane(lane)` read below is
+    // the sole structural dependency, and it's granular per (bar, lane).
+    if (!structural || !structural.hasContent) return null;
     const trackHeight = config.trackHeight as number;
     // Per-lane derived data (bars, layer-wide totals, cumulative
     // bar-start offsets, label color/instrument name); all memoised on

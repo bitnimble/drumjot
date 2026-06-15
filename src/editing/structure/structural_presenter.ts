@@ -8,8 +8,18 @@
  * Owns the drum-offset state (the only mutable bit) and reads everything else
  * from the stores it composes. Satisfies {@link LaidOutJot} so it can back the
  * timeline maths directly.
+ *
+ * **Render-path granularity.** The score reads {@link barsForLane}, which (when
+ * no beat-grid offset is applied, the common case) is built from the store's
+ * per-(bar, lane) granular computeds: a stable geometry spine ({@link
+ * viewGeometry}) plus {@link StructureStore.trackFor} / `spansFor`, each
+ * structurally gated. So adding a note re-renders only the one bar+lane it
+ * touched, and every other row's `barsForLane` keeps its cached value, no
+ * re-render, no React reconciliation. `musicalLayers` / `layers` (the full
+ * structure) stay for export / playback / tempo / density / lane-list
+ * consumers; the render path never reads them.
  */
-import { action, computed, makeObservable, observable } from 'mobx';
+import { action, comparer, computed, makeObservable, observable } from 'mobx';
 import { computedFn } from 'mobx-utils';
 import { Instrument, Jot } from 'src/schema/dsl/dsl';
 import { isDyadic } from 'src/schema/dsl/element_metrics';
@@ -19,12 +29,26 @@ import type { LaidOutJot } from 'src/editing/playback/timeline';
 import {
   LEAD_IN_BAR_ID,
   type StructBar,
+  type StructBarGeometry,
   type StructTrack,
   type StructLayer,
   type StructureStore,
 } from './structure_store';
 import type { PaletteStore } from 'src/editing/palette/palette_store';
 import type { LayoutStore } from 'src/editing/viewport/layout_store';
+
+const STRUCTURAL = { equals: comparer.structural } as const;
+
+/** Per-lane row data the mixer's instrument row reads. */
+export type LaneBars = {
+  bars: readonly StructBar[];
+  layerBeats: number;
+  leadInBarsBeats: number;
+  barBeatStart: readonly number[];
+  startBeats: readonly number[];
+  laneColor: string;
+  instrumentName: string | undefined;
+};
 
 export class StructuralPresenter implements LaidOutJot {
   drumOffsetBeats = 0;
@@ -45,7 +69,12 @@ export class StructuralPresenter implements LaidOutJot {
       musicalLayers: computed,
       layers: computed,
       pxPerBeat: computed,
+      lanes: computed.struct,
+      viewLayerId: computed,
+      viewGeometry: computed.struct,
+      viewGeometryById: computed,
       layerBeats: computed,
+      hasContent: computed,
       primaryLayer: computed,
     });
   }
@@ -71,7 +100,7 @@ export class StructuralPresenter implements LaidOutJot {
   /** The store-native `Struct*` layers, drum-offset applied. The MUSICAL
    *  structure (1:1 with the source bars): export, playback scheduling, and
    *  the tempo summary read this so a view-only lead-in never leaks into
-   *  exported/scheduled content. View code reads {@link layers} instead. */
+   *  exported/scheduled content. View code reads {@link barsForLane} instead. */
   get musicalLayers(): StructLayer[] {
     const base = this.structureStore.layers;
     const eff = this.effectiveDrumOffsetBeats;
@@ -79,16 +108,10 @@ export class StructuralPresenter implements LaidOutJot {
   }
 
   /** The structure as the SCORE renders it: {@link musicalLayers} plus a
-   *  view-only "virtual" lead-in bar so the first note never clips at the
-   *  left edge and an audio track with no pre-roll still has room. The
-   *  virtual bar is sized so total lead-in is at least one full bar (using
-   *  the audio pre-roll when that already exceeds a bar), and is prepended
-   *  only when the song carries no real lead-in bar of its own. Tagged
-   *  {@link LEAD_IN_BAR_ID}; transparent to the renderer, excluded from
-   *  export/playback via {@link musicalLayers}. */
+   *  view-only "virtual" lead-in bar (see {@link viewGeometry}). The full
+   *  multi-lane form, kept for the timeline / minimap / lyrics consumers; the
+   *  per-row render path reads {@link barsForLane}. */
   get layers(): StructLayer[] {
-    // `songLeadIn` is the jot time the audio starts (<= 0); the pre-roll
-    // length is its magnitude.
     const preRollSec = Math.max(0, -(this.source.globalMetadata.songLeadIn ?? 0));
     const bpm = resolveBpm(this.source.globalMetadata.bpm, 120);
     return this.musicalLayers.map((layer) => withVirtualLeadIn(layer, preRollSec, bpm));
@@ -98,12 +121,70 @@ export class StructuralPresenter implements LaidOutJot {
     return ((this.viewConfig.barWidth as number) * this.layoutStore.densityFactor) / 4;
   }
 
+  /** Ordered lane list across all layers (lanes that carry a note).
+   *  `computed.struct`, so an in-lane note edit never churns the mixer's row
+   *  list. */
+  get lanes(): string[] {
+    const out: string[] = [];
+    for (const layer of this.structureStore.layerOrder) {
+      for (const lane of this.structureStore.lanesForLayer(layer.id)) {
+        if (!out.includes(lane)) out.push(lane);
+      }
+    }
+    return out;
+  }
+
+  /** Id of the layer the per-row render path reads (the first `||` layer). */
+  get viewLayerId(): string {
+    return this.structureStore.layerOrder[0]?.id ?? '';
+  }
+
+  /** Geometry spine the score renders against: the layer-0 bar geometry plus a
+   *  view-only "virtual" lead-in bar when the song has no real lead-in of its
+   *  own, so the first note never clips at the left edge and a song with no
+   *  pre-roll still has count-in room. Sized to at least one full bar (or the
+   *  audio pre-roll when that's longer). `computed.struct`, so a note edit
+   *  (which never changes bar geometry) leaves it, and everything keyed off it,
+   *  untouched. */
+  get viewGeometry(): StructBarGeometry[] {
+    const layerId = this.viewLayerId;
+    const base = this.structureStore.geometryFor(layerId);
+    if (base.length === 0) return base;
+    // A real lead-in (explicit `leadBars`) already gives the first note room.
+    if (base.some((b) => b.index < 0)) return base;
+    const preRollSec = Math.max(0, -(this.source.globalMetadata.songLeadIn ?? 0));
+    const bpm = resolveBpm(this.source.globalMetadata.bpm, 120);
+    const firstReal = base.find((b) => b.index === 1) ?? base[0];
+    const oneBarBeats = (firstReal.tsCount * 4) / firstReal.tsUnit;
+    const preRollBeats = (preRollSec * bpm) / 60;
+    const virtual: StructBarGeometry = {
+      id: LEAD_IN_BAR_ID,
+      index: -1,
+      beats: Math.max(preRollBeats, oneBarBeats),
+      tsCount: firstReal.tsCount,
+      tsUnit: firstReal.tsUnit,
+      anacrusis: false,
+    };
+    return [virtual, ...base];
+  }
+
+  /** {@link viewGeometry} indexed by bar id, for the per-bar lane composer. */
+  get viewGeometryById(): Map<string, StructBarGeometry> {
+    const map = new Map<string, StructBarGeometry>();
+    for (const geo of this.viewGeometry) map.set(geo.id, geo);
+    return map;
+  }
+
   get layerBeats(): number {
-    const bars = this.layers[0]?.bars;
-    if (!bars) return 0;
     let total = 0;
-    for (const b of bars) total += b.beats;
+    for (const b of this.viewGeometry) total += b.beats;
     return total;
+  }
+
+  /** Whether a song is loaded (a stable boolean for view null-checks that must
+   *  not re-render on every note edit, unlike reading {@link primaryLayer}). */
+  get hasContent(): boolean {
+    return this.viewGeometry.length > 0;
   }
 
   get primaryLayer(): StructLayer | undefined {
@@ -115,50 +196,81 @@ export class StructuralPresenter implements LaidOutJot {
     return this.source.globalMetadata.instrumentMapping?.[lane] ?? { kind: 'custom' };
   }
 
-  barsForLane = computedFn(
-    (
-      lane: string
-    ): {
-      bars: readonly StructBar[];
-      layerBeats: number;
-      leadInBarsBeats: number;
-      barBeatStart: readonly number[];
-      startBeats: readonly number[];
-      laneColor: string;
-      instrumentName: string | undefined;
-    } => {
-      const layer = this.layers[0];
-      const bars = layer?.bars ?? [];
-      let layerBeats = 0;
-      let leadInBarsBeats = 0;
-      let countedLeadIn = true;
-      const barBeatStart: number[] = new Array(bars.length);
-      let cursor = 0;
-      for (let i = 0; i < bars.length; i++) {
-        barBeatStart[i] = cursor;
-        const b = bars[i];
-        cursor += b.beats;
-        layerBeats += b.beats;
-        if (countedLeadIn) {
-          if (b.index < 0) leadInBarsBeats += b.beats;
-          else countedLeadIn = false;
-        }
-      }
-      // Colour + instrument are jot-wide functions of the lane (palette
-      // slot + the instrument mapping), no longer per-track.
-      const laneColor = this.paletteStore.colorForLane(lane);
-      const instrumentName = this.instrumentFor(lane).name;
-      return {
-        bars,
-        layerBeats,
-        leadInBarsBeats,
-        barBeatStart,
-        startBeats: barBeatStart,
-        laneColor,
-        instrumentName,
-      };
+  /**
+   * One lane-scoped bar: the shared geometry plus ONLY this lane's track (and
+   * the bar's span chrome). Structurally gated, so its identity is stable
+   * unless this lane's notes (or the bar geometry / spans) actually change.
+   * That stability is what isolates a note edit to the single bar+lane it
+   * touched: a sibling lane's `laneBarFor` doesn't even re-run.
+   */
+  private laneBarFor = computedFn((barId: string, lane: string): StructBar => {
+    const geo = this.viewGeometryById.get(barId);
+    const base = geo ?? {
+      id: barId,
+      index: 0,
+      beats: 0,
+      tsCount: 4,
+      tsUnit: 4,
+      anacrusis: false,
+    };
+    if (barId === LEAD_IN_BAR_ID) {
+      return { ...base, tracks: {}, patternSpans: [], tupletSpans: [] };
     }
-  );
+    const key = this.structureStore.keyFor(barId, this.viewLayerId);
+    const track = this.structureStore.trackFor(key, lane);
+    const spans = this.structureStore.spansFor(key);
+    return {
+      ...base,
+      tracks: { [lane]: track },
+      patternSpans: spans.patternSpans,
+      tupletSpans: spans.tupletSpans,
+    };
+  }, STRUCTURAL);
+
+  /**
+   * Per-lane derived data for one instrument row: the lane-scoped bars plus
+   * the cumulative bar-start offsets and label colour/name. Memoised per lane
+   * on the jot; with no beat-grid offset it composes the granular per-(bar,
+   * lane) computeds, so a note edit re-runs only the affected lane's entry and
+   * leaves every other row's value cached (no re-render). A non-zero beat-grid
+   * offset (the Beat-offset slider, a deliberate whole-song reflow) falls back
+   * to the full shifted structure.
+   */
+  barsForLane = computedFn((lane: string): LaneBars => {
+    const bars: readonly StructBar[] =
+      this.effectiveDrumOffsetBeats === 0
+        ? this.viewGeometry.map((geo) => this.laneBarFor(geo.id, lane))
+        : (this.layers[0]?.bars ?? []);
+
+    let layerBeats = 0;
+    let leadInBarsBeats = 0;
+    let countedLeadIn = true;
+    const barBeatStart: number[] = new Array(bars.length);
+    let cursor = 0;
+    for (let i = 0; i < bars.length; i++) {
+      barBeatStart[i] = cursor;
+      const b = bars[i];
+      cursor += b.beats;
+      layerBeats += b.beats;
+      if (countedLeadIn) {
+        if (b.index < 0) leadInBarsBeats += b.beats;
+        else countedLeadIn = false;
+      }
+    }
+    // Colour + instrument are jot-wide functions of the lane (palette slot +
+    // the instrument mapping), no longer per-track.
+    const laneColor = this.paletteStore.colorForLane(lane);
+    const instrumentName = this.instrumentFor(lane).name;
+    return {
+      bars,
+      layerBeats,
+      leadInBarsBeats,
+      barBeatStart,
+      startBeats: barBeatStart,
+      laneColor,
+      instrumentName,
+    };
+  });
 }
 
 // ---------- View-only virtual lead-in ----------

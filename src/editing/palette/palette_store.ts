@@ -20,14 +20,18 @@ export class PaletteStore {
     private readonly getPalette: () => readonly string[],
     private readonly getJot: () => Jot | undefined
   ) {
-    makeObservable(this, { jotLanes: computed, legend: computed });
+    makeObservable(this, { jotLanes: computed.struct, legend: computed.struct });
   }
 
-  /** Union of every layer's lane order, first-seen, the colour-slot order. */
+  /** Union of every layer's lane order, first-seen, the colour-slot order.
+   *  Reads the store's `computed.struct` lane sets (not the note-content
+   *  `layers`), and is itself `computed.struct`, so an in-lane note edit
+   *  neither recomputes it nor notifies `colorForLane`, no row re-colours /
+   *  re-renders on an edit that doesn't change which lanes exist. */
   get jotLanes(): string[] {
     const out: string[] = [];
-    for (const layer of this.structure.layers) {
-      for (const lane of layer.lanes) {
+    for (const layer of this.structure.layerOrder) {
+      for (const lane of this.structure.lanesForLayer(layer.id)) {
         if (!out.includes(lane)) out.push(lane);
       }
     }

@@ -104,26 +104,15 @@ function defaultMixerSortKey(
  */
 export function collectJotLanes(structural: StructuralPresenter | undefined): string[] {
   if (!structural) return [];
-  const out: string[] = [];
-  const instrumentByLane = new Map<string, Instrument>();
-  for (const layer of structural.layers) {
-    for (const p of layer.lanes) {
-      if (!out.includes(p)) out.push(p);
-    }
-    for (const bar of layer.bars) {
-      for (const lane of Object.keys(bar.tracks)) {
-        if (!instrumentByLane.has(lane)) {
-          instrumentByLane.set(
-            lane,
-            structural.source.globalMetadata.instrumentMapping?.[lane] ?? { kind: 'custom' }
-          );
-        }
-      }
-    }
-  }
+  // `structural.lanes` is the `computed.struct` lane set (lanes that carry a
+  // note), so this, and the mixer-order reaction wrapping it, is stable across
+  // an in-lane note edit; only a lane appearing/disappearing perturbs it.
+  const mapping = structural.source.globalMetadata.instrumentMapping;
+  const instrumentFor = (lane: string): Instrument => mapping?.[lane] ?? { kind: 'custom' };
+  const out = [...structural.lanes];
   out.sort((a, b) => {
-    const ka = defaultMixerSortKey(a, instrumentByLane.get(a));
-    const kb = defaultMixerSortKey(b, instrumentByLane.get(b));
+    const ka = defaultMixerSortKey(a, instrumentFor(a));
+    const kb = defaultMixerSortKey(b, instrumentFor(b));
     if (ka[0] !== kb[0]) return ka[0] - kb[0];
     if (ka[1] !== kb[1]) return ka[1] - kb[1];
     return ka[2].localeCompare(kb[2]);

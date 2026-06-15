@@ -40,8 +40,9 @@ export const TimelineHeader = observer(
     // final pixel position. Without this the header re-rendered every wheel
     // tick, re-creating 100+ tick marks just to reposition each by one
     // calc-arithmetic step.
-    const layer = structural?.primaryLayer;
-    if (!structural || !tempo || !layer || layer.bars.length === 0) return null;
+    // `hasContent` is the stable geometry-spine check (doesn't churn on note
+    // edits); the tick layout below reads the tempo timeline, not the layers.
+    if (!structural || !tempo || !structural.hasContent) return null;
 
     const liveTimeline = jotPlayer.timeline;
     const timeline =
@@ -75,8 +76,11 @@ export const TimelineHeader = observer(
     // Rounded so float jitter (119.97 vs 120.03) doesn't paint a change.
     let prevBpm: number | undefined;
     const ticks: TickDescriptor[] = [];
-    for (let i = 0; i < layer.bars.length; i++) {
-      const bar = layer.bars[i];
+    // Stable geometry spine (incl. the virtual lead-in bar); the per-bar
+    // timing/tempo come from the tempo timeline alongside.
+    const geometry = structural.viewGeometry;
+    for (let i = 0; i < geometry.length; i++) {
+      const bar = geometry[i];
       const timing = timeline.bars[i];
       const timeSec = timing?.startSec ?? 0;
       const startBeat = cumBeats;
