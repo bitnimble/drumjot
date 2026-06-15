@@ -139,6 +139,9 @@ public/kuromoji-dict/
 # Storybook static build output (`bun run build-storybook`).
 storybook-static/
 
+# Scratch report written by the /overnight skill (uncommitted morning log).
+OVERNIGHT_LOG.md
+
 # OS noise
 .DS_Store
 Thumbs.db
