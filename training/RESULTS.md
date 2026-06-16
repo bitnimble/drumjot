@@ -461,11 +461,13 @@ per-lane keep_best F1.
 | cap | train win | stop ep | hc | hp | ho | rd | cr | mc | **cymMac** | allMac |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 100^1 | ~clip | 40(fix) | 0.606 | 0.427 | 0.658 | 0.519 | 0.539 | 0.345 | **0.468** | 0.516 |
+| 500 | 1519 | 58 | 0.689 | 0.470 | 0.663 | 0.583 | 0.629 | 0.463 | **0.558** | 0.583 |
 | 1000 | 2563 | 69 | 0.689 | 0.478 | 0.664 | 0.623 | 0.620 | 0.504 | **0.582** | 0.596 |
 | 3000 | 6559 | 62 | 0.702 | 0.507 | 0.661 | 0.607 | 0.656 | 0.509 | **0.591** | 0.607 |
-| 0(full) |, |, |, |, |, |, |, |, |, |, |
+| 0(full) | 15952 | (on 3080) | tbd | tbd | tbd | tbd | tbd | tbd | **tbd** | tbd |
 
-cymMac slope: cap-100→1000 **+0.114**, cap-1000→3000 **+0.009** (2.5x data).
+cymMac slope: cap-100→500 **+0.090**, cap-500→1000 **+0.024**, cap-1000→3000
+**+0.009**. Rise persists to ~cap-1000 (500→1000 still > noise), then flat.
 
 ^1 Phase-1 convergence run; cap-100 was CLIP-unit (pre window-cap), so the cap
 *number* isn't 1:1 on the windows axis, but the val is identical (~700 windows)
@@ -477,12 +479,15 @@ load-bearing: late monotonic risers hc(best@68) / ho(@62); early-peak-then-decay
 flatness (risers plateaued, overfitters bottomed out), NOT all-at-peak.
 
 **Headline: at h128 the cymbal ceiling is DATA-bound, not capacity-bound.** The
-big lift is cap-100→cap-1000 (10x data, cym macro +0.114; mc +0.159, rd +0.104).
-**cap-1000→cap-3000 (2.5x more data) adds only +0.009 cym macro** -- the curve has
-nearly flattened, with the residual being internal reshuffling (cr +0.036, rd
--0.016) not net lift. So h128 looks **near-saturated past ~cap-1000**. cap-0(full)
-pending to confirm the top; the saturation knee is likely ~cap-1000-2000 (binary
-search queued: if cap-0 ~= cap-3000, test cap-2000 next).
+big lift is cap-100→cap-1000 (cym macro +0.114; mc +0.159, rd +0.104). The rise
+persists up to ~cap-1000 (cap-500→1000 still +0.024 > noise) then flattens
+(cap-1000→3000 only +0.009). **So h128's data-saturation knee is ~cap-1000**
+(2563 train windows): below it, more data helps; above it, gains are within
+single-seed noise / internal reshuffling. Note the hats already plateau by
+cap-500 (hc/hp/ho flat across 500→1000); the cap-500→1000 gain is almost entirely
+cymbals (rd +0.040, mc +0.041). Searching below 1000 to locate the knee: cap-500
+done, cap-750 next. cap-0(full) running on the 3080 to confirm the top end (with
+the E-GMD mix-shift caveat).
 
 ### Why this invalidates the Phase-1 width A/B
 
