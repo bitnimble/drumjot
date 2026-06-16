@@ -441,7 +441,11 @@
    coloured note dots or the orange pattern brackets. */
 .tupletBracket {
     position: absolute;
-    top: -17px;
+    /* -17px clears the noteheads; `--tuplet-level` (0 by default) nudges
+       overlapping multi-lane brackets up a notch each so they don't coincide.
+       Kept small so the stacked brackets stay within `.bar`'s
+       overflow-clip-margin at normal zoom (see docs/score-stacking.md §7). */
+    top: calc(-17px - var(--tuplet-level, 0) * 9px);
     height: 13px;
     box-sizing: border-box;
     border-top: 1.5px solid var(--color-text-muted-alt);

@@ -76,6 +76,10 @@ export type StructTupletSpan = {
   count: number;
   startBeat: number;
   endBeat: number;
+  /** Lanes the grouped notes play. A single-lane tuplet draws above that
+   *  lane's row; a multi-lane one draws over the topmost row (it can't sit
+   *  above one lane). */
+  lanes: ReadonlySet<string>;
 };
 
 export type StructBar = {
@@ -345,12 +349,11 @@ export class StructureStore {
    *  {@link mergedTrackFor} for notes). Single-layer jots collapse to one
    *  `spansFor`, leaving the common case untouched.
    *
-   *  Identical brackets are de-duplicated: two layers that carry an aligned
-   *  tuplet (e.g. a hands triplet over `(s s .)` and a feet triplet over
-   *  `(. . k)`, the kick on its own layer) would otherwise stack two identical
-   *  brackets at the same beats. A genuinely different bracket over the same
-   *  span (a 3-vs-5 polyrhythm, or two distinct patterns) has a distinct key
-   *  and is kept. */
+   *  Only *truly* identical brackets are de-duplicated: same span, count, AND
+   *  lanes (e.g. two layers both carrying `(s s s)` on the snare). Aligned
+   *  tuplets on *different* lanes (a hands triplet on the snare and a feet
+   *  triplet on the kick) keep their own entries, each draws above its own
+   *  row, as does a genuine polyrhythm (3 vs 5) or two distinct patterns. */
   mergedSpansFor = computedFn((barId: string): { patternSpans: StructPatternSpan[]; tupletSpans: StructTupletSpan[] } => {
     const layers = this.layerOrder;
     if (layers.length <= 1) {
@@ -362,7 +365,7 @@ export class StructureStore {
     for (const layer of layers) {
       const s = this.spansFor(this.keyFor(barId, layer.id));
       for (const t of s.tupletSpans) {
-        const key = `${r(t.startBeat)}:${r(t.endBeat)}:${t.count}`;
+        const key = `${r(t.startBeat)}:${r(t.endBeat)}:${t.count}:${[...t.lanes].sort().join(',')}`;
         if (!tupletByKey.has(key)) tupletByKey.set(key, t);
       }
       for (const p of s.patternSpans) {
@@ -468,7 +471,9 @@ function flattenInto(
     const children = [...el.children.values()] as Element[];
     const internalLen = naturalSpan(children);
     if (internalLen > EPS && Math.abs(internalLen - el.duration) > EPS) {
-      out.tuplets.push({ count: children.length, startBeat: absBeat, endBeat: absBeat + absDur });
+      const lanes = new Set<string>();
+      collectLanes(children, jot, lanes);
+      out.tuplets.push({ count: children.length, startBeat: absBeat, endBeat: absBeat + absDur, lanes });
     }
     const scale = internalLen > EPS ? absDur / internalLen : 1;
     for (const child of children) {

@@ -44,7 +44,9 @@ describe('dslToReactive', () => {
       layers: [{ bars: [bar(group([note('k'), note('k'), note('k')]))] }],
     };
     const b = structureOf(jot).structure.layers[0].bars[0];
-    expect(b.tupletSpans).toEqual([{ count: 3, startBeat: 0, endBeat: 4 }]);
+    expect(b.tupletSpans).toEqual([
+      { count: 3, startBeat: 0, endBeat: 4, lanes: new Set(['k']) },
+    ]);
     const beats = b.tracks['k'].notes.map((n) => n.beat);
     expect(beats[0]).toBeCloseTo(0);
     expect(beats[1]).toBeCloseTo(4 / 3);

@@ -35,6 +35,30 @@ function coveredByTuplet(bar: StructBar, beat: number): boolean {
   return bar.tupletSpans.some((s) => beat >= s.startBeat - eps && beat <= s.endBeat + eps);
 }
 
+/**
+ * Assign each (multi-lane) tuplet bracket a vertical stack level so brackets
+ * that overlap in beat-space don't draw on top of one another. Greedy interval
+ * colouring: each bracket takes the lowest level not in use by an
+ * earlier-starting bracket it overlaps. Non-overlapping brackets all stay at
+ * level 0, so the common single-tuplet case is unaffected.
+ */
+function tupletStackLevels(spans: readonly StructTupletSpan[]): Map<StructTupletSpan, number> {
+  const eps = 1e-6;
+  const sorted = [...spans].sort((a, b) => a.startBeat - b.startBeat);
+  const levels = new Map<StructTupletSpan, number>();
+  const placed: { endBeat: number; level: number }[] = [];
+  for (const span of sorted) {
+    const used = new Set(
+      placed.filter((p) => p.endBeat > span.startBeat + eps).map((p) => p.level)
+    );
+    let level = 0;
+    while (used.has(level)) level++;
+    levels.set(span, level);
+    placed.push({ endBeat: span.endBeat, level });
+  }
+  return levels;
+}
+
 export const BarView = observer(
   ({
     bar,
@@ -113,6 +137,13 @@ export const BarView = observer(
       minHeight: lanes.length * (config.trackHeight as number),
     } as React.CSSProperties;
     const isLeadIn = bar.index < 0;
+    // Multi-lane tuplet brackets draw on the topmost row; assign each a stack
+    // level so overlapping ones are nudged apart vertically instead of
+    // coinciding. Single-lane tuplets draw above their own lane's row, so they
+    // never need a level. Computed once per bar (cheap; usually 0-1 entries).
+    const multiLaneTupletLevels = tupletStackLevels(
+      bar.tupletSpans.filter((s) => s.lanes.size !== 1)
+    );
     // `bar.index === -1` is the last lead-in bar (lead-in indices count
     // -leadBars..-1 inclusive). Tag it so its right border draws the
     // dashed lead-in→music boundary; the rest of the lead-in bars have
@@ -212,7 +243,19 @@ export const BarView = observer(
             />
           );
         })}
-        {showBrackets && bar.tupletSpans.map((span, i) => <TupletBracket key={i} span={span} />)}
+        {bar.tupletSpans.map((span, i) => {
+          // Single-lane tuplet: draw above its own lane's row (or the sole bar
+          // view when there's no row context). Hidden on every other row.
+          if (span.lanes.size === 1) {
+            const lane = span.lanes.values().next().value as string;
+            if (rowLane !== undefined && rowLane !== lane) return null;
+            return <TupletBracket key={i} span={span} level={0} />;
+          }
+          // Multi-lane tuplet: can't sit above one lane, so draw on the topmost
+          // row, stacked so overlapping brackets don't coincide.
+          if (!showBrackets) return null;
+          return <TupletBracket key={i} span={span} level={multiLaneTupletLevels.get(span) ?? 0} />;
+        })}
       </div>
     );
   }
@@ -341,13 +384,15 @@ const PatternBracket = observer(
  * with the slot count (3 = triplet, 5 = quintuplet, ...) on it. Purely
  * decorative — no interaction, unlike the pattern bracket.
  */
-const TupletBracket = observer(({ span }: { span: StructTupletSpan }) => (
+const TupletBracket = observer(({ span, level }: { span: StructTupletSpan; level: number }) => (
   <div
     className={styles.tupletBracket}
+    data-testid="tuplet-bracket"
     style={
       {
         ['--span-start-beat' as string]: span.startBeat,
         ['--span-end-beat' as string]: span.endBeat,
+        ['--tuplet-level' as string]: level,
       } as React.CSSProperties
     }
     title={`${span.count}-tuplet (not a straight subdivision)`}

@@ -162,7 +162,9 @@ describe('groups & tuplets', () => {
       instruments: {},
     });
     const bar = store(model).layers[0].bars[0];
-    expect(bar.tupletSpans).toEqual([{ count: 3, startBeat: 0, endBeat: 1 }]);
+    expect(bar.tupletSpans).toEqual([
+      { count: 3, startBeat: 0, endBeat: 1, lanes: new Set(['k']) },
+    ]);
     const beats = bar.tracks['k'].notes.map((n) => n.beat);
     expect(beats[0]).toBeCloseTo(0);
     expect(beats[1]).toBeCloseTo(1 / 3);

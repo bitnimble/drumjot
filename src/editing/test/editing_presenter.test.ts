@@ -212,9 +212,10 @@ describe('EditingPresenter, multi-layer (hands/feet split)', () => {
     expect(withTuplet?.tupletSpans[0].count).toBe(3);
   });
 
-  it('de-duplicates aligned identical tuplet brackets across layers', () => {
-    // A hands triplet and a feet triplet over the same beats (kick on its own
-    // layer): the notes show in both rows, but only ONE bracket draws.
+  it('keeps a single-lane tuplet per lane (each draws above its own row)', () => {
+    // A snare triplet and a kick triplet over the same beats (kick on its own
+    // layer): both stay, each tagged with its single lane, so each draws above
+    // its own row rather than coinciding.
     const store = new JotEditorStore();
     store.loadSource(
       parse(
@@ -222,30 +223,41 @@ describe('EditingPresenter, multi-layer (hands/feet split)', () => {
           '| (s s s) . . . | || | (k k k) . . . |'
       )
     );
-    const sBars = store.structural!.barsForLane('s').bars;
-    const bracketBar = sBars.find((b) => b.tupletSpans.length > 0)!;
-    expect(bracketBar.tupletSpans.length).toBe(1);
-    expect(bracketBar.tupletSpans[0].count).toBe(3);
-    const sNotes = sBars.find((b) => b.tracks['s']?.notes.length)!.tracks['s'].notes.length;
-    const kNotes = store.structural!.barsForLane('k').bars.find((b) => b.tracks['k']?.notes.length)!
-      .tracks['k'].notes.length;
-    expect(sNotes).toBe(3);
-    expect(kNotes).toBe(3);
+    const bracketBar = store
+      .structural!.barsForLane('s')
+      .bars.find((b) => b.tupletSpans.length > 0)!;
+    const laneSets = bracketBar.tupletSpans.map((t) => [...t.lanes].join(',')).sort();
+    expect(laneSets).toEqual(['k', 's']);
+    expect(bracketBar.tupletSpans.every((t) => t.lanes.size === 1)).toBe(true);
   });
 
-  it('keeps distinct brackets over the same span (a polyrhythm)', () => {
-    // A triplet against a quintuplet over the same beat: two distinct brackets.
+  it('de-duplicates two identical same-lane tuplets across layers', () => {
+    // Both layers carry the snare triplet: one bracket, not two stacked copies.
     const store = new JotEditorStore();
     store.loadSource(
       parse(
-        '{{ time: "4/4", instrumentMapping: { s:{name:"Snare"}, k:{name:"Kick"} } }} ' +
-          '| (s s s) . . . | || | (k k k k k) . . . |'
+        '{{ time: "4/4", instrumentMapping: { s:{name:"Snare"} } }} ' +
+          '| (s s s) . . . | || | (s s s) . . . |'
       )
     );
     const bracketBar = store
       .structural!.barsForLane('s')
       .bars.find((b) => b.tupletSpans.length > 0)!;
-    expect(bracketBar.tupletSpans.map((t) => t.count).sort((a, b) => a - b)).toEqual([3, 5]);
+    expect(bracketBar.tupletSpans.length).toBe(1);
+  });
+
+  it('a multi-lane tuplet carries all its lanes', () => {
+    const store = new JotEditorStore();
+    store.loadSource(
+      parse(
+        '{{ time: "4/4", instrumentMapping: { s:{name:"Snare"}, k:{name:"Kick"} } }} ' +
+          '| (s k s) . . . |'
+      )
+    );
+    const bracketBar = store
+      .structural!.barsForLane('s')
+      .bars.find((b) => b.tupletSpans.length > 0)!;
+    expect([...bracketBar.tupletSpans[0].lanes].sort()).toEqual(['k', 's']);
   });
 
   it('moving a hi-hat onto the kick lane re-homes it to the kick layer', () => {
