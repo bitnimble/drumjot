@@ -1,0 +1,86 @@
+/* Collapsible right sidebar: a persistent icon rail on the far right with an
+   optional panel to its left. A flex sibling of the main content column, so
+   its width genuinely occludes the score (the virtualization measures the
+   narrowed content width and skips off-screen bars). */
+.sidebar {
+    flex: 0 0 auto;
+    height: 100%;
+    display: flex;
+    flex-direction: row;
+    box-sizing: border-box;
+    background: var(--color-bg-base);
+    border-left: 1px solid var(--color-border);
+    user-select: none;
+    z-index: 21; /* above the toolbar (20) so its left border reads cleanly */
+}
+
+.panel {
+    width: 280px;
+    height: 100%;
+    box-sizing: border-box;
+    border-right: 1px solid var(--color-border-soft);
+    overflow: auto;
+}
+
+.panelBody {
+    padding: 12px 14px;
+}
+
+.panelTitle {
+    composes: labelSm from '../typography.module.css';
+    margin: 0;
+    color: var(--color-text-secondary);
+}
+
+.rail {
+    width: 48px;
+    height: 100%;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 0;
+}
+
+.railButton {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition:
+        background 120ms ease,
+        color 120ms ease,
+        border-color 120ms ease;
+}
+
+.railButton:hover {
+    background: var(--color-accent-overlay-light);
+    color: var(--color-text);
+}
+
+.railButton:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
+.railButtonActive,
+.railButtonActive:hover {
+    background: var(--color-accent-overlay-medium);
+    border-color: var(--color-accent);
+    color: var(--color-accent-on-text);
+}
+
+.railDivider {
+    width: 60%;
+    height: 1px;
+    background: var(--color-border-soft);
+    margin: 4px 0;
+}

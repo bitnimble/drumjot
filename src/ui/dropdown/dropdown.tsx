@@ -348,12 +348,14 @@ export const ToggleMenuItem = ({
   onToggle,
   title,
   disabled,
+  testId,
 }: {
   label: React.ReactNode;
   active: boolean;
   onToggle: () => void;
   title?: string;
   disabled?: boolean;
+  testId?: string;
 }) => (
   <button
     type="button"
@@ -363,6 +365,7 @@ export const ToggleMenuItem = ({
     onClick={onToggle}
     disabled={disabled}
     title={title}
+    data-testid={testId}
   >
     <span className={styles.toggleMenuTick} aria-hidden="true">
       {active && <Check size={12} aria-hidden="true" />}

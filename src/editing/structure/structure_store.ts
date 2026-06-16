@@ -76,6 +76,10 @@ export type StructTupletSpan = {
   count: number;
   startBeat: number;
   endBeat: number;
+  /** Lanes the grouped notes play. A single-lane tuplet draws above that
+   *  lane's row; a multi-lane one draws over the topmost row (it can't sit
+   *  above one lane). */
+  lanes: ReadonlySet<string>;
 };
 
 export type StructBar = {
@@ -300,11 +304,76 @@ export class StructureStore {
     STRUCTURAL
   );
 
+  /** A lane's notes in one bar, UNIONED across every `||` layer that places a
+   *  note on that lane. The mixer renders one row per lane (not per
+   *  layer+lane), so a lane that lives in a non-first layer (e.g. the kick in a
+   *  hands/feet split) must still surface in its row. Single-layer jots collapse
+   *  to a single `trackFor`, so the common case is unchanged and stays granular.
+   *  Structurally gated by beat; a sibling-lane or sibling-layer edit that
+   *  leaves these notes alone doesn't notify. */
+  mergedTrackFor = computedFn((barId: string, lane: string): StructTrack => {
+    const layers = this.layerOrder;
+    if (layers.length <= 1) {
+      return this.trackFor(this.keyFor(barId, layers[0]?.id ?? ''), lane);
+    }
+    const notes: StructNote[] = [];
+    for (const layer of layers) {
+      notes.push(...this.trackFor(this.keyFor(barId, layer.id), lane).notes);
+    }
+    notes.sort((a, b) => a.beat - b.beat);
+    return { lane, notes };
+  }, STRUCTURAL);
+
+  /** The id of the layer that owns `lane`, the first `||` layer (in
+   *  {@link layerOrder}) that carries a note on it, for placing inserted /
+   *  moved notes so they land in the row the user clicked. `undefined` for a
+   *  single-layer jot (its notes carry no `layerId`) or a brand-new lane no
+   *  layer has yet; callers fall back accordingly. */
+  ownerLayerFor = computedFn((lane: string): string | undefined => {
+    if (this.singleLayer) return undefined;
+    for (const layer of this.layerOrder) {
+      if (this.lanesForLayer(layer.id).includes(lane)) return layer.id;
+    }
+    return undefined;
+  });
+
   /** A bar cell's lane-spanning chrome (pattern + tuplet brackets),
    *  structurally gated (a plain-note edit leaves it untouched). */
   spansFor = computedFn((key: string): { patternSpans: StructPatternSpan[]; tupletSpans: StructTupletSpan[] } => {
     const c = this.contentsFor(key);
     return { patternSpans: c.patternSpans, tupletSpans: c.tupletSpans };
+  }, STRUCTURAL);
+
+  /** A bar's bracket chrome UNIONED across every `||` layer, so a tuplet /
+   *  pattern authored in a non-first layer still draws its bracket (mirrors
+   *  {@link mergedTrackFor} for notes). Single-layer jots collapse to one
+   *  `spansFor`, leaving the common case untouched.
+   *
+   *  Only *truly* identical brackets are de-duplicated: same span, count, AND
+   *  lanes (e.g. two layers both carrying `(s s s)` on the snare). Aligned
+   *  tuplets on *different* lanes (a hands triplet on the snare and a feet
+   *  triplet on the kick) keep their own entries, each draws above its own
+   *  row, as does a genuine polyrhythm (3 vs 5) or two distinct patterns. */
+  mergedSpansFor = computedFn((barId: string): { patternSpans: StructPatternSpan[]; tupletSpans: StructTupletSpan[] } => {
+    const layers = this.layerOrder;
+    if (layers.length <= 1) {
+      return this.spansFor(this.keyFor(barId, layers[0]?.id ?? ''));
+    }
+    const tupletByKey = new Map<string, StructTupletSpan>();
+    const patternByKey = new Map<string, StructPatternSpan>();
+    const r = (n: number) => Math.round(n * 1e6) / 1e6; // tolerate FP drift in beats
+    for (const layer of layers) {
+      const s = this.spansFor(this.keyFor(barId, layer.id));
+      for (const t of s.tupletSpans) {
+        const key = `${r(t.startBeat)}:${r(t.endBeat)}:${t.count}:${[...t.lanes].sort().join(',')}`;
+        if (!tupletByKey.has(key)) tupletByKey.set(key, t);
+      }
+      for (const p of s.patternSpans) {
+        const key = `${p.name}:${r(p.startBeat)}:${r(p.endBeat)}`;
+        if (!patternByKey.has(key)) patternByKey.set(key, p);
+      }
+    }
+    return { patternSpans: [...patternByKey.values()], tupletSpans: [...tupletByKey.values()] };
   }, STRUCTURAL);
 
   /** Bar geometry for one layer: index + time-signature beats (an anacrusis
@@ -402,7 +471,9 @@ function flattenInto(
     const children = [...el.children.values()] as Element[];
     const internalLen = naturalSpan(children);
     if (internalLen > EPS && Math.abs(internalLen - el.duration) > EPS) {
-      out.tuplets.push({ count: children.length, startBeat: absBeat, endBeat: absBeat + absDur });
+      const lanes = new Set<string>();
+      collectLanes(children, jot, lanes);
+      out.tuplets.push({ count: children.length, startBeat: absBeat, endBeat: absBeat + absDur, lanes });
     }
     const scale = internalLen > EPS ? absDur / internalLen : 1;
     for (const child of children) {

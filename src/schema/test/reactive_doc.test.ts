@@ -156,6 +156,83 @@ describe('movableList', () => {
   });
 });
 
+describe('bulk mutations', () => {
+  const Song = record({ notes: idMap(Note) });
+
+  it('delete(...ids) removes every listed entry', () => {
+    const { model } = createReactiveDoc(Song);
+    runInAction(() => {
+      model.notes.set('n1', { lane: 'h', beat: 0 });
+      model.notes.set('n2', { lane: 'k', beat: 1 });
+      model.notes.set('n3', { lane: 's', beat: 2 });
+    });
+    runInAction(() => {
+      model.notes.delete('n1', 'n3');
+    });
+    expect([...model.notes.keys()]).toEqual(['n2']);
+  });
+
+  it('delete(...ids) commits once for N entries', () => {
+    const { model, doc } = createReactiveDoc(Song);
+    runInAction(() => {
+      model.notes.set('n1', { lane: 'h', beat: 0 });
+      model.notes.set('n2', { lane: 'k', beat: 1 });
+      model.notes.set('n3', { lane: 's', beat: 2 });
+    });
+    let batches = 0;
+    const unsub = doc.subscribe(() => batches++);
+    runInAction(() => {
+      model.notes.delete('n1', 'n2', 'n3');
+    });
+    unsub();
+    expect(batches).toBe(1);
+  });
+
+  it('setAll(entries) creates/replaces every entry', () => {
+    const { model } = createReactiveDoc(Song);
+    runInAction(() => {
+      model.notes.set('n1', { lane: 'h', beat: 0 });
+    });
+    runInAction(() => {
+      model.notes.setAll([
+        ['n1', { lane: 'h', beat: 5 }],
+        ['n2', { lane: 'k', beat: 6 }],
+      ]);
+    });
+    expect(model.notes.get('n1')!.beat).toBe(5);
+    expect(model.notes.get('n2')!.beat).toBe(6);
+  });
+
+  it('setAll(entries) commits once for N entries', () => {
+    const { model, doc } = createReactiveDoc(Song);
+    let batches = 0;
+    const unsub = doc.subscribe(() => batches++);
+    runInAction(() => {
+      model.notes.setAll([
+        ['n1', { lane: 'h', beat: 0 }],
+        ['n2', { lane: 'k', beat: 1 }],
+        ['n3', { lane: 's', beat: 2 }],
+      ]);
+    });
+    unsub();
+    expect(batches).toBe(1);
+  });
+
+  it('single set/delete still commit (one batch each)', () => {
+    const { model, doc } = createReactiveDoc(Song);
+    let batches = 0;
+    const unsub = doc.subscribe(() => batches++);
+    runInAction(() => {
+      model.notes.set('n1', { lane: 'h', beat: 0 });
+    });
+    runInAction(() => {
+      model.notes.delete('n1');
+    });
+    unsub();
+    expect(batches).toBe(2);
+  });
+});
+
 describe('union + recursion', () => {
   // A recursive tree: leaf{value} | branch{ children: idMap(Tree) }. The
   // descriptor type is annotated explicitly so the self-reference in the

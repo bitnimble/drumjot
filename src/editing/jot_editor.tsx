@@ -1,15 +1,22 @@
 import { untracked } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
-import { Point } from 'src/utils/geom';
+import { Box, Point } from 'src/utils/geom';
 import { Jot } from 'src/schema/dsl/dsl';
 import type { StructuralPresenter } from 'src/editing/structure/structural_presenter';
+import type { StructNote } from 'src/editing/structure/structure_store';
+import { boundingBoxOfNotes, notesById, notesInBox } from 'src/editing/score/note_geometry';
 import type { TempoPresenter } from 'src/editing/playback/tempo_presenter';
 import type { PaletteStore } from 'src/editing/palette/palette_store';
 import { perfProbe } from 'src/utils/perf_probe';
 import { jotPlayer } from 'src/editing/playback/player';
 import { BarTiming, timeToX } from 'src/editing/playback/timeline';
 import { SelectionStore } from 'src/editing/selection/selection';
+import {
+  SelectionPresenter,
+  SelectionPresenterContext,
+  orderedNotes,
+} from 'src/editing/selection/selection_presenter';
 import styles from './jot_editor.module.css';
 import {
   AudioWorkletWarningModal,
@@ -44,6 +51,7 @@ import { EditingStore } from './editing_store';
 import { EditingPresenter } from './editing_presenter';
 import { EditingStoreContext, EditingPresenterContext } from './editing_contexts';
 import { EditingToolbar } from './editing_toolbar';
+import { useEditorKeymap } from './keyboard/keymap';
 import { VerticalScrollbar } from './viewport/vertical_scrollbar';
 import { PlaybackBar } from './playback/playback';
 import {
@@ -73,6 +81,10 @@ import { TranscribePresenter } from './transcribe/transcribe_presenter';
 import { RecentTranscriptionsPicker } from './transcribe/recent_transcriptions';
 import { ToastContainer } from '../ui/toasts/toast_container';
 import { Toolbar } from '../toolbar/toolbar';
+import { Sidebar } from '../sidebar/sidebar';
+import { SidebarStore } from '../sidebar/sidebar_store';
+import { SidebarPresenter } from '../sidebar/sidebar_presenter';
+import { SidebarStoreContext, SidebarPresenterContext } from '../sidebar/sidebar_contexts';
 import { DebugPanel } from './provenance/debug_panel';
 import { ExampleJot } from 'src/fakes/fakes';
 
@@ -96,6 +108,14 @@ type CreateJotEditorResult = {
   playback: PlaybackStore;
   viewport: ViewportStore;
   mixer: MixerStore;
+  /** Selection + editing peers, exposed for console / e2e. */
+  selection: SelectionStore;
+  selectionPresenter: SelectionPresenter;
+  editingStore: EditingStore;
+  editingPresenter: EditingPresenter;
+  /** Right-sidebar peers. */
+  sidebar: SidebarStore;
+  sidebarPresenter: SidebarPresenter;
   /** Per-domain presenters split out of the catch-all. Exposed for
    *  console / e2e. */
   viewportPresenter: ViewportPresenter;
@@ -136,9 +156,32 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
   );
   const transcribePresenter = new TranscribePresenter({ transcribe, jotEditorPresenter });
   if (options.examples) jotEditorPresenter.setExamples(options.examples);
-  const selection = new SelectionStore(jotEditorStore);
+  const selection = new SelectionStore();
+  const selectionPresenter = new SelectionPresenter(selection, () =>
+    orderedNotes(jotEditorStore.structural?.layers ?? [])
+  );
   const editingStore = new EditingStore();
-  const editingPresenter = new EditingPresenter(editingStore, jotEditorStore);
+  const editingPresenter = new EditingPresenter(
+    editingStore,
+    jotEditorStore,
+    settings,
+    selection,
+    selectionPresenter
+  );
+  const sidebar = new SidebarStore();
+  const sidebarPresenter = new SidebarPresenter(sidebar);
+
+  // Marquee hit-test: which notes a rubber-band box (scroll-content coords)
+  // encloses, resolved to the current StructNotes. Reads the DOM, so it only
+  // runs from the pointer handlers below (never a render path).
+  const marqueeHitTest = (box: Box): StructNote[] => {
+    const layers = jotEditorStore.structural?.musicalLayers;
+    if (!layers) return [];
+    return notesInBox(box, notesById(layers));
+  };
+  // Origin of the in-flight marquee drag (scroll-content coords). Closure-local
+  // transient interaction state, not persisted, not observed.
+  let marqueeOrigin: Point | undefined;
 
   // Translate a click on `.jotContainer` into the marquee's coordinate
   // space (the inner `.scrollViewport` wrapper, which is where the
@@ -161,10 +204,19 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
   const onMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     e.preventDefault();
-    selection.beginSelection(containerPoint(e));
+    marqueeOrigin = containerPoint(e);
+    selectionPresenter.beginMarquee(marqueeOrigin);
   };
   const onMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    selection.moveSelection(containerPoint(e));
+    if (!marqueeOrigin) return;
+    const p = containerPoint(e);
+    selectionPresenter.updateMarquee(marqueeOrigin, p, marqueeHitTest(Box.create(marqueeOrigin, p)));
+  };
+  const onMouseUp = () => {
+    if (!marqueeOrigin) return;
+    marqueeOrigin = undefined;
+    const box = selection.marquee;
+    selectionPresenter.endMarquee(box ? marqueeHitTest(box) : []);
   };
 
   /**
@@ -213,7 +265,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
   // the mute/solo snapshots) still flow through props/memo below and stay
   // reactive. Reads of `store.*` inside these bodies run at call time, not
   // render time, so they don't subscribe createJotEditor to anything.
-  const onPatternClick = (name: string) => selection.togglePattern(name);
+  const onPatternClick = (name: string) => selectionPresenter.togglePattern(name);
   const onSeek = (x: number) => playbackPresenter.seekToX(x);
   const onZoomBy = (factor: number) => viewportPresenter.setZoom(viewport.zoom * factor);
   const onMoveTrack = (from: number, to: number) => mixerPresenter.moveTrack(from, to);
@@ -240,43 +292,13 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
       audioWorkletState !== 'available'
     );
 
-    // Spacebar = play / pause / resume, from anywhere on the page. Skip
-    // only when a text-entry control has focus (the user is typing) or
-    // a SELECT is focused (let space/arrows drive the native picker).
-    // A focused BUTTON deliberately falls through: preventDefault both
-    // stops the browser's space-to-scroll and suppresses the button's
-    // space-activation, so spacebar *always* toggles transport. A
-    // focused range slider (e.g. Zoom) also falls through — space has
-    // no native slider function, so swallowing it here would silently
-    // break play/pause until the user clicked elsewhere.
-    React.useEffect(() => {
-      // INPUT types where space is meaningful text/native input and the
-      // shortcut must yield. A range/checkbox/etc. input is not listed,
-      // so spacebar still toggles transport while it has focus.
-      const TEXT_ENTRY_INPUT_TYPES = new Set([
-        'text',
-        'search',
-        'email',
-        'url',
-        'tel',
-        'password',
-        'number',
-      ]);
-      const onKeyDown = (e: KeyboardEvent) => {
-        if (e.code !== 'Space' && e.key !== ' ') return;
-        const el = e.target as HTMLElement | null;
-        const tag = el?.tagName;
-        const isTextEntryInput =
-          tag === 'INPUT' && TEXT_ENTRY_INPUT_TYPES.has((el as HTMLInputElement).type);
-        if (isTextEntryInput || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) {
-          return;
-        }
-        e.preventDefault();
-        void playbackPresenter.togglePlayPause();
-      };
-      window.addEventListener('keydown', onKeyDown);
-      return () => window.removeEventListener('keydown', onKeyDown);
-    }, []);
+    // Global editor keyboard shortcuts, dispatched through the keymap →
+    // command layer (Space = play/pause from anywhere; Delete/Backspace =
+    // delete the selection). The dispatcher skips text-entry targets but lets
+    // a focused BUTTON / range slider fall through, so Space `preventDefault`
+    // both stops page scroll and the button's space-activation and always
+    // toggles transport. Keys are remappable by swapping the keymap.
+    useEditorKeymap({ editingPresenter, playbackPresenter });
 
     const provenanceContextValue = provenance.provenanceContextValue;
 
@@ -359,6 +381,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     );
 
     return (
+        <SidebarStoreContext.Provider value={sidebar}>
+        <SidebarPresenterContext.Provider value={sidebarPresenter}>
         <LyricsPresenterContext.Provider value={lyricsPresenter}>
         <ProvenancePresenterContext.Provider value={provenancePresenter}>
         <ProvenanceStoreContext.Provider value={provenance}>
@@ -366,6 +390,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
         <ViewportStoreContext.Provider value={viewport}>
         <MixerStoreContext.Provider value={mixer}>
         <SelectionContext.Provider value={selection}>
+        <SelectionPresenterContext.Provider value={selectionPresenter}>
         <EditingStoreContext.Provider value={editingStore}>
         <EditingPresenterContext.Provider value={editingPresenter}>
           <NoteProvenanceContext.Provider value={provenanceContextValue}>
@@ -373,6 +398,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
               <UniformWaveformsContext.Provider value={settings.uniformWaveforms}>
                 <FollowPlayheadContext.Provider value={followPlayheadContextValue}>
                   <div className={styles.appContainer}>
+                    <div className={styles.mainColumn}>
                     <Toolbar
                       examples={jotEditorStore.examples}
                       currentId={jotEditorStore.currentExampleId}
@@ -432,7 +458,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                         onPatternClick={onPatternClick}
                         onMouseDown={onMouseDown}
                         onMouseMove={onMouseMove}
-                        onMouseUp={selection.endSelection}
+                        onMouseUp={onMouseUp}
                         onSeek={onSeek}
                         onZoomBy={onZoomBy}
                         trackOrder={mixer.trackOrder}
@@ -466,6 +492,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                     )}
                     {structural && <EditingToolbar />}
                     <DebugPanel provenance={provenance} presenter={provenancePresenter} />
+                    </div>
+                    <Sidebar />
                     <LyricsSearchModal
                       open={lyricsAlign.lyricsSearchOpen}
                       initialTitle={lyricsInitialTitle}
@@ -492,6 +520,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
           </NoteProvenanceContext.Provider>
         </EditingPresenterContext.Provider>
         </EditingStoreContext.Provider>
+        </SelectionPresenterContext.Provider>
         </SelectionContext.Provider>
         </MixerStoreContext.Provider>
         </ViewportStoreContext.Provider>
@@ -499,6 +528,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
         </ProvenanceStoreContext.Provider>
         </ProvenancePresenterContext.Provider>
         </LyricsPresenterContext.Provider>
+        </SidebarPresenterContext.Provider>
+        </SidebarStoreContext.Provider>
     );
   });
 
@@ -511,6 +542,12 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     playback,
     viewport,
     mixer,
+    selection,
+    selectionPresenter,
+    editingStore,
+    editingPresenter,
+    sidebar,
+    sidebarPresenter,
     viewportPresenter,
     mixerPresenter,
     provenancePresenter,
@@ -1216,6 +1253,7 @@ const JotEditor = observer((props: JotEditorProps) => {
                   onResizeGutterStart={onResizeGutterStart}
                 />
                 <MarqueeOverlay />
+                <SelectionFrame />
               </div>
               <VerticalScrollbar viewport={viewport} viewportPresenter={viewportPresenter} />
             </div>
@@ -1695,6 +1733,44 @@ const MarqueeOverlay = observer(() => {
         width: marquee.width,
         height: marquee.height,
       }}
+    />
+  );
+});
+
+/**
+ * Subtle bounding box drawn around a multi-note selection (the "selection
+ * frame"). Lives inside the scroll-content wrapper so it scrolls with the
+ * notes for free; its pixel extents are read from the selected glyphs' DOM
+ * rects in a layout effect that re-runs when the selection or the zoom
+ * (`pxPerBeat`) changes, not on scroll. Hidden for 0 or 1 selected notes.
+ */
+const SelectionFrame = observer(() => {
+  const selection = React.useContext(SelectionContext);
+  const ids = selection?.effectiveIds;
+  // Bail BEFORE reading any zoom observable when there's no multi-selection,
+  // so this component never re-renders on a zoom tick in the common (no
+  // selection) case, keeping the 120fps zoom path free of a per-frame render.
+  if (!ids || ids.size < 2) return null;
+  return <SelectionFrameBox ids={ids} />;
+});
+
+/** The frame box itself, mounted only for a ≥2-note selection. Reads
+ *  `pxPerBeat` so the box re-measures on zoom; that subscription is scoped to
+ *  the (rare) selected state by {@link SelectionFrame}'s early return. */
+const SelectionFrameBox = observer(({ ids }: { ids: ReadonlySet<string> }) => {
+  const structural = React.useContext(StructuralContext);
+  const pxPerBeat = structural?.pxPerBeat ?? 0;
+  const [box, setBox] = React.useState<Box | null>(null);
+  React.useLayoutEffect(() => {
+    setBox(boundingBoxOfNotes(ids));
+  }, [ids, pxPerBeat]);
+  if (!box) return null;
+  return (
+    <div
+      className={styles.selectionFrame}
+      data-testid="selection-frame"
+      aria-hidden="true"
+      style={{ left: box.x, top: box.y, width: box.width, height: box.height }}
     />
   );
 });

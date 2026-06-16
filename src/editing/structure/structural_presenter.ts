@@ -139,6 +139,13 @@ export class StructuralPresenter implements LaidOutJot {
     return this.structureStore.layerOrder[0]?.id ?? '';
   }
 
+  /** Id of the `||` layer that owns `lane` (carries a note on it), for placing
+   *  inserted / moved notes in the row the user clicked. `undefined` for a
+   *  single-layer jot or a lane no layer carries yet. */
+  ownerLayerFor(lane: string): string | undefined {
+    return this.structureStore.ownerLayerFor(lane);
+  }
+
   /** Geometry spine the score renders against: the layer-0 bar geometry plus a
    *  view-only "virtual" lead-in bar when the song has no real lead-in of its
    *  own, so the first note never clips at the left edge and a song with no
@@ -216,9 +223,11 @@ export class StructuralPresenter implements LaidOutJot {
     if (barId === LEAD_IN_BAR_ID) {
       return { ...base, tracks: {}, patternSpans: [], tupletSpans: [] };
     }
-    const key = this.structureStore.keyFor(barId, this.viewLayerId);
-    const track = this.structureStore.trackFor(key, lane);
-    const spans = this.structureStore.spansFor(key);
+    // Notes and bracket chrome both come from every layer that places this
+    // lane / bar (so a hands/feet split shows its kick row, and a tuplet in a
+    // non-first layer still draws its bracket).
+    const track = this.structureStore.mergedTrackFor(barId, lane);
+    const spans = this.structureStore.mergedSpansFor(barId);
     return {
       ...base,
       tracks: { [lane]: track },

@@ -12,6 +12,12 @@ import { PlaybackPresenter } from 'src/editing/playback/playback_presenter';
 import { LyricsPresenter } from 'src/editing/lyrics/lyrics_presenter';
 import { JotEditorPresenter } from 'src/editing/jot_editor_presenter';
 import { JotEditorStore } from 'src/editing/jot_editor_store';
+import { SelectionStore } from 'src/editing/selection/selection';
+import { SelectionPresenter } from 'src/editing/selection/selection_presenter';
+import { EditingStore } from 'src/editing/editing_store';
+import { EditingPresenter } from 'src/editing/editing_presenter';
+import { SidebarStore } from 'src/sidebar/sidebar_store';
+import { SidebarPresenter } from 'src/sidebar/sidebar_presenter';
 import { SettingsStore } from 'src/settings/settings_store';
 import { TranscribeStore } from 'src/editing/transcribe/transcribe_store';
 import { ProvenanceStore } from 'src/editing/provenance/provenance_store';
@@ -41,6 +47,12 @@ class Drumjot {
   readonly playback: PlaybackStore;
   readonly viewport: ViewportStore;
   readonly mixer: MixerStore;
+  readonly selection: SelectionStore;
+  readonly selectionPresenter: SelectionPresenter;
+  readonly editingStore: EditingStore;
+  readonly editingPresenter: EditingPresenter;
+  readonly sidebar: SidebarStore;
+  readonly sidebarPresenter: SidebarPresenter;
   readonly viewportPresenter: ViewportPresenter;
   readonly mixerPresenter: MixerPresenter;
   readonly provenancePresenter: ProvenancePresenter;
@@ -59,6 +71,12 @@ class Drumjot {
       playback,
       viewport,
       mixer,
+      selection,
+      selectionPresenter,
+      editingStore,
+      editingPresenter,
+      sidebar,
+      sidebarPresenter,
       viewportPresenter,
       mixerPresenter,
       provenancePresenter,
@@ -76,6 +94,12 @@ class Drumjot {
     this.playback = playback;
     this.viewport = viewport;
     this.mixer = mixer;
+    this.selection = selection;
+    this.selectionPresenter = selectionPresenter;
+    this.editingStore = editingStore;
+    this.editingPresenter = editingPresenter;
+    this.sidebar = sidebar;
+    this.sidebarPresenter = sidebarPresenter;
     this.viewportPresenter = viewportPresenter;
     this.mixerPresenter = mixerPresenter;
     this.provenancePresenter = provenancePresenter;

@@ -16,6 +16,41 @@ import type {
 /** Root container name holding the top-level record. */
 export const ROOT = 'root';
 
+// ---------- Commit batching ----------
+//
+// Every facade write commits immediately so a single mutation is one Loro
+// change. For bulk edits that fragments one logical gesture into N tiny
+// changes (N sync deltas, N future undo steps). `transact` defers the
+// per-op commits and flushes a single commit at the outermost exit, so a
+// bulk delete/move lands as one change. It is private to this module: the
+// collection facades expose bulk operators (`setAll`, variadic `delete`)
+// that use it, and schema consumers never touch commit batching directly.
+//
+// The depth counter is module-global, which is sound because `transact`'s
+// body is synchronous and JS is single-threaded, so at most one transact
+// is ever open. A nested `transact` only commits at the outer boundary.
+let deferDepth = 0;
+
+/** Run `fn`, suppressing per-op commits, then commit `doc` once. MobX
+ *  reactions are coalesced too via `runInAction`. Re-entrant: nested calls
+ *  flush only when the outermost returns. Commits even if `fn` throws so a
+ *  partial edit still persists and the defer flag never sticks. */
+function transact(doc: LoroDoc, fn: () => void): void {
+  deferDepth++;
+  try {
+    runInAction(fn);
+  } finally {
+    deferDepth--;
+    if (deferDepth === 0) doc.commit();
+  }
+}
+
+/** Commit unless a `transact` is buffering, in which case the outermost
+ *  `transact` will flush. Every facade write goes through here. */
+function commit(doc: LoroDoc): void {
+  if (deferDepth === 0) doc.commit();
+}
+
 export type ReactiveDoc<S extends RecordDescriptor> = {
   /** The deeply-observable MobX projection. Reads/writes are ordinary
    *  property access; writes go Loro-first then commit, and the commit's
@@ -193,7 +228,7 @@ function buildRecordNode(
         get: () => cache.get(key),
         set: (value: unknown) => {
           lmap.set(key, value as never);
-          doc.commit();
+          commit(doc);
         },
       });
     } else {
@@ -290,6 +325,19 @@ class ObservableIdMap implements ReactiveMap<Record<string, unknown>> {
   /** Create (or replace) the keyed child from a plain value object. Flat
    *  register children only for now. */
   set(id: string, value: Record<string, unknown>): void {
+    this.writeEntry(id, value);
+    commit(this.doc);
+  }
+
+  /** Create (or replace) several entries in one Loro commit. */
+  setAll(entries: Iterable<[string, Record<string, unknown>]>): void {
+    transact(this.doc, () => {
+      for (const [id, value] of entries) this.writeEntry(id, value);
+    });
+  }
+
+  /** Replace one entry's contents (no commit). Shared by `set`/`setAll`. */
+  private writeEntry(id: string, value: Record<string, unknown>): void {
     // Mergeable so two peers concurrently creating the same id (rare, but
     // possible) converge on one container rather than competing ones.
     const child = this.lmap.ensureMergeableMap(id);
@@ -302,12 +350,17 @@ class ObservableIdMap implements ReactiveMap<Record<string, unknown>> {
       if (!(k in value)) child.delete(k);
     }
     for (const k of Object.keys(value)) child.set(k, value[k] as never);
-    this.doc.commit();
   }
 
-  delete(id: string): void {
-    this.lmap.delete(id);
-    this.doc.commit();
+  delete(...ids: string[]): void {
+    if (ids.length === 1) {
+      this.lmap.delete(ids[0]);
+      commit(this.doc);
+      return;
+    }
+    transact(this.doc, () => {
+      for (const id of ids) this.lmap.delete(id);
+    });
   }
 
   keys(): IterableIterator<string> {
@@ -416,17 +469,17 @@ class ObservableList implements ReactiveList<Record<string, unknown>> {
   insert(index: number, value: Record<string, unknown>): void {
     const child = this.llist.insertContainer(index, new LoroMap());
     populateNode(this.entryDesc, child, value);
-    this.doc.commit();
+    commit(this.doc);
   }
 
   delete(index: number): void {
     this.llist.delete(index, 1);
-    this.doc.commit();
+    commit(this.doc);
   }
 
   move(from: number, to: number): void {
     this.llist.move(from, to);
-    this.doc.commit();
+    commit(this.doc);
   }
 
   forEach(cb: (value: Record<string, unknown>, index: number, list: ObservableList) => void): void {

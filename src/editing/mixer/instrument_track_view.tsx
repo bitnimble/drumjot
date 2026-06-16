@@ -186,7 +186,7 @@ export const InstrumentTrackView = observer(
         const start = startBeats[i];
         if (cont < start + laneBars[i].beats || i === laneBars.length - 1) {
           const beat = Math.min(Math.max(cont - start, 0), laneBars[i].beats);
-          return { lane, barId: laneBars[i].id, beat, absBeat: start + beat };
+          return { lane, barId: laneBars[i].id, beat, absBeat: start + beat, barBeats: laneBars[i].beats };
         }
       }
       return undefined;

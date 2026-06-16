@@ -138,7 +138,10 @@ export interface ReactiveMap<T> {
   get(id: string): T | undefined;
   /** Create or replace the keyed child from a plain value object. */
   set(id: string, value: T): void;
-  delete(id: string): void;
+  /** Create or replace several entries in one Loro commit. */
+  setAll(entries: Iterable<[string, T]>): void;
+  /** Delete one or more entries; a multi-id delete is one Loro commit. */
+  delete(...ids: string[]): void;
   keys(): IterableIterator<string>;
   values(): IterableIterator<T>;
   entries(): IterableIterator<[string, T]>;
