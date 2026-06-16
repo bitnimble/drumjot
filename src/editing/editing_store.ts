@@ -38,9 +38,9 @@ export class EditingStore {
   placeholder: PlaceholderNote | undefined = undefined;
 
   /** When enabled, inserting and moving notes snaps to the grid at the
-   *  resolution of the currently-enabled grid-line families. Toggled from the
-   *  Edit toolbar menu. */
-  snappingEnabled: boolean = false;
+   *  resolution of the currently-enabled grid-line families. On by default;
+   *  toggled from the Edit toolbar menu. */
+  snappingEnabled: boolean = true;
 
   constructor() {
     makeAutoObservable(this);

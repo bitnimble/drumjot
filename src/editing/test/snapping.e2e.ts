@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import {
+  disableSnapping,
   dragMouse,
   enableSnapping,
   laneNoteIds,
@@ -20,12 +21,12 @@ test.beforeEach(async ({ page }) => {
   await loadRockJot(page);
 });
 
-test('Edit menu toggles the snapping checkmark', async ({ page }) => {
+test('Edit menu toggles the snapping checkmark (on by default)', async ({ page }) => {
   await page.getByRole('button', { name: 'Edit' }).click();
   const item = page.getByTestId('edit-menu-snapping');
-  await expect(item).toHaveAttribute('aria-checked', 'false');
-  await item.click();
   await expect(item).toHaveAttribute('aria-checked', 'true');
+  await item.click();
+  await expect(item).toHaveAttribute('aria-checked', 'false');
 });
 
 // Insert a snare note just past beat 3, an EMPTY grid line in the snare lane,
@@ -49,6 +50,7 @@ async function insertPastEmptyBeat3(page: import('@playwright/test').Page, frac1
 }
 
 test('with snapping OFF an inserted note stays where it was clicked', async ({ page }) => {
+  await disableSnapping(page);
   // ~0.45 of a 16th past beat 3, clearly off any grid line.
   const { left, beat3LeftEdge } = await insertPastEmptyBeat3(page, 0.45);
   expect(left - beat3LeftEdge).toBeGreaterThan(5);
@@ -71,7 +73,30 @@ test('with snapping ON a small drag snaps back to the same grid line', async ({ 
   expect(Math.abs(left - ref.left)).toBeLessThan(3);
 });
 
+test('with snapping ON the live drag preview jumps between grid lines', async ({ page }) => {
+  await enableSnapping(page);
+  // Hi-hats sit on every 8th (beats 0, 0.5, 1, …), so h[0] and h[2] are exactly
+  // one beat apart, giving the on-screen px-per-beat and thus the 16th pitch.
+  const h0 = await noteGeom(page, 'h', 0); // beat 0
+  const h2 = await noteGeom(page, 'h', 2); // beat 1
+  const sixteenth = (h2.x - h0.x) / 4;
+  const ref = await noteGeom(page, 'h', 1); // on beat 0.5, an on-grid reference
+
+  await page.mouse.move(ref.x, ref.y);
+  await page.mouse.down();
+  // Under half a 16th: the live preview snaps back to the original grid line.
+  await page.mouse.move(ref.x + sixteenth * 0.4, ref.y, { steps: 4 });
+  const heldNear = (await noteLeft(page, ref.id))!;
+  expect(Math.abs(heldNear - ref.left)).toBeLessThan(2);
+  // Past half a 16th: it jumps a full grid step rather than moving continuously.
+  await page.mouse.move(ref.x + sixteenth * 0.7, ref.y, { steps: 4 });
+  const heldNext = (await noteLeft(page, ref.id))!;
+  expect(Math.abs(heldNext - (ref.left + sixteenth))).toBeLessThan(2);
+  await page.mouse.up();
+});
+
 test('with snapping OFF the same small drag moves the note freely', async ({ page }) => {
+  await disableSnapping(page);
   const ref = await noteGeom(page, 'h', 1);
   await dragMouse(page, { x: ref.x, y: ref.y }, { x: ref.x + 10, y: ref.y });
   const left = (await noteLeft(page, ref.id))!;

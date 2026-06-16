@@ -67,16 +67,24 @@ export async function laneCentreY(page: Page, lane: string): Promise<number> {
   }, lane);
 }
 
-/** Turn on grid snapping via the Edit toolbar menu (leaves the menu state as
- *  the user would: opens, toggles on, asserts the checkmark). */
-export async function enableSnapping(page: Page): Promise<void> {
+/** Set grid snapping to `on` via the Edit toolbar menu, idempotently (snapping
+ *  is on by default, so callers can't assume a fixed starting state). Opens the
+ *  menu, toggles only if needed, asserts the resulting checkmark, then dismisses
+ *  the menu so it doesn't overlay the score for subsequent clicks. */
+async function setSnapping(page: Page, on: boolean): Promise<void> {
   await page.getByRole('button', { name: 'Edit' }).click();
   const item = page.getByTestId('edit-menu-snapping');
-  await item.click();
-  await expect(item).toHaveAttribute('aria-checked', 'true');
-  // Dismiss the menu so it doesn't overlay the score for subsequent clicks.
+  const checked = (await item.getAttribute('aria-checked')) === 'true';
+  if (checked !== on) await item.click();
+  await expect(item).toHaveAttribute('aria-checked', String(on));
   await page.keyboard.press('Escape');
 }
+
+/** Turn grid snapping on (idempotent). */
+export const enableSnapping = (page: Page): Promise<void> => setSnapping(page, true);
+
+/** Turn grid snapping off (idempotent); snapping is on by default. */
+export const disableSnapping = (page: Page): Promise<void> => setSnapping(page, false);
 
 /** Ids of every note glyph currently in a lane, in DOM order. */
 export async function laneNoteIds(page: Page, lane: string): Promise<string[]> {

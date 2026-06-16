@@ -52,3 +52,34 @@
     border-color: var(--color-accent);
     color: var(--color-accent-on-text);
 }
+
+/* Insert-mode glyph: a filled note disc (a plain div) with a lucide plus badge
+   pinned to its top-right corner. Replaces the old hand-drawn SVG; inherits the
+   button's `currentColor` for both the disc and the plus strokes. */
+.insertIcon {
+    position: relative;
+    display: inline-flex;
+    width: 18px;
+    height: 18px;
+}
+
+.insertIconDot {
+    position: absolute;
+    left: 2px;
+    top: 4px;
+    width: 11px;
+    height: 11px;
+    border-radius: var(--radius-circle);
+    background: currentColor;
+}
+
+/* Plus badge on a base-coloured disc so it reads distinctly where it overlaps
+   the note. The disc is the icon's own background clipped to a circle. */
+.insertIconPlus {
+    position: absolute;
+    top: -1px;
+    right: -1px;
+    border-radius: var(--radius-circle);
+    background: var(--color-bg-base);
+    color: currentColor;
+}

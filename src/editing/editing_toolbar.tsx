@@ -1,30 +1,22 @@
 import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
-import { MousePointer2 } from 'lucide-react';
+import { MousePointer2, Plus } from 'lucide-react';
 import React from 'react';
 import { EditingStoreContext, EditingPresenterContext } from './editing_contexts';
 import type { EditMode } from './editing_store';
 import styles from './editing_toolbar.module.css';
 
 /**
- * A jot note (filled circle) with a small plus badge at its top-right
- * corner, the insert-mode glyph. Drawn inline rather than composed from
- * two lucide icons so the plus sits exactly on the circle's corner.
+ * The insert-mode glyph: a jot note (a filled circle `div`) with a lucide
+ * `Plus` badge at its top-right corner. Composed from a styled element + the
+ * shared icon set rather than a hand-drawn SVG; positioning lives in the CSS.
  */
 function InsertNoteIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" focusable="false">
-      <circle cx="8" cy="10" r="5.5" fill="currentColor" />
-      {/* Plus badge, top-right. Stroked in currentColor over a base-coloured
-          disc so it reads as a distinct badge on top of the note. */}
-      <circle cx="14" cy="4" r="3.5" fill="var(--color-bg-base)" />
-      <path
-        d="M14 2.2v3.6M12.2 4h3.6"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinecap="round"
-      />
-    </svg>
+    <span className={styles.insertIcon} aria-hidden="true">
+      <span className={styles.insertIconDot} />
+      <Plus className={styles.insertIconPlus} size={11} strokeWidth={2.5} />
+    </span>
   );
 }
 

@@ -83,6 +83,7 @@ describe('EditingPresenter', () => {
 
   it('leaves the placeholder unsnapped when snapping is disabled', () => {
     const { editingStore, presenter } = setup();
+    presenter.setSnapping(false); // snapping is on by default
     presenter.setMode('insert');
     presenter.movePlaceholder({ lane: 'k', barId: 'x', beat: 1.1, absBeat: 1.1, barBeats: 4 });
     expect(editingStore.placeholder!.beat).toBeCloseTo(1.1, 9);
@@ -135,6 +136,23 @@ describe('EditingPresenter', () => {
     presenter.setSnapping(true); // default grid: main beats + 16ths
     presenter.moveSelection(k0, 0.3); // 0.3 -> nearest 16th 0.25
     expect(kicks(store)[0].tracks['k'].notes[0].beat).toBeCloseTo(0.25, 9);
+  });
+
+  it('snapDeltaFn snaps the live drag delta to the grid (anchor-relative)', () => {
+    const { store, presenter } = setup();
+    const k0 = kicks(store)[0].tracks['k'].notes[0]; // anchor at abs beat 0
+    presenter.setSnapping(true); // default grid: main beats + 16ths
+    const snap = presenter.snapDeltaFn(k0);
+    // A raw 0.3-beat drag snaps the anchor's target (0.3) to the nearest 16th.
+    expect(snap(0.3)).toBeCloseTo(0.25, 9);
+    expect(snap(0.1)).toBeCloseTo(0, 9);
+  });
+
+  it('snapDeltaFn is identity when snapping is off', () => {
+    const { store, presenter } = setup();
+    const k0 = kicks(store)[0].tracks['k'].notes[0];
+    presenter.setSnapping(false);
+    expect(presenter.snapDeltaFn(k0)(0.3)).toBeCloseTo(0.3, 9);
   });
 
   it('moveSelection remaps lanes via laneMap (cross-lane move)', () => {

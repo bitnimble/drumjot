@@ -155,6 +155,29 @@ export class EditingPresenter {
   }
 
   /**
+   * Build the anchor-snapping function for a live drag: maps a raw beat delta
+   * (cursor pixels ÷ pxPerBeat) to the delta after snapping the anchor's
+   * absolute target onto the grid. Captures the bar layout, grid divisors, and
+   * snapping flag once at drag start so each pointer move snaps without
+   * rebuilding. Identity when snapping is off or the anchor can't be located,
+   * so the preview matches what {@link moveSelection} ultimately commits.
+   */
+  snapDeltaFn(anchor: StructNote): (rawDeltaBeat: number) => number {
+    const identity = (d: number): number => d;
+    const jot = this.jotEditorStore.jot;
+    const layers = this.jotEditorStore.structural?.musicalLayers;
+    if (!jot || !layers || !this.editingStore.snappingEnabled) return identity;
+    const layout = buildBarLayout(layers);
+    const el = jot.elements.get(anchor.id) as Element | undefined;
+    if (!el || el.barId === undefined) return identity;
+    const slot = layout.byId.get(el.barId);
+    if (!slot) return identity;
+    const anchorAbs = slot.start + el.beat;
+    const divisors = enabledDivisors(this.settingsStore.gridLines);
+    return (rawDeltaBeat) => snapBeat(anchorAbs + rawDeltaBeat, divisors, layout.total) - anchorAbs;
+  }
+
+  /**
    * Commit the current insert-mode placeholder as a real note at exactly its
    * displayed bar + beat (snapping, if on, has already been applied to the
    * placeholder). No-op when there's no placeholder or no loaded document.

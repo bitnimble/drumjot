@@ -432,10 +432,14 @@ const NoteView = observer(
     const badge = pickBadge(note);
     const selection = React.useContext(SelectionContext);
     const selectionPresenter = React.useContext(SelectionPresenterContext);
-    const { onPointerDown: onNotePointerDown, justDragged } = useNoteDrag();
+    const { onPointerDown: onNotePointerDown, dragging } = useNoteDrag();
     const selected = selection?.isSelected(note) ?? false;
+    // The inline label is a single-note affordance: show it only when this note
+    // is the *sole* selection (a multi/marquee selection suppresses it) or on
+    // hover, and never while it's being dragged.
+    const isSoleSelected = selection?.selectedNote?.id === note.id;
     const [hovered, setHovered] = React.useState(false);
-    const showLabel = selected || hovered;
+    const showLabel = (isSoleSelected || hovered) && !dragging;
     const description = offGrid
       ? `${describeNote(note, instrument)} — off the straight grid (triplet/tuplet)`
       : describeNote(note, instrument);
@@ -516,12 +520,8 @@ const NoteView = observer(
         onPointerDown={(e) => onNotePointerDown(e, note)}
         onClick={(e) => {
           e.stopPropagation();
-          // A drag just committed a move; swallow the trailing click so it
-          // doesn't collapse the selection back to this one note.
-          if (justDragged.current) {
-            justDragged.current = false;
-            return;
-          }
+          // A drag's trailing click is swallowed at the window (see useNoteDrag),
+          // so this only ever runs for a genuine click.
           // ctrl/cmd = toggle individual; shift = extend range; plain = replace.
           if (e.ctrlKey || e.metaKey) selectionPresenter?.toggle(note);
           else if (e.shiftKey) selectionPresenter?.extendTo(note);
