@@ -462,12 +462,17 @@ per-lane keep_best F1.
 |---|---|---|---|---|---|---|---|---|---|---|
 | 100^1 | ~clip | 40(fix) | 0.606 | 0.427 | 0.658 | 0.519 | 0.539 | 0.345 | **0.468** | 0.516 |
 | 500 | 1519 | 58 | 0.689 | 0.470 | 0.663 | 0.583 | 0.629 | 0.463 | **0.558** | 0.583 |
+| 750 | 2008 | 69 | 0.691 | 0.478 | 0.638 | 0.590 | 0.625 | 0.450 | **0.555** | 0.579 |
 | 1000 | 2563 | 69 | 0.689 | 0.478 | 0.664 | 0.623 | 0.620 | 0.504 | **0.582** | 0.596 |
 | 3000 | 6559 | 62 | 0.702 | 0.507 | 0.661 | 0.607 | 0.656 | 0.509 | **0.591** | 0.607 |
 | 0(full) | 15952 | (on 3080) | tbd | tbd | tbd | tbd | tbd | tbd | **tbd** | tbd |
 
-cymMac slope: cap-100→500 **+0.090**, cap-500→1000 **+0.024**, cap-1000→3000
-**+0.009**. Rise persists to ~cap-1000 (500→1000 still > noise), then flat.
+cymMac slope: 100→500 **+0.090**, 500→750 **-0.003**, 750→1000 **+0.027**,
+1000→3000 **+0.009**. The 500/750 points are indistinguishable (single-seed
+noise ~±0.01-0.015); the climb to plateau happens ~750→1000, flat after.
+**Knee ~cap-1000**; finer resolution is below the single-seed noise floor (would
+need 2-3 seeds/point). NOTE: these caps predate the `mc`-lane removal, so cymMac
+is 3-lane (rd+cr+mc); future 9-lane runs report 2-lane (rd+cr).
 
 ^1 Phase-1 convergence run; cap-100 was CLIP-unit (pre window-cap), so the cap
 *number* isn't 1:1 on the windows axis, but the val is identical (~700 windows)
