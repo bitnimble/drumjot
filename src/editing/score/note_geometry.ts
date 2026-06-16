@@ -36,7 +36,7 @@ export function notesInBox(box: Box, byId: ReadonlyMap<string, StructNote>): Str
 
 /** Bounding box (scroll-content local coords, with `pad`) enclosing the DOM
  *  glyphs of the given note ids, or null if none are mounted. */
-export function boundingBoxOfNotes(ids: ReadonlySet<string>, pad = 4): Box | null {
+export function boundingBoxOfNotes(ids: ReadonlySet<string>, pad = 8): Box | null {
   const wrap = scrollContent();
   if (!wrap || ids.size === 0) return null;
   const wr = wrap.getBoundingClientRect();
