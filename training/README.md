@@ -26,7 +26,7 @@ extra dependency is needed**.
 ```
 training/
   drumjot_training/
-    lanes.py        11-lane vocab + GM-note mapping
+    lanes.py        9-lane vocab + GM-note mapping
     config.py       Config (encoder, head dims, lr, batch_size, cache_dtype)
     targets.py      onset times -> per-frame Gaussian target curve
     metrics.py      peak-pick + onset-F1 (mir_eval, +/-50 ms)
@@ -58,20 +58,21 @@ training/
   tests/            pytest (run in the CUDA sandbox; 111 tests)
 ```
 
-## Lanes (11)
+## Lanes (9)
 
 `k` kick · `s` snare · `ss` side-stick · `t` toms · `hc`/`hp`/`ho`
-closed/pedal/open hi-hat · `rd` ride · `cr` crash · `mc` misc cymbals
-(splash+china+ride-bell) · `mp` misc percussion (cowbell+clap+tambourine).
+closed/pedal/open hi-hat · `rd` ride · `cr` crash.
 
 Fold decisions (`lanes.py` / `star.py`): ride and crash are split; the three
-hat articulations are separate (the HIHAT.md goal); the sparse tail folds up
-into `mc`/`mp` rather than near-empty per-instrument heads. Side-stick is its
-own training lane and emits to GM-37 on its own MIDI track; the frontend
-folds it onto the snare track as a snare articulation at Jot-load
-(integration, not handled in training). Rare lanes (`hp`, `mc`, `mp`, `ss`)
-are sparse, expect weak F1 until trained on the full dataset, with per-lane
-`pos_weight`.
+hat articulations are separate (the HIHAT.md goal); ride bell folds into `rd`
+(same physical cymbal). The `mc` (misc cymbals: splash/china/ride-bell) and
+`mp` (misc percussion: cowbell/clap/tambourine) lanes were REMOVED (2026-06):
+the separators don't isolate them and they scored ~noise; their source classes
+now map to None (except ride bell -> `rd`). Side-stick is its own training lane
+and emits to GM-37 on its own MIDI track; the frontend folds it onto the snare
+track as a snare articulation at Jot-load (integration, not handled in
+training). Rare lanes (`hp`, `ss`) are sparse, expect weak F1 until trained on
+the full dataset, with per-lane `pos_weight`.
 
 ## Running
 
@@ -129,7 +130,6 @@ Real-song, hand-charted held-out test: a folder of Paradiddle `.rlrr` map zips
 4. **Onset-F1 vs the chart**, with per-map optimistic hat/cymbal folding
    (`rlrr.comparison_pairs`: split a group only when the chart distinguishes it;
    hi-hat open/closed also recovered from a strictly-bimodal velocity chart).
-   Aux lanes (`mp`/`mc`) are scored only if the kit charts that instrument.
 
 **Global offset / alignment check.** Each map's chart is checked against the
 drum-stem onset envelope: `support@0` (fraction of chart onsets within ±window
@@ -231,8 +231,8 @@ Open / next:
 1. **Ride + cross-instrument promiscuity:** the worst gap. Likely a
    synthetic-stem → real-separated-stem domain gap; train on STAR's
    `original_drum` (real isolated drums) or on our own separator's output.
-2. **`mp`/`mc`:** effectively noise lanes here (no `mp` stem in the 5-way
-   separation; the model fires `mp` everywhere). Drop or retrain.
+2. ~~**`mp`/`mc`:** effectively noise lanes here.~~ DONE (2026-06): both lanes
+   removed (no per-stem target, scored ~noise); ride bell folded into `rd`.
 3. **Encoder A/B:** MERT layer sweep; MusicFM as the clean-license alternative
    behind the same `encode` interface.
 4. **Transcriber integration:** `app/pipeline/learned_onsets.py` is the
