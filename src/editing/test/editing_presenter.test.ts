@@ -212,6 +212,42 @@ describe('EditingPresenter, multi-layer (hands/feet split)', () => {
     expect(withTuplet?.tupletSpans[0].count).toBe(3);
   });
 
+  it('de-duplicates aligned identical tuplet brackets across layers', () => {
+    // A hands triplet and a feet triplet over the same beats (kick on its own
+    // layer): the notes show in both rows, but only ONE bracket draws.
+    const store = new JotEditorStore();
+    store.loadSource(
+      parse(
+        '{{ time: "4/4", instrumentMapping: { s:{name:"Snare"}, k:{name:"Kick"} } }} ' +
+          '| (s s s) . . . | || | (k k k) . . . |'
+      )
+    );
+    const sBars = store.structural!.barsForLane('s').bars;
+    const bracketBar = sBars.find((b) => b.tupletSpans.length > 0)!;
+    expect(bracketBar.tupletSpans.length).toBe(1);
+    expect(bracketBar.tupletSpans[0].count).toBe(3);
+    const sNotes = sBars.find((b) => b.tracks['s']?.notes.length)!.tracks['s'].notes.length;
+    const kNotes = store.structural!.barsForLane('k').bars.find((b) => b.tracks['k']?.notes.length)!
+      .tracks['k'].notes.length;
+    expect(sNotes).toBe(3);
+    expect(kNotes).toBe(3);
+  });
+
+  it('keeps distinct brackets over the same span (a polyrhythm)', () => {
+    // A triplet against a quintuplet over the same beat: two distinct brackets.
+    const store = new JotEditorStore();
+    store.loadSource(
+      parse(
+        '{{ time: "4/4", instrumentMapping: { s:{name:"Snare"}, k:{name:"Kick"} } }} ' +
+          '| (s s s) . . . | || | (k k k k k) . . . |'
+      )
+    );
+    const bracketBar = store
+      .structural!.barsForLane('s')
+      .bars.find((b) => b.tupletSpans.length > 0)!;
+    expect(bracketBar.tupletSpans.map((t) => t.count).sort((a, b) => a - b)).toEqual([3, 5]);
+  });
+
   it('moving a hi-hat onto the kick lane re-homes it to the kick layer', () => {
     const { store, selectionPresenter, presenter } = setupMulti();
     const hBar = store.structural!.barsForLane('h').bars.find((b) => b.tracks['h']?.notes.length)!;

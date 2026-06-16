@@ -343,20 +343,34 @@ export class StructureStore {
   /** A bar's bracket chrome UNIONED across every `||` layer, so a tuplet /
    *  pattern authored in a non-first layer still draws its bracket (mirrors
    *  {@link mergedTrackFor} for notes). Single-layer jots collapse to one
-   *  `spansFor`, leaving the common case untouched. */
+   *  `spansFor`, leaving the common case untouched.
+   *
+   *  Identical brackets are de-duplicated: two layers that carry an aligned
+   *  tuplet (e.g. a hands triplet over `(s s .)` and a feet triplet over
+   *  `(. . k)`, the kick on its own layer) would otherwise stack two identical
+   *  brackets at the same beats. A genuinely different bracket over the same
+   *  span (a 3-vs-5 polyrhythm, or two distinct patterns) has a distinct key
+   *  and is kept. */
   mergedSpansFor = computedFn((barId: string): { patternSpans: StructPatternSpan[]; tupletSpans: StructTupletSpan[] } => {
     const layers = this.layerOrder;
     if (layers.length <= 1) {
       return this.spansFor(this.keyFor(barId, layers[0]?.id ?? ''));
     }
-    const patternSpans: StructPatternSpan[] = [];
-    const tupletSpans: StructTupletSpan[] = [];
+    const tupletByKey = new Map<string, StructTupletSpan>();
+    const patternByKey = new Map<string, StructPatternSpan>();
+    const r = (n: number) => Math.round(n * 1e6) / 1e6; // tolerate FP drift in beats
     for (const layer of layers) {
       const s = this.spansFor(this.keyFor(barId, layer.id));
-      patternSpans.push(...s.patternSpans);
-      tupletSpans.push(...s.tupletSpans);
+      for (const t of s.tupletSpans) {
+        const key = `${r(t.startBeat)}:${r(t.endBeat)}:${t.count}`;
+        if (!tupletByKey.has(key)) tupletByKey.set(key, t);
+      }
+      for (const p of s.patternSpans) {
+        const key = `${p.name}:${r(p.startBeat)}:${r(p.endBeat)}`;
+        if (!patternByKey.has(key)) patternByKey.set(key, p);
+      }
     }
-    return { patternSpans, tupletSpans };
+    return { patternSpans: [...patternByKey.values()], tupletSpans: [...tupletByKey.values()] };
   }, STRUCTURAL);
 
   /** Bar geometry for one layer: index + time-signature beats (an anacrusis
