@@ -2,7 +2,7 @@ import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { ViewConfig } from 'src/editing/viewport/view_config';
 import { jotPlayer } from 'src/editing/playback/player';
-import { LayersStoreContext } from '../layers/layers_contexts';
+import { LayersStoreContext, LayersPresenterContext } from '../layers/layers_contexts';
 import type { LayersTrackView } from '../layers/layers_store';
 import { MergeLayersContext } from './mixer_contexts';
 import { LyricsTrackView } from '../lyrics/lyrics_track_view';
@@ -81,26 +81,66 @@ export const MixerView = observer(
       }
       return undefined;
     })();
-    // No-op drag wiring: the gutter drag handle is inert for now (row order +
-    // grouping is edited through the Layers panel, which writes `ordering`).
-    const noDrag = {
-      idx: -1,
-      dragFromIdx: undefined,
-      dropTargetIdx: undefined,
-      onDragStartIdx: () => {},
-      onDropTargetIdx: () => {},
-      onMoveTrack: () => {},
-      onResetDrag: () => {},
-      mixerLength: 0,
-      groupStart: false,
-      groupEnd: false,
-      onResizeGutterStart,
+    // Gutter row drag: dragging a trackhead's ≡ handle reorders rows directly on
+    // the score, writing through the same `LayersPresenter` the Layers panel
+    // uses (so the two surfaces stay in sync). Disabled in "merge layers" view,
+    // where a row aggregates a lane across layers and reordering is ill-defined.
+    const presenter = React.useContext(LayersPresenterContext);
+    const [dragFromIdx, setDragFromIdx] = React.useState<number | undefined>(undefined);
+    const [dropTargetIdx, setDropTargetIdx] = React.useState<number | undefined>(undefined);
+    const resetDrag = React.useCallback(() => {
+      setDragFromIdx(undefined);
+      setDropTargetIdx(undefined);
+    }, []);
+    // Flat list of draggable rows in render order (layer -> slot -> track), the
+    // index space the gutter drag handles speak. Each row carries its track id +
+    // owning layer so a move can be expressed against `ordering`.
+    const flatRows = merge
+      ? []
+      : layout.flatMap((l) => l.slots.flatMap((s) => s.tracks.map((t) => ({ trackId: t.id, layerId: l.id }))));
+    const idxOf = new Map(flatRows.map((r, i) => [r.trackId, i]));
+    const onMoveTrack = (from: number, to: number) => {
+      // `to` is an insertion index in [0, length]; dropping onto itself (or just
+      // after itself) is a no-op.
+      if (!presenter || from === to || from + 1 === to) return;
+      const dragged = flatRows[from];
+      if (!dragged) return;
+      if (to >= flatRows.length) {
+        // Append to the last layer.
+        const lastLayerId = flatRows[flatRows.length - 1]?.layerId;
+        if (lastLayerId) presenter.moveTrack(dragged.trackId, lastLayerId, null);
+        return;
+      }
+      // Insert immediately before the row currently at `to` (anchors are track
+      // ids, so the move is correct despite the post-removal index shift, and a
+      // cross-band drop moves the row into that anchor's layer).
+      const anchor = flatRows[to];
+      if (anchor.trackId !== dragged.trackId) {
+        presenter.moveTrack(dragged.trackId, anchor.layerId, anchor.trackId);
+      }
+    };
+    // Per-row drag props. Inert (idx -1, no-op handlers) in merge view.
+    const dragPropsFor = (trackId: string) => {
+      const idx = merge ? -1 : (idxOf.get(trackId) ?? -1);
+      return {
+        idx,
+        dragFromIdx,
+        dropTargetIdx,
+        onDragStartIdx: merge ? () => {} : setDragFromIdx,
+        onDropTargetIdx: merge ? () => {} : setDropTargetIdx,
+        onMoveTrack: merge ? () => {} : onMoveTrack,
+        onResetDrag: resetDrag,
+        mixerLength: flatRows.length,
+        groupStart: false,
+        groupEnd: false,
+        onResizeGutterStart,
+      };
     };
 
     // One row of any kind. Instrument: `layerId` set = per-track (this layer's
     // notes); merged rows pass `layerId` undefined + the layers the collapsed
-    // lane aggregates. Audio / lyrics rows render their session track. The
-    // gutter drag is a no-op for now (panel DnD writes `ordering`).
+    // lane aggregates. Audio / lyrics rows render their session track. The ≡
+    // gutter handle reorders rows via `dragPropsFor` (writing `ordering`).
     const renderTrackRow = (
       t: LayersTrackView,
       layerId: string | undefined,
@@ -121,7 +161,7 @@ export const MixerView = observer(
             onPatternClick={onPatternClick}
             onSeek={onSeek}
             layerControls={layerControls}
-            {...noDrag}
+            {...dragPropsFor(t.id)}
             inGroup={inGroup}
           />
         );
@@ -136,13 +176,19 @@ export const MixerView = observer(
             track={track}
             controls={audioTrackControls}
             onSeek={onSeek}
-            {...noDrag}
+            {...dragPropsFor(t.id)}
             inGroup={inGroup}
           />
         );
       }
       return (
-        <LyricsTrackView key={`lyrics:${t.lyricsId}`} id={t.lyricsId} onSeek={onSeek} {...noDrag} inGroup={inGroup} />
+        <LyricsTrackView
+          key={`lyrics:${t.lyricsId}`}
+          id={t.lyricsId}
+          onSeek={onSeek}
+          {...dragPropsFor(t.id)}
+          inGroup={inGroup}
+        />
       );
     };
 

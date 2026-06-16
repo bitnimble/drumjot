@@ -55,36 +55,36 @@
     color: var(--color-text);
 }
 
-.layerMenu {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 8px;
-    min-width: 180px;
-}
-
-.renameRow {
-    composes: body from '../../typography.module.css';
+/* Labelled row inside an overflow menu (the rename field). Mirrors the
+   geometry of the shared ColorPickerMenuRow (label left, control right, same
+   padding + bodyMd type) so the layer/group ⋯ menus read identically to the
+   audio-track overflow menu and the header dropdowns. */
+.menuRow {
+    composes: bodyMd from '../../typography.module.css';
     display: flex;
     align-items: center;
-    gap: 8px;
-    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 12px;
     color: var(--color-text-secondary);
 }
 
-.renameInput {
+.menuRow > span {
+    flex: 0 0 auto;
+}
+
+.menuInput {
     composes: bodyMd from '../../typography.module.css';
     flex: 1 1 auto;
     min-width: 0;
     box-sizing: border-box;
-    padding: 3px 6px;
+    padding: 4px 8px;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
     background: var(--color-bg-base);
     color: var(--color-text);
 }
 
-.renameInput:focus-visible {
+.menuInput:focus-visible {
     outline: 2px solid var(--color-accent);
     outline-offset: 0;
 }
@@ -98,101 +98,176 @@
     background: var(--color-bg-base);
 }
 
-.group {
-    margin: 2px 0 2px 12px;
-    border-left: 2px solid var(--color-border-soft);
-    padding-left: 8px;
-}
-
-.groupHeader {
-    composes: metaCaption from '../../typography.module.css';
-    color: var(--color-text-muted);
-    margin: 2px 0;
+/* Shared draggable row tile: instrument/audio/lyrics rows AND the group
+   header all use this so the whole group reads as one draggable unit, like the
+   individual rows. */
+.rowTile {
+    composes: bodyEmphasis from '../../typography.module.css';
+    position: relative;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
+    padding: 8px 10px;
+    margin-top: 6px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-base);
+    color: var(--color-text);
+    cursor: grab;
+    /* How far the drop-line extends left, past the tile edge, to reach the
+       band's edge. Loose tiles sit flush with the band content box (6px of
+       band padding); grouped tiles are indented further (see .trackInGroup). */
+    --line-reach-left: 6px;
 }
 
-.groupName {
+.rowTile:hover {
+    background: var(--color-bg-hover);
+    border-color: var(--color-border-strong);
+}
+
+.rowTile:active {
+    cursor: grabbing;
+}
+
+.track {
+    composes: rowTile;
+}
+
+.trackName {
+    flex: 1 1 auto;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-/* Per-track "start a new group" affordance. */
-.newGroupBtn {
+/* Track-kind badge: a small muted Lucide icon, right-aligned. */
+.trackKindIcon {
     flex: 0 0 auto;
-    width: 18px;
-    height: 16px;
-    padding: 0;
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--color-text-muted);
-    cursor: pointer;
-    opacity: 0.5;
-}
-
-.newGroupBtn:hover {
-    background: var(--color-accent-overlay-light);
-    color: var(--color-text);
-    opacity: 1;
-}
-
-/* A plain text action inside a dropdown menu (e.g. Ungroup). */
-.menuButton {
-    composes: bodyMd from '../../typography.module.css';
-    display: block;
-    width: 100%;
-    text-align: left;
-    padding: 4px 6px;
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--color-text);
-    cursor: pointer;
-}
-
-.menuButton:hover {
-    background: var(--color-accent-overlay-light);
-}
-
-.track {
-    composes: body from '../../typography.module.css';
+    margin-left: auto;
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 2px 4px;
-    border-radius: 4px;
-    color: var(--color-text);
-}
-
-.grip {
-    flex: 0 0 auto;
-    cursor: grab;
-    opacity: 0.4;
-}
-
-.grip:active {
-    cursor: grabbing;
+    color: var(--color-text-muted);
 }
 
 .trackDragging {
     opacity: 0.4;
 }
 
-/* Drop-before indicator: a line above the hovered track. */
-.trackDropBefore {
-    box-shadow: inset 0 2px 0 0 var(--color-accent);
+/* The group: a draggable header tile followed by its indented member tiles. */
+.group {
+    /* The header tile + indented members read as one cluster; no extra chrome
+       on the wrapper itself. */
+    margin: 0;
 }
 
+.groupHeader {
+    composes: rowTile;
+}
+
+.groupIcon {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    color: var(--color-text-muted);
+}
+
+.groupName {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* A member of a group: indented under the group header, and its drop-line
+   reaches further left to still span the whole band. */
+.trackInGroup {
+    margin-left: 16px;
+    --line-reach-left: 22px;
+}
+
+/* Move-insertion line: a 2px accent line floating in the gap above/below a
+   tile, spanning past the tile edges to the band's edges. (Not a tile border.)
+   The left reach is per-tile (looser tiles reach less); the right is uniform. */
+.dropLineBefore,
+.dropLineAfter {
+    position: absolute;
+    left: calc(-1 * var(--line-reach-left, 6px));
+    right: -6px;
+    height: 2px;
+    background: var(--color-accent);
+    border-radius: 1px;
+    pointer-events: none;
+    z-index: 3;
+}
+
+.dropLineBefore {
+    top: -4px;
+}
+
+.dropLineAfter {
+    bottom: -4px;
+}
+
+/* Group-drop indicator: the whole row highlights (centre drop creates a
+   group), distinct from the between-rows move line. */
+.trackDropInto {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -2px;
+    background: var(--color-accent-overlay-light);
+}
+
+/* Drop zones overlaying a row during a track drag: top/bottom edges reorder
+   before/after, the centre groups. Mounted only mid-drag (see view). */
+.dropZoneBefore,
+.dropZoneInto,
+.dropZoneAfter {
+    position: absolute;
+    left: 0;
+    right: 0;
+}
+
+.dropZoneBefore {
+    top: 0;
+    height: 30%;
+}
+
+.dropZoneInto {
+    top: 30%;
+    height: 40%;
+}
+
+.dropZoneAfter {
+    bottom: 0;
+    height: 30%;
+}
+
+/* End-of-layer append cue: a thin strip below the last row whose active state
+   draws the same full-width move line, just at the layer's end. Mounted only
+   mid-drag. */
+.endZone {
+    position: relative;
+    height: 10px;
+    margin-top: 2px;
+    pointer-events: none;
+}
+
+.endZoneActive::before {
+    content: '';
+    position: absolute;
+    top: 3px;
+    left: -6px;
+    right: -6px;
+    height: 2px;
+    background: var(--color-accent);
+    border-radius: 1px;
+}
+
+/* Whole-layer outline: shown when dragging a row/group to a DIFFERENT layer
+   (the whole target layer lights up, regardless of pointer position in it), and
+   when reordering whole layers via a layer header. */
 .layerDropTarget {
     outline: 2px solid var(--color-accent);
     outline-offset: -2px;
-}
-
-.trackKind {
-    composes: metaCaption from '../../typography.module.css';
-    margin-left: auto;
-    color: var(--color-text-muted);
 }
