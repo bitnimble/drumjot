@@ -61,7 +61,9 @@ def test_pooled_balance_oversamples_small_source(tmp_path, monkeypatch):
 
     root = _enst_sep_tree(tmp_path)
     monkeypatch.setenv("DRUMJOT_ENST", str(root))
-    # single source can't be drowned, but exercise the cap + balance code paths
-    args = argparse.Namespace(pool_sources="enst", pool_cap=1, pool_balance=True)
+    # single source can't be drowned, but exercise the cap + balance code paths.
+    # cap is in WINDOWS now: the empty-flac fixtures estimate 1 window each, so
+    # cap=5 windows -> drummer_1's 5 perstem clips (balance no-op alone).
+    args = argparse.Namespace(pool_sources="enst", pool_cap=5, pool_balance=True)
     tr, _va, _cache = train._pooled_specs(args)
-    assert len(tr) == 5                              # cap=1 take -> its 5 stems (balance no-op alone)
+    assert len(tr) == 5
