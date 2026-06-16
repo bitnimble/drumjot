@@ -32,7 +32,7 @@ below and record numbers in [RESULTS.md](RESULTS.md).
   not a 3080 command.
 
 All v3 defaults (high-band, aux-activity, sibling-weighting, threshold-floor,
-stitching, 10 lanes) are **ON automatically**; no flags needed to get them.
+stitching, 9 lanes) are **ON automatically**; no flags needed to get them.
 
 ### 0. Full windowing by default. REQUIRES a one-time cache re-encode
 **Scope: data.** **Default: on (was off).** Training now slices every clip (train
@@ -141,6 +141,25 @@ for the `sep_drum`/perstem trees, (c) `--dataset enst --enst-mix wet_mix`.
   as the single construction point (a future MusicFM drop-in would dispatch there).
   `cfg.encoder_fps` stays (it's just MERT's 75 now). No checkpoint/format impact
   (no MuQ checkpoint was ever trained).
+
+### 8. Remove misc-cymbal (`mc`) lane (built + unit-tested 2026-06-16)
+**Scope: train + data + infer/eval.** **Default: removed (model is now 9 lanes,
+was 10).** The `mc` lane (splash/china/ride-bell) is dropped: the per-stem
+separators don't isolate these rare add-on cymbals and they're low musical
+priority. **Ride bell folds into `rd`** (same physical cymbal): GM note 53,
+STAR/ENST class `rb`. Splash + china map to None (dropped, like the removed
+`mp`). Touches `lanes.py` (LANES/LANE_NAMES/GM-map/CONFUSABLE), all four dataset
+mappers (star/egmd/enst/rlrr), the per-stem `c`→`(rd,cr)` sets, metrics/targets/
+inference, the cym+hat sweep harness (`CYM_LANES`/`LANES_CH`), and eval_paradb.
+- **Revert:** re-add `"mc"` to LANES + LANE_NAMES; restore note maps (52/53/55
+  →mc in lanes.py; RB/SPC/CHC→mc in star; ch/spl/rb→mc in enst; china→mc in
+  rlrr); restore per-stem `c`→`(rd,cr,mc)`; restore the CONFUSABLE/metrics/
+  targets.SUSTAINED_LANES/inference.LANE_TO_PITCH/sweep `mc` entries.
+- **Interactions:** ride-bell onsets now accrue to `rd` (a few extra positives).
+  Old 10-lane checkpoints still DECODE (`mc` kept as legacy peak-pick params +
+  GM-fold; inference just drops the unmapped lane). The Phase-2 data-scale runs
+  (cap-100..3000) were measured WITH `mc`; future cym+hat runs are 5-lane
+  (hc/hp/ho/rd/cr), so `mc`'s contribution drops out of the cymbal macro.
 
 ### Open decisions (proposed, not approved, don't action without a nod)
 - Sibling λ (8/3) and `aux_act_weight` (0.5) are **untuned guesses**, sweep
