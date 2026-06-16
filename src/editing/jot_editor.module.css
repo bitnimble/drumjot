@@ -343,13 +343,21 @@
 }
 
 /* Subtle bounding box around a multi-note selection. Dashed accent outline,
-   no fill, so it frames the notes without obscuring them. Non-interactive;
-   positioned in scroll-content coords (scrolls with the score). */
+   no fill, so it frames the notes without obscuring them. Positioned in
+   scroll-content coords (scrolls with the score). Interactive: press-and-drag
+   anywhere on it to move the whole selection (it unmounts once the drag
+   starts), hence `cursor: move`. */
 .selectionFrame {
     position: absolute;
     border: 1px dashed var(--color-accent);
     border-radius: 3px;
-    pointer-events: none;
+    cursor: move;
+    /* Sit above the bars rows (z-index:1 in the shared .scrollViewport stacking
+       context) so the frame, now an interactive drag surface, actually
+       receives the press anywhere over the notes; stays below the sticky
+       gutters (z-index:6). It has no fill, so painting over the notes doesn't
+       obscure them. See docs/score-stacking.md. */
+    z-index: 5;
 }
 
 /* Modal overlay shown over the whole appContainer while a file load is in

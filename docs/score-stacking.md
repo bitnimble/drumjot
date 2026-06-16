@@ -61,6 +61,7 @@ Numbers are only comparable **within the same block** below.
 | z | element | notes |
 |---|---------|-------|
 | 1 | `.barsRow` / `.leadInOverlay` | per-row bars strip; ties break by DOM order |
+| 5 | `.selectionFrame` | multi-note bounding box; interactive drag-to-move surface, so it must sit above every `.barsRow` (and its notes) to receive the press, below the gutters. No fill, so it doesn't obscure the notes |
 | 6 | sticky gutters (`.instrumentRowGutter`, `.musicTrackGutter`, `.lyricsGutter`, `.gutterMasterGutter`, `.timelineHeaderGutter`) | pinned column |
 | 7 | `.gutterResizeHandle` | sits above its gutter |
 

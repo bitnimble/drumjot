@@ -6,6 +6,7 @@ import { Jot } from 'src/schema/dsl/dsl';
 import type { StructuralPresenter } from 'src/editing/structure/structural_presenter';
 import type { StructNote } from 'src/editing/structure/structure_store';
 import { boundingBoxOfNotes, notesById, notesInBox } from 'src/editing/score/note_geometry';
+import { useFrameDrag } from 'src/editing/score/note_drag';
 import type { TempoPresenter } from 'src/editing/playback/tempo_presenter';
 import type { PaletteStore } from 'src/editing/palette/palette_store';
 import { perfProbe } from 'src/utils/perf_probe';
@@ -1761,6 +1762,10 @@ const SelectionFrame = observer(() => {
   // would be stale, drop it for the duration. Read after the size guard so
   // only ≥2-note selections subscribe to `dragActive`.
   if (editing?.dragActive) return null;
+  // Likewise drop it while a marquee is in flight: the frame is now an
+  // interactive (pointer-events) overlay, so leaving it up once the band
+  // encloses ≥2 notes would steal the marquee's own pointermove/up.
+  if (selection?.marquee) return null;
   return <SelectionFrameBox ids={ids} />;
 });
 
@@ -1770,6 +1775,11 @@ const SelectionFrame = observer(() => {
 const SelectionFrameBox = observer(({ ids }: { ids: ReadonlySet<string> }) => {
   const structural = React.useContext(StructuralContext);
   const pxPerBeat = structural?.pxPerBeat ?? 0;
+  // Press-and-drag anywhere on the frame moves the whole selection, not just a
+  // notehead. Crossing the threshold flips `dragActive`, which unmounts the
+  // frame (see {@link SelectionFrame}) so the live preview + bars-row pointer
+  // handlers take over exactly as they do for a notehead drag.
+  const { onPointerDown, onClick } = useFrameDrag();
   const [box, setBox] = React.useState<Box | null>(null);
   React.useLayoutEffect(() => {
     setBox(boundingBoxOfNotes(ids));
@@ -1779,7 +1789,11 @@ const SelectionFrameBox = observer(({ ids }: { ids: ReadonlySet<string> }) => {
     <div
       className={styles.selectionFrame}
       data-testid="selection-frame"
-      aria-hidden="true"
+      onPointerDown={onPointerDown}
+      onClick={onClick}
+      // Suppress the container's mousedown marquee (which would clear the
+      // selection and race the frame drag), exactly as a notehead does.
+      onMouseDown={(e) => e.stopPropagation()}
       style={{ left: box.x, top: box.y, width: box.width, height: box.height }}
     />
   );
