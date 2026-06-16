@@ -167,3 +167,11 @@ blob-report/
 # `popover.screenshot({ path: 'tests/foo.png' })`). Kept local for
 # eyeballing; not a snapshot baseline.
 tests/*.png
+
+# Scratch / experiment artifacts (training sweeps, ad-hoc scripts, JSONs).
+# Kept local, never committed. `/tmp/` is the holding folder; `/tmp_*` is a
+# safety net for tools that hardcode a repo-root output path (e.g. a running
+# sweep's --out-json) so their files never surface as untracked. (Logs are
+# already covered by `*.log` above.)
+/tmp/
+/tmp_*
