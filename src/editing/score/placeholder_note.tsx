@@ -16,12 +16,10 @@ import styles from './score.module.css';
 export const PlaceholderNoteView = observer(function PlaceholderNoteView({
   rowLane,
   color,
-  trackHeight,
   noteDiameter,
 }: {
   rowLane: string;
   color: string;
-  trackHeight: number;
   noteDiameter: number;
 }) {
   const editing = React.useContext(EditingStoreContext);
@@ -34,7 +32,11 @@ export const PlaceholderNoteView = observer(function PlaceholderNoteView({
       style={
         {
           ['--placeholder-beat' as string]: placeholder.absBeat,
-          top: trackHeight / 2,
+          // Centre on the bars row (matching the real glyph, whose single lane
+          // is flex-centred in the taller row) rather than `trackHeight / 2`
+          // from the row top, which sits above centre when the gutter makes the
+          // row taller than one lane.
+          top: '50%',
           width: noteDiameter,
           height: noteDiameter,
           color,
@@ -55,12 +57,10 @@ export const PlaceholderNoteView = observer(function PlaceholderNoteView({
 export const DragPreviewView = observer(function DragPreviewView({
   rowLane,
   color,
-  trackHeight,
   noteDiameter,
 }: {
   rowLane: string;
   color: string;
-  trackHeight: number;
   noteDiameter: number;
 }) {
   const editing = React.useContext(EditingStoreContext);
@@ -77,7 +77,9 @@ export const DragPreviewView = observer(function DragPreviewView({
           style={
             {
               ['--placeholder-beat' as string]: p.absBeat,
-              top: trackHeight / 2,
+              // Centre on the bars row, matching the resting glyph (see
+              // PlaceholderNoteView); `trackHeight / 2` sat above centre.
+              top: '50%',
               width: noteDiameter,
               height: noteDiameter,
               color,
