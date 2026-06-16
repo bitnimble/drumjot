@@ -19,12 +19,14 @@ def test_hat_subclasses():
 def test_ride_and_crash_split():
     assert star.lane_for_star_class("RD") == "rd"
     assert star.lane_for_star_class("RC") == "rd"  # defensive alias for ride
+    assert star.lane_for_star_class("RB") == "rd"  # ride bell folds into ride
     assert star.lane_for_star_class("CRC") == "cr"
 
 
-def test_misc_cymbals():
-    for c in ("SPC", "CHC", "RB"):  # splash, china, ride bell
-        assert star.lane_for_star_class(c) == "mc"
+def test_misc_cymbals_dropped():
+    # mc lane removed: splash + china are out-of-kit now (ride bell -> rd above)
+    for c in ("SPC", "CHC"):
+        assert star.lane_for_star_class(c) is None
 
 
 def test_misc_percussion_dropped():

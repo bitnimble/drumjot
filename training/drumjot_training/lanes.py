@@ -1,9 +1,14 @@
 """Drum lane vocabulary for the onset-detection training set.
 
-10-lane set: kick, snare, side-stick, toms (merged), the three hi-hat
-articulations (closed / pedal / open), ride, crash, and misc cymbals
-(splash + china + ride-bell). General-MIDI percussion notes fold into these
-lanes; anything outside the kit maps to None and is dropped by callers.
+9-lane set: kick, snare, side-stick, toms (merged), the three hi-hat
+articulations (closed / pedal / open), ride, and crash. General-MIDI
+percussion notes fold into these lanes; anything outside the kit maps to None
+and is dropped by callers.
+
+`mc` (misc cymbals: splash / china / ride-bell) was REMOVED (2026-06): the
+per-stem separators don't isolate these rare add-on cymbals and they're low
+musical priority. Ride-bell is physically part of the ride cymbal, so it now
+folds into `rd`; splash + china map to None (dropped, like misc percussion).
 
 `mp` (misc percussion: cowbell / clap / tambourine) was REMOVED (2026-06): it
 has no per-instrument stem, scored ~noise on val, and was the top
@@ -18,7 +23,7 @@ Jot-load time (integration detail, not handled here).
 from __future__ import annotations
 
 LANES: tuple[str, ...] = (
-    "k", "s", "ss", "t", "hc", "hp", "ho", "rd", "cr", "mc",
+    "k", "s", "ss", "t", "hc", "hp", "ho", "rd", "cr",
 )
 
 LANE_NAMES: dict[str, str] = {
@@ -31,11 +36,12 @@ LANE_NAMES: dict[str, str] = {
     "ho": "open hi-hat",
     "rd": "ride",
     "cr": "crash",
-    "mc": "misc cymbals (splash/china/ride-bell)",
 }
 
-# General-MIDI percussion note -> lane. Clap (39), tambourine (54) and cowbell
-# (56) are deliberately unmapped (the removed `mp` lane).
+# General-MIDI percussion note -> lane. Clap (39), tambourine (54), cowbell
+# (56) are deliberately unmapped (the removed `mp` lane); china (52) and
+# splash (55) are unmapped (the removed `mc` lane). Ride bell (53) folds into
+# `rd` since it's the same physical cymbal as the ride.
 _GM_NOTE_TO_LANE: dict[int, str] = {
     35: "k", 36: "k",
     37: "ss",                                  # side stick
@@ -45,8 +51,7 @@ _GM_NOTE_TO_LANE: dict[int, str] = {
     44: "hp",                                  # pedal hi-hat
     46: "ho",                                  # open hi-hat
     49: "cr", 57: "cr",                        # crash 1 / 2
-    51: "rd", 59: "rd",                        # ride 1 / 2
-    52: "mc", 53: "mc", 55: "mc",              # china / ride bell / splash
+    51: "rd", 59: "rd", 53: "rd",              # ride 1 / 2 / bell
 }
 
 
@@ -68,12 +73,11 @@ CONFUSABLE: dict[str, tuple[str, ...]] = {
     "s": ("ss",),
     "ss": ("s", "k"),
     "t": ("k",),
-    "hc": ("ho", "hp", "cr", "rd", "mc"),
+    "hc": ("ho", "hp", "cr", "rd"),
     "hp": ("hc", "ho", "s", "k"),                # hp fired heavily on snare/kick stems
-    "ho": ("hc", "hp", "cr", "rd", "mc"),
-    "rd": ("hc", "ho", "hp", "cr", "mc"),        # hat->ride: the #1 measured leak
-    "cr": ("rd", "mc", "ho", "hc"),
-    "mc": ("cr", "rd", "hc", "ho"),
+    "ho": ("hc", "hp", "cr", "rd"),
+    "rd": ("hc", "ho", "hp", "cr"),              # hat->ride: the #1 measured leak
+    "cr": ("rd", "ho", "hc"),
 }
 
 

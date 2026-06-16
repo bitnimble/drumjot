@@ -53,8 +53,9 @@ _ENST_TO_LANE: dict[str, str] = {
     "lt": "t", "mt": "t", "lmt": "t", "lft": "t",  # toms
     "ltr": "t", "mtr": "t", "lftr": "t",          # tom rim hits -> tom
     "rc": "rd",                                   # ride cymbal
+    "rb": "rd",                                   # ride bell folds into ride
     "cr": "cr", "c": "cr",                         # crash; bare/other cymbal -> crash
-    "ch": "mc", "spl": "mc", "rb": "mc",           # china / splash / ride-bell -> misc cymbal
+    # china (ch) / splash (spl) dropped: removed `mc` lane
 }
 
 _TRAIL = "0123456789-_ "
@@ -160,12 +161,12 @@ def for_split(
 # (ignore cross-instrument bleed). Identical routing to STAR
 # (star.PERSTEM_TO_LANES) and the per-instrument eval (eval_paradb.STEM_TO_LANES):
 # side stick rides with the snare stem; the three hats share the hi-hat stem;
-# ride/crash/misc-cymbal share the cymbal stem.
+# ride/crash share the cymbal stem.
 PERSTEM_TO_LANES: dict[str, tuple[str, ...]] = {
     "k": ("k",),
     "s": ("s", "ss"),
     "h": ("hc", "hp", "ho"),
-    "c": ("rd", "cr", "mc"),
+    "c": ("rd", "cr"),
     "t": ("t",),
 }
 

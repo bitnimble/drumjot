@@ -78,12 +78,12 @@ def take_duration(clips: Sequence[EgmdClip], max_seconds: float) -> list[EgmdCli
 # trained with ONLY its own lanes labelled so the model learns to ignore
 # cross-instrument bleed. Identical routing to STAR/ENST and the per-instrument
 # eval (eval_paradb.STEM_TO_LANES): side stick rides the snare stem, the three
-# hats share the hi-hat stem, ride/crash/misc-cymbal share the cymbal stem.
+# hats share the hi-hat stem, ride/crash share the cymbal stem.
 PERSTEM_TO_LANES: dict[str, tuple[str, ...]] = {
     "k": ("k",),
     "s": ("s", "ss"),
     "h": ("hc", "hp", "ho"),
-    "c": ("rd", "cr", "mc"),
+    "c": ("rd", "cr"),
     "t": ("t",),
 }
 

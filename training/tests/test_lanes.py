@@ -2,7 +2,7 @@ import drumjot_training.lanes as lanes
 
 
 def test_lanes_are_the_expanded_set():
-    assert lanes.LANES == ("k", "s", "ss", "t", "hc", "hp", "ho", "rd", "cr", "mc")
+    assert lanes.LANES == ("k", "s", "ss", "t", "hc", "hp", "ho", "rd", "cr")
 
 
 def test_kick():
@@ -31,15 +31,18 @@ def test_hat_subclasses_split():
 
 
 def test_ride_and_crash_split():
-    for n in (51, 59):
-        assert lanes.lane_for_gm_note(n) == "rd"  # ride 1/2
+    for n in (51, 59, 53):
+        assert lanes.lane_for_gm_note(n) == "rd"  # ride 1 / 2 / bell
     for n in (49, 57):
         assert lanes.lane_for_gm_note(n) == "cr"  # crash 1/2
 
 
-def test_misc_cymbals_folded():
-    for n in (52, 53, 55):  # china, ride bell, splash
-        assert lanes.lane_for_gm_note(n) == "mc"
+def test_misc_cymbals_dropped_ride_bell_folds_to_ride():
+    # mc lane removed: ride bell (53) folds into ride; china (52) + splash (55)
+    # are out-of-kit now
+    assert lanes.lane_for_gm_note(53) == "rd"
+    for n in (52, 55):
+        assert lanes.lane_for_gm_note(n) is None
 
 
 def test_misc_percussion_dropped():

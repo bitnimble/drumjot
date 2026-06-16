@@ -26,7 +26,7 @@ def test_all_lanes_present_even_when_empty():
     assert set(out) == set(lanes.LANES)  # output lanes only
     assert out["t"] == []
     assert out["hc"] == []
-    assert out["mc"] == []
+    assert "mc" not in out  # mc lane removed
     assert "x" not in out
 
 

@@ -9,9 +9,10 @@ Two source-of-truth quirks (see src/rlrr/drums.ts):
     `BP_HiHat_C`). The only disambiguator is the optional `event.midi` extension
     (42=closed, 46=open, 44=pedal); absent -> assume closed.
   - There is no side-stick class in rlrr, so the `ss` lane stays empty.
-China -> misc-cymbal (`mc`), all toms -> `t`; cowbell/tambourine are dropped
-(the `mp` lane was removed), as is tuned/aux percussion (timpani, triangle,
-bongo, mallets, gong) outside the drum-kit vocab.
+All toms -> `t`; china/splash + cowbell/tambourine are dropped (the `mc` and
+`mp` lanes were removed), as is tuned/aux percussion (timpani, triangle,
+bongo, mallets, gong) outside the drum-kit vocab. Ride bell, where present,
+folds into `rd`.
 """
 from __future__ import annotations
 
@@ -26,7 +27,7 @@ _CLASS_TO_LANE: dict[str, str] = {
     "BP_Snare_C": "s",
     "BP_HiHat_C": "hc",  # refined by event.midi (46->ho, 44->hp)
     "BP_Crash13_C": "cr", "BP_Crash15_C": "cr", "BP_Crash17_C": "cr",
-    "BP_China15_C": "mc",
+    # BP_China15_C deliberately unmapped: the `mc` lane was removed (china drops)
     "BP_FloorTom_C": "t", "BP_Tom1_C": "t", "BP_Tom2_C": "t",
     "BP_Ride17_C": "rd", "BP_Ride20_C": "rd",
     # Tambourine/Cowbell deliberately unmapped: the `mp` lane was removed
@@ -131,22 +132,22 @@ def audio_tracks(rlrr: object) -> list[str]:
 
 
 # Lanes our model splits but a hand chart often won't: hi-hat articulations,
-# and ride / crash / misc-cymbal. Each group has a parent label used when the
-# chart doesn't make the distinction.
+# and ride / crash. Each group has a parent label used when the chart doesn't
+# make the distinction.
 _GROUPS: dict[str, tuple[str, ...]] = {
     "h": ("hc", "hp", "ho"),
-    "cym": ("rd", "cr", "mc"),
+    "cym": ("rd", "cr"),
 }
 _GROUPED = {s for subs in _GROUPS.values() for s in subs}
 
 # Stable order for aggregating/printing comparison labels (parents + subs).
-REPORT_ORDER = ("k", "s", "ss", "t", "h", "hc", "hp", "ho", "cym", "rd", "cr", "mc")
+REPORT_ORDER = ("k", "s", "ss", "t", "h", "hc", "hp", "ho", "cym", "rd", "cr")
 
 
 def has_lane_track(rlrr: object, lane: str) -> bool:
     """True if the chart's kit (`instruments[]`) defines a dedicated instrument
-    mapping to `lane`. Used to decide whether to score the sparse aux-percussion
-    lane (mc): only if the map actually charts that percussion."""
+    mapping to `lane`. Used to decide whether to score a sparse aux lane: only
+    if the map actually charts that instrument."""
     for inst in load(rlrr).get("instruments", []):
         cls = inst.get("class")
         if cls and _CLASS_TO_LANE.get(cls) == lane:

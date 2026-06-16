@@ -19,10 +19,11 @@ def test_restricted_onsets_keeps_only_stem_lanes(tmp_path):
     ann.write_text(
         "0.10 bd\n0.20 sd\n0.25 cs\n0.30 cr\n0.40 rc\n0.50 ch\n0.60 cb\n"
     )
-    # cymbals stem -> only ride/crash/misc-cymbal kept; everything else emptied
+    # cymbals stem -> only ride/crash kept; china (ch) dropped, everything else emptied
     o = enst.restricted_onsets(ann, "c")
     assert set(o) == set(LANES)
-    assert o["cr"] == [0.30] and o["rd"] == [0.40] and o["mc"] == [0.50]
+    assert o["cr"] == [0.30] and o["rd"] == [0.40]
+    assert "mc" not in o  # china dropped (mc lane removed)
     assert o["k"] == [] and o["s"] == []
     # snare stem -> snare + side stick (cs) ride along, nothing else
     os_ = enst.restricted_onsets(ann, "s")

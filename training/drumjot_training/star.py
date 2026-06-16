@@ -32,8 +32,9 @@ _STAR_TO_LANE: dict[str, str] = {
     "PHH": "hp",
     "OHH": "ho",
     "RD": "rd", "RC": "rd",  # RC: defensive ride alias (some kit CSVs use it)
+    "RB": "rd",              # ride bell folds into ride (same physical cymbal)
     "CRC": "cr",
-    "SPC": "mc", "CHC": "mc", "RB": "mc",  # splash / china / ride bell
+    # SPC (splash) / CHC (china) dropped: removed `mc` lane, no per-stem target
 }
 
 def lane_for_star_class(cls: str) -> str | None:
@@ -110,7 +111,7 @@ PERSTEM_TO_LANES: dict[str, tuple[str, ...]] = {
     "k": ("k",),
     "s": ("s", "ss"),
     "h": ("hc", "hp", "ho"),
-    "c": ("rd", "cr", "mc"),
+    "c": ("rd", "cr"),
     "t": ("t",),
 }
 

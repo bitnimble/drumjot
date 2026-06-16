@@ -54,12 +54,12 @@ SEP_SR = 44100  # separate at full band so cymbal/hi-hat content survives
 # stems_per pitch -> the model lanes that legitimately belong to that isolated
 # stem. Onsets the model fires in any OTHER lane when fed this stem are
 # cross-instrument leakage (hallucination): discarded + counted. (MDX23C merges
-# ride+crash+china into one "cymbals" stem -> c; misc-perc has no stem.)
+# ride+crash into one "cymbals" stem -> c; misc-perc has no stem.)
 STEM_TO_LANES = {
     "k": ("k",),
     "s": ("s", "ss"),
     "h": ("hc", "hp", "ho"),
-    "c": ("rd", "cr", "mc"),
+    "c": ("rd", "cr"),
     "t": ("t",),
 }
 

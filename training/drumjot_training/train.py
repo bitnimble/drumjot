@@ -1042,9 +1042,9 @@ def _pooled_specs(args) -> tuple[list, list, Path]:
     Class coverage: absent lanes are treated as valid negatives. That is exact
     for STAR (ADT) and E-GMD (GM MIDI), whose audio is derived FROM the labels so
     nothing is unlabelled; ENST is hand-labelled real audio covering every lane
-    except pedal-hat (`hp`, 0 onsets) and misc-cymbal (`mc`, ~0), both supplied
-    richly by STAR+E-GMD, so ENST's negatives there are a minor, mostly-correct
-    signal. (If `hp`/`mc` regress, add per-source lane masking for ENST.)
+    except pedal-hat (`hp`, 0 onsets), supplied richly by STAR+E-GMD, so ENST's
+    negatives there are a minor, mostly-correct signal. (If `hp` regresses, add
+    per-source lane masking for ENST.)
 
     `DRUMJOT_STAR/ENST/EGMD` must point at the sep trees (star_balanced_sep,
     enst-sep, egmd-sep). `--pool-sources` selects which; `--pool-cap` caps each

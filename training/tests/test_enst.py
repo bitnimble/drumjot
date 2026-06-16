@@ -10,8 +10,9 @@ def test_label_normalization_and_mapping():
     assert f("cs") == "ss"                             # cross stick -> side stick
     assert f("chh") == "hc" and f("ohh") == "ho"
     assert f("rc") == "rd" and f("rc2") == "rd"        # ride + numbered variant
+    assert f("rb") == "rd"                             # ride bell folds into ride
     assert f("cr") == "cr" and f("c") == "cr" and f("c3") == "cr"
-    assert f("ch") == "mc" and f("spl") == "mc"        # china / splash -> misc cymbal
+    assert f("ch") is None and f("spl") is None         # china / splash dropped (mc removed)
     assert f("cb") is None                             # cowbell dropped (mp removed)
     assert f("lt") == "t" and f("mt") == "t" and f("lft") == "t" and f("ltr") == "t"
     assert f("sd-") == "s"                             # rim/ghost punctuation stripped

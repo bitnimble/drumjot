@@ -48,7 +48,7 @@ def onsets_to_target(
 
 # Lanes whose identity lives in their SUSTAIN, not just the attack: the
 # auxiliary frame-activity objective is supervised for these only.
-SUSTAINED_LANES: tuple[str, ...] = ("ho", "rd", "cr", "mc")
+SUSTAINED_LANES: tuple[str, ...] = ("ho", "rd", "cr")
 
 
 def ring_spans(

@@ -16,12 +16,12 @@ def test_perstem_to_lanes_covers_all_lanes_no_overlap():
 
 def test_restricted_onsets_keeps_only_stem_lanes(monkeypatch):
     full = {ln: [] for ln in LANES}
-    full.update({"k": [0.1], "s": [0.2], "ss": [0.25], "rd": [0.4], "cr": [0.3], "mc": [0.5], "t": [0.6]})
+    full.update({"k": [0.1], "s": [0.2], "ss": [0.25], "rd": [0.4], "cr": [0.3], "t": [0.6]})
     monkeypatch.setattr("drumjot_training.midi_labels.onsets_from_path", lambda _p: full)
-    # cymbal stem -> ride/crash/misc-cymbal only
+    # cymbal stem -> ride/crash only
     o = egmd.restricted_onsets("ignored.midi", "c")
     assert set(o) == set(LANES)
-    assert o["rd"] == [0.4] and o["cr"] == [0.3] and o["mc"] == [0.5]
+    assert o["rd"] == [0.4] and o["cr"] == [0.3]
     assert o["k"] == [] and o["s"] == [] and o["t"] == []
     # snare stem -> snare + side stick
     os_ = egmd.restricted_onsets("ignored.midi", "s")

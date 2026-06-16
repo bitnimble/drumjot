@@ -61,9 +61,9 @@ from drumjot_training.train import (  # noqa: E402
     tune_thresholds,
 )
 
-CYM_LANES = {"rd", "cr", "mc"}
+CYM_LANES = {"rd", "cr"}
 HAT_LANES = {"hc", "hp", "ho"}
-LANES_CH: tuple[str, ...] = ("hc", "hp", "ho", "rd", "cr", "mc")  # report order
+LANES_CH: tuple[str, ...] = ("hc", "hp", "ho", "rd", "cr")  # report order
 
 
 def _pitch_to_stem(p2l) -> dict:
@@ -314,7 +314,7 @@ def main():
         log(row)
     cym_sum = {H: sum(np.nanmean([results[f"h{H}_s{s}"]["f1"][ln] for s in seeds]) for ln in CYM_LANES)
                for H in hiddens}
-    log(f"\ncymbal-sum (rd+cr+mc) by hidden: {dict((H, round(v, 3)) for H, v in cym_sum.items())}")
+    log(f"\ncymbal-sum (rd+cr) by hidden: {dict((H, round(v, 3)) for H, v in cym_sum.items())}")
     log(f"\nresults -> {args.out_json}")
 
 
