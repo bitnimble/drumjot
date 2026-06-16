@@ -1,5 +1,6 @@
 import { comparer, makeAutoObservable, reaction } from 'mobx';
 import { jotPlayer } from 'src/editing/playback/player';
+import { jotToEvents } from 'src/editing/playback/events';
 import { xToTime } from 'src/editing/playback/timeline';
 import { JotEditorStore } from '../jot_editor_store';
 import { PlaybackStore } from './playback_store';
@@ -62,6 +63,32 @@ export class PlaybackPresenter {
     reaction(() => this.playback.drumMasterAudible, () => jotPlayer.applyDrumBusGain(), {
       fireImmediately: true,
     });
+
+    // Live re-schedule on note edits. The engine snapshots its drum schedule
+    // at `play()` (and on seek / speed / filter change); without this, moving,
+    // inserting, or deleting a note mid-playback wouldn't be heard until the
+    // next stop+start. Tracking the derived event list (under structural
+    // equality, so it fires on a real change in note time/pitch/velocity, not
+    // on every observable touch) and rebuilding the schedule mirrors the
+    // beat-offset reschedule. Like the filter reactions above this MUST be a
+    // `reaction`, not an `autorun`: the effect reads + rewrites player state
+    // (`refreshDrumSchedule` reads `state` / `currentTime`), so an autorun
+    // would depend on what it writes. Gated on `state`: while idle the tracker
+    // returns null without walking the jot, so an edit off-transport (the
+    // common case, e.g. the insert-note latency path) costs nothing here; it
+    // only rebuilds while playing or paused, when a reschedule is actually due.
+    reaction(
+      () => {
+        if (jotPlayer.state !== 'playing' && jotPlayer.state !== 'paused') return null;
+        const { structural } = this.jotEditorStore;
+        return structural ? jotToEvents(structural) : null;
+      },
+      () => {
+        const { structural } = this.jotEditorStore;
+        if (structural) jotPlayer.refreshDrumSchedule(structural);
+      },
+      { equals: comparer.structural }
+    );
   }
 
   setAutoFollowOnPlay(on: boolean) {

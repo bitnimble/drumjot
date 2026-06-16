@@ -291,6 +291,7 @@ export const InstrumentTrackView = observer(
           drop.isDropIndicatorBelow && styles.mixerDropIndicatorBelow
         )}
         data-testid={`instrument-track-${lane}`}
+        data-lane={lane}
         data-layer-id={layerId}
         onDragOver={drop.onDragOver}
         onDragLeave={drop.onDragLeave}

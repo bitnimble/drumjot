@@ -140,6 +140,33 @@ test('dragging a multi-note selection moves the whole group, preserving spacing'
   await expect(selectionFrame(page)).toBeVisible();
 });
 
+test('pressing the selection frame (not a notehead) moves the whole group', async ({ page }) => {
+  const a = await noteGeom(page, 'h', 1);
+  const b = await noteGeom(page, 'h', 3);
+  const gap = b.left - a.left;
+
+  await laneNotes(page, 'h').nth(1).click();
+  await laneNotes(page, 'h').nth(3).click({ modifiers: ['Control'] });
+  await expect(selectedNotes(page)).toHaveCount(2);
+  await expect(selectionFrame(page)).toBeVisible();
+
+  // Grab the FRAME at a point between the two selected notes, over the
+  // intervening (unselected) hi-hat that the frame overlays. Without the frame
+  // intercepting, this press would re-select that single note; instead it drags
+  // the whole group.
+  const mid = { x: (a.x + b.x) / 2, y: a.y };
+  await dragMouse(page, mid, { x: mid.x + 60, y: mid.y });
+
+  // Still the same two-note selection (the in-between note was never selected).
+  await expect(selectedNotes(page)).toHaveCount(2);
+  const aLeft = (await noteLeft(page, a.id))!;
+  const bLeft = (await noteLeft(page, b.id))!;
+  // Both shifted right by the same amount, spacing preserved.
+  expect(aLeft - a.left).toBeGreaterThan(30);
+  expect(bLeft - b.left).toBeGreaterThan(30);
+  expect(Math.abs(bLeft - aLeft - gap)).toBeLessThan(3);
+});
+
 test('a multi-note drag previews every note on its target track (frame hidden)', async ({ page }) => {
   // Two hi-hats; drag the group onto the snare row. Both shift by the same one
   // row, so both previews land on the snare lane.

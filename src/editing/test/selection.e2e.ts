@@ -42,8 +42,10 @@ test('ctrl-click adds and removes individual notes', async ({ page }) => {
   // The frame appears once two notes are selected.
   await expect(selectionFrame(page)).toBeVisible();
 
-  // Ctrl-clicking the second note again removes just it.
-  await laneNotes(page, 'h').nth(3).click({ modifiers: ['Control'] });
+  // Ctrl-clicking the second note again removes just it. The note now sits
+  // under the (interactive) selection frame, which forwards modifier-clicks to
+  // the note beneath; `force` clicks through the overlay the way a user does.
+  await laneNotes(page, 'h').nth(3).click({ modifiers: ['Control'], force: true });
   await expect(selectedNotes(page)).toHaveCount(1);
   await expect(laneNotes(page, 'h').nth(0)).toHaveAttribute('data-selected', 'true');
   await expect(selectionFrame(page)).toHaveCount(0);
@@ -65,7 +67,9 @@ test('re-shift-click recomputes the range from the same anchor', async ({ page }
   await laneNotes(page, 'h').nth(0).click();
   await laneNotes(page, 'h').nth(5).click({ modifiers: ['Shift'] });
   const wide = await selectedNotes(page).count();
-  await laneNotes(page, 'h').nth(2).click({ modifiers: ['Shift'] });
+  // The narrower endpoint is inside the current frame, which forwards
+  // modifier-clicks to the note beneath; `force` clicks through the overlay.
+  await laneNotes(page, 'h').nth(2).click({ modifiers: ['Shift'], force: true });
   const narrow = await selectedNotes(page).count();
   expect(narrow).toBeLessThan(wide);
 });

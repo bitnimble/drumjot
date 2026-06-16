@@ -19,7 +19,11 @@ type DragMoveCtx = {
   anchor: StructNote;
   /** Pointer x at drag start; horizontal motion is a pure delta from here. */
   startClientX: number;
-  anchorOrigLane: string;
+  /** Lane the vertical (cross-lane) shift is measured FROM. A notehead drag
+   *  seeds this with the grabbed note's lane; a frame drag leaves it undefined
+   *  so {@link updateDragMove} adopts the first lane the cursor reports (the row
+   *  under the press), keeping the start shift at zero either way. */
+  startLane: string | undefined;
   /** Snaps a raw beat delta to the grid (identity when snapping is off). */
   snap: (rawDeltaBeat: number) => number;
   /** Timeline length in beats, the upper clamp for a dragged position. */
@@ -234,7 +238,7 @@ export class EditingPresenter {
    * cursor delta and target lane, no DOM measured. Sets the initial preview
    * (notes at rest) and flips `dragActive` so the real glyphs hide.
    */
-  beginDragMove(anchor: StructNote, startClientX: number): void {
+  beginDragMove(anchor: StructNote, startClientX: number, startLane?: string): void {
     const jot = this.jotEditorStore.jot;
     const layers = this.jotEditorStore.structural?.musicalLayers;
     if (!jot || !layers) return;
@@ -258,7 +262,7 @@ export class EditingPresenter {
     this.dragCtx = {
       anchor,
       startClientX,
-      anchorOrigLane: anchor.lane,
+      startLane,
       snap: this.snapDeltaFn(anchor),
       total: layout.total,
       leadInBeats: this.jotEditorStore.structural?.barsForLane(anchor.lane).leadInBarsBeats ?? 0,
@@ -280,6 +284,10 @@ export class EditingPresenter {
   updateDragMove(targetLane: string, clientX: number, laneOrder: readonly string[]): void {
     const ctx = this.dragCtx;
     if (!ctx) return;
+    // A frame drag seeds `startLane` lazily from the first reported row, so the
+    // cross-lane shift is measured from wherever inside the frame the user
+    // grabbed (zero at the start) rather than the snap anchor's lane.
+    if (ctx.startLane === undefined) ctx.startLane = targetLane;
     ctx.lastClientX = clientX;
     ctx.lastTargetLane = targetLane;
     ctx.laneOrder = laneOrder;
@@ -296,7 +304,7 @@ export class EditingPresenter {
     const rawDelta = px > 0 ? (ctx.lastClientX - ctx.startClientX) / px : 0;
     const snapped = ctx.snap(rawDelta);
     const order = ctx.laneOrder;
-    const fromIdx = order.indexOf(ctx.anchorOrigLane);
+    const fromIdx = order.indexOf(ctx.startLane ?? ctx.anchor.lane);
     const toIdx = order.indexOf(ctx.lastTargetLane);
     const rowDelta = fromIdx >= 0 && toIdx >= 0 ? toIdx - fromIdx : 0;
     this.editingStore.dragPreview = ctx.notes.map((n) => {
@@ -319,7 +327,7 @@ export class EditingPresenter {
     if (!ctx) return;
     const px = this.jotEditorStore.structural?.pxPerBeat ?? 0;
     const rawDelta = px > 0 ? (ctx.lastClientX - ctx.startClientX) / px : 0;
-    const laneMap = buildLaneMap(ctx.laneOrder, ctx.anchorOrigLane, ctx.lastTargetLane);
+    const laneMap = buildLaneMap(ctx.laneOrder, ctx.startLane ?? ctx.anchor.lane, ctx.lastTargetLane);
     this.moveSelection(ctx.anchor, rawDelta, laneMap);
   }
 
