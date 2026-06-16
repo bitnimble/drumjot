@@ -637,10 +637,61 @@ export class JotPlayer {
     }
   }
 
+  // --- TEST-ONLY output capture ----------------------------------------
+  // Used by `audio_capture.e2e.ts` to verify that playback produces real
+  // audio and that mute/solo actually change the level. We tap `pageGain`
+  // (the final node feeding `ctx.destination`) with an AnalyserNode, which is
+  // a pure observer: it's connected FROM the master but not onward to the
+  // destination, so it reads the exact signal the user hears without altering
+  // it. Capture is a time series of {AudioContext time, windowed RMS}.
+  private captureNode: AnalyserNode | undefined;
+  private captureSamples: { t: number; rms: number }[] = [];
+  private captureTimer = 0;
+
+  /**
+   * Start recording the page-master output as a windowed-RMS time series.
+   * Returns false if there's no AudioContext yet (call after `play()` has
+   * begun). Idempotent stop via {@link stopOutputCapture}.
+   */
+  startOutputCapture(): boolean {
+    const ctx = this.ctx;
+    const master = this.pageGain;
+    if (!ctx || !master) return false;
+    this.stopOutputCapture();
+    const node = ctx.createAnalyser();
+    node.fftSize = 2048;
+    master.connect(node);
+    this.captureNode = node;
+    this.captureSamples = [];
+    const buf = new Float32Array(node.fftSize);
+    this.captureTimer = self.setInterval(() => {
+      node.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+      this.captureSamples.push({ t: ctx.currentTime, rms: Math.sqrt(sum / buf.length) });
+    }, 10);
+    return true;
+  }
+
+  /** Stop capture and return the recorded {t, rms} series. */
+  stopOutputCapture(): { t: number; rms: number }[] {
+    if (this.captureTimer) self.clearInterval(this.captureTimer);
+    this.captureTimer = 0;
+    if (this.captureNode) {
+      // Remove the `pageGain → captureNode` edge. It's an OUTGOING edge of
+      // `pageGain` (the analyser has no onward connection of its own), so
+      // `captureNode.disconnect()` wouldn't touch it, disconnect from the
+      // source, or each capture cycle leaks an analyser still wired to master.
+      this.pageGain?.disconnect(this.captureNode);
+      this.captureNode = undefined;
+    }
+    return this.captureSamples;
+  }
+
   /**
    * Move the whole-page master fader. Takes effect instantly (it's a
    * single GainNode at the end of the graph) and persists across plays;
-   * works before any audio exists — the value is stored and applied when
+   * works before any audio exists, the value is stored and applied when
    * the graph is built.
    */
   setMasterVolume(v: number): void {
