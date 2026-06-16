@@ -64,7 +64,7 @@ test('the real glyph hides and a preview stands in for it while dragging', async
   await expect(dragPreviews(page, 'h')).toHaveCount(0);
 });
 
-test('the drag preview is vertically centred on the row (no down-shift)', async ({ page }) => {
+test('the drag preview sits exactly where the note rests (no vertical shift)', async ({ page }) => {
   const src = await noteGeom(page, 'h', 1);
   const hRowCentre = await laneRowCentreY(page, 'h');
   await page.mouse.move(src.x, src.y);
@@ -73,9 +73,13 @@ test('the drag preview is vertically centred on the row (no down-shift)', async 
   const p = await previewGeom(page, 'h');
   await page.mouse.up();
   expect(p).not.toBeNull();
-  // The preview sits at the row's vertical centre, not dropped by half its
-  // height (the regression the old transform-based drag had).
-  expect(Math.abs(p!.y - hRowCentre)).toBeLessThan(8);
+  // The preview must land on the SAME vertical position the real glyph rests
+  // at, so the note doesn't jump on grab/release. Both the resting note and the
+  // row's vertical centre are that position (the bars row centres its single
+  // lane), so the preview must match them tightly, not merely sit within half
+  // a notehead of the row centre (the old loose bound let a ~7px up-shift pass).
+  expect(Math.abs(p!.y - src.y)).toBeLessThan(1.5);
+  expect(Math.abs(p!.y - hRowCentre)).toBeLessThan(1.5);
 });
 
 test('the drag preview follows the cursor onto each track it crosses', async ({ page }) => {

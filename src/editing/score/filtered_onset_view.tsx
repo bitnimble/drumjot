@@ -24,7 +24,6 @@ export const FilteredOnsetView = observer(({
   entry,
   beatOffset,
   color,
-  trackHeight,
 }: {
   entry: NoteProvenanceEntry;
   /** Total beat offset from the start of the bars row (leadInBeats +
@@ -34,7 +33,6 @@ export const FilteredOnsetView = observer(({
   /** Lane lane colour. Mirrors what the real notes use; falls back to
    * a neutral grey for filtered-only lanes with no rendered notes. */
   color: string;
-  trackHeight: number;
 }) => {
   const provenance = React.useContext(ProvenanceStoreContext);
   const presenter = React.useContext(ProvenancePresenterContext);
@@ -81,7 +79,10 @@ export const FilteredOnsetView = observer(({
       style={
         {
           ['--filtered-beat' as string]: beatOffset,
-          top: trackHeight / 2,
+          // Centre on the bars row, matching the real glyph (whose single lane
+          // is flex-centred in the taller row); `trackHeight / 2` from the row
+          // top sat above centre.
+          top: '50%',
           color,
         } as React.CSSProperties
       }

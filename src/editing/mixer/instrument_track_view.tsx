@@ -148,7 +148,6 @@ export const InstrumentTrackView = observer(
     // OTHER bar/lane changed; the per-lane `barsForLane(lane)` read below is
     // the sole structural dependency, and it's granular per (bar, lane).
     if (!structural || !structural.hasContent) return null;
-    const trackHeight = config.trackHeight as number;
     // Per-lane derived data (bars, layer-wide totals, cumulative
     // bar-start offsets, label color/instrument name); all memoised on
     // the jot via `barsForLane(lane)`, so each row reads its slice
@@ -419,20 +418,17 @@ export const InstrumentTrackView = observer(
                 entry={entry}
                 beatOffset={beatOffset}
                 color={laneColor}
-                trackHeight={trackHeight as number}
               />
             );
           })}
           <PlaceholderNoteView
             rowLane={lane}
             color={laneColor}
-            trackHeight={trackHeight as number}
             noteDiameter={config.noteDiameter as number}
           />
           <DragPreviewView
             rowLane={lane}
             color={laneColor}
-            trackHeight={trackHeight as number}
             noteDiameter={config.noteDiameter as number}
           />
           <Playhead onSeek={onSeek} />
