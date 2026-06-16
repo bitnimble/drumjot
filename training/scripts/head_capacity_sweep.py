@@ -185,6 +185,9 @@ def main():
     ap.add_argument("--es-jitter", type=float, default=0.015, help="max residual std around the trend")
     ap.add_argument("--es-min-epochs", type=int, default=20, help="never stop before this many epochs")
     ap.add_argument("--batch", type=int, default=8, help="held constant across arms (fair capacity A/B)")
+    ap.add_argument("--grad-clip", type=float, default=None,
+                    help="max global grad norm (clip_grad_norm_); None = off. Use at small batch "
+                    "where high pos_weight + bf16 can explode a lane's gradient to nan.")
     ap.add_argument("--num-workers", type=int, default=8,
                     help="DataLoader prefetch workers: stream .npy from the (NFS) cache in parallel "
                     "WHILE the GPU trains, so it doesn't starve on NFS latency. 0 = serial reads.")
@@ -271,7 +274,7 @@ def main():
                               val_clips=val_clips, keep_best=True, log=log,
                               early_stop=args.early_stop, es_window=args.es_window,
                               es_slope=args.es_slope, es_jitter=args.es_jitter,
-                              es_min_epochs=args.es_min_epochs)
+                              es_min_epochs=args.es_min_epochs, grad_clip=args.grad_clip)
             thr = tune_thresholds(model, val_clips, cfg)
             f1 = eval_per_lane(model, val_clips, cfg, thr)
             # dense per-epoch curves (UNTUNED 0.5-thr val F1, every epoch) -> tell if a

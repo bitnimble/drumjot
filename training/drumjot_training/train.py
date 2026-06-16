@@ -580,6 +580,7 @@ def train_loop(
     es_slope: float = 0.002,
     es_jitter: float = 0.015,
     es_min_epochs: int = 20,
+    grad_clip: float | None = None,
     log: Callable[[str], None] = print,
 ) -> dict:
     """Train `model` on `clips` in padded mini-batches of `batch_size` (clips
@@ -689,6 +690,10 @@ def train_loop(
                         act_logits[:, sus_idx], A[:, sus_idx], mask, one_pw
                     )
             loss.backward()  # bf16 keeps FP32 range, so no GradScaler needed
+            if grad_clip is not None:
+                # small batches + high pos_weight can explode a lane's gradient
+                # into nan under bf16; clip the global norm to keep it finite.
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             opt.step()
             if sched is not None:
                 sched.step()
