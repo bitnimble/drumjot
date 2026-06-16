@@ -223,12 +223,11 @@ export class StructuralPresenter implements LaidOutJot {
     if (barId === LEAD_IN_BAR_ID) {
       return { ...base, tracks: {}, patternSpans: [], tupletSpans: [] };
     }
-    const key = this.structureStore.keyFor(barId, this.viewLayerId);
-    // Notes come from every layer that places this lane (so a hands/feet split
-    // shows its kick row); the lane-spanning chrome (patterns/tuplets) stays
-    // layer-0 for now.
+    // Notes and bracket chrome both come from every layer that places this
+    // lane / bar (so a hands/feet split shows its kick row, and a tuplet in a
+    // non-first layer still draws its bracket).
     const track = this.structureStore.mergedTrackFor(barId, lane);
-    const spans = this.structureStore.spansFor(key);
+    const spans = this.structureStore.mergedSpansFor(barId);
     return {
       ...base,
       tracks: { [lane]: track },

@@ -340,6 +340,25 @@ export class StructureStore {
     return { patternSpans: c.patternSpans, tupletSpans: c.tupletSpans };
   }, STRUCTURAL);
 
+  /** A bar's bracket chrome UNIONED across every `||` layer, so a tuplet /
+   *  pattern authored in a non-first layer still draws its bracket (mirrors
+   *  {@link mergedTrackFor} for notes). Single-layer jots collapse to one
+   *  `spansFor`, leaving the common case untouched. */
+  mergedSpansFor = computedFn((barId: string): { patternSpans: StructPatternSpan[]; tupletSpans: StructTupletSpan[] } => {
+    const layers = this.layerOrder;
+    if (layers.length <= 1) {
+      return this.spansFor(this.keyFor(barId, layers[0]?.id ?? ''));
+    }
+    const patternSpans: StructPatternSpan[] = [];
+    const tupletSpans: StructTupletSpan[] = [];
+    for (const layer of layers) {
+      const s = this.spansFor(this.keyFor(barId, layer.id));
+      patternSpans.push(...s.patternSpans);
+      tupletSpans.push(...s.tupletSpans);
+    }
+    return { patternSpans, tupletSpans };
+  }, STRUCTURAL);
+
   /** Bar geometry for one layer: index + time-signature beats (an anacrusis
    *  bar's beats is content-sized, the only note dependency here).
    *  Structurally gated, so it's stable across note edits to non-anacrusis

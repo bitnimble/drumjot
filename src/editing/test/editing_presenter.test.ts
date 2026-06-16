@@ -197,6 +197,21 @@ describe('EditingPresenter, multi-layer (hands/feet split)', () => {
     expect(noteLayerIds(store, 'k')).toEqual([kLayer, kLayer]);
   });
 
+  it('surfaces a tuplet bracket authored in a non-first layer', () => {
+    const store = new JotEditorStore();
+    store.loadSource(
+      parse(
+        '{{ time: "4/4", instrumentMapping: { h:{name:"HiHat"}, s:{name:"Snare"}, k:{name:"Kick"} } }} ' +
+          '| h h h h | || | (s k s) . . . |'
+      )
+    );
+    // The triplet lives in layer 1 (feet); its bracket must still surface in
+    // the bar's lane-spanning chrome (bar-level, so any lane's bars expose it).
+    const bars = store.structural!.barsForLane('s').bars;
+    const withTuplet = bars.find((b) => b.tupletSpans.length > 0);
+    expect(withTuplet?.tupletSpans[0].count).toBe(3);
+  });
+
   it('moving a hi-hat onto the kick lane re-homes it to the kick layer', () => {
     const { store, selectionPresenter, presenter } = setupMulti();
     const hBar = store.structural!.barsForLane('h').bars.find((b) => b.tracks['h']?.notes.length)!;
