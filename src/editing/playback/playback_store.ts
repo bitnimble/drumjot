@@ -100,11 +100,11 @@ export class PlaybackStore {
    * mixer (which owns the build + also consumes it for its own
    * per-row-audibility computeds). PASSTHROUGH when no mixer is wired.
    */
-  get laneFilter(): PlayerFilter {
-    return this.mixer?.laneFilter ?? PASSTHROUGH_FILTER;
+  get trackFilter(): PlayerFilter {
+    return this.mixer?.trackFilter ?? PASSTHROUGH_FILTER;
   }
 
-  /** Mirror of {@link laneFilter} for the audio-track domain. */
+  /** Mirror of {@link trackFilter} for the audio-track domain. */
   get audioTrackFilter(): AudioTrackFilter {
     return this.mixer?.audioTrackFilter ?? PASSTHROUGH_AUDIO_TRACK_FILTER;
   }

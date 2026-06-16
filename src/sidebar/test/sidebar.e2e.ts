@@ -48,6 +48,49 @@ test('clicking the Layers item opens the panel', async ({ page }) => {
   await expect(page.getByTestId('layers-panel')).toBeVisible();
 });
 
+test('the Layers panel lists the song\'s tracks grouped by layer', async ({ page }) => {
+  await page.getByTestId('sidebar-item-layers').click();
+  await expect(page.getByTestId('layers-tree')).toBeVisible();
+  // This single-||-layer song shows one layer with one instrument track,
+  // labelled from the instrument mapping (HiHat).
+  await expect(page.getByTestId('layers-layer')).toHaveCount(1);
+  const track = page.getByTestId('layers-track');
+  await expect(track).toHaveCount(1);
+  await expect(track).toHaveAttribute('data-track-kind', 'instrument');
+  await expect(track).toContainText('HiHat');
+});
+
+const TWO_LAYER =
+  '{{ time: "4/4", instrumentMapping: { h:{name:"HiHat"}, k:{name:"Kick"} } }} | h h h h | || | k . . . |';
+
+async function loadDsl(page: Page, dsl: string): Promise<void> {
+  await page.evaluate(
+    (s) => (window as unknown as { drumjot: { loadDsl(x: string): void } }).drumjot.loadDsl(s),
+    dsl
+  );
+  // The kick lane only exists in TWO_LAYER (not the beforeEach LONG_SONG), so
+  // waiting for it ensures the new jot has rendered before we assert (the
+  // panel/score read it reactively; without this we race the stale song).
+  await page.waitForSelector('[data-testid="instrument-track-k"]');
+}
+
+test('a two-||-layer song shows two layer bands in the panel', async ({ page }) => {
+  await loadDsl(page, TWO_LAYER);
+  await page.getByTestId('sidebar-item-layers').click();
+  await expect(page.getByTestId('layers-layer')).toHaveCount(2);
+});
+
+test('renaming a layer via its ⋯ menu updates the header', async ({ page }) => {
+  await loadDsl(page, TWO_LAYER);
+  await page.getByTestId('sidebar-item-layers').click();
+  const firstLayer = page.getByTestId('layers-layer').first();
+  await page.getByTitle('Options for Layer 1').click();
+  const input = page.getByTestId('layer-rename-input');
+  await input.fill('Hands');
+  await input.press('Enter');
+  await expect(firstLayer).toContainText('Hands');
+});
+
 test('the collapse/open button toggles the panel', async ({ page }) => {
   await page.getByTestId('sidebar-item-layers').click();
   await expect(page.getByTestId('sidebar-panel')).toBeVisible();

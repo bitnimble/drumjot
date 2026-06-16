@@ -62,8 +62,8 @@ export const LYRICS_OFFSET_STEP_SEC = 0.01;
 /**
  * Module-level monotonic id allocator. Session-scoped, so a page reload
  * resets the sequence; the store never sees a `lyrics-0`. Ids leak into
- * `TrackKey` and React keys, so collisions must not happen within a
- * session even if the user nukes and re-adds many rows.
+ * the track-entity id (`lyrics:<id>`) and React keys, so collisions must
+ * not happen within a session even if the user nukes and re-adds many rows.
  */
 let nextLyricsTrackSeq = 1;
 function allocLyricsTrackId(): LyricsTrackId {
@@ -71,9 +71,9 @@ function allocLyricsTrackId(): LyricsTrackId {
 }
 
 export class LyricsStore {
-  // ObservableMap via MobX. Insertion order = render order seed for
-  // `syncTrackOrder`'s "slot a new lyrics row next to existing ones"
-  // policy. Replacing an entry preserves its insertion position.
+  // ObservableMap via MobX. Insertion order = the order `LayersPresenter`
+  // folds new lyrics rows into `jot.ordering`. Replacing an entry
+  // preserves its insertion position.
   private tracksMap: Map<LyricsTrackId, LyricsTrack> = new Map();
 
   constructor() {
@@ -144,9 +144,9 @@ export class LyricsStore {
     return this.tracksMap.get(id);
   }
 
-  /** Snapshot of ids in insertion order. Consumers (`syncTrackOrder`,
-   *  test code) iterate via this rather than poking at the internal
-   *  Map. */
+  /** Snapshot of ids in insertion order. Consumers (`LayersPresenter`'s
+   *  runtime-track sync, test code) iterate via this rather than poking at
+   *  the internal Map. */
   get trackIds(): readonly LyricsTrackId[] {
     return Array.from(this.tracksMap.keys());
   }

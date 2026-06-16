@@ -576,3 +576,22 @@
     pointer-events: none;
     z-index: 1;
 }
+
+/* Layer-first instrument rows: a tinted band per `||` layer (background set
+   inline from the layer's data colour), holding its groups + per-track rows. */
+.layerBand {
+    display: flex;
+    flex-direction: column;
+}
+
+.layerBandLabel {
+    composes: labelSm from '../../typography.module.css';
+    padding: 3px 8px 2px;
+    color: var(--color-text-secondary);
+}
+
+.layerGroupLabel {
+    composes: metaCaption from '../../typography.module.css';
+    padding: 2px 8px 1px 18px;
+    color: var(--color-text-muted);
+}

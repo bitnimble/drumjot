@@ -32,7 +32,7 @@ import {
   PaletteContext,
 } from './jot_editor_contexts';
 import { GridLineSettingsContext } from '../settings/settings_contexts';
-import { MixerStoreContext, UniformWaveformsContext } from './mixer/mixer_contexts';
+import { MergeLayersContext, MixerStoreContext, UniformWaveformsContext } from './mixer/mixer_contexts';
 import { ViewportStoreContext } from './viewport/viewport_contexts';
 import {
   LyricsAlignStoreContext,
@@ -61,7 +61,6 @@ import {
   formatSubtitle,
 } from './score/score_header';
 import { TimelineHeader } from './score/timeline_header';
-import type { TrackKey } from 'src/editing/tracks/tracks';
 import { SettingsStore, type GridLineSettings } from '../settings/settings_store';
 import { JotEditorStore } from './jot_editor_store';
 import { TranscribeStore } from './transcribe/transcribe_store';
@@ -85,11 +84,13 @@ import { Sidebar } from '../sidebar/sidebar';
 import { SidebarStore } from '../sidebar/sidebar_store';
 import { SidebarPresenter } from '../sidebar/sidebar_presenter';
 import { SidebarStoreContext, SidebarPresenterContext } from '../sidebar/sidebar_contexts';
+import { LayersStore } from './layers/layers_store';
+import { LayersPresenter } from './layers/layers_presenter';
+import { LayersStoreContext, LayersPresenterContext } from './layers/layers_contexts';
 import { DebugPanel } from './provenance/debug_panel';
 import { ExampleJot } from 'src/fakes/fakes';
 
 export { TranscribePresenter } from './transcribe/transcribe_presenter';
-export type { TrackKey } from 'src/editing/tracks/tracks';
 export type { TranscribeOptions, TranscribeStatus } from './transcribe/transcribe_store';
 
 type CreateJotEditorOptions = {
@@ -116,6 +117,9 @@ type CreateJotEditorResult = {
   /** Right-sidebar peers. */
   sidebar: SidebarStore;
   sidebarPresenter: SidebarPresenter;
+  /** Layers read-model (ordering → layer/group/track view) + its writer. */
+  layers: LayersStore;
+  layersPresenter: LayersPresenter;
   /** Per-domain presenters split out of the catch-all. Exposed for
    *  console / e2e. */
   viewportPresenter: ViewportPresenter;
@@ -160,16 +164,22 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
   const selectionPresenter = new SelectionPresenter(selection, () =>
     orderedNotes(jotEditorStore.structural?.layers ?? [])
   );
+  const sidebar = new SidebarStore();
+  const sidebarPresenter = new SidebarPresenter(sidebar);
+  const layers = new LayersStore(() => jotEditorStore.jot);
+  const layersPresenter = new LayersPresenter(() => jotEditorStore.jot);
   const editingStore = new EditingStore();
+  // EditingPresenter resolves an inserted / re-homed note's `trackId` through
+  // LayersPresenter (find-or-mint the track for its layer+lane), so construct
+  // the layers presenter first.
   const editingPresenter = new EditingPresenter(
     editingStore,
     jotEditorStore,
     settings,
     selection,
-    selectionPresenter
+    selectionPresenter,
+    layersPresenter
   );
-  const sidebar = new SidebarStore();
-  const sidebarPresenter = new SidebarPresenter(sidebar);
 
   // Marquee hit-test: which notes a rubber-band box (scroll-content coords)
   // encloses, resolved to the current StructNotes. Reads the DOM, so it only
@@ -261,14 +271,13 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
   // re-render (e.g. the zoom slider writing `store.zoom`) would defeat
   // that memo and reconcile the whole score; stable props let the memo
   // hold so `View` can re-render without touching `JotEditor`. The
-  // observable VALUES JotEditor needs (jot, trackOrder, highlightedPattern,
+  // observable VALUES JotEditor needs (jot, ordering, highlightedPattern,
   // the mute/solo snapshots) still flow through props/memo below and stay
   // reactive. Reads of `store.*` inside these bodies run at call time, not
   // render time, so they don't subscribe createJotEditor to anything.
   const onPatternClick = (name: string) => selectionPresenter.togglePattern(name);
   const onSeek = (x: number) => playbackPresenter.seekToX(x);
   const onZoomBy = (factor: number) => viewportPresenter.setZoom(viewport.zoom * factor);
-  const onMoveTrack = (from: number, to: number) => mixerPresenter.moveTrack(from, to);
   const getGutterWidth = () => viewport.gutterWidth;
   const onSetGutterWidth = (px: number) => viewportPresenter.setGutterWidth(px);
 
@@ -330,13 +339,13 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     // re-render regardless of the bundle's identity.
     const layerControls: LayerControls = React.useMemo(
       () => ({
-        mutedLanes: mixer.mutedLanes,
-        soloedLanes: mixer.soloedLanes,
-        isLaneAudible: mixer.isLaneAudible,
-        volumeFor: (lane) => mixer.laneVolume(lane),
-        onSetVolume: (lane, v) => mixerPresenter.setLaneVolume(lane, v),
-        onToggleMute: (lane) => mixerPresenter.toggleMute(lane),
-        onToggleSolo: (lane) => mixerPresenter.toggleSolo(lane),
+        mutedTracks: mixer.mutedTracks,
+        soloedTracks: mixer.soloedTracks,
+        isTrackAudible: mixer.isTrackAudible,
+        volumeFor: (track) => mixer.trackVolume(track),
+        onSetVolume: (track, v) => mixerPresenter.setTrackVolume(track, v),
+        onToggleMute: (track) => mixerPresenter.toggleMute(track),
+        onToggleSolo: (track) => mixerPresenter.toggleSolo(track),
         masterMuted: mixer.drumMasterMuted,
         masterSoloed: mixer.drumMasterSoloed,
         masterAudible: mixer.isDrumSectionAudible,
@@ -345,8 +354,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
       }),
       // eslint-disable-next-line react-hooks/exhaustive-deps -- observable snapshots; observer wrapper rebuilds when any of these change.
       [
-        mixer.mutedLanes,
-        mixer.soloedLanes,
+        mixer.mutedTracks,
+        mixer.soloedTracks,
         mixer.drumMasterMuted,
         mixer.drumMasterSoloed,
         mixer.isDrumSectionAudible,
@@ -381,6 +390,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     );
 
     return (
+        <LayersStoreContext.Provider value={layers}>
+        <LayersPresenterContext.Provider value={layersPresenter}>
         <SidebarStoreContext.Provider value={sidebar}>
         <SidebarPresenterContext.Provider value={sidebarPresenter}>
         <LyricsPresenterContext.Provider value={lyricsPresenter}>
@@ -395,6 +406,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
         <EditingPresenterContext.Provider value={editingPresenter}>
           <NoteProvenanceContext.Provider value={provenanceContextValue}>
             <GridLineSettingsContext.Provider value={settings.gridLines}>
+              <MergeLayersContext.Provider value={settings.mergeLayers}>
               <UniformWaveformsContext.Provider value={settings.uniformWaveforms}>
                 <FollowPlayheadContext.Provider value={followPlayheadContextValue}>
                   <div className={styles.appContainer}>
@@ -431,6 +443,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                       onToggleGridLine={(k) => settingsPresenter.toggleGridLine(k)}
                       uniformWaveforms={settings.uniformWaveforms}
                       onSetUniformWaveforms={(v) => settingsPresenter.setUniformWaveforms(v)}
+                      mergeLayers={settings.mergeLayers}
+                      onSetMergeLayers={(v) => settingsPresenter.setMergeLayers(v)}
                       autoFollowOnPlay={playback.autoFollowOnPlay}
                       onSetAutoFollowOnPlay={(v) => playbackPresenter.setAutoFollowOnPlay(v)}
                       recentTranscriptions={transcribe.recentTranscriptions}
@@ -461,8 +475,6 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                         onMouseUp={onMouseUp}
                         onSeek={onSeek}
                         onZoomBy={onZoomBy}
-                        trackOrder={mixer.trackOrder}
-                        onMoveTrack={onMoveTrack}
                         layerControls={layerControls}
                         audioTrackControls={audioTrackControls}
                         getGutterWidth={getGutterWidth}
@@ -516,6 +528,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                   </div>
                 </FollowPlayheadContext.Provider>
               </UniformWaveformsContext.Provider>
+              </MergeLayersContext.Provider>
             </GridLineSettingsContext.Provider>
           </NoteProvenanceContext.Provider>
         </EditingPresenterContext.Provider>
@@ -530,6 +543,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
         </LyricsPresenterContext.Provider>
         </SidebarPresenterContext.Provider>
         </SidebarStoreContext.Provider>
+        </LayersPresenterContext.Provider>
+        </LayersStoreContext.Provider>
     );
   });
 
@@ -548,6 +563,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     editingPresenter,
     sidebar,
     sidebarPresenter,
+    layers,
+    layersPresenter,
     viewportPresenter,
     mixerPresenter,
     provenancePresenter,
@@ -590,15 +607,6 @@ type JotEditorProps = {
    * The store clamps to the slider's range.
    */
   onZoomBy: (factor: number) => void;
-  /**
-   * User-customizable mixer ordering — drum-instrument rows and audio
-   * tracks freely interleaved. Drives both row order and which
-   * instrument row hosts the pattern/tuplet bracket overlay (the
-   * topmost drum row in this list).
-   */
-  trackOrder: readonly TrackKey[];
-  /** Move the row at `from` to position `to` (drag-and-drop / Alt+arrow). */
-  onMoveTrack: (from: number, to: number) => void;
   layerControls: LayerControls;
   audioTrackControls: AudioTrackControls;
   /** Read the current sticky-gutter width (px). A getter (not a value)
@@ -628,8 +636,6 @@ const JotEditor = observer((props: JotEditorProps) => {
     onMouseUp,
     onSeek,
     onZoomBy,
-    trackOrder,
-    onMoveTrack,
     layerControls,
     audioTrackControls,
     getGutterWidth,
@@ -1243,11 +1249,9 @@ const JotEditor = observer((props: JotEditorProps) => {
                 <TimelineHeader onSeek={onSeek} onResizeGutterStart={onResizeGutterStart} />
                 <MixerView
                   config={config}
-                  trackOrder={trackOrder}
                   highlightedPattern={highlightedPattern}
                   onPatternClick={onPatternClick}
                   onSeek={onSeek}
-                  onMoveTrack={onMoveTrack}
                   layerControls={layerControls}
                   audioTrackControls={audioTrackControls}
                   onResizeGutterStart={onResizeGutterStart}

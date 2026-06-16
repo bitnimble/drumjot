@@ -1,9 +1,11 @@
 import { makeAutoObservable } from 'mobx';
 import type { Element, Jot, NoteElement } from 'src/schema/schema';
+import { laneForNote, layerIdOfTrack } from 'src/schema/ordering';
 import { SettingsStore } from 'src/settings/settings_store';
 import type { StructLayer, StructNote } from 'src/editing/structure/structure_store';
 import { SelectionStore } from 'src/editing/selection/selection';
 import { SelectionPresenter } from 'src/editing/selection/selection_presenter';
+import { LayersPresenter } from 'src/editing/layers/layers_presenter';
 import { enabledDivisors, snapBeat } from './snap';
 import { buildLaneMap } from './score/note_geometry';
 import { EditingStore, type EditMode, type PlaceholderNote } from './editing_store';
@@ -61,7 +63,8 @@ export class EditingPresenter {
     private readonly jotEditorStore: JotEditorStore,
     private readonly settingsStore: SettingsStore,
     private readonly selectionStore: SelectionStore,
-    private readonly selectionPresenter: SelectionPresenter
+    private readonly selectionPresenter: SelectionPresenter,
+    private readonly layersPresenter: LayersPresenter
   ) {
     makeAutoObservable<
       this,
@@ -70,6 +73,7 @@ export class EditingPresenter {
       | 'settingsStore'
       | 'selectionStore'
       | 'selectionPresenter'
+      | 'layersPresenter'
       | 'dragCtx'
     >(this, {
       editingStore: false,
@@ -77,6 +81,7 @@ export class EditingPresenter {
       settingsStore: false,
       selectionStore: false,
       selectionPresenter: false,
+      layersPresenter: false,
       dragCtx: false,
     });
   }
@@ -170,19 +175,29 @@ export class EditingPresenter {
       if (!cur) continue;
       const newAbs = Math.min(Math.max(cur.start + el.beat + snappedDelta, 0), layout.total);
       const dest = homeBar(layout.slots, newAbs);
-      const newLane = laneMap(el.lane);
-      // Re-home to the layer that owns the destination lane so a cross-lane
-      // move lands in the row clicked (a single-layer jot keeps `layerId`
-      // unset; an unowned/new lane keeps the note's current layer).
-      const owner = newLane === el.lane ? undefined : structural?.ownerLayerFor(newLane);
+      const curLane = laneForNote(jot, el);
+      const newLane = laneMap(curLane);
+      // A cross-lane move re-homes the note to the track for the destination
+      // lane: in the layer that owns that lane (the row clicked), else the
+      // note's own current layer. The note's layer is never stored, so only
+      // its `trackId` changes; a same-lane move leaves the track untouched.
+      let laneUpdate: Record<string, unknown> = {};
+      if (newLane !== curLane) {
+        const curLayer = el.trackId !== undefined ? layerIdOfTrack(jot, el.trackId) : undefined;
+        const targetLayer = structural?.ownerLayerFor(newLane) ?? curLayer;
+        const newTrackId =
+          targetLayer !== undefined
+            ? this.layersPresenter.ensureInstrumentTrack(targetLayer, newLane)
+            : undefined;
+        laneUpdate = { lane: newLane, ...(newTrackId !== undefined ? { trackId: newTrackId } : {}) };
+      }
       updates.push([
         note.id,
         {
           ...el,
           barId: dest.id,
           beat: newAbs - dest.start,
-          lane: newLane,
-          ...(owner !== undefined ? { layerId: owner } : {}),
+          ...laneUpdate,
         },
       ]);
     }
@@ -326,14 +341,21 @@ export class EditingPresenter {
     const jot = this.jotEditorStore.jot;
     if (!placeholder || !jot) return;
     const id = crypto.randomUUID();
-    // Single-layer jots declare no layers; the structure store treats that as
-    // the synthetic primary layer, so we omit `layerId`. Multi-layer jots must
-    // tag the note with the layer that OWNS the clicked lane (e.g. the kick's
-    // Feet layer in a hands/feet split) so it lands in the row clicked, not
-    // whichever layer happens to be first. Falls back to the primary layer for
-    // a brand-new lane no layer carries yet.
+    // Resolve the layer the note lands in: the clicked row's layer (per-track
+    // view) wins so it lands where clicked; a merged row carries no `layerId`,
+    // so fall back to the firstmost layer that owns the lane (the merge-view
+    // rule), then the primary layer for a brand-new lane no layer carries yet.
+    // The note's home is then the instrument track for (layer, lane), minted
+    // if the layer has none yet; so its layer derives from `ordering`, never
+    // stored on the note.
     const layerId =
-      this.jotEditorStore.structural?.ownerLayerFor(placeholder.lane) ?? primaryLayerId(jot);
+      placeholder.layerId ??
+      this.jotEditorStore.structural?.ownerLayerFor(placeholder.lane) ??
+      primaryLayerId(jot);
+    const trackId =
+      layerId !== undefined
+        ? this.layersPresenter.ensureInstrumentTrack(layerId, placeholder.lane)
+        : undefined;
     const note: NoteElement = {
       id,
       barId: placeholder.barId,
@@ -342,7 +364,7 @@ export class EditingPresenter {
       kind: 'note',
       lane: placeholder.lane,
       modifiers: [],
-      ...(layerId !== undefined ? { layerId } : {}),
+      ...(trackId !== undefined ? { trackId } : {}),
     };
     jot.elements.set(id, note);
   }

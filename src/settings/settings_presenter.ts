@@ -26,6 +26,10 @@ export class SettingsPresenter {
     this.settings.uniformWaveforms = on;
   }
 
+  setMergeLayers(on: boolean) {
+    this.settings.mergeLayers = on;
+  }
+
   /**
    * Switch the grid to the 48ths overlay used for transcribed bundles.
    * The transcribe pipeline routinely emits triplet subdivisions; 48ths

@@ -1,0 +1,198 @@
+.root {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.empty {
+    composes: bodySm from '../../typography.module.css';
+    color: var(--color-text-muted);
+    margin: 8px 0 0;
+}
+
+/* A layer band. The muted tint is applied inline from the layer's data colour
+   (color-mix so content stays legible); the border anchors an untinted layer. */
+.layer {
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--radius-md);
+    padding: 6px;
+}
+
+.layerHeader {
+    composes: labelSm from '../../typography.module.css';
+    color: var(--color-text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+}
+
+.layerName {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.layerMore {
+    margin-left: auto;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 18px;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+}
+
+.layerMore:hover {
+    background: var(--color-accent-overlay-light);
+    color: var(--color-text);
+}
+
+.layerMenu {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+    min-width: 180px;
+}
+
+.renameRow {
+    composes: body from '../../typography.module.css';
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: space-between;
+    color: var(--color-text-secondary);
+}
+
+.renameInput {
+    composes: bodyMd from '../../typography.module.css';
+    flex: 1 1 auto;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 3px 6px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-base);
+    color: var(--color-text);
+}
+
+.renameInput:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 0;
+}
+
+.swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    flex: 0 0 auto;
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-base);
+}
+
+.group {
+    margin: 2px 0 2px 12px;
+    border-left: 2px solid var(--color-border-soft);
+    padding-left: 8px;
+}
+
+.groupHeader {
+    composes: metaCaption from '../../typography.module.css';
+    color: var(--color-text-muted);
+    margin: 2px 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.groupName {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Per-track "start a new group" affordance. */
+.newGroupBtn {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 16px;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    opacity: 0.5;
+}
+
+.newGroupBtn:hover {
+    background: var(--color-accent-overlay-light);
+    color: var(--color-text);
+    opacity: 1;
+}
+
+/* A plain text action inside a dropdown menu (e.g. Ungroup). */
+.menuButton {
+    composes: bodyMd from '../../typography.module.css';
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 4px 6px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text);
+    cursor: pointer;
+}
+
+.menuButton:hover {
+    background: var(--color-accent-overlay-light);
+}
+
+.track {
+    composes: body from '../../typography.module.css';
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 4px;
+    border-radius: 4px;
+    color: var(--color-text);
+}
+
+.grip {
+    flex: 0 0 auto;
+    cursor: grab;
+    opacity: 0.4;
+}
+
+.grip:active {
+    cursor: grabbing;
+}
+
+.trackDragging {
+    opacity: 0.4;
+}
+
+/* Drop-before indicator: a line above the hovered track. */
+.trackDropBefore {
+    box-shadow: inset 0 2px 0 0 var(--color-accent);
+}
+
+.layerDropTarget {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -2px;
+}
+
+.trackKind {
+    composes: metaCaption from '../../typography.module.css';
+    margin-left: auto;
+    color: var(--color-text-muted);
+}

@@ -100,54 +100,6 @@ export function useMixerRowDropTarget({
 }
 
 /**
- * A small "drop after the last row" zone. The per-row drop logic
- * already covers "before me" and "after me", but it bottoms out at the
- * last row's "after" position; this acts as the explicit final slot so
- * the indicator renders cleanly between the last row and the bottom of
- * the mixer.
- */
-export const MixerEndDropZone = ({
-  idx,
-  dragFromIdx,
-  dropTargetIdx,
-  onDropTargetIdx,
-  onMoveTrack,
-  onResetDrag,
-}: {
-  idx: number;
-  dragFromIdx: number | undefined;
-  dropTargetIdx: number | undefined;
-  onDropTargetIdx: (i: number | undefined) => void;
-  onMoveTrack: (from: number, to: number) => void;
-  onResetDrag: () => void;
-}) => {
-  const onDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-    if (dragFromIdx === undefined) return;
-    if (!e.dataTransfer.types.includes(MIXER_DRAG_MIME)) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    if (dropTargetIdx !== idx) onDropTargetIdx(idx);
-  };
-  const onDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    if (dragFromIdx === undefined) return;
-    const data = e.dataTransfer.getData(MIXER_DRAG_MIME);
-    if (!data) return;
-    e.preventDefault();
-    const from = parseInt(data, 10);
-    if (Number.isFinite(from)) onMoveTrack(from, idx);
-    onResetDrag();
-  };
-  const showIndicator = dropTargetIdx === idx && dragFromIdx !== undefined;
-  return (
-    <div
-      className={classNames(styles.mixerEndDrop, showIndicator && styles.mixerDropIndicator)}
-      onDragOver={onDragOver}
-      onDrop={onDrop}
-    />
-  );
-};
-
-/**
  * Drag handle (≡) parked on the leftmost edge of every mixer row's
  * gutter. Only this element is `draggable`, so the user can still click
  * mute/solo, drag the volume slider, etc. without accidentally lifting

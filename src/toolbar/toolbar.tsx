@@ -113,6 +113,8 @@ export const Toolbar = observer(
     onToggleGridLine,
     uniformWaveforms,
     onSetUniformWaveforms,
+    mergeLayers,
+    onSetMergeLayers,
     autoFollowOnPlay,
     onSetAutoFollowOnPlay,
     recentTranscriptions,
@@ -174,6 +176,8 @@ export const Toolbar = observer(
     onToggleGridLine: (key: keyof GridLineSettings) => void;
     uniformWaveforms: boolean;
     onSetUniformWaveforms: (on: boolean) => void;
+    mergeLayers: boolean;
+    onSetMergeLayers: (on: boolean) => void;
     /** When true, transitioning to playing re-enables auto-follow if it
      *  was disabled during the previous play session (pan, minimap,
      *  follow button mid-play). Off-states set while idle/paused survive
@@ -750,6 +754,14 @@ export const Toolbar = observer(
                       ? 'Render the onsets the filter LLM rejected as dashed ghost overlays at their detected (bar, beat) position. Click one to see why it was filtered out.'
                       : 'Load a filter-mode debug bundle to enable filtered-onset overlays.'
                   }
+                />
+              </DropdownSection>
+              <DropdownSection label="Layers">
+                <ToggleMenuItem
+                  label="Visually merge layers"
+                  active={mergeLayers}
+                  onToggle={() => onSetMergeLayers(!mergeLayers)}
+                  title="Collapse tracks of the same lane across every || layer into a single row (the flat per-lane view), dropping the layer bands. View-only: notes keep their layer, so edits still route per-note and a new note lands on the firstmost layer carrying the lane."
                 />
               </DropdownSection>
               <DropdownSection label="Waveforms">

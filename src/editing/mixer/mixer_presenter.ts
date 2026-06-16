@@ -1,21 +1,19 @@
 import { comparer, makeAutoObservable, reaction } from 'mobx';
-import { lyricsStore, LyricsTrackId } from 'src/lyrics/store';
 import { AudioTrackId } from 'src/editing/playback/audio_tracks';
 import { jotPlayer } from 'src/editing/playback/player';
-import { buildDebugBundleTrackOrder, reorderTrackOrder, trackKeyEq, type TrackKey } from 'src/editing/tracks/tracks';
 import { JotEditorStore } from '../jot_editor_store';
-import { MixerStore, clampVolume, collectJotLanes } from './mixer_store';
+import { MixerStore, clampVolume } from './mixer_store';
 import { toastStore } from '../../ui/toasts/toasts';
 
 /**
  * Mutations over {@link MixerStore}, per-row + master mute/solo/volume,
- * the user-customisable row order, and the audio-track split stubs. Owns
- * the reaction that keeps the row order synced with the live
- * track/lane/lyrics set and the instrument-track prune, and wires the
- * store in as the player's {@link MixerContext} for audio-track colour
- * inheritance. The engine's mute/solo/volume filter is no longer pushed
- * from here; the player pulls it off the PlaybackStore computeds (see
- * `PlaybackPresenter`).
+ * and the audio-track split stubs. Owns the instrument-track-view-model
+ * prune reaction and wires the store in as the player's
+ * {@link MixerContext} for audio-track colour inheritance. Row order now
+ * lives in the doc (`jot.ordering`, written by `LayersPresenter`); this
+ * presenter no longer owns it. The engine's mute/solo/volume filter is
+ * not pushed from here; the player pulls it off the PlaybackStore
+ * computeds (see `PlaybackPresenter`).
  */
 export class MixerPresenter {
   readonly mixer: MixerStore;
@@ -54,118 +52,6 @@ export class MixerPresenter {
     // / `audioTrackFilter` / `isAudio|DrumSectionAudible`); the reactions
     // that fire the imperative audio-graph re-apply live in
     // `PlaybackPresenter`.
-
-    // Keep `trackOrder` synced with the live audio-track set and the
-    // current jot's lanes. Dropped rows are removed; newly-discovered
-    // rows are slotted at a sensible default position so the user's
-    // drag-and-drop ordering of surviving rows is preserved.
-    reaction(
-      () => ({
-        audioIds: Array.from(jotPlayer.audioTracks.keys()),
-        lanes: this.mixer.jotLanes,
-        lyricsIds: lyricsStore.trackIds.slice(),
-      }),
-      ({ audioIds, lanes, lyricsIds }) => this.syncTrackOrder(audioIds, lanes, lyricsIds),
-      { fireImmediately: true }
-    );
-  }
-
-  /**
-   * Drop entries from {@link MixerStore.trackOrder} that no longer
-   * correspond to a live audio track, jot lane, or lyrics track; then
-   * append the missing ones at a sensible default position so the row
-   * appears immediately:
-   *   - new audio track  → after the last existing audio entry (or top of
-   *     the list if no audio entries exist yet)
-   *   - new lane        → end of the list
-   *   - new lyrics row   → just after the last existing lyrics row,
-   *     keeping the lyrics group contiguous (top of list when none exist).
-   *
-   * Existing entries keep their relative order so a user drag survives an
-   * audio-track add/remove or a jot reload that didn't change the lanes.
-   */
-  private syncTrackOrder(
-    audioIds: AudioTrackId[],
-    lanes: readonly string[],
-    lyricsIds: readonly LyricsTrackId[]
-  ): void {
-    const wanted: TrackKey[] = [
-      ...lyricsIds.map((id) => ({ kind: 'lyrics' as const, id })),
-      ...audioIds.map((id) => ({ kind: 'audio' as const, id })),
-      ...lanes.map((lane) => ({ kind: 'instrument' as const, lane })),
-    ];
-    const next: TrackKey[] = this.mixer.trackOrder.filter((k) =>
-      wanted.some((w) => trackKeyEq(w, k))
-    );
-    for (const w of wanted) {
-      if (next.some((k) => trackKeyEq(k, w))) continue;
-      if (w.kind === 'lyrics') {
-        let insertAt: number | undefined;
-        for (let i = next.length - 1; i >= 0; i--) {
-          if (next[i].kind === 'lyrics') {
-            insertAt = i + 1;
-            break;
-          }
-        }
-        if (insertAt === undefined) {
-          next.unshift(w);
-        } else {
-          next.splice(insertAt, 0, w);
-        }
-      } else if (w.kind === 'audio') {
-        let insertAt = 0;
-        for (let i = next.length - 1; i >= 0; i--) {
-          if (next[i].kind === 'audio') {
-            insertAt = i + 1;
-            break;
-          }
-        }
-        next.splice(insertAt, 0, w);
-      } else {
-        next.push(w);
-      }
-    }
-    // The reaction fires whenever its data fn returns a new object, even
-    // when the underlying sets are unchanged. Skip the observable
-    // assignment when the order is structurally identical (identity AND
-    // groupId) so the mixer renderer doesn't pay an unnecessary re-render
-    // but a real grouping change still propagates.
-    if (
-      next.length === this.mixer.trackOrder.length &&
-      next.every(
-        (k, i) =>
-          trackKeyEq(k, this.mixer.trackOrder[i]) && k.groupId === this.mixer.trackOrder[i].groupId
-      )
-    ) {
-      return;
-    }
-    this.mixer.trackOrder = next;
-  }
-
-  /**
-   * Reorder the mixer by moving the row at `fromIdx` to position `toIdx`.
-   * Both indices refer to positions in the *current* trackOrder; a no-op
-   * move is silently dropped. On drop the moved row's `groupId` becomes
-   * the adjacent rows' shared group (dropped inside a group → join it;
-   * dropped at a boundary / top / bottom → becomes solo).
-   */
-  moveTrack(fromIdx: number, toIdx: number): void {
-    const prev = this.mixer.trackOrder;
-    const next = reorderTrackOrder(prev, fromIdx, toIdx);
-    // `reorderTrackOrder` returns the same array reference on a no-op move,
-    // so this only writes (and wakes observers) on a real reorder.
-    if (next === prev) return;
-    // If the reorder pulled an audio row out of its group (grouped ->
-    // solo), bake the group-derived lane into the track's own state
-    // before the group is gone, so it keeps its instrument association.
-    const movedPrev = prev[fromIdx];
-    if (movedPrev?.kind === 'audio' && movedPrev.groupId !== undefined) {
-      const movedNext = next.find((k) => k.kind === 'audio' && k.id === movedPrev.id);
-      if (movedNext && movedNext.groupId === undefined) {
-        jotPlayer.audioTracks.get(movedPrev.id)?.detachLane();
-      }
-    }
-    this.mixer.trackOrder = next as TrackKey[];
   }
 
   toggleAudioMasterMute() {
@@ -196,22 +82,22 @@ export class MixerPresenter {
     }
   }
 
-  toggleMute(lane: string) {
-    if (this.mixer.mutedLanes.has(lane)) this.mixer.mutedLanes.delete(lane);
-    else this.mixer.mutedLanes.add(lane);
+  toggleMute(track: string) {
+    if (this.mixer.mutedTracks.has(track)) this.mixer.mutedTracks.delete(track);
+    else this.mixer.mutedTracks.add(track);
   }
 
-  toggleSolo(lane: string) {
-    if (this.mixer.soloedLanes.has(lane)) {
-      this.mixer.soloedLanes.delete(lane);
+  toggleSolo(track: string) {
+    if (this.mixer.soloedTracks.has(track)) {
+      this.mixer.soloedTracks.delete(track);
     } else {
-      this.mixer.soloedLanes.add(lane);
-      this.mixer.mutedLanes.delete(lane);
+      this.mixer.soloedTracks.add(track);
+      this.mixer.mutedTracks.delete(track);
     }
   }
 
-  setLaneVolume(lane: string, v: number) {
-    this.mixer.laneVolumes.set(lane, clampVolume(v));
+  setTrackVolume(track: string, v: number) {
+    this.mixer.trackVolumes.set(track, clampVolume(v));
   }
 
   toggleAudioTrackMute(id: AudioTrackId) {
@@ -286,24 +172,12 @@ export class MixerPresenter {
     }
   }
 
-  /** Reset the per-lane mixer (mute/solo/volume). Keyed by DSL lane
-   * letter, not by song, so without this a setting on one song bleeds onto
-   * the next song's matching rows. */
-  resetLaneMixer(): void {
-    this.mixer.mutedLanes.clear();
-    this.mixer.soloedLanes.clear();
-    this.mixer.laneVolumes.clear();
-  }
-
-  /**
-   * Re-order the mixer after a debug bundle is loaded so each per-lane
-   * audio stem sits immediately above its instrument row, with any
-   * unmatched audio at the top. The ordering itself is the pure
-   * {@link buildDebugBundleTrackOrder}; this just feeds it the current
-   * jot's lanes. Called by the bundle loader (JotEditorPresenter).
-   */
-  applyDebugBundleTrackOrder(loadedByKey: ReadonlyMap<string, AudioTrackId>): void {
-    const lanes = collectJotLanes(this.jotEditorStore.structural);
-    this.mixer.trackOrder = buildDebugBundleTrackOrder(lanes, loadedByKey);
+  /** Reset the per-track mixer (mute/solo/volume). Keyed by track key
+   * (`layerId/lane`), not by song, so without this a setting on one song
+   * bleeds onto the next song's matching rows. */
+  resetTrackMixer(): void {
+    this.mixer.mutedTracks.clear();
+    this.mixer.soloedTracks.clear();
+    this.mixer.trackVolumes.clear();
   }
 }

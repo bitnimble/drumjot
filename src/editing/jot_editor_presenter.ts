@@ -259,7 +259,7 @@ export class JotEditorPresenter {
         // the new pack's tracks, and reset the per-lane mixer so an
         // old song's mute/solo/faders don't bleed onto the new rows.
         this.mixerPresenter.clearAllAudioTracks();
-        this.mixerPresenter.resetLaneMixer();
+        this.mixerPresenter.resetTrackMixer();
         this.installJot(jot);
         this.jotEditorStore.currentExampleId = undefined;
         this.provenancePresenter.clearNoteProvenance();
@@ -446,7 +446,7 @@ export class JotEditorPresenter {
   ): Promise<boolean> {
     runInAction(() => {
       this.mixerPresenter.clearAllAudioTracks();
-      this.mixerPresenter.resetLaneMixer();
+      this.mixerPresenter.resetTrackMixer();
       this.lyricsPresenter.clearLyrics();
       // Mount the manifest + per-note provenance (or clear it when the
       // bundle didn't ship one) and reset the ghost-overlay toggle.
@@ -517,28 +517,22 @@ export class JotEditorPresenter {
         return { keys: track.keys, id };
       })
     );
-    const loadedByKey = new Map<string, AudioTrackId>();
     const toMute: AudioTrackId[] = [];
     for (const { keys, id } of resolved) {
       if (!id) continue;
-      let muteThis = false;
-      for (const key of keys) {
-        loadedByKey.set(key, id);
-        // Mute the per-lane stems by default so the (audible) drums
-        // come from the smplr score scheduler; the drumless backing
-        // stays unmuted. Multiple keys → still one mute, since they
-        // share the same `id`.
-        if (key !== NO_DRUMS_KEY) muteThis = true;
-      }
-      if (muteThis) toMute.push(id);
+      // Mute the per-lane stems by default so the (audible) drums come
+      // from the smplr score scheduler; the drumless backing stays
+      // unmuted. A stem shared across keys still mutes once (one `id`).
+      // Each track's row placement + waveform tint now derive from
+      // `jot.ordering` (the audio entity's `lane` from `loadAudioTrack`),
+      // so there's no separate reorder pass here.
+      if (keys.some((key) => key !== NO_DRUMS_KEY)) toMute.push(id);
     }
 
-    // Batch the mute updates and the reorder into a single observable
-    // mutation so the mixer renders once at the end instead of once
-    // per loaded track.
+    // Batch the mute updates into a single observable mutation so the
+    // mixer renders once at the end instead of once per loaded track.
     runInAction(() => {
       this.mixerPresenter.muteAudioTracks(toMute);
-      this.mixerPresenter.applyDebugBundleTrackOrder(loadedByKey);
     });
 
     return scoreLoaded;

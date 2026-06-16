@@ -7,15 +7,17 @@ import type { AudioTrackId } from 'src/editing/playback/audio_tracks';
  * stores directly.
  */
 export type LayerControls = {
-  mutedLanes: ReadonlySet<string>;
-  soloedLanes: ReadonlySet<string>;
-  /** True if the row would currently make sound; false = muted via M or solo exclusion. */
-  isLaneAudible: (lane: string) => boolean;
-  /** Current row fader value, 0..1 (1 = full). */
-  volumeFor: (lane: string) => number;
-  onSetVolume: (lane: string, v: number) => void;
-  onToggleMute: (lane: string) => void;
-  onToggleSolo: (lane: string) => void;
+  /** Track keys (`layerId/lane`) currently muted / soloed. */
+  mutedTracks: ReadonlySet<string>;
+  soloedTracks: ReadonlySet<string>;
+  /** True if the track would currently make sound; false = muted via M or solo
+   *  exclusion. Argument is the row's track key (`layerId/lane`). */
+  isTrackAudible: (track: string) => boolean;
+  /** Current row fader value, 0..1 (1 = full); keyed by track key. */
+  volumeFor: (track: string) => number;
+  onSetVolume: (track: string, v: number) => void;
+  onToggleMute: (track: string) => void;
+  onToggleSolo: (track: string) => void;
   /** Drum section master M/S. The master acts at the bus, not by editing
    * the per-row M/S sets; `masterAudible` reflects the resolved state
    * (master mute + cross-domain solo) so the master row can dim itself. */

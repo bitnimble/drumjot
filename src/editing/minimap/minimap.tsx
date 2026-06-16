@@ -30,6 +30,7 @@ import { reaction } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { jotPlayer } from 'src/editing/playback/player';
+import { trackKey } from 'src/editing/tracks/tracks';
 import { type BarSlice, waveformWorker } from 'src/editing/playback/waveform_worker_client';
 import styles from './minimap.module.css';
 import { WAVEFORM_PAINT_COLOR } from '../utils/waveform_color';
@@ -192,7 +193,9 @@ export const Minimap = observer(
     }
     return reaction(
       () => {
-        const structBars = structural.layers[0]?.bars ?? [];
+        const layer0 = structural.layers[0];
+        const structBars = layer0?.bars ?? [];
+        const layer0Id = layer0?.id ?? '';
         const out: NoteMark[] = [];
         for (let i = 0; i < structBars.length; i++) {
           const sb = structBars[i];
@@ -204,7 +207,7 @@ export const Minimap = observer(
             // waveform path. Tracking `isLaneAudible` here subscribes
             // the reaction to the underlying mute/solo observables, so
             // a toggle updates the ticks live.
-            if (!mixer.isLaneAudible(lane)) continue;
+            if (!mixer.isTrackAudible(trackKey(layer0Id, lane))) continue;
             const color = mixer.getInstrumentTrack(lane).color;
             for (const note of track.notes) {
               const frac = note.beat / sb.beats;

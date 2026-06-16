@@ -58,6 +58,16 @@ export class SettingsStore {
    */
   uniformWaveforms: boolean = true;
 
+  /**
+   * View-only "Visually merge layers". When true, the score collapses all
+   * tracks of the same lane (across every `||` layer) into a single row and
+   * drops the layer bands, showing the old flat per-lane view. Purely a
+   * rendering choice, no data change: each note keeps its own layer, so edits
+   * route per-note and a click-to-add lands on the firstmost layer carrying
+   * the lane. Off by default (the score is layer-first).
+   */
+  mergeLayers: boolean = false;
+
   constructor() {
     makeAutoObservable(this);
   }

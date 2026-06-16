@@ -175,3 +175,6 @@ tests/*.png
 # already covered by `*.log` above.)
 /tmp/
 /tmp_*
+
+# Brainstorming visual companion
+.superpowers/

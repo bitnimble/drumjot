@@ -76,6 +76,18 @@ async function removeTrack(page: Page, id: string): Promise<void> {
   await page.getByTestId(`audio-track-clear-${id}`).click();
 }
 
+test('a loaded audio track appears in the Layers panel (in ordering, groupable)', async ({ page }) => {
+  await loadRockLoop(page);
+  await loadAudioTrack(page);
+  await page.getByTestId('sidebar-item-layers').click();
+  await expect(page.getByTestId('layers-tree')).toBeVisible();
+  // The audio track is now a first-class track in `ordering`, so it shows in
+  // the panel as an audio row (groupable with instrument tracks via DnD).
+  await expect(
+    page.locator('[data-testid="layers-track"][data-track-kind="audio"]')
+  ).toHaveCount(1);
+});
+
 test('loads a track: row appears, buffer decodes, waveform renders', async ({ page }) => {
   await loadRockLoop(page);
   await expect(page.locator('h2')).toContainText('Simple rock loop');

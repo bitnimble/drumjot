@@ -37,7 +37,6 @@
 import { makeAutoObservable, runInAction } from 'mobx';
 import {
   AUDIO_FALLBACK_COLOR,
-  groupInstrumentLanes,
   MixerContext,
   resolveAudioInheritedColor,
   Track,
@@ -117,12 +116,12 @@ export class AudioTrack implements Track {
   readonly sourceBlob: Blob;
   readonly durationSec: number;
   /**
-   * Own-state fallback for {@link lane}. Holds the load-time mapping
-   * (a debug bundle's `mapping` entry) and the value baked in by
-   * {@link detachLane} when the row is dragged out of a group. The
-   * effective lane is normally *derived* from the mixer group (see
-   * {@link lane}); this only takes over when the track is solo.
-   * Undefined for ad-hoc / drumless tracks that were never mapped.
+   * Own-state fallback for {@link lane}. Holds the load-time mapping (a
+   * debug bundle / transcribe `mapping` entry). The effective lane is
+   * normally *derived* from the track's group in `jot.ordering` (see
+   * {@link lane}); this load-time value takes over when the track sits in
+   * a loose run (ungrouped). Undefined for ad-hoc / drumless tracks that
+   * were never mapped.
    */
   private _laneOverride: string | undefined = undefined;
   /**
@@ -194,14 +193,14 @@ export class AudioTrack implements Track {
   }
 
   /**
-   * Instrument lanes sharing this audio track's mixer group, in row
-   * order. Empty when solo. Delegates to the shared free function (NOT a
-   * method) so the read of `trackOrder` stays tracked when called from
-   * the `lane` / `color` computeds, see its note in `tracks.ts`.
+   * Instrument lanes sharing this audio track's group in `jot.ordering`,
+   * in slot order. Empty when the row is loose (ungrouped). Delegates to
+   * the mixer context (which reads the doc ordering) so the read stays
+   * tracked when called from the `lane` / `color` computeds.
    */
   private get inGroupLanes(): string[] {
     const ctx = this.getCtx();
-    return ctx ? groupInstrumentLanes(this.id, ctx) : [];
+    return ctx ? ctx.groupInstrumentLanesForAudio(this.id) : [];
   }
 
   /**
@@ -225,22 +224,6 @@ export class AudioTrack implements Track {
       return inGroup[0];
     }
     return this._laneOverride;
-  }
-
-  /**
-   * Bake the current group-derived lane into {@link _laneOverride} so a
-   * row dragged out of its group keeps its instrument association as its
-   * own state. Called by the mixer the moment a reorder clears this row's
-   * group — while the old group is still live — so the association isn't
-   * lost. No-op for a track that wasn't grouped.
-   */
-  detachLane(): void {
-    const inGroup = this.inGroupLanes;
-    if (inGroup.length === 0) return;
-    this._laneOverride =
-      this._laneOverride !== undefined && inGroup.includes(this._laneOverride)
-        ? this._laneOverride
-        : inGroup[0];
   }
 
   /** Whether the user has set an explicit override on this track.

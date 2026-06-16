@@ -58,13 +58,15 @@ import { waveformWorker } from './waveform_worker_client';
 export type PlayerState = 'idle' | 'loading' | 'playing' | 'paused';
 
 export type PlayerFilter = {
-  mutedLanes: ReadonlySet<string>;
+  /** Track keys (`layerId/lane`, see `trackKey`) the user has muted. */
+  mutedTracks: ReadonlySet<string>;
   /**
-   * When solo is active, ONLY these lanes are audible (others behave
+   * When solo is active, ONLY these tracks are audible (others behave
    * as if muted). Soloed-AND-muted = muted; explicit mute always wins so
    * the user can keep solo on while temporarily silencing a soloed row.
+   * Keyed by track key (`layerId/lane`).
    */
-  soloedLanes: ReadonlySet<string>;
+  soloedTracks: ReadonlySet<string>;
   /**
    * True when a solo is engaged *anywhere*, on an instrument row OR an
    * audio track. Solo is a single global mode shared across both
@@ -84,34 +86,35 @@ export type PlayerFilter = {
    * True when this section's master solo is engaged. Acts as if every
    * row in the section were soloed (only for the purpose of the solo
    * exclusion rule); without this, soloing Drums master would set
-   * `soloActive` but leave `soloedLanes` empty, silencing every drum
+   * `soloActive` but leave `soloedTracks` empty, silencing every drum
    * row.
    */
   sectionMasterSoloed: boolean;
-  /** Per-lane volume multiplier in [0, 1]; missing = full (1). */
+  /** Per-track volume multiplier in [0, 1], keyed by track key; missing = full (1). */
   volumes: ReadonlyMap<string, number>;
 };
 
 export const PASSTHROUGH_FILTER: PlayerFilter = {
-  mutedLanes: new Set(),
-  soloedLanes: new Set(),
+  mutedTracks: new Set(),
+  soloedTracks: new Set(),
   soloActive: false,
   sectionMasterMuted: false,
   sectionMasterSoloed: false,
   volumes: new Map(),
 };
 
-export function isAudibleUnder(lane: string, filter: PlayerFilter): boolean {
+/** @param track the event's track key (`layerId/lane`, see `trackKey`). */
+export function isAudibleUnder(track: string, filter: PlayerFilter): boolean {
   if (filter.sectionMasterMuted) return false;
-  if (filter.mutedLanes.has(lane)) return false;
+  if (filter.mutedTracks.has(track)) return false;
   if (
     filter.soloActive &&
     !filter.sectionMasterSoloed &&
-    !filter.soloedLanes.has(lane)
+    !filter.soloedTracks.has(track)
   ) {
     return false;
   }
-  if ((filter.volumes.get(lane) ?? 1) <= 0) return false;
+  if ((filter.volumes.get(track) ?? 1) <= 0) return false;
   return true;
 }
 
@@ -563,7 +566,7 @@ export class JotPlayer {
    *  live from {@link PlaybackStore} (PASSTHROUGH when no store is wired).
    *  Same computed/pull rationale as {@link currentAudioTrackFilter}. */
   get currentFilter(): PlayerFilter {
-    return this.playback?.laneFilter ?? PASSTHROUGH_FILTER;
+    return this.playback?.trackFilter ?? PASSTHROUGH_FILTER;
   }
   /**
    * Jot-time (seconds) the next `play()` should start from, set by a
@@ -1498,7 +1501,8 @@ export class JotPlayer {
         silentlySkipped++;
         continue;
       }
-      if (!isAudibleUnder(ev.lane, this.currentFilter)) {
+      const evTrack = `${ev.layerId}/${ev.lane}`;
+      if (!isAudibleUnder(evTrack, this.currentFilter)) {
         mutedFiltered++;
         continue;
       }
@@ -1513,7 +1517,7 @@ export class JotPlayer {
       // relative dynamics. isAudibleUnder already rejected vol <= 0.
       // The DEFAULT_PITCH_GAIN trim stacks on top so hats/kick sit
       // right out of the box even before the user touches a fader.
-      const rawVol = this.currentFilter.volumes.get(ev.lane) ?? 1;
+      const rawVol = this.currentFilter.volumes.get(evTrack) ?? 1;
       const vol = rawVol <= 0 ? 0 : MIDI_VOLUME_FLOOR + rawVol * (1 - MIDI_VOLUME_FLOOR);
       const defaultGain = DEFAULT_PITCH_GAIN[ev.lane] ?? 1;
       const floored = Math.max(MIN_PLAYBACK_VELOCITY, Math.round(ev.velocity * defaultGain));

@@ -4,7 +4,7 @@ import React from 'react';
 import { Instrument } from 'src/schema/dsl/dsl';
 import type { StructBar } from 'src/editing/structure/structure_store';
 import { ViewConfig } from 'src/editing/viewport/view_config';
-import { InstrumentTrack } from 'src/editing/tracks/tracks';
+import { InstrumentTrack, trackKey } from 'src/editing/tracks/tracks';
 import { GutterResizeHandle } from 'src/ui/gutter_resize_handle/gutter_resize_handle';
 import { MuteButton, SoloButton } from 'src/ui/icon_button/icon_button';
 import { StructuralContext } from '../jot_editor_contexts';
@@ -105,6 +105,8 @@ const WindowedBarList = observer(function WindowedBarList({
 export const InstrumentTrackView = observer(
   ({
     lane,
+    layerId,
+    mergeLaneLayerIds,
     config,
     showBrackets,
     laneOrder,
@@ -125,6 +127,13 @@ export const InstrumentTrackView = observer(
     onResizeGutterStart,
   }: {
     lane: string;
+    /** When set, the row shows ONLY this layer's notes on the lane (the
+     *  per-track render path, via `barsForTrack`); absent = merged across
+     *  layers (`barsForLane`, the legacy lane-row path). */
+    layerId?: string;
+    /** Merge view only: the layers this collapsed row aggregates. Mute/solo/
+     *  volume then act on every `${layerId}/${lane}` track at once. */
+    mergeLaneLayerIds?: readonly string[];
     config: ViewConfig;
     showBrackets: boolean;
     laneOrder: readonly string[];
@@ -153,7 +162,7 @@ export const InstrumentTrackView = observer(
       barBeatStart,
       startBeats,
       instrumentName,
-    } = structural.barsForLane(lane);
+    } = layerId !== undefined ? structural.barsForTrack(layerId, lane) : structural.barsForLane(lane);
     // Resolve the row's note colour through the store-owned
     // `InstrumentTrack`. The structural `barsForLane().laneColor` is
     // now palette-only (overrides moved off the jot in the colour-
@@ -186,7 +195,7 @@ export const InstrumentTrackView = observer(
         const start = startBeats[i];
         if (cont < start + laneBars[i].beats || i === laneBars.length - 1) {
           const beat = Math.min(Math.max(cont - start, 0), laneBars[i].beats);
-          return { lane, barId: laneBars[i].id, beat, absBeat: start + beat, barBeats: laneBars[i].beats };
+          return { lane, layerId, barId: laneBars[i].id, beat, absBeat: start + beat, barBeats: laneBars[i].beats };
         }
       }
       return undefined;
@@ -228,9 +237,26 @@ export const InstrumentTrackView = observer(
     const showFiltered = provenance?.showFiltered ?? false;
     const rejectedForLane = showFiltered ? (provenance!.rejectedByLane.get(lane) ?? []) : [];
 
-    const audible = layerControls.isLaneAudible(lane);
-    const muted = layerControls.mutedLanes.has(lane);
-    const soloed = layerControls.soloedLanes.has(lane);
+    // Mute/solo/volume key by track (layer+lane) so the same lane in two
+    // layers is controlled independently. A normal row controls one track; a
+    // merged row aggregates every layer's track of the lane (mute = mute each).
+    const rowKeys =
+      mergeLaneLayerIds && mergeLaneLayerIds.length > 0
+        ? mergeLaneLayerIds.map((l) => trackKey(l, lane))
+        : [layerId !== undefined ? trackKey(layerId, lane) : lane];
+    // The row reads as audible if ANY underlying track would sound; muted/soloed
+    // only when ALL its tracks are (so the toggle has a clear next state).
+    const audible = rowKeys.some((k) => layerControls.isTrackAudible(k));
+    const muted = rowKeys.every((k) => layerControls.mutedTracks.has(k));
+    const soloed = rowKeys.every((k) => layerControls.soloedTracks.has(k));
+    // Set every aggregated track to `target` via the per-key toggle.
+    const setAll = (
+      get: (k: string) => boolean,
+      toggle: (k: string) => void,
+      target: boolean
+    ) => {
+      for (const k of rowKeys) if (get(k) !== target) toggle(k);
+    };
     const drop = useMixerRowDropTarget({
       idx,
       dragFromIdx,
@@ -265,6 +291,7 @@ export const InstrumentTrackView = observer(
           drop.isDropIndicatorBelow && styles.mixerDropIndicatorBelow
         )}
         data-testid={`instrument-track-${lane}`}
+        data-layer-id={layerId}
         onDragOver={drop.onDragOver}
         onDragLeave={drop.onDragLeave}
         onDrop={drop.onDrop}
@@ -298,19 +325,25 @@ export const InstrumentTrackView = observer(
             </div>
             <div className={styles.instrumentTrackControls}>
               <RowVolumeSlider
-                value={layerControls.volumeFor(lane)}
-                onChange={(v) => layerControls.onSetVolume(lane, v)}
+                value={layerControls.volumeFor(rowKeys[0])}
+                onChange={(v) => {
+                  for (const k of rowKeys) layerControls.onSetVolume(k, v);
+                }}
                 label={labelText}
               />
               <MuteButton
                 active={muted}
-                onToggle={() => layerControls.onToggleMute(lane)}
+                onToggle={() =>
+                  setAll((k) => layerControls.mutedTracks.has(k), layerControls.onToggleMute, !muted)
+                }
                 offTitle={`Mute ${lane}`}
                 onTitle={`Unmute ${lane}`}
               />
               <SoloButton
                 active={soloed}
-                onToggle={() => layerControls.onToggleSolo(lane)}
+                onToggle={() =>
+                  setAll((k) => layerControls.soloedTracks.has(k), layerControls.onToggleSolo, !soloed)
+                }
                 offTitle={`Solo ${lane}`}
                 onTitle={`Unsolo ${lane}`}
               />
@@ -363,7 +396,7 @@ export const InstrumentTrackView = observer(
             laneOrder={laneOrder}
             highlightedPattern={highlightedPattern}
             onPatternClick={onPatternClick}
-            isLaneAudible={layerControls.isLaneAudible}
+            isLaneAudible={() => audible}
             lanes={lanesMemo}
             colorForLane={colorForLane}
             instrumentForLane={instrumentForLane}

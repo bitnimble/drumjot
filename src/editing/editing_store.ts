@@ -13,6 +13,11 @@ export type EditMode = 'select' | 'insert';
 export type PlaceholderNote = {
   /** Lane (drum instrument) the placeholder sits on. */
   lane: string;
+  /** The `||` layer of the row the cursor is over, so a committed note lands
+   *  in the clicked row's layer (per-track view). `undefined` on a merged row
+   *  (the merge view collapses layers), where insert falls back to the
+   *  firstmost layer carrying the lane. */
+  layerId?: string;
   /** Owning bar id (where a committed note is inserted). */
   barId: string;
   /** Beat within the bar (quarter notes from the downbeat). */

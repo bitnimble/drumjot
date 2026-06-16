@@ -8,9 +8,11 @@ import { parse } from 'src/schema/dsl/parser/parser';
 import { JotEditorStore } from 'src/editing/jot_editor_store';
 import { EditingStore } from 'src/editing/editing_store';
 import { EditingPresenter } from 'src/editing/editing_presenter';
+import { LayersPresenter } from 'src/editing/layers/layers_presenter';
 import { SettingsStore } from 'src/settings/settings_store';
 import { SelectionStore } from 'src/editing/selection/selection';
 import { SelectionPresenter, orderedNotes } from 'src/editing/selection/selection_presenter';
+import { layerIdOfTrack } from 'src/schema/ordering';
 
 // One kick on each downbeat of two 4/4 bars.
 const SRC =
@@ -25,12 +27,14 @@ function setup() {
   const selectionPresenter = new SelectionPresenter(selection, () =>
     orderedNotes(store.structural?.musicalLayers ?? [])
   );
+  const layersPresenter = new LayersPresenter(() => store.jot);
   const presenter = new EditingPresenter(
     editingStore,
     store,
     settings,
     selection,
-    selectionPresenter
+    selectionPresenter,
+    layersPresenter
   );
   return { store, editingStore, settings, selection, selectionPresenter, presenter };
 }
@@ -179,15 +183,28 @@ function setupMulti() {
   const selectionPresenter = new SelectionPresenter(selection, () =>
     orderedNotes(store.structural?.musicalLayers ?? [])
   );
-  const presenter = new EditingPresenter(editingStore, store, settings, selection, selectionPresenter);
+  const layersPresenter = new LayersPresenter(() => store.jot);
+  const presenter = new EditingPresenter(
+    editingStore,
+    store,
+    settings,
+    selection,
+    selectionPresenter,
+    layersPresenter
+  );
   return { store, presenter, selection, selectionPresenter };
 }
 
 describe('EditingPresenter, multi-layer (hands/feet split)', () => {
+  // A placed note stores no `layerId`; its layer derives from its `trackId`'s
+  // placement in `ordering`. So assert on the derived layer, not a stored field.
   const noteLayerIds = (store: JotEditorStore, lane: string) =>
     [...store.jot!.elements.values()]
       .filter((e) => (e as { kind: string; lane?: string }).kind === 'note' && (e as { lane?: string }).lane === lane)
-      .map((e) => (e as { layerId?: string }).layerId);
+      .map((e) => {
+        const trackId = (e as { trackId?: string }).trackId;
+        return trackId !== undefined ? layerIdOfTrack(store.jot!, trackId) : undefined;
+      });
 
   it('renders a lane that lives in the non-first layer (the kick row)', () => {
     const { store } = setupMulti();

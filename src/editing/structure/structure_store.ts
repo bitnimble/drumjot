@@ -1,6 +1,7 @@
 import { comparer, computed, makeObservable } from 'mobx';
 import { computedFn } from 'mobx-utils';
 import { isDyadic } from 'src/schema/dsl/element_metrics';
+import { laneForNote } from 'src/schema/ordering';
 import type { Element, Jot, PatternDef } from 'src/schema/schema';
 
 /**
@@ -203,20 +204,27 @@ export class StructureStore {
     return out;
   }
 
-  /** Top-level element ids grouped by `(bar, layer)` bar cell. Reads only the
-   *  routing fields (`id` / `barId` / `layerId`), NOT note content, so it
-   *  re-runs only on add / remove / re-home, never on a lane/beat/modifier
-   *  edit. The single O(elements) pass per structural edit. */
+  /** Top-level element ids grouped by `(bar, layer)` bar cell. Reads the
+   *  routing fields (`id` / `barId` / `trackId`) plus `ordering` (to map a
+   *  track to its layer), NOT note content, so it re-runs on add / remove /
+   *  re-home OR a track moved across layers, never on a lane/beat/modifier
+   *  edit. A top-level element's layer comes from its track's placement in
+   *  `ordering` (a note via its `trackId`, a group via a descendant note's
+   *  `trackId`), so moving a track across layers re-homes its notes with no
+   *  per-note rewrite. Pattern usages fall back to the stored `layerId` (their
+   *  layer-agnostic template body carries no `trackId`). The single
+   *  O(elements) pass per structural edit. */
   get membership(): Map<string, string[]> {
     const jot = this.getJot();
     const map = new Map<string, string[]>();
     if (!jot) return map;
     const single = this.singleLayer;
+    const layerByTrack = single ? undefined : buildTrackLayerMap(jot);
     for (const value of jot.elements.values()) {
       const el = value as Element;
       const barId = el.barId;
       if (barId === undefined) continue;
-      const key = single ? barId : `${barId}${KEY_SEP}${el.layerId ?? ''}`;
+      const key = single ? barId : `${barId}${KEY_SEP}${layerOfTopLevel(el, layerByTrack!)}`;
       let arr = map.get(key);
       if (!arr) {
         arr = [];
@@ -451,7 +459,7 @@ function flattenInto(
   if (el.kind === 'note') {
     out.notes.push({
       id: el.id,
-      lane: el.lane,
+      lane: laneForNote(jot, el),
       beat: absBeat,
       duration: absDur,
       modifiers: el.modifiers,
@@ -502,6 +510,43 @@ function flattenInto(
   }
 }
 
+/** Map every placed track id to its layer id, from `jot.ordering`. Built once
+ *  per `membership` pass so the per-element layer lookup is O(1). */
+function buildTrackLayerMap(jot: Jot): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const layer of jot.ordering) {
+    for (const slot of layer.slots) {
+      for (const t of slot.tracks) m.set(t.trackId, layer.layerId);
+    }
+  }
+  return m;
+}
+
+/** First placed track id at or below a top-level element (a note's own
+ *  `trackId`, else a group's first descendant note's). `undefined` for a
+ *  pattern usage (template body) or an empty/track-less container. */
+function firstDescendantTrackId(el: Element): string | undefined {
+  if (el.kind === 'note') return el.trackId;
+  if (el.kind === 'group') {
+    for (const child of el.children.values()) {
+      const t = firstDescendantTrackId(child as Element);
+      if (t !== undefined) return t;
+    }
+  }
+  return undefined;
+}
+
+/** The layer a top-level element renders in: its track's layer (via
+ *  `ordering`), else the stored `layerId` fallback (pattern usages / track-less
+ *  containers). Empty string when unresolved (keeps the bar-cell key stable). */
+function layerOfTopLevel(el: Element, layerByTrack: Map<string, string>): string {
+  const tid = firstDescendantTrackId(el);
+  if (tid !== undefined) return layerByTrack.get(tid) ?? '';
+  // No track to derive from: a pattern usage / track-less container keeps its
+  // stored `layerId`; a note with no track (shouldn't occur at top level) ''.
+  return el.kind !== 'note' ? (el.layerId ?? '') : '';
+}
+
 /** Natural internal length of a container's children (latest onset end). */
 function naturalSpan(children: readonly Element[]): number {
   let end = 0;
@@ -512,7 +557,7 @@ function naturalSpan(children: readonly Element[]): number {
 /** Lanes a subtree plays, for a pattern span's lane set. */
 function collectLanes(elements: readonly Element[], jot: Jot, into: Set<string>): void {
   for (const el of elements) {
-    if (el.kind === 'note') into.add(el.lane);
+    if (el.kind === 'note') into.add(laneForNote(jot, el));
     else if (el.kind === 'group') collectLanes([...el.children.values()] as Element[], jot, into);
     else {
       const def = jot.patterns.get(el.patternId) as PatternDef | undefined;

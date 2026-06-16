@@ -16,6 +16,8 @@ import { elementWeight, sumWeights } from 'src/schema/dsl/element_metrics';
 import { initialBpm } from 'src/schema/dsl/tempo';
 import type { Init } from '../descriptors';
 import { createReactiveJot, JotSchema } from '../schema';
+import { TrackBuilder } from '../ordering';
+import { compareLanesByDefaultMixerOrder } from 'src/instruments/mixer_order';
 
 type Obj = Record<string, unknown>;
 
@@ -34,6 +36,9 @@ type Ctx = {
   layerId?: string;
   barId?: string;
   patternIdByName: Record<string, string>;
+  /** Allocates the note's track per `(layerId, lane)`. Absent in pattern-body
+   *  context (template notes are layer-agnostic, so carry no `trackId`). */
+  tracks?: TrackBuilder;
 };
 
 function genId(prefix: string, ctx: Ctx): string {
@@ -57,21 +62,30 @@ function convertElement(
   ctx: Ctx,
   topLevel: boolean
 ): Array<[string, Obj]> {
+  // Containers (group / pattern) carry `barId` + `layerId` as a routing
+  // fallback; a note carries only `barId`, its layer is derived from its
+  // `trackId`'s placement in `ordering` (so moving a track across layers never
+  // re-homes the note).
   const anchor = topLevel ? omitUndef({ barId: ctx.barId, layerId: ctx.layerId }) : {};
   switch (el.kind) {
     case 'rest':
       return [];
     case 'note': {
       const id = genId('e', ctx);
+      // Placed notes (those in a layer) get a track; pattern-body template
+      // notes (no layer context) keep only `lane`.
+      const trackId =
+        ctx.layerId !== undefined && ctx.tracks ? ctx.tracks.track(ctx.layerId, el.lane) : undefined;
       return [
         [
           id,
           omitUndef({
             kind: 'note',
             id,
-            ...anchor,
+            ...(topLevel ? omitUndef({ barId: ctx.barId }) : {}),
             beat,
             duration,
+            trackId,
             lane: el.lane,
             modifiers: el.modifiers ?? [],
             sticking: el.sticking,
@@ -199,10 +213,19 @@ export function dslToInit(jot: DslJot): Init<typeof JotSchema> {
     bars.push({ id, tsCount: t.count, tsUnit: t.unit });
   }
 
-  // Elements: every layer's bars (+ anacrusis) flattened into one map.
+  // Elements: every layer's bars (+ anacrusis) flattened into one map. The
+  // track builder mints one instrument track per (layer, lane) as notes are
+  // converted, and yields the default ordering afterwards.
+  const trackBuilder = new TrackBuilder();
   const elements: Obj = {};
   dslLayers.forEach((v, vi) => {
-    const ctx = (barId: string): Ctx => ({ ids, layerId: layerIds[vi], barId, patternIdByName });
+    const ctx = (barId: string): Ctx => ({
+      ids,
+      layerId: layerIds[vi],
+      barId,
+      patternIdByName,
+      tracks: trackBuilder,
+    });
     if (anacrusisBarId && v.anacrusis && v.anacrusis.length > 0) {
       Object.assign(
         elements,
@@ -244,6 +267,11 @@ export function dslToInit(jot: DslJot): Init<typeof JotSchema> {
     leadBars: gm.leadBars,
     gridDivision: gm.gridDivision,
     layers,
+    tracks: trackBuilder.tracks,
+    trackGroups: {},
+    ordering: trackBuilder.ordering(layerIds, (a, b) =>
+      compareLanesByDefaultMixerOrder(a, b, (lane) => gm.instrumentMapping?.[lane])
+    ),
     bars,
     elements,
     instruments,

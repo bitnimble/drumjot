@@ -1,4 +1,4 @@
-import { makeAutoObservable } from 'mobx';
+import { makeAutoObservable, observable } from 'mobx';
 import { Jot } from 'src/schema/dsl/dsl';
 import type { Jot as ReactiveJot, JotSchema } from 'src/schema/schema';
 import type { ReactiveDoc } from 'src/schema/reactive_doc';
@@ -73,10 +73,13 @@ export class JotEditorStore {
   loadingLabel: string | undefined = undefined;
 
   constructor() {
-    // `reactiveDoc` is a plain WASM-backed handle and `jot` reads it directly,
-    // keep both out of MobX (deep-observing a Loro doc would be wrong, and
-    // load reactivity already flows through `source` / `structural` / etc.).
-    makeAutoObservable<this, 'reactiveDoc'>(this, { reactiveDoc: false, jot: false });
+    // `reactiveDoc` is observed only by REFERENCE (`observable.ref`): deep-
+    // observing a Loro doc would be wrong (its contents are already reactive
+    // through the schema façade), but the *swap* on reload must notify, so a
+    // consumer that reads the reactive jot directly (e.g. `LayersStore.layout`
+    // off `jot.ordering`) re-derives when a new song loads rather than staying
+    // pinned to the previous doc. `jot` stays a plain getter that reads it.
+    makeAutoObservable<this, 'reactiveDoc'>(this, { reactiveDoc: observable.ref, jot: false });
   }
 
   get isLoading(): boolean {

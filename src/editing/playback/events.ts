@@ -33,8 +33,13 @@ export type PlaybackEvent = {
   midiNote: number;
   /** MIDI velocity (1-127). */
   velocity: number;
-  /** DSL lane letter the note was written under; used by mute/solo. */
+  /** DSL lane letter the note was written under; used for the instrument's
+   *  default gain + MIDI note. */
   lane: string;
+  /** The `||` layer this note plays in. With `lane` it forms the track key
+   *  (`layerId/lane`) the mute/solo/volume filter is keyed by, so the same
+   *  lane in two layers is filtered independently. */
+  layerId: string;
 };
 
 // Velocity defaults (DEFAULT_VELOCITY / ACCENT_BOOST / GHOST_REDUCTION /
@@ -104,7 +109,7 @@ export function jotToEvents(structural: StructuralPresenter): PlaybackEvent[] {
           // it's already in real seconds so no tempo conversion is needed.
           const offsetSec = (note.offsetMs ?? 0) / 1000;
           const time = barOffsetSec + beatToSecWithinBar(barTempos, note.beat) + offsetSec;
-          events.push({ time, midiNote, velocity, lane });
+          events.push({ time, midiNote, velocity, lane, layerId: layer.id });
           if (note.modifiers.includes('fl')) {
             // The grace stroke clamps to -leadOffsetSec so it can't run
             // past the start of the pre-drum window (a flam on bar 1
@@ -115,7 +120,7 @@ export function jotToEvents(structural: StructuralPresenter): PlaybackEvent[] {
             const graceFloor = -leadOffsetSec;
             const graceTime = Math.max(graceFloor, time - FLAM_GRACE_OFFSET_SEC);
             const graceVel = Math.max(1, Math.round(velocity * FLAM_GRACE_VELOCITY_RATIO));
-            events.push({ time: graceTime, midiNote, velocity: graceVel, lane });
+            events.push({ time: graceTime, midiNote, velocity: graceVel, lane, layerId: layer.id });
           }
         }
       }

@@ -17,3 +17,10 @@ export const MixerStoreContext = React.createContext<MixerStore | null>(null);
  * what renders the waveforms).
  */
 export const UniformWaveformsContext = React.createContext<boolean>(false);
+
+/**
+ * View toggle "Visually merge layers": when true the score collapses tracks of
+ * the same lane across layers into one row (no layer bands). Read by
+ * `MixerView` to pick the row source. Defaults to `false` (layer-first).
+ */
+export const MergeLayersContext = React.createContext<boolean>(false);

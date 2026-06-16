@@ -102,27 +102,35 @@ export async function resetMix(page: Page): Promise<void> {
     if (m.audioMasterSoloed) p.toggleAudioMasterSolo();
     if (m.drumMasterMuted) p.toggleDrumMasterMute();
     if (m.audioMasterMuted) p.toggleAudioMasterMute();
-    [...m.soloedLanes].forEach((l: string) => p.toggleSolo(l));
-    [...m.mutedLanes].forEach((l: string) => p.toggleMute(l));
+    // Drum mute/solo are keyed per-track (`layerId/lane`); the sets already hold
+    // those composite keys, so toggle them back off directly.
+    [...m.soloedTracks].forEach((k: string) => p.toggleSolo(k));
+    [...m.mutedTracks].forEach((k: string) => p.toggleMute(k));
     [...m.soloedAudioTracks].forEach((id: string) => p.toggleAudioTrackSolo(id));
     [...m.mutedAudioTracks].forEach((id: string) => p.toggleAudioTrackMute(id));
   });
 }
 
+// The per-track mute/solo/volume filter is keyed by `layerId/lane`, not the
+// bare lane; these setters resolve the lane's owning layer (single-layer songs
+// -> `v0/<lane>`) to build that key.
+
 /** Idempotent per-lane / per-track solo + mute setters. */
 export const setLaneSolo = (page: Page, lane: string, on: boolean) =>
   page.evaluate(
     ({ lane, on }) => {
-      const m = (window as any).drumjot.mixer;
-      if (m.soloedLanes.has(lane) !== on) (window as any).drumjot.mixerPresenter.toggleSolo(lane);
+      const dj = (window as any).drumjot;
+      const key = `${dj.jotEditorStore.structural?.ownerLayerFor(lane) ?? 'v0'}/${lane}`;
+      if (dj.mixer.soloedTracks.has(key) !== on) dj.mixerPresenter.toggleSolo(key);
     },
     { lane, on }
   );
 export const setLaneMute = (page: Page, lane: string, on: boolean) =>
   page.evaluate(
     ({ lane, on }) => {
-      const m = (window as any).drumjot.mixer;
-      if (m.mutedLanes.has(lane) !== on) (window as any).drumjot.mixerPresenter.toggleMute(lane);
+      const dj = (window as any).drumjot;
+      const key = `${dj.jotEditorStore.structural?.ownerLayerFor(lane) ?? 'v0'}/${lane}`;
+      if (dj.mixer.mutedTracks.has(key) !== on) dj.mixerPresenter.toggleMute(key);
     },
     { lane, on }
   );
@@ -145,7 +153,11 @@ export const setAudioMasterVolume = (page: Page, v: number) =>
   page.evaluate((v) => (window as any).jotPlayer.setAudioTrackMasterVolume(v), v);
 export const setLaneVolume = (page: Page, lane: string, v: number) =>
   page.evaluate(
-    ({ lane, v }) => (window as any).drumjot.mixerPresenter.setLaneVolume(lane, v),
+    ({ lane, v }) => {
+      const dj = (window as any).drumjot;
+      const key = `${dj.jotEditorStore.structural?.ownerLayerFor(lane) ?? 'v0'}/${lane}`;
+      dj.mixerPresenter.setTrackVolume(key, v);
+    },
     { lane, v }
   );
 export const setTrackVolume = (page: Page, id: string, v: number) =>

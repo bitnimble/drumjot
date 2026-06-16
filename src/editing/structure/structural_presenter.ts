@@ -245,6 +245,76 @@ export class StructuralPresenter implements LaidOutJot {
    * offset (the Beat-offset slider, a deliberate whole-song reflow) falls back
    * to the full shifted structure.
    */
+  /**
+   * Like {@link laneBarFor} but scoped to ONE layer: only that layer's notes /
+   * spans on the lane (via the per-`(bar, layer)` `trackFor` / `spansFor`),
+   * NOT merged across layers. The per-track render path (a track = one layer +
+   * one lane) reads this so two layers' same-lane tracks show their own notes.
+   */
+  private laneBarForLayer = computedFn((barId: string, layerId: string, lane: string): StructBar => {
+    const geo = this.viewGeometryById.get(barId);
+    const base = geo ?? { id: barId, index: 0, beats: 0, tsCount: 4, tsUnit: 4, anacrusis: false };
+    if (barId === LEAD_IN_BAR_ID) {
+      return { ...base, tracks: {}, patternSpans: [], tupletSpans: [] };
+    }
+    const key = this.structureStore.keyFor(barId, layerId);
+    const track = this.structureStore.trackFor(key, lane);
+    const spans = this.structureStore.spansFor(key);
+    return {
+      ...base,
+      tracks: { [lane]: track },
+      patternSpans: spans.patternSpans,
+      tupletSpans: spans.tupletSpans,
+    };
+  }, STRUCTURAL);
+
+  /**
+   * Per-track derived row data: like {@link barsForLane} but for ONE track
+   * (a specific `layerId` + `lane`), so the same lane in two layers renders two
+   * independent rows. With no beat-grid offset it composes the granular
+   * per-(bar, layer) computeds; a non-zero offset falls back to that layer's
+   * shifted structure.
+   */
+  barsForTrack = computedFn((layerId: string, lane: string): LaneBars => {
+    let bars: readonly StructBar[];
+    if (this.effectiveDrumOffsetBeats === 0) {
+      bars = this.viewGeometry.map((geo) => this.laneBarForLayer(geo.id, layerId, lane));
+    } else {
+      const layer = this.layers.find((l) => l.id === layerId);
+      bars = (layer?.bars ?? []).map((b) => ({
+        ...b,
+        tracks: b.tracks[lane] ? { [lane]: b.tracks[lane] } : {},
+      }));
+    }
+
+    let layerBeats = 0;
+    let leadInBarsBeats = 0;
+    let countedLeadIn = true;
+    const barBeatStart: number[] = new Array(bars.length);
+    let cursor = 0;
+    for (let i = 0; i < bars.length; i++) {
+      barBeatStart[i] = cursor;
+      const b = bars[i];
+      cursor += b.beats;
+      layerBeats += b.beats;
+      if (countedLeadIn) {
+        if (b.index < 0) leadInBarsBeats += b.beats;
+        else countedLeadIn = false;
+      }
+    }
+    const laneColor = this.paletteStore.colorForLane(lane);
+    const instrumentName = this.instrumentFor(lane).name;
+    return {
+      bars,
+      layerBeats,
+      leadInBarsBeats,
+      barBeatStart,
+      startBeats: barBeatStart,
+      laneColor,
+      instrumentName,
+    };
+  });
+
   barsForLane = computedFn((lane: string): LaneBars => {
     const bars: readonly StructBar[] =
       this.effectiveDrumOffsetBeats === 0

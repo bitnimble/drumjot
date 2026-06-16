@@ -490,9 +490,22 @@ persists up to ~cap-1000 (cap-500→1000 still +0.024 > noise) then flattens
 (2563 train windows): below it, more data helps; above it, gains are within
 single-seed noise / internal reshuffling. Note the hats already plateau by
 cap-500 (hc/hp/ho flat across 500→1000); the cap-500→1000 gain is almost entirely
-cymbals (rd +0.040, mc +0.041). Searching below 1000 to locate the knee: cap-500
-done, cap-750 next. cap-0(full) running on the 3080 to confirm the top end (with
-the E-GMD mix-shift caveat).
+cymbals (rd +0.040, mc +0.041). Sub-1000 search bottomed out at the noise floor:
+cap-500 (0.558) and cap-750 (0.555) are indistinguishable, the climb to plateau
+is ~750→1000. cap-0(full) on the 3080 to confirm the top (E-GMD mix-shift caveat).
+
+**Seed noise band (2-seed, for judging the future h512 width test).** Ran a 2nd
+seed at cap-1000 + cap-3000 (seed 1; NOTE it's 9-lane post-mc-removal vs seed 0's
+10-lane, so |Δ| conflates seed + the sibling-weighting change on ho/cr/rd). Per-
+lane |Δ| over the 5 shared cym+hat lanes:
+- **cap-1000: mean 0.017, max 0.040** (cr 0.040, ho 0.026 the movers; stable lanes
+  hc/hp/rd 0.003-0.009).
+- **cap-3000: mean 0.007, max 0.014** -- markedly tighter.
+Takeaway: **noise shrinks with data** (more data -> more stable runs), and at the
+plateau (cap-3000) the band is ~0.01. So a future h512-vs-h128 win must clear
+~0.02 at cap-3000 (or ~0.04 at cap-1000) to be real. The data-scale per-point
+deltas (500→750→1000) sit inside the cap-1000 band, confirming "knee ~cap-1000"
+is the resolution limit without more seeds.
 
 ### Why this invalidates the Phase-1 width A/B
 

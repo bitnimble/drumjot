@@ -9,7 +9,6 @@ import { ViewportStoreContext } from '../../viewport/viewport_contexts';
 import { JotEditorStore } from '../../jot_editor_store';
 import { MixerStore } from '../mixer_store';
 import { ViewportStore } from '../../viewport/viewport_store';
-import type { TrackKey } from 'src/editing/tracks/tracks';
 import type { LayerControls } from '../mixer_controls';
 import { InstrumentTrackView } from '../instrument_track_view';
 import { Gallery, Variant } from 'src/ui/stories/_variants';
@@ -60,14 +59,11 @@ function Row({ muted = false }: { muted?: boolean }) {
     const mixer = new MixerStore(jotEditorStore);
     const viewport = new ViewportStore(jotEditorStore);
     const lanes = mixer.jotLanes;
-    runInAction(() => {
-      mixer.trackOrder = lanes.map((p): TrackKey => ({ kind: 'instrument', lane: p }));
-    });
     const lane = lanes[0];
     const layerControls: LayerControls = {
-      mutedLanes: muted ? new Set([lane]) : new Set(),
-      soloedLanes: new Set(),
-      isLaneAudible: () => !muted,
+      mutedTracks: muted ? new Set([lane]) : new Set(),
+      soloedTracks: new Set(),
+      isTrackAudible: () => !muted,
       volumeFor: () => 1,
       onSetVolume: fn(),
       onToggleMute: fn(),
