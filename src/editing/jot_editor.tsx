@@ -81,6 +81,10 @@ import { TranscribePresenter } from './transcribe/transcribe_presenter';
 import { RecentTranscriptionsPicker } from './transcribe/recent_transcriptions';
 import { ToastContainer } from '../ui/toasts/toast_container';
 import { Toolbar } from '../toolbar/toolbar';
+import { Sidebar } from '../sidebar/sidebar';
+import { SidebarStore } from '../sidebar/sidebar_store';
+import { SidebarPresenter } from '../sidebar/sidebar_presenter';
+import { SidebarStoreContext, SidebarPresenterContext } from '../sidebar/sidebar_contexts';
 import { DebugPanel } from './provenance/debug_panel';
 import { ExampleJot } from 'src/fakes/fakes';
 
@@ -109,6 +113,9 @@ type CreateJotEditorResult = {
   selectionPresenter: SelectionPresenter;
   editingStore: EditingStore;
   editingPresenter: EditingPresenter;
+  /** Right-sidebar peers. */
+  sidebar: SidebarStore;
+  sidebarPresenter: SidebarPresenter;
   /** Per-domain presenters split out of the catch-all. Exposed for
    *  console / e2e. */
   viewportPresenter: ViewportPresenter;
@@ -161,6 +168,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     selection,
     selectionPresenter
   );
+  const sidebar = new SidebarStore();
+  const sidebarPresenter = new SidebarPresenter(sidebar);
 
   // Marquee hit-test: which notes a rubber-band box (scroll-content coords)
   // encloses, resolved to the current StructNotes. Reads the DOM, so it only
@@ -372,6 +381,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     );
 
     return (
+        <SidebarStoreContext.Provider value={sidebar}>
+        <SidebarPresenterContext.Provider value={sidebarPresenter}>
         <LyricsPresenterContext.Provider value={lyricsPresenter}>
         <ProvenancePresenterContext.Provider value={provenancePresenter}>
         <ProvenanceStoreContext.Provider value={provenance}>
@@ -387,6 +398,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
               <UniformWaveformsContext.Provider value={settings.uniformWaveforms}>
                 <FollowPlayheadContext.Provider value={followPlayheadContextValue}>
                   <div className={styles.appContainer}>
+                    <div className={styles.mainColumn}>
                     <Toolbar
                       examples={jotEditorStore.examples}
                       currentId={jotEditorStore.currentExampleId}
@@ -480,6 +492,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                     )}
                     {structural && <EditingToolbar />}
                     <DebugPanel provenance={provenance} presenter={provenancePresenter} />
+                    </div>
+                    <Sidebar />
                     <LyricsSearchModal
                       open={lyricsAlign.lyricsSearchOpen}
                       initialTitle={lyricsInitialTitle}
@@ -514,6 +528,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
         </ProvenanceStoreContext.Provider>
         </ProvenancePresenterContext.Provider>
         </LyricsPresenterContext.Provider>
+        </SidebarPresenterContext.Provider>
+        </SidebarStoreContext.Provider>
     );
   });
 
@@ -530,6 +546,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     selectionPresenter,
     editingStore,
     editingPresenter,
+    sidebar,
+    sidebarPresenter,
     viewportPresenter,
     mixerPresenter,
     provenancePresenter,
