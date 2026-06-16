@@ -172,6 +172,24 @@ export const DropdownButton = observer(
       };
     }, [open]);
 
+    // Keep the panel within the viewport horizontally: a trigger near the right
+    // edge (e.g. the Layers panel's ⋯) would otherwise open a left-anchored
+    // panel that runs off-screen. Runs after layout so the panel's real width is
+    // known; only shifts when it would overflow, so left-side dropdowns (the
+    // toolbar menus) are untouched. Converges in one extra render (the clamp
+    // equals itself on the next pass).
+    React.useLayoutEffect(() => {
+      if (!open || !anchor) return;
+      const panel = panelRef.current;
+      if (!panel) return;
+      const margin = 8;
+      const maxLeft = window.innerWidth - panel.offsetWidth - margin;
+      const clamped = Math.max(margin, Math.min(anchor.left, maxLeft));
+      if (clamped !== anchor.left) {
+        setAnchor((a) => (a ? { ...a, left: clamped } : a));
+      }
+    }, [open, anchor]);
+
     return (
       <div className={styles.dropdown} ref={wrapperRef}>
         <button

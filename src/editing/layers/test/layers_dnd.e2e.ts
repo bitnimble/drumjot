@@ -10,6 +10,9 @@ import { expect, test, type Page } from '@playwright/test';
 const META =
   '{{ time: "4/4", instrumentMapping: { h:{name:"HiHat"}, s:{name:"Snare"}, k:{name:"Kick"} } }}';
 
+const META4 =
+  '{{ time: "4/4", instrumentMapping: { h:{name:"HiHat"}, s:{name:"Snare"}, k:{name:"Kick"}, t:{name:"Tom"} } }}';
+
 async function openPanel(page: Page, dsl: string): Promise<void> {
   await page.goto('/');
   await page.waitForFunction(
@@ -31,13 +34,18 @@ function trackInLayer(page: Page, layerId: string, label: string) {
     .locator('[data-testid="layers-track"]', { hasText: label });
 }
 
+/** Aim near a row's top edge so the drop lands in the "before" reorder zone
+ *  (a plain move) rather than the centre "group" zone. */
+const BEFORE_EDGE = { targetPosition: { x: 30, y: 2 } } as const;
+
 test('dragging a track onto another layer moves it there', async ({ page }) => {
   // v0 = {HiHat, Snare}; v1 = {Kick}.
   await openPanel(page, `${META} | h s | || | k |`);
   await expect(trackInLayer(page, 'v0', 'Snare')).toHaveCount(1);
   await expect(trackInLayer(page, 'v1', 'Snare')).toHaveCount(0);
 
-  await trackInLayer(page, 'v0', 'Snare').dragTo(trackInLayer(page, 'v1', 'Kick'));
+  // Drop on Kick's top edge -> a plain move into v1 (not a group).
+  await trackInLayer(page, 'v0', 'Snare').dragTo(trackInLayer(page, 'v1', 'Kick'), BEFORE_EDGE);
 
   // Snare moved out of v0 into v1, in the panel...
   await expect(trackInLayer(page, 'v0', 'Snare')).toHaveCount(0);
@@ -53,31 +61,64 @@ test('dragging a track onto another layer moves it there', async ({ page }) => {
   ).toHaveCount(0);
 });
 
-test('create a group from a track, then ungroup it', async ({ page }) => {
+test('a group forms in place, in the middle of a layer (not just its edges)', async ({ page }) => {
+  await openPanel(page, `${META4} | h s k t |`); // v0 loose, in lane order:
+  const rows = page.locator('[data-layer-id="v0"] [data-testid="layers-track"]');
+  await expect(rows).toHaveText([/HiHat/, /Tom/, /Snare/, /Kick/]);
+
+  // Drop Snare onto Tom's centre -> group {Tom, Snare} formed where they sit,
+  // with HiHat still loose above and Kick still loose below (a middle group).
+  await trackInLayer(page, 'v0', 'Snare').dragTo(trackInLayer(page, 'v0', 'Tom'));
+  await expect(page.getByTestId('layers-group')).toHaveCount(1);
+  await expect(rows).toHaveText([/HiHat/, /Tom/, /Snare/, /Kick/]); // order preserved
+  await expect(
+    page.getByTestId('layers-group').locator('[data-testid="layers-track"]')
+  ).toHaveText([/Tom/, /Snare/]); // exactly the two, nothing else folded in
+});
+
+test('grouping a track onto another track, then ungroup', async ({ page }) => {
   await openPanel(page, `${META} | h s | || | k |`);
   await expect(page.getByTestId('layers-group')).toHaveCount(0);
 
-  // "New group" on the Snare row wraps it in a group.
-  await trackInLayer(page, 'v0', 'Snare').getByTestId('layers-new-group').click();
+  // Drop HiHat onto the centre of Snare -> a group wrapping both.
+  await trackInLayer(page, 'v0', 'HiHat').dragTo(trackInLayer(page, 'v0', 'Snare'));
   await expect(page.getByTestId('layers-group')).toHaveCount(1);
   await expect(page.getByTestId('layers-group')).toContainText('Group 1');
-  // Snare is now inside the group.
   await expect(
     page.getByTestId('layers-group').locator('[data-testid="layers-track"]', { hasText: 'Snare' })
   ).toHaveCount(1);
+  await expect(
+    page.getByTestId('layers-group').locator('[data-testid="layers-track"]', { hasText: 'HiHat' })
+  ).toHaveCount(1);
 
-  // Ungroup via the group ⋯ menu.
+  // A non-empty group offers Ungroup (tracks survive).
   await page.getByTitle('Options for Group 1').click();
   await page.getByTestId('group-ungroup').click();
   await expect(page.getByTestId('layers-group')).toHaveCount(0);
-  await expect(trackInLayer(page, 'v0', 'Snare')).toHaveCount(1); // track survives
+  await expect(trackInLayer(page, 'v0', 'Snare')).toHaveCount(1);
+  await expect(trackInLayer(page, 'v0', 'HiHat')).toHaveCount(1);
+});
+
+test('emptying a group switches its menu action to Delete', async ({ page }) => {
+  await openPanel(page, `${META} | h s | || | k |`);
+  // Group HiHat + Snare in v0, then drag both members out to other layers.
+  await trackInLayer(page, 'v0', 'HiHat').dragTo(trackInLayer(page, 'v0', 'Snare'));
+  await expect(page.getByTestId('layers-group')).toHaveCount(1);
+  // Move both members out via the top edge (a plain move, not a regroup).
+  await trackInLayer(page, 'v0', 'HiHat').dragTo(trackInLayer(page, 'v1', 'Kick'), BEFORE_EDGE);
+  await trackInLayer(page, 'v0', 'Snare').dragTo(trackInLayer(page, 'v1', 'Kick'), BEFORE_EDGE);
+  // The group is now empty; its action reads Delete and removes it.
+  await page.getByTitle('Options for Group 1').click();
+  await expect(page.getByTestId('group-delete')).toBeVisible();
+  await page.getByTestId('group-delete').click();
+  await expect(page.getByTestId('layers-group')).toHaveCount(0);
 });
 
 test('dragging a group header moves the whole group', async ({ page }) => {
   await openPanel(page, `${META} | h s k |`); // v0 = HiHat, Snare, Kick (loose)
-  await trackInLayer(page, 'v0', 'Snare').getByTestId('layers-new-group').click();
+  // Drop Kick onto Snare to make a group; loose HiHat precedes it.
+  await trackInLayer(page, 'v0', 'Kick').dragTo(trackInLayer(page, 'v0', 'Snare'));
   await expect(page.getByTestId('layers-group')).toHaveCount(1);
-  // Loose h, k precede the new group, so the first row is HiHat.
   await expect(page.getByTestId('layers-track').first()).toContainText('HiHat');
 
   // Drag the group header onto the HiHat row -> the group moves before it.

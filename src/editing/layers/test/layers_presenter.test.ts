@@ -74,15 +74,118 @@ describe('LayersPresenter', () => {
     expect(groupIdOfTrack(jot, h)).toBeNull();
   });
 
+  it('moveTrackAfter inserts after the anchor, joining its slot', () => {
+    const { jot, p } = setup('| h s | || | k |');
+    const [h, s] = tracksIn(jot, 'v0');
+    p.moveTrackAfter(h, 'v0', s); // h after s -> [s, h]
+    expect(tracksIn(jot, 'v0')).toEqual([s, h]);
+    // Dropping after a grouped track joins that group.
+    const g = p.createGroup(s)!; // group [s]
+    p.moveTrackAfter(h, 'v0', s); // h joins after s in the group
+    expect(groupIdOfTrack(jot, h)).toBe(g);
+    // After itself is a no-op (no orphaning).
+    p.moveTrackAfter(h, 'v0', h);
+    expect(groupIdOfTrack(jot, h)).toBe(g);
+  });
+
+  it('moveTrackAfter with a mismatched layer/anchor is a no-op (no orphaning)', () => {
+    const { jot, p } = setup('| h s | || | k |');
+    const [h, s] = tracksIn(jot, 'v0');
+    const [k] = tracksIn(jot, 'v1');
+    // Anchor `k` lives in v1, not v0: the track must stay put, never get
+    // removed-but-unplaced.
+    p.moveTrackAfter(s, 'v0', k);
+    expect(layerIdOfTrack(jot, s)).toBe('v0');
+    expect(tracksIn(jot, 'v0')).toEqual([h, s]);
+    expect(tracksIn(jot, 'v1')).toEqual([k]);
+  });
+
+  it('deleteGroup refuses a non-empty group (no orphaning)', () => {
+    const { jot, p } = setup('| h s | || | k |');
+    const [, s] = tracksIn(jot, 'v0');
+    const g = p.createGroup(s)!; // group [s], still populated
+    p.deleteGroup(g); // must be a no-op while it holds a track
+    expect(jot.trackGroups.get(g)).toBeDefined();
+    expect(groupIdOfTrack(jot, s)).toBe(g);
+    expect(layerIdOfTrack(jot, s)).toBe('v0');
+  });
+
+  it('groupTracks wraps a loose target + folds into an existing group', () => {
+    const { jot, p } = setup('| h s k |');
+    const [h, s, k] = tracksIn(jot, 'v0');
+    // Drop h onto loose s -> a fresh group {s, h}.
+    p.groupTracks(h, s);
+    const g = groupIdOfTrack(jot, s);
+    expect(g).not.toBeNull();
+    expect(groupIdOfTrack(jot, h)).toBe(g);
+    expect(groupIdOfTrack(jot, k)).toBeNull(); // k untouched
+    // Drop k onto a now-grouped member -> k joins the same group.
+    p.groupTracks(k, s);
+    expect(groupIdOfTrack(jot, k)).toBe(g);
+    // Onto itself is a no-op.
+    p.groupTracks(s, s);
+    expect(groupIdOfTrack(jot, s)).toBe(g);
+  });
+
+  it('deleteGroup removes an emptied group slot and its entry', () => {
+    const { jot, p } = setup('| h s | || | k |');
+    const [h, s] = tracksIn(jot, 'v0');
+    const g = p.createGroup(s)!; // group [s] in v0
+    // Drag the lone member out -> the group slot is left empty.
+    p.moveTrack(s, 'v1', null);
+    expect(groupIdOfTrack(jot, s)).toBeNull();
+    expect(jot.trackGroups.get(g)).toBeDefined(); // empty group persists
+    // Delete it: slot + entry gone, the other track is undisturbed.
+    p.deleteGroup(g);
+    expect(jot.trackGroups.get(g)).toBeUndefined();
+    expect(tracksIn(jot, 'v0')).toEqual([h]);
+    const v0 = [...jot.ordering].find((l) => l.layerId === 'v0')!;
+    expect([...v0.slots].some((sl) => sl.groupId === g)).toBe(false);
+  });
+
   it('moves a whole group within its layer', () => {
     const { jot, p } = setup('| h s k |');
     const [h, s, k] = tracksIn(jot, 'v0');
-    const groupId = p.createGroup(s)!; // slots: [loose h,k][group s] -> [h,k,s]
-    expect(tracksIn(jot, 'v0')).toEqual([h, k, s]);
-    // Move the group's slot before h -> [group s][loose h,k] -> [s,h,k].
+    const groupId = p.createGroup(s)!; // wraps s in place: [loose h][group s][loose k]
+    expect(tracksIn(jot, 'v0')).toEqual([h, s, k]);
+    // Move the group's slot before h -> [group s][loose h][loose k] -> [s,h,k].
     p.moveGroup(groupId, 'v0', h);
     expect(tracksIn(jot, 'v0')).toEqual([s, h, k]);
     expect(groupIdOfTrack(jot, s)).toBe(groupId); // still grouped
+  });
+
+  it('createGroup wraps a mid-run track in place (not at the run edge)', () => {
+    const { jot, p } = setup('| h s k |');
+    const [h, s, k] = tracksIn(jot, 'v0');
+    const g = p.createGroup(s)!; // s is in the middle: group lands between h and k
+    expect(tracksIn(jot, 'v0')).toEqual([h, s, k]); // order preserved
+    expect(groupIdOfTrack(jot, h)).toBeNull();
+    expect(groupIdOfTrack(jot, s)).toBe(g);
+    expect(groupIdOfTrack(jot, k)).toBeNull();
+  });
+
+  it('moveGroup lands between loose tracks, splitting the run', () => {
+    const { jot, p } = setup('| h s k |'); // one loose run [h,s,k]
+    const [h, s, k] = tracksIn(jot, 'v0');
+    const g = p.createGroup(h)!; // [group h][loose s,k]
+    p.moveGroup(g, 'v0', k); // drop before k -> between s and k
+    expect(tracksIn(jot, 'v0')).toEqual([s, h, k]);
+    expect(groupIdOfTrack(jot, h)).toBe(g);
+    expect(groupIdOfTrack(jot, s)).toBeNull();
+    expect(groupIdOfTrack(jot, k)).toBeNull();
+  });
+
+  it('moveGroup refuses to nest inside another group (no orphaning)', () => {
+    const { jot, p } = setup('| h s k |');
+    const [h, s, k] = tracksIn(jot, 'v0');
+    const gA = p.createGroup(h)!; // group A = {h}
+    p.moveTrackAfter(s, 'v0', h); // s joins A after h -> A = {h, s}
+    expect(gA).toBeDefined();
+    const gB = p.createGroup(k)!; // group B = {k}
+    // Try to drop B before `s`, which is a non-first track inside group A.
+    p.moveGroup(gB, 'v0', s);
+    expect(groupIdOfTrack(jot, k)).toBe(gB); // B intact, not nested into A
+    expect(tracksIn(jot, 'v0')).toEqual([h, s, k]); // order unchanged
   });
 
   it('groupSiblingInstrumentLanes lists instrument lanes sharing a non-loose group', () => {
