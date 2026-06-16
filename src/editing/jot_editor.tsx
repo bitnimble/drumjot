@@ -1746,11 +1746,17 @@ const MarqueeOverlay = observer(() => {
  */
 const SelectionFrame = observer(() => {
   const selection = React.useContext(SelectionContext);
+  const editing = React.useContext(EditingStoreContext);
   const ids = selection?.effectiveIds;
   // Bail BEFORE reading any zoom observable when there's no multi-selection,
   // so this component never re-renders on a zoom tick in the common (no
   // selection) case, keeping the 120fps zoom path free of a per-frame render.
   if (!ids || ids.size < 2) return null;
+  // During a drag-move the dragged glyphs hide and per-note previews stand in
+  // for the group, so the frame (measured from the now-hidden real glyphs)
+  // would be stale, drop it for the duration. Read after the size guard so
+  // only ≥2-note selections subscribe to `dragActive`.
+  if (editing?.dragActive) return null;
   return <SelectionFrameBox ids={ids} />;
 });
 

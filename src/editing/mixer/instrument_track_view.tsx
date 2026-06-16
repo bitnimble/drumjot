@@ -15,7 +15,7 @@ import styles from './mixer.module.css';
 import { Playhead } from '../playback/playhead';
 import { seekFromClick } from '../score/seek';
 import { FilteredOnsetView } from '../score/filtered_onset_view';
-import { PlaceholderNoteView } from '../score/placeholder_note';
+import { DragPreviewView, PlaceholderNoteView } from '../score/placeholder_note';
 import { BarView } from '../score/bar_view';
 import { EditingStoreContext, EditingPresenterContext } from '../editing_contexts';
 import type { PlaceholderNote } from '../editing_store';
@@ -192,7 +192,15 @@ export const InstrumentTrackView = observer(
       return undefined;
     };
     const onBarsRowPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-      if (editing?.mode !== 'insert' || !editingPresenter) return;
+      if (!editingPresenter) return;
+      // A drag-move in flight: report the lane the cursor is over (this row) +
+      // the cursor x; the presenter recomputes the preview top-down. The lane
+      // comes from event routing, not hit-testing, so this needs no DOM read.
+      if (editing?.dragActive) {
+        editingPresenter.updateDragMove(lane, e.clientX, laneOrder);
+        return;
+      }
+      if (editing?.mode !== 'insert') return;
       let left = barsRowLeftRef.current;
       if (left === null) {
         left = e.currentTarget.getBoundingClientRect().left;
@@ -383,6 +391,12 @@ export const InstrumentTrackView = observer(
             );
           })}
           <PlaceholderNoteView
+            rowLane={lane}
+            color={laneColor}
+            trackHeight={trackHeight as number}
+            noteDiameter={config.noteDiameter as number}
+          />
+          <DragPreviewView
             rowLane={lane}
             color={laneColor}
             trackHeight={trackHeight as number}

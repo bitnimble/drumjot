@@ -43,3 +43,48 @@ export const PlaceholderNoteView = observer(function PlaceholderNoteView({
     />
   );
 });
+
+/**
+ * Live drag-move preview glyphs for one instrument row's bars row. While a
+ * drag-move is in flight, {@link EditingStore.dragPreview} holds each dragged
+ * note's current (snapped) lane + position; this renders the entries on this
+ * row's lane, positioned by the same `--placeholder-beat` calc as the insert
+ * placeholder. The real glyphs hide (see `NoteView`), so these stand in for
+ * them. An isolated `observer` so only the rows a drag touches re-render.
+ */
+export const DragPreviewView = observer(function DragPreviewView({
+  rowLane,
+  color,
+  trackHeight,
+  noteDiameter,
+}: {
+  rowLane: string;
+  color: string;
+  trackHeight: number;
+  noteDiameter: number;
+}) {
+  const editing = React.useContext(EditingStoreContext);
+  const previews = editing?.dragPreview.filter((p) => p.lane === rowLane) ?? [];
+  if (previews.length === 0) return null;
+  return (
+    <>
+      {previews.map((p) => (
+        <div
+          key={p.id}
+          className={styles.placeholderNote}
+          data-testid="drag-preview-note"
+          data-preview-lane={rowLane}
+          style={
+            {
+              ['--placeholder-beat' as string]: p.absBeat,
+              top: trackHeight / 2,
+              width: noteDiameter,
+              height: noteDiameter,
+              color,
+            } as React.CSSProperties
+          }
+        />
+      ))}
+    </>
+  );
+});

@@ -25,9 +25,25 @@ export type PlaceholderNote = {
 };
 
 /**
- * Editing UI state: the current {@link EditMode} and the transient
- * insert-mode {@link placeholder}. Pure observable data; every mutation
- * lives on `EditingPresenter`.
+ * One dragged note's live position during a drag-move, rendered as a preview
+ * glyph by whichever lane row owns {@link lane}. The set of these (one per
+ * selected note) is the top-down source of truth for the drag preview, so no
+ * DOM is read to position it.
+ */
+export type DragPreviewNote = {
+  /** Id of the note being dragged; also hides its real glyph while dragging. */
+  id: string;
+  /** Lane the preview currently sits on (the row that renders it). */
+  lane: string;
+  /** Cumulative beat offset from the layer's start; drives the rendered x via
+   *  the same CSS calc the insert placeholder + real notes use. */
+  absBeat: number;
+};
+
+/**
+ * Editing UI state: the current {@link EditMode}, the transient insert-mode
+ * {@link placeholder}, and the live drag-move preview. Pure observable data;
+ * every mutation lives on `EditingPresenter`.
  */
 export class EditingStore {
   /** Current editing mode. Defaults to `select` (existing behaviour). */
@@ -36,6 +52,17 @@ export class EditingStore {
   /** Insert-mode preview note under the cursor, or `undefined` when the
    *  cursor isn't over a lane (or not in insert mode). */
   placeholder: PlaceholderNote | undefined = undefined;
+
+  /** True while a note drag-move is in progress. Drives hiding the dragged
+   *  glyphs + the selection frame. Flips only at drag start / end (never per
+   *  pointer move), so observers reading it don't churn during a drag. */
+  dragActive: boolean = false;
+
+  /** Live preview of the dragged notes at their current (snapped) target lane
+   *  + position. Rewritten on every pointer move during a drag; empty idle.
+   *  Each lane row renders the entries whose {@link DragPreviewNote.lane}
+   *  matches it. */
+  dragPreview: DragPreviewNote[] = [];
 
   /** When enabled, inserting and moving notes snaps to the grid at the
    *  resolution of the currently-enabled grid-line families. On by default;

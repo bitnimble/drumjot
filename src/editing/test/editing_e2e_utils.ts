@@ -25,6 +25,38 @@ export function selectedNotes(page: Page): Locator {
   return page.locator('[data-note-id][data-selected]');
 }
 
+/** Drag-move preview glyphs (the placeholders shown while dragging) in a lane. */
+export function dragPreviews(page: Page, lane: string): Locator {
+  return page.locator(`[data-testid="instrument-track-${lane}"] [data-testid="drag-preview-note"]`);
+}
+
+/** Viewport geometry of the (first) drag-move preview glyph on a lane, or null
+ *  if there's none there. Read mid-drag while the pointer is held. */
+export async function previewGeom(
+  page: Page,
+  lane: string
+): Promise<{ x: number; y: number; left: number } | null> {
+  return page.evaluate((lane) => {
+    const el = document.querySelector(
+      `[data-testid="instrument-track-${lane}"] [data-testid="drag-preview-note"]`
+    ) as HTMLElement | null;
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2, left: r.left };
+  }, lane);
+}
+
+/** Viewport `top + height/2` of a lane's bars row, for asserting a preview is
+ *  vertically centred on the row it lands on. */
+export async function laneRowCentreY(page: Page, lane: string): Promise<number> {
+  return page.evaluate((lane) => {
+    const r = document
+      .querySelector(`[data-testid="instrument-track-${lane}"] [data-bars-row]`)!
+      .getBoundingClientRect();
+    return r.top + r.height / 2;
+  }, lane);
+}
+
 export function selectionFrame(page: Page): Locator {
   return page.getByTestId('selection-frame');
 }

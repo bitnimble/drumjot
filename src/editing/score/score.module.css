@@ -615,6 +615,15 @@
     z-index: 30;
 }
 
+/* While a note is being drag-moved its real glyph hides and a
+   `.placeholderNote` preview (DragPreviewView) stands in for it at the live
+   target lane + position. `visibility: hidden` keeps the note's layout slot
+   (no reflow) and, crucially, drops it from hit-testing so the bars-row under
+   the cursor receives the pointer move that reports the target lane. */
+.note.noteDragHidden {
+    visibility: hidden;
+}
+
 /* Inline label below the selected note showing the same text the hover
    tooltip would. Sticking badges sit at `bottom: -10px`; offset further
    so the two don't overlap. z-index so the label paints over neighbour

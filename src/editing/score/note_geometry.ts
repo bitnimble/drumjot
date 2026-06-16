@@ -60,29 +60,6 @@ export function boundingBoxOfNotes(ids: ReadonlySet<string>, pad = 4): Box | nul
   return new Box(minX - pad, minY - pad, maxX - minX + 2 * pad, maxY - minY + 2 * pad);
 }
 
-/** The instrument lane under a viewport point, read from the enclosing
- *  `[data-testid="instrument-track-<lane>"]` row, or undefined off any row. */
-export function laneAtPoint(clientX: number, clientY: number): string | undefined {
-  const el = document
-    .elementFromPoint(clientX, clientY)
-    ?.closest<HTMLElement>('[data-testid^="instrument-track-"]');
-  const testId = el?.dataset.testid;
-  return testId?.startsWith('instrument-track-') ? testId.slice('instrument-track-'.length) : undefined;
-}
-
-/** Viewport `top` of an instrument lane's bars row, for the cross-track drag
- *  preview: shifting a glyph by the delta between two lanes' bars-row tops lands
- *  it at the same relative vertical spot in the destination row, robust to
- *  non-uniform row heights, group gaps, and the rendered lane order (which a
- *  computed `rowIndex × rowHeight` is not). `null` if the row isn't mounted.
- *  Read from the DOM, so pointer-handler-only (never a render/per-frame path). */
-export function laneBarsRowTop(lane: string): number | null {
-  const el = document.querySelector<HTMLElement>(
-    `[data-testid="instrument-track-${lane}"] [data-bars-row]`
-  );
-  return el ? el.getBoundingClientRect().top : null;
-}
-
 /** A flat map of every current note keyed by id, for resolving DOM-attribute
  *  ids back to live `StructNote`s. */
 export function notesById(layers: readonly StructLayer[]): Map<string, StructNote> {

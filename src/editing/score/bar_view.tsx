@@ -13,6 +13,7 @@ import { msOffsetToBeats } from 'src/schema/dsl/tempo';
 import { BarTimingsContext } from '../jot_editor_contexts';
 import { SelectionContext } from 'src/editing/selection/selection';
 import { SelectionPresenterContext } from 'src/editing/selection/selection_presenter';
+import { EditingStoreContext } from '../editing_contexts';
 import { useNoteDrag } from './note_drag';
 import { NoteProvenanceContext } from '../provenance/provenance_contexts';
 import styles from './score.module.css';
@@ -432,14 +433,21 @@ const NoteView = observer(
     const badge = pickBadge(note);
     const selection = React.useContext(SelectionContext);
     const selectionPresenter = React.useContext(SelectionPresenterContext);
-    const { onPointerDown: onNotePointerDown, dragging } = useNoteDrag();
+    const { onPointerDown: onNotePointerDown } = useNoteDrag();
+    const editing = React.useContext(EditingStoreContext);
     const selected = selection?.isSelected(note) ?? false;
+    // True while this note is part of an in-flight drag-move: its real glyph
+    // hides and a `DragPreviewView` placeholder stands in for it. `selected` is
+    // evaluated first so non-selected notes never subscribe to `dragActive`
+    // (it flips only at drag start/end, so the few selected notes re-render
+    // twice, not every note per move).
+    const beingDragged = selected && (editing?.dragActive ?? false);
     // The inline label is a single-note affordance: show it only when this note
     // is the *sole* selection (a multi/marquee selection suppresses it) or on
     // hover, and never while it's being dragged.
     const isSoleSelected = selection?.selectedNote?.id === note.id;
     const [hovered, setHovered] = React.useState(false);
-    const showLabel = (isSoleSelected || hovered) && !dragging;
+    const showLabel = (isSoleSelected || hovered) && !beingDragged;
     const description = offGrid
       ? `${describeNote(note, instrument)} — off the straight grid (triplet/tuplet)`
       : describeNote(note, instrument);
@@ -493,7 +501,8 @@ const NoteView = observer(
           offGrid && styles.offGrid,
           selected && styles.noteSelected,
           showLabel && styles.noteShowingLabel,
-          hovered && styles.noteHovered
+          hovered && styles.noteHovered,
+          beingDragged && styles.noteDragHidden
         )}
         style={
           {

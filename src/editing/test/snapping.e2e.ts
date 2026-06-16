@@ -7,6 +7,7 @@ import {
   loadRockJot,
   noteGeom,
   noteLeft,
+  previewGeom,
   setMode,
 } from './editing_e2e_utils';
 
@@ -86,12 +87,12 @@ test('with snapping ON the live drag preview jumps between grid lines', async ({
   await page.mouse.down();
   // Under half a 16th: the live preview snaps back to the original grid line.
   await page.mouse.move(ref.x + sixteenth * 0.4, ref.y, { steps: 4 });
-  const heldNear = (await noteLeft(page, ref.id))!;
-  expect(Math.abs(heldNear - ref.left)).toBeLessThan(2);
+  const near = await previewGeom(page, 'h');
+  expect(Math.abs(near!.left - ref.left)).toBeLessThan(2);
   // Past half a 16th: it jumps a full grid step rather than moving continuously.
   await page.mouse.move(ref.x + sixteenth * 0.7, ref.y, { steps: 4 });
-  const heldNext = (await noteLeft(page, ref.id))!;
-  expect(Math.abs(heldNext - (ref.left + sixteenth))).toBeLessThan(2);
+  const next = await previewGeom(page, 'h');
+  expect(Math.abs(next!.left - (ref.left + sixteenth))).toBeLessThan(2);
   await page.mouse.up();
 });
 

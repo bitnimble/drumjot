@@ -5,8 +5,34 @@ import type { StructLayer, StructNote } from 'src/editing/structure/structure_st
 import { SelectionStore } from 'src/editing/selection/selection';
 import { SelectionPresenter } from 'src/editing/selection/selection_presenter';
 import { enabledDivisors, snapBeat } from './snap';
+import { buildLaneMap } from './score/note_geometry';
 import { EditingStore, type EditMode, type PlaceholderNote } from './editing_store';
 import { JotEditorStore } from './jot_editor_store';
+
+/** Per-drag bookkeeping captured at drag start; presenter-local (not store
+ *  state, like an in-flight AbortController). Positions are recomputed top-down
+ *  from these + the live cursor x / target lane, so the drag reads no DOM. */
+type DragMoveCtx = {
+  /** The grabbed note (drives snapping + the lane remap origin). */
+  anchor: StructNote;
+  /** Pointer x at drag start; horizontal motion is a pure delta from here. */
+  startClientX: number;
+  anchorOrigLane: string;
+  /** Snaps a raw beat delta to the grid (identity when snapping is off). */
+  snap: (rawDeltaBeat: number) => number;
+  /** Timeline length in beats, the upper clamp for a dragged position. */
+  total: number;
+  /** Rendered lead-in beats before musical bar 0. Preview glyphs are positioned
+   *  in the rendered (lead-in-inclusive) coordinate, while `buildBarLayout`
+   *  works in musical beats, so this offset bridges the two. */
+  leadInBeats: number;
+  /** Every selected note's id, origin lane, and origin absolute beat. */
+  notes: { id: string; lane: string; origAbs: number }[];
+  /** Rendered top-to-bottom lane order (mixer order), for the group lane shift. */
+  laneOrder: readonly string[];
+  lastClientX: number;
+  lastTargetLane: string;
+};
 
 /** One bar's place in the absolute-beat coordinate (cumulative across bars). */
 type BarSlot = { id: string; start: number; beats: number };
@@ -27,6 +53,9 @@ const INSERTED_NOTE_DURATION = 0.25;
  * go straight through `jotEditorStore.jot` (the sanctioned document-write path).
  */
 export class EditingPresenter {
+  /** Live drag-move bookkeeping, or undefined when no drag is in flight. */
+  private dragCtx: DragMoveCtx | undefined = undefined;
+
   constructor(
     private readonly editingStore: EditingStore,
     private readonly jotEditorStore: JotEditorStore,
@@ -36,13 +65,19 @@ export class EditingPresenter {
   ) {
     makeAutoObservable<
       this,
-      'editingStore' | 'jotEditorStore' | 'settingsStore' | 'selectionStore' | 'selectionPresenter'
+      | 'editingStore'
+      | 'jotEditorStore'
+      | 'settingsStore'
+      | 'selectionStore'
+      | 'selectionPresenter'
+      | 'dragCtx'
     >(this, {
       editingStore: false,
       jotEditorStore: false,
       settingsStore: false,
       selectionStore: false,
       selectionPresenter: false,
+      dragCtx: false,
     });
   }
 
@@ -175,6 +210,110 @@ export class EditingPresenter {
     const anchorAbs = slot.start + el.beat;
     const divisors = enabledDivisors(this.settingsStore.gridLines);
     return (rawDeltaBeat) => snapBeat(anchorAbs + rawDeltaBeat, divisors, layout.total) - anchorAbs;
+  }
+
+  /**
+   * Start a drag-move of the current selection (grabbing `anchor`, which joins
+   * the selection if it wasn't in it). Captures each selected note's origin
+   * position so the preview + commit are computed top-down from the live
+   * cursor delta and target lane, no DOM measured. Sets the initial preview
+   * (notes at rest) and flips `dragActive` so the real glyphs hide.
+   */
+  beginDragMove(anchor: StructNote, startClientX: number): void {
+    const jot = this.jotEditorStore.jot;
+    const layers = this.jotEditorStore.structural?.musicalLayers;
+    if (!jot || !layers) return;
+    if (!this.selectionStore.isSelected(anchor)) this.selectionPresenter.replace(anchor);
+
+    const layout = buildBarLayout(layers);
+    if (layout.slots.length === 0) return;
+    const absOf = (id: string): number | undefined => {
+      const el = jot.elements.get(id) as Element | undefined;
+      if (!el || el.barId === undefined) return undefined;
+      const slot = layout.byId.get(el.barId);
+      return slot ? slot.start + el.beat : undefined;
+    };
+    const notes: DragMoveCtx['notes'] = [];
+    for (const n of this.selectionStore.selectedNotes) {
+      const origAbs = absOf(n.id);
+      if (origAbs !== undefined) notes.push({ id: n.id, lane: n.lane, origAbs });
+    }
+    if (notes.length === 0) return;
+
+    this.dragCtx = {
+      anchor,
+      startClientX,
+      anchorOrigLane: anchor.lane,
+      snap: this.snapDeltaFn(anchor),
+      total: layout.total,
+      leadInBeats: this.jotEditorStore.structural?.barsForLane(anchor.lane).leadInBarsBeats ?? 0,
+      notes,
+      laneOrder: this.jotEditorStore.structural?.lanes ?? [],
+      lastClientX: startClientX,
+      lastTargetLane: anchor.lane,
+    };
+    this.editingStore.dragActive = true;
+    this.applyPreview();
+  }
+
+  /**
+   * Update the in-flight drag from a lane row's pointer move: `targetLane` is
+   * the row the cursor is over (so cross-lane targeting needs no hit-testing),
+   * `clientX` drives the horizontal delta, and `laneOrder` is that row's
+   * rendered lane order (mixer order) for the group's vertical shift.
+   */
+  updateDragMove(targetLane: string, clientX: number, laneOrder: readonly string[]): void {
+    const ctx = this.dragCtx;
+    if (!ctx) return;
+    ctx.lastClientX = clientX;
+    ctx.lastTargetLane = targetLane;
+    ctx.laneOrder = laneOrder;
+    this.applyPreview();
+  }
+
+  /** Recompute the preview glyph positions from the current cursor delta +
+   *  target lane. Horizontal: `(clientX - startX) / pxPerBeat`, snapped. Lane:
+   *  each note shifts by the same row delta the anchor moved over `laneOrder`. */
+  private applyPreview(): void {
+    const ctx = this.dragCtx;
+    if (!ctx) return;
+    const px = this.jotEditorStore.structural?.pxPerBeat ?? 0;
+    const rawDelta = px > 0 ? (ctx.lastClientX - ctx.startClientX) / px : 0;
+    const snapped = ctx.snap(rawDelta);
+    const order = ctx.laneOrder;
+    const fromIdx = order.indexOf(ctx.anchorOrigLane);
+    const toIdx = order.indexOf(ctx.lastTargetLane);
+    const rowDelta = fromIdx >= 0 && toIdx >= 0 ? toIdx - fromIdx : 0;
+    this.editingStore.dragPreview = ctx.notes.map((n) => {
+      const i = order.indexOf(n.lane);
+      const lane = i >= 0 ? order[Math.min(Math.max(i + rowDelta, 0), order.length - 1)] : n.lane;
+      const musicalAbs = Math.min(Math.max(n.origAbs + snapped, 0), ctx.total);
+      // Glyphs render in the rendered (lead-in-inclusive) coordinate.
+      return { id: n.id, lane, absBeat: ctx.leadInBeats + musicalAbs };
+    });
+  }
+
+  /** Commit the drag-move: writes the previewed positions via
+   *  {@link moveSelection} (same snap + lane remap as the preview, so what you
+   *  saw is what lands), then clears the preview. No-op if no drag is active. */
+  commitDragMove(): void {
+    const ctx = this.dragCtx;
+    this.dragCtx = undefined;
+    this.editingStore.dragActive = false;
+    this.editingStore.dragPreview = [];
+    if (!ctx) return;
+    const px = this.jotEditorStore.structural?.pxPerBeat ?? 0;
+    const rawDelta = px > 0 ? (ctx.lastClientX - ctx.startClientX) / px : 0;
+    const laneMap = buildLaneMap(ctx.laneOrder, ctx.anchorOrigLane, ctx.lastTargetLane);
+    this.moveSelection(ctx.anchor, rawDelta, laneMap);
+  }
+
+  /** Abandon an in-flight drag-move (pointercancel), leaving the document
+   *  untouched and clearing the preview. */
+  cancelDragMove(): void {
+    this.dragCtx = undefined;
+    this.editingStore.dragActive = false;
+    this.editingStore.dragPreview = [];
   }
 
   /**
