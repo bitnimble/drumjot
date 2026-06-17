@@ -21,6 +21,7 @@ import {
   movableList,
   type ReactiveMap,
   record,
+  type Snapshot,
   union,
   type UnionDescriptor,
 } from './descriptors';
@@ -367,14 +368,29 @@ export type OrderSlot = Infer<typeof OrderSlotSchema>;
 export type OrderLayer = Infer<typeof OrderLayerSchema>;
 export type Ordering = Infer<typeof OrderingSchema>;
 export type TempoEvent = Infer<typeof TempoEventSchema>;
-export type Jot = Infer<typeof JotSchema>;
+/**
+ * The live, mutable Jot: the deeply-observable MobX/Loro-backed model whose
+ * collections are `ReactiveMap`/`ReactiveList`. Reads/writes are ordinary
+ * property access; every write commits to the backing Loro doc. Snapshot it
+ * to a plain {@link JotState} via `createMutableJot(...).snapshot()`.
+ */
+export type MutableJot = Infer<typeof JotSchema>;
 
 /**
- * Create a reactive Jot document backed by Loro, optionally seeded from a
- * plain Jot object (bars as an array, notes/instruments as records keyed
- * by id/lane). The returned `model` is the deeply-observable MobX
- * projection; reads/writes are ordinary property access.
+ * The immutable Jot: a plain JSON object with the same general schema as
+ * {@link MutableJot} but plain JS collections (bars as an array,
+ * notes/instruments as records keyed by id/lane) and no mutation surface.
+ * What you serialize, diff, or seed a fresh {@link MutableJot} from.
  */
-export function createReactiveJot(initial?: Init<typeof JotSchema>): ReactiveDoc<typeof JotSchema> {
+export type JotState = Snapshot<typeof JotSchema>;
+
+/**
+ * Create a mutable Jot document backed by Loro, optionally seeded from a
+ * plain {@link JotState} (bars as an array, notes/instruments as records
+ * keyed by id/lane). The returned `model` is the deeply-observable MobX
+ * projection; reads/writes are ordinary property access. Call `.snapshot()`
+ * on the result to read the current state back out as a plain {@link JotState}.
+ */
+export function createMutableJot(initial?: Init<typeof JotSchema>): ReactiveDoc<typeof JotSchema> {
   return createReactiveDoc(JotSchema, initial);
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { createReactiveJot, type Jot, type NoteElement } from 'src/schema/schema';
+import { createMutableJot, type MutableJot, type NoteElement } from 'src/schema/schema';
 import { StructureStore } from 'src/editing/structure/structure_store';
 import { LayoutStore } from 'src/editing/viewport/layout_store';
 
@@ -10,7 +10,7 @@ function jotWith(notes: Record<string, { lane: string; beat: number }>, bars = 1
   for (const [id, n] of Object.entries(notes)) {
     elements[id] = { kind: 'note', id, barId: 'b1', duration: 1, modifiers: [], ...n };
   }
-  const { model } = createReactiveJot({
+  const { model } = createMutableJot({
     title: '',
     bpm: 120,
     bars: Array.from({ length: bars }, (_, i) => ({ id: `b${i + 1}`, tsCount: 4, tsUnit: 4 })),
@@ -20,7 +20,7 @@ function jotWith(notes: Record<string, { lane: string; beat: number }>, bars = 1
   return model;
 }
 
-function layout(model: Jot) {
+function layout(model: MutableJot) {
   return new LayoutStore(new StructureStore(() => model), () => BAR_WIDTH, () => 0);
 }
 

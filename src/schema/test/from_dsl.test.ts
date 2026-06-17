@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'bun:test';
 import { bar, group, type Jot as DslJot, note } from 'src/schema/dsl/dsl';
 import { StructureStore } from 'src/editing/structure/structure_store';
-import { dslToReactive } from 'src/schema/dsl/from_dsl';
+import { dslToMutable } from 'src/schema/dsl/from_dsl';
 
 function structureOf(jot: DslJot) {
-  const { model } = dslToReactive(jot);
+  const { model } = dslToMutable(jot);
   return { model, structure: new StructureStore(() => model) };
 }
 
@@ -17,7 +17,7 @@ const META = {
   },
 };
 
-describe('dslToReactive', () => {
+describe('dslToMutable', () => {
   it('carries metadata + instruments', () => {
     const { model } = structureOf({ title: 'T', globalMetadata: META, layers: [{ bars: [] }] });
     expect(model.title).toBe('T');

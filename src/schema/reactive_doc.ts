@@ -10,6 +10,7 @@ import type {
   ReactiveList,
   ReactiveMap,
   RecordDescriptor,
+  Snapshot,
   UnionDescriptor,
 } from './descriptors';
 
@@ -59,6 +60,11 @@ export type ReactiveDoc<S extends RecordDescriptor> = {
   /** The backing Loro doc, the source of truth for merge/persistence.
    *  App code shouldn't touch it; it's the synchroniser. */
   doc: LoroDoc;
+  /** Plain-JSON snapshot of the current committed state: `idMap`s as
+   *  records keyed by id, `movableList`s as arrays, no live MobX/Loro
+   *  surfaces. The inverse of seeding a fresh doc, the result is a valid
+   *  `Init<S>`, so `createReactiveDoc(schema, other.snapshot())` clones it. */
+  snapshot: () => Snapshot<S>;
   /** Stop listening to Loro events and unregister every node. */
   dispose: () => void;
   /** Number of live containers currently registered. Diagnostic, lets
@@ -611,9 +617,18 @@ export function createReactiveDoc<S extends RecordDescriptor>(
     unsubscribe();
     root.dispose();
   };
+  // Read the plain value straight off Loro (the committed source of truth)
+  // rather than walking the MobX surface: `toJSON` already projects
+  // `idMap`s to records and `movableList`s to arrays. Cast through `unknown`
+  // so the generic `Snapshot<S>` never expands in this body (its recursive
+  // union/lazy branches blow TS's depth limit for the generic S; concrete
+  // call sites are fine).
+  const snapshot = () =>
+    (doc.toJSON() as Record<string, unknown>)[ROOT] as unknown as Snapshot<S>;
   return {
     model: surface as unknown as Infer<S>,
     doc,
+    snapshot,
     dispose,
     containerCount: () => registry.size,
   };

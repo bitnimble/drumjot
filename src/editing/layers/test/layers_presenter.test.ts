@@ -1,17 +1,17 @@
 import { describe, expect, it } from 'bun:test';
 import { LayersPresenter } from 'src/editing/layers/layers_presenter';
-import { dslToReactive } from 'src/schema/dsl/from_dsl';
+import { dslToMutable } from 'src/schema/dsl/from_dsl';
 import { groupIdOfTrack, groupSiblingInstrumentLanes, layerIdOfTrack } from 'src/schema/ordering';
 import { parse } from 'src/schema/dsl/parser/parser';
-import type { Jot } from 'src/schema/schema';
+import type { MutableJot } from 'src/schema/schema';
 
-function setup(src: string): { jot: Jot; p: LayersPresenter } {
-  const jot = dslToReactive(parse(src)).model;
+function setup(src: string): { jot: MutableJot; p: LayersPresenter } {
+  const jot = dslToMutable(parse(src)).model;
   return { jot, p: new LayersPresenter(() => jot) };
 }
 
 /** Track ids placed in a layer, in render order. */
-function tracksIn(jot: Jot, layerId: string): string[] {
+function tracksIn(jot: MutableJot, layerId: string): string[] {
   const layer = [...jot.ordering].find((l) => l.layerId === layerId);
   return layer ? [...layer.slots].flatMap((s) => [...s.tracks].map((t) => t.trackId)) : [];
 }

@@ -1,7 +1,7 @@
 import { computed, makeObservable } from 'mobx';
 import { computedFn } from 'mobx-utils';
 import { groupIdOfTrack, layerIdOfTrack } from 'src/schema/ordering';
-import type { Jot, Track } from 'src/schema/schema';
+import type { MutableJot, Track } from 'src/schema/schema';
 import { PICKER_PALETTE } from 'src/editing/tracks/tracks';
 
 /**
@@ -52,7 +52,7 @@ export type LayersLayerView = {
 };
 
 export class LayersStore {
-  constructor(private readonly getJot: () => Jot | undefined) {
+  constructor(private readonly getJot: () => MutableJot | undefined) {
     makeObservable(this, { layout: computed, mergedLayout: computed });
   }
 

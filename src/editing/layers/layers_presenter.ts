@@ -2,7 +2,7 @@ import { reaction } from 'mobx';
 import { jotPlayer } from 'src/editing/playback/player';
 import { lyricsStore } from 'src/lyrics/store';
 import { audioTrackEntityId, lyricsTrackEntityId } from 'src/schema/ordering';
-import type { Jot, OrderLayer, OrderSlot, Track } from 'src/schema/schema';
+import type { MutableJot, OrderLayer, OrderSlot, Track } from 'src/schema/schema';
 
 /** Deterministic track-entity ids for the session-only runtime tracks, so the
  *  sync is idempotent (re-running finds the existing entity). */
@@ -24,7 +24,7 @@ const lyricsTrackId = lyricsTrackEntityId;
  * instrument tracks.
  */
 export class LayersPresenter {
-  constructor(private readonly getJot: () => Jot | undefined) {
+  constructor(private readonly getJot: () => MutableJot | undefined) {
     // Keep audio/lyrics tracks present in the doc model: add a track entity +
     // place it at the top of layer 0 when one loads, drop it when it unloads.
     // Existing placements (e.g. a user-grouped audio row) are left alone.

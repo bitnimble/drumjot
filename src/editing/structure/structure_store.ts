@@ -2,10 +2,10 @@ import { comparer, computed, makeObservable } from 'mobx';
 import { computedFn } from 'mobx-utils';
 import { isDyadic } from 'src/schema/dsl/element_metrics';
 import { laneForNote } from 'src/schema/ordering';
-import type { Element, Jot, PatternDef } from 'src/schema/schema';
+import type { Element, MutableJot, PatternDef } from 'src/schema/schema';
 
 /**
- * Beat-addressed score structure derived from the reactive Jot's element
+ * Beat-addressed score structure derived from the mutable Jot's element
  * tree, the grouping/indexing layer that used to live in `JotStructure`.
  *
  * The reactive model is a hierarchy of `note | group | pattern` elements
@@ -148,7 +148,7 @@ const EMPTY_CONTENTS: BarContents = {
 };
 
 export class StructureStore {
-  constructor(private readonly getJot: () => Jot | undefined) {
+  constructor(private readonly getJot: () => MutableJot | undefined) {
     makeObservable(this, {
       layerOrder: computed,
       barOrder: computed,
@@ -452,7 +452,7 @@ function flattenInto(
   el: Element,
   absBeat: number,
   absDur: number,
-  jot: Jot,
+  jot: MutableJot,
   colorOf: (name: string) => number,
   out: { notes: StructNote[]; tuplets: StructTupletSpan[]; patternSpans: StructPatternSpan[] }
 ): void {
@@ -512,7 +512,7 @@ function flattenInto(
 
 /** Map every placed track id to its layer id, from `jot.ordering`. Built once
  *  per `membership` pass so the per-element layer lookup is O(1). */
-function buildTrackLayerMap(jot: Jot): Map<string, string> {
+function buildTrackLayerMap(jot: MutableJot): Map<string, string> {
   const m = new Map<string, string>();
   for (const layer of jot.ordering) {
     for (const slot of layer.slots) {
@@ -555,7 +555,7 @@ function naturalSpan(children: readonly Element[]): number {
 }
 
 /** Lanes a subtree plays, for a pattern span's lane set. */
-function collectLanes(elements: readonly Element[], jot: Jot, into: Set<string>): void {
+function collectLanes(elements: readonly Element[], jot: MutableJot, into: Set<string>): void {
   for (const el of elements) {
     if (el.kind === 'note') into.add(laneForNote(jot, el));
     else if (el.kind === 'group') collectLanes([...el.children.values()] as Element[], jot, into);
@@ -567,7 +567,7 @@ function collectLanes(elements: readonly Element[], jot: Jot, into: Set<string>)
 }
 
 /** Pattern names used by a subtree, in encounter order (for colour slots). */
-function collectPatternNames(el: Element, jot: Jot, assign: (name: string) => void): void {
+function collectPatternNames(el: Element, jot: MutableJot, assign: (name: string) => void): void {
   if (el.kind === 'note') return;
   if (el.kind === 'group') {
     for (const child of el.children.values()) collectPatternNames(child as Element, jot, assign);

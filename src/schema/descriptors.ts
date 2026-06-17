@@ -237,6 +237,32 @@ type InitField<X, N extends number> =
 // (a missing scalar is just unset; a missing collection starts empty).
 type InitRecord<F, N extends number> = Prettify<{ [K in keyof F]?: InitField<F[K], Depths[N]> }>;
 
+/**
+ * Plain-data snapshot shape: the immutable JSON projection you'd serialize
+ * or diff. Like {@link Infer} in its field presence (a snapshot has every
+ * field a read of the live model would, so required keys stay required),
+ * but with plain JS collections like {@link Init}: an `idMap` is a record
+ * keyed by id and a `movableList` is an array, never the live
+ * `ReactiveMap`/`ReactiveList`. A `Snapshot` is therefore assignable to the
+ * matching {@link Init}, so it round-trips straight back into a fresh doc.
+ */
+export type Snapshot<D, N extends number = 15> =
+  N extends 0 ? unknown
+  : D extends RegDescriptor<infer T> ? z.infer<T>
+  : D extends RecordDescriptor<infer F> ? SnapshotRecord<F, N>
+  : D extends IdMapDescriptor<infer V> ? InitMap<Snapshot<V, Depths[N]>>
+  : D extends MovableListDescriptor<infer V> ? Snapshot<V, Depths[N]>[]
+  : D extends UnionDescriptor<infer V> ? Snapshot<V[keyof V], Depths[N]>
+  : D extends LazyDescriptor<infer R> ? Snapshot<R, Depths[N]>
+  : never;
+
+type SnapshotField<X, N extends number> =
+  X extends Descriptor ? Snapshot<X, N> : X extends ZodType ? z.infer<X> : never;
+
+type SnapshotRecord<F, N extends number> = Prettify<
+  MakeUndefinedOptional<{ [K in keyof F]: SnapshotField<F[K], Depths[N]> }>
+>;
+
 export function movableList<V extends Descriptor>(value: V): MovableListDescriptor<V> {
   return { [KIND]: true, kind: 'movableList', value };
 }

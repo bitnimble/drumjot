@@ -1,5 +1,5 @@
 import { computed, makeObservable } from 'mobx';
-import type { Jot } from 'src/schema/schema';
+import type { MutableJot } from 'src/schema/schema';
 import { INSTRUMENT_FALLBACK_COLOR } from 'src/editing/tracks/tracks';
 import type { StructureStore } from 'src/editing/structure/structure_store';
 
@@ -18,7 +18,7 @@ export class PaletteStore {
   constructor(
     private readonly structure: StructureStore,
     private readonly getPalette: () => readonly string[],
-    private readonly getJot: () => Jot | undefined
+    private readonly getJot: () => MutableJot | undefined
   ) {
     makeObservable(this, { jotLanes: computed.struct, legend: computed.struct });
   }
