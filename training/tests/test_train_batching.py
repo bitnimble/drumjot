@@ -135,6 +135,37 @@ def test_feature_index_version_mismatch_rebuilds(tmp_path):
     assert _load_feature_index(tmp_path) == {}  # discarded -> rebuild
 
 
+def test_train_loop_resume_continues_from_checkpoint(tmp_path):
+    # A run stopped after 2 epochs resumes (into a fresh model) and finishes the
+    # rest, continuing the SAME history instead of restarting from epoch 0.
+    import os
+
+    from drumjot_training.config import Config
+    from drumjot_training.model import MultiLaneHeads
+    from drumjot_training.train import train_loop
+
+    cfg = Config(encoder_fps=100.0)
+    nl = len(cfg.lanes)
+    clips = [_clip(t, dim=8, n_lanes=nl) for t in (30, 20, 25, 15, 18)]
+    rp = str(tmp_path / "r.pt")
+
+    # "stop" after 2 epochs (a full-state checkpoint is written each epoch)
+    m1 = MultiLaneHeads(in_dim=8, hidden=8, num_layers=1, lane_names=cfg.lanes)
+    h1 = train_loop(m1, clips, cfg, epochs=2, batch_size=2, resume_path=rp, log=lambda s: None)
+    assert len(h1["train_loss"]) == 2
+    assert os.path.exists(rp)  # checkpoint left behind for resume
+
+    # resume for 5 epochs total: loads state, trains only epochs 2,3,4
+    logs: list[str] = []
+    m2 = MultiLaneHeads(in_dim=8, hidden=8, num_layers=1, lane_names=cfg.lanes)
+    h2 = train_loop(m2, clips, cfg, epochs=5, batch_size=2, resume_path=rp, log=logs.append)
+    assert len(h2["train_loss"]) == 5                  # 2 restored + 3 new, NOT restarted
+    assert h2["train_loss"][:2] == h1["train_loss"]    # restored history carried forward
+    assert any("resumed @ epoch 2" in s for s in logs)
+    trained = {int(s.split()[1]) for s in logs if s.startswith("epoch")}
+    assert trained == {2, 3, 4}  # only the remaining epochs ran this session
+
+
 def test_train_loop_runs_batched_over_variable_lengths():
     # Exercises shuffle + chunking + per-batch averaging with a batch that
     # spans clips of different lengths (so padding/masking is in play).

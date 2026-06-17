@@ -594,6 +594,35 @@ def materialize(
     return CachedClips(ok, cfg, cache_dir, max_seconds)
 
 
+def _save_resume(path, *, epoch, model, opt, sched, history, best_f1, best_epoch,
+                 best_state, gen) -> None:
+    """Atomic full-state checkpoint for pause/resume: model + optimizer + LR
+    schedule + epoch + history + keep_best snapshots + RNG. Lets a killed run
+    continue from the next epoch (re-run the same command). Written once per epoch
+    -- point it at LOCAL disk; per-epoch torch.save of the optimizer state is heavy
+    over NFS."""
+    import os
+
+    import torch
+
+    ckpt = {
+        "epoch": int(epoch),
+        "model": model.state_dict(),
+        "opt": opt.state_dict(),
+        "sched": sched.state_dict() if sched is not None else None,
+        "history": history,
+        "best_lane_f1": best_f1,
+        "best_lane_epoch": best_epoch,
+        "best_lane_state": best_state,
+        "gen": gen.get_state(),
+    }
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".tmp")
+    torch.save(ckpt, tmp)
+    os.replace(tmp, p)
+
+
 def _fmt_eta(seconds: float) -> str:
     s = max(0, int(seconds))
     return f"{s // 3600}:{(s % 3600) // 60:02d}:{s % 60:02d}"
@@ -641,6 +670,7 @@ def train_loop(
     es_jitter: float = 0.015,
     es_min_epochs: int = 20,
     grad_clip: float | None = None,
+    resume_path: str | None = None,
     log: Callable[[str], None] = print,
 ) -> dict:
     """Train `model` on `clips` in padded mini-batches of `batch_size` (clips
@@ -714,7 +744,22 @@ def train_loop(
             return 0.5 * (1.0 + math.cos(math.pi * min(1.0, max(0.0, prog))))
 
         sched = torch.optim.lr_scheduler.LambdaLR(opt, _lr_mult)
-    for epoch in range(epochs):
+
+    start_epoch = 0
+    if resume_path is not None and Path(resume_path).exists():
+        ckpt = torch.load(resume_path, map_location=device)
+        model.load_state_dict(ckpt["model"])
+        opt.load_state_dict(ckpt["opt"])
+        if sched is not None and ckpt.get("sched") is not None:
+            sched.load_state_dict(ckpt["sched"])
+        history = ckpt["history"]
+        best_lane_f1 = ckpt["best_lane_f1"]
+        best_lane_epoch = ckpt["best_lane_epoch"]
+        best_lane_state = ckpt["best_lane_state"]
+        gen.set_state(ckpt["gen"])
+        start_epoch = int(ckpt["epoch"]) + 1
+        log(f"  resumed @ epoch {start_epoch} ({epochs - start_epoch} epochs left) <- {resume_path}")
+    for epoch in range(start_epoch, epochs):
         ep_start = time.perf_counter()
         model.train()
         total, n_batches = 0.0, 0
@@ -807,6 +852,13 @@ def train_loop(
             checkpoint.save(out_dir, model, cfg, {ln: cfg.peak_threshold for ln in cfg.lanes},
                             in_dim=embeddings.feat_dim(cfg.high_band))
             log(f"  checkpoint saved @ epoch {epoch} (untuned) -> {out_dir}")
+        # full-state resume checkpoint (model+opt+sched+epoch+history+keep_best),
+        # so a kill mid-run continues from the next epoch. Caller deletes it once
+        # the arm's result is safely recorded.
+        if resume_path is not None:
+            _save_resume(resume_path, epoch=epoch, model=model, opt=opt, sched=sched,
+                         history=history, best_f1=best_lane_f1, best_epoch=best_lane_epoch,
+                         best_state=best_lane_state, gen=gen)
         # convergence early-stop: stop once EVERY lane with val onsets is converged
         # (so a still-climbing lane blocks it); `epochs` is the absolute cap and we
         # never stop before `es_min_epochs`.

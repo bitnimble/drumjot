@@ -188,6 +188,10 @@ def main():
     ap.add_argument("--grad-clip", type=float, default=None,
                     help="max global grad norm (clip_grad_norm_); None = off. Use at small batch "
                     "where high pos_weight + bf16 can explode a lane's gradient to nan.")
+    ap.add_argument("--ckpt-dir", default=None,
+                    help="enable pause/resume: per-epoch full-state checkpoints here (use LOCAL "
+                    "disk). Re-run the SAME command to resume -- completed arms (in --out-json) are "
+                    "skipped, the in-progress arm continues from its last epoch.")
     ap.add_argument("--num-workers", type=int, default=8,
                     help="DataLoader prefetch workers: stream .npy from the (NFS) cache in parallel "
                     "WHILE the GPU trains, so it doesn't starve on NFS latency. 0 = serial reads.")
@@ -258,9 +262,23 @@ def main():
             f"-> rough upper bound {n_arms * args.epochs * dt / 3600:.1f}h")
         return
 
+    ckpt_dir = Path(args.ckpt_dir) if args.ckpt_dir else None
     results = {}
+    if ckpt_dir is not None:
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        if Path(args.out_json).exists():
+            try:
+                results = json.loads(Path(args.out_json).read_text())
+            except Exception:  # noqa: BLE001  corrupt partial -> start fresh
+                results = {}
+        if results:
+            log(f"resume: {len(results)} arm(s) done, will skip: {', '.join(results)}")
     for H in hiddens:
         for seed in seeds:
+            arm = f"h{H}_s{seed}"
+            if arm in results:
+                log(f"resume: skipping completed arm {arm}")
+                continue
             cfg = make_cfg(H, args.layers)
             torch.manual_seed(seed)
             if torch.cuda.is_available():
@@ -274,7 +292,8 @@ def main():
                               val_clips=val_clips, keep_best=True, log=log,
                               early_stop=args.early_stop, es_window=args.es_window,
                               es_slope=args.es_slope, es_jitter=args.es_jitter,
-                              es_min_epochs=args.es_min_epochs, grad_clip=args.grad_clip)
+                              es_min_epochs=args.es_min_epochs, grad_clip=args.grad_clip,
+                              resume_path=str(ckpt_dir / f"{arm}.resume.pt") if ckpt_dir else None)
             thr = tune_thresholds(model, val_clips, cfg)
             f1 = eval_per_lane(model, val_clips, cfg, thr)
             # dense per-epoch curves (UNTUNED 0.5-thr val F1, every epoch) -> tell if a
@@ -302,6 +321,10 @@ def main():
             _tmp = Path(args.out_json + ".tmp")
             _tmp.write_text(json.dumps(results, indent=2))
             os.replace(_tmp, args.out_json)
+            if ckpt_dir is not None:  # arm recorded -> drop its resume checkpoint
+                rp = ckpt_dir / f"{arm}.resume.pt"
+                if rp.exists():
+                    rp.unlink()
             del model
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
