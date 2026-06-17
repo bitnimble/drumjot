@@ -149,10 +149,11 @@ def build_specs(sources, cap, cache):
     return tr_specs, va_specs
 
 
-def make_cfg(hidden, layers):
+def make_cfg(hidden, layers, lr=None):
+    kw = {} if lr is None else {"lr": lr}
     return Config(
         encoder=embeddings.MERT_NAME, encoder_fps=embeddings.MERT_FPS, encoder_layer=10,
-        high_band=True, lanes=LANES_CH, head_hidden=hidden, head_layers=layers,
+        high_band=True, lanes=LANES_CH, head_hidden=hidden, head_layers=layers, **kw,
     )
 
 
@@ -192,6 +193,12 @@ def main():
                     help="enable pause/resume: per-epoch full-state checkpoints here (use LOCAL "
                     "disk). Re-run the SAME command to resume -- completed arms (in --out-json) are "
                     "skipped, the in-progress arm continues from its last epoch.")
+    ap.add_argument("--lr", type=float, default=None,
+                    help="override Config.lr. Lower it to stabilise big heads (h512 explodes "
+                    "gradients under the default LR -> climbing then 100%% skipped batches).")
+    ap.add_argument("--warmup", type=int, default=0,
+                    help="LR warmup steps (ramp 0->lr) -- avoids the early gradient blow-up that "
+                    "drives big heads into the unstable regime.")
     ap.add_argument("--num-workers", type=int, default=8,
                     help="DataLoader prefetch workers: stream .npy from the (NFS) cache in parallel "
                     "WHILE the GPU trains, so it doesn't starve on NFS latency. 0 = serial reads.")
@@ -244,7 +251,7 @@ def main():
 
     if args.probe_timing:
         H = max(hiddens)
-        cfg = make_cfg(H, args.layers)
+        cfg = make_cfg(H, args.layers, args.lr)
         torch.manual_seed(0)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(0)
@@ -279,7 +286,7 @@ def main():
             if arm in results:
                 log(f"resume: skipping completed arm {arm}")
                 continue
-            cfg = make_cfg(H, args.layers)
+            cfg = make_cfg(H, args.layers, args.lr)
             torch.manual_seed(seed)
             if torch.cuda.is_available():
                 torch.cuda.manual_seed_all(seed)
@@ -293,6 +300,7 @@ def main():
                               early_stop=args.early_stop, es_window=args.es_window,
                               es_slope=args.es_slope, es_jitter=args.es_jitter,
                               es_min_epochs=args.es_min_epochs, grad_clip=args.grad_clip,
+                              warmup_steps=args.warmup,
                               resume_path=str(ckpt_dir / f"{arm}.resume.pt") if ckpt_dir else None)
             thr = tune_thresholds(model, val_clips, cfg)
             f1 = eval_per_lane(model, val_clips, cfg, thr)
