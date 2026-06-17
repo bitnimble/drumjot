@@ -166,6 +166,29 @@ def test_train_loop_resume_continues_from_checkpoint(tmp_path):
     assert trained == {2, 3, 4}  # only the remaining epochs ran this session
 
 
+def test_train_loop_skips_nonfinite_batches(tmp_path):
+    # A batch with nan features -> nan loss/grad. The step must be SKIPPED so the
+    # weights stay finite and the run continues, instead of one nan poisoning every
+    # later epoch (val -> 0). Batch size 1 isolates the bad clip to its own batch.
+    import torch
+
+    from drumjot_training.config import Config
+    from drumjot_training.model import MultiLaneHeads
+    from drumjot_training.train import train_loop
+
+    cfg = Config(encoder_fps=100.0)
+    nl = len(cfg.lanes)
+    clips = [_clip(20, dim=8, n_lanes=nl) for _ in range(4)]
+    clips[0].features[:] = np.nan  # poison one clip's features
+    logs: list[str] = []
+    model = MultiLaneHeads(in_dim=8, hidden=8, num_layers=1, lane_names=cfg.lanes)
+    hist = train_loop(model, clips, cfg, epochs=3, batch_size=1, log=logs.append)
+
+    assert all(np.isfinite(v) for v in hist["train_loss"])  # nan batch didn't pollute the avg
+    assert all(torch.isfinite(p).all() for p in model.parameters())  # weights never poisoned
+    assert any("skipped" in s for s in logs)  # the skip is reported
+
+
 def test_train_loop_runs_batched_over_variable_lengths():
     # Exercises shuffle + chunking + per-batch averaging with a batch that
     # spans clips of different lengths (so padding/masking is in play).

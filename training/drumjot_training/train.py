@@ -762,7 +762,7 @@ def train_loop(
     for epoch in range(start_epoch, epochs):
         ep_start = time.perf_counter()
         model.train()
-        total, n_batches = 0.0, 0
+        total, n_batches, n_skip = 0.0, 0, 0
         for bi, (X, Y, Yw, A, mask) in enumerate(loader):
             X = X.to(device, non_blocking=True)
             Y = Y.to(device, non_blocking=True)
@@ -795,15 +795,24 @@ def train_loop(
                         act_logits[:, sus_idx], A[:, sus_idx], mask, one_pw
                     )
             loss.backward()  # bf16 keeps FP32 range, so no GradScaler needed
-            if grad_clip is not None:
-                # small batches + high pos_weight can explode a lane's gradient
-                # into nan under bf16; clip the global norm to keep it finite.
-                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-            opt.step()
-            if sched is not None:
-                sched.step()
-            total += float(loss.detach())
-            n_batches += 1
+            # clip_grad_norm_ returns the PRE-clip total grad norm. If it's
+            # non-finite (a bad batch / bf16 forward blow-up -- clipping can't
+            # sanitise an already-nan grad, only scale a finite one), SKIP the step:
+            # otherwise one nan poisons the weights and val collapses to 0 for the
+            # rest of the run (h512 hits this even with --grad-clip). max_norm=inf
+            # when grad_clip is off still measures the norm without clipping, so the
+            # skip-guard protects every run; a stable run's norm is always finite.
+            gnorm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), grad_clip if grad_clip is not None else float("inf"))
+            if torch.isfinite(gnorm):
+                opt.step()
+                if sched is not None:
+                    sched.step()
+                total += float(loss.detach())
+                n_batches += 1
+            else:
+                opt.zero_grad(set_to_none=True)
+                n_skip += 1
             # show movement within epoch 0 (before any epoch line prints), so a
             # fresh run on new hardware confirms throughput immediately
             if epoch == 0 and expected_batches >= 4 and (bi + 1) % (expected_batches // 4) == 0:
@@ -845,6 +854,8 @@ def train_loop(
         if val_clips:
             msg += f"  val_macro_f1 {history['val_f1'][-1]:.3f}"
         msg += f"  {dt:.1f}s/ep  eta {_fmt_eta(eta)}"
+        if n_skip:
+            msg += f"  (skipped {n_skip} non-finite batches)"
         log(msg)
         # periodic safety checkpoint (untuned thresholds) for long unattended
         # runs; the final main() save overwrites this with tuned thresholds
