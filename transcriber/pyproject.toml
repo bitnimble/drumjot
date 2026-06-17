@@ -121,6 +121,18 @@ dev = ["ruff>=0.6", "pytest>=8"]
 # resolving the SAME wheel set Docker ships. `explicit = true` means
 # packages are only pulled from this index when listed in
 # `[tool.uv.sources]` below; everything else stays on default PyPI.
+[tool.uv]
+# Drop torchvision: it's an UNUSED transitive dep (onnx2torch-py313 <-
+# audio-separator[gpu]). The training path never imports audio-separator, and on
+# cu128/WSL torchvision's compiled ops fail to load ("operator torchvision::nms
+# does not exist"), which then breaks `transformers` model loading (it imports
+# torchvision whenever it's present). The impossible marker removes it from the
+# resolved graph so `uv sync` never reinstalls it.
+# CAVEAT: this also drops it from the Docker transcriber image. audio-separator's
+# audio models (BS-Roformer / MDX23C) shouldn't need torchvision (onnx2torch only
+# uses it for vision ops), but verify a separation run after `uv lock` before relying on it.
+override-dependencies = ["torchvision; sys_platform == 'never'"]
+
 [[tool.uv.index]]
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
