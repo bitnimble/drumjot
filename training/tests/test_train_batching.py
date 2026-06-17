@@ -89,6 +89,52 @@ def test_materialize_and_cached_clips_stream_from_disk(tmp_path):
     assert clip.onsets_by_lane["k"] == [0.1]  # 100.0s capped out
 
 
+def test_materialize_frame_index_backfills_then_avoids_npy(tmp_path):
+    from drumjot_training import embeddings
+    from drumjot_training.config import Config
+    from drumjot_training.train import _load_feature_index, _window_specs, materialize
+
+    cfg = Config()
+    audio, T = "/fake/song.flac", 200
+    onsets = {"k": [0.1], "s": [0.2]}
+    variant = embeddings.feat_variant(cfg.high_band)
+    key = embeddings.cache_key(audio, cfg.encoder, cfg.encoder_layer, 30.0, variant)
+    cache = tmp_path / "_cache_mert"
+    cache.mkdir()
+    np.save(cache / f"{key}.npy", np.zeros((T, embeddings.MERT_DIM), dtype=np.float32))
+
+    specs = _window_specs([(audio, onsets)], 30.0, 3.0, 1)
+    # 1st pass: index empty -> backfills the frame count from the .npy header.
+    materialize(specs, _StubEncoder(cfg), cfg, cache, 30.0, "t", log=lambda s: None)
+    assert _load_feature_index(cache).get(key) == T
+    assert (cache / "_feature_index.json").exists()
+
+    # 2nd pass with the .npy DELETED: the index hit supplies the frame count, so
+    # materialize + iter_targets work WITHOUT reading the feature file at all.
+    (cache / f"{key}.npy").unlink()
+    ds = materialize(specs, _StubEncoder(cfg), cfg, cache, 30.0, "t", log=lambda s: None)
+    assert len(ds) == 1
+    assert list(ds.iter_targets())[0].shape == (len(cfg.lanes), T)
+
+
+def test_feature_index_version_mismatch_rebuilds(tmp_path):
+    import json
+
+    from drumjot_training.train import (
+        FEATURE_INDEX_VERSION,
+        _load_feature_index,
+        _save_feature_index,
+    )
+
+    _save_feature_index(tmp_path, {"abc": 123})
+    assert _load_feature_index(tmp_path) == {"abc": 123}  # roundtrip
+    p = tmp_path / "_feature_index.json"
+    d = json.loads(p.read_text())
+    d["v"] = FEATURE_INDEX_VERSION + 99  # stale format version
+    p.write_text(json.dumps(d))
+    assert _load_feature_index(tmp_path) == {}  # discarded -> rebuild
+
+
 def test_train_loop_runs_batched_over_variable_lengths():
     # Exercises shuffle + chunking + per-batch averaging with a batch that
     # spans clips of different lengths (so padding/masking is in play).

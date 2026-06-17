@@ -498,6 +498,46 @@ def _window_specs(specs, window: float, search: float, max_windows: int,
     return out
 
 
+# Frame-count index: maps each window's feature `cache_key` -> encoder frame
+# count. `materialize` only needs the frame count (CachedClips streams the actual
+# features per batch at train time), so a warm-cache pass resolves from this ONE
+# json instead of loading every window's .npy (frames x 1040) just to read its
+# shape -- ~30 GB of NFS reads at cap-3000, the "checking cached windows" stall.
+# Feature CONTENT is invalidated via `embeddings.FEAT_VARIANT` (part of the
+# cache_key, so it also re-keys this index); FEATURE_INDEX_VERSION governs only
+# the index FILE FORMAT (bump to discard + rebuild the index, not the .npy cache).
+FEATURE_INDEX_VERSION = 1
+
+
+def _load_feature_index(cache_dir) -> dict:
+    import json
+
+    p = Path(cache_dir) / "_feature_index.json"
+    try:
+        d = json.loads(p.read_text())
+        if d.get("v") == FEATURE_INDEX_VERSION:
+            return dict(d.get("frames", {}))
+    except Exception:  # noqa: BLE001  missing / corrupt / stale-version -> rebuild
+        pass
+    return {}
+
+
+def _save_feature_index(cache_dir, new_frames: dict) -> None:
+    """Atomic, merge-on-write: re-read the on-disk index and merge our new keys on
+    top before writing. So concurrent materializes (e.g. the 1660 + the 3080 on the
+    same shared cache) don't clobber each other -- worst case a lost key is just
+    re-backfilled from the .npy header next run (cheap)."""
+    import json
+    import os
+
+    p = Path(cache_dir) / "_feature_index.json"
+    merged = _load_feature_index(cache_dir)
+    merged.update(new_frames)
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps({"v": FEATURE_INDEX_VERSION, "frames": merged}))
+    os.replace(tmp, p)
+
+
 def materialize(
     specs: Sequence[tuple],
     encoder: embeddings.MertEncoder,
@@ -507,11 +547,18 @@ def materialize(
     tag: str = "clips",
     log: Callable[[str], None] = print,
 ) -> CachedClips:
-    """One-time encode pass: ensure every spec's features are in the `.npy`
-    cache (encoded then discarded, never accumulated in RAM) and return a
-    `CachedClips` over the specs that succeeded. Replaces an all-in-RAM build,
-    so the train set can exceed available memory."""
+    """One-time pass: ensure every spec's features are in the `.npy` cache and
+    return a `CachedClips` over the specs that succeeded. Only the encoder FRAME
+    COUNT is needed here, so a warm cache is resolved with NO per-window feature
+    read: frame-index hit -> 0 I/O; index miss but .npy present -> read the .npy
+    HEADER only (mmap, ~128 B) and backfill the index; miss + absent -> encode on
+    the GPU (and write the .npy). Replaces an all-in-RAM build, so the train set
+    can exceed available memory."""
     cache_dir = Path(cache_dir)
+    index = _load_feature_index(cache_dir)
+    variant = embeddings.feat_variant(cfg.high_band)
+    new_frames: dict = {}
+    n_enc = 0
     ok: list[tuple] = []
     for i, spec in enumerate(specs):
         # spec: (audio, onsets_rel, weight_onsets_or_None, start, length) -- one
@@ -519,18 +566,31 @@ def materialize(
         # carries FULL-kit onsets for sibling loss weighting (per-stem mode).
         audio, onsets, weight_onsets, start, length = spec
         try:
-            feat = embeddings.embed_clip(
-                audio, encoder, cache_dir=cache_dir, max_seconds=length,
-                cache_dtype=cfg.cache_dtype, high_band=cfg.high_band,
-                start_seconds=start,
-            )
+            key = embeddings.cache_key(audio, encoder.name, encoder.layer, length, variant, start)
+            frames = index.get(key)
+            if frames is None:
+                cf = cache_dir / f"{key}.npy"
+                if cf.exists():
+                    frames = int(np.load(cf, mmap_mode="r").shape[0])  # header only, no data read
+                else:
+                    feat = embeddings.embed_clip(
+                        audio, encoder, cache_dir=cache_dir, max_seconds=length,
+                        cache_dtype=cfg.cache_dtype, high_band=cfg.high_band,
+                        start_seconds=start,
+                    )
+                    frames = int(feat.shape[0])
+                    n_enc += 1
+                index[key] = frames
+                new_frames[key] = frames
             rings = _rings_for_clip(audio, onsets, cfg, cache_dir, length, start)
-            ok.append((audio, onsets, weight_onsets, rings, int(feat.shape[0]), start, length))
+            ok.append((audio, onsets, weight_onsets, rings, frames, start, length))
         except Exception as e:  # noqa: BLE001
             log(f"  skip {Path(audio).name}@{start:.0f}s: {e!r}")
-        if (i + 1) % 50 == 0:
-            log(f"  {tag}: {i + 1}/{len(specs)} windows cached")
-    log(f"{tag}: {len(ok)} windows")
+        if (i + 1) % 500 == 0:
+            log(f"  {tag}: {i + 1}/{len(specs)} windows ({n_enc} encoded)")
+    if new_frames:
+        _save_feature_index(cache_dir, new_frames)
+    log(f"{tag}: {len(ok)} windows ({n_enc} newly encoded, {len(ok) - n_enc} from cache)")
     return CachedClips(ok, cfg, cache_dir, max_seconds)
 
 
