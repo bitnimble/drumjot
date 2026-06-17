@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { autorun, runInAction } from 'mobx';
-import { createReactiveJot, type Jot as ReactiveJot } from 'src/schema/schema';
+import { createMutableJot, type MutableJot } from 'src/schema/schema';
 import type { Jot } from 'src/schema/dsl/dsl';
 import { StructureStore, type StructBar } from 'src/editing/structure/structure_store';
 import { StructuralPresenter } from 'src/editing/structure/structural_presenter';
@@ -21,7 +21,7 @@ import { ViewConfig } from 'src/editing/viewport/view_config';
 
 /** Wire the render-facing peers around a mutable reactive model, mirroring
  *  `buildJotPeers` but exposing the model so the test can edit it. */
-function peers(model: ReactiveJot): StructuralPresenter {
+function peers(model: MutableJot): StructuralPresenter {
   const viewConfig = new ViewConfig();
   const structureStore = new StructureStore(() => model);
   const palette = new PaletteStore(structureStore, () => viewConfig.palette, () => model);
@@ -36,8 +36,8 @@ function peers(model: ReactiveJot): StructuralPresenter {
   return new StructuralPresenter(structureStore, palette, layoutStore, source, viewConfig);
 }
 
-function model(): ReactiveJot {
-  return createReactiveJot({
+function model(): MutableJot {
+  return createMutableJot({
     title: '',
     bpm: 120,
     bars: [
@@ -53,7 +53,7 @@ function model(): ReactiveJot {
   }).model;
 }
 
-const addNote = (m: ReactiveJot, id: string, barId: string, beat: number, lane: string) =>
+const addNote = (m: MutableJot, id: string, barId: string, beat: number, lane: string) =>
   runInAction(() =>
     m.elements.set(id, { kind: 'note', id, barId, beat, duration: 1, lane, modifiers: [] })
   );

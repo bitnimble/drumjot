@@ -5,7 +5,7 @@ import type { DrumInstrumentKind } from 'src/instruments/instruments';
 import { idMap, type Infer, record } from 'src/schema/descriptors';
 import { createReactiveDoc } from 'src/schema/reactive_doc';
 import {
-  createReactiveJot,
+  createMutableJot,
   GroupElementSchema,
   type GroupElement,
   type Instrument,
@@ -96,9 +96,9 @@ describe('NoteElementSchema round-trips through a reactive doc', () => {
   });
 });
 
-describe('createReactiveJot', () => {
+describe('createMutableJot', () => {
   it('deep-initializes a whole Jot from a plain object', () => {
-    const { model } = createReactiveJot({
+    const { model } = createMutableJot({
       title: 'Breakbeat',
       bpm: 174,
       bars: [
@@ -122,13 +122,45 @@ describe('createReactiveJot', () => {
   });
 
   it('starts empty when no initial object is given', () => {
-    const { model } = createReactiveJot();
+    const { model } = createMutableJot();
     expect(model.bars.length).toBe(0);
     expect(model.elements.size).toBe(0);
   });
 
+  it('snapshots to a plain JotState that seeds an identical mutable jot', () => {
+    const seed = {
+      title: 'Breakbeat',
+      bpm: 174,
+      bars: [
+        { id: 'b1', tsCount: 4, tsUnit: 4 },
+        { id: 'b2', tsCount: 4, tsUnit: 4, tempoBpm: 180 },
+      ],
+      elements: {
+        n1: { kind: 'note' as const, id: 'n1', barId: 'b1', beat: 0, duration: 1, lane: 'k', modifiers: [] },
+      },
+      instruments: { k: { kind: 'kick' as const, name: 'Kick' } },
+    };
+    const doc = createMutableJot(seed);
+
+    const state = doc.snapshot();
+    // Plain JS surfaces: `bars` is an array, `elements`/`instruments` are
+    // records keyed by id, no ReactiveMap/ReactiveList in sight.
+    expect(Array.isArray(state.bars)).toBe(true);
+    expect(state.bars.length).toBe(2);
+    expect((state.elements.n1 as { lane: string }).lane).toBe('k');
+    expect(state.instruments.k.name).toBe('Kick');
+
+    // The snapshot round-trips straight back into a fresh mutable jot.
+    const { model: clone } = createMutableJot(state);
+    expect(clone.title).toBe('Breakbeat');
+    expect(clone.bars.length).toBe(2);
+    expect(clone.bars.at(1)!.tempoBpm).toBe(180);
+    expect((clone.elements.get('n1') as NoteElement).lane).toBe('k');
+    expect(clone.instruments.get('k')!.name).toBe('Kick');
+  });
+
   it('edits round-trip (a top-level note element lane is one write)', () => {
-    const { model } = createReactiveJot({
+    const { model } = createMutableJot({
       title: '',
       bpm: 120,
       bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
@@ -145,7 +177,7 @@ describe('createReactiveJot', () => {
   });
 
   it('deep-initializes layers, tempo events, a pattern def, and a nested group', () => {
-    const { model } = createReactiveJot({
+    const { model } = createMutableJot({
       title: 'x',
       bpm: 120,
       layers: { v0: { id: 'v0', name: 'Hands' } },

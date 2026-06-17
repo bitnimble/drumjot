@@ -1,5 +1,5 @@
 import { makeAutoObservable } from 'mobx';
-import type { Element, Jot, NoteElement } from 'src/schema/schema';
+import type { Element, MutableJot, NoteElement } from 'src/schema/schema';
 import { laneForNote, layerIdOfTrack } from 'src/schema/ordering';
 import { SettingsStore } from 'src/settings/settings_store';
 import type { StructLayer, StructNote } from 'src/editing/structure/structure_store';
@@ -403,7 +403,7 @@ function homeBar(slots: readonly BarSlot[], abs: number): BarSlot {
 
 /** First declared layer id (numeric-sorted), mirroring `StructureStore`'s
  *  primary-layer pick. `undefined` for single-layer jots (no declared layers). */
-function primaryLayerId(jot: Jot): string | undefined {
+function primaryLayerId(jot: MutableJot): string | undefined {
   const ids = [...jot.layers.keys()];
   if (ids.length === 0) return undefined;
   return ids.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))[0];

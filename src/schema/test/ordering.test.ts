@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { dslToReactive } from 'src/schema/dsl/from_dsl';
+import { dslToMutable } from 'src/schema/dsl/from_dsl';
 import { parse } from 'src/schema/dsl/parser/parser';
 import {
   groupIdOfTrack,
@@ -7,19 +7,19 @@ import {
   layerIdOfTrack,
   trackLaneOf,
 } from 'src/schema/ordering';
-import type { Jot, NoteElement } from 'src/schema/schema';
+import type { MutableJot, NoteElement } from 'src/schema/schema';
 
-function jotFrom(src: string): Jot {
-  return dslToReactive(parse(src)).model;
+function jotFrom(src: string): MutableJot {
+  return dslToMutable(parse(src)).model;
 }
 
 /** All placed top-level notes, in id order. */
-function notesOf(jot: Jot): NoteElement[] {
+function notesOf(jot: MutableJot): NoteElement[] {
   return [...jot.elements.values()].filter((e) => e.kind === 'note') as NoteElement[];
 }
 
 /** The lone loose slot's track ids for a layer in the default ordering. */
-function looseTrackIds(jot: Jot, layerId: string): string[] {
+function looseTrackIds(jot: MutableJot, layerId: string): string[] {
   const layer = [...jot.ordering].find((l) => l.layerId === layerId);
   if (!layer) return [];
   return [...layer.slots].flatMap((s) => [...s.tracks].map((t) => t.trackId));

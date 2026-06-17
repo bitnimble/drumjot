@@ -3,12 +3,12 @@ import { autorun, runInAction } from 'mobx';
 import { LayersStore } from 'src/editing/layers/layers_store';
 import { JotEditorStore } from 'src/editing/jot_editor_store';
 import { PICKER_PALETTE } from 'src/editing/tracks/tracks';
-import { dslToReactive } from 'src/schema/dsl/from_dsl';
+import { dslToMutable } from 'src/schema/dsl/from_dsl';
 import { parse } from 'src/schema/dsl/parser/parser';
-import type { Jot } from 'src/schema/schema';
+import type { MutableJot } from 'src/schema/schema';
 
-function storeFrom(src: string): { jot: Jot; store: LayersStore } {
-  const jot = dslToReactive(parse(src)).model;
+function storeFrom(src: string): { jot: MutableJot; store: LayersStore } {
+  const jot = dslToMutable(parse(src)).model;
   return { jot, store: new LayersStore(() => jot) };
 }
 

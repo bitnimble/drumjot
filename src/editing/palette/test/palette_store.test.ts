@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'bun:test';
-import { createReactiveJot, type Jot } from 'src/schema/schema';
+import { createMutableJot, type MutableJot } from 'src/schema/schema';
 import { StructureStore } from 'src/editing/structure/structure_store';
 import { PaletteStore } from 'src/editing/palette/palette_store';
 
 function fixture(palette: readonly string[]) {
-  const { model } = createReactiveJot({
+  const { model } = createMutableJot({
     title: '',
     bpm: 120,
     bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],

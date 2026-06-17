@@ -1,9 +1,9 @@
 import { makeAutoObservable, observable } from 'mobx';
 import { Jot } from 'src/schema/dsl/dsl';
-import type { Jot as ReactiveJot, JotSchema } from 'src/schema/schema';
+import type { MutableJot, JotSchema } from 'src/schema/schema';
 import type { ReactiveDoc } from 'src/schema/reactive_doc';
 import { ExampleJot } from 'src/fakes/fakes';
-import { dslToReactive } from 'src/schema/dsl/from_dsl';
+import { dslToMutable } from 'src/schema/dsl/from_dsl';
 import { ViewConfig } from 'src/editing/viewport/view_config';
 import { StructureStore } from 'src/editing/structure/structure_store';
 import { StructuralPresenter } from 'src/editing/structure/structural_presenter';
@@ -23,18 +23,18 @@ import { TempoPresenter } from 'src/editing/playback/tempo_presenter';
  * any one being defined implies all are.
  *
  * Observables + computeds, plus the {@link loadSource} peer-constructor: it
- * builds the reactive document and the structure / palette / tempo views over
+ * builds the mutable document and the structure / palette / tempo views over
  * it (the one place that does, the sanctioned exception to "stores hold no
  * logic"). All higher-level load orchestration (parse, convert, replace-song
  * coordination) still lives on the presenter, which is the only caller of
  * `loadSource`. Document edits go through {@link jot} (`store.jot.elements.set`).
  */
 export class JotEditorStore {
-  /** Reactive Loro-backed document for the loaded song, or `undefined` before
+  /** Mutable Loro-backed document for the loaded song, or `undefined` before
    *  the first load. The source of truth the peers below are views over;
    *  edits go through {@link jot}. Held as a plain (non-observable) handle,
    *  load reactivity flows through the peer fields, set together with it. */
-  private reactiveDoc: ReactiveDoc<typeof JotSchema> | undefined;
+  private mutableDoc: ReactiveDoc<typeof JotSchema> | undefined;
 
   /** Raw source of the loaded song (title / globalMetadata read off this),
    *  or `undefined` before the first load (the empty-state welcome screen
@@ -73,38 +73,38 @@ export class JotEditorStore {
   loadingLabel: string | undefined = undefined;
 
   constructor() {
-    // `reactiveDoc` is observed only by REFERENCE (`observable.ref`): deep-
+    // `mutableDoc` is observed only by REFERENCE (`observable.ref`): deep-
     // observing a Loro doc would be wrong (its contents are already reactive
     // through the schema façade), but the *swap* on reload must notify, so a
-    // consumer that reads the reactive jot directly (e.g. `LayersStore.layout`
+    // consumer that reads the mutable jot directly (e.g. `LayersStore.layout`
     // off `jot.ordering`) re-derives when a new song loads rather than staying
     // pinned to the previous doc. `jot` stays a plain getter that reads it.
-    makeAutoObservable<this, 'reactiveDoc'>(this, { reactiveDoc: observable.ref, jot: false });
+    makeAutoObservable<this, 'mutableDoc'>(this, { mutableDoc: observable.ref, jot: false });
   }
 
   get isLoading(): boolean {
     return this.loadingCount > 0;
   }
 
-  /** The reactive document model for the loaded song, or `undefined` before
+  /** The mutable document model for the loaded song, or `undefined` before
    *  the first load. Edits go straight through it, e.g.
    *  `store.jot?.elements.set(id, note)`; the commit reflows `structural`. */
-  get jot(): ReactiveJot | undefined {
-    return this.reactiveDoc?.model;
+  get jot(): MutableJot | undefined {
+    return this.mutableDoc?.model;
   }
 
   /**
-   * Build (or clear) the loaded song's reactive document and its peer views,
-   * installing them atomically. The sole writer of `reactiveDoc` / `source` /
+   * Build (or clear) the loaded song's mutable document and its peer views,
+   * installing them atomically. The sole writer of `mutableDoc` / `source` /
    * `structural` / `palette` / `tempo`; the presenter calls it from inside its
    * per-load `runInAction`. Pass `undefined` to clear the loaded song (empty
    * state). Disposes the previous document so its Loro subscription is torn
    * down (leak-test safety).
    */
   loadSource(source: Jot | undefined): void {
-    this.reactiveDoc?.dispose();
+    this.mutableDoc?.dispose();
     if (!source) {
-      this.reactiveDoc = undefined;
+      this.mutableDoc = undefined;
       this.source = undefined;
       this.structural = undefined;
       this.palette = undefined;
@@ -112,7 +112,7 @@ export class JotEditorStore {
       return;
     }
     const peers = buildJotPeers(source, this.viewConfig);
-    this.reactiveDoc = peers.doc;
+    this.mutableDoc = peers.doc;
     this.source = source;
     this.structural = peers.structural;
     this.palette = peers.palette;
@@ -121,7 +121,7 @@ export class JotEditorStore {
 }
 
 /**
- * Build the reactive document for `source` plus the structure / palette /
+ * Build the mutable document for `source` plus the structure / palette /
  * tempo views over it. The `StructureStore` + `LayoutStore` are captured by the
  * peers' closures and intentionally not surfaced; the `doc` is returned so the
  * owner can hold it for edits + disposal. Pass the shared {@link ViewConfig} so
@@ -129,13 +129,13 @@ export class JotEditorStore {
  * `pxPerBeat` / layout; standalone callers can omit it for a fresh default.
  */
 function buildJotPeers(source: Jot, viewConfig: ViewConfig) {
-  const doc = dslToReactive(source);
-  const reactive = doc.model;
-  const structureStore = new StructureStore(() => reactive);
+  const doc = dslToMutable(source);
+  const mutable = doc.model;
+  const structureStore = new StructureStore(() => mutable);
   const palette = new PaletteStore(
     structureStore,
     () => viewConfig.palette,
-    () => reactive
+    () => mutable
   );
   const layoutStore = new LayoutStore(
     structureStore,
@@ -157,7 +157,7 @@ function buildJotPeers(source: Jot, viewConfig: ViewConfig) {
  * Store-free structure builder for one-shot consumers that only need the
  * derived structure of a plain `Jot` (MIDI / RLRR export, unit tests,
  * Storybook), with no document lifecycle. Returns just the
- * {@link StructuralPresenter}; the underlying reactive doc is transient.
+ * {@link StructuralPresenter}; the underlying mutable doc is transient.
  */
 export function buildStructural(
   source: Jot,

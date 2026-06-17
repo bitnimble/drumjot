@@ -15,7 +15,7 @@ import type { Element as DslElement, Jot as DslJot, TimeSignature } from 'src/sc
 import { elementWeight, sumWeights } from 'src/schema/dsl/element_metrics';
 import { initialBpm } from 'src/schema/dsl/tempo';
 import type { Init } from '../descriptors';
-import { createReactiveJot, JotSchema } from '../schema';
+import { createMutableJot, JotSchema } from '../schema';
 import { TrackBuilder } from '../ordering';
 import { compareLanesByDefaultMixerOrder } from 'src/instruments/mixer_order';
 
@@ -165,7 +165,7 @@ function convertBarElements(els: DslElement[], totalBeats: number, ctx: Ctx): Ob
   return out;
 }
 
-/** Build the plain-object initial state for {@link createReactiveJot}. */
+/** Build the plain-object initial state for {@link createMutableJot}. */
 export function dslToInit(jot: DslJot): Init<typeof JotSchema> {
   const ids = { n: 0 };
   const gm = jot.globalMetadata;
@@ -280,7 +280,7 @@ export function dslToInit(jot: DslJot): Init<typeof JotSchema> {
   }) as Init<typeof JotSchema>;
 }
 
-/** Convert a DSL `Jot` into a live reactive Jot document. */
-export function dslToReactive(jot: DslJot) {
-  return createReactiveJot(dslToInit(jot));
+/** Convert a DSL `Jot` into a live mutable Jot document. */
+export function dslToMutable(jot: DslJot) {
+  return createMutableJot(dslToInit(jot));
 }

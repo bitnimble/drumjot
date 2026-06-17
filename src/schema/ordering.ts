@@ -12,9 +12,9 @@
  *
  * These are plain functions today; the reactive, memoised forms live on the
  * Layers store (added when consumers read them). A later augmented
- * `ReactiveJot` will fold `laneForNote` onto the note itself.
+ * `MutableJot` will fold `laneForNote` onto the note itself.
  */
-import type { Jot, NoteElement, Track } from './schema';
+import type { MutableJot, NoteElement, Track } from './schema';
 
 /** Separates layerId from lane in a TrackBuilder cache key. Layer ids are
  *  converter slugs and lanes are single letters, so neither contains a slash;
@@ -36,7 +36,7 @@ export const lyricsTrackEntityId = (lyricsId: string): string => `lyrics:${lyric
  * Pure, but reads `jot.ordering` / `jot.tracks`, so calling it inside a MobX
  * derivation makes that derivation react to regroups.
  */
-export function groupSiblingInstrumentLanes(jot: Jot, trackId: string): string[] {
+export function groupSiblingInstrumentLanes(jot: MutableJot, trackId: string): string[] {
   for (const layer of jot.ordering) {
     for (const slot of layer.slots) {
       let inSlot = false;
@@ -60,14 +60,14 @@ export function groupSiblingInstrumentLanes(jot: Jot, trackId: string): string[]
 }
 
 /** A track's lane, or undefined if it isn't an instrument track / not found. */
-export function trackLaneOf(jot: Jot, trackId: string): string | undefined {
+export function trackLaneOf(jot: MutableJot, trackId: string): string | undefined {
   const t = jot.tracks.get(trackId) as Track | undefined;
   return t && t.kind === 'instrument' ? t.lane : undefined;
 }
 
 /** A note's lane: via its `trackId` -> track, else the transitional `note.lane`
  *  (pattern-body template notes carry no `trackId`). */
-export function laneForNote(jot: Jot, note: NoteElement): string {
+export function laneForNote(jot: MutableJot, note: NoteElement): string {
   if (note.trackId !== undefined) {
     const lane = trackLaneOf(jot, note.trackId);
     if (lane !== undefined) return lane;
@@ -77,7 +77,7 @@ export function laneForNote(jot: Jot, note: NoteElement): string {
 
 /** The id of the layer that holds `trackId`, by reverse-lookup in the
  *  ordering. `undefined` if the track isn't placed. */
-export function layerIdOfTrack(jot: Jot, trackId: string): string | undefined {
+export function layerIdOfTrack(jot: MutableJot, trackId: string): string | undefined {
   for (const layer of jot.ordering) {
     for (const slot of layer.slots) {
       for (const t of slot.tracks) if (t.trackId === trackId) return layer.layerId;
@@ -88,7 +88,7 @@ export function layerIdOfTrack(jot: Jot, trackId: string): string | undefined {
 
 /** The group (`groupId`, or `null` for a loose run) that holds `trackId`.
  *  `undefined` if the track isn't placed at all. */
-export function groupIdOfTrack(jot: Jot, trackId: string): string | null | undefined {
+export function groupIdOfTrack(jot: MutableJot, trackId: string): string | null | undefined {
   for (const layer of jot.ordering) {
     for (const slot of layer.slots) {
       for (const t of slot.tracks) if (t.trackId === trackId) return slot.groupId;

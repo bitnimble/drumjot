@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'bun:test';
 import { autorun, runInAction } from 'mobx';
-import { createReactiveJot, type Jot } from 'src/schema/schema';
+import { createMutableJot, type MutableJot } from 'src/schema/schema';
 import { StructureStore } from 'src/editing/structure/structure_store';
 
-function store(jot: Jot) {
+function store(jot: MutableJot) {
   return new StructureStore(() => jot);
 }
 
 describe('grouping', () => {
   it('groups top-level note elements into bars and per-lane tracks, sorted by beat', () => {
-    const { model } = createReactiveJot({
+    const { model } = createMutableJot({
       title: '',
       bpm: 120,
       bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
@@ -29,7 +29,7 @@ describe('grouping', () => {
   });
 
   it('flags off-grid (non-dyadic) onsets as not straight', () => {
-    const { model } = createReactiveJot({
+    const { model } = createMutableJot({
       title: '',
       bpm: 120,
       bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
@@ -45,7 +45,7 @@ describe('grouping', () => {
   });
 
   it('is reactive: adding an element updates the derived structure', () => {
-    const { model } = createReactiveJot({
+    const { model } = createMutableJot({
       title: '',
       bpm: 120,
       bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
@@ -73,7 +73,7 @@ describe('grouping', () => {
 
 describe('bar indexing', () => {
   it('numbers a plain bar 1, lead-in negative, anacrusis 0', () => {
-    const { model: plain } = createReactiveJot({
+    const { model: plain } = createMutableJot({
       title: '',
       bpm: 120,
       bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
@@ -82,7 +82,7 @@ describe('bar indexing', () => {
     });
     expect(store(plain).layers[0].bars[0].index).toBe(1);
 
-    const { model: lead } = createReactiveJot({
+    const { model: lead } = createMutableJot({
       title: '',
       bpm: 120,
       leadBars: 1,
@@ -95,7 +95,7 @@ describe('bar indexing', () => {
     });
     expect(store(lead).layers[0].bars.map((b) => b.index)).toEqual([-1, 1]);
 
-    const { model: ana } = createReactiveJot({
+    const { model: ana } = createMutableJot({
       title: '',
       bpm: 120,
       bars: [
@@ -115,7 +115,7 @@ describe('bar indexing', () => {
 
 describe('groups & tuplets', () => {
   it('scales a group that fills its duration with no tuplet bracket', () => {
-    const { model } = createReactiveJot({
+    const { model } = createMutableJot({
       title: '',
       bpm: 120,
       bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
@@ -140,7 +140,7 @@ describe('groups & tuplets', () => {
   });
 
   it('brackets a group whose children overflow its duration as a tuplet, scaling onsets', () => {
-    const { model } = createReactiveJot({
+    const { model } = createMutableJot({
       title: '',
       bpm: 120,
       bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
@@ -174,7 +174,7 @@ describe('groups & tuplets', () => {
 
 describe('pattern spans', () => {
   it('instantiates a pattern element: span named/coloured + body notes expanded', () => {
-    const { model } = createReactiveJot({
+    const { model } = createMutableJot({
       title: '',
       bpm: 120,
       bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
@@ -207,7 +207,7 @@ describe('pattern spans', () => {
 
 describe('lead-in (musical structure)', () => {
   it('materialises explicit leadBars as negative-indexed bars (no synthesis here)', () => {
-    const { model } = createReactiveJot({
+    const { model } = createMutableJot({
       title: '',
       bpm: 120,
       leadBars: 1,
@@ -226,7 +226,7 @@ describe('lead-in (musical structure)', () => {
   });
 
   it('adds no synthetic bar for a songLeadIn-only song (that is a view concern)', () => {
-    const { model } = createReactiveJot({
+    const { model } = createMutableJot({
       title: '',
       bpm: 120,
       songLeadIn: -3,
