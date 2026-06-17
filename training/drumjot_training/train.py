@@ -819,6 +819,7 @@ def train_loop(
                 log(f"  epoch 0  batch {bi + 1}/{expected_batches}  ({time.perf_counter() - ep_start:.0f}s)")
         avg = total / max(1, n_batches)
         history["train_loss"].append(avg)
+        epoch_lane_f1: dict[str, float] = {}  # this epoch's per-lane val F1, for the log
         if val_clips:
             if keep_best or early_stop:
                 # one eval pass -> per-clip per-lane F1; derive the clip-macro (for
@@ -838,6 +839,7 @@ def train_loop(
                         continue
                     lf = sum(vals) / len(vals)
                     history.setdefault(f"vf1_{lane}", []).append(lf)  # per-epoch per-lane curve
+                    epoch_lane_f1[lane] = lf
                     if keep_best and lf > best_lane_f1[lane]:
                         best_lane_f1[lane], best_lane_epoch[lane] = lf, epoch
                         pref = f"heads.{lane}."
@@ -853,6 +855,9 @@ def train_loop(
         msg = f"epoch {epoch:3d}  train_loss {avg:.4f}"
         if val_clips:
             msg += f"  val_macro_f1 {history['val_f1'][-1]:.3f}"
+        if epoch_lane_f1:  # per-lane val F1 (when keep_best/early_stop computed it)
+            msg += "  [" + " ".join(f"{ln} {epoch_lane_f1[ln]:.2f}"
+                                    for ln in cfg.lanes if ln in epoch_lane_f1) + "]"
         msg += f"  {dt:.1f}s/ep  eta {_fmt_eta(eta)}"
         if n_skip:
             msg += f"  (skipped {n_skip} non-finite batches)"
