@@ -43,6 +43,7 @@ import json
 import os
 import sys
 import time
+import types
 from pathlib import Path
 
 import numpy as np
@@ -65,50 +66,51 @@ SLICES: dict[str, tuple[int, int]] = {
 }
 
 
-def extract_lane_samples(clips, lanes, fps, pool_frames):
-    """One sample per (lane, onset): (single-frame feat, pooled feat, lane idx).
+def _extract_clip(feats, onsets_by_lane, lane_idx, fps, pool_frames):
+    """Single pass over one clip -> (lane_rows, rdcr_rows), each a list of
+    (single_frame, pooled, label). Indexes ONLY the onset rows, so a memmap
+    `feats` reads ~tens of rows from disk, not the whole window array. Pooled =
+    mean over [onset, onset+pool_frames) (attack + early tail)."""
+    n = feats.shape[0]
+    pool = max(1, pool_frames)
 
-    Pooled = mean over [onset, onset+pool_frames) (captures attack + early tail).
-    Frames outside the feature range are skipped."""
-    lane_idx = {ln: i for i, ln in enumerate(lanes)}
-    xs, xp, y = [], [], []
-    for clip in clips:
-        feats = np.asarray(clip.features, dtype=np.float32)  # (T, D)
-        n = feats.shape[0]
-        for ln in lanes:
-            for t in clip.onsets_by_lane.get(ln, []):
-                f = int(round(float(t) * fps))
-                if f < 0 or f >= n:
-                    continue
-                xs.append(feats[f])
-                xp.append(feats[f : min(n, f + max(1, pool_frames))].mean(axis=0))
-                y.append(lane_idx[ln])
-    if not xs:
-        d = MERT_DIM + HB_BANDS
-        return np.zeros((0, d), np.float32), np.zeros((0, d), np.float32), np.zeros((0,), np.int64)
-    return np.asarray(xs, np.float32), np.asarray(xp, np.float32), np.asarray(y, np.int64)
+    def rows(f):
+        # np.array (a COPY), not asarray: on a same-dtype memmap asarray returns a
+        # VIEW that pins the backing file open, and accumulating thousands of those
+        # would exhaust the OS fd limit. The pooled `.mean` already allocates fresh.
+        return (np.array(feats[f], dtype=np.float32),
+                np.asarray(feats[f : min(n, f + pool)], np.float32).mean(axis=0))
+
+    frames_by_lane, lane_rows = {}, []
+    for ln, li in lane_idx.items():
+        fs = [f for f in (int(round(float(t) * fps)) for t in onsets_by_lane.get(ln, [])) if 0 <= f < n]
+        frames_by_lane[ln] = fs
+        for f in fs:
+            s, p = rows(f)
+            lane_rows.append((s, p, li))
+    rd, cr = set(frames_by_lane.get("rd", [])), set(frames_by_lane.get("cr", []))
+    both = rd & cr  # drop simultaneous rd+cr frames so the binary target is unambiguous
+    rdcr_rows = []
+    for label, frames in ((0, rd - both), (1, cr - both)):
+        for f in frames:
+            s, p = rows(f)
+            rdcr_rows.append((s, p, label))
+    return lane_rows, rdcr_rows
 
 
-def extract_binary_rd_cr(clips, fps, pool_frames):
-    """Ride(0)-vs-crash(1) samples, EXCLUDING frames where both fire (the
-    ambiguous simultaneous hits) so the binary target is unambiguous."""
-    xs, xp, y = [], [], []
-    for clip in clips:
-        feats = np.asarray(clip.features, dtype=np.float32)
-        n = feats.shape[0]
-        rd = {int(round(float(t) * fps)) for t in clip.onsets_by_lane.get("rd", [])}
-        cr = {int(round(float(t) * fps)) for t in clip.onsets_by_lane.get("cr", [])}
-        both = rd & cr
-        for label, frames in ((0, rd - both), (1, cr - both)):
-            for f in frames:
-                if 0 <= f < n:
-                    xs.append(feats[f])
-                    xp.append(feats[f : min(n, f + max(1, pool_frames))].mean(axis=0))
-                    y.append(label)
-    if not xs:
-        d = MERT_DIM + HB_BANDS
-        return np.zeros((0, d), np.float32), np.zeros((0, d), np.float32), np.zeros((0,), np.int64)
-    return np.asarray(xs, np.float32), np.asarray(xp, np.float32), np.asarray(y, np.int64)
+def _mmap_clips(cached, cfg, cache_dir):
+    """Yield clips with memmap-backed `.features` (rows read lazily from the .npy
+    cache), ONE open file at a time. Reconstructs the same cache path CachedClips
+    uses, so extraction reads only the onset rows it needs instead of full-loading
+    every ~5 MB window array (≈50x less I/O than np.load over NFS). Reads
+    `cached._specs` directly to bypass CachedClips' eager np.load."""
+    variant = embeddings.feat_variant(cfg.high_band)
+    cache_dir = Path(cache_dir)
+    for spec in cached._specs:  # (audio_path, onsets, w, rings, n_frames, start, length)
+        audio_path, onsets, start, length = spec[0], spec[1], spec[5], spec[6]
+        key = embeddings.cache_key(audio_path, cfg.encoder, cfg.encoder_layer, length, variant, start)
+        feats = np.load(cache_dir / f"{key}.npy", mmap_mode="r")
+        yield types.SimpleNamespace(features=feats, onsets_by_lane=onsets)
 
 
 def _metrics(y_true, y_pred, n_classes):
@@ -197,12 +199,34 @@ def run_probes(samp_tr, samp_va, lanes, *, steps, lr, wd, device, log):
     return results
 
 
-def _build_samples(clips, lanes, fps, pool_frames):
-    xs, xp, y = extract_lane_samples(clips, lanes, fps, pool_frames)
-    bxs, bxp, by = extract_binary_rd_cr(clips, fps, pool_frames)
+def _build_samples(clips, lanes, fps, pool_frames, log=None, label=""):
+    """Single pass over `clips` (a generator of memmap clips, or an in-memory
+    list) -> {lane:{single,pooled:(X,y)}, rdcr:{single,pooled:(X,y)}}. Logs
+    progress so a long over-NFS extraction isn't silent."""
+    lane_idx = {ln: i for i, ln in enumerate(lanes)}
+    ls, lp, ly, bs, bp, by = [], [], [], [], [], []
+    t0 = time.perf_counter()
+    i = 0
+    for i, clip in enumerate(clips, 1):
+        feats = clip.features
+        lane_rows, rdcr_rows = _extract_clip(feats, clip.onsets_by_lane, lane_idx, fps, pool_frames)
+        for s, p, yy in lane_rows:
+            ls.append(s); lp.append(p); ly.append(yy)  # noqa: E702
+        for s, p, yy in rdcr_rows:
+            bs.append(s); bp.append(p); by.append(yy)  # noqa: E702
+        del feats  # release the memmap fd before the next clip
+        if log and i % 500 == 0:
+            log(f"  extract {label}: {i} clips, {len(ly)} onsets, {len(by)} rd/cr "
+                f"({time.perf_counter() - t0:.0f}s)")
+    if log:
+        log(f"  extract {label}: {i} clips done, {len(ly)} onsets / {len(by)} rd/cr "
+            f"in {time.perf_counter() - t0:.0f}s")
+    d = MERT_DIM + HB_BANDS
+    fa = lambda v: np.asarray(v, np.float32) if v else np.zeros((0, d), np.float32)  # noqa: E731
+    ia = lambda v: np.asarray(v, np.int64) if v else np.zeros((0,), np.int64)  # noqa: E731
     return {
-        "lane": {"single": (xs, y), "pooled": (xp, y)},
-        "rdcr": {"single": (bxs, by), "pooled": (bxp, by)},
+        "lane": {"single": (fa(ls), ia(ly)), "pooled": (fa(lp), ia(ly))},
+        "rdcr": {"single": (fa(bs), ia(by)), "pooled": (fa(bp), ia(by))},
     }
 
 
@@ -239,8 +263,6 @@ def _selftest():
     """Validate extraction + probe + slicing on synthetic clips, no cache/GPU.
     Plants ride/crash signal ONLY in HB columns, so HB-only & MERT+HB should
     separate (~1.0) while MERT-only stays near chance."""
-    import types
-
     rng = np.random.default_rng(0)
     fps, d = embeddings.MERT_FPS, MERT_DIM + HB_BANDS
     lanes = list(LANES_CH)
@@ -263,8 +285,8 @@ def _selftest():
         return clips
 
     log = lambda s: print(s, flush=True)  # noqa: E731
-    tr = _build_samples(make_clips(40), lanes, fps, 8)
-    va = _build_samples(make_clips(12), lanes, fps, 8)
+    tr = _build_samples(make_clips(40), lanes, fps, 8, log, "train")
+    va = _build_samples(make_clips(12), lanes, fps, 8, log, "val")
     import torch
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -335,9 +357,9 @@ def main():
         torch.cuda.empty_cache()
 
     fps = cfg.encoder_fps
-    log("extracting onset-frame features...")
-    samp_tr = _build_samples(train_clips, lanes, fps, args.pool_frames)
-    samp_va = _build_samples(val_clips, lanes, fps, args.pool_frames)
+    log("extracting onset-frame features (mmap row-reads)...")
+    samp_tr = _build_samples(_mmap_clips(train_clips, cfg, cache), lanes, fps, args.pool_frames, log, "train")
+    samp_va = _build_samples(_mmap_clips(val_clips, cfg, cache), lanes, fps, args.pool_frames, log, "val")
     n_tr = len(samp_tr["lane"]["single"][1])
     n_va = len(samp_va["lane"]["single"][1])
     n_rdcr_tr = len(samp_tr["rdcr"]["single"][1])
