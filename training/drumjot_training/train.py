@@ -756,7 +756,10 @@ def train_loop(
         best_lane_f1 = ckpt["best_lane_f1"]
         best_lane_epoch = ckpt["best_lane_epoch"]
         best_lane_state = ckpt["best_lane_state"]
-        gen.set_state(ckpt["gen"])
+        # get_state() returns a CPU ByteTensor; map_location above moved it to
+        # the GPU, but Generator.set_state() requires a CPU ByteTensor, so move
+        # it back (.cpu() is a no-op when resuming on CPU).
+        gen.set_state(ckpt["gen"].cpu())
         start_epoch = int(ckpt["epoch"]) + 1
         log(f"  resumed @ epoch {start_epoch} ({epochs - start_epoch} epochs left) <- {resume_path}")
     for epoch in range(start_epoch, epochs):
