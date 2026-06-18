@@ -533,6 +533,77 @@ Caveat: if h128 is still climbing at cap-0 (full = all data we have), it hasn't
 saturated and the width test is confounded by data availability -- note the
 limitation rather than over-read it.
 
+## Matched-LR width A/B: h128 vs h512 at cap-3000 (2026-06-18)
+
+**Setup.** The corrected width test above, on the cym+hat 5-lane set at cap-3000
+(h128's saturation bracket), batch 8, **matched schedule across arms** (lr 3e-4,
+warmup 500, seed 1, early-stop, 80-epoch cap), per-lane keep_best. h512 on the
+3080; h128 (matched-LR control) + h256 (intermediate) on the 1660. Tuned per-lane
+F1 on the pooled per-stem val:
+
+| arm | params | hc | hp | ho | rd | cr | macro | cym(rd,cr) |
+|---|---|---|---|---|---|---|---|---|
+| h128 | 6.0M | 0.708 | 0.504 | 0.679 | 0.591 | 0.640 | 0.624 | 0.616 |
+| h512 | 47.5M | 0.722 | 0.507 | 0.689 | 0.631 | 0.638 | 0.637 | 0.635 |
+| Δ | 8x | +.014 | +.003 | +.010 | **+.040** | **−.002** | +.013 | +.019 |
+
+(h256 on the 1660 still running; append when done.)
+
+**LR-confound control.** h128 at the matched lr 3e-4 ≈ h128 at the old default lr
+1e-3 (hc .707 hp .510 ho .671 rd .593 cr .658) within noise (biggest Δ cr −0.018)
+→ the warmup/LR schedule is NOT a confound; the A/B is clean.
+
+**Verdict: capacity is NOT the cymbal bottleneck.** An 8× bigger head buys +0.013
+macro; the only material per-lane gain is **ride +0.040**, and **crash is a tie
+(−0.002)**. The rd gain is fragile too -- h512's rd peak was an early (ep5)
+keep_best snapshot that later drifted to ~0.52. Single seed; deltas near the
+cap-3000 noise band (~0.02). With Phase 2 (data volume doesn't move crash) this
+rules out both capacity AND volume → the cymbal ceiling is intrinsic (features /
+labels / separation / decision), not model size.
+
+## Cymbal feature-separability probe (2026-06-18)
+
+**Setup.** `scripts/cymbal_feature_probe.py`: a convex linear probe (multinomial
+logreg) over FROZEN features AT ground-truth onset frames, decoupled from the
+GRU / recall / peak-pick / threshold -- isolates whether ride/crash (and hats)
+are *linearly decodable* from the features. Same cap-3000 cym+hat per-stem cache
+as the sweep (425,362 train / 24,032 val onsets; rd/cr 133,165 / 5,646). Compares
+MERT(1024) / MERT+HB(1040) / HB-only(16) slices × single-frame / 8-frame
+post-onset pool. 3080.
+
+**Ride-vs-crash balanced accuracy (headline):**
+
+| variant | MERT | MERT+HB | HB-only |
+|---|---|---|---|
+| single | 0.823 | 0.819 | 0.633 |
+| pooled | 0.826 | **0.836** | 0.759 |
+
+**5-way lane recall (pooled, MERT+HB):** hc 0.86, hp 0.49, **ho 0.34**, rd 0.84, cr 0.77.
+
+**Findings.**
+- **Ride/crash IS linearly separable (~0.84)** -- well above the ~0.6
+  "info-not-in-features" floor. The encoder is not the main ride/crash problem.
+- **MERT alone separates them (0.823); the high-band block barely helps** (HB-only
+  weaker, 0.63-0.76). The distinction lives in MERT's sub-12 kHz content, NOT the
+  >12 kHz sizzle → "richer HF" is not the cymbal lever (matches the mel-128 wash).
+  Pooling the tail helps cymbals (+0.02; +0.13 for HB) -- cymbal identity is in
+  the sustain.
+- **The feature-limited lane is the HAT, not the cymbal.** Open-hat recall 0.34 /
+  pedal 0.49 (vs rd 0.84, cr 0.77); both confuse with closed-hat. Pooling *hurts*
+  the 5-way (0.715 single → 0.660 pooled): hats are attack-defined, cymbals
+  tail-defined.
+
+**Interpretation (corrected).** 0.84 linear separability is a REAL ~16% ride/crash
+confusion floor (crash→ride 18.6%, ride→crash 14.3%) -- NOT "features fine, purely
+downstream." Caveats both ways: (1) it's the LINEAR floor, a nonlinear head over
+more layers/context could push below ~16%; (2) the old two-stage's 24% crash→ride
+is ~5 pts WORSE than this floor, so some confusion IS recoverable downstream; (3)
+the probe is handed the true onset, so it says nothing about RECALL -- end-to-end
+ride/crash F1 (~0.59/0.64) is confusion AND the ~0.83 proposer recall compounding.
+Going BELOW the ~16% confusion floor needs better features OR audio-level
+ride/crash separation (split stems sidestep the disambiguation). Next:
+recall-vs-confusion decomposition of the end-to-end ride/crash F1.
+
 ## Per-stem pooled MERT layer sweep (2026-06-12)
 
 **Setup.** `scripts/perstem_layer_sweep.py` over pooled per-stem examples from all
