@@ -604,6 +604,92 @@ Going BELOW the ~16% confusion floor needs better features OR audio-level
 ride/crash separation (split stems sidestep the disambiguation). Next:
 recall-vs-confusion decomposition of the end-to-end ride/crash F1.
 
+## Ride/crash recall-vs-confusion decomposition (2026-06-18)
+
+End-to-end h128 cap-3000 (s1, the same head, not the linear probe), each matched
+ride/crash onset bucketed as **hit** (right lane), **confused** (predicted the
+*other* cymbal), or **missed** (no prediction in tolerance). 3080;
+`cymbal_recall_confusion.json`.
+
+| lane | n | hit | confused | missed | false_pos | recall | prec | F1 |
+|------|---|-----|----------|--------|-----------|--------|------|-----|
+| rd | 4415 | **84.2%** | **0.7%** | 15.1% | 954 | 0.842 | 0.796 | 0.818 |
+| cr | 1365 | **55.1%** | **17.3%** | 27.6% | 451 | 0.551 | 0.625 | 0.586 |
+
+**This overturns the "confusion-bound ceiling" reading.** Confusion is NOT the
+dominant error mode and it is wildly **asymmetric**, not the symmetric ~16% the
+linear probe implied:
+
+- **Ride loses almost nothing to confusion (0.7%).** Its entire shortfall is
+  *missed detection* (15.1%), a recall problem, not a discrimination problem.
+- **Crash confusion is real (17.3%)** but its *bigger* loss is also missed
+  detection (27.6%). Missed > confused for both lanes (ride 95% of error is
+  misses; crash 61%).
+- The asymmetry is a **majority-class default**: ride outnumbers crash 3.2:1 in
+  val, so the head defaults to "ride" when unsure → true crashes leak to ride
+  (17.3%) while rides almost never leak to crash (0.7%). The probe's "~16% floor"
+  was symmetric because the probe was class-balanced per onset; the real head is not.
+
+**Implication for levers.** The biggest headroom for *both* cymbals is **recall
+(missed onsets)**, not ride/crash disambiguation, opposite to the probe's steer.
+Detection-side levers (threshold/peak-pick recall, class re-balancing to stop the
+ride default, focal loss, real-audio domain match) should beat any
+confusion-targeted work. Confusion-side work (better features, split stems) only
+meaningfully helps **crash**, and only after its 27.6% miss rate is addressed.
+Precision is the other drag on crash (0.625; 451 false-pos vs 752 hits).
+
+## Ride/crash miss typing + picker sweep (2026-06-18)
+
+Follow-up to the decomposition: *why* are the cymbal onsets missed, and how much
+is recoverable with the **picker alone** (no retrain) vs needs new training.
+Reuses `h128_cymhat_s1.pt` -- one head forward over the warm cache, then pure
+numpy. Each own-lane miss bucketed by inspecting this lane's activation around it:
+`dead` (peak <max(0.1,0.5*thr) -> model sees nothing), `subthreshold` (a bump,
+below the tuned height), `merge`/`decay`/`prominence` (clears height but a single
+picker constraint drops it). `cymbal_miss_typing.json`. Tuned thr: rd 0.6, cr 0.8.
+
+| lane | recall | misses | dead | subthr | merge | decay | prom | picker-recoverable |
+|------|--------|--------|------|--------|-------|-------|------|--------------------|
+| rd | 0.841 | 700 | **43.7%** | 26.7% | 2.6% | 15.6% | 3.6% | 48.4% |
+| cr | 0.551 | 613 | **74.6%** | 20.9% | 2.3% | 0.8% | -- | 24.0% |
+
+Picker grid-sweep (min-dist x decay-reset x prominence x thr-scale), best point
+holding precision >= current:
+
+| lane | config | R | P | F1 |
+|------|--------|---|---|-----|
+| rd current | md .070 dr .6 | 0.841 | 0.714 | 0.773 |
+| rd **best** | md .040 dr .0 | **0.866** | 0.717 | 0.784 |
+| cr current | md .070 dr .6 | 0.551 | 0.608 | 0.578 |
+| cr best | md .070 dr .0 | 0.554 | 0.608 | 0.580 |
+
+**Verdict: the picker is NOT the lever; under-activation is.** The dominant miss
+type is `dead` (the head's activation is ~0 at the true onset) -- 43.7% for ride,
+**74.6% for crash**. That's a TRAINING problem, not post-processing.
+
+- **No clean picker win (corrected).** Per-axis: **min-distance is INERT** --
+  0.070/0.050/0.040/0.030 give identical R/P/F1 (the 70 ms limit isn't binding;
+  the merge bucket is only 18 onsets). The entire ride +2.5 pt
+  (0.841->0.866 R, 0.773->0.784 F1) comes from **turning the decay-reset filter
+  OFF** (the `if decay_reset_frac>0` gate is skipped), and dr=0.3 is actually
+  *worse* than the current 0.6 (R 0.722 -- a stricter reset drops more). Decay-off
+  is exactly the change most likely to **regress on real audio**: that filter
+  stops one sustained cymbal/open-hat ring being read as a stream of false
+  onsets, and clean in-domain val under-represents sustain. So it is NOT a free
+  ship -- it needs ParaDB/real-audio validation first.
+- **Crash recall is not picker-limited at all** (every axis ~0; best dr=0.0 is
+  0.551->0.554). 95.5% of crash misses are dead+subthreshold -- the head
+  under-fires on crash, and F1-tuning pushed its threshold to 0.8 (vs ride 0.6),
+  trading recall for precision.
+- **`subthreshold` (ride 26.7%, crash 20.9%) is recoverable only by lowering the
+  threshold, a bad trade**: ride thr*0.85 buys +1.5 pt R for -4 pt P; crash
+  thr*0.85 buys +4.4 pt R for -6.4 pt P. A softer form of the `dead` under-firing.
+- **dead is worst on the rare class** (crash 74.6% vs ride 43.7%; crash 1365 vs
+  ride 4415 onsets) -> class imbalance strongly implicated. The ONLY real lever
+  is the retrain: **class re-balancing / inverse-freq or focal loss** (raise crash
+  activation so peaks clear), then real-audio domain match. The picker/threshold
+  knobs are spent.
+
 ## Per-stem pooled MERT layer sweep (2026-06-12)
 
 **Setup.** `scripts/perstem_layer_sweep.py` over pooled per-stem examples from all
