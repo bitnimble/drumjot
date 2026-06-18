@@ -22,6 +22,49 @@ from __future__ import annotations
 import contextlib
 
 
+def tee_stdio(log_path) -> None:
+    """Mirror stdout+stderr to `log_path` (append) IN ADDITION to the console, so
+    long runs self-log without a manual `… | tee` / `>> file 2>&1` redirect.
+
+    Captures everything the process emits, prints, library warnings, tqdm bars
+    (stderr) and tracebacks. Call once at the very top of a script's `main()`
+    (before the encoder/heavy imports run) so nothing is missed. Creates parent
+    dirs; line-buffered so `tail -f` is live. No-op if `log_path` is falsy.
+
+    NOTE: this replaces a manual shell redirect, don't do both, or every line
+    lands in the file twice (the script writes it AND the shell captures the
+    tee'd stdout)."""
+    import sys
+    from pathlib import Path
+
+    if not log_path:
+        return
+    p = Path(log_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    # noqa SIM115: the handle is the process-lifetime stdio sink, it MUST stay
+    # open (no `with`); line-buffered so a tailing reader sees each line live.
+    fh = open(p, "a", buffering=1)  # noqa: SIM115
+
+    class _Tee:
+        def __init__(self, stream):
+            self._stream = stream
+
+        def write(self, s):
+            self._stream.write(s)
+            fh.write(s)
+            return len(s)
+
+        def flush(self):
+            self._stream.flush()
+            fh.flush()
+
+        def __getattr__(self, name):  # delegate isatty()/fileno()/encoding/…
+            return getattr(self._stream, name)
+
+    sys.stdout = _Tee(sys.stdout)
+    sys.stderr = _Tee(sys.stderr)
+
+
 def configure_backends() -> None:
     """Enable TF32 matmul/cuDNN where supported. Idempotent; no-op off CUDA.
 

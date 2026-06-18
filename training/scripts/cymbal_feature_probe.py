@@ -307,6 +307,7 @@ def main():
     import torch
 
     from drumjot_training import runtime
+    runtime.tee_stdio(Path(args.out_json).with_suffix(".log"))  # self-log next to --out-json
     runtime.configure_backends()
     log = lambda s: print(s, flush=True)  # noqa: E731
     sources = [s.strip() for s in args.pool_sources.split(",") if s.strip()]

@@ -201,6 +201,8 @@ def main():
     ap.add_argument("--full-drum", action="store_true",
                     help="run the model once on the whole BS-Roformer drum stem (all lanes) instead of the "
                     "MDX23C per-instrument split; no cross-instrument isolation/leakage")
+    ap.add_argument("--log", default=None,
+                    help="tee stdout+stderr to this file (self-log; no manual redirect needed)")
     args = ap.parse_args()
 
     import gc
@@ -208,6 +210,8 @@ def main():
     import torch
     from app.pipeline.separate import Separator
 
+    from drumjot_training import runtime
+    runtime.tee_stdio(args.log)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if args.stems_cache:
         stems_cache = Path(args.stems_cache)

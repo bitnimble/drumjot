@@ -219,12 +219,15 @@ def main():
     ap.add_argument("--no-pipeline", action="store_true",
                     help="use the simple serial materialize instead of the load-once/prefetch "
                     "pipeline (debug / parity check)")
+    ap.add_argument("--log", default=None,
+                    help="tee stdout+stderr to this file (self-log; no manual redirect needed)")
     args = ap.parse_args()
 
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
     import torch
 
+    runtime.tee_stdio(args.log)
     print(f"torch {torch.__version__}  built-for-cuda {torch.version.cuda}  "
           f"cuda_available={torch.cuda.is_available()}", flush=True)
     if torch.cuda.is_available():

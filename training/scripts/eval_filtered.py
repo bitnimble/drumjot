@@ -27,10 +27,14 @@ def main():
     ap.add_argument("--max-seconds", type=float, default=30.0)
     ap.add_argument("--align-window", type=float, default=0.03)
     ap.add_argument("--support-percentile", type=float, default=60.0)
+    ap.add_argument("--log", default=None,
+                    help="tee stdout+stderr to this file (self-log; no manual redirect needed)")
     args = ap.parse_args()
 
     import torch
 
+    from drumjot_training import runtime
+    runtime.tee_stdio(args.log)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model, meta = checkpoint.load(args.checkpoint, device)
     cfg = Config(encoder_layer=meta["encoder_layer"])

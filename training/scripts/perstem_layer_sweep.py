@@ -92,12 +92,15 @@ def main():
     ap.add_argument("--batch-size", type=int, default=8)
     ap.add_argument("--max-seconds", type=float, default=30.0)
     ap.add_argument("--enst-mix", default="sep_drum")
+    ap.add_argument("--log", default=None,
+                    help="tee stdout+stderr to this file (self-log; no manual redirect needed)")
     args = ap.parse_args()
 
     import torch
 
     from drumjot_training import runtime
 
+    runtime.tee_stdio(args.log)
     runtime.configure_backends()
     layers = [int(x) for x in args.layers.split(",")]
     seeds = [int(s) for s in args.seeds.split(",")]

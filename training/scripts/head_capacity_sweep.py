@@ -218,6 +218,7 @@ def main():
     import torch
 
     runtime.configure_backends()
+    runtime.tee_stdio(Path(args.out_json).with_suffix(".log"))  # self-log next to --out-json
     sources = [s.strip() for s in args.pool_sources.split(",") if s.strip()]
     hiddens = [int(h) for h in args.hidden.split(",")]
     seeds = [int(s) for s in args.seeds.split(",")]

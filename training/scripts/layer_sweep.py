@@ -65,10 +65,14 @@ def main():
         "reported as mean+/-std, so a high-band delta is only believed if it clears the seed "
         "noise band. The DataLoader shuffle is separately fixed (train_loop seeds it).",
     )
+    ap.add_argument("--log", default=None,
+                    help="tee stdout+stderr to this file (self-log; no manual redirect needed)")
     args = ap.parse_args()
 
     import torch
 
+    from drumjot_training import runtime
+    runtime.tee_stdio(args.log)
     layers = [int(x) for x in args.layers.split(",")]
     root = Path(args.root)
     cache = Path(args.cache_dir) if args.cache_dir else root / "_cache_sweep"
