@@ -723,6 +723,44 @@ NOT mislabels. Rules out the data-cleaning detour and re-confirms the under-firi
 diagnosis -> focal / oversample (up-weighting hard/weak positives) is the lever.
 egmd's 3.2% lines up with its known MIDI<->audio drift but is small.
 
+## Onset SNAP + FILTER: dataset-wide label alignment (2026-06-19/20)
+
+Follow-up that OVERTURNS the "labels are fine" read above. The canonical support
+gate was lenient (1.3%); a stricter relative gate flagged ~30% of crash labels,
+and the user's eyes+ears on 100 snippets CONFIRMED those are real defects -- not
+soft crashes but **mistimed** labels (the label sits off the audio onset) and
+**false** labels (no onset there). A "shot in the dark" lane-coincidence check
+nailed the kind: of the false crash labels, **88% coincide with ANOTHER
+instrument** (open-hat / kick / snare / tom) = lane-mislabels, not pure ghosts.
+
+Built an audio-referenced cleaner (`cymbal_snap_redraw.py` decision fns +
+`align_dataset_onsets.py`): per stem, find real onsets (onset-strength local maxima
+passing a transient test), then per label SNAP to the nearest real onset within a
+per-lane window, else DISCARD (classified ghost vs wrong-lane). Ran over **all
+2.62M onsets / 9,420 perstem stems** (star+enst+egmd) -> reversible
+`_onsets_aligned.json` (originals untouched). Opt-in via `--aligned-onsets`.
+
+| lane | labels | %snap | %disc | | lane | labels | %snap | %disc |
+|------|--------|-------|-------|-|------|--------|-------|-------|
+| hc | 252k | 93.4% | 6.6% | | s  | 543k | 83.2% | 16.8% |
+| ss | 114k | 91.9% | 8.1% | | t  | 262k | 81.5% | 18.5% |
+| k  | 623k | 91.3% | 8.7% | | cr | 28k  | 71.9% | 28.1% |
+| hp | 343k | 90.0% | 10.0%| | rd | 369k | 71.2% | 28.8% |
+| ho | 86k  | 87.9% | 12.1%| | ALL| 2.62M| 85.6% | 14.4% |
+
+Discards overall: 122k ghost / 257k wrong-lane (**68% wrong-lane**). Cymbals (cr/rd
+~28%, mostly wrong-lane) are by far the noisiest -> a large share of the cymbal
+"recall gap" is plausibly mislabeled/mistimed targets, not model under-firing.
+
+**Validated:** crash snap+filter eyeballed (000's bogus 3.0s label discarded as
+wrong-lane, real 2.6s kept; 016/005 clean). Per-lane samples in
+`/codebox-workspace/align_validate/`: snap looks good on ALL lanes; clean lanes
+barely touched (kick k_00 = 15 snap/0 discard).
+**CAVEAT:** the FILTER is only validated on crash (no soft ghost-notes). On
+snare/ride/tom the higher discard MAY drop real soft hits -- review the per-lane
+images before training on filtered non-crash lanes. The SNAP alone is the safe
+universal win; a snap-only artifact (no discard) is the conservative default.
+
 ## Per-stem pooled MERT layer sweep (2026-06-12)
 
 **Setup.** `scripts/perstem_layer_sweep.py` over pooled per-stem examples from all

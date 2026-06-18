@@ -74,9 +74,11 @@ def iter_source(name, log):
         yield str(c.audio_path), c.pitch, p2l.get(c.pitch, ()), full
 
 
-def align_stem(audio_path, lanes, full, log):
-    """Snap+filter a stem's lanes against its audio. Returns (aligned dict, stats)
-    where stats = {lane: [n_in, n_snap, n_ghost, n_wrong]} and aligned = {lane: times}."""
+def align_stem(audio_path, lanes, full, log, *, no_filter=False):
+    """Snap (+optionally filter) a stem's lanes against its audio. Returns (aligned
+    dict, stats), stats = {lane: [n_in, n_snap, n_ghost, n_wrong]}. With `no_filter`
+    (snap-only) a would-be discard is KEPT at its original time instead of dropped --
+    the conservative variant that aligns without risking real soft hits."""
     import librosa
     from cymbal_snap_redraw import align_or_discard, discard_reason, real_onset_times
 
@@ -94,10 +96,13 @@ def align_stem(audio_path, lanes, full, log):
             if kind == "snap":
                 kept.append(round(nt, 4))
                 n_snap += 1
-            elif discard_reason(ot, full, exclude=lane).startswith("wrong"):
-                n_wrong += 1
             else:
-                n_ghost += 1
+                if no_filter:
+                    kept.append(round(ot, 4))  # snap-only: keep the (unsnapped) original
+                if discard_reason(ot, full, exclude=lane).startswith("wrong"):
+                    n_wrong += 1
+                else:
+                    n_ghost += 1
         aligned[lane] = sorted(kept)
         stats[lane] = [len(onsets), n_snap, n_ghost, n_wrong]
     return aligned, stats
@@ -148,6 +153,9 @@ def main():
     ap.add_argument("--stats-out", default="/codebox-workspace/datasets/_onsets_aligned_stats.json")
     ap.add_argument("--flush-every", type=int, default=200, help="incremental write cadence (resume)")
     ap.add_argument("--max-stems", type=int, default=0, help="cap stems processed (0=all; dry run)")
+    ap.add_argument("--no-filter", action="store_true",
+                    help="snap-only: keep would-be discards at their original time (conservative; "
+                    "aligns without risking real soft hits on snare/ride/tom)")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
 
@@ -170,7 +178,7 @@ def main():
             if audio_path in aligned:
                 continue
             try:
-                a, stats = align_stem(audio_path, lanes, full, log)
+                a, stats = align_stem(audio_path, lanes, full, log, no_filter=args.no_filter)
             except Exception as e:  # noqa: BLE001
                 log(f"  skip {Path(audio_path).name}: {e!r}")
                 continue
