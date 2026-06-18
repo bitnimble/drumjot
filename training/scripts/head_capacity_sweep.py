@@ -105,17 +105,27 @@ def _source(name: str):
     return tr, va, ann_of, reader, p2l
 
 
-def build_specs(sources, cap, cache):
+def build_specs(sources, cap, cache, aligned_path=None):
     """Pooled cymbal+hat per-stem specs (audio, restricted_onsets, full_onsets),
     capped per source to ~`cap` WINDOWS (~cap*30s of audio; predictable across
     varying clip lengths). Restricted = full filtered to the stem's own lanes; full
     rides along for sibling weighting. Parsed onsets are memoized to _onsets.json
-    beside the feature cache (same as _pooled_specs)."""
+    beside the feature cache (same as _pooled_specs).
+
+    `aligned_path` (opt-in): a `_onsets_aligned.json` from align_dataset_onsets.py
+    (audio_path -> {lane: snapped/filtered times}). When set, the per-stem
+    RESTRICTED targets come from it instead of the raw annotation (sibling-weight
+    `full` stays raw). Stems missing from it fall back to raw. Default None =
+    unchanged behaviour."""
     ocp = Path(cache) / "_onsets.json"
     try:
         ocache = json.loads(ocp.read_text()) if ocp.exists() else {}
     except Exception:  # noqa: BLE001
         ocache = {}
+    aligned = {}
+    if aligned_path:
+        aligned = json.loads(Path(aligned_path).read_text())
+        print(f"  using aligned onsets <- {aligned_path} ({len(aligned)} stems)", flush=True)
     dirty = False
 
     def _full(path, reader):
@@ -135,7 +145,11 @@ def build_specs(sources, cap, cache):
         def _spec(c, ann_of=ann_of, reader=reader, p2l=p2l):
             full = _full(ann_of(c), reader)
             keep = set(p2l.get(c.pitch, ()))
-            restricted = {ln: (full[ln] if ln in keep else []) for ln in LANES}
+            al = aligned.get(str(c.audio_path)) if aligned else None
+            if al is not None:
+                restricted = {ln: (list(al.get(ln, [])) if ln in keep else []) for ln in LANES}
+            else:
+                restricted = {ln: (full[ln] if ln in keep else []) for ln in LANES}
             return (c.audio_path, restricted, full)
 
         tr_c = _cap_by_windows(tr, cap)
@@ -209,6 +223,10 @@ def main():
                     help="windows per VAL song (>1 enlarges/diversifies val -> damps lucky-epoch F1; "
                     "0 = all). The first N windows are a subset of the full-windowed cache, so still hits.")
     ap.add_argument("--cache", default="/codebox-workspace/datasets/_cache_mert_pooled")
+    ap.add_argument("--aligned-onsets", default=None,
+                    help="opt-in: a _onsets_aligned.json (align_dataset_onsets.py) -> train on "
+                    "audio-snapped/filtered targets. Default: raw labels. Feature cache is "
+                    "label-independent so it stays valid; only the targets change.")
     ap.add_argument("--out-json", default="head_capacity_results.json")
     ap.add_argument("--probe-timing", action="store_true",
                     help="materialize, then train 1 epoch at the LARGEST hidden and exit "
@@ -229,7 +247,7 @@ def main():
         f"layers={args.layers} seeds={seeds} epochs={args.epochs} batch={args.batch} "
         f"num_workers={args.num_workers} train_win={args.train_max_windows} val_win={args.val_max_windows} ===")
     log("indexing pooled cym+hat specs:")
-    tr_specs, va_specs = build_specs(sources, args.pool_cap, cache)
+    tr_specs, va_specs = build_specs(sources, args.pool_cap, cache, aligned_path=args.aligned_onsets)
     log(f"total: {len(tr_specs)} train / {len(va_specs)} val cym+hat stem clips")
 
     # one materialize pass (features are head-size independent); reuse across arms.

@@ -161,7 +161,7 @@ def _train_arm(arm, args, cache, sources, cfg, in_dim, log):
     from drumjot_training.targets import pos_weights_from_targets
     from drumjot_training.train import _window_specs, materialize, train_loop, tune_thresholds
 
-    tr_specs, va_specs = build_specs(sources, args.pool_cap, cache)
+    tr_specs, va_specs = build_specs(sources, args.pool_cap, cache, aligned_path=args.aligned_onsets)
     if arm == "crash_oversample":
         tr_specs, n_crash = crash_oversample_specs(tr_specs, args.crash_oversample)
         log(f"  crash-oversample x{args.crash_oversample}: {n_crash} crash stems -> "
@@ -215,6 +215,8 @@ def main():
     ap.add_argument("--pos-weight-cap", type=float, default=50.0)
     ap.add_argument("--crash-oversample", type=int, default=2, help="duplicate crash stems Nx")
     ap.add_argument("--cache", default="/codebox-workspace/datasets/_cache_mert_pooled")
+    ap.add_argument("--aligned-onsets", default=None,
+                    help="opt-in _onsets_aligned.json -> train+score on audio-snapped/filtered targets")
     ap.add_argument("--ckpt-dir", default="/codebox-workspace/checkpoints")
     ap.add_argument("--baseline-ckpt", default="/codebox-workspace/checkpoints/h128_cymhat_s1.pt")
     ap.add_argument("--out-json", default="/codebox-workspace/cymbal_loss_ab.json")
@@ -257,7 +259,7 @@ def main():
 
                 from drumjot_training.train import _window_specs, materialize
                 ck = torch.load(args.baseline_ckpt, map_location="cuda" if uc else "cpu")
-                _, va_specs = build_specs(sources, args.pool_cap, cache)
+                _, va_specs = build_specs(sources, args.pool_cap, cache, aligned_path=args.aligned_onsets)
                 enc = _CacheKeyEncoder(cfg.encoder, cfg.encoder_layer)
                 va_w = _window_specs(va_specs, 30.0, 3.0, 4, plan_cache_dir=cache)
                 val_clips = materialize(va_w, enc, cfg, cache, 30.0, "val", log)  # type: ignore[arg-type]
