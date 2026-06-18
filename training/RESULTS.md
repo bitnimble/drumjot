@@ -690,6 +690,39 @@ type is `dead` (the head's activation is ~0 at the true onset) -- 43.7% for ride
   activation so peaks clear), then real-audio domain match. The picker/threshold
   knobs are spent.
 
+## Crash label-quality audit -- labels are fine (2026-06-19)
+
+Tested the obvious alternative to "head under-fires": maybe the crash LABELS are
+wrong (no transient at the labelled time -> a target the head can't/shouldn't
+fire on). Audited all 19,592 crash onsets (train+val, per-instrument crash stems)
+two ways. `cymbal_label_audit.py`; `cymbal_label_audit_canonical.json`.
+
+Note: the onset cleaner (`forced_align` snap + `clean.support_score` support gate)
+EXISTS but is **only wired into `eval_paradb.py`, NOT the training pool** --
+`build_specs` feeds raw onsets. So the model trains uncleaned. But:
+
+| source | onsets | canonical %unsupp | hand-rolled %suspect |
+|--------|--------|-------------------|----------------------|
+| enst | 1,333 | 0.3% | 8.1% |
+| egmd | 1,499 | 3.2% | 31.2% |
+| star | 16,760 | 1.2% | 31.4% |
+| ALL | 19,592 | **1.3%** | 29.8% |
+
+- **Canonical gate** (`forced_align.onset_envelope` + `postfilter` pct-60 floor +
+  `align_lane` +/-30 ms -- the ParaDB cleaner's own criterion): **1.3%
+  unsupported.** Wiring the cleaner into training would discard ~1% -> negligible.
+- **Hand-rolled gate** (peak vs clip-MAX, rel>=0.15 OR local-SNR>=3): ~30%. The
+  gap is threshold strictness, not a contradiction: the pct-60 floor sits at the
+  near-silence level on a sparse crash stem (medFloor ~0.13), so canonical flags
+  only DEAD-SILENCE labels; the relative test additionally flags SOFT / ring-tail
+  crashes -- which are *real* onsets, just quiet, so flagging them was wrong.
+
+**Conclusion: the labels are essentially correct (1.3% truly unsupported).** The
+dead crashes are real-but-WEAK onsets (soft / on a ring) the head under-fires on,
+NOT mislabels. Rules out the data-cleaning detour and re-confirms the under-firing
+diagnosis -> focal / oversample (up-weighting hard/weak positives) is the lever.
+egmd's 3.2% lines up with its known MIDI<->audio drift but is small.
+
 ## Per-stem pooled MERT layer sweep (2026-06-12)
 
 **Setup.** `scripts/perstem_layer_sweep.py` over pooled per-stem examples from all
