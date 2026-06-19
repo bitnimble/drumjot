@@ -950,9 +950,42 @@ calibration mismatch, not pure model failure.
 **Caveat / next:** this changed two knobs at once and overshot recall, so it does
 NOT establish the F1-optimal point at prominence 0.1. The proper test is a height
 **re-tune** (sweep to the F1 optimum per arm) at prominence 0.1, not a blind halve.
-focal is the arm most likely to win it (highest recall ceiling + most precision
-headroom). Crash F1 still hasn't beaten ~0.57 under any picker; alignment remains
-the only crash F1 mover.
+
+#### Proper height re-tune at prominence 0.1 vs 0.2 (2026-06-19)
+
+`cymbal_thresh_sweep.py`: for each saved checkpoint, cache the cym activations once
+(one model pass), then sweep the height threshold over a grid (0.05..0.90) at BOTH
+prominence 0.20 and 0.10 -- same grid, only prominence differs -- and report each
+lane's F1-OPTIMAL point. **Bug caught + fixed first:** the initial pass counted a
+lane's firing on ALL clips, penalizing precision for cross-stem leakage (rd firing
+on a crash/kick stem). The project convention (and `cymbal_recall_confusion.
+decompose`) scores a lane ONLY on clips that carry its ground truth; fixed to skip
+no-ref clips (FP was ~2x inflated, which had skewed thresholds high). Post-fix the
+absolute F1s line up with the A/B decompose.
+
+| arm | rd best (thr/F1) | cr best (thr/F1) | prom0.1-vs-0.2 ΔF1 |
+|---|---|---|---|
+| baseline (raw cap-3000) | 0.80 / 0.780 | 0.90 / **0.616** | rd 0 / cr 0 |
+| bce | 0.80 / 0.780 | 0.75 / 0.585 | rd -.003 / cr -.000 |
+| focal | 0.40 / **0.845** | 0.30 / 0.586 | rd -.000 / cr +.000 |
+| crash_oversample | 0.85 / 0.814 | 0.80 / 0.570 | rd +.000 / cr -.003 |
+
+**(1) Prominence is NOT a lever.** At the F1-optimal threshold, 0.10 == 0.20 within
++/-0.003 (noise) for every arm/lane. The picker-retest's F1 drop was entirely the
+blind height-halve, not the prominence change.
+
+**(2) Focal does NOT win crash even at its F1-optimum** (cr 0.586 ~= bce 0.585). Its
+picker-suppressed recall (0.614 reachable) costs too much precision; the F1-optimum
+sits back at recall 0.538. So "recall is recoverable" is true but does not convert
+to crash F1. **Alignment remains the only crash F1 mover.** Among matched cap-1000
+aligned arms crash is flat ~0.57-0.59; baseline's 0.616 is the cap-3000 data-scale
+edge, not a loss effect.
+
+**(3) Focal's RIDE win is robust to picker tuning:** rd 0.845 vs bce 0.780 =
+**+0.065** at matched-optimal thresholds (focal's optimum is a notably lower height,
+0.40 vs 0.80 -- focal outputs sit lower, as expected). This is the keeper result
+from the loss A/B: fold `--loss focal` into the cym+hat recipe (pending 2nd seed +
+ParaDB), and it needs its own threshold re-tune (don't inherit bce's heights).
 
 ## Per-stem pooled MERT layer sweep (2026-06-12)
 
