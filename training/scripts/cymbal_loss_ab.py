@@ -100,15 +100,37 @@ def _miss_typing(model, val_clips, cfg, thresholds):
     return typing
 
 
+def _all_lane_f1(model, val_clips, cfg, thresholds):
+    """Per-lane onset-F1 over EVERY trained lane, at the arm's TUNED thresholds,
+    with per-stem isolation (each lane scored only on clips that carry its onsets).
+
+    This is the apples-to-apples cross-arm metric. It exists because the rd/cr
+    `decompose` table alone once HID a real per-lane win: focal beat bce on
+    closed-hat (+0.030) but hc wasn't in the cym-only table, and the during-training
+    keep_best metric is at a FIXED threshold where focal (which calibrates lower)
+    looked tied. Lesson baked in: report ALL trained lanes, always at tuned
+    thresholds. See training/README.md 'A/B testing traps'."""
+    from drumjot_training.train import evaluate_clip
+
+    per = [evaluate_clip(model, c, cfg, thresholds) for c in val_clips]
+    out = {}
+    for ln in cfg.lanes:
+        vals = [per[i][ln] for i, c in enumerate(val_clips) if c.onsets_by_lane.get(ln)]
+        if vals:
+            out[ln] = sum(vals) / len(vals)
+    return out
+
+
 def score_arm(model, val_clips, cfg, thresholds, log):
-    """Decomposition (hit/confused/missed/fp + R/P/F1) + miss typing for one arm."""
+    """rd/cr confusion decomposition + miss typing + ALL-lane tuned F1 for one arm."""
     from cymbal_recall_confusion import _report, decompose
 
     agg = decompose(model, val_clips, cfg, thresholds, log)
     decomp = _report(agg, log)
     typing = _miss_typing(model, val_clips, cfg, thresholds)
-    return {"decomp": decomp, "typing": typing,
-            "thresholds": {ln: thresholds.get(ln, cfg.peak_threshold) for ln in CYM}}
+    lane_f1 = _all_lane_f1(model, val_clips, cfg, thresholds)
+    return {"decomp": decomp, "typing": typing, "lane_f1": lane_f1,
+            "thresholds": {ln: round(thresholds.get(ln, cfg.peak_threshold), 2) for ln in cfg.lanes}}
 
 
 def _comparison_table(results, log):
@@ -127,6 +149,20 @@ def _comparison_table(results, log):
             cells.append(f"{o.get('recall', 0):5.3f} {o.get('precision', 0):5.3f} "
                          f"{o.get('f1', 0):5.3f} {t[ln]['dead_rate']:7.1%}")
         log(f"  {arm:16s} | {cells[0]} | {cells[1]}")
+    # ALL trained lanes at tuned thresholds -- the complete view, so a per-lane win
+    # (e.g. focal on closed-hat) can't hide behind the rd/cr-only table above.
+    lanes = [ln for ln in (next((r["lane_f1"] for r in results.values() if r and r.get("lane_f1")), {}))]
+    if lanes:
+        log("\n  per-lane tuned-threshold F1 (ALL trained lanes; tuned thr in []):")
+        log(f"  {'arm':16s} | " + " ".join(f"{ln:>11s}" for ln in lanes))
+        for arm in ALL_ARMS:
+            r = results.get(arm)
+            if not r or not r.get("lane_f1"):
+                continue
+            lf, th = r["lane_f1"], r.get("thresholds", {})
+            cells = [f"{lf[ln]:.3f}[{th.get(ln, float('nan')):.2f}]" if ln in lf else f"{'--':>11s}"
+                     for ln in lanes]
+            log(f"  {arm:16s} | " + " ".join(f"{c:>11s}" for c in cells))
     # Deltas vs the clean BCE-on-aligned control if it ran, else the old-ckpt baseline.
     ref_name = "bce" if results.get("bce") else "baseline"
     ref = results.get(ref_name)

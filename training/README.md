@@ -238,3 +238,33 @@ Open / next:
 4. **Transcriber integration:** `app/pipeline/learned_onsets.py` is the
    spike that runs a checkpoint as a pipeline stage; wire it behind a config
    flag for production use.
+
+## A/B testing traps (read before any loss/recipe comparison)
+
+Hard-won, cost real false conclusions. When comparing two training recipes
+(focal-vs-bce, oversample, a new feature, …):
+
+1. **Always compare at per-lane TUNED thresholds, never a shared/fixed one.** The
+   peak-pick height is per-lane and must be re-tuned per arm. Calibration-shifting
+   losses (focal fires LOWER than BCE) look tied-or-worse at a fixed threshold and
+   only reveal their win at their own optimum. Real misses this caused: focal
+   *closed-hat* looked tied (0.68=0.68) at the during-training fixed threshold but
+   was **+0.030** tuned (opt thr 0.45 vs bce 0.90); focal *ride* looked **worse**
+   untuned (0.60 vs 0.62) but was **+0.065** tuned. The during-training keep_best
+   val metric is at a FIXED threshold; it is NOT a valid cross-recipe comparison,
+   only an each-arm convergence signal.
+2. **Always report EVERY trained lane, not just the lanes of interest.** A cym-only
+   table (`cymbal_recall_confusion.decompose` reports rd/cr) hid focal's closed-hat
+   win entirely, hc was trained and tuned but never printed. `cymbal_loss_ab.py`
+   now prints an all-lane tuned-F1 table (`_all_lane_f1` → `evaluate_clip` at tuned
+   thresholds, per-stem isolation). Use it / copy it; don't trust a partial table.
+3. **Score with per-stem isolation** (a lane scored only on clips that carry its
+   onsets); counting a lane's firing on stems where it's absent is cross-stem
+   leakage, a separate metric, and inflates false positives ~2× (skews the optimal
+   threshold high). Matches `decompose`'s `if not len(ref): continue`.
+4. **Per-lane loss is supported and is the right default** when a loss helps some
+   lanes and hurts others: `train_loop(focal_lanes=[…])` trains those lanes with
+   focal and the rest with BCE (heads are independent, so no cross-lane effect).
+   Decide the map by re-scoring saved checkpoints per lane
+   (`cymbal_lane_loss_pick.py`), not by guessing. Current data-driven map:
+   focal on `hc,rd`; BCE on `hp,ho,cr,k,s,ss,t`.
