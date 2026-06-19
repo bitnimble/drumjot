@@ -49,8 +49,9 @@ sys.path.insert(0, os.path.join(_HERE, "..", "..", "dsp"))  # dsp/
 
 CYM = ("rd", "cr")
 # baseline = old raw-trained ckpt (absolute anchor); bce = clean BCE-on-aligned
-# control (the real A/B reference); focal / crash_oversample = the levers under test.
-ALL_ARMS = ("baseline", "bce", "focal", "crash_oversample")
+# control (the real A/B reference); focal / crash_oversample = the levers under test;
+# mixed = per-lane loss (focal on --focal-lanes, BCE on the rest) -- the deployable.
+ALL_ARMS = ("baseline", "bce", "focal", "crash_oversample", "mixed")
 
 
 def _use_cuda(args) -> bool:
@@ -181,6 +182,9 @@ def _train_arm(arm, args, cache, sources, cfg, in_dim, log):
                            lane_names=cfg.lanes)
     if uc:
         model = model.cuda()
+    # mixed = per-lane loss (focal on --focal-lanes, BCE on the rest); pos_weight is
+    # still computed (the focal lanes ignore it inside train_loop).
+    focal_lanes = tuple(s.strip() for s in args.focal_lanes.split(",") if s.strip()) if arm == "mixed" else ()
     if args.loss_for(arm) == "focal":
         pos_w = 1.0  # focal ignores pos_weight (targets hard frames directly)
     else:
@@ -193,7 +197,8 @@ def _train_arm(arm, args, cache, sources, cfg, in_dim, log):
     train_loop(model, train_clips, cfg, epochs=args.epochs, pos_weight=pos_w,
                batch_size=args.batch, num_workers=args.num_workers, val_clips=val_clips,
                keep_best=True, log=log, early_stop=True, es_min_epochs=20,
-               warmup_steps=args.warmup, loss_fn=args.loss_for(arm), resume_path=resume)
+               warmup_steps=args.warmup, loss_fn=args.loss_for(arm), focal_lanes=focal_lanes,
+               resume_path=resume)
     thresholds = tune_thresholds(model, val_clips, cfg)
     log(f"  tuned thresholds: {dict((ln, round(thresholds.get(ln, cfg.peak_threshold), 2)) for ln in cfg.lanes)}")
     save = str(Path(args.ckpt_dir) / f"loss_ab_{arm}.pt")
@@ -218,6 +223,8 @@ def main():
     ap.add_argument("--num-workers", type=int, default=8)
     ap.add_argument("--pos-weight-cap", type=float, default=50.0)
     ap.add_argument("--crash-oversample", type=int, default=2, help="duplicate crash stems Nx")
+    ap.add_argument("--focal-lanes", default="hc,rd",
+                    help="lanes the 'mixed' arm trains with focal (rest BCE); data-driven default")
     ap.add_argument("--cache", default="/codebox-workspace/datasets/_cache_mert_pooled")
     ap.add_argument("--aligned-onsets", default=None,
                     help="opt-in _onsets_aligned.json -> train+score on audio-snapped/filtered targets")

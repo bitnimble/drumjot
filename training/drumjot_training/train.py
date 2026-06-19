@@ -663,6 +663,7 @@ def train_loop(
     lr_schedule: str = "cosine",
     warmup_steps: int = 0,
     loss_fn: str = "bce",
+    focal_lanes: Sequence[str] = (),
     keep_best: bool = False,
     early_stop: bool = False,
     es_window: int = 8,
@@ -706,6 +707,21 @@ def train_loop(
     # aux ring-activity rows + a unit pos_weight for the activity BCE
     sus_idx = [i for i, ln in enumerate(cfg.lanes) if ln in SUSTAINED_LANES]
     one_pw = torch.ones(len(sus_idx), 1, device=device)
+    # per-lane loss selection. Heads are independent (each lane its own OnsetHead
+    # over frozen features), so a per-lane loss has NO cross-lane interaction --
+    # focal's gradient flows only into the focal lanes' heads. `focal_lanes` lists
+    # the lanes trained with CenterNet focal; the rest use pos-weighted BCE. With
+    # `focal_lanes` empty, `loss_fn` sets one global loss for all lanes (back-compat).
+    focal_set = set(focal_lanes)
+    if focal_set:
+        focal_idx = [i for i, ln in enumerate(cfg.lanes) if ln in focal_set]
+        bce_idx = [i for i, ln in enumerate(cfg.lanes) if ln not in focal_set]
+    elif loss_fn == "focal":
+        focal_idx, bce_idx = list(range(len(cfg.lanes))), []
+    else:
+        focal_idx, bce_idx = [], list(range(len(cfg.lanes)))
+    log(f"  loss: focal={[cfg.lanes[i] for i in focal_idx] or 'none'} "
+        f"bce={[cfg.lanes[i] for i in bce_idx] or 'none'}")
     history: dict[str, list[float]] = {"train_loss": []}
     # keep_best: PER-LANE early stopping. Each lane's head is an independent
     # OnsetHead, so we snapshot each lane's head params at the epoch where THAT
@@ -785,11 +801,17 @@ def train_loop(
             opt.zero_grad()
             with runtime.autocast():  # bf16 fwd on Ampere+; FP32 no-op elsewhere
                 logits, act_logits = model.forward_all(X)
-                loss = (
-                    masked_focal(logits, Y, mask, frame_weight=fw)
-                    if loss_fn == "focal"
-                    else masked_bce(logits, Y, mask, pw, frame_weight=fw)
-                )
+                # per-lane loss: BCE on bce_idx lanes + focal on focal_idx lanes.
+                # Independent heads -> summing the two (separately normalised) terms
+                # is correct; each head only sees its own lane's loss gradient.
+                terms = []
+                if bce_idx:
+                    fwb = fw[:, bce_idx] if fw is not None else None
+                    terms.append(masked_bce(logits[:, bce_idx], Y[:, bce_idx], mask, pw[bce_idx], frame_weight=fwb))
+                if focal_idx:
+                    fwf = fw[:, focal_idx] if fw is not None else None
+                    terms.append(masked_focal(logits[:, focal_idx], Y[:, focal_idx], mask, frame_weight=fwf))
+                loss = sum(terms)
                 if cfg.aux_act_weight > 0.0:
                     # auxiliary ring-activity BCE, sustained lanes only (the
                     # open-hat/cymbal tail that defines those classes)

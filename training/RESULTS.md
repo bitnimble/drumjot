@@ -987,6 +987,35 @@ edge, not a loss effect.
 from the loss A/B: fold `--loss focal` into the cym+hat recipe (pending 2nd seed +
 ParaDB), and it needs its own threshold re-tune (don't inherit bce's heights).
 
+#### Per-lane loss pick -> per-lane loss is now supported (2026-06-19)
+
+Since the heads are INDEPENDENT (each lane its own OnsetHead over frozen features),
+the best model uses, per lane, whichever loss trained the better head -- no
+cross-lane interaction. `cymbal_lane_loss_pick.py` re-scores the saved focal & bce
+checkpoints (no retrain), per lane at its F1-optimal height + production prominence:
+
+| lane | bce F1 (thr) | focal F1 (thr) | Δ(f-b) | winner |
+|---|---|---|---|---|
+| hc | 0.820 (0.90) | **0.850** (0.45) | +0.030 | **focal** |
+| hp | 0.633 (0.90) | 0.629 (0.35) | -0.004 | bce |
+| ho | 0.724 (0.90) | 0.713 (0.40) | -0.010 | bce |
+| rd | 0.780 (0.80) | **0.845** (0.40) | +0.066 | **focal** |
+| cr | 0.585 (0.75) | 0.586 (0.30) | +0.001 | bce |
+
+**Focal wins TWO lanes: closed-hat (+0.030) and ride (+0.066)** -- the hc win was
+hidden in the untuned keep_best (focal needs a far lower threshold, 0.45 vs 0.90).
+hp/ho/cr keep bce. Data-driven map: **`--focal-lanes hc,rd`**. (Every focal lane's
+optimum is ~half bce's height -> per-lane threshold tuning is mandatory.)
+
+**Implemented:** `train_loop(focal_lanes=...)` (train.py) computes focal on those
+lanes' logits + BCE on the rest and sums them; independent heads make this exactly
+a per-head loss choice. Exposed as the `mixed` arm in `cymbal_loss_ab.py`
+(`--focal-lanes`, default `hc,rd`). The deployable cym+hat model trains all heads in
+one run, each with its winning loss. (Caveat: focal in the mixed run is normalised
+over the focal lanes' positives only, vs all-lanes in the pure-focal A/B -- a
+different effective LR for those heads; the run validates whether hc/rd still land
+at ~0.85 or need the graft fallback. Single seed; cap-1000 aligned.)
+
 ## Per-stem pooled MERT layer sweep (2026-06-12)
 
 **Setup.** `scripts/perstem_layer_sweep.py` over pooled per-stem examples from all
