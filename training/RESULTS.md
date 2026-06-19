@@ -771,6 +771,36 @@ snare/ride/tom the higher discard MAY drop real soft hits -- review the per-lane
 images before training on filtered non-crash lanes. The SNAP alone is the safe
 universal win; a snap-only artifact (no discard) is the conservative default.
 
+### Prominence update (2026-06-20)
+
+The numbers above used a height/SNR floor that dropped soft-but-real rides. Per
+user review (a barely-audible ride at the noise floor still had a real local
+peak), switched the transient test to a **PROMINENCE gate** (peak rise above its
+local baseline >= 5% of clip-max -- the transcriber-picker approach; calibration
+showed background noise peaks ~3.3% prominence, so 5% sits just above noise). Also
+coarsened the detection hop 64->256 (~4x less RAM, identical result). Validated on
+rd_03: floor 4 snap/13 discard -> prominence **11 snap/7 discard** (soft rides
+kept). Regenerated both JSONs (8 shards, ~13 min each). Final per-lane discard:
+
+| lane | floor->prom | | lane | floor->prom |
+|------|-------------|-|------|-------------|
+| cr | 28.1% -> **9.1%** | | k  | 8.7% -> **22.5%** |
+| rd | 28.8% -> **13.7%** | | s  | 16.8% -> **31.7%** |
+| ho | 12.1% -> 7.9% | | t  | 18.5% -> 25.3% |
+| hc | 6.6% -> 6.7% | | ss | 8.1% -> 18.2% |
+| hp | 10.0% -> 16.2% | | ALL | 14.4% -> 20.3% |
+
+**Prominence fixed the cymbals (cr/rd discard ~halved -- soft rides preserved) but
+made kick/snare/tom WORSE.** Cause: prominence relative to CLIP-MAX is too strict
+on high-dynamic-range lanes -- a snare's loud backbeats set the max, so real ghost
+notes fall below 5% and get dropped (32% of snares). Ride has uniform dynamics so
+5% works. ALL rose to 20.3% because the big-count k/s lanes dominate.
+
+**Net:** the **cym+hat pool (hc/hp/ho/rd/cr) is well-handled (7-16%)** -> the
+`_onsets_aligned.json` is READY for the h256 crash retrain (the payoff test of
+"is the intrinsic crash ceiling the labels?"). For a FULL-KIT run, kick/snare/tom
+need a lower / per-lane prominence (to keep ghost notes) or snap-only -- TODO.
+
 ## Per-stem pooled MERT layer sweep (2026-06-12)
 
 **Setup.** `scripts/perstem_layer_sweep.py` over pooled per-stem examples from all
