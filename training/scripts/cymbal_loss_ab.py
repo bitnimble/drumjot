@@ -48,7 +48,9 @@ sys.path.insert(0, os.path.join(_HERE, ".."))  # training/
 sys.path.insert(0, os.path.join(_HERE, "..", "..", "dsp"))  # dsp/
 
 CYM = ("rd", "cr")
-ALL_ARMS = ("baseline", "focal", "crash_oversample")
+# baseline = old raw-trained ckpt (absolute anchor); bce = clean BCE-on-aligned
+# control (the real A/B reference); focal / crash_oversample = the levers under test.
+ALL_ARMS = ("baseline", "bce", "focal", "crash_oversample")
 
 
 def _use_cuda(args) -> bool:
@@ -124,15 +126,17 @@ def _comparison_table(results, log):
             cells.append(f"{o.get('recall', 0):5.3f} {o.get('precision', 0):5.3f} "
                          f"{o.get('f1', 0):5.3f} {t[ln]['dead_rate']:7.1%}")
         log(f"  {arm:16s} | {cells[0]} | {cells[1]}")
-    base = results.get("baseline")
-    if base:
-        for arm in ("focal", "crash_oversample"):
-            r = results.get(arm)
-            if not r:
+    # Deltas vs the clean BCE-on-aligned control if it ran, else the old-ckpt baseline.
+    ref_name = "bce" if results.get("bce") else "baseline"
+    ref = results.get(ref_name)
+    if ref:
+        for arm in ALL_ARMS:
+            if arm == ref_name or not results.get(arm):
                 continue
-            d_cr = r["decomp"].get("cr", {}).get("recall", 0) - base["decomp"].get("cr", {}).get("recall", 0)
-            d_dead = r["typing"]["cr"]["dead_rate"] - base["typing"]["cr"]["dead_rate"]
-            log(f"  -> {arm}: crash recall {d_cr:+.3f}, crash dead-rate {d_dead:+.1%} vs baseline")
+            r = results[arm]
+            d_cr = r["decomp"].get("cr", {}).get("recall", 0) - ref["decomp"].get("cr", {}).get("recall", 0)
+            d_dead = r["typing"]["cr"]["dead_rate"] - ref["typing"]["cr"]["dead_rate"]
+            log(f"  -> {arm} vs {ref_name}: crash recall {d_cr:+.3f}, crash dead-rate {d_dead:+.1%}")
 
 
 def _selftest():
