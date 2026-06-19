@@ -42,42 +42,26 @@ sys.path.insert(0, os.path.join(_HERE, "..", "..", "dsp"))  # dsp/
 SR = 44100
 DISP_HOP = 512  # spectrogram/display envelope hop
 SNAP_HOP = 64   # forced_align's high-res envelope hop (~1.45 ms)
-SNR_THR = 3.0   # transient test: local rise >= 3x the surrounding median ...
-REL_THR = 0.15  # ... OR peak >= 15% of the clip's loudest onset
-BASE_FLOOR_FRAC = 0.03  # floor the SNR baseline at 3% of clip max (kills silence false-onsets)
+# A real onset = an envelope local max whose PROMINENCE (rise above its local
+# baseline) clears PROM_FRAC of the clip's loudest onset. Prominence (not absolute
+# height) is what the transcriber's picker uses -- it keeps a soft-but-real hit
+# while rejecting flat noise. Calibration (ride stem): background noise peaks sit
+# at ~3.3% prominence (p90), so a few % puts the bar just above the noise; soft
+# rides below it are near-inaudible and fine to drop.
+PROM_FRAC = 0.05
 
 
-def _transient_ok(env, f, fps, *, core_s=0.03, ctx_s=0.4, ref=None):
-    """Is frame `f` a real transient? local-SNR >= SNR_THR OR rel-to-clip-max >= REL_THR.
-
-    The baseline is FLOORED at `BASE_FLOOR_FRAC` of the clip max: in a silent stretch
-    the context median is ~0, which would give any tiny noise ripple an infinite SNR
-    (false 'onset' in silence). Flooring it means a silence ripple needs real
-    salience to pass, while a soft hit in a quiet bar still clears it."""
-    n = env.size
-    w, c = max(1, int(core_s * fps)), max(1, int(ctx_s * fps))
-    lo, hi = max(0, f - w), min(n, f + w + 1)
-    if lo >= hi:
-        return False
-    peak = float(env[lo:hi].max())
-    ctx = env[max(0, f - c):min(n, f + c + 1)]
-    base = float(np.median(ctx)) if ctx.size else 0.0
-    r = ref if ref is not None else (float(env.max()) if n else 0.0)
-    base = max(base, BASE_FLOOR_FRAC * r)  # silence can't manufacture infinite SNR
-    return (peak / (base + 1e-9) >= SNR_THR) or (peak / (r + 1e-9) >= REL_THR)
-
-
-def real_onset_times(env, fps, *, min_sep_s=0.03):
+def real_onset_times(env, fps, *, min_sep_s=0.03, prom_frac=PROM_FRAC):
     """Times (s) of real audio onsets: envelope local maxima >= `min_sep_s` apart
-    that pass the transient test. The audio's own onset set, to align labels to."""
+    whose prominence >= `prom_frac` * clip-max. The audio's own onset set, to align
+    labels to."""
     from scipy.signal import find_peaks
 
-    peaks, _ = find_peaks(env, distance=max(1, round(min_sep_s * fps)))
-    if peaks.size == 0:
+    if env.size == 0:
         return np.empty(0)
-    ref = float(env.max())
-    keep = [p for p in peaks if _transient_ok(env, int(p), fps, ref=ref)]
-    return np.asarray(keep, dtype=np.float64) / fps
+    peaks, _ = find_peaks(env, distance=max(1, round(min_sep_s * fps)),
+                          prominence=prom_frac * float(env.max()))
+    return peaks.astype(np.float64) / fps
 
 
 def align_or_discard(label_times, real_times, window_s):
@@ -174,14 +158,15 @@ def _selftest():
     dec = align_or_discard([2.01, 2.05], reals, window_s=0.12)
     kinds = sorted(d[0] for d in dec)
     assert kinds == ["discard", "snap"], dec
-    # SILENCE false-onset guard: a tiny ripple in a silent stretch must NOT register
-    # (without the baseline floor, median~=0 gives it infinite SNR -> false onset).
-    sil = np.zeros(n)
-    sil[int(round(2.0 * fps))] = 5.0   # the one real onset (sets clip ref)
-    sil[int(round(4.0 * fps))] = 0.02  # noise ripple at 0.4% of ref, in silence
-    reals2 = real_onset_times(sil, fps)
-    assert np.allclose(np.round(reals2), [2.0]), f"silence ripple leaked: {reals2}"
-    print("SELFTEST OK (snap/discard/dedup + silence false-onset guard)", flush=True)
+    # PROMINENCE gate: a loud onset (high prominence) is kept; a low-prominence
+    # noise ripple is dropped; a soft-but-real hit ABOVE the prominence bar is kept.
+    pg = np.zeros(n)
+    pg[int(round(2.0 * fps))] = 5.0    # loud onset (sets clip ref) -> kept
+    pg[int(round(4.0 * fps))] = 0.10   # noise ripple at 2% of ref (< PROM_FRAC) -> dropped
+    pg[int(round(5.0 * fps))] = 0.40   # soft-but-real at 8% of ref (> PROM_FRAC) -> kept
+    got = np.round(real_onset_times(pg, fps)).tolist()
+    assert got == [2.0, 5.0], f"prominence gate: {got} (want loud+soft kept, noise dropped)"
+    print("SELFTEST OK (snap/discard/dedup + prominence gate)", flush=True)
 
 
 def main():
