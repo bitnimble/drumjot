@@ -880,6 +880,47 @@ is small: **crash 5.6% (2.4 wrong + 3.2 dead), ride 1.7%**. Reads:
 premise holds. Optional further tightening = drop the wrong+dead buckets (cr 5.6%)
 before training, but soft-dominance says the current `_onsets_aligned.json` is fine.
 
+### Loss A/B on aligned labels: focal / oversample (2026-06-19) -- focal is a RIDE lever, crash wash
+
+The two pending levers (`--loss focal`, crash-oversample), finally run -- on the
+ALIGNED labels (so focal isn't fighting label noise). `cymbal_loss_ab.py`, h128
+cap-1000 30-ep seed-1, all arms in-harness with the SAME scoring (the
+`cymbal_recall_confusion` decompose: hit/confuse/miss + R/P/F1 + the `dead`-rate
+that miss-typing flagged). `cymbal_loss_ab_aligned_h128_cap1000.json`.
+
+NB this decompose-F1 uses a different matcher than the head-capacity keep_best F1,
+so these numbers are NOT comparable to the +0.049 retrain table above -- compare
+ONLY across rows here. `bce` = the clean BCE-on-aligned control; `baseline` = the
+old raw-trained cap-3000 ckpt (confounded by 3x data + raw labels, an anchor only).
+
+| arm | rd R | rd P | rd F1 | rd dead | cr R | cr P | cr F1 | cr dead |
+|---|---|---|---|---|---|---|---|---|
+| baseline (raw cap-3000) | 0.823 | 0.716 | 0.766 | 40.1% | 0.585 | 0.605 | 0.595 | 72.6% |
+| **bce** (aligned ctrl) | 0.771 | 0.763 | 0.767 | 31.3% | 0.562 | 0.584 | 0.573 | 84.4% |
+| **focal** | **0.888** | 0.785 | **0.833** | 48.5% | 0.460 | **0.734** | 0.565 | 69.2% |
+| crash_oversample | 0.803 | **0.816** | 0.810 | 26.3% | 0.533 | 0.605 | 0.567 | 77.9% |
+
+**Focal is a strong RIDE win and a crash wash.**
+- **Ride:** F1 0.767 -> **0.833** (+0.066), recall 0.771 -> **0.888** (+0.117) vs
+  the bce control. A real, large ride gain -- the standout result.
+- **Crash:** focal DID do what miss-typing predicted -- woke up activation
+  (dead-rate 84.4% -> 69.2%) and crash precision jumped (0.584 -> **0.734**). But
+  crash **recall collapsed** (0.562 -> 0.460) and confusion rose (0.188 -> 0.236),
+  so crash **F1 is flat** (0.573 -> 0.565). Focal reshapes crash into a
+  high-precision / low-recall lane; it does NOT lift crash.
+- **crash-oversample: no win** -- marginal ride precision (+0.05 P), crash flat
+  (F1 0.567, recall down 0.029). Duping 71 crash stems 2x didn't help.
+
+**Verdict: neither loss lever breaks the crash ceiling** (crash F1 ~0.57 across all
+three aligned arms). This **overturns the miss-typing steer** ("focal/oversample is
+the crash lever"): focal raises crash *activation* exactly as predicted, but the
+extra firing is low-quality (precision/recall trade, more rd<->cr confusion), not
+recall. **The only lever that has moved crash remains label alignment** (+0.049).
+The unexpected payoff is RIDE: focal is the first clear ride lever -- worth a 2nd
+seed + ParaDB confirm, and folding `--loss focal` into the main cym+hat recipe if
+it holds (watch the threshold recalibration: focal tuned to cr 0.4 / rd 0.3 vs bce
+0.5 / 0.5). Single seed; decompose-F1; cym+hat pool.
+
 ## Per-stem pooled MERT layer sweep (2026-06-12)
 
 **Setup.** `scripts/perstem_layer_sweep.py` over pooled per-stem examples from all
