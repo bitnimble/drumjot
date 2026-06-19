@@ -1010,11 +1010,31 @@ optimum is ~half bce's height -> per-lane threshold tuning is mandatory.)
 **Implemented:** `train_loop(focal_lanes=...)` (train.py) computes focal on those
 lanes' logits + BCE on the rest and sums them; independent heads make this exactly
 a per-head loss choice. Exposed as the `mixed` arm in `cymbal_loss_ab.py`
-(`--focal-lanes`, default `hc,rd`). The deployable cym+hat model trains all heads in
-one run, each with its winning loss. (Caveat: focal in the mixed run is normalised
-over the focal lanes' positives only, vs all-lanes in the pure-focal A/B -- a
-different effective LR for those heads; the run validates whether hc/rd still land
-at ~0.85 or need the graft fallback. Single seed; cap-1000 aligned.)
+(`--focal-lanes`, default `hc,rd`).
+
+**Mixed run validated (focal hc,rd + bce rest; h128 cap-1000 aligned).** Per-lane
+F1-optimal of the single mixed checkpoint vs the pure arms:
+
+| lane | bce | focal-only | **mixed** | mixed vs bce |
+|---|---|---|---|---|
+| rd | 0.780 | 0.845 | **0.853** | **+0.073** |
+| hc | 0.820 | 0.850 | 0.833 | +0.013 |
+| cr | 0.585 | 0.586 | 0.594 | +0.009 |
+| hp | 0.633 | 0.629 | 0.622 | -0.011 |
+| ho | 0.724 | 0.713 | 0.714 | -0.010 |
+
+**Net win over pure BCE, driven by ride (+0.073) + modest closed-hat (+0.013);**
+the BCE lanes are within single-seed run-to-run noise (+/-0.01). Notably **rd
+EXCEEDED focal-only** (0.853 vs 0.845) -- concentrating focal on hc+rd raised those
+heads' effective LR and helped ride. **hc UNDERSHOT focal-only** (0.833 vs 0.850) --
+the predicted normalization caveat biting closed-hat. So:
+- **Deployable option A (mixed checkpoint):** one coherent run, rd best-in-study.
+- **Deployable option B (graft):** drop `loss_ab_focal.pt`'s `heads.hc`+`heads.rd`
+  into `loss_ab_bce.pt` (independent modules, zero training) -> the EXACT per-lane
+  bests (hc 0.850, rd 0.845, hp/ho/cr at bce). Marginally better overall (recovers
+  hc's 0.017); mixed wins rd by 0.008. Both single-seed; differences mostly within
+  the cap-1000 noise band. **Next:** 2nd seed + ParaDB to pick between them and
+  confirm the ride/hc wins hold out-of-domain.
 
 ## Per-stem pooled MERT layer sweep (2026-06-12)
 

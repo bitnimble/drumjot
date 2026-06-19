@@ -34,6 +34,7 @@ LANES = ("hc", "hp", "ho", "rd", "cr")
 CKPTS = {
     "bce": "/codebox-workspace/checkpoints/loss_ab_bce.pt",
     "focal": "/codebox-workspace/checkpoints/loss_ab_focal.pt",
+    "mixed": "/codebox-workspace/checkpoints/loss_ab_mixed.pt",  # focal hc,rd + bce rest
 }
 
 
@@ -126,7 +127,11 @@ def main():
         if uc:
             torch.cuda.empty_cache()
 
-    log(f"\n  {'lane':4s} | {'bce F1':>7s} (thr) | {'focal F1':>8s} (thr) | {'Δ(f-b)':>7s} | winner")
+    extra = [a for a in best if a not in ("bce", "focal")]  # e.g. the deployable 'mixed'
+    hdr = f"\n  {'lane':4s} | {'bce F1':>7s}(thr) | {'focal F1':>8s}(thr) | {'Δ(f-b)':>7s} | winner"
+    for a in extra:
+        hdr += f" | {a + ' F1':>9s}(thr)"
+    log(hdr)
     focal_lanes = []
     out = {}
     for ln in LANES:
@@ -135,9 +140,14 @@ def main():
         win = "focal" if d >= args.margin else "bce"
         if win == "focal":
             focal_lanes.append(ln)
-        log(f"  {ln:4s} | {b['f1']:7.3f} ({b['thr']:.2f}) | {f['f1']:8.3f} ({f['thr']:.2f}) | "
-            f"{d:+7.3f} | {win}")
-        out[ln] = {"bce": b, "focal": f, "delta": d, "winner": win}
+        line = (f"  {ln:4s} | {b['f1']:7.3f}({b['thr']:.2f}) | {f['f1']:8.3f}({f['thr']:.2f}) | "
+                f"{d:+7.3f} | {win:6s}")
+        for a in extra:
+            e = best[a][ln]
+            line += f" | {e['f1']:9.3f}({e['thr']:.2f})"
+        log(line)
+        out[ln] = {"bce": b, "focal": f, "delta": d, "winner": win,
+                   **{a: best[a][ln] for a in extra}}
     log(f"\n  => --focal-lanes {','.join(focal_lanes) if focal_lanes else '(none)'}  "
         f"(margin {args.margin}); all other lanes -> bce")
     Path(args.out_json).write_text(json.dumps(
