@@ -837,6 +837,49 @@ is **ParaDB** (independent GT, never touched by our snapper). (3) cym+hat-only p
 not full-kit. **Next:** repeat at h256 (the best-cym width), add a seed, and run
 ParaDB on the aligned checkpoint to kill the val-cleanliness confound.
 
+### Suspect-label recheck: are the aligned labels actually clean? (2026-06-19)
+
+The snap+filter discards (cr 9.1% / rd 13.7%) and the original hand-rolled suspect
+audit (~30% crash, commit b8ffe8f) measure DIFFERENT things, so the small discard
+didn't prove the surviving labels are good. `cymbal_suspect_recheck.py` re-runs the
+**original strict gate VERBATIM** (rel>=0.15 of clip-max OR local-SNR>=3 at the
+labelled time) over both the raw and the snapped+filtered onsets (one envelope per
+stem, scored twice), then decomposes each surviving suspect into **wrong** (a
+sibling cymbal onset within +/-50 ms = rd<->cr mislabel), **dead** (snr<1.5 = no
+transient, separation drop / cross-kit mislabel), or **soft** (weak-but-real, keep).
+Sanity: raw crash ALL = **29.8%**, reproducing the original audit exactly.
+
+| src/lane | raw susp | aligned susp | wrong% | dead% | soft% |
+|---|---|---|---|---|---|
+| enst/cr (real) | 8.1% | **6.0%** | 0.0% | 1.1% | 4.9% |
+| enst/rd | 13.1% | **9.0%** | 0.0% | 0.6% | 8.3% |
+| egmd/cr (drift) | 31.2% | **22.9%** | 0.8% | 0.9% | 21.2% |
+| egmd/rd | 37.3% | **20.5%** | 0.0% | 0.5% | 20.0% |
+| star/cr (synth) | 31.4% | **27.6%** | 2.8% | 3.5% | 21.3% |
+| star/rd | 34.8% | **28.2%** | 1.8% | 4.5% | 21.9% |
+| **ALL/cr** | 29.8% | **25.7%** | **2.4%** | **3.2%** | 20.1% |
+| **ALL/rd** | 36.2% | **21.8%** | **0.4%** | **1.3%** | 20.1% |
+
+**The aligned labels are good targets.** The strict gate's ~26%/22% residual is
+**overwhelmingly soft-but-real** (20.1% of all onsets both lanes) -- the quiet hits
+we deliberately kept by loosening to the prominence gate. The genuinely-bad share
+is small: **crash 5.6% (2.4 wrong + 3.2 dead), ride 1.7%**. Reads:
+- **Snap fixed real timing error where it existed:** egmd (MIDI<->audio drift) ride
+  raw-suspect 37.3% -> 20.5% (-16.8), and its residual is ~all soft (<=0.9% bad).
+- **Real hand-labeled data (enst) is essentially clean** -- 0% rd<->cr mislabels,
+  ~1% dead, the rest soft.
+- **star carries the most bad** (2-3% wrong, 3.5-4.5% dead) = synthetic separation
+  drops + rd/cr acoustic overlap; still soft-dominated.
+- `dead` is an **upper bound** on bad: a crash label parked on a kick/snare
+  (cross-kit mislabel, invisible to the within-stem rd<->cr check) shows up as a
+  no-transient `dead` in the cymbal stem, so the 3.2% crash-dead already absorbs
+  most cross-kit bleed. Cross-KIT bleed can't be measured directly here (per-stem
+  files carry only cymbal lanes).
+
+**Implication:** the +0.049 crash retrain was NOT built on junk targets; the
+premise holds. Optional further tightening = drop the wrong+dead buckets (cr 5.6%)
+before training, but soft-dominance says the current `_onsets_aligned.json` is fine.
+
 ## Per-stem pooled MERT layer sweep (2026-06-12)
 
 **Setup.** `scripts/perstem_layer_sweep.py` over pooled per-stem examples from all
