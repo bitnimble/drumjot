@@ -49,6 +49,7 @@ def main():
     args = ap.parse_args()
 
     import librosa
+    import soundfile as sf
     from align_dataset_onsets import iter_source
     from cymbal_snap_redraw import align_or_discard, discard_reason, real_onset_times, render
 
@@ -104,9 +105,10 @@ def main():
             ns = sum(1 for d in draw if d[0] == "snap")
             nd = len(draw) - ns
             title = f"{ln}  {ns} snap / {nd} discard  {Path(audio_path).name}"
-            png = out_dir / f"{ln}_{made:02d}_{Path(audio_path).stem[:36]}.png"
+            base = out_dir / f"{ln}_{made:02d}_{Path(audio_path).stem[:36]}"
             try:
-                render(y2, sr, draw, title, png)
+                render(y2, sr, draw, title, base.with_suffix(".png"))
+                sf.write(base.with_suffix(".wav"), y2, sr)  # audio to listen alongside
                 made += 1
             except Exception as exc:  # noqa: BLE001
                 log(f"  render fail {Path(audio_path).name}: {exc!r}")

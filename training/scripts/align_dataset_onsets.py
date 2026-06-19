@@ -153,6 +153,10 @@ def main():
     ap.add_argument("--stats-out", default="/codebox-workspace/datasets/_onsets_aligned_stats.json")
     ap.add_argument("--flush-every", type=int, default=200, help="incremental write cadence (resume)")
     ap.add_argument("--max-stems", type=int, default=0, help="cap stems processed (0=all; dry run)")
+    ap.add_argument("--shard", default="0/1",
+                    help="'i/N': process only stems with (global index) %% N == i. Run N independent "
+                    "processes (different i, different --out) for file-level parallelism, then merge "
+                    "-- robust where an in-process pool deadlocks (librosa/numba under spawn).")
     ap.add_argument("--no-filter", action="store_true",
                     help="snap-only: keep would-be discards at their original time (conservative; "
                     "aligns without risking real soft hits on snare/ride/tom)")
@@ -170,12 +174,16 @@ def main():
     aligned = json.loads(out_path.read_text()) if out_path.exists() else {}
     log(f"=== dataset onset alignment: sources={args.sources} (resume: {len(aligned)} stems done) ===")
 
+    shard_i, shard_n = (int(x) for x in args.shard.split("/"))
+    log(f"shard {shard_i}/{shard_n}")
     total: dict[str, list[int]] = {}
     t0 = time.perf_counter()
     done = 0
+    idx = -1  # global stem index (stable across resume so shards stay disjoint)
     for name in [s.strip() for s in args.sources.split(",") if s.strip()]:
         for audio_path, _pitch, lanes, full in iter_source(name, log):
-            if audio_path in aligned:
+            idx += 1
+            if idx % shard_n != shard_i or audio_path in aligned:
                 continue
             try:
                 a, stats = align_stem(audio_path, lanes, full, log, no_filter=args.no_filter)
