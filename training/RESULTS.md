@@ -801,6 +801,42 @@ notes fall below 5% and get dropped (32% of snares). Ride has uniform dynamics s
 "is the intrinsic crash ceiling the labels?"). For a FULL-KIT run, kick/snare/tom
 need a lower / per-lane prominence (to keep ghost notes) or snap-only -- TODO.
 
+### Aligned-onset retrain: h128 cap-1000 (2026-06-19) -- crash WINS
+
+The payoff test, run small to land in ~1 h with a clean prior comparison: the
+**raw cap-1000 h128** baseline (Phase-2 line, the data-scale knee) re-run
+**identically but on `_onsets_aligned.json`** (snap+prominence-filter labels),
+same cym+hat pool, batch 8, 30-ep cap, per-lane keep_best, seed 1.
+`aligned_h128_cap1000_s1.json`.
+
+| labels | hc | hp | ho | rd | cr | cym(rd,cr) |
+|---|---|---|---|---|---|---|
+| raw cap-1000 | 0.689 | 0.478 | 0.664 | 0.623 | 0.620 | 0.622 |
+| **aligned** | 0.688 | 0.428 | 0.666 | 0.633 | **0.669** | **0.651** |
+| Δ | −.001 | **−.050** | +.002 | +.010 | **+.049** | +.029 |
+
+**Crash clears the bar.** cr **+0.049** is just past the ~0.04 single-seed
+cap-1000 noise band -- the first lever that has moved crash at all (it was FLAT
+across width *and* data volume; see the width A/B and Phase 2). Aligning the
+labels lifts crash where 8× capacity and 3× data did nothing → **a real share of
+the crash ceiling was mistimed/mislabeled targets, not model under-firing.** This
+is the direct confirmation the under-firing diagnosis was missing: with the labels
+on the audio onset, the head fires. Ride +0.010 (within noise); hats flat.
+
+**But hp REGRESSED −0.050.** Pedal-hat is the casualty of the prominence FILTER --
+the clip-max-relative gate (calibrated on crash) over-drops soft foot-chicks the
+same way it over-drops snare/tom ghost notes (16.2% hp discard). The aligned set
+is a net win *for crash* but is **not safe for hp/kick/snare/tom as-is** -- the
+per-lane / lower prominence TODO above is now load-bearing, or use snap-only for
+those lanes.
+
+**Caveats.** (1) Single seed; cr +0.049 only just clears the noise band -- wants a
+2nd seed. (2) **Aligned val is cleaner GT** (its onsets were also snapped/filtered)
+so part of the lift is easier matching, not pure model gain -- the unbiased confirm
+is **ParaDB** (independent GT, never touched by our snapper). (3) cym+hat-only pool,
+not full-kit. **Next:** repeat at h256 (the best-cym width), add a seed, and run
+ParaDB on the aligned checkpoint to kill the val-cleanliness confound.
+
 ## Per-stem pooled MERT layer sweep (2026-06-12)
 
 **Setup.** `scripts/perstem_layer_sweep.py` over pooled per-stem examples from all
