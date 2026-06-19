@@ -44,10 +44,16 @@ DISP_HOP = 512  # spectrogram/display envelope hop
 SNAP_HOP = 64   # forced_align's high-res envelope hop (~1.45 ms)
 SNR_THR = 3.0   # transient test: local rise >= 3x the surrounding median ...
 REL_THR = 0.15  # ... OR peak >= 15% of the clip's loudest onset
+BASE_FLOOR_FRAC = 0.03  # floor the SNR baseline at 3% of clip max (kills silence false-onsets)
 
 
 def _transient_ok(env, f, fps, *, core_s=0.03, ctx_s=0.4, ref=None):
-    """Is frame `f` a real transient? local-SNR >= SNR_THR OR rel-to-clip-max >= REL_THR."""
+    """Is frame `f` a real transient? local-SNR >= SNR_THR OR rel-to-clip-max >= REL_THR.
+
+    The baseline is FLOORED at `BASE_FLOOR_FRAC` of the clip max: in a silent stretch
+    the context median is ~0, which would give any tiny noise ripple an infinite SNR
+    (false 'onset' in silence). Flooring it means a silence ripple needs real
+    salience to pass, while a soft hit in a quiet bar still clears it."""
     n = env.size
     w, c = max(1, int(core_s * fps)), max(1, int(ctx_s * fps))
     lo, hi = max(0, f - w), min(n, f + w + 1)
@@ -57,6 +63,7 @@ def _transient_ok(env, f, fps, *, core_s=0.03, ctx_s=0.4, ref=None):
     ctx = env[max(0, f - c):min(n, f + c + 1)]
     base = float(np.median(ctx)) if ctx.size else 0.0
     r = ref if ref is not None else (float(env.max()) if n else 0.0)
+    base = max(base, BASE_FLOOR_FRAC * r)  # silence can't manufacture infinite SNR
     return (peak / (base + 1e-9) >= SNR_THR) or (peak / (r + 1e-9) >= REL_THR)
 
 
@@ -167,7 +174,14 @@ def _selftest():
     dec = align_or_discard([2.01, 2.05], reals, window_s=0.12)
     kinds = sorted(d[0] for d in dec)
     assert kinds == ["discard", "snap"], dec
-    print("SELFTEST OK (real_onset_times + align_or_discard snap/discard/dedup)", flush=True)
+    # SILENCE false-onset guard: a tiny ripple in a silent stretch must NOT register
+    # (without the baseline floor, median~=0 gives it infinite SNR -> false onset).
+    sil = np.zeros(n)
+    sil[int(round(2.0 * fps))] = 5.0   # the one real onset (sets clip ref)
+    sil[int(round(4.0 * fps))] = 0.02  # noise ripple at 0.4% of ref, in silence
+    reals2 = real_onset_times(sil, fps)
+    assert np.allclose(np.round(reals2), [2.0]), f"silence ripple leaked: {reals2}"
+    print("SELFTEST OK (snap/discard/dedup + silence false-onset guard)", flush=True)
 
 
 def main():
