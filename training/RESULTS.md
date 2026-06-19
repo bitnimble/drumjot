@@ -544,10 +544,15 @@ F1 on the pooled per-stem val:
 | arm | params | hc | hp | ho | rd | cr | macro | cym(rd,cr) |
 |---|---|---|---|---|---|---|---|---|
 | h128 | 6.0M | 0.708 | 0.504 | 0.679 | 0.591 | 0.640 | 0.624 | 0.616 |
+| h256 | ~16M | 0.716 | 0.521 | 0.697 | **0.643** | 0.623 | **0.640** | 0.633 |
 | h512 | 47.5M | 0.722 | 0.507 | 0.689 | 0.631 | 0.638 | 0.637 | 0.635 |
-| Δ | 8x | +.014 | +.003 | +.010 | **+.040** | **−.002** | +.013 | +.019 |
+| Δ128→512 | 8x | +.014 | +.003 | +.010 | **+.040** | **−.002** | +.013 | +.019 |
 
-(h256 on the 1660 still running; append when done.)
+**h256 completes the curve (2026-06-20).** It's the sweet spot: best macro (0.640)
+and best ride (0.643), both edging out h512 -- macro climbs 128→256 (+0.016) then
+plateaus 256→512 (−0.003). Crucially **crash is FLAT across all three widths**
+(0.640 / 0.623 / 0.638, within the ~0.02 band) -- width does nothing for crash.
+The cymbal gain is entirely ride, and it saturates by h256.
 
 **LR-confound control.** h128 at the matched lr 3e-4 ≈ h128 at the old default lr
 1e-3 (hc .707 hp .510 ho .671 rd .593 cr .658) within noise (biggest Δ cr −0.018)
@@ -559,7 +564,12 @@ macro; the only material per-lane gain is **ride +0.040**, and **crash is a tie
 keep_best snapshot that later drifted to ~0.52. Single seed; deltas near the
 cap-3000 noise band (~0.02). With Phase 2 (data volume doesn't move crash) this
 rules out both capacity AND volume → the cymbal ceiling is intrinsic (features /
-labels / separation / decision), not model size.
+labels / separation / decision), not model size. The h256 curve confirms it:
+crash is flat across 128/256/512 → width-invariant. **This is now directly
+testable:** the onset-alignment work (2026-06-19) found ~28% of crash labels
+mistimed/false (mostly lane-mislabels) → the aligned-onset retrain
+(`--aligned-onsets`) is the test of whether the intrinsic crash ceiling is the
+LABELS. h256 is the width to use for it (best cym at no extra crash cost).
 
 ## Cymbal feature-separability probe (2026-06-18)
 
