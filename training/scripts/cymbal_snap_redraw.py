@@ -41,7 +41,8 @@ sys.path.insert(0, os.path.join(_HERE, "..", "..", "dsp"))  # dsp/
 
 SR = 44100
 DISP_HOP = 512  # spectrogram/display envelope hop
-SNAP_HOP = 64   # forced_align's high-res envelope hop (~1.45 ms)
+SNAP_HOP = 256  # detection-envelope hop (~5.8 ms). 64 (1.45 ms) is overkill for
+                # ~13 ms-target alignment and its STFT is ~4x the memory per stem.
 # A real onset = an envelope local max whose PROMINENCE (rise above its local
 # baseline) clears PROM_FRAC of the clip's loudest onset. Prominence (not absolute
 # height) is what the transcriber's picker uses -- it keeps a soft-but-real hit

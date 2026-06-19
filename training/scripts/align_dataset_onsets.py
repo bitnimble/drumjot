@@ -80,13 +80,14 @@ def align_stem(audio_path, lanes, full, log, *, no_filter=False):
     (snap-only) a would-be discard is KEPT at its original time instead of dropped --
     the conservative variant that aligns without risking real soft hits."""
     import librosa
-    from cymbal_snap_redraw import align_or_discard, discard_reason, real_onset_times
+    from cymbal_snap_redraw import SNAP_HOP, align_or_discard, discard_reason, real_onset_times
 
     y, sr = librosa.load(audio_path, sr=None, mono=True)
     if y.size == 0:
         return {}, {}
-    env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=64)
-    reals = real_onset_times(env, sr / 64)
+    env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=SNAP_HOP)
+    del y  # free the full-song audio before the per-lane loop (env is all we need)
+    reals = real_onset_times(env, sr / SNAP_HOP)
     aligned, stats = {}, {}
     for lane in lanes:
         onsets = sorted(float(x) for x in full.get(lane, []))
