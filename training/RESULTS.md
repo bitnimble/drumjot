@@ -921,6 +921,39 @@ seed + ParaDB confirm, and folding `--loss focal` into the main cym+hat recipe i
 it holds (watch the threshold recalibration: focal tuned to cr 0.4 / rd 0.3 vs bce
 0.5 / 0.5). Single seed; decompose-F1; cym+hat pool.
 
+#### Picker retest: was focal's crash recall picker-suppressed? (2026-06-19)
+
+The A/B used the production cymbal picker (min-dist 70 ms, prominence 0.20, decay-
+reset, + tuned height). To separate "model can't recall crash" from "picker too
+strict for focal's calibration", `cymbal_picker_retest.py` re-scores the saved
+keep_best checkpoints (NO retrain) with the height threshold x0.5 and cym
+prominence 0.20 -> 0.10. The `orig` rows reproduce the A/B exactly (sanity OK).
+
+| arm | cr R orig->mod | cr P orig->mod | cr F1 orig->mod |
+|---|---|---|---|
+| bce | 0.562 -> 0.600 | 0.584 -> 0.482 | 0.573 -> 0.535 |
+| focal | 0.460 -> **0.614** | 0.734 -> 0.492 | 0.565 -> 0.546 |
+| crash_oversample | 0.533 -> 0.597 | 0.605 -> 0.488 | 0.567 -> 0.537 |
+| baseline | 0.585 -> 0.661 | 0.605 -> 0.393 | 0.595 -> 0.493 |
+
+**Two reads.** (1) The permissive picker is a recall-for-precision trade in every
+arm and lane -- net F1 DROPS throughout (halving height AND dropping prominence
+overshoots; FPs rise faster than TPs). So there's no free picker win here. (2) BUT
+**focal's crash recall was genuinely picker-suppressed**: loosened, focal reaches
+crash recall **0.614 -- the highest of ANY config in the study** (vs 0.460 under the
+production picker), and still holds the best precision at that recall (cr P 0.492 vs
+baseline 0.393). So focal DID raise crash activation (confirming the dead-rate
+84%->69% drop); the strict prominence-0.20 + high-threshold picker was discarding
+those firings. focal's apparent "crash recall collapse" is partly a picker-
+calibration mismatch, not pure model failure.
+
+**Caveat / next:** this changed two knobs at once and overshot recall, so it does
+NOT establish the F1-optimal point at prominence 0.1. The proper test is a height
+**re-tune** (sweep to the F1 optimum per arm) at prominence 0.1, not a blind halve.
+focal is the arm most likely to win it (highest recall ceiling + most precision
+headroom). Crash F1 still hasn't beaten ~0.57 under any picker; alignment remains
+the only crash F1 mover.
+
 ## Per-stem pooled MERT layer sweep (2026-06-12)
 
 **Setup.** `scripts/perstem_layer_sweep.py` over pooled per-stem examples from all
