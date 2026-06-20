@@ -89,6 +89,7 @@ export const Toolbar = observer(
     transcribeOptions,
     onTranscribe,
     onResumeTranscribe,
+    onNewJot,
     onSaveJot,
     onLoadJot,
     onLoadMidi,
@@ -136,6 +137,9 @@ export const Toolbar = observer(
     transcribeOptions: TranscribeOptions;
     onTranscribe: (file: File) => void;
     onResumeTranscribe: (folder: string, stage: TranscribeStage) => void;
+    /** Start a fresh, empty jot (default kit lanes, one empty bar, no audio).
+     *  Prompts before discarding unsaved changes is the caller's job. */
+    onNewJot: () => void;
     /** Save the current session as a mutable `.jot` file (lossless superset:
      *  the edited document + editor metadata). Browser download. */
     onSaveJot: () => void;
@@ -271,6 +275,18 @@ export const Toolbar = observer(
         >
           {(close) => (
             <>
+              <button
+                type="button"
+                className={dropdownStyles.dropdownItem}
+                onClick={() => {
+                  onNewJot();
+                  close();
+                }}
+                title="Start a fresh, empty jot: the standard drum-kit lanes (crash, ride, hi-hat, snare, kick) with no notes and no audio tracks, ready to chart from scratch. Prompts before discarding unsaved changes."
+                data-testid="file-menu-new"
+              >
+                New jot
+              </button>
               <button
                 type="button"
                 className={dropdownStyles.dropdownItem}

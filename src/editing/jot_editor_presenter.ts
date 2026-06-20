@@ -1,6 +1,8 @@
-import { makeAutoObservable, runInAction } from 'mobx';
+import { makeAutoObservable, reaction, runInAction } from 'mobx';
+import type { LoroDoc } from 'loro-crdt';
 import { loadDebugZip, NO_DRUMS_KEY } from 'src/editing/provenance/debug_zip';
 import { ExampleJot } from 'src/fakes/fakes';
+import { createBlankJot } from 'src/editing/new_jot';
 import { Jot } from 'src/schema/dsl/dsl';
 import { parseEnhancedLrc } from 'src/lyrics/enhanced_lrc';
 import { lyricsStore } from 'src/lyrics/store';
@@ -63,6 +65,11 @@ export class JotEditorPresenter {
    */
   private sessionReset: SessionReset | undefined = undefined;
 
+  /** Tears down the current doc's edit subscription (dirty tracking). */
+  private dirtyUnsub: (() => void) | undefined = undefined;
+  /** Disposes the doc-swap reaction that drives dirty tracking. */
+  private readonly disposeDirtyReaction: () => void;
+
   constructor(
     jotEditorStore: JotEditorStore,
     settingsPresenter: SettingsPresenter,
@@ -75,14 +82,46 @@ export class JotEditorPresenter {
     this.mixerPresenter = mixerPresenter;
     this.provenancePresenter = provenancePresenter;
     this.lyricsPresenter = lyricsPresenter;
-    makeAutoObservable<this, 'sessionReset'>(this, {
+    makeAutoObservable<this, 'sessionReset' | 'dirtyUnsub' | 'disposeDirtyReaction'>(this, {
       jotEditorStore: false,
       settingsPresenter: false,
       mixerPresenter: false,
       provenancePresenter: false,
       lyricsPresenter: false,
       sessionReset: false,
+      dirtyUnsub: false,
+      disposeDirtyReaction: false,
     });
+    // Unsaved-changes tracking: each wholesale load swaps `loroDoc`; reattach
+    // the per-doc edit subscription and reset `dirty` to false. The new doc is
+    // already fully populated before this fires (the populate commits predate
+    // the subscription), so the load itself never marks the song dirty, only
+    // edits after it do. Mirrors `HistoryPresenter`'s doc-swap reaction.
+    this.disposeDirtyReaction = reaction(
+      () => this.jotEditorStore.loroDoc,
+      (doc) => this.attachDirtyTracking(doc),
+      { fireImmediately: true }
+    );
+  }
+
+  /** Drop the previous doc's edit subscription, clear the dirty flag, and (if a
+   *  song is loaded) subscribe so any later commit marks the song dirty. */
+  private attachDirtyTracking(doc: LoroDoc | undefined): void {
+    this.dirtyUnsub?.();
+    this.dirtyUnsub = undefined;
+    runInAction(() => (this.jotEditorStore.dirty = false));
+    if (!doc) return;
+    this.dirtyUnsub = doc.subscribe(() => {
+      runInAction(() => (this.jotEditorStore.dirty = true));
+    });
+  }
+
+  /** Tear down the dirty-tracking reaction + live subscription (leak-test
+   *  safety / editor disposal). */
+  dispose(): void {
+    this.disposeDirtyReaction();
+    this.dirtyUnsub?.();
+    this.dirtyUnsub = undefined;
   }
 
   /** Wire in the composition root's {@link SessionReset} registry. Called
@@ -174,6 +213,16 @@ export class JotEditorPresenter {
 
   setExamples(examples: readonly ExampleJot[]) {
     this.jotEditorStore.examples = examples;
+  }
+
+  /**
+   * Replace the session with a fresh, empty jot: the default drum kit declared
+   * as (empty) lanes, one empty 4/4 bar at 120 bpm, no audio tracks. Goes
+   * through the same wholesale-replace path as a file load, so the caller is
+   * responsible for the unsaved-changes prompt (see {@link JotEditorStore.dirty}).
+   */
+  createNewJot(): void {
+    this.setJot(createBlankJot());
   }
 
   loadExample(id: string) {
@@ -395,6 +444,9 @@ export class JotEditorPresenter {
     const bytes = await encodeMutableJotFile(bundle.file, bundle.audio);
     const title = bundle.file.document.title?.trim() || 'untitled';
     downloadBytes(bytes, `${sanitizeFilename(title)}.jot`);
+    // The on-disk file now matches the session; clear the unsaved-changes flag
+    // so the next edit re-arms it (and a wholesale replace won't prompt).
+    runInAction(() => (this.jotEditorStore.dirty = false));
   }
 
   /**

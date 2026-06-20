@@ -25,6 +25,7 @@ import {
 } from './playback/audio_worklet_warning_modal';
 import { LyricsSearchModal } from './lyrics/lyrics_search_modal';
 import { LyricsTextLoadModal } from './lyrics/lyrics_text_modal';
+import { NewJotConfirmModal } from './new_jot_confirm_modal';
 import { SelectionContext } from 'src/editing/selection/selection';
 import {
   BarTimingsContext,
@@ -367,6 +368,15 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     const [audioWorkletWarningOpen, setAudioWorkletWarningOpen] = React.useState(
       audioWorkletState !== 'available'
     );
+    // File → New jot. Replacing a dirty session can't be undone across the load
+    // boundary, so confirm first when there are unsaved edits; a clean (or
+    // empty) session starts the new jot straight away. The confirm's open state
+    // is transient UI, so it lives in React, not a store.
+    const [confirmNewJotOpen, setConfirmNewJotOpen] = React.useState(false);
+    const onNewJot = React.useCallback(() => {
+      if (jotEditorStore.dirty) setConfirmNewJotOpen(true);
+      else jotEditorPresenter.createNewJot();
+    }, [jotEditorStore, jotEditorPresenter]);
 
     // Global editor keyboard shortcuts, dispatched through the keymap →
     // command layer (Space = play/pause from anywhere; Delete/Backspace =
@@ -504,6 +514,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                       transcribeOptions={transcribe.transcribeOptions}
                       onTranscribe={(file) => transcribePresenter.transcribeAudio(file)}
                       onResumeTranscribe={(folder, stage) => transcribePresenter.resumeTranscribe(folder, stage)}
+                      onNewJot={onNewJot}
                       onSaveJot={() => jotEditorPresenter.saveMutableFile()}
                       onLoadJot={(file) => jotEditorPresenter.loadJotFile(file)}
                       onLoadMidi={(file) => jotEditorPresenter.loadMidiFile(file)}
@@ -614,6 +625,14 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                       plan={fileDrop.pendingPlan}
                       onConfirm={fileDrop.confirmPending}
                       onCancel={fileDrop.cancelPending}
+                    />
+                    <NewJotConfirmModal
+                      open={confirmNewJotOpen}
+                      onConfirm={() => {
+                        jotEditorPresenter.createNewJot();
+                        setConfirmNewJotOpen(false);
+                      }}
+                      onCancel={() => setConfirmNewJotOpen(false)}
                     />
                     <LoadingOverlay jotEditorStore={jotEditorStore} />
                     <ToastContainer />
@@ -1942,20 +1961,29 @@ const EmptyState = observer(
         <div className={styles.emptyStateIcon} aria-hidden="true">
           <Logo size={56} />
         </div>
-        <h2 className={styles.emptyStateTitle}>Open a file to get started</h2>
+        <h2 className={styles.emptyStateTitle}>Start a new jot or open a file</h2>
         <p className={styles.emptyStateBody}>
-          Load a Drumjot <code>.jot</code>, a <code>.zip</code> pack, or a recent transcription, or
-          try one of the examples below.
+          Create a blank jot with the standard kit, or load a Drumjot <code>.jot</code>, a{' '}
+          <code>.zip</code> pack, or a recent transcription, or try one of the examples below.
         </p>
         <div className={styles.emptyStateActions}>
           <button
             type="button"
             className={styles.emptyStatePrimary}
-            onClick={() => jotInputRef.current?.click()}
+            onClick={() => jotEditorPresenter.createNewJot()}
+            data-testid="empty-state-new-jot"
+            title="Start a fresh, empty jot: the standard drum-kit lanes (crash, ride, hi-hat, snare, kick) with no notes and no audio tracks, ready to chart from scratch."
           >
-            Open .jot file
+            New blank jot
           </button>
           <div className={styles.emptyStateAltActions}>
+            <button
+              type="button"
+              className={styles.emptyStateSecondary}
+              onClick={() => jotInputRef.current?.click()}
+            >
+              Open .jot file
+            </button>
             <button
               type="button"
               className={styles.emptyStateSecondary}

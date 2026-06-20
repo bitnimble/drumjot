@@ -74,6 +74,15 @@ export class JotEditorStore {
   loadingCount: number = 0;
   loadingLabel: string | undefined = undefined;
 
+  /**
+   * Whether the loaded song has unsaved edits: `false` right after a load or a
+   * save, `true` once the document is edited. Drives the "discard changes?"
+   * prompt before a wholesale replace (e.g. File → New jot). Written only by
+   * {@link JotEditorPresenter} (the load/save orchestrator + the per-doc edit
+   * subscription); `false` with nothing loaded.
+   */
+  dirty: boolean = false;
+
   constructor() {
     // `mutableDoc` is observed only by REFERENCE (`observable.ref`): deep-
     // observing a Loro doc would be wrong (its contents are already reactive

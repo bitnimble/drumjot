@@ -117,6 +117,7 @@ export type InstrumentTrackInit = { id: string; kind: 'instrument'; lane: string
 export class TrackBuilder {
   private readonly byKey = new Map<string, string>();
   private readonly orderByLayer = new Map<string, string[]>();
+  private readonly lanesUsed = new Set<string>();
   private n = 0;
   /** Allocated instrument tracks, keyed by id, ready as an idMap init. */
   readonly tracks: Record<string, InstrumentTrackInit> = {};
@@ -137,7 +138,15 @@ export class TrackBuilder {
       list.push(id);
       this.orderByLayer.set(layerId, list);
     }
+    this.lanesUsed.add(lane);
     return id;
+  }
+
+  /** Whether any layer already carries a track on `lane`. Lets a converter
+   *  decide whether to mint an empty declared-but-unused lane as a fresh row
+   *  without duplicating a lane that already lives in some layer. */
+  hasLane(lane: string): boolean {
+    return this.lanesUsed.has(lane);
   }
 
   /**

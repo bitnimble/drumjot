@@ -264,6 +264,19 @@ export function dslToInit(jot: DslJot): Init<typeof JotSchema> {
     });
   });
 
+  // Declared-but-unused kit lanes: mint an empty instrument track on the primary
+  // layer for every `instrumentMapping` lane that no note placed, so the score /
+  // mixer render it as an empty row. That's what lets a freshly created jot show
+  // its kit before any notes exist. Skip lanes already carried by some layer
+  // (they have their row there) so a lane living only in a non-primary layer
+  // isn't duplicated as an empty primary-layer row.
+  const primaryLayerId = layerIds[0];
+  if (primaryLayerId !== undefined) {
+    for (const lane of Object.keys(gm.instrumentMapping ?? {})) {
+      if (!trackBuilder.hasLane(lane)) trackBuilder.track(primaryLayerId, lane);
+    }
+  }
+
   // Tempo events, anchored by bar id.
   const tempoEvents: Obj = {};
   for (const ev of jot.tempoEvents ?? []) {

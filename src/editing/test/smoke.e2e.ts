@@ -13,7 +13,7 @@ test('boots to the empty state with the probe surface wired', async ({ page }) =
   await page.goto('/');
   // Boot no longer auto-loads an example; it lands on the empty-state
   // welcome screen until the user picks something (src/index.tsx).
-  await expect(page.locator('h2')).toContainText('Open a file to get started');
+  await expect(page.locator('h2')).toContainText('Start a new jot or open a file');
   const wired = await page.evaluate(
     () => typeof (window as any).jotPlayer === 'object' && !!(window as any).drumjot,
   );
