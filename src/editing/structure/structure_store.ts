@@ -61,7 +61,6 @@ export type StructNote = {
   velocity?: number;
   midiNote?: number;
   midiTick?: number;
-  vol?: string;
 };
 
 export type StructTrack = { lane: string; notes: StructNote[] };
@@ -625,7 +624,6 @@ function flattenInto(
       velocity: el.velocity,
       midiNote: el.midiNote,
       midiTick: el.midiTick,
-      vol: el.vol,
     });
     return;
   }

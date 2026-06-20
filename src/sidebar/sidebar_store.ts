@@ -1,8 +1,10 @@
 import { makeAutoObservable } from 'mobx';
 
-/** The panels the right sidebar can show. Only `layers` exists today; the
- *  panel body itself is a stub until a later PR. */
-export type SidebarPanelId = 'layers';
+/** The panels the right sidebar can show. The store owns this (it's the type of
+ *  its own `activePanel` state); the view registry in `panels/sidebar_panels`
+ *  maps each id to its rail icon + panel body and is `satisfies`-checked against
+ *  this union, so a new panel is a new member here plus a registry entry. */
+export type SidebarPanelId = 'layers' | 'note_properties';
 
 /**
  * Right-sidebar UI state: whether the panel is expanded and which panel is

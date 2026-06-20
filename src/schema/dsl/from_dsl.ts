@@ -14,6 +14,7 @@
 import type { Element as DslElement, Jot as DslJot, TimeSignature } from 'src/schema/dsl/dsl';
 import { elementWeight, sumWeights } from 'src/schema/dsl/element_metrics';
 import { initialBpm } from 'src/schema/dsl/tempo';
+import { VOLUME_TO_VELOCITY } from 'src/dynamics/dynamics';
 import type { Init } from '../descriptors';
 import { createMutableJot, JotSchema } from '../schema';
 import { TrackBuilder } from '../ordering';
@@ -92,9 +93,14 @@ function convertElement(
             roll: el.roll ? true : undefined,
             offsetMs: el.offset,
             midiNote: midiMeta(el)?.note,
-            velocity: midiMeta(el)?.velocity,
+            // Loudness lives in `velocity`; an explicit MIDI velocity wins,
+            // else an authored `pp`..`ff` marker is converted once here.
+            velocity:
+              midiMeta(el)?.velocity ??
+              (typeof el.metadata?.vol === 'string'
+                ? VOLUME_TO_VELOCITY[el.metadata.vol]
+                : undefined),
             midiTick: midiMeta(el)?.tick,
-            vol: typeof el.metadata?.vol === 'string' ? el.metadata.vol : undefined,
           }),
         ],
       ];

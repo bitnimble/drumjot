@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { runInAction } from 'mobx';
-import type { Limb, Modifier, Sticking, Volume } from 'src/schema/dsl/dsl';
+import type { Limb, Modifier, Sticking } from 'src/schema/dsl/dsl';
 import type { DrumInstrumentKind } from 'src/instruments/instruments';
 import { idMap, type Infer, record } from 'src/schema/descriptors';
 import { createReactiveDoc } from 'src/schema/reactive_doc';
@@ -35,7 +35,6 @@ type ExpectedNote = {
   velocity?: number;
   midiNote?: number;
   midiTick?: number;
-  vol?: Volume;
 };
 type ExpectedInstrument = {
   kind: DrumInstrumentKind;

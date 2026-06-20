@@ -27,13 +27,8 @@
  *       `globalMetadata.rlrr` when present; the Jot's `title` always
  *       overrides `recordingMetadata.title`.
  */
-import { Instrument, Jot, Modifier, Volume } from 'src/schema/dsl/dsl';
-import {
-  ACCENT_BOOST,
-  DEFAULT_VELOCITY,
-  GHOST_REDUCTION,
-  VOLUME_TO_VELOCITY,
-} from 'src/dynamics/dynamics';
+import { Instrument, Jot, Modifier } from 'src/schema/dsl/dsl';
+import { ACCENT_BOOST, DEFAULT_VELOCITY, GHOST_REDUCTION } from 'src/dynamics/dynamics';
 import { buildStructural } from 'src/editing/jot_editor_store';
 import type { StructNote } from 'src/editing/structure/structure_store';
 import { beatToSecWithinBar, buildBarTempos, initialBpm, resolveBpm } from 'src/schema/dsl/tempo';
@@ -232,11 +227,6 @@ function resolveVelocity(
   if (typeof note.velocity === 'number') return note.velocity;
 
   let baseline = opts.defaultVelocity;
-  const vol = note.vol as Volume | undefined;
-  if (typeof vol === 'string') {
-    baseline = VOLUME_TO_VELOCITY[vol] ?? baseline;
-  }
-
   if (note.modifiers.includes('a')) baseline += opts.accentBoost;
   if (note.modifiers.includes('g')) baseline -= opts.ghostReduction;
   return baseline;

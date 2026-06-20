@@ -50,7 +50,6 @@ export const MODIFIER = z.enum([
 
 export const STICKING = z.enum(['r', 'l', 'rf', 'lf']);
 export const LIMB = z.enum(['lh', 'rh', 'lf', 'rf']);
-export const VOLUME = z.enum(['pp', 'p', 'mp', 'mf', 'f', 'ff']);
 export const INSTRUMENT_KIND = z.enum(['kick', 'snare', 'hihat', 'ride', 'crash', 'tom', 'custom']);
 
 // ---------- Entities ----------
@@ -96,14 +95,14 @@ export const NoteElementSchema = record({
   roll: z.boolean().optional(),
   /** Signed sub-slot timing offset in milliseconds (DSL `Note.offset`). */
   offsetMs: z.number().optional(),
-  /** Explicit MIDI velocity override; absent = derive from `vol`/modifiers. */
+  /** MIDI velocity (0-127). The single source of loudness; authored dynamics
+   *  (`pp`..`ff` in the DSL) are converted to a velocity at parse time. Absent
+   *  = derive from modifiers (accent/ghost) at export, else the default. */
   velocity: z.number().optional(),
   /** Explicit MIDI note override; absent = derive from instrument/lane. */
   midiNote: z.number().optional(),
   /** Raw MIDI tick from a transcribed/imported source (provenance key). */
   midiTick: z.number().optional(),
-  /** Symbolic dynamic (pp…ff). */
-  vol: VOLUME.optional(),
 });
 
 /**
@@ -125,7 +124,6 @@ export const GroupElementSchema = record({
   children: idMap(lazy((): UnionDescriptor => ElementSchema)),
   modifiers: z.array(MODIFIER).optional(),
   roll: z.boolean().optional(),
-  vol: VOLUME.optional(),
 });
 
 /** A leaf usage of a pattern definition, referenced by its internal id.
@@ -321,7 +319,6 @@ export const JotSchema = record({
 
 export type Modifier = z.infer<typeof MODIFIER>;
 export type Sticking = z.infer<typeof STICKING>;
-export type Volume = z.infer<typeof VOLUME>;
 export type DrumInstrumentKind = z.infer<typeof INSTRUMENT_KIND>;
 
 type ElementCommon = {
@@ -343,7 +340,6 @@ export type NoteElement = ElementCommon & {
   velocity?: number;
   midiNote?: number;
   midiTick?: number;
-  vol?: Volume;
 };
 export type GroupElement = ElementCommon & {
   kind: 'group';
@@ -352,7 +348,6 @@ export type GroupElement = ElementCommon & {
   children: ReactiveMap<Element>;
   modifiers?: Modifier[];
   roll?: boolean;
-  vol?: Volume;
 };
 export type PatternElement = ElementCommon & { kind: 'pattern'; layerId?: string; patternId: string };
 export type Element = NoteElement | GroupElement | PatternElement;

@@ -14,15 +14,10 @@
  *     shared per-bar tempo helper so the playhead, audio waveform and
  *     scheduled drums all share one clock.
  */
-import { Instrument, Modifier, Volume } from 'src/schema/dsl/dsl';
+import { Instrument, Modifier } from 'src/schema/dsl/dsl';
 import type { StructuralPresenter } from 'src/editing/structure/structural_presenter';
 import type { StructNote } from 'src/editing/structure/structure_store';
-import {
-  ACCENT_BOOST,
-  DEFAULT_VELOCITY,
-  GHOST_REDUCTION,
-  VOLUME_TO_VELOCITY,
-} from 'src/dynamics/dynamics';
+import { ACCENT_BOOST, DEFAULT_VELOCITY, GHOST_REDUCTION } from 'src/dynamics/dynamics';
 import { defaultMidiNote } from 'src/midi/gm';
 import { beatToSecWithinBar, buildBarTempos } from 'src/schema/dsl/tempo';
 
@@ -142,11 +137,6 @@ function resolveVelocity(note: StructNote): number {
   if (typeof note.velocity === 'number') return clamp(Math.round(note.velocity));
 
   let baseline = DEFAULT_VELOCITY;
-  const vol = note.vol as Volume | undefined;
-  if (typeof vol === 'string') {
-    baseline = VOLUME_TO_VELOCITY[vol] ?? baseline;
-  }
-
   if (note.modifiers.includes('a')) baseline += ACCENT_BOOST;
   if (note.modifiers.includes('g')) baseline -= GHOST_REDUCTION;
 

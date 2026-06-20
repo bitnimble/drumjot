@@ -1,0 +1,78 @@
+/* Compact numeric up/down whose buttons emit a step DIRECTION (see
+   stepper.tsx). Mirrors number_stepper's pill chrome: [−] [input] [+] inside
+   one shared border so the group reads as a single control. */
+
+.stepper {
+    display: inline-flex;
+    align-items: stretch;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-base);
+    overflow: hidden;
+}
+
+.stepper:focus-within {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+.stepper[data-disabled='true'] {
+    opacity: 0.55;
+}
+
+.button {
+    composes: reset from '../button/button.module.css';
+    composes: body from '../../typography.module.css';
+    flex: 0 0 auto;
+    width: 20px;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: var(--color-text-faint-strong);
+    /* stylelint-disable-next-line property-disallowed-list -- bold +/− glyphs read as buttons, not body text. */
+    font-weight: 700;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+    background: var(--color-bg-hover);
+    color: var(--color-text-secondary-alt);
+}
+
+.button:focus-visible {
+    outline-offset: -2px;
+}
+
+.button:disabled {
+    color: var(--color-text-disabled);
+    cursor: not-allowed;
+}
+
+.minus {
+    border-right: 1px solid var(--color-border-soft);
+}
+
+.plus {
+    border-left: 1px solid var(--color-border-soft);
+}
+
+.input {
+    composes: body from '../../typography.module.css';
+    flex: 1 0 auto;
+    width: 44px;
+    padding: 3px 4px;
+    border: none;
+    background: transparent;
+    color: var(--color-text);
+    /* stylelint-disable-next-line property-disallowed-list -- tabular-nums keeps the value from jittering as digits change. */
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+}
+
+.input:focus {
+    outline: none;
+}

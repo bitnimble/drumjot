@@ -1,0 +1,105 @@
+/* Bar/Beat segmented field: a 2-row grid. Row 1 holds the two labels aligned
+   over their segments; row 2 holds the segments, an inter-segment divider, and
+   the shared up/down stepper. The pill border is a background element
+   (`.fieldBg`) spanning all of row 2 behind the transparent inputs, so the two
+   segments read as one field while the labels still align above each. */
+
+.wrap {
+    display: inline-grid;
+    grid-template-columns: 48px 1px 48px auto;
+    grid-template-rows: auto auto;
+    row-gap: 3px;
+    align-items: center;
+}
+
+.wrap[data-disabled='true'] {
+    opacity: 0.55;
+}
+
+.label {
+    composes: labelSm from '../../typography.module.css';
+    color: var(--color-text-faint-strong);
+    text-align: center;
+}
+
+.fieldBg {
+    grid-area: 2 / 1 / 3 / 5;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-base);
+}
+
+.wrap:focus-within .fieldBg {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+.segment {
+    composes: body from '../../typography.module.css';
+    grid-row: 2;
+    z-index: 1;
+    min-width: 0;
+    padding: 3px 4px;
+    border: none;
+    background: transparent;
+    color: var(--color-text);
+    /* stylelint-disable-next-line property-disallowed-list -- tabular-nums keeps the segments from jittering as digits change. */
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+}
+
+.segment:first-of-type {
+    grid-column: 1;
+}
+
+.segment:last-of-type {
+    grid-column: 3;
+}
+
+.segment:focus {
+    outline: none;
+}
+
+.divider {
+    grid-area: 2 / 2;
+    z-index: 1;
+    align-self: stretch;
+    margin: 4px 0;
+    background: var(--color-border-soft);
+}
+
+.steppers {
+    grid-area: 2 / 4;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid var(--color-border-soft);
+}
+
+.stepBtn {
+    composes: reset from '../button/button.module.css';
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 13px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--color-text-faint-strong);
+    cursor: pointer;
+}
+
+.stepBtn:hover:not(:disabled) {
+    background: var(--color-bg-hover);
+    color: var(--color-text-secondary-alt);
+}
+
+.stepBtn:focus-visible {
+    outline-offset: -2px;
+}
+
+.stepBtn:disabled {
+    color: var(--color-text-disabled);
+    cursor: not-allowed;
+}

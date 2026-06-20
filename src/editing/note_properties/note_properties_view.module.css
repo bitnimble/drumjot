@@ -1,0 +1,65 @@
+/* Note properties editor body: a vertical stack of labelled fields. Each
+   field's label sits above its control; checkbox/radio rows read inline. */
+
+.empty {
+    composes: bodySm from '../../typography.module.css';
+    margin: 8px 0 0;
+    color: var(--color-text-faint);
+}
+
+.props {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin: 10px 0 0;
+}
+
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.label {
+    composes: labelSm from '../../typography.module.css';
+    color: var(--color-text-faint-strong);
+}
+
+.select {
+    composes: field from '../../ui/form/form.module.css';
+    width: 100%;
+    cursor: pointer;
+}
+
+.inline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.unit {
+    composes: bodySm from '../../typography.module.css';
+    color: var(--color-text-muted-alt);
+    min-width: 18px;
+}
+
+.checkRow {
+    composes: bodyMd from '../../typography.module.css';
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+}
+
+.checkRow[data-disabled] {
+    color: var(--color-text-disabled);
+    cursor: not-allowed;
+}
+
+.modifierGrid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 12px;
+    margin-top: 2px;
+}

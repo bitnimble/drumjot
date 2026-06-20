@@ -95,6 +95,12 @@ import { SidebarStoreContext, SidebarPresenterContext } from '../sidebar/sidebar
 import { LayersStore } from './layers/layers_store';
 import { LayersPresenter } from './layers/layers_presenter';
 import { LayersStoreContext, LayersPresenterContext } from './layers/layers_contexts';
+import { NotePropertiesStore } from './note_properties/note_properties_store';
+import { NotePropertiesPresenter } from './note_properties/note_properties_presenter';
+import {
+  NotePropertiesStoreContext,
+  NotePropertiesPresenterContext,
+} from './note_properties/note_properties_contexts';
 import { DebugPanel } from './provenance/debug_panel';
 import { ExampleJot } from 'src/fakes/fakes';
 
@@ -134,6 +140,9 @@ type CreateJotEditorResult = {
   /** Layers read-model (ordering → layer/group/track view) + its writer. */
   layers: LayersStore;
   layersPresenter: LayersPresenter;
+  /** Note-properties read-model + writer for the sidebar panel. */
+  noteProperties: NotePropertiesStore;
+  notePropertiesPresenter: NotePropertiesPresenter;
   /** Per-domain presenters split out of the catch-all. Exposed for
    *  console / e2e. */
   viewportPresenter: ViewportPresenter;
@@ -182,6 +191,15 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
   const sidebarPresenter = new SidebarPresenter(sidebar);
   const layers = new LayersStore(() => jotEditorStore.jot);
   const layersPresenter = new LayersPresenter(() => jotEditorStore.jot);
+  // Editable properties of the current note selection (lane, position,
+  // volume, modifiers, …). The store aggregates the selection's fields; the
+  // presenter is the single writer (re-homing lanes via LayersPresenter).
+  const noteProperties = new NotePropertiesStore(selection, jotEditorStore);
+  const notePropertiesPresenter = new NotePropertiesPresenter(
+    jotEditorStore,
+    selection,
+    layersPresenter
+  );
   const editingStore = new EditingStore();
   // EditingPresenter resolves an inserted / re-homed note's `trackId` through
   // LayersPresenter (find-or-mint the track for its layer+lane), so construct
@@ -442,6 +460,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     return (
         <LayersStoreContext.Provider value={layers}>
         <LayersPresenterContext.Provider value={layersPresenter}>
+        <NotePropertiesStoreContext.Provider value={noteProperties}>
+        <NotePropertiesPresenterContext.Provider value={notePropertiesPresenter}>
         <SidebarStoreContext.Provider value={sidebar}>
         <SidebarPresenterContext.Provider value={sidebarPresenter}>
         <LyricsPresenterContext.Provider value={lyricsPresenter}>
@@ -598,6 +618,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
         </LyricsPresenterContext.Provider>
         </SidebarPresenterContext.Provider>
         </SidebarStoreContext.Provider>
+        </NotePropertiesPresenterContext.Provider>
+        </NotePropertiesStoreContext.Provider>
         </LayersPresenterContext.Provider>
         </LayersStoreContext.Provider>
     );
@@ -624,6 +646,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     sidebarPresenter,
     layers,
     layersPresenter,
+    noteProperties,
+    notePropertiesPresenter,
     viewportPresenter,
     mixerPresenter,
     provenancePresenter,

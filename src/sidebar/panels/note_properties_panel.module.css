@@ -1,0 +1,8 @@
+/* Read-only note-id line under the panel header. Mono keeps the uuid
+   scannable; muted so it doesn't compete with the editable fields. */
+.noteId {
+    composes: mono from '../../typography.module.css';
+    margin: 4px 0 0;
+    color: var(--color-text-faint-strong);
+    overflow-wrap: anywhere;
+}

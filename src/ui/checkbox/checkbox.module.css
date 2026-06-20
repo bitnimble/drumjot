@@ -48,6 +48,21 @@
     opacity: 1;
 }
 
+/* Indeterminate (tri-state middle): a centered horizontal dash rather than
+   the check, on the same accent fill. Overrides the rotated-check ::before. */
+.checkbox:indeterminate {
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+}
+
+.checkbox:indeterminate::before {
+    width: 8px;
+    height: 0;
+    border-width: 0 0 1.5px 0;
+    transform: none;
+    opacity: 1;
+}
+
 .checkbox:disabled {
     cursor: not-allowed;
     opacity: 0.5;
