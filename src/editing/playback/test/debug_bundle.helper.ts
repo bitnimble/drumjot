@@ -18,10 +18,10 @@ export const DEBUG_BUNDLE_PATH = process.env.E2E_DEBUG_BUNDLE
  * hidden file inputs mount; loading the bundle then replaces the song
  * wholesale.
  *
- * The bundle is loaded via File → Load → "Load debug bundle (.zip)"
- * rather than a direct input selector: several hidden inputs (ParaDB
- * map / score / debug bundle) share the same `.zip` `accept`, so the menu
- * is the only unambiguous handle.
+ * The bundle is loaded via File → Load → "Load zip", which auto-detects
+ * the bundle and routes it to the debug-bundle loader. Because a song is
+ * already loaded, the flow asks to confirm before replacing it, so this
+ * accepts the confirm dialog after choosing the file.
  *
  * Throws if `E2E_DEBUG_BUNDLE` is unset; gate the calling test on
  * {@link DEBUG_BUNDLE_PATH} instead of relying on this.
@@ -49,9 +49,11 @@ export async function loadDebugBundle(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Load', exact: true }).click();
   const [chooser] = await Promise.all([
     page.waitForEvent('filechooser'),
-    page.getByRole('button', { name: 'Load debug bundle (.zip)' }).click(),
+    page.getByRole('button', { name: 'Load zip', exact: true }).click(),
   ]);
   await chooser.setFiles(DEBUG_BUNDLE_PATH);
+  // Auto-detect flow confirms before replacing the seeded rock loop.
+  await page.getByTestId('drop-confirm-replace').click();
 
   // Applying the bundle is async (zip unpack + parallel audio decode).
   // Wait for the manifest to mount and at least one audio track to come

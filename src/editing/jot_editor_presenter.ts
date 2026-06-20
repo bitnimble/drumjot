@@ -8,6 +8,7 @@ import { fromMidi } from 'src/midi/from_midi';
 import { ParseError } from 'src/schema/dsl/parser/errors';
 import { parse } from 'src/schema/dsl/parser/parser';
 import { AudioTrackId, AudioTrackRole } from 'src/editing/playback/audio_tracks';
+import { DocumentLoadKind, DropPlan, PlannedFile } from 'src/editing/drag_drop/file_routing';
 import { jotPlayer } from 'src/editing/playback/player';
 import { loadParadbZip } from 'src/schema/rlrr/paradb';
 import { titleFromFilename, transcriber } from 'src/editing/transcribe/transcriber';
@@ -391,6 +392,62 @@ export class JotEditorPresenter {
         toastStore.showError(`Could not parse score from ${file.name}.`);
       }
     });
+  }
+
+  /**
+   * Dispatch a single document-replacing load to its matching loader. The
+   * `'jot'` case also covers a `.jot` extracted from a dropped zip (the
+   * caller passes the already-extracted inner file).
+   */
+  private loadDocumentFile(item: PlannedFile<DocumentLoadKind>): Promise<void> {
+    switch (item.kind) {
+      case 'jot':
+        return this.loadJotFile(item.file);
+      case 'midi':
+        return this.loadMidiFile(item.file);
+      case 'paradb':
+        return this.loadParadbMap(item.file);
+      case 'debug':
+        return this.loadDebugBundleFile(item.file);
+    }
+  }
+
+  /**
+   * Execute a drag-and-drop {@link DropPlan} (built by `planDrop`): run the
+   * single document-replacing load first (so a wholesale replace that drops
+   * existing audio tracks doesn't then wipe the additive tracks dropped
+   * alongside it), then add every audio / lyrics track. Unrecognised files
+   * and surplus document loads surface as error toasts; a multi-track audio
+   * drop gets a success summary. The confirm-before-replace gate lives in
+   * the drop UI (it owns the modal state); by the time this runs the user
+   * has already accepted any document replacement.
+   */
+  async executeDropPlan(plan: DropPlan): Promise<void> {
+    for (const file of plan.unknown) {
+      toastStore.showError(`Don't know how to load "${file.name}".`);
+    }
+    for (const ignored of plan.ignoredDocumentLoads) {
+      toastStore.showError(
+        `Skipped "${ignored.file.name}": only one score / map can be loaded per drop.`
+      );
+    }
+
+    if (plan.documentLoad) {
+      await this.loadDocumentFile(plan.documentLoad);
+    }
+
+    let audioAdded = 0;
+    for (const item of plan.additive) {
+      if (item.kind === 'audio') {
+        const id = await this.loadAudioTrack(item.file);
+        if (id) audioAdded += 1;
+      } else {
+        await this.loadLyricsFile(item.file);
+      }
+    }
+    if (audioAdded > 0) {
+      toastStore.showSuccess(`Added ${audioAdded} audio track${audioAdded === 1 ? '' : 's'}.`);
+    }
   }
 
   /**

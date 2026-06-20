@@ -66,14 +66,14 @@ export async function loadParadbMap(page: Page): Promise<void> {
 
 /**
  * Load a ParaDB pack at `zipPath` through the real toolbar path (File → Load →
- * "Load ParaDB map (.zip)") and wait for it to replace the song. Boots a
- * throwaway rock loop first so the toolbar + its hidden file inputs mount;
- * loading the pack then swaps in the converted chart + its audio tracks.
+ * "Load zip", which auto-detects the pack) and wait for it to replace the
+ * song. Boots a throwaway rock loop first so the toolbar + its hidden file
+ * inputs mount; loading the pack then swaps in the converted chart + its
+ * audio tracks.
  *
- * The pack is loaded via the menu rather than a direct input selector
- * because several hidden inputs (ParaDB map / ParaDB score / debug bundle)
- * share the same `.zip` `accept`, so the menu item is the only unambiguous
- * handle.
+ * "Load zip" routes through the shared auto-detect flow; because a song is
+ * already loaded, that flow asks to confirm before replacing it, so this
+ * accepts the confirm dialog after choosing the file.
  */
 async function loadParadbMapFromPath(page: Page, zipPath: string): Promise<void> {
   await page.goto('/');
@@ -92,9 +92,11 @@ async function loadParadbMapFromPath(page: Page, zipPath: string): Promise<void>
   await page.getByRole('button', { name: 'Load', exact: true }).click();
   const [chooser] = await Promise.all([
     page.waitForEvent('filechooser'),
-    page.getByRole('button', { name: 'Load ParaDB map (.zip)' }).click(),
+    page.getByRole('button', { name: 'Load zip', exact: true }).click(),
   ]);
   await chooser.setFiles(zipPath);
+  // Auto-detect flow confirms before replacing the seeded rock loop.
+  await page.getByTestId('drop-confirm-replace').click();
 
   // Applying the pack is async (zip unpack + .rlrr → jot + parallel audio
   // decode). The seeded test jot is the rock loop ("Simple rock loop");
