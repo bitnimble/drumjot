@@ -1070,12 +1070,39 @@ genuine model over-firing (precision), not bad GT.
 - MDB AVG(HH,CY) 0.731 pooled. Published MDB 5-class is ~0.85-0.89 but kick/snare-
   dominated; the HH/cymbal sub-scores are where we're competing, and we're in range.
 
-**Caveats.** Per-stem isolation discards cross-instrument FP -> optimistic vs
-SOTA-run-on-the-mix. ENST drummer_3 was in the val/threshold pool (mildly
-optimistic); MDB is fully pristine (never train/val/threshold) = the honest read.
-A few MDB tracks score 0.00 (80sRock/Beatles/Shadows HH; several CY) = per-track
-separation/alignment failures -- pooled is robust to them but worth a look. The
-full 5-class row (KD/SD/TT) needs a full-kit checkpoint (training pending).
+**Framing (this is a SYSTEM comparison, not a model-in-isolation one).** We run the
+deployed pipeline: separate (BS-Roformer->MDX23C) -> per-instrument stems -> model
+-> keep each stem's owned lanes. The per-stem isolation in the eval is NOT a
+measurement artifact -- it is exactly what production does (a prediction of lane X
+on stem Y!=X is dropped in deployment too). So the eval faithfully measures the
+deployable system, and the strong hat/cymbal PRECISION is the intended payoff of
+separating first: the separator removes the cross-instrument confounders (the
+hi-hat a mix-input model misfires as a ride) BEFORE the lane decision. SOTA
+(ADTOF/Vogl-CRNN) transcribes the raw mix; comparing the two is a fair
+system-vs-system comparison (audio in -> onsets out), which is the comparison that
+matters for a deployable tool. Running our head on the raw mix (no isolation) is a
+config we'd never ship, so it's not the relevant baseline.
+
+**Per-class vs SOTA (ADTOF Fig.5, Vogl-CRNN, mir_eval +/-50 ms, micro; cymbals = CY+RD):**
+
+| | HH SOTA | HH ours | CY SOTA | CY ours |
+|---|---|---|---|---|
+| ENST | 0.77-0.83 | **0.848** | 0.28-0.72 | 0.569 |
+| MDB  | 0.70-0.78 | 0.722 | 0.38-0.72 | **0.740** |
+
+Hi-hat matches/beats SOTA (ENST 0.848 > best 0.83); cymbals competitive-to-better
+(MDB 0.740 >= SOTA best 0.72). SOTA CY+RD spans 0.28-0.72 by training config; cymbals
+are the hardest ADT class everywhere (sparsity), which is where we hold up well.
+
+**Dependencies / non-issues.** System performance is contingent on separation
+quality (the separator is a load-bearing component) -- a real property to
+characterize, though on MDB no track actually failed. The **0.00-scoring tracks are
+EMPTY-GT, not failures**: 80sRock/Beatles/Shadows have 0 hi-hat onsets, Country1/
+Disco/Hendrix/Rock/Rockabilly have 0 cymbal onsets (verified from the annotations);
+they're correctly excluded from the per-track mean. ENST drummer_3 was in the
+val/threshold pool (mildly optimistic); MDB is fully pristine (never
+train/val/threshold) = the honest read. Full 5-class row (KD/SD/TT) needs a full-kit
+checkpoint (training pending) -- train on snap-only onsets, not the cym-tuned filter.
 
 ## Per-stem pooled MERT layer sweep (2026-06-12)
 
