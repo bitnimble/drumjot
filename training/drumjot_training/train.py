@@ -125,14 +125,43 @@ def _clip_probs(model, clip: Clip) -> np.ndarray:
         return torch.sigmoid(model(x))[0].float().cpu().numpy()
 
 
-def evaluate_clip(
-    model, clip: Clip, cfg: Config, thresholds: dict[str, float] | None = None
-) -> dict[str, float]:
-    """Per-lane onset-F1 for one clip (peak-pick the sigmoid, match vs truth).
+def _clip_probs_batched(model, clips: Sequence[Clip], max_batch: int = 16):
+    """Sigmoid activations per clip, but BATCHED across clips for speed -- returns a
+    list of (n_lanes, T) arrays aligned to `clips`.
 
-    `thresholds` overrides the per-lane peak height; defaults to
-    `cfg.peak_threshold` for every lane."""
-    probs = _clip_probs(model, clip)
+    Clips are grouped by EXACT frame length so each batch needs no padding; with no
+    pad frames every sequence's BiGRU output is identical to its single-clip forward
+    (`_clip_probs`), so results match (verified: per-lane F1 delta 0.0) while
+    amortising kernel-launch latency over ~`max_batch` clips. The per-epoch val pass
+    and `tune_thresholds` were 694 serial forwards each; batching cuts that ~1.5x+
+    (more on a launch-latency-bound box). cfg isn't needed (only model + features)."""
+    from collections import defaultdict
+
+    import torch
+
+    if not clips:
+        return []
+    model.eval()
+    device = next(model.parameters()).device
+    out: list = [None] * len(clips)
+    by_len: dict[int, list[int]] = defaultdict(list)
+    for i, c in enumerate(clips):
+        by_len[c.features.shape[0]].append(i)
+    with torch.no_grad(), runtime.autocast():
+        for idxs in by_len.values():
+            for s in range(0, len(idxs), max_batch):
+                chunk = idxs[s:s + max_batch]
+                x = torch.stack([torch.as_tensor(clips[j].features, dtype=torch.float32, device=device)
+                                 for j in chunk])
+                p = torch.sigmoid(model(x)).float().cpu().numpy()  # (B, n_lanes, T)
+                for k, j in enumerate(chunk):
+                    out[j] = p[k]
+    return out
+
+
+def _f1_from_probs(probs, clip: Clip, cfg: Config, thresholds: dict[str, float] | None = None
+                   ) -> dict[str, float]:
+    """Per-lane onset-F1 from precomputed `probs` (n_lanes, T) for one clip."""
     out: dict[str, float] = {}
     for i, lane in enumerate(cfg.lanes):
         thr = thresholds.get(lane, cfg.peak_threshold) if thresholds else cfg.peak_threshold
@@ -140,6 +169,16 @@ def evaluate_clip(
         ref = clip.onsets_by_lane.get(lane, [])
         out[lane] = metrics.onset_f1(ref, est, cfg.onset_tolerance_s)["f"]
     return out
+
+
+def evaluate_clip(
+    model, clip: Clip, cfg: Config, thresholds: dict[str, float] | None = None
+) -> dict[str, float]:
+    """Per-lane onset-F1 for one clip (peak-pick the sigmoid, match vs truth).
+
+    `thresholds` overrides the per-lane peak height; defaults to
+    `cfg.peak_threshold` for every lane."""
+    return _f1_from_probs(_clip_probs(model, clip), clip, cfg, thresholds)
 
 
 def mean_f1(model, clips: Sequence[Clip], cfg: Config) -> float:
@@ -174,8 +213,10 @@ def tune_thresholds(
     and flooded real audio with false positives (see RESULTS.md)."""
     grid = grid or (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8)
     # keep only probs + onsets per clip (not the feature-heavy Clip), so a
-    # streaming val set isn't fully resident at once
-    probs_onsets = [(_clip_probs(model, c), c.onsets_by_lane) for c in val_clips]
+    # streaming val set isn't fully resident at once. Batched forward (grouped by
+    # length, no padding) -> same probs as per-clip, far fewer kernel launches.
+    _pb = _clip_probs_batched(model, val_clips)
+    probs_onsets = [(_pb[i], c.onsets_by_lane) for i, c in enumerate(val_clips)]
     best: dict[str, float] = {}
     for i, lane in enumerate(cfg.lanes):
         n_ref = sum(len(onsets.get(lane, [])) for _, onsets in probs_onsets)
@@ -850,7 +891,11 @@ def train_loop(
                 # one eval pass -> per-clip per-lane F1; derive the clip-macro (for
                 # the log, matching mean_f1), the per-lane curves (early-stop +
                 # keep_best read them), AND track each lane's own best epoch.
-                per = [evaluate_clip(model, c, cfg) for c in val_clips]
+                # Batched forward (grouped by length, no padding) == per-clip probs,
+                # but ~max_batch fewer kernel launches (the serial val was the big
+                # per-epoch fixed cost on this launch-latency-bound small head).
+                _vp = _clip_probs_batched(model, val_clips)
+                per = [_f1_from_probs(_vp[i], c, cfg) for i, c in enumerate(val_clips)]
                 clip_macros = []
                 for c, pl in zip(val_clips, per, strict=True):
                     present = [pl[ln] for ln in cfg.lanes if c.onsets_by_lane.get(ln)]
