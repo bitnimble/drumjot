@@ -61,6 +61,11 @@ export function selectionFrame(page: Page): Locator {
   return page.getByTestId('selection-frame');
 }
 
+/** Every group-frame slice currently drawn (one per bar+row a group spans). */
+export function groupFrames(page: Page): Locator {
+  return page.getByTestId('group-frame');
+}
+
 /** Switch the floating editing toolbar between select / insert mode. */
 export async function setMode(page: Page, mode: 'select' | 'insert'): Promise<void> {
   const btn = page.getByTestId(`mode-${mode}`);

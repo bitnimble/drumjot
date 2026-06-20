@@ -301,7 +301,7 @@ function buildIdMapNode(
     for (const d of entryDisposers.values()) d();
     entryDisposers.clear();
   };
-  return { surface: new ObservableIdMap(entries, lmap, doc), dispose };
+  return { surface: new ObservableIdMap(entries, lmap, doc, entryDesc), dispose };
 }
 
 /**
@@ -313,7 +313,10 @@ class ObservableIdMap implements ReactiveMap<Record<string, unknown>> {
   constructor(
     private readonly store: ReturnType<typeof observable.map<string, Record<string, unknown>>>,
     private readonly lmap: LoroMap,
-    private readonly doc: LoroDoc
+    private readonly doc: LoroDoc,
+    /** The entry's schema, so a write can deep-create nested containers (e.g. a
+     *  group element's `children` idMap), not just flat registers. */
+    private readonly entryDesc: Descriptor
   ) {}
 
   get size(): number {
@@ -355,7 +358,11 @@ class ObservableIdMap implements ReactiveMap<Record<string, unknown>> {
     for (const k of [...child.keys()]) {
       if (!(k in value)) child.delete(k);
     }
-    for (const k of Object.keys(value)) child.set(k, value[k] as never);
+    // Deep-write through the entry's schema: register fields land as plain
+    // values (the common note/instrument case), while container fields (a
+    // group element's nested `children` idMap) are created as real Loro
+    // sub-containers rather than a flat JSON blob.
+    populateNode(this.entryDesc, child, value);
   }
 
   delete(...ids: string[]): void {

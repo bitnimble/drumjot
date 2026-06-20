@@ -139,6 +139,108 @@ describe('groups & tuplets', () => {
     expect(bar.tracks['k'].notes.map((n) => n.beat)).toEqual([0, 0.5]);
   });
 
+  it('emits a group frame span for an in-place (scale-1) group, fully closed', () => {
+    const { model } = createMutableJot({
+      title: '',
+      bpm: 120,
+      bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
+      elements: {
+        g: {
+          kind: 'group',
+          id: 'g',
+          barId: 'b1',
+          beat: 1,
+          duration: 1,
+          children: {
+            a: { kind: 'note', id: 'a', beat: 0, duration: 0.5, lane: 'k', modifiers: [] },
+            b: { kind: 'note', id: 'b', beat: 0.5, duration: 0.5, lane: 'h', modifiers: [] },
+          },
+        },
+      },
+      instruments: {},
+    });
+    const bar = store(model).layers[0].bars[0];
+    expect(bar.tupletSpans).toEqual([]);
+    expect(bar.groupSpans.length).toBe(1);
+    const g = bar.groupSpans[0];
+    expect(g.startBeat).toBeCloseTo(1);
+    expect(g.endBeat).toBeCloseTo(2);
+    expect(g.openLeft).toBe(false);
+    expect(g.openRight).toBe(false);
+    expect([...g.lanes].sort()).toEqual(['h', 'k']);
+  });
+
+  it('also frames a tuplet group (frame + bracket coexist)', () => {
+    const { model } = createMutableJot({
+      title: '',
+      bpm: 120,
+      bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
+      elements: {
+        g: {
+          kind: 'group',
+          id: 'g',
+          barId: 'b1',
+          beat: 0,
+          duration: 1,
+          children: {
+            a: { kind: 'note', id: 'a', beat: 0, duration: 0.5, lane: 'k', modifiers: [] },
+            b: { kind: 'note', id: 'b', beat: 0.5, duration: 0.5, lane: 'k', modifiers: [] },
+            c: { kind: 'note', id: 'c', beat: 1, duration: 0.5, lane: 'k', modifiers: [] },
+          },
+        },
+      },
+      instruments: {},
+    });
+    const bar = store(model).layers[0].bars[0];
+    expect(bar.tupletSpans.length).toBe(1);
+    expect(bar.groupSpans.length).toBe(1);
+    expect(bar.groupSpans[0].startBeat).toBeCloseTo(0);
+    expect(bar.groupSpans[0].endBeat).toBeCloseTo(1);
+  });
+
+  it('distributes a multi-bar group: notes land in their true bars, frame clipped + open-edged', () => {
+    const { model } = createMutableJot({
+      title: '',
+      bpm: 120,
+      bars: [
+        { id: 'b1', tsCount: 4, tsUnit: 4 },
+        { id: 'b2', tsCount: 4, tsUnit: 4 },
+      ],
+      elements: {
+        // Anchored at b1 beat 2, span 3 (scale 1): child `a` lands at b1 beat 2,
+        // child `b` overflows to b2 beat 0.
+        g: {
+          kind: 'group',
+          id: 'g',
+          barId: 'b1',
+          beat: 2,
+          duration: 3,
+          children: {
+            a: { kind: 'note', id: 'a', beat: 0, duration: 1, lane: 'k', modifiers: [] },
+            b: { kind: 'note', id: 'b', beat: 2, duration: 1, lane: 'k', modifiers: [] },
+          },
+        },
+      },
+      instruments: {},
+    });
+    const bars = store(model).layers[0].bars;
+    // b1: note a at beat 2; frame [2,4] open on the right (continues into b2).
+    expect(bars[0].tracks['k'].notes.map((n) => n.beat)).toEqual([2]);
+    expect(bars[0].tupletSpans).toEqual([]);
+    expect(bars[0].groupSpans.length).toBe(1);
+    expect(bars[0].groupSpans[0].startBeat).toBeCloseTo(2);
+    expect(bars[0].groupSpans[0].endBeat).toBeCloseTo(4);
+    expect(bars[0].groupSpans[0].openLeft).toBe(false);
+    expect(bars[0].groupSpans[0].openRight).toBe(true);
+    // b2: note b at beat 0; frame [0,1] open on the left.
+    expect(bars[1].tracks['k'].notes.map((n) => n.beat)).toEqual([0]);
+    expect(bars[1].groupSpans.length).toBe(1);
+    expect(bars[1].groupSpans[0].startBeat).toBeCloseTo(0);
+    expect(bars[1].groupSpans[0].endBeat).toBeCloseTo(1);
+    expect(bars[1].groupSpans[0].openLeft).toBe(true);
+    expect(bars[1].groupSpans[0].openRight).toBe(false);
+  });
+
   it('brackets a group whose children overflow its duration as a tuplet, scaling onsets', () => {
     const { model } = createMutableJot({
       title: '',

@@ -135,6 +135,125 @@ export class EditingPresenter {
   }
 
   /**
+   * Group the selected notes into one {@link GroupElement} per `||` layer, IN
+   * PLACE: the group's `duration` equals its children's natural span (scale 1),
+   * so every note flattens back to its exact position and no tuplet bracket
+   * fires, only a group frame appears. The children are rebased into the group's
+   * internal space (keeping their ids, tracks, and modifiers); the group is
+   * anchored at the bar holding its earliest note. A multi-layer selection
+   * yields one group per layer; partitions with fewer than two top-level notes
+   * (and notes already inside a group) are skipped.
+   */
+  groupSelection(): void {
+    const jot = this.jotEditorStore.jot;
+    const layers = this.jotEditorStore.structural?.musicalLayers;
+    if (!jot || !layers || this.selectionStore.selectedNotes.size === 0) return;
+    const layout = buildBarLayout(layers);
+    if (layout.slots.length === 0) return;
+
+    // Partition the selected, groupable note elements by their `||` layer (a
+    // group lives in one layer; its layer derives from its children's tracks).
+    const byLayer = new Map<string, { el: NoteElement; abs: number }[]>();
+    for (const note of this.selectionStore.selectedNotes) {
+      const el = jot.elements.get(note.id) as Element | undefined;
+      // Only top-level notes (a note already in a group isn't in `jot.elements`).
+      if (!el || el.kind !== 'note' || el.barId === undefined) continue;
+      const slot = layout.byId.get(el.barId);
+      if (!slot) continue;
+      const layerKey = el.trackId !== undefined ? (layerIdOfTrack(jot, el.trackId) ?? '') : '';
+      let arr = byLayer.get(layerKey);
+      if (!arr) {
+        arr = [];
+        byLayer.set(layerKey, arr);
+      }
+      arr.push({ el, abs: slot.start + el.beat });
+    }
+
+    for (const members of byLayer.values()) {
+      if (members.length < 2) continue;
+      const start = Math.min(...members.map((m) => m.abs));
+      const end = Math.max(...members.map((m) => m.abs + m.el.duration));
+      const anchor = homeBar(layout.slots, start);
+      const groupId = crypto.randomUUID();
+      const children: Record<string, NoteElement> = {};
+      for (const { el, abs } of members) {
+        // Rebase into the group's internal space; drop `barId` (children live in
+        // the group's coordinate space, not a bar's). Keep the id so selection /
+        // provenance survive the regroup.
+        children[el.id] = childNoteOf(el, abs - start);
+      }
+      jot.elements.delete(...members.map((m) => m.el.id));
+      jot.elements.set(groupId, {
+        kind: 'group',
+        id: groupId,
+        barId: anchor.id,
+        beat: start - anchor.start,
+        duration: end - start,
+        children,
+      } as unknown as Element);
+    }
+  }
+
+  /**
+   * Ungroup every group touched by the selection: flatten each owning
+   * {@link GroupElement} back into top-level notes at their effective positions
+   * (re-homed to the bar each lands in), keeping note ids, then remove the group
+   * shell. The inverse of {@link groupSelection} for an in-place group; for a
+   * tuplet it bakes the scaled onsets into plain notes. No-op if no selected
+   * note belongs to a group.
+   */
+  ungroupSelection(): void {
+    const jot = this.jotEditorStore.jot;
+    const layers = this.jotEditorStore.structural?.musicalLayers;
+    if (!jot || !layers) return;
+    const layout = buildBarLayout(layers);
+    if (layout.slots.length === 0) return;
+
+    // Resolve the owning groups from the CURRENT structure by id: the selection
+    // holds the `StructNote` objects as they were when selected (rendering
+    // matches them by id), so a note selected BEFORE it was grouped carries no
+    // `groupId` on its stale object, the live flattened note does.
+    const selectedIds = new Set([...this.selectionStore.selectedNotes].map((n) => n.id));
+    const groupIds = new Set<string>();
+    for (const layer of layers) {
+      for (const bar of layer.bars) {
+        for (const lane of Object.keys(bar.tracks)) {
+          for (const note of bar.tracks[lane].notes) {
+            if (note.groupId !== undefined && selectedIds.has(note.id)) groupIds.add(note.groupId);
+          }
+        }
+      }
+    }
+    for (const groupId of groupIds) {
+      const group = jot.elements.get(groupId) as Element | undefined;
+      if (!group || group.kind !== 'group' || group.barId === undefined) continue;
+      const groupSlot = layout.byId.get(group.barId);
+      if (!groupSlot) continue;
+      const groupStart = groupSlot.start + group.beat;
+      const children = [...group.children.values()] as Element[];
+      const internalLen = children.reduce((m, c) => Math.max(m, c.beat + c.duration), 0);
+      const scale = internalLen > 1e-9 ? group.duration / internalLen : 1;
+      const restored: [string, NoteElement][] = [];
+      for (const child of children) {
+        if (child.kind !== 'note') continue;
+        const abs = Math.min(Math.max(groupStart + child.beat * scale, 0), layout.total);
+        const dest = homeBar(layout.slots, abs);
+        // Fresh id: the child's original id was deleted from the top-level map
+        // when the group formed, and resurrecting a tombstoned Loro key yields
+        // an empty container, so mint a new one (matching `insertNote`).
+        const id = crypto.randomUUID();
+        restored.push([id, { ...childNoteOf(child, abs - dest.start), id, barId: dest.id }]);
+      }
+      jot.elements.delete(groupId);
+      if (restored.length > 0) jot.elements.setAll(restored);
+    }
+    // The restored notes carry fresh ids, so the selection (still holding the
+    // pre-ungroup note objects) no longer matches any element, clear it rather
+    // than leave a dangling selection that renders nothing.
+    if (groupIds.size > 0) this.selectionPresenter.clear();
+  }
+
+  /**
    * Move the selected notes by `deltaBeat` (in absolute-beat space) with the
    * anchor snapping to the grid and every other note following by the same
    * snapped delta, preserving relative spacing. Notes re-home across bar
@@ -376,6 +495,30 @@ export class EditingPresenter {
     };
     jot.elements.set(id, note);
   }
+}
+
+/** A note element's child-init: its fields with `beat` rebased and `barId`
+ *  dropped (a group's children live in the group's coordinate space). Undefined
+ *  optionals are omitted so the reactive-doc write stays clean. Reused by
+ *  ungroup, which adds a `barId` back on. */
+function childNoteOf(el: NoteElement, beat: number): NoteElement {
+  const out: Record<string, unknown> = {
+    kind: 'note',
+    id: el.id,
+    beat,
+    duration: el.duration,
+    lane: el.lane,
+    modifiers: [...el.modifiers],
+  };
+  if (el.trackId !== undefined) out.trackId = el.trackId;
+  if (el.sticking !== undefined) out.sticking = el.sticking;
+  if (el.roll !== undefined) out.roll = el.roll;
+  if (el.offsetMs !== undefined) out.offsetMs = el.offsetMs;
+  if (el.velocity !== undefined) out.velocity = el.velocity;
+  if (el.midiNote !== undefined) out.midiNote = el.midiNote;
+  if (el.midiTick !== undefined) out.midiTick = el.midiTick;
+  if (el.vol !== undefined) out.vol = el.vol;
+  return out as unknown as NoteElement;
 }
 
 /** Build the absolute-beat coordinate from the musical bars (real bars only,

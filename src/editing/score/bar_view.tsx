@@ -4,6 +4,7 @@ import React from 'react';
 import { Instrument, Modifier, Sticking } from 'src/schema/dsl/dsl';
 import type {
   StructBar,
+  StructGroupSpan,
   StructNote,
   StructPatternSpan,
   StructTupletSpan,
@@ -244,6 +245,14 @@ export const BarView = observer(
             />
           );
         })}
+        {/* Group frames: a subtle bounding box (with a faint fill) around each
+            group's notes. Purely visual (pointer-events: none), painted over the
+            row so the thin border + wash never block the noteheads underneath. */}
+        {bar.groupSpans.map((span, i) => {
+          const band = groupBandForRow(span, rowLane, laneOrder);
+          if (band === 'hidden') return null;
+          return <GroupFrame key={i} span={span} band={band} />;
+        })}
         {bar.tupletSpans.map((span, i) => {
           // Single-lane tuplet: draw above its own lane's row (or the sole bar
           // view when there's no row context). Hidden on every other row.
@@ -299,6 +308,44 @@ function bracketPositionForRow(
   if (firstIdx === -1 || lastIdx === -1) return 'single';
   if (firstIdx === lastIdx) return 'single';
   const myIdx = laneOrder.indexOf(rowLane);
+  if (myIdx === firstIdx) return 'top';
+  if (myIdx === lastIdx) return 'bottom';
+  return 'middle';
+}
+
+/**
+ * Where this row sits within a group frame's vertical band. Unlike a pattern
+ * bracket (which hides rows whose lane isn't in the span), a group frame is a
+ * solid bounding rectangle: every row BETWEEN the topmost and bottommost
+ * grouped lane draws a slice (sides only), so a group spanning non-adjacent
+ * lanes still reads as one closed box enclosing the rows in between.
+ *
+ *   - `single`: the band is one row, full box.
+ *   - `top` / `bottom`: the outermost rows, draw that horizontal edge + sides.
+ *   - `middle`: a row inside the band, sides only.
+ *   - `hidden`: outside the band, nothing.
+ */
+function groupBandForRow(
+  span: StructGroupSpan,
+  rowLane: string | undefined,
+  laneOrder: readonly string[] | undefined
+): BracketPosition {
+  // No row context (non-mixer caller): render as a self-contained box.
+  if (rowLane === undefined || !laneOrder) return 'single';
+  let firstIdx = -1;
+  let lastIdx = -1;
+  for (let i = 0; i < laneOrder.length; i++) {
+    if (span.lanes.has(laneOrder[i])) {
+      if (firstIdx === -1) firstIdx = i;
+      lastIdx = i;
+    }
+  }
+  // The group's lanes aren't in this row order (e.g. a brand-new lane), fall
+  // back to a self-contained box rather than an open-ended band.
+  if (firstIdx === -1) return 'single';
+  const myIdx = laneOrder.indexOf(rowLane);
+  if (myIdx < firstIdx || myIdx > lastIdx) return 'hidden';
+  if (firstIdx === lastIdx) return 'single';
   if (myIdx === firstIdx) return 'top';
   if (myIdx === lastIdx) return 'bottom';
   return 'middle';
@@ -400,6 +447,33 @@ const TupletBracket = observer(({ span, level }: { span: StructTupletSpan; level
   >
     <span className={styles.tupletNumber}>{span.count}</span>
   </div>
+));
+
+/**
+ * The "group frame": a subtle rounded rectangle (with a faint fill) drawn
+ * around a {@link GroupElement}'s notes. Rendered per (bar, lane-row) as one
+ * slice of a 2D-clipped box, top/bottom from the row's place in the group's
+ * vertical band, left/right from whether the group continues into the adjacent
+ * bar. Purely visual (`pointer-events: none`), so it never intercepts clicks
+ * meant for the noteheads it encloses.
+ */
+const GroupFrame = observer(({ span, band }: { span: StructGroupSpan; band: BracketPosition }) => (
+  <div
+    className={classNames(
+      styles.groupFrame,
+      (band === 'top' || band === 'single') && styles.groupFrameTop,
+      (band === 'bottom' || band === 'single') && styles.groupFrameBottom,
+      !span.openLeft && styles.groupFrameLeft,
+      !span.openRight && styles.groupFrameRight
+    )}
+    data-testid="group-frame"
+    style={
+      {
+        ['--span-start-beat' as string]: span.startBeat,
+        ['--span-end-beat' as string]: span.endBeat,
+      } as React.CSSProperties
+    }
+  />
 ));
 
 const NoteView = observer(

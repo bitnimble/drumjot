@@ -13,6 +13,8 @@ export const DEFAULT_KEYMAP: Keymap = {
   Delete: 'deleteSelection',
   Backspace: 'deleteSelection',
   Space: 'togglePlayPause',
+  'Ctrl+g': 'group',
+  'Ctrl+Shift+g': 'ungroup',
 };
 
 /** INPUT `type`s where a keystroke is meaningful text entry and shortcuts must
@@ -29,11 +31,17 @@ const TEXT_ENTRY_INPUT_TYPES = new Set([
 ]);
 
 /** Normalize a KeyboardEvent to a combo string used as a keymap key. Space is
- *  spelled `Space` (its `key` is a literal space); other keys use `key`
- *  directly (`Delete`, `Backspace`, …). */
-export function eventCombo(e: Pick<KeyboardEvent, 'key' | 'code'>): string {
-  if (e.code === 'Space' || e.key === ' ') return 'Space';
-  return e.key;
+ *  spelled `Space` (its `key` is a literal space); a bare key uses `key`
+ *  directly (`Delete`, `Backspace`, …). A Ctrl/⌘ chord is spelled
+ *  `Ctrl[+Shift]+<lowercased key>` (`Ctrl+g`, `Ctrl+Shift+g`), so a letter
+ *  shortcut matches regardless of the Shift-cased `key` (`G` vs `g`) or
+ *  platform (Ctrl vs ⌘). Shift/Alt WITHOUT Ctrl don't prefix, so existing bare
+ *  bindings (Delete/Backspace/Space) keep matching even when Shift is held. */
+export function eventCombo(e: Pick<KeyboardEvent, 'key' | 'code' | 'ctrlKey' | 'metaKey' | 'shiftKey'>): string {
+  const base = e.code === 'Space' || e.key === ' ' ? 'Space' : e.key;
+  if (!e.ctrlKey && !e.metaKey) return base;
+  const key = base.length === 1 ? base.toLowerCase() : base;
+  return `Ctrl+${e.shiftKey ? 'Shift+' : ''}${key}`;
 }
 
 /** True when the event target is a control that should swallow the keystroke
