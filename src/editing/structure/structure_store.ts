@@ -51,6 +51,9 @@ export type StructNote = {
   roll: boolean;
   /** Onset lands on the binary (dyadic) grid. `isDyadic(beat)`. */
   straight: boolean;
+  /** Id of the top-level {@link GroupElement} this note was flattened out of, if
+   *  any. Lets the group frame select / ungroup the whole group by id. */
+  groupId?: string;
   /** Playback fields (carried so the events / MIDI / RLRR derivations can
    *  resolve the note's MIDI/dynamics without the structure store knowing
    *  about it). */
@@ -83,6 +86,30 @@ export type StructTupletSpan = {
   lanes: ReadonlySet<string>;
 };
 
+/** A {@link GroupElement}'s "group frame": the rectangle drawn around its
+ *  grouped notes (every group, tuplet or not). A multi-bar group is emitted as
+ *  one clipped span PER spanned bar, each carrying `openLeft`/`openRight` so the
+ *  renderer can drop the side border where the frame continues into the
+ *  adjacent bar, making the box read as one continuous rectangle. `lanes` is the
+ *  group's FULL lane union (not just this bar's slice), so the frame is a
+ *  consistent height across every bar it covers. */
+export type StructGroupSpan = {
+  startBeat: number;
+  endBeat: number;
+  lanes: ReadonlySet<string>;
+  /** The group continues past this bar's left edge (a multi-bar group). */
+  openLeft: boolean;
+  /** The group continues past this bar's right edge. */
+  openRight: boolean;
+  /** The owning top-level {@link GroupElement} id (undefined for a frame from a
+   *  pattern-body group), for click-to-select + ungroup. */
+  groupId?: string;
+};
+
+/** A group span before clipping to a bar cell (layer-absolute beats, no
+ *  open-edge flags); {@link StructureStore.contentsFor} clips + flags it. */
+type RawGroupSpan = { startBeat: number; endBeat: number; lanes: Set<string> };
+
 export type StructBar = {
   id: string;
   index: number;
@@ -93,6 +120,7 @@ export type StructBar = {
   tracks: Record<string, StructTrack>;
   patternSpans: StructPatternSpan[];
   tupletSpans: StructTupletSpan[];
+  groupSpans: StructGroupSpan[];
 };
 
 export type StructLayer = {
@@ -136,6 +164,7 @@ type BarContents = {
   tracks: Record<string, StructTrack>;
   tupletSpans: StructTupletSpan[];
   patternSpans: StructPatternSpan[];
+  groupSpans: StructGroupSpan[];
   /** Natural content length (latest onset end), used to size anacrusis bars. */
   contentBeats: number;
 };
@@ -144,6 +173,7 @@ const EMPTY_CONTENTS: BarContents = {
   tracks: {},
   tupletSpans: [],
   patternSpans: [],
+  groupSpans: [],
   contentBeats: 0,
 };
 
@@ -152,6 +182,7 @@ export class StructureStore {
     makeObservable(this, {
       layerOrder: computed,
       barOrder: computed,
+      barLayout: computed,
       membership: computed,
       patternColors: computed.struct,
       layers: computed,
@@ -204,6 +235,31 @@ export class StructureStore {
     return out;
   }
 
+  /** Each bar's cumulative quarter-note start + length in LAYER-absolute space,
+   *  keyed by bar id. Length is the time-signature length (`tsCount*4/tsUnit`),
+   *  NOT content-sized, so this stays independent of note edits, the cheap spine
+   *  the group-distribution maths reads to spread a multi-bar group's children
+   *  back across the bars they land in. (An anacrusis bar's rendered length is
+   *  content-sized; this map uses its nominal time-signature length instead,
+   *  which only matters for the degenerate case of a group straddling an
+   *  anacrusis.) */
+  get barLayout(): Map<string, { start: number; beats: number }> {
+    const map = new Map<string, { start: number; beats: number }>();
+    let start = 0;
+    for (const b of this.barOrder) {
+      const beats = (b.tsCount * 4) / b.tsUnit;
+      map.set(b.id, { start, beats });
+      start += beats;
+    }
+    return map;
+  }
+
+  /** The bar id embedded in a {@link keyFor} bar-cell key. */
+  private barIdOf(key: string): string {
+    const i = key.indexOf(KEY_SEP);
+    return i === -1 ? key : key.slice(0, i);
+  }
+
   /** Top-level element ids grouped by `(bar, layer)` bar cell. Reads the
    *  routing fields (`id` / `barId` / `trackId`) plus `ordering` (to map a
    *  track to its layer), NOT note content, so it re-runs on add / remove /
@@ -220,17 +276,35 @@ export class StructureStore {
     if (!jot) return map;
     const single = this.singleLayer;
     const layerByTrack = single ? undefined : buildTrackLayerMap(jot);
-    for (const value of jot.elements.values()) {
-      const el = value as Element;
-      const barId = el.barId;
-      if (barId === undefined) continue;
-      const key = single ? barId : `${barId}${KEY_SEP}${layerOfTopLevel(el, layerByTrack!)}`;
+    const layout = this.barLayout;
+    const push = (key: string, id: string) => {
       let arr = map.get(key);
       if (!arr) {
         arr = [];
         map.set(key, arr);
       }
-      arr.push(el.id);
+      arr.push(id);
+    };
+    for (const value of jot.elements.values()) {
+      const el = value as Element;
+      const barId = el.barId;
+      if (barId === undefined) continue;
+      const layerId = single ? undefined : layerOfTopLevel(el, layerByTrack!);
+      const keyFor = (bId: string) => (single ? bId : `${bId}${KEY_SEP}${layerId}`);
+      // A group can SPAN bars (its children flatten past its anchor bar), so it
+      // belongs to every bar cell its [start, end) range overlaps; each cell's
+      // `contentsFor` keeps only the children that land in that bar. A note /
+      // pattern stays in its single anchor bar.
+      if (el.kind === 'group') {
+        const anchor = layout.get(barId);
+        const gStart = (anchor?.start ?? 0) + el.beat;
+        const gEnd = gStart + el.duration;
+        for (const [bId, info] of layout) {
+          if (gStart < info.start + info.beats - EPS && gEnd > info.start + EPS) push(keyFor(bId), el.id);
+        }
+      } else {
+        push(keyFor(barId), el.id);
+      }
     }
     for (const arr of map.values()) arr.sort();
     return map;
@@ -278,16 +352,70 @@ export class StructureStore {
     // Read the global colour map lazily: only a pattern element triggers the
     // dependency, so plain-note bars never couple to it.
     const colorOf = (name: string) => this.patternColors[name] ?? 0;
+    // This cell's bar window in LAYER-absolute beats; a group is flattened to
+    // absolute coords then clipped to [lo, hi) so each bar keeps only its slice.
+    const cell = this.barLayout.get(this.barIdOf(key));
+    const lo = cell?.start ?? 0;
+    const hi = lo + (cell?.beats ?? Infinity);
     const notes: StructNote[] = [];
     const tuplets: StructTupletSpan[] = [];
     const patternSpans: StructPatternSpan[] = [];
+    const groupSpans: StructGroupSpan[] = [];
+    const groups: RawGroupSpan[] = [];
     let contentBeats = 0;
     for (const id of ids) {
       const el = jot.elements.get(id) as Element | undefined;
       if (!el) continue;
-      // Top-level coordinates are already bar-relative.
-      flattenInto(el, el.beat, el.duration, jot, colorOf, { notes, tuplets, patternSpans });
-      contentBeats = Math.max(contentBeats, el.beat + el.duration);
+      if (el.kind === 'group') {
+        // A group's children flatten in LAYER-absolute space (its anchor bar's
+        // start + its own beat), so a multi-bar group's notes can be clipped
+        // back to whichever bar cell they fall in. The flattened notes/spans are
+        // then rebased to bar-relative and the group frame clipped + flagged.
+        const groupAbsStart = (this.barLayout.get(el.barId ?? '')?.start ?? lo) + el.beat;
+        const tmp: FlattenOut = { notes: [], tuplets: [], patternSpans: [], groups: [] };
+        flattenInto(el, groupAbsStart, el.duration, jot, colorOf, tmp);
+        for (const n of tmp.notes) {
+          if (n.beat < lo - EPS || n.beat >= hi - EPS) continue;
+          const beat = n.beat - lo;
+          notes.push({ ...n, beat, straight: isDyadic(beat), groupId: el.id });
+          contentBeats = Math.max(contentBeats, beat + n.duration);
+        }
+        for (const t of tmp.tuplets) {
+          const s = Math.max(t.startBeat, lo);
+          const e = Math.min(t.endBeat, hi);
+          if (e > s + EPS) tuplets.push({ ...t, startBeat: s - lo, endBeat: e - lo });
+        }
+        for (const p of tmp.patternSpans) {
+          const s = Math.max(p.startBeat, lo);
+          const e = Math.min(p.endBeat, hi);
+          if (e > s + EPS) patternSpans.push({ ...p, startBeat: s - lo, endBeat: e - lo });
+        }
+        for (const g of tmp.groups) {
+          const s = Math.max(g.startBeat, lo);
+          const e = Math.min(g.endBeat, hi);
+          if (e > s + EPS) {
+            groupSpans.push({
+              startBeat: s - lo,
+              endBeat: e - lo,
+              lanes: g.lanes,
+              openLeft: g.startBeat < lo - EPS,
+              openRight: g.endBeat > hi + EPS,
+              groupId: el.id,
+            });
+          }
+        }
+      } else {
+        // Top-level note / pattern: coordinates are already bar-relative and
+        // confined to this bar.
+        flattenInto(el, el.beat, el.duration, jot, colorOf, { notes, tuplets, patternSpans, groups });
+        contentBeats = Math.max(contentBeats, el.beat + el.duration);
+      }
+    }
+    // A group nested inside a top-level pattern body surfaces here as a
+    // bar-relative raw span (patterns are within-bar), so it never needs
+    // clipping or open edges.
+    for (const g of groups) {
+      groupSpans.push({ startBeat: g.startBeat, endBeat: g.endBeat, lanes: g.lanes, openLeft: false, openRight: false });
     }
     const tracks: Record<string, StructTrack> = {};
     for (const note of notes) {
@@ -301,7 +429,7 @@ export class StructureStore {
     for (const lane of Object.keys(tracks)) {
       tracks[lane].notes.sort((a, b) => a.beat - b.beat);
     }
-    return { tracks, tupletSpans: tuplets, patternSpans, contentBeats };
+    return { tracks, tupletSpans: tuplets, patternSpans, groupSpans, contentBeats };
   }, STRUCTURAL);
 
   /** One lane's track within a bar cell, structurally gated. Adding a note to a
@@ -347,10 +475,13 @@ export class StructureStore {
 
   /** A bar cell's lane-spanning chrome (pattern + tuplet brackets),
    *  structurally gated (a plain-note edit leaves it untouched). */
-  spansFor = computedFn((key: string): { patternSpans: StructPatternSpan[]; tupletSpans: StructTupletSpan[] } => {
-    const c = this.contentsFor(key);
-    return { patternSpans: c.patternSpans, tupletSpans: c.tupletSpans };
-  }, STRUCTURAL);
+  spansFor = computedFn(
+    (key: string): { patternSpans: StructPatternSpan[]; tupletSpans: StructTupletSpan[]; groupSpans: StructGroupSpan[] } => {
+      const c = this.contentsFor(key);
+      return { patternSpans: c.patternSpans, tupletSpans: c.tupletSpans, groupSpans: c.groupSpans };
+    },
+    STRUCTURAL
+  );
 
   /** A bar's bracket chrome UNIONED across every `||` layer, so a tuplet /
    *  pattern authored in a non-first layer still draws its bracket (mirrors
@@ -362,27 +493,39 @@ export class StructureStore {
    *  tuplets on *different* lanes (a hands triplet on the snare and a feet
    *  triplet on the kick) keep their own entries, each draws above its own
    *  row, as does a genuine polyrhythm (3 vs 5) or two distinct patterns. */
-  mergedSpansFor = computedFn((barId: string): { patternSpans: StructPatternSpan[]; tupletSpans: StructTupletSpan[] } => {
-    const layers = this.layerOrder;
-    if (layers.length <= 1) {
-      return this.spansFor(this.keyFor(barId, layers[0]?.id ?? ''));
-    }
-    const tupletByKey = new Map<string, StructTupletSpan>();
-    const patternByKey = new Map<string, StructPatternSpan>();
-    const r = (n: number) => Math.round(n * 1e6) / 1e6; // tolerate FP drift in beats
-    for (const layer of layers) {
-      const s = this.spansFor(this.keyFor(barId, layer.id));
-      for (const t of s.tupletSpans) {
-        const key = `${r(t.startBeat)}:${r(t.endBeat)}:${t.count}:${[...t.lanes].sort().join(',')}`;
-        if (!tupletByKey.has(key)) tupletByKey.set(key, t);
+  mergedSpansFor = computedFn(
+    (barId: string): { patternSpans: StructPatternSpan[]; tupletSpans: StructTupletSpan[]; groupSpans: StructGroupSpan[] } => {
+      const layers = this.layerOrder;
+      if (layers.length <= 1) {
+        return this.spansFor(this.keyFor(barId, layers[0]?.id ?? ''));
       }
-      for (const p of s.patternSpans) {
-        const key = `${p.name}:${r(p.startBeat)}:${r(p.endBeat)}`;
-        if (!patternByKey.has(key)) patternByKey.set(key, p);
+      const tupletByKey = new Map<string, StructTupletSpan>();
+      const patternByKey = new Map<string, StructPatternSpan>();
+      const groupByKey = new Map<string, StructGroupSpan>();
+      const r = (n: number) => Math.round(n * 1e6) / 1e6; // tolerate FP drift in beats
+      for (const layer of layers) {
+        const s = this.spansFor(this.keyFor(barId, layer.id));
+        for (const t of s.tupletSpans) {
+          const key = `${r(t.startBeat)}:${r(t.endBeat)}:${t.count}:${[...t.lanes].sort().join(',')}`;
+          if (!tupletByKey.has(key)) tupletByKey.set(key, t);
+        }
+        for (const p of s.patternSpans) {
+          const key = `${p.name}:${r(p.startBeat)}:${r(p.endBeat)}`;
+          if (!patternByKey.has(key)) patternByKey.set(key, p);
+        }
+        for (const g of s.groupSpans) {
+          const key = `${r(g.startBeat)}:${r(g.endBeat)}:${[...g.lanes].sort().join(',')}`;
+          if (!groupByKey.has(key)) groupByKey.set(key, g);
+        }
       }
-    }
-    return { patternSpans: [...patternByKey.values()], tupletSpans: [...tupletByKey.values()] };
-  }, STRUCTURAL);
+      return {
+        patternSpans: [...patternByKey.values()],
+        tupletSpans: [...tupletByKey.values()],
+        groupSpans: [...groupByKey.values()],
+      };
+    },
+    STRUCTURAL
+  );
 
   /** Bar geometry for one layer: index + time-signature beats (an anacrusis
    *  bar's beats is content-sized, the only note dependency here).
@@ -436,6 +579,7 @@ export class StructureStore {
           tracks: c.tracks,
           patternSpans: c.patternSpans,
           tupletSpans: c.tupletSpans,
+          groupSpans: c.groupSpans,
         };
       });
       return { id: layer.id, name: layer.name, bars, lanes: this.lanesForLayer(layer.id) };
@@ -443,10 +587,21 @@ export class StructureStore {
   }
 }
 
+/** The accumulator {@link flattenInto} writes into. `groups` collects a raw
+ *  frame span for EVERY group (tuplet or not), in the same coordinate space as
+ *  the notes; the caller clips it to the bar cell. */
+type FlattenOut = {
+  notes: StructNote[];
+  tuplets: StructTupletSpan[];
+  patternSpans: StructPatternSpan[];
+  groups: RawGroupSpan[];
+};
+
 /**
  * Recursively flatten an element positioned at bar-absolute `[absBeat,
  * absBeat+absDur)` into notes (with absolute beats), tuplet spans (groups
- * that don't fill their duration) and pattern spans (pattern usages).
+ * that don't fill their duration), pattern spans (pattern usages), and a group
+ * frame span for every group.
  */
 function flattenInto(
   el: Element,
@@ -454,7 +609,7 @@ function flattenInto(
   absDur: number,
   jot: MutableJot,
   colorOf: (name: string) => number,
-  out: { notes: StructNote[]; tuplets: StructTupletSpan[]; patternSpans: StructPatternSpan[] }
+  out: FlattenOut
 ): void {
   if (el.kind === 'note') {
     out.notes.push({
@@ -478,9 +633,12 @@ function flattenInto(
   if (el.kind === 'group') {
     const children = [...el.children.values()] as Element[];
     const internalLen = naturalSpan(children);
+    const lanes = new Set<string>();
+    collectLanes(children, jot, lanes);
+    // Every group draws a frame; a group whose children DON'T fill its duration
+    // is additionally a tuplet (the bracket + count).
+    out.groups.push({ startBeat: absBeat, endBeat: absBeat + absDur, lanes });
     if (internalLen > EPS && Math.abs(internalLen - el.duration) > EPS) {
-      const lanes = new Set<string>();
-      collectLanes(children, jot, lanes);
       out.tuplets.push({ count: children.length, startBeat: absBeat, endBeat: absBeat + absDur, lanes });
     }
     const scale = internalLen > EPS ? absDur / internalLen : 1;

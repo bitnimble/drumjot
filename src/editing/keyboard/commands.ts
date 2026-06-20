@@ -48,6 +48,16 @@ export const EDITOR_COMMANDS: readonly EditorCommand[] = [
     label: 'Redo',
     run: (ctx) => ctx.historyPresenter.redo(),
   },
+  {
+    id: 'group',
+    label: 'Group selected notes',
+    run: (ctx) => ctx.editingPresenter.groupSelection(),
+  },
+  {
+    id: 'ungroup',
+    label: 'Ungroup selected notes',
+    run: (ctx) => ctx.editingPresenter.ungroupSelection(),
+  },
 ];
 
 export const COMMANDS_BY_ID: ReadonlyMap<string, EditorCommand> = new Map(

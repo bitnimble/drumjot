@@ -105,6 +105,66 @@ describe('EditingPresenter', () => {
     expect(selection.selectedNotes.size).toBe(0);
   });
 
+  const elementsOfKind = (store: ReturnType<typeof setup>['store'], kind: string) =>
+    [...store.jot!.elements.values()].filter((e) => (e as { kind: string }).kind === kind);
+
+  it('groupSelection groups a multi-bar selection in place: positions unchanged, frame open across the barline', () => {
+    const { store, selection, presenter } = setup();
+    const k0 = kicks(store)[0].tracks['k'].notes[0];
+    const k1 = kicks(store)[1].tracks['k'].notes[0];
+    selection.state = { type: 'notes', notes: new Set([k0, k1]) };
+    presenter.groupSelection();
+
+    // One group shell, no loose top-level notes left.
+    expect(elementsOfKind(store, 'group').length).toBe(1);
+    expect(elementsOfKind(store, 'note').length).toBe(0);
+
+    // Notes render in exactly their original bars/beats (in-place).
+    const b0 = kicks(store)[0].tracks['k'].notes;
+    const b1 = kicks(store)[1].tracks['k'].notes;
+    expect(b0.map((n) => n.beat)).toEqual([0]);
+    expect(b1.map((n) => n.beat)).toEqual([0]);
+    // Both carry the same (defined) group id; no tuplet (scale 1).
+    expect(b0[0].groupId).toBeDefined();
+    expect(b0[0].groupId).toBe(b1[0].groupId!);
+    expect(kicks(store)[0].tupletSpans).toEqual([]);
+
+    // The frame is one rectangle clipped per bar: open on the right in bar 0,
+    // open on the left in bar 1.
+    expect(kicks(store)[0].groupSpans.length).toBe(1);
+    expect(kicks(store)[0].groupSpans[0].openRight).toBe(true);
+    expect(kicks(store)[1].groupSpans[0].openLeft).toBe(true);
+  });
+
+  it('groupSelection is a no-op for a single-note selection', () => {
+    const { store, selectionPresenter, presenter } = setup();
+    selectionPresenter.replace(kicks(store)[0].tracks['k'].notes[0]);
+    presenter.groupSelection();
+    expect(elementsOfKind(store, 'group').length).toBe(0);
+    expect(elementsOfKind(store, 'note').length).toBe(2);
+  });
+
+  it('ungroupSelection restores grouped notes to their bars and removes the shell', () => {
+    const { store, selection, presenter } = setup();
+    const k0 = kicks(store)[0].tracks['k'].notes[0];
+    const k1 = kicks(store)[1].tracks['k'].notes[0];
+    selection.state = { type: 'notes', notes: new Set([k0, k1]) };
+    presenter.groupSelection();
+
+    // The selection still holds the PRE-group note objects (which carry no
+    // groupId); ungroup resolves the owning group from the live structure by id,
+    // so it works without re-selecting.
+    presenter.ungroupSelection();
+
+    expect(elementsOfKind(store, 'group').length).toBe(0);
+    expect(elementsOfKind(store, 'note').length).toBe(2);
+    expect(kicks(store)[0].tracks['k'].notes.map((n) => n.beat)).toEqual([0]);
+    expect(kicks(store)[1].tracks['k'].notes.map((n) => n.beat)).toEqual([0]);
+    expect(kicks(store)[0].tracks['k'].notes[0].groupId).toBeUndefined();
+    // Fresh ids on the restored notes invalidate the old selection, so it clears.
+    expect(selection.selectedNotes.size).toBe(0);
+  });
+
   it('moveSelection shifts a note within its bar', () => {
     const { store, selectionPresenter, presenter } = setup();
     const k0 = kicks(store)[0].tracks['k'].notes[0];

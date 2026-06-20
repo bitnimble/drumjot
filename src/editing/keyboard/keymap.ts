@@ -21,6 +21,8 @@ export const DEFAULT_KEYMAP: Keymap = {
   'Mod+z': 'undo',
   'Mod+Shift+z': 'redo',
   'Mod+y': 'redo',
+  'Mod+g': 'group',
+  'Mod+Shift+g': 'ungroup',
 };
 
 /** INPUT `type`s where a keystroke is meaningful text entry and shortcuts must

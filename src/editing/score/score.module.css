@@ -476,6 +476,48 @@
     line-height: 1;
 }
 
+/* Group frame: a subtle rounded box with a faint wash around a group's
+   notes (every group, tuplet or not, since a tuplet IS a group). Time-
+   anchored to the bar like the pattern bracket, and drawn per (bar,
+   lane-row) as one slice of a 2D-clipped box: the Top/Bottom/Left/Right
+   edge classes toggle each border, so an open edge (the group continuing
+   into the adjacent bar, or a row in the middle of the vertical band)
+   simply omits that side and the box reads as one continuous rectangle.
+   Purely decorative, `pointer-events: none`, so it never intercepts a
+   click meant for the noteheads it sits over. The top/bottom -1px overhang
+   lets stacked rows' side borders kiss instead of leaving a hairline gap. */
+.groupFrame {
+    position: absolute;
+    top: -1px;
+    bottom: -1px;
+    box-sizing: border-box;
+    pointer-events: none;
+    z-index: 1;
+    background: color-mix(in srgb, var(--color-text-muted-alt) 8%, transparent);
+    left: calc(var(--span-start-beat) / var(--bar-beats) * 100%);
+    width: calc((var(--span-end-beat) - var(--span-start-beat)) / var(--bar-beats) * 100%);
+}
+
+.groupFrameTop {
+    border-top: 1.5px solid var(--color-text-muted-alt);
+    border-top-left-radius: var(--radius-sm);
+    border-top-right-radius: var(--radius-sm);
+}
+
+.groupFrameBottom {
+    border-bottom: 1.5px solid var(--color-text-muted-alt);
+    border-bottom-left-radius: var(--radius-sm);
+    border-bottom-right-radius: var(--radius-sm);
+}
+
+.groupFrameLeft {
+    border-left: 1.5px solid var(--color-text-muted-alt);
+}
+
+.groupFrameRight {
+    border-right: 1.5px solid var(--color-text-muted-alt);
+}
+
 .note {
     position: absolute;
     border-radius: var(--radius-circle);

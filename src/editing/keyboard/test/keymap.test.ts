@@ -96,6 +96,11 @@ describe('default keymap', () => {
     expect(DEFAULT_KEYMAP['Mod+y']).toBe('redo');
   });
 
+  it('binds Mod+G to group and Mod+Shift+G to ungroup', () => {
+    expect(DEFAULT_KEYMAP['Mod+g']).toBe('group');
+    expect(DEFAULT_KEYMAP['Mod+Shift+g']).toBe('ungroup');
+  });
+
   it('every bound command id resolves to a registered command', () => {
     for (const id of Object.values(DEFAULT_KEYMAP)) {
       expect(COMMANDS_BY_ID.has(id)).toBe(true);
@@ -139,12 +144,28 @@ describe('commands', () => {
     expect(calls).toEqual(['undo', 'redo']);
   });
 
+  it('group / ungroup invoke the editing presenter', () => {
+    const calls: string[] = [];
+    const ctx = {
+      editingPresenter: {
+        groupSelection: () => calls.push('group'),
+        ungroupSelection: () => calls.push('ungroup'),
+      },
+      playbackPresenter: { togglePlayPause: () => Promise.resolve() },
+    } as unknown as CommandContext;
+    COMMANDS_BY_ID.get('group')!.run(ctx);
+    COMMANDS_BY_ID.get('ungroup')!.run(ctx);
+    expect(calls).toEqual(['group', 'ungroup']);
+  });
+
   it('exposes commands as an enumerable list for a future remap UI', () => {
     expect(EDITOR_COMMANDS.map((c) => c.id).sort()).toEqual([
       'deleteSelection',
+      'group',
       'redo',
       'togglePlayPause',
       'undo',
+      'ungroup',
     ]);
   });
 });

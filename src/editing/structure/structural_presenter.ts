@@ -221,7 +221,7 @@ export class StructuralPresenter implements LaidOutJot {
       anacrusis: false,
     };
     if (barId === LEAD_IN_BAR_ID) {
-      return { ...base, tracks: {}, patternSpans: [], tupletSpans: [] };
+      return { ...base, tracks: {}, patternSpans: [], tupletSpans: [], groupSpans: [] };
     }
     // Notes and bracket chrome both come from every layer that places this
     // lane / bar (so a hands/feet split shows its kick row, and a tuplet in a
@@ -233,6 +233,7 @@ export class StructuralPresenter implements LaidOutJot {
       tracks: { [lane]: track },
       patternSpans: spans.patternSpans,
       tupletSpans: spans.tupletSpans,
+      groupSpans: spans.groupSpans,
     };
   }, STRUCTURAL);
 
@@ -255,7 +256,7 @@ export class StructuralPresenter implements LaidOutJot {
     const geo = this.viewGeometryById.get(barId);
     const base = geo ?? { id: barId, index: 0, beats: 0, tsCount: 4, tsUnit: 4, anacrusis: false };
     if (barId === LEAD_IN_BAR_ID) {
-      return { ...base, tracks: {}, patternSpans: [], tupletSpans: [] };
+      return { ...base, tracks: {}, patternSpans: [], tupletSpans: [], groupSpans: [] };
     }
     const key = this.structureStore.keyFor(barId, layerId);
     const track = this.structureStore.trackFor(key, lane);
@@ -265,6 +266,7 @@ export class StructuralPresenter implements LaidOutJot {
       tracks: { [lane]: track },
       patternSpans: spans.patternSpans,
       tupletSpans: spans.tupletSpans,
+      groupSpans: spans.groupSpans,
     };
   }, STRUCTURAL);
 
@@ -381,6 +383,7 @@ function withVirtualLeadIn(layer: StructLayer, preRollSec: number, bpm: number):
     tracks: {},
     patternSpans: [],
     tupletSpans: [],
+    groupSpans: [],
   };
   return { ...layer, bars: [virtual, ...layer.bars] };
 }
@@ -412,6 +415,7 @@ function shiftStructLayer(layer: StructLayer, offsetBeats: number): StructLayer 
     tracks: {},
     patternSpans: [],
     tupletSpans: [],
+    groupSpans: [],
   }));
 
   const locate = (absBeat: number): number => {
