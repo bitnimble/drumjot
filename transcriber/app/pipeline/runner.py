@@ -197,10 +197,12 @@ class PipelineOptions:
     # controlled here, it pins Haiku 4.5 in `pipeline/quantise.py`.
     llm_model: str = ""
     # Experimental: replace the ADTOF onset detector with the trained
-    # frozen-MERT model (training/, `learned_onsets.py`). It runs once on the
-    # drum stem and emits ALL trained classes as distinct pitches (no merge to
-    # 5), so the hihat/cymbal splitters and the filter LLM are skipped for it.
-    # `learned_onsets_checkpoint` is a run dir (model.pt + meta.json).
+    # frozen-MERT model (training/, `learned_onsets.py`). It runs PER STEM over
+    # the per-instrument stems (matching the per-stem deployment architecture
+    # the model was tuned/evaluated on) and emits ALL trained classes as
+    # distinct pitches (no merge to 5), so the hihat/cymbal splitters and the
+    # filter LLM are skipped for it. `learned_onsets_checkpoint` is a run dir
+    # (model.pt + meta.json with tuned per-lane thresholds).
     use_learned_onsets: bool = False
     learned_onsets_checkpoint: str = ""
 
@@ -472,21 +474,21 @@ def _learned_onsets(
     ctx: PipelineContext, options: PipelineOptions,
 ) -> dict[str, list[OnsetCandidate]]:
     """Trained frozen-MERT onset model (training/, `learned_onsets.py`), run
-    once on the drum stem. Emits every trained class as its own pitch (no merge
-    to 5); the ADTOF hihat/cymbal splitters are skipped because the model
-    already separates them. NOTE: encodes the whole stem in one MERT pass, long
-    songs may need windowing (follow-up)."""
+    PER STEM over `ctx.per_instrument_stems` (windowed MERT encode), matching
+    the deployment architecture the model was tuned/evaluated on (per-stem
+    isolation; see `learned_onsets.py`). Emits every trained class as its own
+    pitch (no merge to 5); the ADTOF hihat/cymbal splitters and the filter LLM
+    are skipped because the model already separates and calibrates them."""
     if not options.learned_onsets_checkpoint:
         raise RuntimeError(
             "onsets: use_learned_onsets is set but learned_onsets_checkpoint is empty"
         )
     assert ctx.structure is not None  # caller (_do_onsets) guards this
-    from pathlib import Path
-
     from app.pipeline.learned_onsets import detect_all_pitches_learned
 
-    source = ctx.drum_stem or next(iter(ctx.per_instrument_stems.values()))
-    learned = detect_all_pitches_learned(Path(source), Path(options.learned_onsets_checkpoint))
+    learned = detect_all_pitches_learned(
+        ctx.per_instrument_stems, Path(options.learned_onsets_checkpoint)
+    )
     return {
         pitch: _attach_beat_positions(cands, ctx.structure)
         for pitch, cands in learned.items()

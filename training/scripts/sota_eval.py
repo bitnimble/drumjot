@@ -154,9 +154,37 @@ def _predict_perstem(stems: dict, model, meta, encoder, max_seconds) -> dict[str
     return pred
 
 
+# ADTOF stem pitch -> the 9-lane key fold5 reads, so the ADTOF baseline scores
+# through the EXACT same fold5 + mir_eval path as the learned model. ADTOF's
+# hi-hat lane -> hc (HH class); its merged ride+crash lane -> rd (CY class).
+_ADTOF_STEM_TO_KEY = {"k": "k", "s": "s", "t": "t", "h": "hc", "c": "rd"}
+
+
+def _predict_perstem_adtof(stems: dict) -> dict[str, list[float]]:
+    """Baseline: the transcriber's DEPLOYED ADTOF backend, run per stem with its
+    full per-stem post-processing (adaptive threshold + audio-refine + amplitude
+    floor + hihat audio supplement + crash-shadow). Keyed so fold5 scores it
+    identically to the learned model -> same stems / GT / scorer = apples-to-apples
+    (each detector at its own deployed config, which is what we'd actually ship)."""
+    from app.pipeline.adtof_onsets import detect_onsets_adtof
+
+    pred: dict[str, list[float]] = {}
+    for pitch, audio in stems.items():
+        key = _ADTOF_STEM_TO_KEY.get(pitch)
+        if key is None:
+            continue
+        cands = detect_onsets_adtof(Path(audio), pitch)
+        pred[key] = sorted(float(c.time) for c in cands)
+    return pred
+
+
 def main():
     ap = argparse.ArgumentParser(description="SOTA-comparable 5-class ADT eval (mir_eval +/-50ms)")
-    ap.add_argument("--checkpoint", required=True, help="loss_ab_*.pt raw dict OR a checkpoint.py dir")
+    ap.add_argument("--backend", default="learned", choices=("learned", "adtof"),
+                    help="learned = our trained checkpoint (per-stem); adtof = the transcriber's "
+                         "DEPLOYED ADTOF backend per stem (baseline). Identical stems/GT/scorer.")
+    ap.add_argument("--checkpoint", default="", help="loss_ab_*.pt raw dict OR a checkpoint.py dir "
+                    "(required for --backend learned; ignored for adtof)")
     ap.add_argument("--dataset", default="enst", choices=("enst", "mdb", "rbma"))
     ap.add_argument("--enst-root", default=None, help="enst-sep root (per-stem); else $DRUMJOT_ENST")
     ap.add_argument("--mdb-root", default="/codebox-workspace/datasets/MDBDrums", help="MDBDrums clone")
@@ -183,10 +211,18 @@ def main():
     runtime.configure_backends()
     log = lambda s: print(s, flush=True)  # noqa: E731
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    log(f"=== SOTA eval: dataset={args.dataset} tol=+/-{args.tolerance*1000:.0f}ms ckpt={args.checkpoint} ===")
-    model, meta, encoder = _load_checkpoint(args.checkpoint, device)
-    model.eval()
-    log(f"  lanes={meta['lanes']} thresholds={ {k: round(v,2) for k,v in meta['thresholds'].items()} }")
+    log(f"=== SOTA eval: backend={args.backend} dataset={args.dataset} "
+        f"tol=+/-{args.tolerance*1000:.0f}ms ===")
+    model = meta = encoder = None
+    if args.backend == "learned":
+        if not args.checkpoint:
+            ap.error("--checkpoint is required for --backend learned")
+        log(f"  ckpt={args.checkpoint}")
+        model, meta, encoder = _load_checkpoint(args.checkpoint, device)
+        model.eval()
+        log(f"  lanes={meta['lanes']} thresholds={ {k: round(v,2) for k,v in meta['thresholds'].items()} }")
+    else:
+        log("  backend=ADTOF (transcriber deployed per-stem gates; no checkpoint)")
     want = {x.strip() for x in args.classes.split(",")}
     classes = [c for c in CLASSES if c in want]
     log(f"  scoring classes: {classes}  (GT for others is excluded from mir_eval)")
@@ -201,7 +237,8 @@ def main():
         if len(stems) < 5:
             log(f"  warn {tid}: only {len(stems)}/5 per-instrument stems found "
                 f"-> missing-lane scores will be low (incomplete separation?)")
-        pred9 = _predict_perstem(stems, model, meta, encoder, args.max_seconds)
+        pred9 = (_predict_perstem_adtof(stems) if args.backend == "adtof"
+                 else _predict_perstem(stems, model, meta, encoder, args.max_seconds))
         gt5, pred5 = fold5(gt9), fold5(pred9)
         cells = []
         for c in classes:

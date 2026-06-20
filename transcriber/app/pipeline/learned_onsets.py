@@ -1,68 +1,145 @@
-"""Trained drum-onset model as a transcriber pipeline stage (SPIKE).
+"""Trained drum-onset model as a transcriber pipeline stage.
 
 Loads a checkpoint produced by the `training/` package and emits
-`OnsetCandidate`s per DSL pitch, mirroring
-`adtof_onsets.detect_all_lanes_adtof` so it can slot into the pipeline. Runs
-the frozen MERT encoder + per-lane heads and folds the 11 training lanes to
-the DSL pitch letters via `inference.LANE_TO_DSL`.
+`OnsetCandidate`s per DSL pitch, mirroring `adtof_onsets.detect_onsets_adtof`
+so it can slot into the pipeline. Runs the frozen MERT encoder + per-lane
+heads and folds the 9 training lanes to the DSL pitch letters via
+`inference.LANE_TO_PITCH`.
 
-SPIKE STATUS, this validates the wiring (the transcriber can load the
-trained model and produce pipeline-shaped onsets). Not yet called from
-`runner.py`. Two follow-ups before production:
-  - Packaging: the `drumjot_training` package must be importable here (add
-    `training/` to PYTHONPATH or `uv pip install -e training`); torch +
-    transformers are already transcriber deps, MERT weights download/cache
-    on first use.
-  - `amplitude` is left None (velocity falls back to `strength`); a later
-    pass can read it off the stem like `adtof_onsets` does.
+PER-STEM, matching the deployment architecture. The model is trained, tuned,
+and evaluated PER STEM (`training/scripts/sota_eval.py::_predict_perstem` +
+`enst.PERSTEM_TO_LANES`): run the model on each isolated per-instrument stem,
+keep only that stem's owned lanes. The transcriber's `stems_per` stage already
+produces exactly those k/s/h/c/t stems, so we run the model once per stem and
+assemble. Running it once on the merged drum stem (the old spike shortcut)
+would (a) not match the per-stem isolation the model was tuned for, leaking
+cross-lane bleed the published numbers exclude, and (b) feed MERT one long
+sequence (its attention is O(n^2)).
+
+WINDOWED. We use `inference.stitched_probs` (overlapping ~30 s chunks, centre-
+crop stitched) rather than a single full-song encode, bounding MERT's sequence
+length / VRAM. This is the same path `inference.transcribe` (hence the eval
+harness) uses, so the transcriber's onsets match the scored numbers.
+
+Post-model peak-picking is the SHARED training-side picker
+(`metrics.pick_onsets_lane`: per-lane min-distance + prominence + decay-reset
+from `drumjot_dsp.peakpick`) at the checkpoint's TUNED per-lane thresholds.
+We deliberately do NOT apply the ADTOF backend's OOD-correction machinery
+(adaptive threshold, median-normalise, hi-hat audio supplement, amplitude
+floor, crash-shadow): those compensate for ADTOF being out-of-distribution on
+isolated stems, and the adaptive threshold in particular would override the
+model's calibrated operating points. See `docs/learned-onsets-integration.md`
+for the full picker comparison + rationale.
+
+`amplitude` is left None (velocity falls back to `strength`): per-onset audio
+amplitude would have to be read off the per-stem audio, a later refinement.
+`refine_audio` (off by default) optionally snaps each peak time to the nearest
+audio onset-strength maximum (the ADTOF backend's `_refine_peak_times_audio`),
+upgrading the 75 fps / ~13 ms grid to a transient-honest time; keep it off
+until validated F1-neutral against the eval harness.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
+from app.config import settings
 from app.models import OnsetCandidate
 
 
+def _resolve_device() -> str:
+    """CUDA when available (respecting `settings.device`), else CPU.
+
+    Mirrors `adtof_onsets._resolve_device`: `cpu`/`mps` force CPU; anything
+    else asks for CUDA but degrades to CPU when torch reports no GPU."""
+    import torch
+
+    pref = (settings.device or "auto").lower()
+    if pref in ("cpu", "mps"):
+        return "cpu"
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
 def detect_all_pitches_learned(
-    audio_path: Path,
+    per_instrument_stems: dict[str, Path],
     checkpoint_dir: Path,
     encoder=None,
+    *,
+    device: str | None = None,
+    refine_audio: bool = False,
 ) -> dict[str, list[OnsetCandidate]]:
-    """Per-pitch `OnsetCandidate`s from a trained checkpoint.
+    """Per-pitch `OnsetCandidate`s from a trained checkpoint, PER STEM.
+
+    `per_instrument_stems` maps the transcriber's stem pitch letters
+    (k/s/h/c/t, as produced by `stems_per`) to the isolated stem audio. For
+    each stem we run the model and keep only the lanes that stem owns
+    (`enst.PERSTEM_TO_LANES`), then fold to DSL pitches via
+    `inference.LANE_TO_PITCH` (INJECTIVE: every trained class keeps a distinct
+    pitch / GM note; any display folding happens later in MIDI->Jot).
 
     `strength` is the model's sigmoid activation at the peak frame (the same
-    "is this a hit?" confidence `adtof_onsets` provides). The lane->pitch map
-    is INJECTIVE (`inference.LANE_TO_PITCH`): every trained class keeps a
-    distinct pitch (kick/snare/side-stick/tom/closed-hat/pedal-hat/open-hat/
-    ride/crash/misc-cymbal/misc-perc) and a distinct GM note downstream, so
-    nothing is merged back down. Any display folding happens later in MIDI->Jot.
+    "is this a hit?" confidence `adtof_onsets` provides). One MERT encoder is
+    built once and reused across stems.
     """
-    from drumjot_training import inference, metrics
+    from drumjot_training import embeddings, enst, inference, metrics
 
-    model, meta = inference.load_model(checkpoint_dir)
-    probs, fps = inference.lane_probs(audio_path, model, meta, encoder=encoder)
+    dev = device or _resolve_device()
+    model, meta = inference.load_model(checkpoint_dir, dev)
+    # Build the encoder once and reuse across stems (else each stem reloads the
+    # 330M MERT weights), co-located with the model on `dev` so a forced
+    # `settings.device=cpu` is honoured rather than MERT auto-grabbing the GPU.
+    # `stitched_probs` accepts an injected encoder.
+    enc = encoder or embeddings.MertEncoder(
+        name=meta["encoder"], layer=meta["encoder_layer"], device=dev
+    )
     thresholds = meta["thresholds"]
-    n_frames = probs.shape[1]
+    lane_index = {lane: i for i, lane in enumerate(meta["lanes"])}
 
     by_pitch: dict[str, list[OnsetCandidate]] = {}
-    for i, lane in enumerate(meta["lanes"]):
-        pitch = inference.LANE_TO_PITCH.get(lane)
-        if pitch is None:
-            continue
-        thr = thresholds.get(lane, meta["peak_threshold"])
-        for t in metrics.pick_onsets_lane(probs[i], fps, lane, thr):
-            frame = min(int(round(float(t) * fps)), n_frames - 1)
-            by_pitch.setdefault(pitch, []).append(
-                OnsetCandidate(
-                    time=float(t),
-                    strength=float(probs[i][frame]),
-                    amplitude=None,
-                    bar=-1,
-                    beat_in_bar=-1.0,
-                    raw_model_time=float(t),
-                )
+    for stem_pitch, audio_path in per_instrument_stems.items():
+        owned = enst.PERSTEM_TO_LANES.get(stem_pitch, ())
+        if not owned:
+            continue  # stem the model has no lane for (e.g. residual)
+        probs, fps = inference.stitched_probs(audio_path, model, meta, encoder=enc)
+        n_frames = probs.shape[1]
+        for lane in owned:
+            i = lane_index.get(lane)
+            pitch = inference.LANE_TO_PITCH.get(lane)
+            if i is None or pitch is None:
+                continue
+            thr = thresholds.get(lane, meta["peak_threshold"])
+            times = [float(t) for t in metrics.pick_onsets_lane(probs[i], fps, lane, thr)]
+            refined = (
+                _refine_peak_times(audio_path, times)
+                if refine_audio
+                else times
             )
+            for raw_t, t in zip(times, refined, strict=True):
+                frame = min(int(round(raw_t * fps)), n_frames - 1)
+                by_pitch.setdefault(pitch, []).append(
+                    OnsetCandidate(
+                        time=t,
+                        strength=float(probs[i][frame]),
+                        amplitude=None,
+                        bar=-1,
+                        beat_in_bar=-1.0,
+                        raw_model_time=raw_t,
+                    )
+                )
 
     for cands in by_pitch.values():
         cands.sort(key=lambda c: c.time)
     return by_pitch
+
+
+def _refine_peak_times(audio_path: Path, times: list[float]) -> list[float]:
+    """Snap each peak time to the nearest audio onset-strength maximum.
+
+    Reuses the ADTOF backend's audio-domain refinement so the two onset paths
+    share one implementation. Optional (off by default) for the learned model:
+    its targets are onset-centred, but the 75 fps grid is coarse, so this can
+    sharpen playback timing once validated F1-neutral."""
+    from app.pipeline.adtof_onsets import _refine_peak_times_audio
+
+    return _refine_peak_times_audio(
+        audio_path, times, window_sec=settings.adtof_audio_refine_window_s
+    )
