@@ -66,7 +66,10 @@ def apply_compression(y: np.ndarray, sr: int, threshold_db: float = -20.0, ratio
     # ~10ms attack/release smoothing so the gain curve doesn't add its own transient
     win = max(1, int(0.01 * sr))
     kernel = np.ones(win, dtype=np.float32) / win
-    env = fftconvolve(env, kernel, mode="same").astype(np.float32)
+    # FFT-based convolution of a non-negative signal can dip slightly negative
+    # from roundoff (largest near silence next to loud hits); clamp so log10 is
+    # always defined.
+    env = np.maximum(fftconvolve(env, kernel, mode="same"), 0.0).astype(np.float32)
     env_db = 20.0 * np.log10(env + eps)
     over = np.maximum(0.0, env_db - threshold_db)
     gain_db = -over * (1.0 - 1.0 / ratio)
@@ -164,4 +167,7 @@ def random_chain(
         br = int(rng.choice(codec_bitrates))
         out = apply_codec(out, sr, bitrate_kbps=br)
         steps.append(f"mp3{br}k")
+    # contract: always return finite audio so a corpus build never dies on one
+    # pathological sample (backstop; transforms should already stay finite).
+    out = np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
     return out, "+".join(steps) if steps else "identity"

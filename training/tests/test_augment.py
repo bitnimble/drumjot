@@ -73,6 +73,26 @@ def test_compression_reduces_crest_factor():
     assert len(out) == len(y)
 
 
+def test_compression_stays_finite_with_loud_bursts_over_silence():
+    # a loud burst next to true silence: FFT-conv roundoff makes the silent-region
+    # envelope dip below -eps, and log10 of a negative used to yield NaN. The
+    # envelope must be clamped non-negative. (Real drum stems look exactly like
+    # this: sharp hits separated by gaps.)
+    sr = 44100
+    y = np.zeros(sr, dtype=np.float32)
+    y[:1500] = 5.0 * np.random.default_rng(0).standard_normal(1500).astype(np.float32)
+    out = augment.apply_compression(y, sr, threshold_db=-20, ratio=4.0)
+    assert np.isfinite(out).all()
+
+
+def test_random_chain_output_is_always_finite():
+    sr = 44100
+    y = (2.5 * np.random.default_rng(1).standard_normal(sr)).astype(np.float32)
+    for s in range(20):
+        out, _ = augment.random_chain(y, sr, np.random.default_rng(s), use_codec=False)
+        assert np.isfinite(out).all(), f"seed {s} produced non-finite audio"
+
+
 def test_noise_lowers_snr_without_moving_onsets():
     sr = 44100
     y = _clicks(sr, [0.5, 1.2])
