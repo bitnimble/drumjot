@@ -102,6 +102,9 @@ import {
   NotePropertiesPresenterContext,
 } from './note_properties/note_properties_contexts';
 import { DebugPanel } from './provenance/debug_panel';
+import { useFileDrop } from './drag_drop/use_file_drop';
+import { DropOverlay } from './drag_drop/drop_overlay';
+import { DropConfirmModal } from './drag_drop/drop_confirm_modal';
 import { ExampleJot } from 'src/fakes/fakes';
 
 export { TranscribePresenter } from './transcribe/transcribe_presenter';
@@ -377,6 +380,12 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     // for an in-flight paste placement.
     useClipboardShortcuts(clipboardPresenter, editingStore, editingPresenter);
 
+    // Window-level file drag-and-drop. Handlers spread onto the app-shell
+    // container below; gated on OS file drags so internal mixer / layers
+    // DnD is untouched. A drop that would replace the open score opens the
+    // confirm dialog first.
+    const fileDrop = useFileDrop(jotEditorStore, jotEditorPresenter);
+
     const provenanceContextValue = provenance.provenanceContextValue;
 
     // Lyrics modal visibility lives on the store so any TS consumer can
@@ -481,7 +490,11 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
               <MergeLayersContext.Provider value={settings.mergeLayers}>
               <UniformWaveformsContext.Provider value={settings.uniformWaveforms}>
                 <FollowPlayheadContext.Provider value={followPlayheadContextValue}>
-                  <div className={styles.appContainer}>
+                  <div
+                    className={styles.appContainer}
+                    data-testid="app-container"
+                    {...fileDrop.dropHandlers}
+                  >
                     <div className={styles.mainColumn}>
                     <Toolbar
                       examples={jotEditorStore.examples}
@@ -494,9 +507,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                       onSaveJot={() => jotEditorPresenter.saveMutableFile()}
                       onLoadJot={(file) => jotEditorPresenter.loadJotFile(file)}
                       onLoadMidi={(file) => jotEditorPresenter.loadMidiFile(file)}
-                      onLoadParadb={(file) => jotEditorPresenter.loadParadbMap(file)}
+                      onLoadZip={(file) => fileDrop.openFiles([file])}
                       onScoreParadb={(file) => jotEditorPresenter.scoreParadbMap(file)}
-                      onLoadDebugBundle={(file) => jotEditorPresenter.loadDebugBundleFile(file)}
                       onLoadAudioTrack={(file) => jotEditorPresenter.loadAudioTrack(file)}
                       onLoadLyricsFile={(file) => jotEditorPresenter.loadLyricsFile(file)}
                       onOpenLyricsTextLoad={() => lyricsPresenter.setLyricsTextOpen(true)}
@@ -559,6 +571,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                         jotEditorPresenter={jotEditorPresenter}
                         jotEditorStore={jotEditorStore}
                         transcribe={transcribe}
+                        onOpenZip={(file) => fileDrop.openFiles([file])}
                       />
                     )}
                     <Minimap
@@ -595,6 +608,12 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                       state={audioWorkletState}
                       open={audioWorkletWarningOpen}
                       onClose={() => setAudioWorkletWarningOpen(false)}
+                    />
+                    <DropOverlay active={fileDrop.dragActive} />
+                    <DropConfirmModal
+                      plan={fileDrop.pendingPlan}
+                      onConfirm={fileDrop.confirmPending}
+                      onCancel={fileDrop.cancelPending}
                     />
                     <LoadingOverlay jotEditorStore={jotEditorStore} />
                     <ToastContainer />
@@ -1883,11 +1902,10 @@ const SelectionFrameBox = observer(({ ids }: { ids: ReadonlySet<string> }) => {
 
 /**
  * First-load welcome screen rendered when no jot is loaded. Surfaces the
- * primary entry points (.jot file, ParaDB map, recent transcriptions)
+ * primary entry points (.jot file, a `.zip` pack, recent transcriptions)
  * directly and lists the built-in example jots as one-click shortcuts;
- * other formats (MIDI, debug bundle, audio tracks, transcribe) stay in
- * the toolbar's File / Transcribe menus to avoid duplicating that whole
- * surface here.
+ * other formats (MIDI, audio tracks, transcribe) stay in the toolbar's
+ * File / Transcribe menus to avoid duplicating that whole surface here.
  */
 const EmptyState = observer(
   ({
@@ -1895,22 +1913,27 @@ const EmptyState = observer(
     jotEditorPresenter,
     jotEditorStore,
     transcribe,
+    onOpenZip,
   }: {
     transcribePresenter: TranscribePresenter;
     jotEditorPresenter: JotEditorPresenter;
     jotEditorStore: JotEditorStore;
     transcribe: TranscribeStore;
+    /** Load a `.zip` through the shared auto-detect flow (ParaDB map /
+     *  debug bundle / zipped `.jot`). No replace-confirm is possible here
+     *  since the empty state only renders with no score loaded. */
+    onOpenZip: (file: File) => void;
   }) => {
   const jotInputRef = React.useRef<HTMLInputElement>(null);
-  const paradbInputRef = React.useRef<HTMLInputElement>(null);
+  const zipInputRef = React.useRef<HTMLInputElement>(null);
   const handleJotFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) jotEditorPresenter.loadJotFile(file);
     e.target.value = '';
   };
-  const handleParadbFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleZipFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) jotEditorPresenter.loadParadbMap(file);
+    if (file) onOpenZip(file);
     e.target.value = '';
   };
   return (
@@ -1921,8 +1944,8 @@ const EmptyState = observer(
         </div>
         <h2 className={styles.emptyStateTitle}>Open a file to get started</h2>
         <p className={styles.emptyStateBody}>
-          Load a Drumjot <code>.jot</code>, a ParaDB map, or a recent transcription, or try one of
-          the examples below.
+          Load a Drumjot <code>.jot</code>, a <code>.zip</code> pack, or a recent transcription, or
+          try one of the examples below.
         </p>
         <div className={styles.emptyStateActions}>
           <button
@@ -1936,10 +1959,10 @@ const EmptyState = observer(
             <button
               type="button"
               className={styles.emptyStateSecondary}
-              onClick={() => paradbInputRef.current?.click()}
-              title="Load a ParaDB / Paradiddle map pack (.zip). The chart is converted to a score and its audio tracks are loaded automatically for play-along practice."
+              onClick={() => zipInputRef.current?.click()}
+              title="Load a .zip and auto-detect its type: a ParaDB / Paradiddle map pack, a transcriber debug bundle, or a zipped .jot. The matching loader runs automatically."
             >
-              Open ParaDB map
+              Open zip
             </button>
             <RecentTranscriptionsPicker
               variant="cta"
@@ -1981,11 +2004,12 @@ const EmptyState = observer(
           onChange={handleJotFileChange}
         />
         <input
-          ref={paradbInputRef}
+          ref={zipInputRef}
           type="file"
           accept=".zip,application/zip"
           className={styles.emptyStateFileInput}
-          onChange={handleParadbFileChange}
+          onChange={handleZipFileChange}
+          data-testid="empty-state-open-zip-input"
         />
       </div>
     </div>

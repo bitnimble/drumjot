@@ -92,9 +92,8 @@ export const Toolbar = observer(
     onSaveJot,
     onLoadJot,
     onLoadMidi,
-    onLoadParadb,
+    onLoadZip,
     onScoreParadb,
-    onLoadDebugBundle,
     onLoadAudioTrack,
     onLoadLyricsFile,
     onOpenLyricsTextLoad,
@@ -142,11 +141,13 @@ export const Toolbar = observer(
     onSaveJot: () => void;
     onLoadJot: (file: File) => void;
     onLoadMidi: (file: File) => void;
-    onLoadParadb: (file: File) => void;
+    /** Load a `.zip` and auto-detect its type (ParaDB map, transcriber
+     *  debug bundle, or a zipped `.jot`), routing through the same
+     *  drag-and-drop auto-load flow (with the replace-confirm gate). */
+    onLoadZip: (file: File) => void;
     /** Score a ParaDB map against its own audio (dev test harness for the
      *  corpus-filtering scorer); reports a quality number, doesn't load it. */
     onScoreParadb: (file: File) => void;
-    onLoadDebugBundle: (file: File) => void;
     onLoadAudioTrack: (file: File) => void;
     /** Load a synced-lyrics file (.lrc or .txt in LRC format) from disk.
      *  Pushes the parsed lines straight into the session lyrics store. */
@@ -211,9 +212,8 @@ export const Toolbar = observer(
     const fileInputRef = React.useRef<HTMLInputElement>(null);
     const jotInputRef = React.useRef<HTMLInputElement>(null);
     const midiInputRef = React.useRef<HTMLInputElement>(null);
-    const paradbInputRef = React.useRef<HTMLInputElement>(null);
+    const zipInputRef = React.useRef<HTMLInputElement>(null);
     const scoreParadbInputRef = React.useRef<HTMLInputElement>(null);
-    const debugBundleInputRef = React.useRef<HTMLInputElement>(null);
     const audioTrackInputRef = React.useRef<HTMLInputElement>(null);
     const lyricsInputRef = React.useRef<HTMLInputElement>(null);
     const uploading = transcribeStatus.phase === 'uploading';
@@ -237,21 +237,15 @@ export const Toolbar = observer(
       e.target.value = '';
     };
 
-    const handleParadbChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleZipChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
-      if (file) onLoadParadb(file);
+      if (file) onLoadZip(file);
       e.target.value = '';
     };
 
     const handleScoreParadbChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (file) onScoreParadb(file);
-      e.target.value = '';
-    };
-
-    const handleDebugBundleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) onLoadDebugBundle(file);
       e.target.value = '';
     };
 
@@ -364,12 +358,13 @@ export const Toolbar = observer(
                         type="button"
                         className={dropdownStyles.dropdownItem}
                         onClick={() => {
-                          paradbInputRef.current?.click();
+                          zipInputRef.current?.click();
                           closeAll();
                         }}
-                        title="Load a ParaDB / Paradiddle map pack (`.zip`). The chart is converted to a score and its audio tracks are loaded automatically for play-along practice. Runs entirely client-side."
+                        title="Load a `.zip` and auto-detect its type: a ParaDB / Paradiddle map pack, a transcriber debug bundle, or a zipped `.jot`. The matching loader runs automatically (you're asked to confirm before replacing the open score). Runs entirely client-side."
+                        data-testid="file-menu-load-zip"
                       >
-                        Load ParaDB map (.zip)
+                        Load zip
                       </button>
                       <button
                         type="button"
@@ -381,17 +376,6 @@ export const Toolbar = observer(
                         title="Score a ParaDB map pack (`.zip`) against its own audio: how faithfully the chart's onsets line up with the detected drum onsets (0-100, after a global offset/tempo align). A dev test harness for the corpus-quality scorer, reports a number as a toast (full breakdown in the console); does NOT load the chart. Requires the transcriber service."
                       >
                         Score ParaDB map (.zip)
-                      </button>
-                      <button
-                        type="button"
-                        className={dropdownStyles.dropdownItem}
-                        onClick={() => {
-                          debugBundleInputRef.current?.click();
-                          closeAll();
-                        }}
-                        title="Load a transcriber debug bundle (`.zip`), the same artifact `Transcribe audio` produces server-side. Restores the score, every per-stem audio track (MP3), and surfaces the captured logs + per-stage timings in the debug panel for inspection. Runs entirely client-side."
-                      >
-                        Load debug bundle (.zip)
                       </button>
                       <button
                         type="button"
@@ -703,11 +687,12 @@ export const Toolbar = observer(
           onChange={handleMidiFileChange}
         />
         <input
-          ref={paradbInputRef}
+          ref={zipInputRef}
           type="file"
           accept=".zip,application/zip"
           className={styles.hiddenInput}
-          onChange={handleParadbChange}
+          onChange={handleZipChange}
+          data-testid="load-zip-input"
         />
         <input
           ref={scoreParadbInputRef}
@@ -715,13 +700,6 @@ export const Toolbar = observer(
           accept=".zip,application/zip"
           className={styles.hiddenInput}
           onChange={handleScoreParadbChange}
-        />
-        <input
-          ref={debugBundleInputRef}
-          type="file"
-          accept=".zip,application/zip"
-          className={styles.hiddenInput}
-          onChange={handleDebugBundleChange}
         />
         <input
           ref={audioTrackInputRef}

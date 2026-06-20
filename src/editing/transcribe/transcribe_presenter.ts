@@ -312,7 +312,7 @@ export class TranscribePresenter {
    * cheap way to reopen a finished run.
    *
    * Errors land on the shared status pill, mirroring the explicit
-   * "Load debug bundle" file picker. Wrapped in `withLoading` so the
+   * "Load zip" debug-bundle file picker. Wrapped in `withLoading` so the
    * modal overlay reads as one continuous load even though the inner
    * `applyDebugBundle` may itself trigger nested audio-track loads.
    */

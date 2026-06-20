@@ -10,7 +10,7 @@ import { ProvenancePresenter } from './provenance_presenter';
  * Bottom-pinned drawer that surfaces a loaded transcriber debug bundle.
  *
  * Renders nothing until a debug bundle has been loaded (the
- * `Load > Load debug bundle (.zip)` action populates
+ * `Load > Load zip` action, which auto-detects the bundle, populates
  * `ProvenanceStore.lastDebugBundle`). When open, shows the per-stage
  * timings on the left and the captured log stream on the right; collapses
  * to a thin toggle bar so the user can hide it without forgetting the

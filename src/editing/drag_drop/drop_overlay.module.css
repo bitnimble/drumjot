@@ -1,0 +1,41 @@
+/* Full-window "drop to load" hint. Sits above the score/empty-state but
+   below the loading overlay and modals (both z-index:100) and toasts
+   (z-index:1000), so a load that starts on drop paints its spinner over
+   this. `pointer-events: none` keeps the drag/drop events flowing to the
+   app-shell container that owns the handlers. */
+
+.overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 95;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: var(--color-bg-overlay);
+}
+
+.card {
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 32px 48px;
+    border: 2px dashed var(--color-accent);
+    border-radius: var(--radius-lg);
+    background: var(--color-bg-base);
+    box-shadow: var(--shadow-lg);
+    color: var(--color-accent);
+}
+
+.label {
+    composes: heading from '../../typography.module.css';
+    color: var(--color-text-strong);
+}
+
+.hint {
+    composes: bodySm from '../../typography.module.css';
+    color: var(--color-text-muted-alt);
+}
