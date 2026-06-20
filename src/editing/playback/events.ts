@@ -17,7 +17,7 @@
 import { Instrument, Modifier } from 'src/schema/dsl/dsl';
 import type { StructuralPresenter } from 'src/editing/structure/structural_presenter';
 import type { StructNote } from 'src/editing/structure/structure_store';
-import { ACCENT_BOOST, DEFAULT_VELOCITY, GHOST_REDUCTION } from 'src/dynamics/dynamics';
+import { DEFAULT_VELOCITY } from 'src/dynamics/dynamics';
 import { defaultMidiNote } from 'src/midi/gm';
 import { beatToSecWithinBar, buildBarTempos } from 'src/schema/dsl/tempo';
 
@@ -37,10 +37,9 @@ export type PlaybackEvent = {
   layerId: string;
 };
 
-// Velocity defaults (DEFAULT_VELOCITY / ACCENT_BOOST / GHOST_REDUCTION /
-// VOLUME_TO_VELOCITY) come from the shared `src/dynamics.ts` so playback
-// loudness matches exactly what gets written to an exported `.mid` /
-// `.rlrr` file.
+// `DEFAULT_VELOCITY` comes from the shared `src/dynamics.ts` so playback
+// loudness for an unset note matches exactly what gets written to an
+// exported `.mid` / `.rlrr` file.
 
 // Flam = a grace stroke shortly before the main hit on the same drum.
 // Acoustic flams sit ~25-35 ms apart, but two SF2 layers that close on the
@@ -134,13 +133,7 @@ function resolveMidiNote(note: StructNote, instrument: Instrument): number | und
 }
 
 function resolveVelocity(note: StructNote): number {
-  if (typeof note.velocity === 'number') return clamp(Math.round(note.velocity));
-
-  let baseline = DEFAULT_VELOCITY;
-  if (note.modifiers.includes('a')) baseline += ACCENT_BOOST;
-  if (note.modifiers.includes('g')) baseline -= GHOST_REDUCTION;
-
-  return clamp(Math.round(baseline));
+  return clamp(Math.round(note.velocity ?? DEFAULT_VELOCITY));
 }
 
 function clamp(v: number): number {

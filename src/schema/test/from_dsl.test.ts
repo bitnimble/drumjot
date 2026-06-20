@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { bar, group, type Jot as DslJot, note } from 'src/schema/dsl/dsl';
 import { StructureStore } from 'src/editing/structure/structure_store';
 import { dslToMutable } from 'src/schema/dsl/from_dsl';
+import { ACCENT_VELOCITY, GHOST_VELOCITY } from 'src/dynamics/dynamics';
 
 function structureOf(jot: DslJot) {
   const { model } = dslToMutable(jot);
@@ -57,10 +58,22 @@ describe('dslToMutable', () => {
     const jot: DslJot = {
       title: '',
       globalMetadata: META,
-      layers: [{ bars: [bar(note('s', { modifiers: ['a'], sticking: 'r' }))] }],
+      layers: [{ bars: [bar(note('s', { modifiers: ['r'], sticking: 'r' }))] }],
     };
     const note0 = structureOf(jot).structure.layers[0].bars[0].tracks['s'].notes[0];
-    expect(note0.modifiers).toEqual(['a']);
+    expect(note0.modifiers).toEqual(['r']);
     expect(note0.sticking).toBe('r');
+  });
+
+  it('maps the :a / :g loudness markers to velocity, not stored modifiers', () => {
+    const jot: DslJot = {
+      title: '',
+      globalMetadata: META,
+      layers: [{ bars: [bar(note('s', { modifiers: ['a'] }), note('s', { modifiers: ['g'] }))] }],
+    };
+    const notes = structureOf(jot).structure.layers[0].bars[0].tracks['s'].notes;
+    expect(notes[0].modifiers).toEqual([]);
+    expect(notes[0].velocity).toBe(ACCENT_VELOCITY);
+    expect(notes[1].velocity).toBe(GHOST_VELOCITY);
   });
 });

@@ -28,7 +28,7 @@
  *       overrides `recordingMetadata.title`.
  */
 import { Instrument, Jot, Modifier } from 'src/schema/dsl/dsl';
-import { ACCENT_BOOST, DEFAULT_VELOCITY, GHOST_REDUCTION } from 'src/dynamics/dynamics';
+import { DEFAULT_VELOCITY } from 'src/dynamics/dynamics';
 import { buildStructural } from 'src/editing/jot_editor_store';
 import type { StructNote } from 'src/editing/structure/structure_store';
 import { beatToSecWithinBar, buildBarTempos, initialBpm, resolveBpm } from 'src/schema/dsl/tempo';
@@ -51,8 +51,6 @@ import {
 
 export type JotToRlrrOptions = {
   defaultVelocity?: number;
-  accentBoost?: number;
-  ghostReduction?: number;
   /** Override the kit; if omitted, prefer `globalMetadata.rlrr.instruments` then `DEFAULT_INSTRUMENTS`. */
   instruments?: RlrrInstrument[];
   authoringTool?: string;
@@ -61,13 +59,10 @@ export type JotToRlrrOptions = {
   audioFileData?: RlrrAudioFileData;
 };
 
-// Velocity defaults come from the shared `src/dynamics.ts` so an accent
-// plays back, exports to MIDI, and exports to RLRR at the same loudness.
-// (Previously `accentBoost` here was 24 while MIDI export used 36.)
-const DEFAULTS: Required<Pick<JotToRlrrOptions, 'defaultVelocity' | 'accentBoost' | 'ghostReduction' | 'authoringTool'>> = {
+// Loudness for a note with no explicit velocity; from the shared dynamics so
+// playback, MIDI export, and RLRR export agree.
+const DEFAULTS: Required<Pick<JotToRlrrOptions, 'defaultVelocity' | 'authoringTool'>> = {
   defaultVelocity: DEFAULT_VELOCITY,
-  accentBoost: ACCENT_BOOST,
-  ghostReduction: GHOST_REDUCTION,
   authoringTool: RLRR_AUTHORING_TOOL,
 };
 
@@ -222,14 +217,9 @@ function resolveInstrument(
 
 function resolveVelocity(
   note: StructNote,
-  opts: Required<Pick<JotToRlrrOptions, 'defaultVelocity' | 'accentBoost' | 'ghostReduction'>>
+  opts: Required<Pick<JotToRlrrOptions, 'defaultVelocity'>>
 ): number {
-  if (typeof note.velocity === 'number') return note.velocity;
-
-  let baseline = opts.defaultVelocity;
-  if (note.modifiers.includes('a')) baseline += opts.accentBoost;
-  if (note.modifiers.includes('g')) baseline -= opts.ghostReduction;
-  return baseline;
+  return typeof note.velocity === 'number' ? note.velocity : opts.defaultVelocity;
 }
 
 function resolveMidiNote(note: StructNote, instrument: RlrrInstrument): number | undefined {

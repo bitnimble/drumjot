@@ -21,10 +21,10 @@
  *       Otherwise we fall back to `instrumentMapping[lane].midi` and, for
  *       unknown lanes, to a heuristic in `defaultMidiNote`.
  *
- *  [B5] When no velocity is supplied we map `vol` buckets to GM-ish values
- *       and apply `:a` / `:g` adjustments. Volume transitions
- *       (`VolTransition`) are NOT interpolated; we use only the bucket's
- *       baseline (`vol.start` if present, else `vol.end`).
+ *  [B5] When no explicit `velocity` is supplied we use `DEFAULT_VELOCITY`.
+ *       Authored loudness (`pp`..`ff` and the `:a`/`:g` accent/ghost markers)
+ *       is converted to a numeric `velocity` at parse time (`from_dsl.ts`) and
+ *       never reaches here.
  *
  *  [B6] Roll / buzz (`~`) is rendered as a single note-on. We do not yet
  *       emit a tremolo or expand it into multiple strikes; doing so well
@@ -46,25 +46,19 @@ import { writeMidi, MidiEvent } from 'midi-file';
 import { Instrument, Jot, Modifier } from 'src/schema/dsl/dsl';
 import { buildStructural } from 'src/editing/jot_editor_store';
 import type { StructNote } from 'src/editing/structure/structure_store';
-import { ACCENT_BOOST, DEFAULT_VELOCITY, GHOST_REDUCTION } from 'src/dynamics/dynamics';
+import { DEFAULT_VELOCITY } from 'src/dynamics/dynamics';
 import { resolveBpm } from 'src/schema/dsl/tempo';
 import { defaultMidiNote } from './gm';
 
 export type ToMidiOptions = {
   drumChannel?: number;
   defaultVelocity?: number;
-  accentBoost?: number;
-  ghostReduction?: number;
 };
 
 const DEFAULTS: Required<ToMidiOptions> = {
   drumChannel: 10,
-  // Velocity defaults come from the shared `src/dynamics.ts`; see
-  // ACCENT_BOOST's note there for why an accent must clear `ff` (96) to
-  // round-trip through `from_midi`.
+  // Loudness for a note with no explicit velocity; from the shared dynamics.
   defaultVelocity: DEFAULT_VELOCITY,
-  accentBoost: ACCENT_BOOST,
-  ghostReduction: GHOST_REDUCTION,
 };
 
 /** [B2] */
@@ -317,13 +311,7 @@ function resolveMidiNote(note: StructNote, instrument: Instrument): number | und
 }
 
 function resolveVelocity(note: StructNote, opts: Required<ToMidiOptions>): number {
-  if (typeof note.velocity === 'number') return note.velocity;
-
-  let baseline = opts.defaultVelocity;
-  if (note.modifiers.includes('a')) baseline += opts.accentBoost;
-  if (note.modifiers.includes('g')) baseline -= opts.ghostReduction;
-
-  return baseline;
+  return typeof note.velocity === 'number' ? note.velocity : opts.defaultVelocity;
 }
 
 function clampVelocity(v: number): number {

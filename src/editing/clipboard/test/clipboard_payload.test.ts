@@ -11,7 +11,7 @@ const payload: ClipboardPayload = {
   copiedAt: 1000,
   notes: [
     { lane: 'k', relBeat: 0, duration: 0.25, modifiers: [] },
-    { lane: 's', relBeat: 1, duration: 0.25, modifiers: ['a'], sticking: 'r', vol: 'f' },
+    { lane: 's', relBeat: 1, duration: 0.25, modifiers: ['r'], sticking: 'r', velocity: 100 },
   ],
 };
 

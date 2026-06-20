@@ -29,9 +29,11 @@ import { createReactiveDoc, type ReactiveDoc } from './reactive_doc';
 
 // ---------- Leaf enums (mirror src/dsl/dsl.ts) ----------
 
+// NB: accent/ghost are NOT modifiers in the schema. They're loudness, stored in
+// `velocity`; the DSL `:a`/`:g` markers (still in the DSL `Modifier` type) are
+// converted to a velocity in `from_dsl.ts`, and the accent ring / ghost glyph
+// are derived from velocity at render time (see `bar_view.tsx`).
 export const MODIFIER = z.enum([
-  'a', // accent
-  'g', // ghost
   'c', // closed (hi-hat)
   'h', // half-open
   'o', // open
@@ -76,8 +78,8 @@ const elementBase = {
 };
 
 /** A single drum hit. Its home is a track (`trackId` → {@link TrackSchema},
- *  which carries the lane and, via `ordering`, the layer); dynamics via `vol` +
- *  modifiers. `lane` is also kept on the note (and is the sole home for
+ *  which carries the lane and, via `ordering`, the layer); loudness via the
+ *  numeric `velocity`. `lane` is also kept on the note (and is the sole home for
  *  layer-agnostic pattern-body template notes, which carry no `trackId`); read
  *  a note's lane via `laneForNote`. A placed note carries NO `layerId`, its
  *  layer follows its track across layer moves with no per-note rewrite. */
@@ -110,8 +112,8 @@ export const NoteElementSchema = record({
  * in the group's internal coordinate space; a **tuplet** is simply a group
  * whose children's natural span ≠ its `duration` (the ratio is the
  * scaling). Moving/stretching a group touches only its own `beat`/
- * `duration`, the children are untouched. Group-level `modifiers`/`roll`/
- * `vol` apply to all descendants. Annotated `RecordDescriptor` so the
+ * `duration`, the children are untouched. Group-level `modifiers`/`roll`
+ * apply to all descendants. Annotated `RecordDescriptor` so the
  * `lazy` self-reference type-checks.
  */
 export const GroupElementSchema = record({

@@ -14,13 +14,20 @@
 import type { Element as DslElement, Jot as DslJot, TimeSignature } from 'src/schema/dsl/dsl';
 import { elementWeight, sumWeights } from 'src/schema/dsl/element_metrics';
 import { initialBpm } from 'src/schema/dsl/tempo';
-import { VOLUME_TO_VELOCITY } from 'src/dynamics/dynamics';
+import { ACCENT_VELOCITY, GHOST_VELOCITY, VOLUME_TO_VELOCITY } from 'src/dynamics/dynamics';
 import type { Init } from '../descriptors';
 import { createMutableJot, JotSchema } from '../schema';
 import { TrackBuilder } from '../ordering';
 import { compareLanesByDefaultMixerOrder } from 'src/instruments/mixer_order';
 
 type Obj = Record<string, unknown>;
+
+/** Drop the `:a`/`:g` loudness markers (not schema modifiers); `undefined` when
+ *  nothing's left, matching the group schema's optional `modifiers`. */
+function groupModifiers(mods: readonly string[] | undefined): string[] | undefined {
+  const kept = (mods ?? []).filter((m) => m !== 'a' && m !== 'g');
+  return kept.length > 0 ? kept : undefined;
+}
 
 function barBeats(time: TimeSignature): number {
   return (time.count * 4) / time.unit;
@@ -77,6 +84,17 @@ function convertElement(
       // notes (no layer context) keep only `lane`.
       const trackId =
         ctx.layerId !== undefined && ctx.tracks ? ctx.tracks.track(ctx.layerId, el.lane) : undefined;
+      // Accent/ghost aren't schema modifiers: they're loudness. An explicit MIDI
+      // velocity wins, else `:a`/`:g` map to a representative velocity, else a
+      // `pp`..`ff` marker is converted. The `:a`/`:g` markers are dropped from
+      // the stored modifiers (the accent ring / ghost glyph derive from
+      // velocity at render time).
+      const dslMods = el.modifiers ?? [];
+      const accentGhostVel = dslMods.includes('a')
+        ? ACCENT_VELOCITY
+        : dslMods.includes('g')
+          ? GHOST_VELOCITY
+          : undefined;
       return [
         [
           id,
@@ -88,15 +106,14 @@ function convertElement(
             duration,
             trackId,
             lane: el.lane,
-            modifiers: el.modifiers ?? [],
+            modifiers: dslMods.filter((m) => m !== 'a' && m !== 'g'),
             sticking: el.sticking,
             roll: el.roll ? true : undefined,
             offsetMs: el.offset,
             midiNote: midiMeta(el)?.note,
-            // Loudness lives in `velocity`; an explicit MIDI velocity wins,
-            // else an authored `pp`..`ff` marker is converted once here.
             velocity:
               midiMeta(el)?.velocity ??
+              accentGhostVel ??
               (typeof el.metadata?.vol === 'string'
                 ? VOLUME_TO_VELOCITY[el.metadata.vol]
                 : undefined),
@@ -120,7 +137,8 @@ function convertElement(
             beat,
             duration,
             children: convertChildren(el.elements, ctx),
-            modifiers: el.modifiers && el.modifiers.length > 0 ? el.modifiers : undefined,
+            // Drop the accent/ghost loudness markers (not schema modifiers).
+            modifiers: groupModifiers(el.modifiers),
             roll: el.roll ? true : undefined,
           }),
         ],

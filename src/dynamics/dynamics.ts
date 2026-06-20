@@ -1,40 +1,20 @@
 /**
- * Shared note-dynamics constants: the single source of truth for how an
- * authored volume marker (`pp`..`ff`) maps to a MIDI velocity, and how a
- * `:a` accent / `:g` ghost adjust a note's baseline velocity (1-127).
+ * Shared note-dynamics constants. A note's loudness lives entirely in its
+ * numeric `velocity` field (1-127); there is no stored accent/ghost modifier.
  *
- * A note's loudness lives in its numeric `velocity` field. Authored DSL
- * dynamics (`pp`..`ff`) are converted to a velocity once, at parse time, via
- * {@link VOLUME_TO_VELOCITY} (see `from_dsl.ts`). The accent/ghost adjustments
- * here only apply at export when a note has NO explicit velocity, and are
- * consumed by playback (`playback/events.ts`), MIDI export (`midi/to_midi.ts`),
- * MIDI import (`midi/from_midi.ts`), and RLRR export (`schema/rlrr/writer.ts`).
- *
- * Keeping these in one place is load-bearing for round-trip fidelity: an
- * accent must play back, export to MIDI, and export to RLRR at the *same*
- * loudness. Previously each consumer redeclared its own copy and the accent
- * boost had drifted (playback/RLRR used 24, MIDI used 36).
+ * Authored DSL loudness is just sugar over `velocity`, converted once at parse
+ * time (`from_dsl.ts`): a `pp`..`ff` marker maps via {@link VOLUME_TO_VELOCITY},
+ * and the `:a` / `:g` accent/ghost markers map to {@link ACCENT_VELOCITY} /
+ * {@link GHOST_VELOCITY}. Accent/ghost NOTATION (the ring / dimmed glyph) is
+ * then derived from velocity at render time via {@link ACCENT_THRESHOLD} /
+ * {@link GHOST_THRESHOLD} (see `bar_view.tsx`); the same thresholds let
+ * `from_midi` / the RLRR parser tag loud/soft imported hits with the `:a`/`:g`
+ * sugar so they survive into the schema as the right velocity.
  */
 import { Volume } from 'src/schema/dsl/dsl';
 
-/** Velocity for a note with no explicit volume marker. */
+/** Velocity for a note with no explicit loudness. */
 export const DEFAULT_VELOCITY = 80;
-
-/**
- * Velocity added to a note's baseline for an `:a` accent.
- *
- * Must push an accent above the loudest non-accent volume (`ff` = 96) so
- * the MIDI round-trip can tell them apart: `from_midi` tags a velocity
- * `>= ACCENT_THRESHOLD` (100) as `:a`. The worst case is an explicit
- * `mf:a` (baseline 64): 64 + 36 = 100 lands exactly on the threshold,
- * while a smaller boost (e.g. the old 24 -> 88) would sit *below* `ff`
- * (96) and be unrecoverable on import. 36 is therefore the smallest boost
- * that keeps every accent round-trippable.
- */
-export const ACCENT_BOOST = 36;
-
-/** Velocity subtracted from a note's baseline for a `:g` ghost note. */
-export const GHOST_REDUCTION = 32;
 
 /**
  * Authored volume marker -> MIDI velocity, applied once at parse time
@@ -51,10 +31,18 @@ export const VOLUME_TO_VELOCITY: Record<Volume, number> = {
   ff: 127,
 };
 
-/** Velocity at and above which `from_midi` decorates a note with `:a`.
- *  Paired with {@link ACCENT_BOOST} (see its note) so the export boost
- *  and the import threshold can't drift apart. */
+/** Velocity a bare `:a` accent marker maps to (kept clear of
+ *  {@link ACCENT_THRESHOLD} so it renders as accented). */
+export const ACCENT_VELOCITY = 112;
+
+/** Velocity a bare `:g` ghost marker maps to (kept below
+ *  {@link GHOST_THRESHOLD} so it renders as a ghost note). */
+export const GHOST_VELOCITY = 28;
+
+/** Velocity at and above which a note renders with the accent ring, and at
+ *  which `from_midi` / the RLRR parser tag an imported hit with `:a`. */
 export const ACCENT_THRESHOLD = 100;
 
-/** Velocity below which `from_midi` decorates a note with `:g`. */
+/** Velocity below which a note renders dimmed as a ghost, and at which
+ *  `from_midi` / the RLRR parser tag an imported hit with `:g`. */
 export const GHOST_THRESHOLD = 40;

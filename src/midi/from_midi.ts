@@ -103,8 +103,9 @@ export type FromMidiOptions = {
 const DEFAULTS: Required<FromMidiOptions> = {
   drumChannel: 10,
   gridDivision: 48,
-  // Paired with ACCENT_BOOST / GHOST_REDUCTION in `src/dynamics.ts` so the
-  // export boost and this import threshold can't drift apart.
+  // Velocity at/below which an imported hit is tagged with the `:a`/`:g`
+  // loudness marker; `from_dsl` converts that back to a velocity, and the same
+  // thresholds drive the accent/ghost notation at render time (`bar_view`).
   accentThreshold: ACCENT_THRESHOLD,
   ghostThreshold: GHOST_THRESHOLD,
   offsetToleranceMs: 5,

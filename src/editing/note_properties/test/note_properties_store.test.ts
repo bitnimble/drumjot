@@ -48,7 +48,13 @@ describe('NotePropertiesStore aggregation', () => {
     expect(store.beat).toBe(2);
     expect(store.volumeUi).toBe(6); // DEFAULT_VELOCITY 80 -> step 6
     expect(store.roll).toBe(false);
-    expect(store.noteIdLabel).toBe(lane(editor, 's')[0].id);
+    expect(store.noteIdLabel).toBe(`id: ${lane(editor, 's')[0].id}`);
+  });
+
+  it('summarises the on articulations, Roll first', () => {
+    const { editor, selection, store } = setup('| s~:r . . . |');
+    select(selection, lane(editor, 's')[0]);
+    expect(store.articulationSummary).toBe('Roll, Rimshot');
   });
 
   it('converts an authored dynamic to the volume scale + label', () => {
@@ -86,6 +92,6 @@ describe('NotePropertiesStore aggregation', () => {
     select(selection, lane(editor, 'h')[0], lane(editor, 's')[0]);
     const byMod = new Map(store.modifierRows.map((r) => [r.mod, r.enabled]));
     expect(byMod.get('o')).toBe(false); // open invalid for snare -> disabled for the pair
-    expect(byMod.get('a')).toBe(true); // accent valid for both
+    expect(byMod.get('m')).toBe(true); // mute valid for both
   });
 });

@@ -42,7 +42,7 @@ test('with nothing selected the panel shows the empty hint', async ({ page }) =>
 test('selecting a note shows its id, lane, and bar/beat', async ({ page }) => {
   const id = (await laneNote(page, 's').getAttribute('data-note-id'))!;
   await laneNote(page, 's').click();
-  await expect(page.getByTestId('note-properties-id')).toHaveText(id);
+  await expect(page.getByTestId('note-properties-id')).toHaveText(`id: ${id}`);
   await expect(page.getByTestId('np-lane')).toHaveValue('s');
   await expect(page.getByTestId('np-barbeat-bar')).toHaveValue('1');
   await expect(page.getByTestId('np-barbeat-beat')).toHaveValue('3'); // snare on beat 3
@@ -65,22 +65,29 @@ test('stepping the volume changes the value', async ({ page }) => {
   await expect(input).toHaveValue(String(before + 1));
 });
 
-test('toggling a modifier checks it', async ({ page }) => {
+test('the articulation dropdown summarises selected options and toggles them', async ({ page }) => {
   await laneNote(page, 's').click();
-  const accent = page.getByTestId('np-modifier-a');
-  await expect(accent).not.toBeChecked();
-  await accent.click();
-  await expect(accent).toBeChecked();
+  // Collapsed: nothing on yet.
+  await expect(page.getByTestId('np-articulation-summary')).toHaveText('None');
+  await page.getByTitle('Articulation').click();
+  const rimshot = page.getByTestId('np-modifier-r');
+  await expect(rimshot).not.toBeChecked();
+  await rimshot.click();
+  await expect(rimshot).toBeChecked();
+  // The collapsed summary now lists it.
+  await expect(page.getByTestId('np-articulation-summary')).toHaveText('Rimshot');
 });
 
 test('modifiers irrelevant to the lane are disabled', async ({ page }) => {
   await laneNote(page, 'h').click(); // hi-hat: open valid, rimshot not
+  await page.getByTitle('Articulation').click();
   await expect(page.getByTestId('np-modifier-o')).toBeEnabled();
   await expect(page.getByTestId('np-modifier-r')).toBeDisabled();
 });
 
 test('enabling Roll disables the modifiers it conflicts with', async ({ page }) => {
   await laneNote(page, 's').click();
+  await page.getByTitle('Articulation').click();
   await expect(page.getByTestId('np-modifier-fl')).toBeEnabled();
   await page.getByTestId('np-roll').click();
   await expect(page.getByTestId('np-roll')).toBeChecked();

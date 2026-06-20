@@ -11,6 +11,7 @@ import type {
 } from 'src/editing/structure/structure_store';
 import { ViewConfig } from 'src/editing/viewport/view_config';
 import { msOffsetToBeats } from 'src/schema/dsl/tempo';
+import { ACCENT_THRESHOLD, DEFAULT_VELOCITY, GHOST_THRESHOLD } from 'src/dynamics/dynamics';
 import { BarTimingsContext } from '../jot_editor_contexts';
 import { SelectionContext } from 'src/editing/selection/selection';
 import { SelectionPresenterContext } from 'src/editing/selection/selection_presenter';
@@ -499,8 +500,11 @@ const NoteView = observer(
     instrument: Instrument;
     offGrid: boolean;
   }) => {
-    const isAccent = note.modifiers.includes('a');
-    const isGhost = note.modifiers.includes('g');
+    // Accent ring / ghost dimming are loudness notation, derived from the
+    // note's velocity (there is no stored accent/ghost modifier).
+    const velocity = note.velocity ?? DEFAULT_VELOCITY;
+    const isAccent = velocity >= ACCENT_THRESHOLD;
+    const isGhost = velocity < GHOST_THRESHOLD;
     const isFlam = note.modifiers.includes('fl');
     const isDrag = note.modifiers.includes('dr');
     const isCross = note.modifiers.includes('x');
@@ -710,6 +714,10 @@ function pickBadge(note: StructNote): string | undefined {
 function describeNote(note: StructNote, instrument: Instrument): string {
   const name = instrument.name ?? `Lane ${note.lane}`;
   const qualifiers: string[] = [];
+  // Accent/ghost are velocity-derived loudness, not modifiers.
+  const velocity = note.velocity ?? DEFAULT_VELOCITY;
+  if (velocity >= ACCENT_THRESHOLD) qualifiers.push('accented');
+  else if (velocity < GHOST_THRESHOLD) qualifiers.push('ghost');
   for (const mod of note.modifiers) {
     qualifiers.push(MODIFIER_LABELS[mod as Modifier] ?? mod);
   }
@@ -719,8 +727,6 @@ function describeNote(note: StructNote, instrument: Instrument): string {
 }
 
 const MODIFIER_LABELS: Partial<Record<Modifier, string>> = {
-  a: 'accented',
-  g: 'ghost',
   c: 'closed',
   h: 'half-open',
   o: 'open',

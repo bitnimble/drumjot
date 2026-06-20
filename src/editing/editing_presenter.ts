@@ -589,7 +589,6 @@ export class EditingPresenter implements Resettable {
       modifiers: [...r.el.modifiers],
       ...(r.el.sticking !== undefined ? { sticking: r.el.sticking } : {}),
       ...(r.el.roll !== undefined ? { roll: r.el.roll } : {}),
-      ...(r.el.vol !== undefined ? { vol: r.el.vol } : {}),
       ...(r.el.offsetMs !== undefined ? { offsetMs: r.el.offsetMs } : {}),
       ...(r.el.velocity !== undefined ? { velocity: r.el.velocity } : {}),
       ...(r.el.midiNote !== undefined ? { midiNote: r.el.midiNote } : {}),
@@ -720,7 +719,6 @@ export class EditingPresenter implements Resettable {
           modifiers: [...n.modifiers],
           ...(n.sticking !== undefined ? { sticking: n.sticking } : {}),
           ...(n.roll !== undefined ? { roll: n.roll } : {}),
-          ...(n.vol !== undefined ? { vol: n.vol } : {}),
           ...(n.offsetMs !== undefined ? { offsetMs: n.offsetMs } : {}),
           ...(n.velocity !== undefined ? { velocity: n.velocity } : {}),
           ...(n.midiNote !== undefined ? { midiNote: n.midiNote } : {}),
@@ -795,7 +793,6 @@ function childNoteOf(el: NoteElement, beat: number): NoteElement {
   if (el.velocity !== undefined) out.velocity = el.velocity;
   if (el.midiNote !== undefined) out.midiNote = el.midiNote;
   if (el.midiTick !== undefined) out.midiTick = el.midiTick;
-  if (el.vol !== undefined) out.vol = el.vol;
   return out as unknown as NoteElement;
 }
 

@@ -5,6 +5,8 @@
 .group {
     display: inline-flex;
     align-items: stretch;
+    box-sizing: border-box;
+    height: var(--control-height);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
     background: var(--color-bg-base);

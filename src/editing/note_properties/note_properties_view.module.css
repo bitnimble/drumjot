@@ -20,6 +20,14 @@
     gap: 5px;
 }
 
+/* Two fields sharing a line (Bar/Beat + Micro timing). Labels align at the
+   top; controls sit below. */
+.row {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+}
+
 .label {
     composes: labelSm from '../../typography.module.css';
     color: var(--color-text-faint-strong);
@@ -61,5 +69,55 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 6px 12px;
-    margin-top: 2px;
+    margin-top: 8px;
+}
+
+/* Articulation control: a select-styled trigger that opens a floating panel
+   holding the Roll checkbox + the modifier grid. */
+.articulationTrigger {
+    composes: reset from '../../ui/button/button.module.css';
+    composes: bodyMd from '../../typography.module.css';
+    box-sizing: border-box;
+    width: 100%;
+    min-height: var(--control-height);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-base);
+    color: var(--color-text-strong);
+    cursor: pointer;
+    text-align: left;
+}
+
+.articulationTrigger:hover {
+    border-color: var(--color-border-strong);
+}
+
+.articulationTrigger:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
+.articulationSummary {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.placeholder {
+    color: var(--color-text-faint);
+}
+
+.articulationChevron {
+    flex: 0 0 auto;
+    color: var(--color-text-muted-alt);
+}
+
+.articulationPanel {
+    width: 240px;
+    padding: 10px 12px;
 }

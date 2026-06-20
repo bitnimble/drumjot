@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { runInAction } from 'mobx';
-import type { Limb, Modifier, Sticking } from 'src/schema/dsl/dsl';
+import type { Limb, Sticking } from 'src/schema/dsl/dsl';
 import type { DrumInstrumentKind } from 'src/instruments/instruments';
 import { idMap, type Infer, record } from 'src/schema/descriptors';
 import { createReactiveDoc } from 'src/schema/reactive_doc';
@@ -10,6 +10,7 @@ import {
   type GroupElement,
   type Instrument,
   JotSchema,
+  type Modifier,
   type NoteElement,
   NoteElementSchema,
 } from 'src/schema/schema';
@@ -82,14 +83,14 @@ describe('NoteElementSchema round-trips through a reactive doc', () => {
         beat: 1.5,
         duration: 0.5,
         lane: 'h',
-        modifiers: ['a', 'o'],
+        modifiers: ['c', 'o'],
         sticking: 'r',
       });
     });
     const n = model.els.get('n1')!;
     expect(n.beat).toBe(1.5);
     expect(n.lane).toBe('h');
-    expect(n.modifiers).toEqual(['a', 'o']);
+    expect(n.modifiers).toEqual(['c', 'o']);
     expect(n.sticking).toBe('r');
     expect(n.roll).toBeUndefined();
   });
@@ -106,7 +107,7 @@ describe('createMutableJot', () => {
       ],
       elements: {
         n1: { kind: 'note', id: 'n1', barId: 'b1', beat: 0, duration: 1, lane: 'k', modifiers: [] },
-        n2: { kind: 'note', id: 'n2', barId: 'b1', beat: 2, duration: 1, lane: 's', modifiers: ['a'] },
+        n2: { kind: 'note', id: 'n2', barId: 'b1', beat: 2, duration: 1, lane: 's', modifiers: ['r'] },
       },
       instruments: { k: { kind: 'kick', name: 'Kick' }, s: { kind: 'snare' } },
     });
@@ -116,7 +117,7 @@ describe('createMutableJot', () => {
     expect(model.bars.length).toBe(2);
     expect(model.bars.at(1)!.tempoBpm).toBe(180);
     expect(model.elements.size).toBe(2);
-    expect((model.elements.get('n2') as NoteElement).modifiers).toEqual(['a']);
+    expect((model.elements.get('n2') as NoteElement).modifiers).toEqual(['r']);
     expect(model.instruments.get('k')!.name).toBe('Kick');
   });
 

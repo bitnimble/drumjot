@@ -7,9 +7,15 @@
 .wrap {
     display: inline-grid;
     grid-template-columns: 48px 1px 48px auto;
-    grid-template-rows: auto auto;
+    /* Row 2 is the field itself, pinned to the shared control height. */
+    grid-template-rows: auto var(--control-height);
     row-gap: 3px;
-    align-items: center;
+    /* A definite width + start alignment so a flex-column parent doesn't
+       stretch this inline-grid to full width (which would also collapse the
+       field's height to a line). Row-2 items stretch to fill the field box. */
+    width: max-content;
+    align-self: start;
+    align-items: stretch;
 }
 
 .wrap[data-disabled='true'] {
@@ -81,8 +87,10 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    /* Two buttons split the field height evenly. */
+    flex: 1 1 0;
+    min-height: 0;
     width: 20px;
-    height: 13px;
     padding: 0;
     border: 0;
     background: transparent;

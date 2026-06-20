@@ -32,7 +32,6 @@ export type ClipboardNote = {
   modifiers: readonly string[];
   sticking?: string;
   roll?: boolean;
-  vol?: string;
   offsetMs?: number;
   velocity?: number;
   midiNote?: number;
@@ -83,7 +82,6 @@ export function deserializeClipboard(text: string | null | undefined): Clipboard
       modifiers: Array.isArray(m.modifiers) ? m.modifiers.filter((x): x is string => typeof x === 'string') : [],
       ...(typeof m.sticking === 'string' ? { sticking: m.sticking } : {}),
       ...(typeof m.roll === 'boolean' ? { roll: m.roll } : {}),
-      ...(typeof m.vol === 'string' ? { vol: m.vol } : {}),
       ...(typeof m.offsetMs === 'number' ? { offsetMs: m.offsetMs } : {}),
       ...(typeof m.velocity === 'number' ? { velocity: m.velocity } : {}),
       ...(typeof m.midiNote === 'number' ? { midiNote: m.midiNote } : {}),

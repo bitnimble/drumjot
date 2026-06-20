@@ -7,23 +7,19 @@ import { DEFAULT_VELOCITY } from 'src/dynamics/dynamics';
  * Pure data shared by the store, presenter, and view.
  */
 
-/** Roll lives in its own checkbox above the modifier list. The modifiers it's
- *  incompatible with (other multi-stroke ornaments + the dynamics modifiers)
- *  are disabled while Roll is on. */
+/** Roll lives in its own checkbox above the modifier list. The other
+ *  multi-stroke ornaments it's incompatible with are disabled while Roll is
+ *  on. (Accent/ghost aren't modifiers, they're loudness, set via Volume.) */
 export const ROLL_DISABLED_MODIFIERS: ReadonlySet<Modifier> = new Set<Modifier>([
   'fl',
   'dr',
   'rf',
   'z',
-  'a',
-  'g',
 ]);
 
-/** The modifier checkboxes, in display order, with human labels. Accent/ghost
- *  lead since they're the most common; the rest follow the enum order. */
+/** The modifier checkboxes, in display order, with human labels (the enum
+ *  order). Loudness, including accent/ghost feel; is the Volume control. */
 export const MODIFIER_FIELDS: ReadonlyArray<{ mod: Modifier; label: string }> = [
-  { mod: 'a', label: 'Accent' },
-  { mod: 'g', label: 'Ghost' },
   { mod: 'c', label: 'Closed' },
   { mod: 'h', label: 'Half-open' },
   { mod: 'o', label: 'Open' },

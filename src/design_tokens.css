@@ -142,6 +142,12 @@
     --radius-circle: 50%;
     --radius-pill: 999px;
 
+    /* ─── Controls ────────────────────────────────────────────────────
+       Unified height for single-line form controls (text inputs, selects,
+       numeric steppers, the bar/beat field, segmented radios) so they line
+       up when placed side by side. */
+    --control-height: 28px;
+
     /* ─── Shadows ─────────────────────────────────────────────────── */
     --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
     --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.12);

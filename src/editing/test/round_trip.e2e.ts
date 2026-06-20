@@ -58,7 +58,7 @@ const GRID_FN = `() => {
             roll: !!n.roll,
             mods: [...(n.modifiers ?? [])].sort(),
             stick: n.sticking ?? null,
-            vol: n.vol ?? (n.source && n.source.metadata && n.source.metadata.vol) ?? null,
+            velocity: n.velocity ?? null,
           })),
         ])
       ),

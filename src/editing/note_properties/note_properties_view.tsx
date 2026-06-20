@@ -1,6 +1,9 @@
+import classNames from 'classnames';
+import { ChevronDown } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { Checkbox } from 'src/ui/checkbox/checkbox';
+import { DropdownButton } from 'src/ui/dropdown/dropdown';
 import { RadioGroup } from 'src/ui/radio_group/radio_group';
 import { Stepper } from 'src/ui/stepper/stepper';
 import { BarBeatField } from 'src/ui/bar_beat_field/bar_beat_field';
@@ -62,18 +65,6 @@ export const NotePropertiesView = observer(function NotePropertiesView() {
       </div>
 
       <div className={styles.field}>
-        <BarBeatField
-          bar={num(store.bar)}
-          beat={num(store.beat)}
-          onStepBar={(d) => presenter.stepBar(d)}
-          onStepBeat={(d) => presenter.stepBeat(d)}
-          onSetBar={(v) => presenter.setBar(v)}
-          onSetBeat={(v) => presenter.setBeat(v)}
-          testId="np-barbeat"
-        />
-      </div>
-
-      <div className={styles.field}>
         <span className={styles.label}>Volume</span>
         <div className={styles.inline}>
           <Stepper
@@ -89,49 +80,87 @@ export const NotePropertiesView = observer(function NotePropertiesView() {
         </div>
       </div>
 
-      <div className={styles.field}>
-        <span className={styles.label}>Micro timing</span>
-        <div className={styles.inline}>
-          <Stepper
-            value={num(store.microTiming)}
-            onStep={(d) => presenter.stepMicroTiming(d)}
-            onSet={(v) => presenter.setMicroTiming(v)}
-            ariaLabel="Micro timing"
-            testId="np-microtiming"
+      <div className={styles.row}>
+        <div className={styles.field}>
+          <BarBeatField
+            bar={num(store.bar)}
+            beat={num(store.beat)}
+            onStepBar={(d) => presenter.stepBar(d)}
+            onStepBeat={(d) => presenter.stepBeat(d)}
+            onSetBar={(v) => presenter.setBar(v)}
+            onSetBeat={(v) => presenter.setBeat(v)}
+            testId="np-barbeat"
           />
-          <span className={styles.unit}>ms</span>
+        </div>
+
+        <div className={styles.field}>
+          <span className={styles.label}>Micro timing</span>
+          <div className={styles.inline}>
+            <Stepper
+              value={num(store.microTiming)}
+              onStep={(d) => presenter.stepMicroTiming(d)}
+              onSet={(v) => presenter.setMicroTiming(v)}
+              ariaLabel="Micro timing"
+              testId="np-microtiming"
+            />
+            <span className={styles.unit}>ms</span>
+          </div>
         </div>
       </div>
 
       <div className={styles.field}>
         <span className={styles.label}>Articulation</span>
-        <label className={styles.checkRow}>
-          <Checkbox
-            checked={store.roll === true}
-            indeterminate={store.roll === MIXED}
-            onChange={() => presenter.toggleRoll()}
-            data-testid="np-roll"
-          />
-          <span>Roll</span>
-        </label>
-        <div className={styles.modifierGrid}>
-          {store.modifierRows.map((row) => (
-            <label
-              key={row.mod}
-              className={styles.checkRow}
-              data-disabled={!row.enabled || undefined}
-            >
-              <Checkbox
-                checked={row.state === true}
-                indeterminate={row.state === MIXED}
-                disabled={!row.enabled}
-                onChange={() => presenter.toggleModifier(row.mod)}
-                data-testid={`np-modifier-${row.mod}`}
-              />
-              <span>{row.label}</span>
-            </label>
-          ))}
-        </div>
+        <DropdownButton
+          title="Articulation"
+          className={styles.articulationTrigger}
+          panelClassName={styles.articulationPanel}
+          label={
+            <>
+              <span
+                className={classNames(
+                  styles.articulationSummary,
+                  store.articulationSummary === '' && styles.placeholder
+                )}
+                data-testid="np-articulation-summary"
+              >
+                {store.articulationSummary || 'None'}
+              </span>
+              <ChevronDown size={14} aria-hidden="true" className={styles.articulationChevron} />
+            </>
+          }
+        >
+          {() => (
+            <>
+              <label className={styles.checkRow}>
+                <Checkbox
+                  checked={store.roll === true}
+                  indeterminate={store.roll === MIXED}
+                  onChange={() => presenter.toggleRoll()}
+                  data-testid="np-roll"
+                />
+                <span>Roll</span>
+              </label>
+              <div className={styles.modifierGrid}>
+                {store.modifierRows.map((row) => (
+                  <label
+                    key={row.mod}
+                    className={styles.checkRow}
+                    data-disabled={!row.enabled || undefined}
+                  >
+                    <Checkbox
+                      checked={row.state === true}
+                      indeterminate={row.state === MIXED}
+                      disabled={!row.enabled}
+                      onChange={() => presenter.toggleModifier(row.mod)}
+                      data-testid={`np-modifier-${row.mod}`}
+                    />
+                    <span>{row.label}</span>
+                  </label>
+                ))}
+              </div>
+            </>
+          )}
+        </DropdownButton>
       </div>
 
       <div className={styles.field}>

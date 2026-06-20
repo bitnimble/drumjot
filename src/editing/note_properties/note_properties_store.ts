@@ -55,6 +55,7 @@ export class NotePropertiesStore {
       rollActive: computed,
       stickingValues: computed,
       modifierRows: computed,
+      articulationSummary: computed,
     });
   }
 
@@ -80,7 +81,7 @@ export class NotePropertiesStore {
   get noteIdLabel(): string | undefined {
     const els = this.selectedElements;
     if (els.length === 0) return undefined;
-    if (els.length === 1) return els[0].id;
+    if (els.length === 1) return `id: ${els[0].id}`;
     return '(multiple notes selected)';
   }
 
@@ -131,8 +132,8 @@ export class NotePropertiesStore {
     return this.common(this.selectedElements.map((e) => e.offsetMs ?? 0));
   }
 
-  /** Roll: all on / all off / {@link MIXED}. */
-  get roll(): TristateValue | undefined {
+  /** Roll: all on / all off / {@link MIXED} (off when nothing is selected). */
+  get roll(): TristateValue {
     return this.tristate(this.selectedElements.map((e) => e.roll === true));
   }
 
@@ -165,6 +166,16 @@ export class NotePropertiesStore {
         enabled,
       };
     });
+  }
+
+  /** Comma-joined labels of the articulations that are ON across the whole
+   *  selection (Roll first, then modifiers in display order). Mixed/off ones
+   *  are omitted. Drives the collapsed articulation dropdown's text. */
+  get articulationSummary(): string {
+    const parts: string[] = [];
+    if (this.roll === true) parts.push('Roll');
+    for (const row of this.modifierRows) if (row.state === true) parts.push(row.label);
+    return parts.join(', ');
   }
 
   // ---------- internals ----------
