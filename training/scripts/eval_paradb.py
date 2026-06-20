@@ -181,17 +181,30 @@ def _global_offset(gt, env, env_fps, floor, window_s, search_s):
     return off, s0
 
 
+def _requested_lanes(args):
+    """The lanes the oracle report is restricted to (None = all checkpoint lanes)."""
+    return {ln.strip() for ln in args.lanes.split(",")} if args.lanes else None
+
+
 def _accumulate_gap(gap_records, model, meta, encoder, gt_scored, drum_stem, pieces, args, predictor):
     """Read each stem's raw activation curves and append per-lane oracle-gap
     records (current vs oracle, plus predicted when a predictor is loaded). A
     separate MERT pass from the scoring path -- this mode is a deliberate
     analysis, not the deployed hot path."""
+    req = _requested_lanes(args)
     # (stem audio, lanes that legitimately belong to it) -- mirrors how `est` is
-    # built so the gap is measured on the same isolated-stem inputs.
+    # built so the gap is measured on the same isolated-stem inputs. With --lanes,
+    # drop stems carrying no requested lane so the model never runs on them.
     if args.full_drum:
-        targets_ = [(drum_stem, None)]
+        targets_ = [(drum_stem, req)]
     else:
-        targets_ = [(stem_path, set(STEM_TO_LANES.get(pitch, ()))) for pitch, stem_path in pieces.items()]
+        targets_ = []
+        for pitch, stem_path in pieces.items():
+            restrict = set(STEM_TO_LANES.get(pitch, ()))
+            if req is not None:
+                restrict &= req
+            if restrict:
+                targets_.append((stem_path, restrict))
     for stem_path, restrict in targets_:
         probs, fps = inference.stitched_probs(
             stem_path, model, meta, encoder, args.max_seconds, args.window_seconds
@@ -236,6 +249,10 @@ def main():
     ap.add_argument("--param-predictor", default=None,
                     help="optional ParamRegressor joblib artifact; when set, the oracle report adds a "
                     "'predicted' column scoring the predictor's per-song params (label-free inference).")
+    ap.add_argument("--lanes", default=None,
+                    help="comma-separated lanes to restrict the --oracle-report to (e.g. hc,hp,ho,rd,cr for a "
+                    "hi-hat+cymbal checkpoint); stems carrying none of them are skipped. Default: all "
+                    "checkpoint lanes.")
     ap.add_argument("--log", default=None,
                     help="tee stdout+stderr to this file (self-log; no manual redirect needed)")
     args = ap.parse_args()

@@ -117,6 +117,9 @@ def main():
     ap.add_argument("--out", required=True, help="output npz Table")
     ap.add_argument("--variants", type=int, default=6, help="augmented variants per song (plus the original)")
     ap.add_argument("--no-codec", dest="codec", action="store_false", help="skip lossy-codec augmentation")
+    ap.add_argument("--lanes", default=None,
+                    help="comma-separated lanes to build rows for (e.g. hc,hp,ho,rd,cr); stems carrying none "
+                    "of them are skipped (the model never runs on them). Default: all checkpoint lanes.")
     ap.add_argument("--stems-cache", default=None, help="dir to cache separated stems across runs")
     ap.add_argument("--max-seconds", type=float, default=None)
     ap.add_argument("--window-seconds", type=float, default=30.0)
@@ -159,9 +162,14 @@ def main():
     for zp, gt, drum_stem, pieces in maps:
         print(f"\n=== {zp.name} (rows) ===", flush=True)
         gt_scored = _offset_corrected_gt(gt, drum_stem, args)
+        req = {ln.strip() for ln in args.lanes.split(",")} if args.lanes else None
         for v in range(args.variants + 1):
             for pitch, stem_path in pieces.items():
                 restrict = set(ep.STEM_TO_LANES.get(pitch, ()))
+                if req is not None:
+                    restrict &= req
+                if not restrict:
+                    continue
                 wave, sr = librosa.load(str(stem_path), sr=ep.SEP_SR, mono=True)
                 tmp_wav = None
                 if v == 0:

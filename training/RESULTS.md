@@ -16,6 +16,38 @@ Scoring is `mir_eval` onset-F1 at ±50 ms (`metrics.onset_f1`).
 
 ---
 
+## 2026-06-20 · Adaptive per-song peak-pick params: oracle-gap gate (hat+cymbal ckpt)
+
+First run of the new `parampred` gap gate (`eval_paradb.py --oracle-report`) on the
+A/B hat+cymbal checkpoint `ovn3080/mixed_c3000_h256_s1/loss_ab_mixed.pt`
+(lanes `hc/hp/ho/rd/cr`, in_dim 1040, tuned thr `hc .4 / hp .7 / ho .8 / rd .1 /
+cr .7`), 6 ParaDB maps, cached stems. The gate sweeps **all 5 peakpick params per
+song per lane** against GT and reports the ceiling vs today's global params:
+
+| lane | current (global) | per-song oracle | gap | songs |
+|---|---|---|---|---|
+| hc | 0.507 | 0.549 | **+0.041** | 6 |
+| ho | 0.630 | 0.675 | **+0.045** | 2 |
+| rd | 0.085 | 0.109 | **+0.023** | 4 |
+| cr | 0.375 | 0.435 | **+0.060** | 6 |
+
+**Mean oracle gap +0.042 F1.** Read:
+- The per-song-param **ceiling is modest** (~+0.04 mean), concentrated in **crash
+  (+0.060)** and the hats. A learned predictor captures only a *fraction* of a
+  ceiling, so the realizable win here is small.
+- **Ride is model-limited, not param-limited:** at 0.085 F1 the oracle barely
+  lifts it (+0.023). No threshold rescues a lane the model isn't detecting, the
+  ride fix is the model/training, not adaptive params (consistent with the
+  long-standing ride/cymbal weak-spot entry below).
+- **Caveat, these 6 maps are clean** (support ≈1.0, offsets ≤34 ms). Per-song
+  params earn their keep on degraded / oddly-mixed real audio, which the
+  augmentation pipeline simulates but this test set doesn't contain. So this gate
+  is plausibly a *lower bound* on the real-world gap. Open question: measure the
+  oracle gap **under augmentation** (build_param_dataset on these songs, identity
+  vs augmented rows) before committing to the full corpus+train.
+
+---
+
 ## Per-lane F1 progress (consolidated, newest columns right within each group)
 
 One row per lane, one column per run condition, so each lane's trajectory reads
@@ -62,6 +94,48 @@ has folded `h`/`cym` rows not shown here). `✗` = `mp` removed from the model
 (rd/cr/mc) and closed-hat are strong on synthetic SV but collapse on real PDB, the synthetic→real gap. The PS columns are the separation-aware bet: ride
 **0.51–0.54** and crash **0.54–0.56** on separated stems vs PDB ride 0.03–0.21,
 the cymbal recovery the per-stem direction targets.
+
+---
+
+## ADTOF vs our cym+HH checkpoint, apples-to-apples (2026-06-20)
+
+Head-to-head of the **deployed ADTOF backend** vs **our `loss_ab_mixed.pt`**
+(cym+HH checkpoint: lanes hc/hp/ho/rd/cr) on the *identical* test suite, via
+`sota_eval.py --backend {adtof,learned}`: same per-stem audio (enst-sep /
+mdb-sep), same GT, same fold5, same `mir_eval` ±50 ms, same track set. Each
+detector runs at **its own deployed config** (ADTOF = adaptive threshold +
+audio-refine + hihat audio-supplement + amplitude floor + crash-shadow; learned
+= the shared training picker at the checkpoint's tuned per-lane thresholds), i.e.
+"what we'd actually ship", not a stripped comparison. Pooled (micro) F:
+
+| set | class | ADTOF (R / P / F) | learned (R / P / F) | winner |
+|---|---|---|---|---|
+| **MDB** (pristine) | HH | 0.971 / 0.615 / **0.753** | 0.936 / 0.588 / 0.722 | ADTOF +0.031 |
+| MDB | CY | 0.757 / 0.824 / **0.789** | 0.866 / 0.645 / 0.740 | ADTOF +0.049 |
+| MDB | AVG | **0.771** | 0.731 | ADTOF |
+| **ENST** (learned tuned here*) | HH | 0.937 / 0.780 / **0.851** | 0.915 / 0.640 / 0.753 | ADTOF +0.098 |
+| ENST | CY | 0.839 / 0.648 / 0.731 | 0.784 / 0.731 / **0.756** | learned +0.025 |
+| ENST | AVG | **0.791** | 0.755 | ADTOF |
+
+*ENST drummer_3 was in our val/threshold-tuning pool → mildly optimistic for the
+learned model; MDB is pristine for both, ADTOF was never tuned on either.
+
+**Verdict: ADTOF currently wins.** It takes HH on both sets (decisively on ENST)
+and CY on the pristine MDB; the learned model only edges CY on the set it was
+tuned on. The cym+HH checkpoint is **not yet ready to replace ADTOF.**
+
+**Root cause = precision, not recall.** In every cell the learned model has
+**higher recall but lower precision** (it over-fires): HH P 0.588/0.640 vs ADTOF
+0.615/0.780; CY P 0.645/0.731 vs 0.824/0.648. The fixed tuned thresholds don't
+transfer to unseen audio as well as ADTOF's *adaptive, self-calibrating* per-stem
+threshold + amplitude/shadow gates do. Levers: re-tune thresholds toward
+precision on a held-out set, add a learned-side energy floor or a small
+adaptive-threshold term, and the full-kit checkpoint (more data) should help.
+Re-run after the full-kit train. cf. [[ab-test-tuned-thresholds]].
+
+Harness: `sota_eval.py` gained `--backend adtof` (`_predict_perstem_adtof`, keys
+ADTOF h→hc, c→rd so fold5 scores it identically). JSONs at
+`/codebox-workspace/cmp_{enst,mdb}_{adtof,learned}.json`.
 
 ---
 
