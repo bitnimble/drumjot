@@ -113,21 +113,27 @@ def _enst_tracks(root: str, split: str, val_drummer: str, exclude: str = "hits")
         yield ann.stem, d["stems"], enst.onsets_by_lane(ann)
 
 
+def _mdb_tracks(mdb_root: str, sep_root: str):
+    """Yield MDB-Drums eval tracks: (track, {pitch: stem_path}, gt9). Audio = the
+    pre-separated `mdb-sep` per-stem tree (separate_mdb_dataset.py); GT parsed from
+    MDB's subclass annotations. MDB is PRISTINE (never in our train/val)."""
+    from drumjot_training import mdb
+
+    sep = Path(sep_root)
+    for clip in mdb.index(mdb_root):
+        stems = {p: sep / "perstem" / p / f"{clip.track}.flac" for p in ("k", "s", "h", "c", "t")}
+        stems = {p: a for p, a in stems.items() if a.exists()}
+        yield clip.track, stems, mdb.onsets_by_lane(clip.subclass_ann)
+
+
 def _dataset_tracks(dataset: str, args):
     if dataset == "enst":
         root = args.enst_root or os.environ.get("DRUMJOT_ENST", "/codebox-workspace/datasets/enst-sep")
         yield from _enst_tracks(root, args.split, args.val_drummer, exclude=args.exclude_takes)
-    elif dataset in ("mdb", "rbma"):
-        # TODO: pristine benchmarks (never in our train/val) -- the honest SOTA number.
-        # Need: (1) download MDB-Drums / RBMA-13; (2) parse their annotations to 9-lane
-        #   onsets (MDB: .txt "time<TAB>class", classes KD/SD/HH/TT.../CY subtypes ->
-        #   map to our lanes; RBMA: .txt/.jams onset+class); (3) separate each MIX with
-        #   our MDX23C drumsep into per-pitch stems (reuse separate_enst_dataset.py /
-        #   eval_paradb's separator), then feed like ENST. Until the data + separation
-        #   are staged, this raises.
-        raise NotImplementedError(
-            f"{dataset}: stage the dataset + per-stem separation first (see _dataset_tracks TODO). "
-            f"ENST works now as the proxy; MDB/RBMA are the pristine targets.")
+    elif dataset == "mdb":
+        yield from _mdb_tracks(args.mdb_root, args.mdb_sep_root)
+    elif dataset == "rbma":
+        raise NotImplementedError("rbma: skipped (no free audio source).")
     else:
         raise ValueError(f"unknown dataset {dataset}")
 
@@ -153,6 +159,9 @@ def main():
     ap.add_argument("--checkpoint", required=True, help="loss_ab_*.pt raw dict OR a checkpoint.py dir")
     ap.add_argument("--dataset", default="enst", choices=("enst", "mdb", "rbma"))
     ap.add_argument("--enst-root", default=None, help="enst-sep root (per-stem); else $DRUMJOT_ENST")
+    ap.add_argument("--mdb-root", default="/codebox-workspace/datasets/MDBDrums", help="MDBDrums clone")
+    ap.add_argument("--mdb-sep-root", default="/codebox-workspace/datasets/mdb-sep",
+                    help="MDB per-stem tree from separate_mdb_dataset.py")
     ap.add_argument("--split", default="test", help="enst split (test=held-out drummer)")
     ap.add_argument("--val-drummer", default="drummer_3", help="ENST held-out drummer")
     ap.add_argument("--tolerance", type=float, default=0.05, help="mir_eval onset window (s); ADT std 0.05")
@@ -189,6 +198,9 @@ def main():
     for tid, stems, gt9 in _dataset_tracks(args.dataset, args):
         if args.max_tracks and n_tracks >= args.max_tracks:
             break
+        if len(stems) < 5:
+            log(f"  warn {tid}: only {len(stems)}/5 per-instrument stems found "
+                f"-> missing-lane scores will be low (incomplete separation?)")
         pred9 = _predict_perstem(stems, model, meta, encoder, args.max_seconds)
         gt5, pred5 = fold5(gt9), fold5(pred9)
         cells = []

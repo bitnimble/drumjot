@@ -48,13 +48,15 @@ def _enst_clips(root, split, val_drummer, exclude, mix):
 
 def main():
     ap = argparse.ArgumentParser(description="Eval-GT cleanliness probe (dead-onset detector)")
-    ap.add_argument("--dataset", default="enst", choices=("enst",))
+    ap.add_argument("--dataset", default="enst", choices=("enst", "mdb"))
     ap.add_argument("--enst-public-root", default="/codebox-workspace/datasets/ENST-drums-public",
                     help="ORIGINAL ENST (with audio/wet_mix) -- the dataset's own reference recording")
-    ap.add_argument("--split", default="test", help="test=held-out drummer; 'all' = whole dataset")
+    ap.add_argument("--mdb-root", default="/codebox-workspace/datasets/MDBDrums",
+                    help="MDBDrums clone (reference = its full_mix)")
+    ap.add_argument("--split", default="test", help="ENST: test=held-out drummer; 'all'=whole dataset")
     ap.add_argument("--val-drummer", default="drummer_3")
     ap.add_argument("--exclude-takes", default="hits", help="skip ENST isolated-technique demos")
-    ap.add_argument("--mix", default="wet_mix", help="reference audio (wet_mix = mixed recording)")
+    ap.add_argument("--mix", default="wet_mix", help="ENST reference audio (wet_mix = mixed recording)")
     ap.add_argument("--window-s", type=float, default=0.05, help="+/- search (= mir_eval tolerance)")
     ap.add_argument("--rel-floor", type=float, default=0.01,
                     help="dead if peak in window < this * track peak (0.01 = ~-40 dB, 'silent')")
@@ -64,26 +66,40 @@ def main():
 
     import librosa
 
-    from drumjot_training import enst, runtime
+    from drumjot_training import runtime
     runtime.tee_stdio(Path(args.out_json).with_suffix(".log"))
     log = lambda s: print(s, flush=True)  # noqa: E731
 
-    clips = _enst_clips(args.enst_public_root, args.split, args.val_drummer, args.exclude_takes, args.mix)
-    log(f"=== eval-GT cleanliness: {args.dataset} {args.split} mix={args.mix} "
-        f"win=+/-{args.window_s*1000:.0f}ms floor={args.rel_floor:.3f}*peak  ({len(clips)} takes) ===")
+    # unified clip source -> (reference_audio_path, onsets_by_lane, name)
+    def _iter():
+        if args.dataset == "enst":
+            from drumjot_training import enst
+            for c in _enst_clips(args.enst_public_root, args.split, args.val_drummer,
+                                 args.exclude_takes, args.mix):
+                name = c.audio_path.stem if c.audio_path else c.annotation_path.stem
+                yield c.audio_path, enst.onsets_by_lane(c.annotation_path), name
+        else:  # mdb -- reference = full_mix
+            from drumjot_training import mdb
+            for c in mdb.index(args.mdb_root):
+                yield c.full_mix, mdb.onsets_by_lane(c.subclass_ann), c.track
+
+    triples = list(_iter())
+    ref = args.mix if args.dataset == "enst" else "full_mix"
+    ctx = f" split={args.split}" if args.dataset == "enst" else ""
+    log(f"=== eval-GT cleanliness: {args.dataset}{ctx} mix={ref} "
+        f"win=+/-{args.window_s*1000:.0f}ms floor={args.rel_floor:.3f}*peak  ({len(triples)} tracks) ===")
 
     per_lane = defaultdict(lambda: {"n": 0, "dead": 0})
-    examples = []  # (ratio, take, lane, t)
+    examples = []  # (ratio, name, lane, t)
     w = int(args.window_s * args.sr)
-    for ci, clip in enumerate(clips, 1):
-        if clip.audio_path is None or not Path(clip.audio_path).exists():
-            log(f"  skip {clip.annotation_path.stem}: no {args.mix} audio")
+    for ci, (audio, onsets, name) in enumerate(triples, 1):
+        if audio is None or not Path(audio).exists():
+            log(f"  skip {name}: no reference audio")
             continue
-        y, _ = librosa.load(str(clip.audio_path), sr=args.sr, mono=True)
+        y, _ = librosa.load(str(audio), sr=args.sr, mono=True)
         tp = float(np.max(np.abs(y))) if y.size else 0.0
         if tp <= 0:
             continue
-        onsets = enst.onsets_by_lane(clip.annotation_path)
         for lane, times in onsets.items():
             if lane not in LANE_TO_CLASS:
                 continue
@@ -95,9 +111,9 @@ def main():
                 per_lane[lane]["n"] += 1
                 if ratio < args.rel_floor:
                     per_lane[lane]["dead"] += 1
-                    examples.append((ratio, clip.annotation_path.stem, lane, round(float(t), 3)))
+                    examples.append((ratio, name, lane, round(float(t), 3)))
         if ci % 20 == 0:
-            log(f"  scanned {ci}/{len(clips)} takes")
+            log(f"  scanned {ci}/{len(triples)} tracks")
 
     # report per-lane + folded 5-class + overall
     log(f"\n==== DEAD onsets (peak < {args.rel_floor:.3f} x track peak within +/-{args.window_s*1000:.0f}ms) ====")
@@ -127,7 +143,7 @@ def main():
     log("\n  most-dead labels (lowest peak/track ratio) -- eyeball/ear-check these:")
     for ratio, take, lane, t in examples[:25]:
         log(f"    {ratio:6.4f}  {lane:3s} @ {t:7.3f}s  {take}")
-    log("\n  NB reference = the dataset's wet_mix, so a dead label = a DATASET annotation error")
+    log(f"\n  NB reference = the dataset's own {ref}, so a dead label = a DATASET annotation error")
     log("  (not a separation drop). Strict: only true-silence labels; soft/wrong-lane NOT flagged.")
     out = {"config": vars(args), "per_lane": out_lanes,
            "by_class": {c: dict(v) for c, v in cls_tot.items()},
