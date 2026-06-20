@@ -46,6 +46,27 @@ song per lane** against GT and reports the ceiling vs today's global params:
   oracle gap **under augmentation** (build_param_dataset on these songs, identity
   vs augmented rows) before committing to the full corpus+train.
 
+**Augmented-gap follow-up (same checkpoint, 6 songs × 4 onset-preserving aug
+variants, 90 rows).** The clean-test-set caveat was right: degradation widens the
+oracle gap, and **almost all of it is closed hi-hat**.
+
+| lane | identity gap | augmented gap | widening |
+|---|---|---|---|
+| hc | +0.040 | **+0.148** | **+0.109** |
+| cr | +0.060 | +0.066 | +0.006 |
+| ho | +0.045 | +0.047 | +0.002 |
+| rd | +0.024 | +0.030 | +0.006 |
+| mean | +0.042 | +0.073 | +0.031 |
+
+`hc` global-param F1 *collapses* under degradation (0.502→0.400) while the
+per-song oracle holds (0.548) → adaptive params recover **+0.148** on degraded
+closed-hat. Crash is a steady ~+0.06 clean or degraded. Open-hat is small (high
+base F1); ride stays model-limited. → **Build the predictor; expect the win in
+`hc` + `cr`.** Caveat: training it needs labeled hat+cymbal data that ISN'T the
+ParaDB test set (extend build_param_dataset to the E-GMD/STAR/ENST loaders, or
+more .rlrr-format songs). Identity rows reproduced the gate's +0.042 exactly
+(internal consistency check).
+
 ---
 
 ## Per-lane F1 progress (consolidated, newest columns right within each group)
