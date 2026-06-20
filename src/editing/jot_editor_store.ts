@@ -1,7 +1,8 @@
 import { makeAutoObservable, observable } from 'mobx';
 import type { LoroDoc } from 'loro-crdt';
 import { Jot } from 'src/schema/dsl/dsl';
-import type { MutableJot, JotSchema } from 'src/schema/schema';
+import type { MutableJot, JotSchema, JotState } from 'src/schema/schema';
+import { createMutableJotFromState } from 'src/schema/schema';
 import type { ReactiveDoc } from 'src/schema/reactive_doc';
 import { ExampleJot } from 'src/fakes/fakes';
 import { dslToMutable } from 'src/schema/dsl/from_dsl';
@@ -108,6 +109,14 @@ export class JotEditorStore {
     return this.mutableDoc?.model;
   }
 
+  /** Plain {@link JotState} snapshot of the loaded song's edited document,
+   *  or `undefined` before the first load. What the mutable `.jot` save
+   *  format serialises (the lossless superset, post-edit); the inverse of
+   *  {@link loadState}. */
+  snapshot(): JotState | undefined {
+    return this.mutableDoc?.snapshot();
+  }
+
   /**
    * Build (or clear) the loaded song's mutable document and its peer views,
    * installing them atomically. The sole writer of `mutableDoc` / `source` /
@@ -126,7 +135,32 @@ export class JotEditorStore {
       this.tempo = undefined;
       return;
     }
-    const peers = buildJotPeers(source, this.viewConfig);
+    this.installPeers(dslToMutable(source), source);
+  }
+
+  /**
+   * Install a song from a saved {@link JotState} snapshot (a mutable `.jot`
+   * file) rather than from DSL: the document is seeded directly from
+   * `document` (preserving the edits the snapshot captured, which a DSL
+   * round-trip would lose), while `source` supplies the `globalMetadata` the
+   * peers read. The same single-writer / atomic-swap contract as {@link
+   * loadSource}; the presenter is the only caller and wraps it in its
+   * per-load `runInAction`.
+   *
+   * `source` is the transitional DSL AST persisted alongside the document
+   * (see `MutableJotFile.source`); when a later phase lifts `globalMetadata`
+   * into the schema, this collapses to taking only `document`.
+   */
+  loadState(document: JotState, source: Jot): void {
+    this.mutableDoc?.dispose();
+    this.installPeers(createMutableJotFromState(document), source);
+  }
+
+  /** Set the loaded-song peer fields together (the atomic swap both {@link
+   *  loadSource} and {@link loadState} share). Sole writer of `mutableDoc` /
+   *  `source` / `structural` / `palette` / `tempo`. */
+  private installPeers(doc: ReactiveDoc<typeof JotSchema>, source: Jot): void {
+    const peers = buildJotPeers(doc, source, this.viewConfig);
     this.mutableDoc = peers.doc;
     this.source = source;
     this.structural = peers.structural;
@@ -136,15 +170,16 @@ export class JotEditorStore {
 }
 
 /**
- * Build the mutable document for `source` plus the structure / palette /
- * tempo views over it. The `StructureStore` + `LayoutStore` are captured by the
- * peers' closures and intentionally not surfaced; the `doc` is returned so the
- * owner can hold it for edits + disposal. Pass the shared {@link ViewConfig} so
- * the zoom slider (which mutates `viewConfig.barWidth`) drives this song's
- * `pxPerBeat` / layout; standalone callers can omit it for a fresh default.
+ * Build the structure / palette / tempo views over an already-constructed
+ * mutable document `doc` (seeded from DSL via `dslToMutable`, or from a saved
+ * snapshot via `createMutableJotFromState`). `source` supplies the
+ * `globalMetadata` the peers read; the `StructureStore` + `LayoutStore` are
+ * captured by the peers' closures and intentionally not surfaced; `doc` is
+ * passed back through so the owner can hold it for edits + disposal. Pass the
+ * shared {@link ViewConfig} so the zoom slider (which mutates
+ * `viewConfig.barWidth`) drives this song's `pxPerBeat` / layout.
  */
-function buildJotPeers(source: Jot, viewConfig: ViewConfig) {
-  const doc = dslToMutable(source);
+function buildJotPeers(doc: ReactiveDoc<typeof JotSchema>, source: Jot, viewConfig: ViewConfig) {
   const mutable = doc.model;
   const structureStore = new StructureStore(() => mutable);
   const palette = new PaletteStore(
@@ -178,5 +213,5 @@ export function buildStructural(
   source: Jot,
   viewConfig: ViewConfig = new ViewConfig()
 ): StructuralPresenter {
-  return buildJotPeers(source, viewConfig).structural;
+  return buildJotPeers(dslToMutable(source), source, viewConfig).structural;
 }

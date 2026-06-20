@@ -1,6 +1,7 @@
 import { makeAutoObservable, observable } from 'mobx';
 import React from 'react';
 import { Box } from 'src/utils/geom';
+import type { Resettable } from 'src/editing/session_reset';
 import type {
   StructBar,
   StructNote,
@@ -32,7 +33,7 @@ const EMPTY_NOTES: ReadonlySet<StructNote> = Object.freeze(new Set<StructNote>()
  * clicking a specific element (note, pattern bracket) bypass this by stopping
  * mouse-down propagation before the container handler fires.
  */
-export class SelectionStore {
+export class SelectionStore implements Resettable {
   state?: SelectionState = undefined;
   transientState?: SelectionState = undefined;
   marquee: Box | undefined = undefined;
@@ -62,6 +63,18 @@ export class SelectionStore {
       },
       { autoBind: true }
     );
+  }
+
+  /** Session reset: drop the selection, the in-flight marquee, and the
+   *  shift-range bookkeeping so a new song starts with nothing selected.
+   *  The sanctioned session-reset exception (see {@link Resettable}); all
+   *  other mutation lives on `SelectionPresenter`. */
+  reset(): void {
+    this.state = undefined;
+    this.transientState = undefined;
+    this.marquee = undefined;
+    this.anchor = undefined;
+    this.base = EMPTY_NOTES;
   }
 
   /** The committed set of selected notes (empty unless a notes-selection is

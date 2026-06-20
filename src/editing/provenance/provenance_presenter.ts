@@ -2,6 +2,7 @@ import { makeAutoObservable } from 'mobx';
 import { DebugBundleManifest, NoteProvenanceFile } from 'src/editing/provenance/debug_zip';
 import { ProvenanceStore } from './provenance_store';
 import { ViewportStore } from '../viewport/viewport_store';
+import type { Resettable } from '../session_reset';
 
 /**
  * Mutations over {@link ProvenanceStore}, the debug-bundle / per-note
@@ -9,7 +10,7 @@ import { ViewportStore } from '../viewport/viewport_store';
  * Reads {@link ViewportStore} only to clamp the panel height against the
  * live viewport.
  */
-export class ProvenancePresenter {
+export class ProvenancePresenter implements Resettable {
   readonly provenance: ProvenanceStore;
   readonly viewport: ViewportStore;
 
@@ -65,5 +66,19 @@ export class ProvenancePresenter {
   clearNoteProvenance() {
     this.provenance.noteProvenance = undefined;
     this.provenance.showFilteredOnsets = false;
+  }
+
+  /**
+   * Session reset: drop the loaded bundle's per-song debug state (manifest,
+   * per-note provenance, the filtered-onset overlay toggle + pin). The
+   * DebugPanel's open/height chrome is UI state, not per-song, so it
+   * survives the load. The debug-bundle loader runs this and then mounts
+   * its own manifest/provenance afterwards.
+   */
+  reset(): void {
+    this.provenance.lastDebugBundle = undefined;
+    this.provenance.noteProvenance = undefined;
+    this.provenance.showFilteredOnsets = false;
+    this.provenance.pinnedFilteredOnsetKey = undefined;
   }
 }

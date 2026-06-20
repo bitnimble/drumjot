@@ -89,6 +89,7 @@ export const Toolbar = observer(
     transcribeOptions,
     onTranscribe,
     onResumeTranscribe,
+    onSaveJot,
     onLoadJot,
     onLoadMidi,
     onLoadParadb,
@@ -136,6 +137,9 @@ export const Toolbar = observer(
     transcribeOptions: TranscribeOptions;
     onTranscribe: (file: File) => void;
     onResumeTranscribe: (folder: string, stage: TranscribeStage) => void;
+    /** Save the current session as a mutable `.jot` file (lossless superset:
+     *  the edited document + editor metadata). Browser download. */
+    onSaveJot: () => void;
     onLoadJot: (file: File) => void;
     onLoadMidi: (file: File) => void;
     onLoadParadb: (file: File) => void;
@@ -273,6 +277,19 @@ export const Toolbar = observer(
         >
           {(close) => (
             <>
+              <button
+                type="button"
+                className={dropdownStyles.dropdownItem}
+                onClick={() => {
+                  onSaveJot();
+                  close();
+                }}
+                title="Save the current session to a `.jot` file: the full editable document plus the editor metadata (mixer faders, display settings, palette) and the loaded audio tracks the DSL text format can't carry. This is the lossless save that preserves your edits; downloads to your machine."
+                data-testid="file-menu-save"
+              >
+                Save .jot file
+              </button>
+              <span className={dropdownStyles.dropdownDivider} aria-hidden="true" />
               <SubmenuItem
                 label="Load"
                 title="Load a score, audio tracks, or a previous transcription from disk."
@@ -328,7 +345,7 @@ export const Toolbar = observer(
                           jotInputRef.current?.click();
                           closeAll();
                         }}
-                        title="Load a Drumjot DSL file (`.jot`) from disk and render it. Parser runs entirely client-side; no transcriber service required."
+                        title="Load a `.jot` file from disk: either a saved session (the lossless mutable format, with your edits + mixer/display/palette settings) or a hand-authored Drumjot DSL file. The format is detected automatically. Runs entirely client-side; no transcriber service required."
                       >
                         Load .jot file
                       </button>

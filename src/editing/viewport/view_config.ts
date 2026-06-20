@@ -1,5 +1,6 @@
 import { makeAutoObservable } from 'mobx';
 import { PICKER_PALETTE } from 'src/editing/tracks/tracks';
+import type { Resettable } from 'src/editing/session_reset';
 
 /** Branded pixel scalar to avoid mixing pixel and beat measurements. */
 export type Pixels = number & { __pixels: never };
@@ -7,7 +8,7 @@ export const px = (n: number) => n as Pixels;
 
 // ---------- Layout config ----------
 
-export class ViewConfig {
+export class ViewConfig implements Resettable {
   /** Pixel width of one whole bar at default zoom. */
   barWidth = px(448);
   /** Vertical height of one rendered lane track. */
@@ -42,5 +43,14 @@ export class ViewConfig {
 
   constructor() {
     makeAutoObservable(this);
+  }
+
+  /** Session reset: return the colour palette to the default ramp. The
+   *  palette is per-song (a loaded `.jot`'s `editor.palette` is applied on
+   *  top of this afterwards); the geometry fields (`barWidth` zoom, track
+   *  height, note diameter, …) are global view config and untouched. The
+   *  sanctioned session-reset exception (see {@link Resettable}). */
+  reset(): void {
+    this.palette = [...PICKER_PALETTE];
   }
 }

@@ -394,3 +394,20 @@ export type JotState = Snapshot<typeof JotSchema>;
 export function createMutableJot(initial?: Init<typeof JotSchema>): ReactiveDoc<typeof JotSchema> {
   return createReactiveDoc(JotSchema, initial);
 }
+
+/**
+ * Rebuild a live mutable Jot document from a plain {@link JotState} snapshot
+ * (e.g. one read back out of a saved `.jot` file, or another
+ * `createMutableJot(...).snapshot()`). The inverse of `.snapshot()`: round-
+ * tripping `state → createMutableJotFromState(state).snapshot()` is lossless.
+ *
+ * A `Snapshot` is a fully-populated superset of the `Init` seed shape (same
+ * plain-object projection, idMaps as records, movableLists as arrays), so the
+ * cast through `unknown` is safe; it only exists because the two recursive
+ * generic types don't structurally unify without blowing TS's depth limit
+ * (the same reason `createReactiveDoc`'s body erases `Init<S>` to a plain
+ * object). The seeding path (`populateRecord`) reads it as a plain object.
+ */
+export function createMutableJotFromState(state: JotState): ReactiveDoc<typeof JotSchema> {
+  return createMutableJot(state as unknown as Init<typeof JotSchema>);
+}

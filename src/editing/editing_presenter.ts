@@ -1,4 +1,4 @@
-import { makeAutoObservable, reaction } from 'mobx';
+import { makeAutoObservable } from 'mobx';
 import type { Element, MutableJot, NoteElement } from 'src/schema/schema';
 import { laneForNote, layerIdOfTrack } from 'src/schema/ordering';
 import { SettingsStore } from 'src/settings/settings_store';
@@ -11,6 +11,7 @@ import { buildLaneMap, notesById } from './score/note_geometry';
 import { EditingStore, type DragPreviewNote, type EditMode, type PlaceholderNote } from './editing_store';
 import { JotEditorStore } from './jot_editor_store';
 import type { ClipboardNote, ClipboardPayload } from './clipboard/clipboard_payload';
+import type { Resettable } from './session_reset';
 
 /** Per-drag bookkeeping captured at drag start; presenter-local (not store
  *  state, like an in-flight AbortController). Positions are recomputed top-down
@@ -90,13 +91,11 @@ const INSERTED_NOTE_DURATION = 0.25;
  * reactive document. The single writer of {@link EditingStore}; note inserts
  * go straight through `jotEditorStore.jot` (the sanctioned document-write path).
  */
-export class EditingPresenter {
+export class EditingPresenter implements Resettable {
   /** Live drag-move bookkeeping, or undefined when no drag is in flight. */
   private dragCtx: DragMoveCtx | undefined = undefined;
   /** Live paste-placement bookkeeping, or undefined when no paste is in flight. */
   private pasteCtx: PasteCtx | undefined = undefined;
-  /** Disposes the doc-swap reaction (teardown / leak tests). */
-  private readonly disposeLoadReaction: () => void;
 
   constructor(
     private readonly editingStore: EditingStore,
@@ -116,7 +115,6 @@ export class EditingPresenter {
       | 'layersPresenter'
       | 'dragCtx'
       | 'pasteCtx'
-      | 'disposeLoadReaction'
     >(this, {
       editingStore: false,
       jotEditorStore: false,
@@ -126,25 +124,23 @@ export class EditingPresenter {
       layersPresenter: false,
       dragCtx: false,
       pasteCtx: false,
-      disposeLoadReaction: false,
     });
-    // A song load swaps the backing document out from under any in-flight
-    // paste/drag, whose ctx captured the PREVIOUS song's bar layout. Cancel
-    // them on the swap so a stale placement can't survive into the new song
-    // (committing misplaced notes) or leave the editor stuck in paste mode.
-    this.disposeLoadReaction = reaction(
-      () => this.jotEditorStore.loroDoc,
-      () => {
-        this.cancelPaste();
-        this.cancelDragMove();
-      }
-    );
   }
 
-  /** Tear down the doc-swap reaction (editor disposal / leak tests). The
-   *  presenter is otherwise page-lifetime, so the live app never calls this. */
-  dispose(): void {
-    this.disposeLoadReaction();
+  /**
+   * Session reset: cancel any in-flight paste/drag placement (their ctx
+   * captured the PREVIOUS song's bar layout, so a stale placement must not
+   * survive into the new song, committing misplaced notes, or leave the
+   * editor stuck in paste mode) and return the editing store to its
+   * fresh-load state. Registered in {@link SessionReset} and fired before the
+   * document swap on every wholesale load, so it's the single authority for
+   * the editing-domain reset (this replaced a separate doc-swap reaction that
+   * did the same cancel).
+   */
+  reset(): void {
+    this.cancelPaste();
+    this.cancelDragMove();
+    this.editingStore.reset();
   }
 
   setMode(mode: EditMode): void {

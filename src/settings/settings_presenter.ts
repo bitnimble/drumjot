@@ -31,6 +31,21 @@ export class SettingsPresenter {
   }
 
   /**
+   * Re-apply the display settings carried in a loaded `.jot` save file's
+   * editor metadata. Called after {@link SettingsStore.reset} + the new
+   * song is installed, so a saved grid-line overlay / waveform / merge
+   * choice travels with the song. A partial snapshot leaves the reset
+   * defaults in place for any absent field.
+   */
+  applySettings(settings: SettingsState): void {
+    if (settings.gridLines) this.settings.gridLines = { ...settings.gridLines };
+    if (settings.uniformWaveforms !== undefined) {
+      this.settings.uniformWaveforms = settings.uniformWaveforms;
+    }
+    if (settings.mergeLayers !== undefined) this.settings.mergeLayers = settings.mergeLayers;
+  }
+
+  /**
    * Switch the grid to the 48ths overlay used for transcribed bundles.
    * The transcribe pipeline routinely emits triplet subdivisions; 48ths
    * is the LCM of 16ths + triplets so it visualises both. Called by the
@@ -47,3 +62,14 @@ export class SettingsPresenter {
     };
   }
 }
+
+/**
+ * Serialisable display-settings snapshot for the `.jot` save format's editor
+ * metadata. Every field optional so the loader tolerates files written by an
+ * older app version (missing fields keep their reset defaults).
+ */
+export type SettingsState = {
+  gridLines?: GridLineSettings;
+  uniformWaveforms?: boolean;
+  mergeLayers?: boolean;
+};

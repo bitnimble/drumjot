@@ -3,6 +3,7 @@ import { AudioTrackId } from 'src/editing/playback/audio_tracks';
 import { jotPlayer } from 'src/editing/playback/player';
 import { JotEditorStore } from '../jot_editor_store';
 import { MixerStore, clampVolume } from './mixer_store';
+import type { Resettable } from '../session_reset';
 import { toastStore } from '../../ui/toasts/toasts';
 
 /**
@@ -15,7 +16,7 @@ import { toastStore } from '../../ui/toasts/toasts';
  * not pushed from here; the player pulls it off the PlaybackStore
  * computeds (see `PlaybackPresenter`).
  */
-export class MixerPresenter {
+export class MixerPresenter implements Resettable {
   readonly mixer: MixerStore;
   readonly jotEditorStore: JotEditorStore;
 
@@ -180,4 +181,80 @@ export class MixerPresenter {
     this.mixer.soloedTracks.clear();
     this.mixer.trackVolumes.clear();
   }
+
+  /**
+   * Session reset: drop every audio track, clear all per-row + master
+   * mute/solo/volume, and forget the per-instrument colour view-models +
+   * split stubs, so no mixer state from the previous song leaks onto the
+   * new one (the page-refresh semantic). A loaded save file's drum-lane
+   * mixer is re-applied afterwards via {@link applyTrackMixerState};
+   * audio-track mixer state is session-only (the audio files themselves
+   * aren't in the `.jot`, and their ids aren't stable across a reload).
+   */
+  reset(): void {
+    this.clearAllAudioTracks();
+    this.resetTrackMixer();
+    this.mixer.mutedAudioTracks.clear();
+    this.mixer.soloedAudioTracks.clear();
+    this.mixer.audioTrackVolumes.clear();
+    this.mixer.audioMasterMuted = false;
+    this.mixer.drumMasterMuted = false;
+    this.mixer.audioMasterSoloed = false;
+    this.mixer.drumMasterSoloed = false;
+    this.mixer.instrumentTracks.clear();
+    this.mixer.audioTrackSplitStatuses.clear();
+  }
+
+  /**
+   * Re-apply a saved drum-lane mixer snapshot from a loaded `.jot` file's
+   * editor metadata. Only the drum domain round-trips: its keys
+   * (`layerId/lane`) are part of the persisted document, so they're stable
+   * across save/load, unlike session-generated audio-track ids. Called
+   * after {@link reset} + the new song is installed.
+   */
+  applyTrackMixerState(state: TrackMixerState): void {
+    this.mixer.mutedTracks = new Set(state.mutedTracks);
+    this.mixer.soloedTracks = new Set(state.soloedTracks);
+    this.mixer.trackVolumes = new Map(state.trackVolumes);
+    this.mixer.drumMasterMuted = state.drumMasterMuted;
+    this.mixer.drumMasterSoloed = state.drumMasterSoloed;
+  }
+
+  /** Re-apply a saved audio track's per-track mixer state to its freshly-
+   *  minted id when restoring a `.jot` save bundle's embedded audio. Unlike
+   *  drum tracks, audio-track ids are session-generated, so this is keyed by
+   *  the new id the re-decode produced, not a stable key. */
+  applyAudioTrackState(
+    id: AudioTrackId,
+    state: { muted: boolean; soloed: boolean; volume: number }
+  ): void {
+    if (state.muted) this.mixer.mutedAudioTracks.add(id);
+    if (state.soloed) this.mixer.soloedAudioTracks.add(id);
+    this.mixer.audioTrackVolumes.set(id, clampVolume(state.volume));
+  }
+
+  /** Snapshot the drum-lane mixer for persistence (the inverse of
+   *  {@link applyTrackMixerState}). */
+  trackMixerState(): TrackMixerState {
+    return {
+      mutedTracks: Array.from(this.mixer.mutedTracks),
+      soloedTracks: Array.from(this.mixer.soloedTracks),
+      trackVolumes: Array.from(this.mixer.trackVolumes.entries()),
+      drumMasterMuted: this.mixer.drumMasterMuted,
+      drumMasterSoloed: this.mixer.drumMasterSoloed,
+    };
+  }
 }
+
+/**
+ * Serialisable drum-lane mixer state for the `.jot` save format's editor
+ * metadata. Drum rows only (keys are `layerId/lane`, stable across a
+ * reload); audio-track mute/solo/volume is session-only and not persisted.
+ */
+export type TrackMixerState = {
+  mutedTracks: string[];
+  soloedTracks: string[];
+  trackVolumes: Array<[string, number]>;
+  drumMasterMuted: boolean;
+  drumMasterSoloed: boolean;
+};

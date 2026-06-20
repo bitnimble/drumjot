@@ -18,6 +18,19 @@ import { SettingsPresenter } from '../settings/settings_presenter';
 import { MixerPresenter } from './mixer/mixer_presenter';
 import { ProvenancePresenter } from './provenance/provenance_presenter';
 import { LyricsPresenter } from './lyrics/lyrics_presenter';
+import type { SessionReset } from './session_reset';
+import {
+  AUDIO_ENTRY_PREFIX,
+  decodeMutableJotFile,
+  encodeMutableJotFile,
+  isMutableJotFile,
+  JOT_FILE_VERSION,
+  type AudioEntryInput,
+  type DecodedMutableJotFile,
+  type JotEditorMetadata,
+  type MutableJotFile,
+  type PersistedAudioTrack,
+} from './persistence/jot_file';
 
 /**
  * Song-load orchestration over {@link JotEditorStore}: the file loaders
@@ -39,6 +52,16 @@ export class JotEditorPresenter {
   readonly provenancePresenter: ProvenancePresenter;
   readonly lyricsPresenter: LyricsPresenter;
 
+  /**
+   * Registry of every persistent peer's session reset, fired exactly once
+   * at the start of each wholesale load. Injected after construction
+   * ({@link attachSessionReset}) because some resettable peers (selection,
+   * editing) are built after this presenter at the composition root.
+   * `undefined` only in the window before that wiring (e.g. a presenter
+   * constructed standalone in a unit test that never loads a song).
+   */
+  private sessionReset: SessionReset | undefined = undefined;
+
   constructor(
     jotEditorStore: JotEditorStore,
     settingsPresenter: SettingsPresenter,
@@ -51,13 +74,32 @@ export class JotEditorPresenter {
     this.mixerPresenter = mixerPresenter;
     this.provenancePresenter = provenancePresenter;
     this.lyricsPresenter = lyricsPresenter;
-    makeAutoObservable(this, {
+    makeAutoObservable<this, 'sessionReset'>(this, {
       jotEditorStore: false,
       settingsPresenter: false,
       mixerPresenter: false,
       provenancePresenter: false,
       lyricsPresenter: false,
+      sessionReset: false,
     });
+  }
+
+  /** Wire in the composition root's {@link SessionReset} registry. Called
+   *  once by `createJotEditor` after every resettable peer exists. */
+  attachSessionReset(sessionReset: SessionReset): void {
+    this.sessionReset = sessionReset;
+  }
+
+  /**
+   * Reset every persistent peer to its fresh-session state, the shared
+   * prelude to every wholesale song load (`.jot` / MIDI / ParaDB / debug
+   * bundle / example / Save-file open). Replaces the per-loader hand-clears
+   * that used to drift out of sync (the plain `.jot`/MIDI loaders once
+   * forgot to drop the previous song's audio tracks + lane mixer). Run
+   * inside the caller's `runInAction`, before the new song is installed.
+   */
+  private resetSession(): void {
+    this.sessionReset?.reset();
   }
 
   /**
@@ -119,19 +161,14 @@ export class JotEditorPresenter {
   }
 
   setJot(source: Jot | undefined) {
-    this.installJot(source);
-    // External setJot calls invalidate the example pointer + any
-    // previously-loaded debug provenance (provenance is per-bundle and
-    // doesn't survive a wholesale jot replacement).
-    this.jotEditorStore.currentExampleId = undefined;
-    this.provenancePresenter.clearNoteProvenance();
-    // Lyrics are tied to a specific recording; a new jot means they no
-    // longer apply. See `src/lyrics/store.ts` for the lifecycle rationale.
-    this.lyricsPresenter.clearLyrics();
-    // Replace the song wholesale: stop any in-flight playback so the
-    // playhead, scheduled drum events, and idle cue from the previous
-    // jot don't leak onto the new one.
-    jotPlayer.stop();
+    runInAction(() => {
+      // Wholesale replace: return every persistent peer to its fresh state
+      // (drops stale audio tracks / mixer / lyrics / debug provenance,
+      // stops playback) before installing the new song.
+      this.resetSession();
+      this.installJot(source);
+      this.jotEditorStore.currentExampleId = undefined;
+    });
   }
 
   setExamples(examples: readonly ExampleJot[]) {
@@ -141,27 +178,37 @@ export class JotEditorPresenter {
   loadExample(id: string) {
     const example = this.jotEditorStore.examples.find((e) => e.id === id);
     if (!example) return;
-    this.installJot(example.jot);
-    this.jotEditorStore.currentExampleId = id;
-    this.provenancePresenter.clearNoteProvenance();
-    this.lyricsPresenter.clearLyrics();
-    jotPlayer.stop();
+    runInAction(() => {
+      this.resetSession();
+      this.installJot(example.jot);
+      this.jotEditorStore.currentExampleId = id;
+    });
   }
 
   /**
-   * Read a Drumjot DSL file from the user's machine and load it as the
-   * current jot. Parse failures surface as error toasts.
+   * Read a `.jot` file from the user's machine and load it. Format-aware:
+   * the same menu entry opens both flavours of `.jot` (see
+   * `persistence/jot_file.ts`). A {@link isMutableJotFile mutable binary}
+   * file is decoded and installed with its saved editor metadata; otherwise
+   * the bytes are DSL text and go through the parser. Read / parse / decode
+   * failures surface as error toasts.
    */
   async loadJotFile(file: File): Promise<void> {
     return this.withLoading(`Loading ${file.name}…`, async () => {
-      let text: string;
+      let bytes: Uint8Array;
       try {
-        text = await file.text();
+        bytes = new Uint8Array(await file.arrayBuffer());
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         toastStore.showError(`Could not read ${file.name}: ${message}`);
         return;
       }
+      if (isMutableJotFile(bytes)) {
+        await this.installMutableFileBytes(bytes, file.name);
+        return;
+      }
+      // DSL text path: the original `.jot`. Decode the same bytes as UTF-8.
+      const text = new TextDecoder().decode(bytes);
       try {
         const jot = parse(text);
         if (!jot.title) {
@@ -169,14 +216,9 @@ export class JotEditorPresenter {
           if (derivedTitle) jot.title = derivedTitle;
         }
         runInAction(() => {
+          this.resetSession();
           this.installJot(jot);
           this.jotEditorStore.currentExampleId = undefined;
-          // A bare jot file has no provenance; drop whatever the
-          // previous bundle put there so the selection label doesn't
-          // surface stale debug data on the new song's notes.
-          this.provenancePresenter.clearNoteProvenance();
-          this.lyricsPresenter.clearLyrics();
-          jotPlayer.stop();
         });
       } catch (err) {
         const message =
@@ -188,6 +230,170 @@ export class JotEditorPresenter {
         toastStore.showError(message);
       }
     });
+  }
+
+  /**
+   * Load a mutable-format `.jot` directly (the binary flavour). Public so a
+   * caller that already knows the file is a save bundle (or e2e) can skip the
+   * sniff; the format-agnostic entry point is {@link loadJotFile}.
+   */
+  async loadMutableFile(file: File): Promise<void> {
+    return this.withLoading(`Loading ${file.name}…`, async () => {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      await this.installMutableFileBytes(bytes, file.name);
+    });
+  }
+
+  /**
+   * Decode mutable-format bytes and install them as the current song:
+   * reset every peer, seed the document straight from the saved snapshot
+   * (preserving the edits a DSL round-trip would drop), re-apply the file's
+   * editor metadata (drum mixer / display settings / palette), then re-decode
+   * the embedded audio tracks. Decode failures (corrupt zip, wrong format tag,
+   * a newer file version) surface as an error toast and leave the current song
+   * untouched.
+   */
+  private async installMutableFileBytes(bytes: Uint8Array, filename: string): Promise<void> {
+    let decoded: DecodedMutableJotFile;
+    try {
+      decoded = await decodeMutableJotFile(bytes);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      toastStore.showError(`Could not open ${filename}: ${message}`);
+      return;
+    }
+    const { file, audio } = decoded;
+    runInAction(() => {
+      this.resetSession();
+      this.jotEditorStore.loadState(file.document, file.source);
+      this.jotEditorStore.currentExampleId = undefined;
+      this.applyEditorMetadata(file.editor);
+    });
+    // Audio tracks are re-decoded AFTER the document install (decode is async +
+    // needs the AudioContext) and best-effort, mirroring the ParaDB / debug
+    // loaders: a missing or undecodable track doesn't fail the whole load.
+    await this.restoreAudioTracks(file.editor.audioTracks, audio);
+  }
+
+  /** Re-apply a loaded save file's (non-audio) editor metadata over the
+   *  freshly-reset, installed song. Each block is optional, an older / partial
+   *  file just leaves the reset defaults in place. Audio tracks are handled
+   *  separately by {@link restoreAudioTracks} (they need async decode). */
+  private applyEditorMetadata(editor: JotEditorMetadata): void {
+    if (editor.settings) this.settingsPresenter.applySettings(editor.settings);
+    if (editor.palette) this.jotEditorStore.viewConfig.palette = [...editor.palette];
+    if (editor.mixer) this.mixerPresenter.applyTrackMixerState(editor.mixer);
+  }
+
+  /** Re-decode each embedded audio track from the container and re-apply its
+   *  saved per-track mixer state to the freshly-minted track id. Best-effort:
+   *  `loadAudioTrack` reports its own failures and returns `undefined`, so one
+   *  bad track doesn't abort restoring the rest. */
+  private async restoreAudioTracks(
+    tracks: PersistedAudioTrack[] | undefined,
+    audio: Map<string, Uint8Array>
+  ): Promise<void> {
+    if (!tracks?.length) return;
+    for (const track of tracks) {
+      const bytes = audio.get(track.entry);
+      if (!bytes) continue;
+      const file = new File([new Uint8Array(bytes)], track.filename);
+      const id = await this.loadAudioTrack(file, track.lane, track.role);
+      if (!id) continue;
+      runInAction(() => {
+        this.mixerPresenter.applyAudioTrackState(id, {
+          muted: track.muted,
+          soloed: track.soloed,
+          volume: track.volume,
+        });
+      });
+    }
+  }
+
+  /**
+   * Assemble the current session into a mutable `.jot` save bundle, the JSON
+   * envelope plus the embedded audio bytes, or `undefined` when no song is
+   * loaded. Captures the edited document snapshot (the lossless superset), the
+   * transitional DSL `source`, the editor metadata the DSL can't carry (drum
+   * mixer, display settings, palette), and every loaded audio track / stem
+   * (source bytes + per-track mixer state). The manifest entry paths are
+   * generated in lockstep with the `audio` byte array so they pair up at
+   * decode.
+   */
+  private async buildSaveBundle(): Promise<
+    { file: MutableJotFile; audio: AudioEntryInput[] } | undefined
+  > {
+    const document = this.jotEditorStore.snapshot();
+    const source = this.jotEditorStore.source;
+    if (!document || !source) return undefined;
+    const settings = this.settingsPresenter.settings;
+    const mixer = this.mixerPresenter.mixer;
+
+    const audio: AudioEntryInput[] = [];
+    const audioTracks: PersistedAudioTrack[] = [];
+    let i = 0;
+    for (const track of jotPlayer.audioTracks.values()) {
+      const entry = audioEntryName(i++, track.filename);
+      // Store the source bytes verbatim (original codec); only zip-deflate the
+      // uncompressed PCM formats (WAV / AIFF), where it actually shrinks them.
+      audio.push({
+        entry,
+        bytes: new Uint8Array(await track.sourceBlob.arrayBuffer()),
+        compress: !isAlreadyCompressedAudio(track.filename),
+      });
+      audioTracks.push({
+        entry,
+        filename: track.filename,
+        role: track.role,
+        lane: track.lane,
+        muted: mixer.mutedAudioTracks.has(track.id),
+        soloed: mixer.soloedAudioTracks.has(track.id),
+        volume: mixer.audioTrackVolume(track.id),
+      });
+    }
+
+    const file: MutableJotFile = {
+      format: 'drumjot-mutable',
+      version: JOT_FILE_VERSION,
+      savedAt: new Date().toISOString(),
+      document,
+      source,
+      editor: {
+        mixer: this.mixerPresenter.trackMixerState(),
+        settings: {
+          gridLines: { ...settings.gridLines },
+          uniformWaveforms: settings.uniformWaveforms,
+          mergeLayers: settings.mergeLayers,
+        },
+        palette: [...this.jotEditorStore.viewConfig.palette],
+        audioTracks: audioTracks.length > 0 ? audioTracks : undefined,
+      },
+    };
+    return { file, audio };
+  }
+
+  /** Encode the current session and return the mutable-format bytes, or
+   *  `undefined` when nothing is loaded. The serialisable form behind
+   *  {@link saveMutableFile} (and the programmatic / e2e entry point). */
+  async toMutableBytes(): Promise<Uint8Array | undefined> {
+    const bundle = await this.buildSaveBundle();
+    return bundle ? encodeMutableJotFile(bundle.file, bundle.audio) : undefined;
+  }
+
+  /**
+   * Save the current session to a mutable `.jot` file via a browser
+   * download named after the song title. No-op (with a toast) when nothing
+   * is loaded.
+   */
+  async saveMutableFile(): Promise<void> {
+    const bundle = await this.buildSaveBundle();
+    if (!bundle) {
+      toastStore.showError('Nothing to save yet, load or transcribe a song first.');
+      return;
+    }
+    const bytes = await encodeMutableJotFile(bundle.file, bundle.audio);
+    const title = bundle.file.document.title?.trim() || 'untitled';
+    downloadBytes(bytes, `${sanitizeFilename(title)}.jot`);
   }
 
   /**
@@ -213,13 +419,9 @@ export class JotEditorPresenter {
           if (derivedTitle) jot.title = derivedTitle;
         }
         runInAction(() => {
+          this.resetSession();
           this.installJot(jot);
           this.jotEditorStore.currentExampleId = undefined;
-          // Same reasoning as in loadJotFile: a bare MIDI load shouldn't
-          // surface stale provenance from a previous debug bundle.
-          this.provenancePresenter.clearNoteProvenance();
-          this.lyricsPresenter.clearLyrics();
-          jotPlayer.stop();
         });
       } catch (err) {
         const message =
@@ -254,17 +456,12 @@ export class JotEditorPresenter {
         if (derivedTitle) jot.title = derivedTitle;
       }
       runInAction(() => {
-        // Replace the song wholesale: drop any audio tracks from a
-        // previously loaded map/transcription so they don't play over
-        // the new pack's tracks, and reset the per-lane mixer so an
-        // old song's mute/solo/faders don't bleed onto the new rows.
-        this.mixerPresenter.clearAllAudioTracks();
-        this.mixerPresenter.resetTrackMixer();
+        // Replace the song wholesale: drop the previous song's audio
+        // tracks, mixer, lyrics, and debug provenance, and stop playback,
+        // before installing the new pack (its own audio tracks load below).
+        this.resetSession();
         this.installJot(jot);
         this.jotEditorStore.currentExampleId = undefined;
-        this.provenancePresenter.clearNoteProvenance();
-        this.lyricsPresenter.clearLyrics();
-        jotPlayer.stop();
       });
 
       // Audio tracks are best-effort: a chart with the score loaded is
@@ -445,9 +642,11 @@ export class JotEditorPresenter {
     fallbackName: string
   ): Promise<boolean> {
     runInAction(() => {
-      this.mixerPresenter.clearAllAudioTracks();
-      this.mixerPresenter.resetTrackMixer();
-      this.lyricsPresenter.clearLyrics();
+      // Wholesale replace prelude (drops the previous song's audio tracks,
+      // mixer, lyrics, debug provenance; stops playback; returns the grid
+      // overlay to its default). The bundle then mounts its own provenance
+      // + 48ths overlay on top, so these two calls must follow the reset.
+      this.resetSession();
       // Mount the manifest + per-note provenance (or clear it when the
       // bundle didn't ship one) and reset the ghost-overlay toggle.
       this.provenancePresenter.loadDebugBundle(bundle.manifest, bundle.noteProvenance ?? undefined);
@@ -478,7 +677,6 @@ export class JotEditorPresenter {
         runInAction(() => {
           this.installJot(jot);
           this.jotEditorStore.currentExampleId = undefined;
-          jotPlayer.stop();
         });
         scoreLoaded = true;
       } catch (err) {
@@ -582,4 +780,58 @@ export class JotEditorPresenter {
       return false;
     }
   }
+}
+
+/** Trigger a browser download of `bytes` as `filename` via a transient
+ *  object-URL anchor. A side-effect of the Save flow (DOM, not store state),
+ *  so it lives on this orchestrating presenter's module rather than a store. */
+function downloadBytes(bytes: Uint8Array, filename: string): void {
+  const blob = new Blob([new Uint8Array(bytes)], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  // Revoke on the next tick so the click's navigation has surely picked up
+  // the URL first (revoking synchronously can cancel the download in some
+  // browsers).
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+/** Make a song title safe for a download filename: collapse path separators
+ *  and characters browsers/OSes dislike to underscores, trim, and cap the
+ *  length so the `.jot` suffix always survives. */
+function sanitizeFilename(name: string): string {
+  const cleaned = name.replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, ' ').trim();
+  return (cleaned || 'untitled').slice(0, 120);
+}
+
+/** Zip-entry path for the `index`-th saved audio track, keeping the source
+ *  file's extension for human inspectability (the path is opaque to load,
+ *  which matches it back via the manifest). */
+function audioEntryName(index: number, filename: string): string {
+  const ext = fileExt(filename);
+  return `${AUDIO_ENTRY_PREFIX}${index}.${ext || 'dat'}`;
+}
+
+/** Already-compressed audio container extensions, deflating these in the zip
+ *  only burns CPU for ~no size win, so they're stored verbatim. Everything
+ *  else (WAV / AIFF / unknown) is treated as compressible PCM. */
+const COMPRESSED_AUDIO_EXTS = new Set([
+  'mp3', 'flac', 'ogg', 'oga', 'm4a', 'mp4', 'aac', 'opus', 'weba', 'webm', 'wma',
+]);
+
+/** Whether a loaded audio file's codec is already compressed (so the
+ *  container stores it as-is rather than deflating). Lossless FLAC counts, its
+ *  own entropy coding leaves nothing for deflate. */
+function isAlreadyCompressedAudio(filename: string): boolean {
+  return COMPRESSED_AUDIO_EXTS.has(fileExt(filename));
+}
+
+/** Lowercased file extension without the dot, or `''` when there is none. */
+function fileExt(filename: string): string {
+  const dot = filename.lastIndexOf('.');
+  return dot > 0 ? filename.slice(dot + 1).toLowerCase().replace(/[^a-z0-9]/g, '') : '';
 }

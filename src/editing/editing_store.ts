@@ -1,4 +1,5 @@
 import { makeAutoObservable } from 'mobx';
+import type { Resettable } from './session_reset';
 
 /** The current editing interaction mode.
  *  - `select`: the existing behaviour (click-to-seek, marquee, note select).
@@ -51,9 +52,10 @@ export type DragPreviewNote = {
 /**
  * Editing UI state: the current {@link EditMode}, the transient insert-mode
  * {@link placeholder}, and the live drag-move preview. Pure observable data;
- * every mutation lives on `EditingPresenter`.
+ * every mutation lives on `EditingPresenter` (plus {@link reset}, the
+ * sanctioned session-reset exception, see {@link Resettable}).
  */
-export class EditingStore {
+export class EditingStore implements Resettable {
   /** Current editing mode. Defaults to `select` (existing behaviour). */
   mode: EditMode = 'select';
 
@@ -86,5 +88,18 @@ export class EditingStore {
 
   constructor() {
     makeAutoObservable(this);
+  }
+
+  /** Session reset: drop the transient interaction state (mode, insert
+   *  placeholder, in-flight drag/paste flags) and return to select mode.
+   *  {@link snappingEnabled} is a workflow preference, not per-song state, so
+   *  it survives a load (like the zoom level). The presenter-side paste/drag
+   *  *ctx* is cleared by `EditingPresenter.reset`, which calls this. */
+  reset(): void {
+    this.mode = 'select';
+    this.placeholder = undefined;
+    this.dragActive = false;
+    this.pasteActive = false;
+    this.dragPreview = [];
   }
 }

@@ -83,6 +83,7 @@ import { PlaybackPresenter } from './playback/playback_presenter';
 import { ProvenancePresenter } from './provenance/provenance_presenter';
 import { LyricsPresenter } from './lyrics/lyrics_presenter';
 import { JotEditorPresenter } from './jot_editor_presenter';
+import { SessionReset } from './session_reset';
 import { TranscribePresenter } from './transcribe/transcribe_presenter';
 import { RecentTranscriptionsPicker } from './transcribe/recent_transcriptions';
 import { ToastContainer } from '../ui/toasts/toast_container';
@@ -201,6 +202,27 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
   // presenter's placement (the copied cluster follows the cursor).
   const clipboard = new ClipboardStore();
   const clipboardPresenter = new ClipboardPresenter(clipboard, editingPresenter);
+
+  // Session-reset registry: every persistent peer that must return to its
+  // fresh state when a song is loaded wholesale (see `session_reset.ts` for
+  // what resets vs. what's a kept global/session preference). Built here,
+  // once all peers exist, and handed to the load orchestrator which fires it
+  // exactly once per load. Order is cosmetic (resets are independent), but
+  // kept roughly outer-to-inner for readability.
+  const sessionReset = new SessionReset([
+    playbackPresenter, // stops the engine first
+    mixerPresenter,
+    provenancePresenter,
+    lyricsPresenter,
+    settings,
+    jotEditorStore.viewConfig, // per-song palette → default
+    viewport,
+    selection,
+    // EditingPresenter (not the store): it also cancels the in-flight
+    // paste/drag placement ctx, then resets the store flags.
+    editingPresenter,
+  ]);
+  jotEditorPresenter.attachSessionReset(sessionReset);
 
   // Marquee hit-test: which notes a rubber-band box (scroll-content coords)
   // encloses, resolved to the current StructNotes. Reads the DOM, so it only
@@ -449,6 +471,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                       transcribeOptions={transcribe.transcribeOptions}
                       onTranscribe={(file) => transcribePresenter.transcribeAudio(file)}
                       onResumeTranscribe={(folder, stage) => transcribePresenter.resumeTranscribe(folder, stage)}
+                      onSaveJot={() => jotEditorPresenter.saveMutableFile()}
                       onLoadJot={(file) => jotEditorPresenter.loadJotFile(file)}
                       onLoadMidi={(file) => jotEditorPresenter.loadMidiFile(file)}
                       onLoadParadb={(file) => jotEditorPresenter.loadParadbMap(file)}

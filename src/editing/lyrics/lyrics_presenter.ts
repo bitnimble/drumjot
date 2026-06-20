@@ -8,6 +8,7 @@ import { toastStore } from '../../ui/toasts/toasts';
 import { isBackendUnreachable } from 'src/net/backend_fetch';
 import { JotEditorStore } from '../jot_editor_store';
 import { LyricsAlignStore } from './lyrics_align_store';
+import type { Resettable } from '../session_reset';
 
 /**
  * Orchestration over {@link LyricsAlignStore}: the lyrics-load flows
@@ -16,7 +17,7 @@ import { LyricsAlignStore } from './lyrics_align_store';
  * AbortControllers. Reads {@link JotEditorStore} only to size the
  * plain-text spread against the current jot's timeline.
  */
-export class LyricsPresenter {
+export class LyricsPresenter implements Resettable {
   readonly lyricsAlign: LyricsAlignStore;
   readonly jotEditorStore: JotEditorStore;
 
@@ -275,6 +276,13 @@ export class LyricsPresenter {
   clearLyrics(): void {
     lyricsStore.clear();
     this.cancelAllLyricsAlign();
+  }
+
+  /** Session reset: same as {@link clearLyrics} (drop every lyrics row +
+   *  abort in-flight aligns). Lyrics are tied to a specific recording, so a
+   *  new song always starts with none. */
+  reset(): void {
+    this.clearLyrics();
   }
 
   /**

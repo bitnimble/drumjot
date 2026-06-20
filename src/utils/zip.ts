@@ -109,3 +109,142 @@ export function zipEntryBasename(path: string): string {
   const slash = norm.lastIndexOf('/');
   return slash >= 0 ? norm.slice(slash + 1) : norm;
 }
+
+// ---------- Writer ----------
+
+/** One entry to write into a zip via {@link writeZip}. */
+export type ZipWriteEntry = {
+  /** Entry path inside the archive (forward slashes), e.g. `audio/0.mp3`. */
+  name: string;
+  /** Uncompressed bytes. */
+  data: Uint8Array;
+  /** Deflate the entry (method 8) when true; store it uncompressed (method 0)
+   *  when false/omitted. Leave off for already-compressed payloads (MP3 /
+   *  FLAC audio) where deflate only burns CPU; turn on for JSON / text. */
+  compress?: boolean;
+};
+
+/**
+ * Write a minimal, spec-valid zip archive that {@link readCentralDirectory} +
+ * {@link inflateEntry} read back. The counterpart to the reader above: same
+ * "no zip dependency" approach, using `CompressionStream('deflate-raw')` for
+ * the compressed entries. Local headers carry real sizes + CRC32 (no data
+ * descriptors), so the archive is also openable by standard tools.
+ */
+export async function writeZip(entries: ZipWriteEntry[]): Promise<Uint8Array> {
+  const prepared = await Promise.all(
+    entries.map(async (e) => {
+      const crc = crc32(e.data);
+      const body = e.compress ? await deflateRaw(e.data) : e.data;
+      return {
+        nameBytes: new TextEncoder().encode(e.name),
+        body,
+        crc,
+        method: e.compress ? 8 : 0,
+        uncompSize: e.data.length,
+      };
+    })
+  );
+
+  const chunks: Uint8Array[] = [];
+  const central: Uint8Array[] = [];
+  let offset = 0;
+
+  for (const e of prepared) {
+    const local = new Uint8Array(30 + e.nameBytes.length);
+    const lv = new DataView(local.buffer);
+    lv.setUint32(0, LOC_SIG, true);
+    lv.setUint16(4, 20, true); // version needed
+    lv.setUint16(6, 0, true); // flags
+    lv.setUint16(8, e.method, true);
+    lv.setUint16(10, 0, true); // mod time
+    lv.setUint16(12, 0, true); // mod date
+    lv.setUint32(14, e.crc, true);
+    lv.setUint32(18, e.body.length, true); // compressed size
+    lv.setUint32(22, e.uncompSize, true);
+    lv.setUint16(26, e.nameBytes.length, true);
+    lv.setUint16(28, 0, true); // extra len
+    local.set(e.nameBytes, 30);
+
+    const localOffset = offset;
+    chunks.push(local, e.body);
+    offset += local.length + e.body.length;
+
+    const cen = new Uint8Array(46 + e.nameBytes.length);
+    const cv = new DataView(cen.buffer);
+    cv.setUint32(0, CEN_SIG, true);
+    cv.setUint16(4, 20, true); // version made by
+    cv.setUint16(6, 20, true); // version needed
+    cv.setUint16(8, 0, true); // flags
+    cv.setUint16(10, e.method, true);
+    cv.setUint16(12, 0, true); // mod time
+    cv.setUint16(14, 0, true); // mod date
+    cv.setUint32(16, e.crc, true);
+    cv.setUint32(20, e.body.length, true);
+    cv.setUint32(24, e.uncompSize, true);
+    cv.setUint16(28, e.nameBytes.length, true);
+    cv.setUint16(30, 0, true); // extra len
+    cv.setUint16(32, 0, true); // comment len
+    cv.setUint16(34, 0, true); // disk start
+    cv.setUint16(36, 0, true); // internal attrs
+    cv.setUint32(38, 0, true); // external attrs
+    cv.setUint32(42, localOffset, true);
+    cen.set(e.nameBytes, 46);
+    central.push(cen);
+  }
+
+  const cdOffset = offset;
+  let cdSize = 0;
+  for (const c of central) {
+    chunks.push(c);
+    cdSize += c.length;
+    offset += c.length;
+  }
+
+  const eocd = new Uint8Array(22);
+  const ev = new DataView(eocd.buffer);
+  ev.setUint32(0, EOCD_SIG, true);
+  ev.setUint16(8, prepared.length, true); // entries on this disk
+  ev.setUint16(10, prepared.length, true); // total entries
+  ev.setUint32(12, cdSize, true);
+  ev.setUint32(16, cdOffset, true);
+  chunks.push(eocd);
+
+  return concatBytes(chunks, offset + eocd.length);
+}
+
+async function deflateRaw(data: Uint8Array): Promise<Uint8Array> {
+  const stream = new Blob([new Uint8Array(data)])
+    .stream()
+    .pipeThrough(new CompressionStream('deflate-raw'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+function concatBytes(chunks: readonly Uint8Array[], total: number): Uint8Array {
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const c of chunks) {
+    out.set(c, at);
+    at += c.length;
+  }
+  return out;
+}
+
+let CRC_TABLE: Uint32Array | undefined;
+
+/** Standard zip CRC-32 (reflected, poly 0xEDB88320). */
+function crc32(bytes: Uint8Array): number {
+  let table = CRC_TABLE;
+  if (!table) {
+    table = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      table[n] = c >>> 0;
+    }
+    CRC_TABLE = table;
+  }
+  let crc = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) crc = table[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}

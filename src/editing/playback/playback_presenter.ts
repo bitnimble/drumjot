@@ -4,6 +4,7 @@ import { jotToEvents } from 'src/editing/playback/events';
 import { xToTime } from 'src/editing/playback/timeline';
 import { JotEditorStore } from '../jot_editor_store';
 import { PlaybackStore } from './playback_store';
+import type { Resettable } from '../session_reset';
 
 /**
  * Transport + playhead-follow orchestration over {@link PlaybackStore}.
@@ -12,7 +13,7 @@ import { PlaybackStore } from './playback_store';
  * {@link JotEditorStore} for the loaded song's peers (play / seek /
  * drum-offset all need the laid-out `structural` + `tempo`).
  */
-export class PlaybackPresenter {
+export class PlaybackPresenter implements Resettable {
   readonly playback: PlaybackStore;
   readonly jotEditorStore: JotEditorStore;
 
@@ -123,6 +124,21 @@ export class PlaybackPresenter {
 
   stopPlayback(): void {
     jotPlayer.stop();
+  }
+
+  /**
+   * Session reset: stop any in-flight playback (so the playhead, scheduled
+   * drum events, and idle cue from the previous song don't leak onto the
+   * new one) and return the follow-playhead flags to their defaults. The
+   * live {@link PlaybackStore.songLeadInSec} is owned by the constructor's
+   * seeding reaction, which re-fires off the new song's `source`, so it
+   * isn't touched here.
+   */
+  reset(): void {
+    jotPlayer.stop();
+    this.playback.followPlayhead = true;
+    this.playback.autoFollowOnPlay = true;
+    this.playback.followDisabledIsTransient = false;
   }
 
   /**

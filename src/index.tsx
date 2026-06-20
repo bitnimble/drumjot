@@ -124,10 +124,34 @@ class Drumjot {
 
   /** Serialize the currently-loaded song back to DSL (.jot) source text,
    *  the inverse of {@link loadDsl}. Empty string when nothing is loaded.
-   *  Round-trips through {@link writeDsl} over the source jot. */
+   *  Round-trips through {@link writeDsl} over the source jot.
+   *
+   *  Lossy: the DSL is the *subset* format, it reflects only the originally-
+   *  loaded source, not edits made since (those live in the mutable
+   *  document). Use {@link saveMutable} for a lossless, edit-preserving save. */
   toDsl(): string {
     const source = this.jotEditorStore.source;
     return source ? writeDsl(source) : '';
+  }
+
+  /** Save the current session to a mutable `.jot` file (browser download).
+   *  The lossless *superset* format: the edited document plus editor metadata
+   *  (mixer, display settings, palette) the DSL can't carry. */
+  saveMutable(): Promise<void> {
+    return this.jotEditorPresenter.saveMutableFile();
+  }
+
+  /** Encode the current session to mutable `.jot` bytes in memory (no
+   *  download), or `undefined` when nothing is loaded. For programmatic use
+   *  and e2e round-tripping without the OS file picker. */
+  toMutableBytes(): Promise<Uint8Array | undefined> {
+    return this.jotEditorPresenter.toMutableBytes();
+  }
+
+  /** Load mutable `.jot` bytes (the inverse of {@link toMutableBytes}). */
+  loadMutableBytes(bytes: Uint8Array): Promise<void> {
+    const file = new File([new Uint8Array(bytes)], 'session.jot');
+    return this.jotEditorPresenter.loadMutableFile(file);
   }
 
   /** Load one of the registered example jots by id. */

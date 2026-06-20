@@ -1,5 +1,6 @@
 import { makeAutoObservable } from 'mobx';
 import { JotEditorStore } from '../jot_editor_store';
+import type { Resettable } from '../session_reset';
 
 /**
  * Pixels-per-bar at zoom = 1. Same numeric value as `ViewConfig.barWidth`'s
@@ -46,7 +47,7 @@ export function snapToDevicePx(x: number): number {
  * mutation, clamping, device-pixel snapping, zoom application, lives on
  * the presenter; it is the only thing that writes these fields.
  */
-export class ViewportStore {
+export class ViewportStore implements Resettable {
   /** Horizontal zoom multiplier; 1.0 = `BASE_BAR_WIDTH` pixels per bar. */
   zoom: number = 1;
   /**
@@ -84,6 +85,17 @@ export class ViewportStore {
   constructor(jotEditorStore: JotEditorStore) {
     this.jotEditorStore = jotEditorStore;
     makeAutoObservable(this, { jotEditorStore: false });
+  }
+
+  /** Session reset: scroll back to the top-left so a new (possibly shorter)
+   *  song isn't left scrolled past its end. Zoom + gutter width are global
+   *  view preferences that survive a load, and the viewport/content extents
+   *  are re-measured by the ResizeObservers, so neither is touched here.
+   *  The sanctioned session-reset exception (see {@link Resettable}); all
+   *  other writes live on `ViewportPresenter`. */
+  reset(): void {
+    this.scrollX = 0;
+    this.scrollY = 0;
   }
 
   /**
