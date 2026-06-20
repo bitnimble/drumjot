@@ -171,6 +171,38 @@ test('pressing the selection frame (not a notehead) moves the whole group', asyn
   expect(Math.abs(bLeft - aLeft - gap)).toBeLessThan(3);
 });
 
+test('a selection spanning lanes moves horizontally only, preserving each lane', async ({ page }) => {
+  // Grab a hi-hat and a kick (different lanes). Dragging the group must shift it
+  // in time without re-pitching: the hat stays a hat, the kick stays a kick,
+  // even though the cursor travels down across rows.
+  const hat = await noteGeom(page, 'h', 1);
+  const kick = await noteGeom(page, 'k', 0);
+  const kY = await laneCentreY(page, 'k');
+
+  await laneNotes(page, 'h').nth(1).click();
+  await laneNotes(page, 'k').nth(0).click({ modifiers: ['Control'] });
+  await expect(selectedNotes(page)).toHaveCount(2);
+
+  // Mid-drag: previews stay on their own lanes (no collapse onto one lane).
+  await page.mouse.move(hat.x, hat.y);
+  await page.mouse.down();
+  await page.mouse.move(hat.x + 60, kY, { steps: 6 });
+  await expect(dragPreviews(page, 'h')).toHaveCount(1);
+  await expect(dragPreviews(page, 'k')).toHaveCount(1);
+  await page.mouse.up();
+
+  // Committed: both notes kept their original lanes...
+  await expect(
+    page.locator(`[data-testid="instrument-track-h"] [data-note-id="${hat.id}"]`)
+  ).toHaveCount(1);
+  await expect(
+    page.locator(`[data-testid="instrument-track-k"] [data-note-id="${kick.id}"]`)
+  ).toHaveCount(1);
+  // ...and both shifted right by the horizontal delta.
+  expect((await noteLeft(page, hat.id))! - hat.left).toBeGreaterThan(30);
+  expect((await noteLeft(page, kick.id))! - kick.left).toBeGreaterThan(30);
+});
+
 test('a multi-note drag previews every note on its target track (frame hidden)', async ({ page }) => {
   // Two hi-hats; drag the group onto the snare row. Both shift by the same one
   // row, so both previews land on the snare lane.

@@ -118,3 +118,31 @@
     color: var(--color-accent);
     line-height: 1;
 }
+
+/* One-shot action row: label on the left, optional shortcut pill pushed to the
+   right edge. Mirrors `.toggleMenuItem`'s flex layout but with no tick gutter. */
+.actionMenuItem {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    width: 100%;
+}
+
+/* Keyboard-shortcut pill on the right of an action row. Subtle warm chip that
+   reads as secondary to the label. */
+.menuItemShortcut {
+    composes: readoutSm from '../../typography.module.css';
+    padding: 1px 6px;
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-cream-warm);
+    color: var(--color-text-muted-alt);
+    white-space: nowrap;
+}
+
+/* Dim the pill alongside a disabled action (the button's own :disabled greys
+   the label, but the pill sets its own colour). */
+.actionMenuItem:disabled .menuItemShortcut {
+    opacity: 0.55;
+}

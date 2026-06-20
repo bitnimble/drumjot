@@ -1,5 +1,6 @@
 import type { EditingPresenter } from 'src/editing/editing_presenter';
 import type { PlaybackPresenter } from 'src/editing/playback/playback_presenter';
+import type { HistoryPresenter } from 'src/editing/history/history_presenter';
 
 /**
  * Dependencies a command needs to run. The keymap dispatcher builds this from
@@ -9,6 +10,7 @@ import type { PlaybackPresenter } from 'src/editing/playback/playback_presenter'
 export type CommandContext = {
   editingPresenter: EditingPresenter;
   playbackPresenter: PlaybackPresenter;
+  historyPresenter: HistoryPresenter;
 };
 
 /**
@@ -35,6 +37,16 @@ export const EDITOR_COMMANDS: readonly EditorCommand[] = [
     id: 'togglePlayPause',
     label: 'Play / pause',
     run: (ctx) => void ctx.playbackPresenter.togglePlayPause(),
+  },
+  {
+    id: 'undo',
+    label: 'Undo',
+    run: (ctx) => ctx.historyPresenter.undo(),
+  },
+  {
+    id: 'redo',
+    label: 'Redo',
+    run: (ctx) => ctx.historyPresenter.redo(),
   },
 ];
 

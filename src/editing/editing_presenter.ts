@@ -1,4 +1,4 @@
-import { makeAutoObservable } from 'mobx';
+import { makeAutoObservable, reaction } from 'mobx';
 import type { Element, MutableJot, NoteElement } from 'src/schema/schema';
 import { laneForNote, layerIdOfTrack } from 'src/schema/ordering';
 import { SettingsStore } from 'src/settings/settings_store';
@@ -7,9 +7,10 @@ import { SelectionStore } from 'src/editing/selection/selection';
 import { SelectionPresenter } from 'src/editing/selection/selection_presenter';
 import { LayersPresenter } from 'src/editing/layers/layers_presenter';
 import { enabledDivisors, snapBeat } from './snap';
-import { buildLaneMap } from './score/note_geometry';
-import { EditingStore, type EditMode, type PlaceholderNote } from './editing_store';
+import { buildLaneMap, notesById } from './score/note_geometry';
+import { EditingStore, type DragPreviewNote, type EditMode, type PlaceholderNote } from './editing_store';
 import { JotEditorStore } from './jot_editor_store';
+import type { ClipboardNote, ClipboardPayload } from './clipboard/clipboard_payload';
 
 /** Per-drag bookkeeping captured at drag start; presenter-local (not store
  *  state, like an in-flight AbortController). Positions are recomputed top-down
@@ -34,10 +35,41 @@ type DragMoveCtx = {
   leadInBeats: number;
   /** Every selected note's id, origin lane, and origin absolute beat. */
   notes: { id: string; lane: string; origAbs: number }[];
+  /** True when the dragged selection spans more than one lane. A multi-lane
+   *  group moves horizontally only, each note keeps its own lane, so a
+   *  cross-lane drag never re-pitches the cluster. A single-lane group (incl. a
+   *  lone note) still follows the cursor's lane. Frozen at drag start. */
+  spansMultipleLanes: boolean;
   /** Rendered top-to-bottom lane order (mixer order), for the group lane shift. */
   laneOrder: readonly string[];
   lastClientX: number;
   lastTargetLane: string;
+};
+
+/** Per-paste-placement bookkeeping, the paste analogue of {@link DragMoveCtx}.
+ *  Presenter-local. Where a drag moves EXISTING notes by a cursor delta, a paste
+ *  places COPIED notes at an absolute cursor beat; both share the span rule +
+ *  clamp via {@link placementPreview}, so a multi-lane paste preserves lanes
+ *  exactly like a multi-lane drag. */
+type PasteCtx = {
+  /** Each pasted note: a synthetic preview id, its lane, the anchor-relative
+   *  beat offset (`baseAbs`), and the source fields to write on commit. */
+  members: { id: string; lane: string; baseAbs: number; note: ClipboardNote }[];
+  /** True when the cluster spans more than one lane (then lanes are preserved;
+   *  a single-lane cluster follows the cursor's lane). */
+  spansMultipleLanes: boolean;
+  /** Snaps the cursor's absolute anchor beat to the grid (identity when off). */
+  snap: (rawAbs: number) => number;
+  /** Timeline length in beats (upper clamp) + rendered lead-in offset. */
+  total: number;
+  leadInBeats: number;
+  laneOrder: readonly string[];
+  /** Latest cursor anchor beat (musical) + lane the cursor is over. */
+  lastAnchorAbs: number;
+  lastTargetLane: string;
+  /** False until the first pointer move over the score gives a real position;
+   *  a commit before then is a no-op (nothing placed). */
+  hasCursor: boolean;
 };
 
 /** One bar's place in the absolute-beat coordinate (cumulative across bars). */
@@ -61,6 +93,10 @@ const INSERTED_NOTE_DURATION = 0.25;
 export class EditingPresenter {
   /** Live drag-move bookkeeping, or undefined when no drag is in flight. */
   private dragCtx: DragMoveCtx | undefined = undefined;
+  /** Live paste-placement bookkeeping, or undefined when no paste is in flight. */
+  private pasteCtx: PasteCtx | undefined = undefined;
+  /** Disposes the doc-swap reaction (teardown / leak tests). */
+  private readonly disposeLoadReaction: () => void;
 
   constructor(
     private readonly editingStore: EditingStore,
@@ -79,6 +115,8 @@ export class EditingPresenter {
       | 'selectionPresenter'
       | 'layersPresenter'
       | 'dragCtx'
+      | 'pasteCtx'
+      | 'disposeLoadReaction'
     >(this, {
       editingStore: false,
       jotEditorStore: false,
@@ -87,7 +125,26 @@ export class EditingPresenter {
       selectionPresenter: false,
       layersPresenter: false,
       dragCtx: false,
+      pasteCtx: false,
+      disposeLoadReaction: false,
     });
+    // A song load swaps the backing document out from under any in-flight
+    // paste/drag, whose ctx captured the PREVIOUS song's bar layout. Cancel
+    // them on the swap so a stale placement can't survive into the new song
+    // (committing misplaced notes) or leave the editor stuck in paste mode.
+    this.disposeLoadReaction = reaction(
+      () => this.jotEditorStore.loroDoc,
+      () => {
+        this.cancelPaste();
+        this.cancelDragMove();
+      }
+    );
+  }
+
+  /** Tear down the doc-swap reaction (editor disposal / leak tests). The
+   *  presenter is otherwise page-lifetime, so the live app never calls this. */
+  dispose(): void {
+    this.disposeLoadReaction();
   }
 
   setMode(mode: EditMode): void {
@@ -242,6 +299,8 @@ export class EditingPresenter {
     const jot = this.jotEditorStore.jot;
     const layers = this.jotEditorStore.structural?.musicalLayers;
     if (!jot || !layers) return;
+    // A drag supersedes any in-flight paste placement (they share `dragPreview`).
+    this.cancelPaste();
     if (!this.selectionStore.isSelected(anchor)) this.selectionPresenter.replace(anchor);
 
     const layout = buildBarLayout(layers);
@@ -267,6 +326,7 @@ export class EditingPresenter {
       total: layout.total,
       leadInBeats: this.jotEditorStore.structural?.barsForLane(anchor.lane).leadInBarsBeats ?? 0,
       notes,
+      spansMultipleLanes: new Set(notes.map((n) => n.lane)).size > 1,
       laneOrder: this.jotEditorStore.structural?.lanes ?? [],
       lastClientX: startClientX,
       lastTargetLane: anchor.lane,
@@ -294,26 +354,24 @@ export class EditingPresenter {
     this.applyPreview();
   }
 
-  /** Recompute the preview glyph positions from the current cursor delta +
-   *  target lane. Horizontal: `(clientX - startX) / pxPerBeat`, snapped. Lane:
-   *  each note shifts by the same row delta the anchor moved over `laneOrder`. */
+  /** Recompute the drag-move preview from the current cursor delta + target
+   *  lane. Horizontal: `(clientX - startX) / pxPerBeat`, snapped to the grid;
+   *  the snapped delta shifts every member off its rest position. Lane: the
+   *  shared span rule (see {@link placementPreview}). */
   private applyPreview(): void {
     const ctx = this.dragCtx;
     if (!ctx) return;
     const px = this.jotEditorStore.structural?.pxPerBeat ?? 0;
     const rawDelta = px > 0 ? (ctx.lastClientX - ctx.startClientX) / px : 0;
-    const snapped = ctx.snap(rawDelta);
-    const order = ctx.laneOrder;
-    const fromIdx = order.indexOf(ctx.startLane ?? ctx.anchor.lane);
-    const toIdx = order.indexOf(ctx.lastTargetLane);
-    const rowDelta = fromIdx >= 0 && toIdx >= 0 ? toIdx - fromIdx : 0;
-    this.editingStore.dragPreview = ctx.notes.map((n) => {
-      const i = order.indexOf(n.lane);
-      const lane = i >= 0 ? order[Math.min(Math.max(i + rowDelta, 0), order.length - 1)] : n.lane;
-      const musicalAbs = Math.min(Math.max(n.origAbs + snapped, 0), ctx.total);
-      // Glyphs render in the rendered (lead-in-inclusive) coordinate.
-      return { id: n.id, lane, absBeat: ctx.leadInBeats + musicalAbs };
-    });
+    const shift = ctx.snap(rawDelta);
+    this.editingStore.dragPreview = placementPreview(
+      ctx.notes.map((n) => ({ id: n.id, lane: n.lane, baseAbs: n.origAbs })),
+      shift,
+      ctx.spansMultipleLanes,
+      ctx.lastTargetLane,
+      ctx.total,
+      ctx.leadInBeats
+    );
   }
 
   /** Commit the drag-move: writes the previewed positions via
@@ -327,7 +385,12 @@ export class EditingPresenter {
     if (!ctx) return;
     const px = this.jotEditorStore.structural?.pxPerBeat ?? 0;
     const rawDelta = px > 0 ? (ctx.lastClientX - ctx.startClientX) / px : 0;
-    const laneMap = buildLaneMap(ctx.laneOrder, ctx.startLane ?? ctx.anchor.lane, ctx.lastTargetLane);
+    // Span rule (mirrors `applyPreview`): a multi-lane group keeps every lane
+    // (identity map); a single-lane group re-homes wholesale onto the cursor's
+    // lane via the row-index shift.
+    const laneMap = ctx.spansMultipleLanes
+      ? SAME_LANE
+      : buildLaneMap(ctx.laneOrder, ctx.startLane ?? ctx.anchor.lane, ctx.lastTargetLane);
     this.moveSelection(ctx.anchor, rawDelta, laneMap);
   }
 
@@ -376,6 +439,225 @@ export class EditingPresenter {
     };
     jot.elements.set(id, note);
   }
+
+  // ---------- Clipboard: copy + paste placement ----------
+
+  /**
+   * Serialize the current selection into a {@link ClipboardPayload} for the
+   * clipboard, or `undefined` when nothing's selected. Positions are normalized
+   * to the cluster's earliest note (`relBeat` 0); each note carries its lane +
+   * musical fields, but NOT its identity / owning bar / track, those are
+   * re-resolved from the drop position on paste. `copiedAt` lets a later copy
+   * (here or in another tab) win the newer-wins pick. The {@link ClipboardPresenter}
+   * owns the clipboard write; this is just the document → payload projection.
+   */
+  copySelectionPayload(): ClipboardPayload | undefined {
+    const jot = this.jotEditorStore.jot;
+    const layers = this.jotEditorStore.structural?.musicalLayers;
+    const selected = this.selectionStore.selectedNotes;
+    if (!jot || !layers || selected.size === 0) return undefined;
+    const layout = buildBarLayout(layers);
+    const rows: { lane: string; abs: number; el: NoteElement }[] = [];
+    for (const n of selected) {
+      const el = jot.elements.get(n.id) as Element | undefined;
+      if (!el || el.kind !== 'note' || el.barId === undefined) continue;
+      const slot = layout.byId.get(el.barId);
+      if (!slot) continue;
+      rows.push({ lane: laneForNote(jot, el), abs: slot.start + el.beat, el });
+    }
+    if (rows.length === 0) return undefined;
+    const minAbs = Math.min(...rows.map((r) => r.abs));
+    const notes: ClipboardNote[] = rows.map((r) => ({
+      lane: r.lane,
+      relBeat: r.abs - minAbs,
+      duration: r.el.duration,
+      modifiers: [...r.el.modifiers],
+      ...(r.el.sticking !== undefined ? { sticking: r.el.sticking } : {}),
+      ...(r.el.roll !== undefined ? { roll: r.el.roll } : {}),
+      ...(r.el.vol !== undefined ? { vol: r.el.vol } : {}),
+      ...(r.el.offsetMs !== undefined ? { offsetMs: r.el.offsetMs } : {}),
+      ...(r.el.velocity !== undefined ? { velocity: r.el.velocity } : {}),
+      ...(r.el.midiNote !== undefined ? { midiNote: r.el.midiNote } : {}),
+    }));
+    return { copiedAt: Date.now(), notes };
+  }
+
+  /** Snap an absolute anchor beat to the grid (paste analogue of
+   *  {@link snapDeltaFn}). Identity when snapping is off. */
+  private snapAbsFn(total: number): (rawAbs: number) => number {
+    if (!this.editingStore.snappingEnabled) return (a) => a;
+    const divisors = enabledDivisors(this.settingsStore.gridLines);
+    return (rawAbs) => snapBeat(rawAbs, divisors, total);
+  }
+
+  /**
+   * Begin a paste placement of `payload`: the copied cluster becomes a live
+   * preview that follows the cursor (a click commits it, Esc cancels). Nothing
+   * is written until commit. The preview is empty until the first pointer move
+   * over the score gives an anchor position. Supersedes any in-flight paste.
+   */
+  beginPaste(payload: ClipboardPayload): void {
+    const jot = this.jotEditorStore.jot;
+    const layers = this.jotEditorStore.structural?.musicalLayers;
+    if (!jot || !layers || payload.notes.length === 0) return;
+    // A paste supersedes any in-flight drag (they share `dragPreview`).
+    this.cancelDragMove();
+    const layout = buildBarLayout(layers);
+    if (layout.slots.length === 0) return;
+    const lanes = new Set(payload.notes.map((n) => n.lane));
+    const anchorLane = payload.notes[0].lane;
+    this.pasteCtx = {
+      members: payload.notes.map((n, i) => ({
+        id: `paste:${i}`,
+        lane: n.lane,
+        baseAbs: n.relBeat,
+        note: n,
+      })),
+      spansMultipleLanes: lanes.size > 1,
+      snap: this.snapAbsFn(layout.total),
+      total: layout.total,
+      leadInBeats: this.jotEditorStore.structural?.barsForLane(anchorLane).leadInBarsBeats ?? 0,
+      laneOrder: this.jotEditorStore.structural?.lanes ?? [],
+      lastAnchorAbs: 0,
+      lastTargetLane: anchorLane,
+      hasCursor: false,
+    };
+    this.editingStore.pasteActive = true;
+    // Preview appears on the first pointer move (which seeds the anchor).
+    this.editingStore.dragPreview = [];
+  }
+
+  /**
+   * Update an in-flight paste from a bars-row pointer move: `anchorAbs` is the
+   * cursor's absolute musical beat (the row's `placeholderAt` mapping) and
+   * `targetLane` is the row the cursor is over. Mirrors {@link updateDragMove},
+   * but the horizontal quantity is an absolute beat, not a delta.
+   */
+  updatePaste(anchorAbs: number, targetLane: string, laneOrder: readonly string[]): void {
+    const ctx = this.pasteCtx;
+    if (!ctx) return;
+    ctx.lastAnchorAbs = anchorAbs;
+    ctx.lastTargetLane = targetLane;
+    ctx.laneOrder = laneOrder;
+    ctx.hasCursor = true;
+    this.applyPastePreview();
+  }
+
+  /** Recompute the paste preview from the current cursor anchor + target lane,
+   *  through the same {@link placementPreview} span rule as a drag. */
+  private applyPastePreview(): void {
+    const ctx = this.pasteCtx;
+    if (!ctx) return;
+    const shift = ctx.snap(ctx.lastAnchorAbs);
+    this.editingStore.dragPreview = placementPreview(
+      ctx.members,
+      shift,
+      ctx.spansMultipleLanes,
+      ctx.lastTargetLane,
+      ctx.total,
+      ctx.leadInBeats
+    );
+  }
+
+  /**
+   * Commit the paste: write every previewed note as a fresh note (new id,
+   * resolved layer/track for its lane, owning bar from its absolute beat) in
+   * one Loro commit (so it's one undo step), then select the pasted notes. The
+   * lane + position match the preview exactly (same span rule + snap). No-op
+   * before the first pointer move (no position chosen) or with no document.
+   */
+  commitPaste(): void {
+    const ctx = this.pasteCtx;
+    this.pasteCtx = undefined;
+    this.editingStore.pasteActive = false;
+    this.editingStore.dragPreview = [];
+    if (!ctx || !ctx.hasCursor) return;
+    const jot = this.jotEditorStore.jot;
+    const layers = this.jotEditorStore.structural?.musicalLayers;
+    if (!jot || !layers) return;
+    const layout = buildBarLayout(layers);
+    if (layout.slots.length === 0) return;
+    const structural = this.jotEditorStore.structural;
+    const shift = ctx.snap(ctx.lastAnchorAbs);
+    const newIds: string[] = [];
+    const entries: [string, Record<string, unknown>][] = [];
+    for (const m of ctx.members) {
+      const lane = ctx.spansMultipleLanes ? m.lane : ctx.lastTargetLane;
+      const abs = Math.min(Math.max(m.baseAbs + shift, 0), layout.total);
+      const dest = homeBar(layout.slots, abs);
+      // Resolve the note's home like insertNote: the firstmost layer owning the
+      // lane, else the primary layer; mint its instrument track if needed.
+      const layerId = structural?.ownerLayerFor(lane) ?? primaryLayerId(jot);
+      const trackId =
+        layerId !== undefined ? this.layersPresenter.ensureInstrumentTrack(layerId, lane) : undefined;
+      const id = crypto.randomUUID();
+      newIds.push(id);
+      const n = m.note;
+      entries.push([
+        id,
+        {
+          id,
+          barId: dest.id,
+          beat: abs - dest.start,
+          duration: n.duration,
+          kind: 'note',
+          lane,
+          modifiers: [...n.modifiers],
+          ...(n.sticking !== undefined ? { sticking: n.sticking } : {}),
+          ...(n.roll !== undefined ? { roll: n.roll } : {}),
+          ...(n.vol !== undefined ? { vol: n.vol } : {}),
+          ...(n.offsetMs !== undefined ? { offsetMs: n.offsetMs } : {}),
+          ...(n.velocity !== undefined ? { velocity: n.velocity } : {}),
+          ...(n.midiNote !== undefined ? { midiNote: n.midiNote } : {}),
+          ...(trackId !== undefined ? { trackId } : {}),
+        },
+      ]);
+    }
+    if (entries.length === 0) return;
+    jot.elements.setAll(entries);
+    // Select the freshly-pasted notes (resolved from the recomputed structure).
+    const byId = notesById(this.jotEditorStore.structural?.musicalLayers ?? []);
+    const pasted: StructNote[] = [];
+    for (const id of newIds) {
+      const n = byId.get(id);
+      if (n) pasted.push(n);
+    }
+    this.selectionPresenter.setNotes(pasted);
+  }
+
+  /** Abandon an in-flight paste placement (Esc / a new load), writing nothing
+   *  and clearing the preview. No-op when no paste is active. */
+  cancelPaste(): void {
+    if (!this.pasteCtx && !this.editingStore.pasteActive) return;
+    this.pasteCtx = undefined;
+    this.editingStore.pasteActive = false;
+    this.editingStore.dragPreview = [];
+  }
+}
+
+/**
+ * The shared placement core for drag-move AND paste: position each member at
+ * `baseAbs + shift` (clamped to the timeline) and assign its lane by the span
+ * rule, a cluster spanning >1 lane keeps every member's own lane (a
+ * horizontal-only move), while a single-lane cluster moves wholesale onto
+ * `targetLane` (the cursor's lane). Returns preview glyphs in the rendered
+ * (lead-in-inclusive) coordinate. This is the single definition of "how a
+ * multi-note group follows the cursor", reused so paste behaves identically to
+ * a multi-lane drag.
+ */
+function placementPreview(
+  members: readonly { id: string; lane: string; baseAbs: number }[],
+  shift: number,
+  spansMultipleLanes: boolean,
+  targetLane: string,
+  total: number,
+  leadInBeats: number
+): DragPreviewNote[] {
+  return members.map((m) => {
+    const lane = spansMultipleLanes ? m.lane : targetLane;
+    const musicalAbs = Math.min(Math.max(m.baseAbs + shift, 0), total);
+    return { id: m.id, lane, absBeat: leadInBeats + musicalAbs };
+  });
 }
 
 /** Build the absolute-beat coordinate from the musical bars (real bars only,
