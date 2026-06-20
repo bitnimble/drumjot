@@ -1,4 +1,5 @@
 import { makeAutoObservable, observable } from 'mobx';
+import type { LoroDoc } from 'loro-crdt';
 import { Jot } from 'src/schema/dsl/dsl';
 import type { MutableJot, JotSchema } from 'src/schema/schema';
 import type { ReactiveDoc } from 'src/schema/reactive_doc';
@@ -79,11 +80,25 @@ export class JotEditorStore {
     // consumer that reads the mutable jot directly (e.g. `LayersStore.layout`
     // off `jot.ordering`) re-derives when a new song loads rather than staying
     // pinned to the previous doc. `jot` stays a plain getter that reads it.
-    makeAutoObservable<this, 'mutableDoc'>(this, { mutableDoc: observable.ref, jot: false });
+    makeAutoObservable<this, 'mutableDoc'>(this, {
+      mutableDoc: observable.ref,
+      jot: false,
+      loroDoc: false,
+    });
   }
 
   get isLoading(): boolean {
     return this.loadingCount > 0;
+  }
+
+  /** The backing Loro document for the loaded song, or `undefined` before the
+   *  first load. The source of truth for undo/redo: `HistoryPresenter` builds
+   *  its `UndoManager` from this and reattaches when the reference swaps on
+   *  reload. App edits still go through {@link jot}; this is the synchroniser
+   *  handle, not an edit surface. Reading it tracks the `observable.ref`
+   *  {@link mutableDoc}, so a reaction over it re-fires when a new song loads. */
+  get loroDoc(): LoroDoc | undefined {
+    return this.mutableDoc?.doc;
   }
 
   /** The mutable document model for the loaded song, or `undefined` before

@@ -13,6 +13,14 @@ export const DEFAULT_KEYMAP: Keymap = {
   Delete: 'deleteSelection',
   Backspace: 'deleteSelection',
   Space: 'togglePlayPause',
+  // `Mod` = Ctrl on Windows/Linux, Cmd on macOS (see `eventCombo`). Undo /
+  // redo follow the cross-platform convention (Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z,
+  // plus Ctrl+Y for Windows muscle memory). Cut/copy/paste are intentionally
+  // NOT here: they ride the DOM `copy`/`cut`/`paste` events (see
+  // `clipboard_presenter`) so the system clipboard + context menu integrate.
+  'Mod+z': 'undo',
+  'Mod+Shift+z': 'redo',
+  'Mod+y': 'redo',
 };
 
 /** INPUT `type`s where a keystroke is meaningful text entry and shortcuts must
@@ -28,17 +36,70 @@ const TEXT_ENTRY_INPUT_TYPES = new Set([
   'number',
 ]);
 
-/** Normalize a KeyboardEvent to a combo string used as a keymap key. Space is
- *  spelled `Space` (its `key` is a literal space); other keys use `key`
- *  directly (`Delete`, `Backspace`, …). */
-export function eventCombo(e: Pick<KeyboardEvent, 'key' | 'code'>): string {
+/** Normalize a KeyboardEvent to a combo string used as a keymap key.
+ *
+ *  Space is spelled `Space` (its `key` is a literal space) and stays
+ *  modifier-free for backwards compatibility. Otherwise the combo is the
+ *  modifier prefix (`Mod` for Ctrl/Cmd, then `Alt`, then `Shift`, in that
+ *  fixed order) joined to the key by `+`: `Mod+z`, `Mod+Shift+z`, `Delete`.
+ *
+ *  `Mod` unifies Ctrl (Windows/Linux) and Cmd (macOS) so one binding serves
+ *  both platforms. Single-character keys are lower-cased so the binding is
+ *  written `Mod+z` regardless of Shift (whose presence is carried by the
+ *  explicit `Shift` token, not the letter case `Z`). */
+export function eventCombo(
+  e: Pick<KeyboardEvent, 'key' | 'code' | 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>
+): string {
   if (e.code === 'Space' || e.key === ' ') return 'Space';
-  return e.key;
+  const parts: string[] = [];
+  if (e.ctrlKey || e.metaKey) parts.push('Mod');
+  if (e.altKey) parts.push('Alt');
+  if (e.shiftKey) parts.push('Shift');
+  parts.push(e.key.length === 1 ? e.key.toLowerCase() : e.key);
+  return parts.join('+');
+}
+
+/** macOS runtime (render `Mod` as ⌘, not Ctrl). Best-effort + SSR-safe;
+ *  defaults to non-mac. `navigator.platform` is deprecated but still the most
+ *  reliable signal in current browsers; prefer `userAgentData` when present. */
+function isMacPlatform(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const platform =
+    (navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform ??
+    navigator.platform ??
+    '';
+  return /mac/i.test(platform);
+}
+
+/** Render a normalized combo (see {@link eventCombo}) as a human-readable
+ *  shortcut for a menu pill: `Mod+Shift+z` → `⌘⇧Z` on macOS, `Ctrl+Shift+Z`
+ *  elsewhere. macOS concatenates its glyphs; other platforms join with `+`. */
+export function formatCombo(combo: string): string {
+  const mac = isMacPlatform();
+  const symbols: Record<string, string> = mac
+    ? { Mod: '⌘', Shift: '⇧', Alt: '⌥' }
+    : { Mod: 'Ctrl', Shift: 'Shift', Alt: 'Alt' };
+  const parts = combo.split('+').map((p) => symbols[p] ?? (p.length === 1 ? p.toUpperCase() : p));
+  return mac ? parts.join('') : parts.join('+');
+}
+
+/** Display label of the FIRST shortcut bound to `commandId` in `keymap`, or
+ *  undefined if none. Reads the live keymap registry, so a future rebind shows
+ *  the new key with no hardcoded shortcut text anywhere. */
+export function shortcutForCommand(
+  commandId: string,
+  keymap: Keymap = DEFAULT_KEYMAP
+): string | undefined {
+  for (const [combo, id] of Object.entries(keymap)) {
+    if (id === commandId) return formatCombo(combo);
+  }
+  return undefined;
 }
 
 /** True when the event target is a control that should swallow the keystroke
- *  (the user is typing / driving a native picker). */
-function isTextEntryTarget(target: EventTarget | null): boolean {
+ *  (the user is typing / driving a native picker). Shared with the clipboard
+ *  handlers so copy/cut/paste over a focused text field stay native. */
+export function isTextEntryTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
   const tag = el?.tagName;
   const isTextInput =

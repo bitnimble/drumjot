@@ -354,6 +354,50 @@ export const DropdownSection = ({
 );
 
 /**
+ * A one-shot action row inside a {@link DropdownButton} panel: a label on the
+ * left and (optionally) a keyboard-shortcut pill on the right. Unlike
+ * {@link ToggleMenuItem} it carries no tick and reads as `menuitem`; the caller
+ * typically dismisses the panel from `onClick` (via the render-prop `close`).
+ * `disabled` greys it out but keeps it visible (an unavailable action still
+ * shows where it lives + its shortcut).
+ */
+export const ActionMenuItem = ({
+  label,
+  onClick,
+  disabled,
+  shortcut,
+  title,
+  testId,
+}: {
+  label: React.ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  /** Display text for the trailing shortcut pill (e.g. `Ctrl+Z`). Pull it from
+   *  the keymap registry (see `shortcutForCommand`) so a rebind reflects here
+   *  rather than hardcoding it. Omitted = no pill. */
+  shortcut?: string;
+  title?: string;
+  testId?: string;
+}) => (
+  <button
+    type="button"
+    className={classNames(styles.dropdownItem, styles.actionMenuItem)}
+    role="menuitem"
+    onClick={onClick}
+    disabled={disabled}
+    title={title}
+    data-testid={testId}
+  >
+    <span>{label}</span>
+    {shortcut && (
+      <span className={styles.menuItemShortcut} data-testid={testId ? `${testId}-shortcut` : undefined}>
+        {shortcut}
+      </span>
+    )}
+  </button>
+);
+
+/**
  * Dropdown menu row with a leading tick (or blank gutter) so the user
  * sees the toggle's current state at a glance. Acts like a regular
  * `.dropdownItem` (hover background, focus ring) but the panel stays

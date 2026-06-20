@@ -208,6 +208,19 @@ export const InstrumentTrackView = observer(
         editingPresenter.updateDragMove(lane, e.clientX, laneOrder);
         return;
       }
+      // A paste placement in flight: feed the cursor's absolute beat (same
+      // clientX→beat mapping as the insert placeholder) + the row's lane; the
+      // copied cluster follows via the shared placement core.
+      if (editing?.pasteActive) {
+        let pLeft = barsRowLeftRef.current;
+        if (pLeft === null) {
+          pLeft = e.currentTarget.getBoundingClientRect().left;
+          barsRowLeftRef.current = pLeft;
+        }
+        const ph = placeholderAt(e.clientX, pLeft);
+        if (ph) editingPresenter.updatePaste(ph.absBeat, lane, laneOrder);
+        return;
+      }
       if (editing?.mode !== 'insert') return;
       let left = barsRowLeftRef.current;
       if (left === null) {
@@ -223,6 +236,12 @@ export const InstrumentTrackView = observer(
       if (editing?.mode === 'insert') editingPresenter?.clearPlaceholder();
     };
     const onBarsRowClick = (e: React.MouseEvent<HTMLDivElement>) => {
+      // A click during a paste placement commits the cluster at its previewed
+      // position (and is swallowed here so it doesn't also seek).
+      if (editing?.pasteActive && editingPresenter) {
+        editingPresenter.commitPaste();
+        return;
+      }
       if (editing?.mode === 'insert' && editingPresenter) {
         editingPresenter.insertNote();
         return;

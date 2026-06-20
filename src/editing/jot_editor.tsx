@@ -51,6 +51,12 @@ import { Minimap } from './minimap/minimap';
 import { EditingStore } from './editing_store';
 import { EditingPresenter } from './editing_presenter';
 import { EditingStoreContext, EditingPresenterContext } from './editing_contexts';
+import { HistoryStore } from './history/history_store';
+import { HistoryPresenter } from './history/history_presenter';
+import { HistoryStoreContext, HistoryPresenterContext } from './history/history_contexts';
+import { ClipboardStore } from './clipboard/clipboard_store';
+import { ClipboardPresenter } from './clipboard/clipboard_presenter';
+import { useClipboardShortcuts } from './clipboard/clipboard_shortcuts';
 import { EditingToolbar } from './editing_toolbar';
 import { useEditorKeymap } from './keyboard/keymap';
 import { VerticalScrollbar } from './viewport/vertical_scrollbar';
@@ -115,6 +121,12 @@ type CreateJotEditorResult = {
   selectionPresenter: SelectionPresenter;
   editingStore: EditingStore;
   editingPresenter: EditingPresenter;
+  /** Undo/redo availability + its writer (wraps Loro's UndoManager). */
+  history: HistoryStore;
+  historyPresenter: HistoryPresenter;
+  /** In-app clipboard + copy/cut/paste orchestration. */
+  clipboard: ClipboardStore;
+  clipboardPresenter: ClipboardPresenter;
   /** Right-sidebar peers. */
   sidebar: SidebarStore;
   sidebarPresenter: SidebarPresenter;
@@ -181,6 +193,14 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     selectionPresenter,
     layersPresenter
   );
+  // Undo/redo: a thin presenter over Loro's UndoManager (rebuilt per loaded
+  // doc); availability mirrors into the data-only HistoryStore.
+  const history = new HistoryStore();
+  const historyPresenter = new HistoryPresenter(history, jotEditorStore);
+  // Clipboard: copy/cut/paste of selected notes. Paste defers to the editing
+  // presenter's placement (the copied cluster follows the cursor).
+  const clipboard = new ClipboardStore();
+  const clipboardPresenter = new ClipboardPresenter(clipboard, editingPresenter);
 
   // Marquee hit-test: which notes a rubber-band box (scroll-content coords)
   // encloses, resolved to the current StructNotes. Reads the DOM, so it only
@@ -214,6 +234,9 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
   };
   const onMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
+    // A press during a paste placement is the commit click (handled on the
+    // bars row); don't start a marquee under it.
+    if (editingStore.pasteActive) return;
     e.preventDefault();
     marqueeOrigin = containerPoint(e);
     selectionPresenter.beginMarquee(marqueeOrigin);
@@ -308,7 +331,11 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     // a focused BUTTON / range slider fall through, so Space `preventDefault`
     // both stops page scroll and the button's space-activation and always
     // toggles transport. Keys are remappable by swapping the keymap.
-    useEditorKeymap({ editingPresenter, playbackPresenter });
+    useEditorKeymap({ editingPresenter, playbackPresenter, historyPresenter });
+    // Note cut/copy/paste ride the DOM clipboard events (not the keymap) so the
+    // system clipboard + context menu integrate; this also installs Esc-cancel
+    // for an in-flight paste placement.
+    useClipboardShortcuts(clipboardPresenter, editingStore, editingPresenter);
 
     const provenanceContextValue = provenance.provenanceContextValue;
 
@@ -405,6 +432,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
         <SelectionPresenterContext.Provider value={selectionPresenter}>
         <EditingStoreContext.Provider value={editingStore}>
         <EditingPresenterContext.Provider value={editingPresenter}>
+        <HistoryStoreContext.Provider value={history}>
+        <HistoryPresenterContext.Provider value={historyPresenter}>
           <NoteProvenanceContext.Provider value={provenanceContextValue}>
             <GridLineSettingsContext.Provider value={settings.gridLines}>
               <MergeLayersContext.Provider value={settings.mergeLayers}>
@@ -532,6 +561,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
               </MergeLayersContext.Provider>
             </GridLineSettingsContext.Provider>
           </NoteProvenanceContext.Provider>
+        </HistoryPresenterContext.Provider>
+        </HistoryStoreContext.Provider>
         </EditingPresenterContext.Provider>
         </EditingStoreContext.Provider>
         </SelectionPresenterContext.Provider>
@@ -562,6 +593,10 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     selectionPresenter,
     editingStore,
     editingPresenter,
+    history,
+    historyPresenter,
+    clipboard,
+    clipboardPresenter,
     sidebar,
     sidebarPresenter,
     layers,
