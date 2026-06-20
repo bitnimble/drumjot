@@ -118,13 +118,13 @@ type Volume = 'pp' | 'p' | 'mp' | 'mf' | 'f' | 'ff';
 type BpmTransition = {
   start?: number;
   end: number;
-  duration: number; // bars
+  duration: number; // quarter-note beats (may be fractional)
 };
 
 type VolTransition = {
   start?: Volume;
   end: Volume;
-  duration: number; // bars
+  duration: number; // quarter-note beats (may be fractional)
 };
 
 // One drum-kit instrument (kick, snare, hi-hat, ...).
