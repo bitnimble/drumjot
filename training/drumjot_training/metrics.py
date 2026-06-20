@@ -62,8 +62,8 @@ def pick_onsets_lane(activation: np.ndarray, fps: float, lane: str, threshold: f
 
 
 def onset_f1(
-    ref_times: Sequence[float],
-    est_times: Sequence[float],
+    ref_times: Sequence[float] | np.ndarray,
+    est_times: Sequence[float] | np.ndarray,
     tolerance: float = 0.05,
 ) -> dict[str, float]:
     """Onset F-measure / precision / recall at +/-`tolerance` seconds.

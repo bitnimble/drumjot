@@ -46,14 +46,23 @@ training/
     forced_align.py per-note envelope snap + support gate
     dedup.py / clean.py   dedup keys + cleaning-stage dedup/support scoring
     paths.py        dataset paths via env var / data_paths.toml
+    parampred/      adaptive per-song peak-pick params (see section below):
+                    oracle.py (per-song best params), features.py (activation +
+                    audio features), baseline.py (deterministic knee rules),
+                    regressor.py (per-lane HistGBR), dataset.py (corpus table),
+                    augment.py (onset-preserving audio aug), eval_gap.py,
+                    report.py
   scripts/
     fetch_egmd.sh / fetch_star.sh   dataset download + unpack
     extract_star_mix.py     mix-only STAR extract from the zip parts (~39 GB)
     extract_star_subset.py  N-song subset from the parts
     extract_star_stems.py   mirror a subset with re-synth DRUM-STEM audio
     extract_star_balanced.py  class-balanced (rare-lane) selection from the parts
-    eval_paradb.py          ParaDB test-set eval (separate -> per-instrument -> score)
+    eval_paradb.py          ParaDB test-set eval (separate -> per-instrument -> score);
+                            --oracle-report adds the adaptive-param gap gate
     eval_filtered.py        raw vs +envelope-filter F1 for a checkpoint
+    build_param_dataset.py  build the param-predictor corpus (GPU; aug variants)
+    train_param_predictor.py  fit the per-song param predictor from that corpus
   Dockerfile        self-contained GPU trainer image (MERT baked, runs as uid 1000)
   tests/            pytest (run in the CUDA sandbox; 111 tests)
 ```
@@ -73,6 +82,36 @@ and emits to GM-37 on its own MIDI track; the frontend folds it onto the snare
 track as a snare articulation at Jot-load (integration, not handled in
 training). Rare lanes (`hp`, `ss`) are sparse, expect weak F1 until trained on
 the full dataset, with per-lane `pos_weight`.
+
+## Adaptive per-song peak-pick params (`parampred/`)
+
+The peak-picker's per-lane params (`threshold`, `prominence`, `min_distance_s`,
+`decay_reset_*`) are today a single global value per lane (`tune_thresholds`).
+Different kits/recordings -- especially post-separation -- vary enough that the
+best params are **per-song**. `parampred/` learns a label-free predictor that
+emits per-song params from the activation curve + audio, sitting *after* the
+frozen model (no retraining):
+`audio -> model -> curves -> [features -> predictor -> params] -> pick`.
+
+**Design spec:**
+[`docs/superpowers/specs/2026-06-20-adaptive-peakpick-params-design.md`](../docs/superpowers/specs/2026-06-20-adaptive-peakpick-params-design.md).
+
+Build order (the first step is a gate):
+
+1. **Gap gate.** `eval_paradb.py --oracle-report` reports per-lane onset-F1 at
+   today's global params vs the per-song **oracle** (the ceiling). If the gap is
+   small, stop here. `oracle.py` finds the per-song best params by coordinate
+   ascent; the report is current vs predicted vs oracle + fraction-of-gap
+   captured.
+2. **Corpus.** `build_param_dataset.py --maps-dir <TRAIN maps> --checkpoint
+   <ckpt> --out table.npz [--variants 6]` runs the frozen model over each song
+   plus onset-preserving augmented variants (gain / EQ / reverb / compression /
+   noise / lossy-codec; `augment.py`) and writes `{features -> oracle params}`
+   rows. **Point it at a training corpus, never ParaDB** (the test set).
+3. **Fit.** `train_param_predictor.py --dataset table.npz --out pred.joblib`
+   fits a per-lane HistGBR (`regressor.py`), song-grouped holdout.
+4. **Re-measure.** `eval_paradb.py --oracle-report --param-predictor pred.joblib`
+   adds the predicted column; the headline is the captured fraction of the gap.
 
 ## Running
 

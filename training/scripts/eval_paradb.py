@@ -47,6 +47,7 @@ from drumjot_training import (  # noqa: E402
     postfilter,
     rlrr,
 )
+from drumjot_training.parampred import eval_gap, regressor, report  # noqa: E402
 
 _AUDIO_EXTS = {".ogg", ".mp3", ".wav", ".flac", ".m4a", ".aac"}
 SEP_SR = 44100  # separate at full band so cymbal/hi-hat content survives
@@ -180,6 +181,33 @@ def _global_offset(gt, env, env_fps, floor, window_s, search_s):
     return off, s0
 
 
+def _accumulate_gap(gap_records, model, meta, encoder, gt_scored, drum_stem, pieces, args, predictor):
+    """Read each stem's raw activation curves and append per-lane oracle-gap
+    records (current vs oracle, plus predicted when a predictor is loaded). A
+    separate MERT pass from the scoring path -- this mode is a deliberate
+    analysis, not the deployed hot path."""
+    # (stem audio, lanes that legitimately belong to it) -- mirrors how `est` is
+    # built so the gap is measured on the same isolated-stem inputs.
+    if args.full_drum:
+        targets_ = [(drum_stem, None)]
+    else:
+        targets_ = [(stem_path, set(STEM_TO_LANES.get(pitch, ()))) for pitch, stem_path in pieces.items()]
+    for stem_path, restrict in targets_:
+        probs, fps = inference.stitched_probs(
+            stem_path, model, meta, encoder, args.max_seconds, args.window_seconds
+        )
+        wave = sr = None
+        if predictor is not None:
+            import librosa
+
+            wave, sr = librosa.load(str(stem_path), sr=SEP_SR, mono=True)
+        gap_records.extend(eval_gap.lane_gap_records(
+            probs, fps, meta["lanes"], meta["thresholds"], gt_scored,
+            default_threshold=meta["peak_threshold"], tolerance=meta["onset_tolerance_s"],
+            restrict_lanes=restrict, predictor=predictor, waveform=wave, sr=sr,
+        ))
+
+
 def main():
     ap = argparse.ArgumentParser(description="Evaluate learned model on ParaDB maps")
     ap.add_argument("--maps-dir", required=True, help="folder of .zip ParaDB maps")
@@ -201,6 +229,13 @@ def main():
     ap.add_argument("--full-drum", action="store_true",
                     help="run the model once on the whole BS-Roformer drum stem (all lanes) instead of the "
                     "MDX23C per-instrument split; no cross-instrument isolation/leakage")
+    ap.add_argument("--oracle-report", action="store_true",
+                    help="also report per-lane onset-F1 at the per-song ORACLE peakpick params (the ceiling) "
+                    "vs today's global params -- the adaptive-param gap gate (design spec build-order step 1). "
+                    "Adds an extra MERT pass per stem to read the raw activation curves.")
+    ap.add_argument("--param-predictor", default=None,
+                    help="optional ParamRegressor joblib artifact; when set, the oracle report adds a "
+                    "'predicted' column scoring the predictor's per-song params (label-free inference).")
     ap.add_argument("--log", default=None,
                     help="tee stdout+stderr to this file (self-log; no manual redirect needed)")
     args = ap.parse_args()
@@ -295,6 +330,8 @@ def main():
     agg: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     leak: dict[str, dict] = defaultdict(lambda: {"matched": 0, "leaked": 0, "to": Counter()})
     flagged = []
+    predictor = regressor.ParamRegressor.load(args.param_predictor) if args.param_predictor else None
+    gap_records: list[report.GapRecord] = []
 
     for zp, gt, drum_stem, pieces, aux_keep in maps:
         print(f"\n=== {zp.name} (score) ===", flush=True)
@@ -359,6 +396,9 @@ def main():
             for ts in d.values():
                 ts.sort()
 
+        if args.oracle_report:
+            _accumulate_gap(gap_records, model, meta, encoder, gt_scored, drum_stem, pieces, args, predictor)
+
         bare_pairs = {lbl: el for lbl, _r, el in rlrr.comparison_pairs(gt_scored, est_bare)}
         for label, ref, est_l in rlrr.comparison_pairs(gt_scored, est):
             if not ref:
@@ -401,6 +441,15 @@ def main():
             continue
         top = ", ".join(f"{ln}:{n}" for ln, n in d["to"].most_common(3))
         print(f"  {pitch:4s} {d['matched']:7d} {d['leaked']:7d} {100 * d['leaked'] / tot:5.1f}%   {top}", flush=True)
+
+    if args.oracle_report and gap_records:
+        gaps = report.aggregate(gap_records)
+        order = [ln for ln in rlrr.REPORT_ORDER if ln in gaps] or sorted(gaps)
+        print("\n" + report.format_report(gaps, lane_order=order), flush=True)
+        tot = sum(g.gap for g in gaps.values()) / len(gaps)
+        cap = sum(g.captured for g in gaps.values()) / len(gaps)
+        src = "predicted" if predictor else "(no predictor: predicted == current)"
+        print(f"  mean oracle gap {tot:+.3f} F1; mean captured {cap:+.3f} {src}", flush=True)
 
     if flagged:
         print(f"\n{len(flagged)} SUSPECT maps (low support or large offset, review/exclude):", flush=True)
