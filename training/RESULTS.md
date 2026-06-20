@@ -1036,6 +1036,47 @@ the predicted normalization caveat biting closed-hat. So:
   the cap-1000 noise band. **Next:** 2nd seed + ParaDB to pick between them and
   confirm the ride/hc wins hold out-of-domain.
 
+## SOTA-comparable eval: ENST + MDB, 5-class mir_eval (2026-06-20)
+
+First apples-to-apples comparison to published ADT. `sota_eval.py` folds our 9
+lanes -> KD/SD/HH/TT/CY, scores onset F at +/-50 ms (pooled micro, the dataset
+convention) on the standard benchmarks; `eval_gt_cleanliness.py` first confirmed
+the GT is clean (so we're not scored down on phantom labels). Prediction = our
+DEPLOYMENT path (per-instrument stems via BS-Roformer->MDX23C, keep-own-lanes,
+deterministic picker). Checkpoint = the cym+hat **mixed** (loss_ab_mixed, h128
+cap-1000 aligned, focal hc+rd) -> only HH+CY scorable (no kick/snare/tom heads;
+full-kit checkpoint pending). RBMA skipped (no free audio).
+
+| set | cond. | HH F | CY F | notes |
+|---|---|---|---|---|
+| ENST (12 takes) | drummer_3 phrases, enst-sep | **0.848** | 0.569 | HH P 0.77 / CY P 0.41 |
+| **MDB (23, pristine)** | full_mix -> our sep | **0.722** | **0.740** | HH P 0.59 / CY P 0.65 |
+
+(pooled micro; HH = hc+hp+ho, CY = rd+cr.)
+
+**GT cleanliness (strict dead-label probe, peak <1% track peak within +/-50 ms vs
+the dataset's own mix):** ENST 0.18% dead (30/16694, ~all closed-hat in minus-one
+takes); **MDB 0.00% (0/7962)**. Both eval sets are clean -> the scores are real,
+and since dead labels only cost recall (already ~0.9+), the cymbal weakness is
+genuine model over-firing (precision), not bad GT.
+
+**Reads.**
+- **Hi-hat is SOTA-band on ENST (0.848)**; drops to 0.722 on MDB, entirely
+  PRECISION (0.77 -> 0.59, recall stays 0.94). MDB is full-song -> full separation,
+  which leaves more hat-like artifacts; ENST is cleaner drum-focused audio.
+- **Cymbals: 0.74 on pristine MDB** (better than ENST's 0.57, precision 0.41->0.65)
+  -- competitive-to-strong for the hardest ADT class (cymbal sub-scores are ~0.3-0.6
+  even at SOTA). recall 0.87, precision 0.65.
+- MDB AVG(HH,CY) 0.731 pooled. Published MDB 5-class is ~0.85-0.89 but kick/snare-
+  dominated; the HH/cymbal sub-scores are where we're competing, and we're in range.
+
+**Caveats.** Per-stem isolation discards cross-instrument FP -> optimistic vs
+SOTA-run-on-the-mix. ENST drummer_3 was in the val/threshold pool (mildly
+optimistic); MDB is fully pristine (never train/val/threshold) = the honest read.
+A few MDB tracks score 0.00 (80sRock/Beatles/Shadows HH; several CY) = per-track
+separation/alignment failures -- pooled is robust to them but worth a look. The
+full 5-class row (KD/SD/TT) needs a full-kit checkpoint (training pending).
+
 ## Per-stem pooled MERT layer sweep (2026-06-12)
 
 **Setup.** `scripts/perstem_layer_sweep.py` over pooled per-stem examples from all
