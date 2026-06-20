@@ -93,6 +93,25 @@ describe('jotToEvents timing', () => {
     expect(evs[1].time).toBeCloseTo(0.5, 6);
   });
 
+  it('schedules notes along a gradual tempo ramp (linear-in-time, exact)', () => {
+    // Ramp 60 -> 120 over the first bar's 4 beats. Each beat b's time is the
+    // closed-form integral: bpm(b)=sqrt(60²+(120²−60²)·b/4),
+    // t(b)=120·4·(bpm(b)−60)/(120²−60²).
+    const evs = events(
+      '{{ bpm: 60, time: "4/4", instrumentMapping: { k:{name:"Kick"} } }}\n' +
+        '{{ bpm: { start: 60, end: 120, duration: 4 } }}\n' +
+        '| k k k k |'
+    );
+    const tAt = (b: number) => {
+      const bpm = Math.sqrt(3600 + (14400 - 3600) * (b / 4));
+      return (120 * 4 * (bpm - 60)) / (14400 - 3600);
+    };
+    expect(evs[0].time).toBeCloseTo(0, 6);
+    expect(evs[1].time).toBeCloseTo(tAt(1), 6); // ≈ 0.861s
+    expect(evs[2].time).toBeCloseTo(tAt(2), 6); // ≈ 1.550s
+    expect(evs[3].time).toBeCloseTo(tAt(3), 6); // ≈ 2.141s
+  });
+
   it('honours a mid-bar bpm change at the next-element onset', () => {
     // 8-slot 4/4 bar at 60 bpm: each slot is 0.5 beats = 0.5s at 60 bpm.
     // {{bpm:120}} after the 4th element (slot index 4 is at beat 2.0,

@@ -91,13 +91,25 @@ export function writeRlrr(jot: Jot, options: JotToRlrrOptions = {}): RlrrFile {
   const layer0 = layers[0];
   const barTempos = layer0 ? buildBarTempos(jot, layer0.bars) : [];
   const barStartSec: number[] = new Array(layer0?.bars.length ?? 0);
+  const barStartBeat: number[] = new Array(layer0?.bars.length ?? 0);
   {
-    let cursor = 0;
+    let secCursor = 0;
+    let beatCursor = 0;
     for (let i = 0; i < barStartSec.length; i++) {
-      barStartSec[i] = cursor;
-      cursor += barTempos[i]?.durationSec ?? 0;
+      barStartSec[i] = secCursor;
+      barStartBeat[i] = beatCursor;
+      secCursor += barTempos[i]?.durationSec ?? 0;
+      beatCursor += layer0?.bars[i]?.beats ?? 0;
     }
   }
+  // Wall-clock seconds at a global beat position (cumulative over bars),
+  // used to time each step of a subdivided tempo ramp that may span bars.
+  const globalBeatToSec = (g: number): number => {
+    let j = 0;
+    while (j + 1 < barStartBeat.length && barStartBeat[j + 1] <= g) j++;
+    const tempos = barTempos[j];
+    return (barStartSec[j] ?? 0) + (tempos ? beatToSecWithinBar(tempos, g - (barStartBeat[j] ?? 0)) : 0);
+  };
 
   const events: RlrrEvent[] = [];
   // [S5] Merge all layers. All layers share layer 0's bar timing.
@@ -165,17 +177,30 @@ export function writeRlrr(jot: Jot, options: JotToRlrrOptions = {}): RlrrFile {
   };
 
   // [S1] One bpmEvent per tempoEvent at its wall-clock time, prefixed by
-  // the initial tempo at time 0. RLRR has no `BpmTransition`, so a
-  // transition flattens to its `start` (else `end`).
+  // the initial tempo at time 0. RLRR has no `BpmTransition`, so a gradual
+  // ramp is subdivided into stepwise bpmEvents (1/32-beat resolution) along
+  // the linear-in-time curve, with the final step landing exactly on `end`.
   const bpmEvents = [{ bpm: initialBpm(jot), time: 0 }];
+  const pushBpm = (bpm: number, time: number) => {
+    if (bpm > 0 && Math.abs(bpm - bpmEvents[bpmEvents.length - 1].bpm) > 1e-9) {
+      bpmEvents.push({ bpm, time });
+    }
+  };
   for (const ev of jot.tempoEvents ?? []) {
-    const tempos = barTempos[ev.barIndex];
-    if (!tempos) continue;
-    const startSec = barStartSec[ev.barIndex] ?? 0;
-    const time = startSec + beatToSecWithinBar(tempos, ev.beat);
-    const bpm = resolveBpm(ev.bpm, bpmEvents[bpmEvents.length - 1].bpm);
-    if (bpm === bpmEvents[bpmEvents.length - 1].bpm) continue;
-    bpmEvents.push({ bpm, time });
+    if (ev.barIndex < 0 || ev.barIndex >= barStartBeat.length) continue;
+    const baseG = (barStartBeat[ev.barIndex] ?? 0) + ev.beat;
+    if (typeof ev.bpm === 'object') {
+      const start = ev.bpm.start ?? bpmEvents[bpmEvents.length - 1].bpm;
+      const { end, duration } = ev.bpm;
+      const steps = Math.max(1, Math.ceil(duration * 32));
+      for (let s = 0; s <= steps; s++) {
+        const f = s / steps;
+        const bpm = s === steps ? end : Math.sqrt(start * start + (end * end - start * start) * f);
+        pushBpm(bpm, globalBeatToSec(baseG + f * duration));
+      }
+    } else {
+      pushBpm(resolveBpm(ev.bpm, bpmEvents[bpmEvents.length - 1].bpm), globalBeatToSec(baseG));
+    }
   }
 
   return {

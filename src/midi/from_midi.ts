@@ -279,22 +279,50 @@ export function fromMidi(
   const initialBpm = tempoChanges.length > 0 ? tempoChanges[0].bpm : bpm;
   const tempoEvents: TempoEvent[] = [];
   {
+    // A clearly-linear run of setTempo events (monotonic, ~uniform spacing
+    // and ~uniform delta) is collapsed into one `BpmTransition` ramp; every
+    // other change stays a flat tempo event.
+    const ramps = detectRampRuns(tempoChanges);
+    const anchor = (tick: number) => {
+      const snapped = Math.round(tick / gridTicks) * gridTicks;
+      const barIndex = locateBar(barSpans, snapped);
+      if (barIndex < 0) return null;
+      const beat = (snapped - barSpans[barIndex].startTick) / ticksPerBeat;
+      return { barIndex, beat: Math.max(0, beat), snapped };
+    };
     let currentBpm = initialBpm;
-    for (let i = 0; i < tempoChanges.length; i++) {
-      const tc = tempoChanges[i];
-      if (i === 0) {
-        // First event already accounted for in `initialBpm`.
-        currentBpm = tc.bpm;
+    let ri = 0;
+    for (let i = 0; i < tempoChanges.length; ) {
+      if (ri < ramps.length && ramps[ri][0] === i) {
+        const [a, b] = ramps[ri++];
+        const start = anchor(tempoChanges[a].tick);
+        const endSnapped = Math.round(tempoChanges[b].tick / gridTicks) * gridTicks;
+        const duration = start ? (endSnapped - start.snapped) / ticksPerBeat : 0;
+        if (start && duration > 0) {
+          tempoEvents.push({
+            barIndex: start.barIndex,
+            beat: start.beat,
+            bpm: { start: tempoChanges[a].bpm, end: tempoChanges[b].bpm, duration },
+          });
+        }
+        currentBpm = tempoChanges[b].bpm;
+        i = b + 1;
         continue;
       }
-      if (tc.bpm === currentBpm) continue;
-      const snapped = Math.round(tc.tick / gridTicks) * gridTicks;
-      const barIndex = locateBar(barSpans, snapped);
-      if (barIndex < 0) continue;
-      const span = barSpans[barIndex];
-      const beat = (snapped - span.startTick) / ticksPerBeat;
-      tempoEvents.push({ barIndex, beat: Math.max(0, beat), bpm: tc.bpm });
-      currentBpm = tc.bpm;
+      const tc = tempoChanges[i];
+      if (i === 0) {
+        currentBpm = tc.bpm; // initial tempo lives on globalMetadata.bpm
+        i++;
+        continue;
+      }
+      if (tc.bpm !== currentBpm) {
+        const a = anchor(tc.tick);
+        if (a) {
+          tempoEvents.push({ barIndex: a.barIndex, beat: a.beat, bpm: tc.bpm });
+          currentBpm = tc.bpm;
+        }
+      }
+      i++;
     }
   }
 
@@ -489,6 +517,82 @@ function locateBar(spans: BarSpan[], tick: number): number {
   }
   // Tick past the last bar; clamp to the final bar.
   return spans.length - 1;
+}
+
+/**
+ * Find maximal runs of `tempoChanges` that look like a deliberate tempo ramp,
+ * so they can be re-collapsed into a single `BpmTransition` instead of
+ * importing as a cloud of flat tempo events. Returns inclusive
+ * `[startIdx, endIdx]` ranges, non-overlapping and ascending.
+ *
+ * A run qualifies only when it is **clearly** a ramp: strictly monotonic over
+ * at least {@link RAMP_MIN_POINTS} points, with BOTH its tick-spacing and its
+ * bpm-delta sequences staying *uniform*, and "uniform" here means uniform
+ * either **additively** (≈constant value) OR **multiplicatively** (≈constant
+ * ratio between consecutive values). The multiplicative option is what lets a
+ * curved ramp register: a linear-in-time (square-based) transition sampled at
+ * uniform beats has uniform tick spacing but geometrically-shrinking deltas,
+ * and one sampled at uniform bpm has geometrically-growing spacing, each is
+ * caught by the multiplicative arm on the relevant axis. The two-arm gate
+ * still rejects arbitrary tempo maps, so non-ramps stay flat events.
+ */
+const RAMP_MIN_POINTS = 4;
+const RAMP_TOL = 0.3;
+
+/** Within ±RAMP_TOL of reference `a` (relative; exact match when a ≤ 0). */
+function nearRamp(a: number, b: number): boolean {
+  return a > 0 ? Math.abs(b - a) <= RAMP_TOL * a : a === b;
+}
+
+function detectRampRuns(tcs: { tick: number; bpm: number }[]): [number, number][] {
+  const runs: [number, number][] = [];
+  let i = 0;
+  while (i < tcs.length - 1) {
+    const dir = Math.sign(tcs[i + 1].bpm - tcs[i].bpm);
+    if (dir === 0) {
+      i++;
+      continue;
+    }
+    const gap0 = tcs[i + 1].tick - tcs[i].tick;
+    const delta0 = Math.abs(tcs[i + 1].bpm - tcs[i].bpm);
+    // Each axis stays uniform additively (≈ first value) and/or
+    // multiplicatively (≈ first consecutive ratio); a broken arm stays broken.
+    let gapAdd = true;
+    let gapMul = true;
+    let deltaAdd = true;
+    let deltaMul = true;
+    let gapRatio = NaN;
+    let deltaRatio = NaN;
+    let prevGap = gap0;
+    let prevDelta = delta0;
+    let end = i + 1;
+    while (end + 1 < tcs.length) {
+      const signedDelta = tcs[end + 1].bpm - tcs[end].bpm;
+      if (Math.sign(signedDelta) !== dir) break;
+      const gap = tcs[end + 1].tick - tcs[end].tick;
+      const delta = Math.abs(signedDelta);
+      if (gap <= 0) break;
+      gapAdd = gapAdd && nearRamp(gap0, gap);
+      deltaAdd = deltaAdd && nearRamp(delta0, delta);
+      const gr = gap / prevGap;
+      const dr = delta / prevDelta;
+      if (Number.isNaN(gapRatio)) gapRatio = gr;
+      else gapMul = gapMul && nearRamp(gapRatio, gr);
+      if (Number.isNaN(deltaRatio)) deltaRatio = dr;
+      else deltaMul = deltaMul && nearRamp(deltaRatio, dr);
+      if (!(gapAdd || gapMul) || !(deltaAdd || deltaMul)) break;
+      prevGap = gap;
+      prevDelta = delta;
+      end++;
+    }
+    if (end - i + 1 >= RAMP_MIN_POINTS) {
+      runs.push([i, end]);
+      i = end + 1;
+    } else {
+      i++;
+    }
+  }
+  return runs;
 }
 
 function buildNote(

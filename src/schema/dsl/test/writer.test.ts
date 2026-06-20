@@ -95,4 +95,28 @@ describe('writeDsl', () => {
       '{{ time: "7/8" }}\n| k . s . k k s |\n{{ time: "4/4" }}\n| k . s . k . s . |'
     );
   });
+
+  it('round-trips a gradual bpm transition (start/end/duration)', () => {
+    const { after } = roundTrip(
+      '{{ bpm: 120, time: "4/4" }}\n' +
+        '{{ bpm: { start: 120, end: 180, duration: 8 } }}\n' +
+        '| k . s . |\n| k . s . |'
+    );
+    // The transition survives the parse -> write -> parse round trip as a
+    // single tempo event carrying the full ramp (not flattened to `start`).
+    expect(after.tempoEvents).toEqual([
+      { barIndex: 0, beat: 0, bpm: { start: 120, end: 180, duration: 8 } },
+    ]);
+  });
+
+  it('keeps a transition whose start equals the running tempo', () => {
+    // `resolveBpm` collapses the transition to its `start` (120), which
+    // equals the initial tempo; the hoist must NOT drop it as a no-op.
+    const before = parse(
+      '{{ bpm: 120 }}\n{{ bpm: { start: 120, end: 90, duration: 4 } }}\n| k . s . |'
+    );
+    expect(before.tempoEvents).toEqual([
+      { barIndex: 0, beat: 0, bpm: { start: 120, end: 90, duration: 4 } },
+    ]);
+  });
 });

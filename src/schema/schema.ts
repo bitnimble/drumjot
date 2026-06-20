@@ -247,7 +247,7 @@ export const TempoEventSchema = record({
     z.object({
       start: z.number().optional(),
       end: z.number(),
-      /** Transition length, in bars. */
+      /** Ramp length, in quarter-note beats (may be fractional). */
       duration: z.number(),
     }),
   ]),

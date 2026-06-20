@@ -27,6 +27,13 @@ import { resolveBpm, DEFAULT_BPM } from 'src/schema/dsl/tempo';
 
 type BpmField = number | BpmTransition;
 
+/** Structural equality for a bpm field, so the same authored ramp carried
+ *  forward across bars (or a re-stated flat tempo) reads as "unchanged". */
+function sameBpmField(a: BpmField, b: BpmField): boolean {
+  if (typeof a === 'number' || typeof b === 'number') return a === b;
+  return a.start === b.start && a.end === b.end && a.duration === b.duration;
+}
+
 /**
  * In-place: populate `jot.tempoEvents` from every bpm source on the AST
  * and strip the originating fields. Called once by the parser at the
@@ -35,6 +42,10 @@ type BpmField = number | BpmTransition;
 export function hoistTempoEvents(jot: Jot): void {
   const events: TempoEvent[] = [];
   let currentBpm = resolveBpm(jot.globalMetadata.bpm, DEFAULT_BPM);
+  // The bpm value currently in force as authored (number or ramp), so a
+  // transition propagated identically onto every following bar's snapshot
+  // (how the parser carries `bpm` forward) collapses to a single event.
+  let currentBpmField: BpmField = jot.globalMetadata.bpm ?? DEFAULT_BPM;
   let initialBpmCaptured = false;
 
   // The initial tempo: the very first bpm value encountered (in layer 0,
@@ -42,17 +53,30 @@ export function hoistTempoEvents(jot: Jot): void {
   // `globalMetadata.bpm` (else default) stands.
   const setInitial = (bpm: BpmField) => {
     if (initialBpmCaptured) return;
+    // The initial tempo (`globalMetadata.bpm`, the value in force before
+    // any event) is always a scalar. A song that opens with a ramp seeds
+    // its initial tempo from the ramp's `start` and still emits the ramp
+    // as a tempo event below, so `currentBpmField` stays scalar here.
     const resolved = resolveBpm(bpm, currentBpm);
-    jot.globalMetadata.bpm = bpm;
+    jot.globalMetadata.bpm = resolved;
     currentBpm = resolved;
+    currentBpmField = resolved;
     initialBpmCaptured = true;
   };
 
   const considerChange = (barIndex: number, beat: number, bpm: BpmField) => {
-    const resolved = resolveBpm(bpm, currentBpm);
-    if (resolved === currentBpm) return; // no-op
+    if (typeof bpm === 'object') {
+      // A transition fires unless the identical ramp is already in force
+      // (it ramps to `end`, so it's NOT a no-op just because its `start`
+      // equals the running tempo).
+      if (sameBpmField(bpm, currentBpmField)) return;
+    } else if (resolveBpm(bpm, currentBpm) === currentBpm) {
+      // A flat bpm equal to the running tempo is a no-op.
+      return;
+    }
     events.push({ barIndex, beat, bpm });
-    currentBpm = resolved;
+    currentBpm = resolveBpm(bpm, currentBpm);
+    currentBpmField = bpm;
   };
 
   // We canonicalize tempo against layer 0. Layers 1+ share the same bar

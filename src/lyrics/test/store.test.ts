@@ -14,6 +14,7 @@ function fakeTimeline(
   return {
     totalDurationSec: rows.reduce((acc, r) => Math.max(acc, r.startSec + r.durationSec), 0),
     bars: rows.map((r) => ({ startSec: r.startSec, durationSec: r.durationSec })),
+    tempos: [],
     rendered: undefined,
   };
 }

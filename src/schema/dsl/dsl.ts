@@ -23,14 +23,14 @@ export type TimeSignature = {
 export type BpmTransition = {
   start?: number;
   end: number;
-  /** duration of the transition, in bars */
+  /** ramp length, in quarter-note beats (may be fractional) */
   duration: number;
 };
 
 export type VolTransition = {
   start?: Volume;
   end: Volume;
-  /** duration of the transition, in bars */
+  /** ramp length, in quarter-note beats (may be fractional) */
   duration: number;
 };
 

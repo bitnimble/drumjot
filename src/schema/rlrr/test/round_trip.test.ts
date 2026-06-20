@@ -7,6 +7,7 @@ import { allocateFallbackLetters } from 'src/schema/rlrr/fallback';
 import { writeRlrr } from 'src/schema/rlrr/writer';
 import { parseRlrr } from 'src/schema/rlrr/parser';
 import { DEFAULT_INSTRUMENTS, RlrrFile, eventTimeSeconds } from 'src/schema/rlrr/schema';
+import { parse } from 'src/schema/dsl/parser/parser';
 
 const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -68,6 +69,30 @@ describe('mid-bar tempo round trip through Jot', () => {
     // Sixteenth at 120 bpm = 0.125s; the round-trip's quantization
     // budget is one sixteenth either side of the source time.
     expect(Math.abs(second!.time - 1.0)).toBeLessThanOrEqual(0.125);
+  });
+});
+
+describe('writeRlrr gradual tempo ramp', () => {
+  it('subdivides a BpmTransition into stepwise bpmEvents along the curve', () => {
+    const jot = parse(
+      '{{ bpm: 60, time: "4/4", instrumentMapping: { k:{name:"K"} } }}\n' +
+        '{{ bpm: { start: 60, end: 120, duration: 4 } }}\n' +
+        '| k k k k |\n| k k k k |'
+    );
+    const { bpmEvents } = writeRlrr(jot);
+    const bpms = bpmEvents.map((e) => e.bpm);
+    // Initial 60 at t=0, then many steps (1/32-beat over 4 beats ≈ 128), not
+    // one flat step at `start`.
+    expect(bpmEvents[0]).toEqual({ bpm: 60, time: 0 });
+    expect(bpmEvents.length).toBeGreaterThan(40);
+    expect(Math.max(...bpms)).toBeCloseTo(120, 0);
+    // Monotonically non-decreasing (an accelerando).
+    for (let i = 1; i < bpms.length; i++) expect(bpms[i]).toBeGreaterThanOrEqual(bpms[i - 1] - 1e-9);
+    // The final step lands on `end` at the ramp's end time (4 beats at the
+    // average 90 BPM = 2.6667s).
+    const last = bpmEvents[bpmEvents.length - 1];
+    expect(last.bpm).toBeCloseTo(120, 3);
+    expect(last.time).toBeCloseTo((120 * 4) / (60 + 120), 2);
   });
 });
 

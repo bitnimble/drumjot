@@ -122,6 +122,58 @@
     user-select: none;
 }
 
+/* A gradual tempo change (`BpmTransition`): a solid bar spanning the ramp's
+   beat range, captioned `120 bpm ___ 180 bpm`. Positioned in the same
+   beat-space as `.timelineHeaderTick` (`--bar-start-beat`) and sized by
+   `--bar-span-beats`; both set inline per ramp, zoom-invariant. */
+.timelineHeaderBpmRamp {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: calc(var(--bar-start-beat) / var(--layer-beats) * 100%);
+    width: calc(var(--bar-span-beats) / var(--layer-beats) * 100%);
+    display: flex;
+    align-items: center;
+    pointer-events: none;
+    user-select: none;
+}
+
+/* The single solid connecting line, full ramp width, vertically centred and
+   sitting behind the two edge labels (which mask it where the text is). */
+.timelineHeaderBpmRampLine {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    border-top: 1px solid var(--color-border);
+}
+
+/* Start / end bpm captions. The score has no native scroll container
+   (scroll is a `transform` on `.scrollViewport`), so `position: sticky` is
+   inert here; instead `WindowedTicks` clamps each caption to the visible
+   window with an inline `translateX` (off store observables) so both values
+   stay readable when a ramp is wider than the viewport. The cream
+   background masks the connecting line behind the text. */
+.timelineHeaderBpmRampLabel {
+    /* stylelint-disable property-disallowed-list -- score chrome at its own 9px scale, matching the bpm pills. */
+    font-size: 9px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    /* stylelint-enable property-disallowed-list */
+    color: var(--color-text-secondary);
+    background: var(--color-bg-cream);
+    padding: 0 4px;
+    line-height: 1;
+    white-space: nowrap;
+    z-index: 1;
+}
+
+.timelineHeaderBpmRampEnd {
+    /* Pushed to the ramp's right edge; the inline transform pulls it left to
+       track the visible-right edge when the ramp overruns the viewport. */
+    margin-left: auto;
+}
+
 .timelineHeaderTime {
     /* stylelint-disable property-disallowed-list -- score chrome at 9px / tabular-nums; matches the other timeline meta pills. */
     font-size: 9px;

@@ -8,6 +8,7 @@ import { buildStructural } from 'src/editing/jot_editor_store';
 import { fromMidi } from 'src/midi/from_midi';
 import { allocateLanesForMidi } from 'src/midi/gm';
 import { toMidi } from 'src/midi/to_midi';
+import { parse } from 'src/schema/dsl/parser/parser';
 
 const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const DRUM_CHANNEL_IDX = 9;
@@ -48,6 +49,29 @@ function firstTempoBpm(midi: MidiData): number | null {
     }
   }
   return null;
+}
+
+/** All setTempo events as absolute-tick (tick, bpm), tick-ascending. */
+function absoluteTempoEvents(midi: MidiData): { tick: number; bpm: number }[] {
+  const out: { tick: number; bpm: number }[] = [];
+  for (const track of midi.tracks) {
+    let t = 0;
+    for (const ev of track) {
+      t += ev.deltaTime;
+      if (ev.type === 'setTempo') out.push({ tick: t, bpm: 60_000_000 / ev.microsecondsPerBeat });
+    }
+  }
+  return out.sort((a, b) => a.tick - b.tick);
+}
+
+/** Tempo (bpm) in force at `tick` given ascending tempo events. */
+function bpmAtTick(events: { tick: number; bpm: number }[], tick: number): number {
+  let bpm = events[0]?.bpm ?? 120;
+  for (const e of events) {
+    if (e.tick <= tick) bpm = e.bpm;
+    else break;
+  }
+  return bpm;
 }
 
 function firstTimeSig(midi: MidiData): { count: number; unit: number } | null {
@@ -138,6 +162,126 @@ function buildMidi(opts: {
     })
   );
 }
+
+/**
+ * Build a 4/4 MIDI with an arbitrary list of `(tick, bpm)` setTempo events
+ * plus a kick on every beat through `beats`, so bars exist for the importer.
+ */
+function buildTempoSeqMidi(tempos: { tick: number; bpm: number }[], beats: number): Uint8Array {
+  const ticksPerBeat = 480;
+  type Pending = { tick: number; build: (dt: number) => MidiEvent };
+  const events: Pending[] = [
+    {
+      tick: 0,
+      build: (dt) => ({
+        deltaTime: dt,
+        meta: true,
+        type: 'timeSignature',
+        numerator: 4,
+        denominator: 4,
+        metronome: 24,
+        thirtyseconds: 8,
+      }),
+    },
+  ];
+  for (const t of tempos) {
+    events.push({
+      tick: t.tick,
+      build: (dt) => ({
+        deltaTime: dt,
+        meta: true,
+        type: 'setTempo',
+        microsecondsPerBeat: Math.round(60_000_000 / t.bpm),
+      }),
+    });
+  }
+  for (let b = 0; b < beats; b++) {
+    const tick = b * ticksPerBeat;
+    events.push({
+      tick,
+      build: (dt) => ({ deltaTime: dt, type: 'noteOn', noteNumber: 36, velocity: 100, channel: DRUM_CHANNEL_IDX }),
+    });
+    events.push({
+      tick: tick + 1,
+      build: (dt) => ({ deltaTime: dt, type: 'noteOff', noteNumber: 36, velocity: 0, channel: DRUM_CHANNEL_IDX }),
+    });
+  }
+  events.sort((a, b) => a.tick - b.tick);
+  const track: MidiEvent[] = [];
+  let last = 0;
+  for (const { tick, build } of events) {
+    track.push(build(tick - last));
+    last = tick;
+  }
+  track.push({ deltaTime: 0, meta: true, type: 'endOfTrack' });
+  return new Uint8Array(writeMidi({ header: { format: 1, numTracks: 1, ticksPerBeat }, tracks: [track] }));
+}
+
+describe('fromMidi tempo-ramp detection', () => {
+  it('collapses a clearly-linear setTempo run into a single BpmTransition', () => {
+    // 120 → 240 over 8 beats: setTempo each beat, equal spacing (480 ticks)
+    // and equal delta (+15 bpm), a textbook linear ramp.
+    const tempos = Array.from({ length: 9 }, (_, i) => ({ tick: i * 480, bpm: 120 + i * 15 }));
+    const jot = fromMidi(buildTempoSeqMidi(tempos, 8));
+    expect(jot.globalMetadata.bpm).toBe(120);
+    expect(jot.tempoEvents).toHaveLength(1);
+    const ev = jot.tempoEvents![0];
+    expect(typeof ev.bpm).toBe('object');
+    expect(ev.bpm).toMatchObject({ start: 120, end: 240 });
+    expect((ev.bpm as { duration: number }).duration).toBeCloseTo(8, 1);
+    expect(ev.barIndex).toBe(0);
+    expect(ev.beat).toBeCloseTo(0, 3);
+  });
+
+  it('collapses a curved (multiplicative-spacing) ramp via the geometric arm', () => {
+    // Uniform +12 bpm steps but geometrically-shrinking tick gaps, the
+    // shape a square-based ramp takes when sampled at uniform bpm.
+    let tick = 0;
+    const tempos: { tick: number; bpm: number }[] = [{ tick: 0, bpm: 120 }];
+    let gap = 800;
+    for (let k = 1; k <= 6; k++) {
+      tick += Math.round(gap);
+      tempos.push({ tick, bpm: 120 + k * 12 });
+      gap *= 0.85; // constant ratio → multiplicative-uniform spacing
+    }
+    const jot = fromMidi(buildTempoSeqMidi(tempos, 12));
+    const transitions = (jot.tempoEvents ?? []).filter((e) => typeof e.bpm === 'object');
+    expect(transitions).toHaveLength(1);
+    expect(transitions[0].bpm).toMatchObject({ start: 120, end: 192 });
+  });
+
+  it('round-trips a Drumjot ramp through MIDI back into one BpmTransition', () => {
+    // Our export samples linear-in-time at uniform beats: uniform tick
+    // spacing, geometrically-shrinking deltas. The geometric delta arm must
+    // re-collapse it.
+    const jot = parse(
+      '{{ bpm: 60, time: "4/4", instrumentMapping: { k:{name:"K"} } }}\n' +
+        '{{ bpm: { start: 60, end: 120, duration: 8 } }}\n' +
+        '| k k k k |\n| k k k k |\n| k k k k |'
+    );
+    const back = fromMidi(toMidi(jot));
+    const transitions = (back.tempoEvents ?? []).filter((e) => typeof e.bpm === 'object');
+    expect(transitions).toHaveLength(1);
+    const t = transitions[0].bpm as { start: number; end: number; duration: number };
+    expect(t.start).toBeGreaterThan(58);
+    expect(t.start).toBeLessThan(64);
+    expect(t.end).toBeCloseTo(120, 0);
+    expect(t.duration).toBeCloseTo(8, 0);
+  });
+
+  it('leaves an irregular / non-monotonic tempo sequence as flat events', () => {
+    // Up then down, not a ramp. Must stay two flat tempo events.
+    const tempos = [
+      { tick: 0, bpm: 120 },
+      { tick: 4 * 480, bpm: 180 },
+      { tick: 8 * 480, bpm: 100 },
+    ];
+    const jot = fromMidi(buildTempoSeqMidi(tempos, 12));
+    expect(jot.globalMetadata.bpm).toBe(120);
+    expect(jot.tempoEvents).toHaveLength(2);
+    for (const ev of jot.tempoEvents!) expect(typeof ev.bpm).toBe('number');
+  });
+});
 
 // ---------- synthetic baseline tests ----------
 
@@ -230,6 +374,24 @@ describe('MIDI <-> Jot synthetic baseline', () => {
     const re = parseMidi(toMidi(jot));
     expect(firstTempoBpm(re)).toBe(92);
     expect(firstTimeSig(re)).toEqual({ count: 7, unit: 8 });
+  });
+
+  it('subdivides a gradual tempo ramp into stepwise setTempo along the curve', () => {
+    const jot = parse(
+      '{{ bpm: 60, time: "4/4", instrumentMapping: { k:{name:"K"} } }}\n' +
+        '{{ bpm: { start: 60, end: 120, duration: 4 } }}\n' +
+        '| k k k k |\n| k k k k |'
+    );
+    const tempos = absoluteTempoEvents(parseMidi(toMidi(jot)));
+    const bpms = tempos.map((t) => t.bpm);
+    // Stepwise (1/32-beat over 4 beats ≈ 128 steps), not one flat step.
+    expect(tempos.length).toBeGreaterThan(40);
+    expect(Math.min(...bpms)).toBeCloseTo(60, 0);
+    expect(Math.max(...bpms)).toBeCloseTo(120, 0);
+    // Ramp = 4 beats × 480 = 1920 ticks. Midpoint (tick 960) ≈ sqrt(9000).
+    expect(bpmAtTick(tempos, 960)).toBeCloseTo(94.87, 0);
+    // After the ramp the tempo is exactly the end value.
+    expect(bpmAtTick(tempos, 1920)).toBeCloseTo(120, 1);
   });
 
   it('honours time-signature changes on subsequent bars', () => {

@@ -28,7 +28,14 @@
 import { Jot, TimeSignature } from 'src/schema/dsl/dsl';
 import { toTempoBars, type StructLayer } from 'src/editing/structure/structure_store';
 import { Pixels, px, type ViewConfig } from 'src/editing/viewport/view_config';
-import { buildBarTempos, resolveBpm } from 'src/schema/dsl/tempo';
+import {
+  type BarTempos,
+  beatToSecWithinBar,
+  buildBarTempos,
+  resolveBpm,
+  secToBeatWithinBar,
+  segmentDurationSec,
+} from 'src/schema/dsl/tempo';
 
 export { resolveBpm };
 
@@ -73,9 +80,10 @@ export function pickDominantBpmAndTime(jot: LaidOutJot): {
     if (bar.index < 0) continue;
     const barTempos = tempos[i];
     for (const seg of barTempos.segments) {
-      const segDuration = (seg.endBeat - seg.startBeat) * (60 / seg.bpm);
-      const bpmKey = Math.round(seg.bpm);
-      bpmDur.set(bpmKey, (bpmDur.get(bpmKey) ?? 0) + segDuration);
+      // Ramp segments span a range of tempos; bucket their (exact) duration
+      // under the midpoint bpm so the time accounting stays correct.
+      const bpmKey = Math.round((seg.bpm + (seg.endBpm ?? seg.bpm)) / 2);
+      bpmDur.set(bpmKey, (bpmDur.get(bpmKey) ?? 0) + segmentDurationSec(seg));
     }
     const timeKey = `${bar.tsCount}/${bar.tsUnit}`;
     const prev = timeDur.get(timeKey);
@@ -114,9 +122,15 @@ export type JotTimeline = {
   totalDurationSec: number;
   bars: BarTiming[];
   /**
+   * Per-bar tempo segments (parallel to {@link bars}), so `timeToX` /
+   * `xToTime` map within a bar exactly even across a gradual tempo ramp
+   * (the within-bar time↔beat curve is nonlinear). Empty on
+   * {@link EMPTY_TIMELINE}.
+   */
+  tempos: BarTempos[];
+  /**
    * Reference to the laid-out jot whose bars drive playback. Held by
-   * reference so `timeToX` always reads current `bar.x` / `bar.width` —
-   * critical for zoom changes during playback.
+   * reference so `timeToX` always reads current `bar.x` / `bar.width`, * critical for zoom changes during playback.
    *
    * `undefined` only on {@link EMPTY_TIMELINE}.
    */
@@ -126,6 +140,7 @@ export type JotTimeline = {
 export const EMPTY_TIMELINE: JotTimeline = {
   totalDurationSec: 0,
   bars: [],
+  tempos: [],
   rendered: undefined,
 };
 
@@ -179,7 +194,7 @@ export function buildTimeline(rendered: LaidOutJot): JotTimeline {
   // `cursor` now sits at the end of the last bar in jot time. The total
   // playable duration (used as the playback stop sentinel) covers
   // [-leadOffsetSec, cursor].
-  return { totalDurationSec: cursor, bars, rendered };
+  return { totalDurationSec: cursor, bars, tempos, rendered };
 }
 
 /**
@@ -224,8 +239,11 @@ export function timeToX(timeline: JotTimeline, seconds: number): Pixels {
     const bar = bars[i];
     const widthPx = (structBars[i]?.beats ?? 0) * pxPerBeat;
     if (seconds < bar.startSec + bar.durationSec) {
-      const within = bar.durationSec > 0 ? (seconds - bar.startSec) / bar.durationSec : 0;
-      return px(cursor + pad + within * widthPx);
+      // Exact within-bar: seconds → beat-within-bar via the bar's tempo
+      // segments (nonlinear across a ramp), then beat → x is linear.
+      const tempos = timeline.tempos[i];
+      const beatInBar = tempos ? secToBeatWithinBar(tempos, seconds - bar.startSec) : 0;
+      return px(cursor + pad + beatInBar * pxPerBeat);
     }
     cursor += widthPx;
   }
@@ -264,8 +282,12 @@ export function xToTime(timeline: JotTimeline, x: number): number {
     if (x < x0 + widthPx) {
       const timing = bars[i];
       if (!timing) return endSec;
-      const within = widthPx > 0 ? (x - x0) / widthPx : 0;
-      return timing.startSec + within * timing.durationSec;
+      // Exact within-bar: x → beat-within-bar is linear, then beat → seconds
+      // via the bar's tempo segments (nonlinear across a ramp).
+      const tempos = timeline.tempos[i];
+      const beatInBar = pxPerBeat > 0 ? (x - x0) / pxPerBeat : 0;
+      const secInBar = tempos ? beatToSecWithinBar(tempos, beatInBar) : 0;
+      return timing.startSec + secInBar;
     }
     cursor += widthPx;
   }

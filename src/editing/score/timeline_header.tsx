@@ -1,6 +1,7 @@
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { jotPlayer } from 'src/editing/playback/player';
+import type { TempoRamp } from 'src/editing/playback/tempo_presenter';
 import { GutterResizeHandle } from 'src/ui/gutter_resize_handle/gutter_resize_handle';
 import { StructuralContext, TempoContext } from '../jot_editor_contexts';
 import { ViewportStoreContext } from '../viewport/viewport_contexts';
@@ -65,6 +66,13 @@ export const TimelineHeader = observer(
     // zoom tick doesn't invalidate it).
     const tempos = tempo.barTempos;
 
+    // Gradual tempo changes render as solid ramp bars (handled in
+    // WindowedTicks). The flat bpm pills the segment walk would otherwise
+    // paint across a ramp's span (now that `buildBarTempos` emits varying
+    // ramp segments) are suppressed; the ramp's own captions carry the
+    // start/end values.
+    const ramps = tempo.tempoRamps;
+
     // Full (non-windowed) walk to build the per-bar tick descriptors.
     // The time-sig / bpm "changed since the previous bar" flags depend on
     // running state across every bar, so the walk can't be windowed; but
@@ -99,6 +107,13 @@ export const TimelineHeader = observer(
       const midBpmChanges: Array<{ beat: number; bpm: number }> = [];
       for (let s = 0; s < segments.length; s++) {
         const seg = segments[s];
+        // A segment inside a ramp is drawn as the ramp bar, not a flat pill;
+        // it still advances the running tempo to its local end so the first
+        // flat segment after the ramp doesn't paint a redundant pill.
+        if (inRampSpan(ramps, startBeat + seg.startBeat)) {
+          prevBpm = Math.round(seg.endBpm ?? seg.bpm);
+          continue;
+        }
         const bpm = Math.round(seg.bpm);
         if (prevBpm === undefined || bpm !== prevBpm) {
           if (seg.startBeat === 0) downbeatBpm = bpm;
@@ -135,13 +150,29 @@ export const TimelineHeader = observer(
           }
           onClick={(e) => seekFromClick(e, onSeek)}
         >
-          <WindowedTicks ticks={ticks} />
+          <WindowedTicks ticks={ticks} ramps={ramps} />
           <Playhead showLabel onSeek={onSeek} />
         </div>
       </div>
     );
   }
 );
+
+/** Whether a global beat falls inside any tempo ramp's span. The end is
+ *  exclusive (with a small epsilon) so the first segment after a ramp reads
+ *  as a normal flat region. */
+function inRampSpan(ramps: readonly TempoRamp[], gBeat: number): boolean {
+  const eps = 1e-6;
+  for (const r of ramps) {
+    if (gBeat >= r.startBeat - eps && gBeat < r.endBeat - eps) return true;
+  }
+  return false;
+}
+
+/** Clamp `v` to `[lo, hi]`. */
+function clampRange(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
+}
 
 /** One timeline-header tick's render data, precomputed by the full bar
  *  walk in {@link TimelineHeader} so {@link WindowedTicks} can window the
@@ -166,11 +197,74 @@ type TickDescriptor = {
  * intersects {@link JotEditorStore.visibleBeatRange}; the descriptor list
  * is precomputed and stable, so the parent doesn't re-render on scroll.
  */
-const WindowedTicks = observer(function WindowedTicks({ ticks }: { ticks: TickDescriptor[] }) {
+const WindowedTicks = observer(function WindowedTicks({
+  ticks,
+  ramps,
+}: {
+  ticks: TickDescriptor[];
+  ramps: readonly TempoRamp[];
+}) {
   const viewport = React.useContext(ViewportStoreContext);
+  const structural = React.useContext(StructuralContext);
   const range = viewport?.visibleBeatRange ?? null;
+  // The score has no real scroll container (`.jotContainer` is
+  // `overflow: hidden`; scroll is a CSS `transform` on `.scrollViewport`),
+  // so `position: sticky` is inert. To keep both bpm captions visible while
+  // a ramp wider than the viewport runs off either edge, we clamp each label
+  // to the visible window in JS off store observables (scrollX / viewport
+  // width / pxPerBeat, no DOM layout reads). This component already
+  // re-renders on scroll + zoom (its `visibleBeatRange` read depends on
+  // both), and only the handful of windowed ramps pay the cost.
+  const pxPerBeat = structural?.pxPerBeat ?? 0;
+  const scrollX = viewport?.scrollX ?? 0;
+  // Bars-row-local x of the visible window: its left edge sits at `scrollX`
+  // (the sticky gutter overlays content-x 0..gutterWidth), and its width is
+  // the viewport minus that gutter.
+  const usableWidth = (viewport?._viewportWidth ?? 0) - (viewport?.gutterWidth ?? 0);
+  const canPin = pxPerBeat > 0 && usableWidth > 0;
   return (
     <>
+      {ramps.map((r) => {
+        if (!intersectsBeatRange(range, r.startBeat, r.endBeat - r.startBeat)) return null;
+        const widthPx = (r.endBeat - r.startBeat) * pxPerBeat;
+        const leftPx = r.startBeat * pxPerBeat;
+        const rightPx = r.endBeat * pxPerBeat;
+        // Start caption rides the left visible edge; end caption the right;
+        // each clamped so it can't leave its own ramp box.
+        const startShift = canPin ? clampRange(scrollX - leftPx, 0, widthPx) : 0;
+        const endShift = canPin
+          ? -clampRange(rightPx - (scrollX + usableWidth), 0, widthPx)
+          : 0;
+        return (
+          <div
+            key={`ramp-${r.startBeat}`}
+            className={styles.timelineHeaderBpmRamp}
+            data-testid="bpm-ramp"
+            style={
+              {
+                ['--bar-start-beat' as string]: r.startBeat,
+                ['--bar-span-beats' as string]: r.endBeat - r.startBeat,
+              } as React.CSSProperties
+            }
+          >
+            <div className={styles.timelineHeaderBpmRampLine} />
+            <span
+              className={styles.timelineHeaderBpmRampLabel}
+              data-testid="bpm-ramp-start"
+              style={{ transform: `translateX(${startShift}px)` }}
+            >
+              {Math.round(r.startBpm)} bpm
+            </span>
+            <span
+              className={`${styles.timelineHeaderBpmRampLabel} ${styles.timelineHeaderBpmRampEnd}`}
+              data-testid="bpm-ramp-end"
+              style={{ transform: `translateX(${endShift}px)` }}
+            >
+              {Math.round(r.endBpm)} bpm
+            </span>
+          </div>
+        );
+      })}
       {ticks.map((t) => {
         if (!intersectsBeatRange(range, t.startBeat, t.beats)) return null;
         return (

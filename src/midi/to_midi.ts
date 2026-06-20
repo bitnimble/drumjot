@@ -102,19 +102,36 @@ export function toMidi(jot: Jot, options: ToMidiOptions = {}): Uint8Array {
   }
 
   // [B7] Tempo events: walk `jot.tempoEvents` and emit setTempo at the
-  // exact tick of each anchor. Dedup no-ops (parser already dedupes,
-  // but defensive). Skipped events whose barIndex is out of range
-  // collapse onto the last valid bar.
+  // exact tick of each anchor. A gradual `BpmTransition` ramp has no native
+  // MIDI representation (set_tempo is stepwise), so it's sampled at
+  // 1/32-beat resolution along the linear-in-time curve, with the final
+  // step landing exactly on `end`. Dedup events that resolve to the same
+  // MIDI tempo value. Out-of-range barIndex collapses onto the last bar.
   {
     let currentBpm = globalBpm;
+    const micro = (bpm: number) => Math.max(1, Math.round(60_000_000 / bpm));
+    const pushTempo = (tick: number, bpm: number) => {
+      if (bpm > 0 && micro(bpm) !== micro(currentBpm)) tempoChanges.push({ tick, bpm });
+      if (bpm > 0) currentBpm = bpm;
+    };
     for (const ev of jot.tempoEvents ?? []) {
-      const bpm = resolveBpm(ev.bpm, currentBpm);
-      if (bpm === currentBpm) continue;
       const idx = Math.min(Math.max(0, ev.barIndex), barTickStart.length - 1);
-      const barStart = barTickStart[idx] ?? 0;
-      const tick = barStart + Math.round(ev.beat * TICKS_PER_BEAT);
-      tempoChanges.push({ tick, bpm });
-      currentBpm = bpm;
+      const startTick = (barTickStart[idx] ?? 0) + Math.round(ev.beat * TICKS_PER_BEAT);
+      if (typeof ev.bpm === 'object') {
+        const start = ev.bpm.start ?? currentBpm;
+        const { end, duration } = ev.bpm;
+        const steps = Math.max(1, Math.ceil(duration * 32));
+        for (let j = 0; j < steps; j++) {
+          // Constant tempo over the sub-interval ≈ its midpoint tempo
+          // (bpm² is linear in beat for a linear-in-time ramp).
+          const f = (j + 0.5) / steps;
+          const bpm = Math.sqrt(start * start + (end * end - start * start) * f);
+          pushTempo(startTick + Math.round((j / steps) * duration * TICKS_PER_BEAT), bpm);
+        }
+        pushTempo(startTick + Math.round(duration * TICKS_PER_BEAT), end);
+      } else {
+        pushTempo(startTick, resolveBpm(ev.bpm, currentBpm));
+      }
     }
   }
 

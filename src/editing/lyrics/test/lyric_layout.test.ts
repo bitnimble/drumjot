@@ -11,6 +11,7 @@ const TIMELINE: JotTimeline = {
     { startSec: 0, durationSec: 2 },
     { startSec: 2, durationSec: 2 },
   ],
+  tempos: [],
   rendered: undefined,
 };
 const STRUCT_BEATS = [4, 4];
