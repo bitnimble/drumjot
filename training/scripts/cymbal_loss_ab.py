@@ -234,7 +234,7 @@ def _train_arm(arm, args, cache, sources, cfg, in_dim, log):
                batch_size=args.batch, num_workers=args.num_workers, val_clips=val_clips,
                keep_best=True, log=log, early_stop=True, es_min_epochs=20,
                warmup_steps=args.warmup, loss_fn=args.loss_for(arm), focal_lanes=focal_lanes,
-               resume_path=resume)
+               grad_clip=(args.grad_clip if args.grad_clip > 0 else None), resume_path=resume)
     thresholds = tune_thresholds(model, val_clips, cfg)
     log(f"  tuned thresholds: {dict((ln, round(thresholds.get(ln, cfg.peak_threshold), 2)) for ln in cfg.lanes)}")
     save = str(Path(args.ckpt_dir) / f"loss_ab_{arm}.pt")
@@ -261,6 +261,9 @@ def main():
     ap.add_argument("--crash-oversample", type=int, default=2, help="duplicate crash stems Nx")
     ap.add_argument("--focal-lanes", default="hc,rd",
                     help="lanes the 'mixed' arm trains with focal (rest BCE); data-driven default")
+    ap.add_argument("--grad-clip", type=float, default=0.0,
+                    help="max grad norm (0=off). Set ~1.0 for h256+ to tame bf16 grad explosion "
+                         "(escalating 'skipped non-finite batches'); bounds weight growth.")
     ap.add_argument("--cache", default="/codebox-workspace/datasets/_cache_mert_pooled")
     ap.add_argument("--aligned-onsets", default=None,
                     help="opt-in _onsets_aligned.json -> train+score on audio-snapped/filtered targets")

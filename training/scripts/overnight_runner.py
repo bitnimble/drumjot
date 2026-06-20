@@ -47,6 +47,7 @@ def main():
     ap.add_argument("--cache", default="/codebox-workspace/datasets/_cache_mert_pooled")
     ap.add_argument("--aligned-onsets", default="/codebox-workspace/datasets/_onsets_aligned.json")
     ap.add_argument("--focal-lanes", default="hc,rd")
+    ap.add_argument("--grad-clip", type=float, default=0.0, help="max grad norm (0=off); ~1.0 for h256+")
     ap.add_argument("--batch", type=int, default=8)
     ap.add_argument("--num-workers", type=int, default=8)
     args = ap.parse_args()
@@ -87,8 +88,8 @@ def main():
         cmd = [sys.executable, os.path.join(_HERE, "cymbal_loss_ab.py"),
                "--arms", c["arm"], "--pool-cap", str(c["cap"]), "--hidden", str(c["hidden"]),
                "--layers", "2", "--epochs", str(c["epochs"]), "--seed", str(c["seed"]),
-               "--focal-lanes", args.focal_lanes, "--batch", str(args.batch),
-               "--num-workers", str(args.num_workers), "--cache", args.cache,
+               "--focal-lanes", args.focal_lanes, "--grad-clip", str(args.grad_clip),
+               "--batch", str(args.batch), "--num-workers", str(args.num_workers), "--cache", args.cache,
                "--aligned-onsets", args.aligned_onsets, "--ckpt-dir", str(ckpt_dir),
                "--out-json", str(out_json)]
         t0 = time.perf_counter()
