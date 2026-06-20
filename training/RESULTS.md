@@ -16,6 +16,49 @@ Scoring is `mir_eval` onset-F1 at ±50 ms (`metrics.onset_f1`).
 
 ---
 
+## 2026-06-21 · Adaptive params: trained predictor does NOT beat global (negative)
+
+Full pipeline ran end-to-end overnight on the hat+cymbal checkpoint: built a
+**28,645-row** corpus from STAR/ENST/E-GMD per-stem (cache-aware -- identity free
+from the training MERT cache, +4 onset-preserving augmented variants per window,
+all 3,768 h/c stems, ~5.5 h on the 1660), trained the per-lane HistGBR predictor,
+evaluated on held-out ParaDB.
+
+**The predictor does not capture the oracle gap -- it's ~neutral-to-slightly-worse
+than today's global params:**
+
+| lane | current | predicted | oracle | captured |
+|---|---|---|---|---|
+| hc | 0.502 | 0.476 | 0.542 | **-66%** |
+| ho | 0.630 | 0.638 | 0.675 | +19% |
+| rd | 0.174 | 0.169 | 0.198 | -23% |
+| cr | 0.373 | 0.386 | 0.433 | +23% |
+
+Mean captured **-0.002 F1** (oracle gap reconfirmed +0.042). It helps crash +
+open-hat slightly but *hurts* closed-hat and ride, netting neutral. The deploy
+safety-rail (fall back to global when predicted loses on aggregate) would here
+just revert to global.
+
+**Diagnosis (primary suspect): train/eval distribution mismatch.** The corpus is
+built on the model's own TRAINING stems, where its activation curves are
+in-domain / overconfident / clean (params barely matter), whereas ParaDB is
+out-of-domain real *separated* stems with messy, low-confidence curves (where
+params matter most). The learned feature->param mapping doesn't transfer.
+Augmentation covered gain/EQ/codec/reverb/noise but NOT separation artifacts or
+the in-domain->OOD confidence gap. Secondary: per-30 s-window corpus vs full-song
+eval granularity. The +0.042 ceiling is real; a learned cross-song predictor
+trained on in-domain curves isn't the way to bank it.
+
+**Next levers:** (a) build the corpus from curves that look like deployment --
+real separated stems (run more real songs through our separation; needs labels
+for the oracle) or at least the model's HELD-OUT splits, not its training data;
+(b) per-song *self-calibrating* params at inference (e.g. threshold at the knee
+of THIS song's peak-height histogram -- the deterministic baseline.py path), which
+needs no cross-song transfer; (c) domain-invariant features. Artifacts kept at
+`checkpoints/ovn3080/mixed_c3000_h256_s1/` (param_corpus.npz, param_predictor.joblib).
+
+---
+
 ## 2026-06-20 · Adaptive per-song peak-pick params: oracle-gap gate (hat+cymbal ckpt)
 
 First run of the new `parampred` gap gate (`eval_paradb.py --oracle-report`) on the
