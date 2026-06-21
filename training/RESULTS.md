@@ -38,11 +38,28 @@ the param corpus: the dist<=0.10 predictor (`param_predictor_a2md.joblib`) is th
 best artifact so far.** This is the same "closeness to the clean signal matters"
 lesson as the synth dilution + the augmentation-hurts result, a third time.
 
-**Next:** the support gate is the knob -- rebuild the 537-corpus with a stricter
-gate (`--min-support 0.98`) to test whether the GOOD parts of dist0p20 are
-recoverable (cheap: probs are cached, so it's a CPU-only re-gate, no GPU encode).
-If cymbals don't recover, just keep dist<=0.10. Artifacts: `a2md_corpus_id_v2.npz`,
-`param_predictor_a2md_v2.joblib`, `eval_a2md_{197,537}_det.log`.
+**Stricter gate partially recovers, but dist0p20 still loses.** Rebuilt the
+537-corpus at `--min-support 0.98` (CPU-only re-gate, probs cached; dropped only
+1,310->1,251 rows), retrained, re-evaled:
+
+| corpus / gate | predict | hybrid | cr pred% | rd pred% |
+|---|---|---|---|---|
+| dist<=0.10, 0.95 (197) | **+0.017** | **+0.024** | +64% | +108% |
+| dist<=0.20, 0.95 (537) | +0.002 | +0.009 | +27% | +64% |
+| dist<=0.20, 0.98 (537) | +0.010 | +0.016 | +53% | +95% |
+
+So the gate IS a real lever (0.98 recovered ~half: crash 27%->53%, ride 64%->95%),
+but **even strictly gated, dist0p20 stays below clean dist<=0.10.** Since the 537
+set = the 197 clean songs + 340 dist0p20, and it loses to 197 alone, the dist0p20
+additions are net-negative regardless of gate -- their residual is *timing* noise
+(slightly-off MIDI), which support (an onset-presence check) only partly catches.
+
+**Verdict:** keep the dist<=0.10 predictor (`param_predictor_a2md.joblib`,
++0.017/+0.024) as the param artifact. To grow it, get more *low*-dist (clean) real
+songs, not higher-dist ones; a higher gate just converges back toward the dist<=0.10
+subset. Artifacts: `a2md_corpus_id_v2{,_s98}.npz`,
+`param_predictor_a2md_v2{,_s98}.joblib`, `eval_a2md_{197,537}_det.log`,
+`eval_a2md_537_s98.log`.
 
 ---
 
