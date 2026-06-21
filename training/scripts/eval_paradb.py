@@ -66,11 +66,10 @@ STEM_TO_LANES = {
 
 
 def _pick_rlrr(root: Path) -> Path | None:
-    """Hardest chart in an extracted map dir (highest complexity)."""
-    charts = list(root.rglob("*.rlrr"))
-    if not charts:
-        return None
-    return max(charts, key=lambda p: rlrr.complexity(p))
+    """Hardest chart in an extracted map dir, chosen deterministically (complexity,
+    then difficulty name, then path) -- a complexity tie between e.g. Expert + Hard
+    charts otherwise resolves by unstable rglob order, parsing a different GT per run."""
+    return rlrr.pick_hardest(root.rglob("*.rlrr"))
 
 
 def _sum_tracks(root: Path, names: list[str], sr: int):

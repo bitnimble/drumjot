@@ -187,3 +187,31 @@ def comparison_pairs(
 def complexity(rlrr: object) -> int:
     """Difficulty (1-4); used to pick the hardest chart in a multi-chart zip."""
     return int((load(rlrr).get("recordingMetadata") or {}).get("complexity", 0))
+
+
+_DIFFICULTY_RANK = (("expert", 4), ("hard", 3), ("medium", 2), ("easy", 1))
+
+
+def difficulty_rank(name: str) -> int:
+    """Difficulty implied by a chart's filename (expert>hard>medium>easy, else 0).
+
+    `recordingMetadata.complexity` is coarse (often the SAME 1-4 for a map's Expert
+    and Hard charts), so it ties; this breaks the tie toward the genuinely harder
+    chart. Mirrors transcriber `paradb_read._difficulty_rank`."""
+    n = name.lower()
+    for word, rank in _DIFFICULTY_RANK:
+        if word in n:
+            return rank
+    return 0
+
+
+def pick_hardest(charts) -> Path | None:
+    """The hardest of several `.rlrr` paths, chosen DETERMINISTICALLY: by
+    `complexity`, then filename `difficulty_rank`, then the path itself. Without the
+    tiebreaks a complexity tie resolves by directory-iteration order (e.g.
+    `rglob`), which varies run-to-run -- a map with Expert+Hard charts at the same
+    complexity would then parse a different GT each run."""
+    charts = list(charts)
+    if not charts:
+        return None
+    return max(charts, key=lambda p: (complexity(p), difficulty_rank(Path(p).name), str(p)))

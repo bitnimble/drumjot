@@ -92,13 +92,15 @@ from +0.010 to −0.011. So grow the corpus with **more real songs, not augmente
 copies.** Augmentation is presumably still right for the synthetic ADT datasets (it
 moves them *toward* realism); it's wrong for already-real audio.
 
-> **Eval-variance caveat:** the ParaDB harness is not run-to-run deterministic --
-> `Kaikai_Kitan` parsed as 1640 GT onsets here vs 1516 in the prior batch, shifting
-> the sparse `rd` lane's current/oracle (0.174->0.085). The dense lanes
-> (`hc`/`ho`/`cr`) were stable, so the conclusions rest on them; treat single-run
-> `rd` numbers as noisy. **Follow-up: make eval_paradb deterministic** (seed /
-> remove the per-map optimistic-fold dependence on model output) before trusting
-> small per-lane deltas.
+> **Eval-variance caveat (ROOT-CAUSED + FIXED):** the `rd` current/oracle moved
+> between runs (0.174->0.085) because `Kaikai_Kitan.zip` ships TWO charts --
+> `_Expert` (1640 onsets) and `_Hard` (1516) -- that TIE at `complexity=4`, and
+> `_pick_rlrr`'s `max(charts, key=complexity)` then resolved the tie by unstable
+> `rglob` order (fresh temp-dir extraction each run), so it parsed a different chart
+> each time. Fixed: `rlrr.pick_hardest` now breaks ties by filename difficulty
+> (expert>hard>medium>easy) then path, so it deterministically picks `_Expert`. The
+> dense lanes (`hc`/`ho`/`cr`) were already stable, so the conclusions above hold;
+> single-run pre-fix `rd` numbers were noisy. Re-run evals will all use `_Expert`.
 
 **Next:** grow the real corpus -- the other dist buckets (0.00 tight + 0.20 with
 the support gate dropping bad lanes) and more A2MD songs (dist0p20 separation

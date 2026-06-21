@@ -49,6 +49,42 @@ def test_complexity():
     assert rlrr.complexity(_CHART) == 3
 
 
+def test_difficulty_rank_orders_known_names():
+    assert rlrr.difficulty_rank("Song_Expert.rlrr") == 4
+    assert rlrr.difficulty_rank("Song_Hard.rlrr") == 3
+    assert rlrr.difficulty_rank("Song_Medium.rlrr") == 2
+    assert rlrr.difficulty_rank("Song_Easy.rlrr") == 1
+    assert rlrr.difficulty_rank("Song.rlrr") == 0  # unlabelled
+
+
+def _write_chart(path, complexity, n_events):
+    import json
+    chart = {"recordingMetadata": {"complexity": complexity},
+             "audioFileData": {"songTracks": [], "drumTracks": []},
+             "events": [{"name": "BP_Kick_C_1", "time": float(i)} for i in range(n_events)]}
+    path.write_text(json.dumps(chart))
+
+
+def test_pick_hardest_breaks_complexity_tie_deterministically(tmp_path):
+    # Expert + Hard at the SAME complexity but different onset counts (the real
+    # Kaikai_Kitan case): the tie must resolve to Expert regardless of input order.
+    expert = tmp_path / "Song_Expert.rlrr"
+    hard = tmp_path / "Song_Hard.rlrr"
+    _write_chart(expert, complexity=4, n_events=1640)
+    _write_chart(hard, complexity=4, n_events=1516)
+    assert rlrr.pick_hardest([expert, hard]) == expert
+    assert rlrr.pick_hardest([hard, expert]) == expert  # order-independent
+    assert rlrr.pick_hardest([]) is None
+
+
+def test_pick_hardest_prefers_higher_complexity_over_difficulty_name(tmp_path):
+    easy_but_complex = tmp_path / "Song_Easy.rlrr"
+    expert_simple = tmp_path / "Song_Expert.rlrr"
+    _write_chart(easy_but_complex, complexity=4, n_events=10)
+    _write_chart(expert_simple, complexity=2, n_events=10)
+    assert rlrr.pick_hardest([easy_but_complex, expert_simple]) == easy_but_complex
+
+
 def test_song_and_drum_tracks_split():
     # song.ogg appears in both arrays -> counts as a song track only
     assert rlrr.song_tracks(_CHART) == ["song.ogg"]
