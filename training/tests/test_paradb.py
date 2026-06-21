@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from drumjot_training import paradb
+from drumjot_training import clean, paradb
 from drumjot_training.lanes import LANES
 
 
@@ -165,6 +165,25 @@ def test_stale_lock_is_reclaimed_but_fresh_is_not(tmp_path):
     old = time.time() - 7200
     os.utime(g._claim_path(wd, "M2"), (old, old))
     assert g._try_claim(wd, "M2", stale_s=3600) is True
+
+
+def test_recall_score_flags_missing_obvious_hits():
+    # drum-stem envelope with 4 clear transients at 0.1/0.2/0.3/0.4 s
+    fps = 100.0
+    env = np.zeros(100, dtype=np.float64)
+    env[[10, 20, 30, 40]] = 1.0
+    floor = 0.5  # confident-onset floor below the spikes, above the zeros
+    # complete chart: a note near every audio onset -> recall 1.0
+    full = {"k": [0.1, 0.2, 0.3, 0.4]}
+    r = clean.recall_score(full, env, fps, confident_floor=floor, window_s=0.03, min_distance_s=0.05)
+    assert r["n_confident"] == 4 and r["n_covered"] == 4 and r["fraction"] == 1.0
+    # simpler chart: omits two real hits (100% precision, low recall)
+    simple = {"k": [0.1, 0.3]}
+    r2 = clean.recall_score(simple, env, fps, confident_floor=floor, window_s=0.03, min_distance_s=0.05)
+    assert r2["n_confident"] == 4 and r2["n_covered"] == 2 and r2["fraction"] == 0.5
+    # silent envelope -> no confident onsets -> nothing can be missing
+    r3 = clean.recall_score(simple, np.zeros(100), fps, confident_floor=floor, window_s=0.03)
+    assert r3["n_confident"] == 0 and r3["fraction"] == 1.0
 
 
 def test_merge_results_collects_entries(tmp_path):

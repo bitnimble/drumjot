@@ -14,6 +14,18 @@ stem's onset-strength envelope, after a robust global chart->audio offset
 correction. The drum stem is CACHED so the survivors' MDX23C split
 (separate_paradb_dataset.py) reuses it -- nothing wasted on what we keep.
 
+TWO signals, because support only catches PRECISION:
+  - support (precision): fraction of charted onsets on a real transient. Catches
+    auto-from-MIDI / mis-synced charts (notes where there's no drum hit).
+  - recall: fraction of HIGH-CONFIDENCE audio onsets the chart covers. Catches a
+    chart SIMPLER than the performance (100% precision but missing real hits) --
+    only the unambiguous drum transients count, so we flag missing OBVIOUS hits.
+A map is kept only if BOTH clear their thresholds (chosen from the histograms).
+
+PIPELINED so the GPU never idles: a producer thread claims+extracts+builds the
+next map's mix while the main thread separates the current map and a scorer
+thread scores+writes the previous one (mirrors separate_egmd_dataset.py).
+
 DISTRIBUTED (per-map claiming). Run this on as many boxes as you like at once
 (1660 + 3080 + sandbox); they cooperate over the shared `--work-dir` with NO
 coordination beyond the filesystem:
@@ -136,81 +148,74 @@ def _merge_results(work_dir: Path) -> dict:
     return manifest
 
 
-def _score_map(zp: Path, sep, stems_cache: Path, args) -> dict:
-    """Separate (cached) + score one map -> a manifest entry dict.
-
-    Known failures (no chart, no audio, separation error, silent stem) are
-    returned as a `status` rather than raised. Unexpected raises (corrupt zip,
-    malformed chart) are caught by the caller, which records an `error` result so
-    the corpus run is crash-proof and the bad map isn't re-claimed forever."""
+def _extract_parse(zp: Path, td: Path, args) -> tuple[dict, dict | None, Path | None]:
+    """Stage 1 (CPU): extract the zip into `td`, pick the hardest chart, parse
+    onsets + sanity. Returns `(entry, gt, chart_path)`; gt/chart are None for a
+    terminal status (no_chart / too_few_onsets). Raises only on a corrupt zip /
+    malformed chart, which the producer catches into an `error` result."""
     map_id = paradb.map_id_of_zip(zp)
     entry: dict = {"zip": zp.name, "map_id": map_id, "status": "ok", "runner": _RUNNER}
-    with tempfile.TemporaryDirectory() as td:
-        root = Path(td)
-        with zipfile.ZipFile(zp) as z:
-            z.extractall(root)
-        chart = paradb.pick_chart(root)
-        if chart is None:
-            entry["status"] = "no_chart"
-            return entry
-        entry["chart"] = str(chart.relative_to(root))
-        gt = rlrr.onsets_by_lane(chart)
-        per_lane_n = {ln: len(ts) for ln, ts in gt.items() if ts}
-        n_onsets = sum(per_lane_n.values())
-        entry["n_onsets"] = n_onsets
-        entry["per_lane_n"] = per_lane_n
-        if n_onsets < args.min_onsets:
-            entry["status"] = "too_few_onsets"
-            return entry
-
-        # BS-Roformer drum stem (cached -> reused by separate_paradb_dataset.py).
-        drum_cached = stems_cache / f"{map_id}.drum.flac"
-        if not drum_cached.exists():
-            mix_wav = root / "_mix.wav"
-            ok, case = paradb.build_mix(
-                root, rlrr.song_tracks(chart), rlrr.drum_tracks(chart),
-                paradb.SEP_SR, mix_wav, args.max_seconds, args.drum_corr_threshold,
-            )
-            entry["mix_case"] = case
-            if not ok:
-                entry["status"] = "no_audio"
-                return entry
-            try:
-                drum = sep.run_stems_all(mix_wav, root, build_no_drums=False).drum_stem
-            except Exception as exc:  # noqa: BLE001
-                entry["status"] = "sep_failed"
-                entry["error"] = f"{type(exc).__name__}: {exc}"
-                return entry
-            drum_cached.parent.mkdir(parents=True, exist_ok=True)
-            # atomic publish so a concurrent runner never reads a half-written stem
-            tmp_stem = drum_cached.with_suffix(f".{os.getpid()}.tmp")
-            tmp_stem.write_bytes(Path(drum).read_bytes())
-            os.replace(tmp_stem, drum_cached)
-        entry["drum_stem"] = drum_cached.name
-
-        # support: fraction of charted onsets on a real drum transient, at offset
-        # 0 and after the robust global offset correction (a globally-shifted but
-        # otherwise-good chart is still good once corrected).
-        env, env_fps = forced_align.onset_envelope(drum_cached, max_seconds=args.max_seconds)
-        if env.size == 0 or float(np.max(env)) <= 0.0:
-            entry["status"] = "silent_stem"
-            return entry
-        floor = postfilter.support_floor_from_env(env, args.support_percentile)
-        off, s0 = paradb.global_offset(gt, env, env_fps, floor, args.align_window, args.offset_window)
-        apply_off = off if abs(off) > args.offset_correct_min else 0.0
-        s_corr = clean.support_score(
-            paradb.shift_onsets(gt, apply_off), env, env_fps,
-            window_s=args.align_window, support_floor=floor,
-        )["fraction"]
-        entry["duration_s"] = round(float(env.size / env_fps), 2)
-        entry["offset_ms"] = round(off * 1000.0, 1)
-        entry["support_0"] = round(float(s0), 4)
-        entry["support_corr"] = round(float(s_corr), 4)
-        entry["keep"] = bool(s_corr >= args.keep_support)
-    return entry
+    with zipfile.ZipFile(zp) as z:
+        z.extractall(td)
+    chart = paradb.pick_chart(td)
+    if chart is None:
+        entry["status"] = "no_chart"
+        return entry, None, None
+    entry["chart"] = str(chart.relative_to(td))
+    gt = rlrr.onsets_by_lane(chart)
+    per_lane_n = {ln: len(ts) for ln, ts in gt.items() if ts}
+    entry["n_onsets"] = sum(per_lane_n.values())
+    entry["per_lane_n"] = per_lane_n
+    if entry["n_onsets"] < args.min_onsets:
+        entry["status"] = "too_few_onsets"
+        return entry, None, None
+    return entry, gt, chart
 
 
-def _print_report(manifest: dict, keep_support: float, log) -> None:
+def _score_from_stem(entry: dict, gt: dict, drum_path: Path, args) -> None:
+    """Stage 3 (CPU): score `gt` against the drum stem's onset envelope, mutating
+    `entry`. Two cleanliness signals at the offset-corrected chart:
+      - support (PRECISION): fraction of charted onsets on a real transient.
+      - recall: fraction of HIGH-CONFIDENCE audio onsets the chart covers
+        (catches a chart simpler than the performance; missing real hits)."""
+    entry["drum_stem"] = Path(drum_path).name
+    env, env_fps = forced_align.onset_envelope(drum_path, max_seconds=args.max_seconds)
+    if env.size == 0 or float(np.max(env)) <= 0.0:
+        entry["status"] = "silent_stem"
+        return
+    floor = postfilter.support_floor_from_env(env, args.support_percentile)
+    off, s0 = paradb.global_offset(gt, env, env_fps, floor, args.align_window, args.offset_window)
+    apply_off = off if abs(off) > args.offset_correct_min else 0.0
+    gt_off = paradb.shift_onsets(gt, apply_off)
+    s_corr = clean.support_score(
+        gt_off, env, env_fps, window_s=args.align_window, support_floor=floor,
+    )["fraction"]
+    conf_floor = postfilter.support_floor_from_env(env, args.recall_percentile)
+    rec = clean.recall_score(
+        gt_off, env, env_fps, confident_floor=conf_floor, window_s=args.recall_window,
+        min_distance_s=args.recall_min_distance, prominence=(args.recall_prominence or None),
+    )
+    entry["duration_s"] = round(float(env.size / env_fps), 2)
+    entry["offset_ms"] = round(off * 1000.0, 1)
+    entry["support_0"] = round(float(s0), 4)
+    entry["support_corr"] = round(float(s_corr), 4)
+    entry["recall"] = round(float(rec["fraction"]), 4)
+    entry["n_confident"] = rec["n_confident"]
+    entry["keep"] = bool(s_corr >= args.keep_support and rec["fraction"] >= args.keep_recall)
+
+
+def _histogram(vals: np.ndarray, label: str, log) -> None:
+    log(f"\n  {label} over {len(vals)} scored maps "
+        f"(median {np.median(vals):.3f}, mean {vals.mean():.3f}):")
+    edges = np.linspace(0.0, 1.0, 11)
+    hist, _ = np.histogram(vals, bins=edges)
+    peak = max(hist.max(), 1)
+    for i in range(len(hist)):
+        bar = "#" * int(round(40 * hist[i] / peak))
+        log(f"    {edges[i]:.1f}-{edges[i+1]:.1f} | {hist[i]:5d} {bar}")
+
+
+def _print_report(manifest: dict, keep_support: float, keep_recall: float, log) -> None:
     scored = [e for e in manifest.values() if "support_corr" in e]
     statuses: dict[str, int] = {}
     for e in manifest.values():
@@ -220,35 +225,34 @@ def _print_report(manifest: dict, keep_support: float, log) -> None:
         log(f"  status {st:16s} {n:5d}")
     if not scored:
         return
-    sc = np.array([e["support_corr"] for e in scored])
-    log(f"\n  support@corrected over {len(sc)} scored maps "
-        f"(median {np.median(sc):.3f}, mean {sc.mean():.3f}):")
-    edges = np.linspace(0.0, 1.0, 11)
-    hist, _ = np.histogram(sc, bins=edges)
-    peak = max(hist.max(), 1)
-    for i in range(len(hist)):
-        bar = "#" * int(round(40 * hist[i] / peak))
-        log(f"    {edges[i]:.1f}-{edges[i+1]:.1f} | {hist[i]:5d} {bar}")
-    for thr in (0.5, 0.6, 0.7, 0.8, 0.9):
-        log(f"  keep >= {thr:.2f}: {int((sc >= thr).sum()):5d} maps")
-    log(f"\n  provisional keep (>= {keep_support:.2f}): "
+    sup = np.array([e["support_corr"] for e in scored])
+    rec = np.array([e.get("recall", 1.0) for e in scored])
+    _histogram(sup, "support@corrected (precision)", log)
+    _histogram(rec, "recall (confident audio onsets covered)", log)
+    # combined keep grid: how many maps survive each (support, recall) cut pair
+    log("\n  combined keep (support>=row, recall>=col):")
+    cols = (0.4, 0.5, 0.6, 0.7)
+    log("    sup\\rec |" + "".join(f"{c:>7.2f}" for c in cols))
+    for srow in (0.5, 0.6, 0.7, 0.8):
+        cells = "".join(f"{int(((sup >= srow) & (rec >= c)).sum()):>7d}" for c in cols)
+        log(f"    {srow:>7.2f} |{cells}")
+    log(f"\n  provisional keep (support>={keep_support:.2f} AND recall>={keep_recall:.2f}): "
         f"{sum(1 for e in scored if e.get('keep'))} maps")
-    by_supp = sorted(scored, key=lambda e: e["support_corr"])
-    log("\n  sample LOW-support maps (likely trash):")
-    for e in by_supp[:8]:
-        log(f"    {e['support_corr']:.2f}  off={e.get('offset_ms',0):+.0f}ms  "
-            f"n={e.get('n_onsets',0):5d}  {e['zip']}")
-    log("  sample HIGH-support maps (likely good):")
-    for e in by_supp[-8:]:
-        log(f"    {e['support_corr']:.2f}  off={e.get('offset_ms',0):+.0f}ms  "
-            f"n={e.get('n_onsets',0):5d}  {e['zip']}")
+    log("\n  sample LOW-recall maps (chart simpler than the audio):")
+    for e in sorted(scored, key=lambda e: e.get("recall", 1.0))[:8]:
+        log(f"    rec={e.get('recall',1.0):.2f} sup={e['support_corr']:.2f} "
+            f"conf={e.get('n_confident',0):4d} n={e.get('n_onsets',0):5d}  {e['zip']}")
+    log("  sample LOW-support maps (charted notes not in the audio):")
+    for e in sorted(scored, key=lambda e: e["support_corr"])[:8]:
+        log(f"    sup={e['support_corr']:.2f} rec={e.get('recall',1.0):.2f} "
+            f"off={e.get('offset_ms',0):+.0f}ms n={e.get('n_onsets',0):5d}  {e['zip']}")
 
 
-def _merge_and_report(work_dir: Path, out_path: Path, keep_support: float, log) -> dict:
+def _merge_and_report(work_dir: Path, out_path: Path, keep_support: float, keep_recall: float, log) -> dict:
     manifest = _merge_results(work_dir)
     out_path.write_text(json.dumps(manifest, indent=2))
     log(f"\nmerged {len(manifest)} results -> {out_path}")
-    _print_report(manifest, keep_support, log)
+    _print_report(manifest, keep_support, keep_recall, log)
     return manifest
 
 
@@ -266,7 +270,9 @@ def main():
     ap.add_argument("--max-seconds", type=float, default=None, help="cap per-song audio (debug)")
     ap.add_argument("--min-onsets", type=int, default=50, help="charts below this many onsets are trash")
     ap.add_argument("--keep-support", type=float, default=DEFAULT_KEEP_SUPPORT,
-                    help="provisional keep threshold written to the manifest (real cut chosen from histogram)")
+                    help="provisional support (precision) keep threshold (real cut chosen from histogram)")
+    ap.add_argument("--keep-recall", type=float, default=0.5,
+                    help="provisional recall keep threshold (real cut chosen from histogram)")
     ap.add_argument("--support-percentile", type=float, default=60.0, help="adaptive support floor percentile")
     ap.add_argument("--align-window", type=float, default=0.03, help="support window (s)")
     ap.add_argument("--offset-window", type=float, default=0.05, help="+/- median-offset search (s)")
@@ -274,6 +280,16 @@ def main():
                     help="apply offset correction only if |median offset| exceeds this (s)")
     ap.add_argument("--drum-corr-threshold", type=float, default=0.5,
                     help="drum/song correlation above which the song already contains the drums")
+    # recall gate: only EXTREMELY confident audio onsets (high percentile) count,
+    # so we penalise a chart for missing OBVIOUS hits, not soft/ambiguous ones.
+    ap.add_argument("--recall-percentile", type=float, default=92.0,
+                    help="envelope percentile for 'confident' audio onsets (higher = stricter)")
+    ap.add_argument("--recall-window", type=float, default=0.05,
+                    help="+/- window for a chart onset to count as covering an audio onset (s)")
+    ap.add_argument("--recall-min-distance", type=float, default=0.05,
+                    help="min spacing between confident audio onsets (s)")
+    ap.add_argument("--recall-prominence", type=float, default=0.0,
+                    help="prominence for confident-onset peaks (0=off)")
     ap.add_argument("--merge", action="store_true", help="just rebuild the manifest from results/ and exit")
     ap.add_argument("--report-only", action="store_true", help="rebuild + print the report, no separation")
     ap.add_argument("--log", default=None, help="tee stdout+stderr to this file")
@@ -288,7 +304,7 @@ def main():
     (work_dir / "results").mkdir(parents=True, exist_ok=True)
 
     if args.merge or args.report_only:
-        _merge_and_report(work_dir, out_path, args.keep_support, log)
+        _merge_and_report(work_dir, out_path, args.keep_support, args.keep_recall, log)
         return
 
     stems_cache = Path(args.stems_cache)
@@ -296,40 +312,119 @@ def main():
     stale_s = args.stale_minutes * 60.0
     zips = paradb.iter_zips(args.maps_dir)
     n_done = len(list((work_dir / "results").glob("*.json")))
-    log(f"[{_RUNNER}] {len(zips)} maps total; {n_done} already have results; "
-        f"work-dir={work_dir}")
+    log(f"[{_RUNNER}] {len(zips)} maps total; {n_done} already have results; work-dir={work_dir}")
+
+    _run_pipeline(zips, work_dir, stems_cache, stale_s, args, log)
+    _merge_and_report(work_dir, out_path, args.keep_support, args.keep_recall, log)
+
+
+def _run_pipeline(zips, work_dir: Path, stems_cache: Path, stale_s: float, args, log) -> None:
+    """3-stage GPU-fed pipeline (mirrors separate_egmd_dataset.py) so the GPU
+    never idles on disk/IO: a producer thread claims+extracts+builds the next
+    map's mix while the main thread separates the current one and a scorer thread
+    scores+writes the previous one. Each map flows as a mutable `job` dict; every
+    stage guards its own failures into the job's `entry` so one bad map can't kill
+    the runner, and the scorer always writes a result + releases the claim."""
+    import queue
+    import shutil
+    import threading
 
     from app.pipeline.separate import Separator
 
+    ready_q: queue.Queue = queue.Queue(maxsize=3)   # prepped (CPU) -> GPU
+    score_q: queue.Queue = queue.Queue(maxsize=3)   # separated -> scorer (CPU)
+    counts = {"claimed": 0, "done": 0}
+
+    def produce():
+        claimed = 0
+        for zp in zips:
+            if args.limit and claimed >= args.limit:
+                break
+            map_id = paradb.map_id_of_zip(zp)
+            if not _try_claim(work_dir, map_id, stale_s):
+                continue  # done by, or in flight on, another runner
+            claimed += 1
+            td = Path(tempfile.mkdtemp(prefix="paradbgate_"))
+            job = {"map_id": map_id, "td": td, "gt": None, "mix": None,
+                   "drum": None, "to_gpu": False,
+                   "entry": {"zip": zp.name, "map_id": map_id, "status": "ok", "runner": _RUNNER}}
+            try:
+                entry, gt, chart = _extract_parse(zp, td, args)
+                job["entry"] = entry
+                job["gt"] = gt
+                if gt is not None:  # passed sanity
+                    drum_cached = stems_cache / f"{map_id}.drum.flac"
+                    if drum_cached.exists():
+                        job["drum"] = drum_cached  # already separated -> score from cache
+                    else:
+                        mix = td / "_mix.wav"
+                        ok, case = paradb.build_mix(
+                            td, rlrr.song_tracks(chart), rlrr.drum_tracks(chart),
+                            paradb.SEP_SR, mix, args.max_seconds, args.drum_corr_threshold,
+                        )
+                        entry["mix_case"] = case
+                        if ok:
+                            job["mix"] = mix
+                            job["to_gpu"] = True
+                        else:
+                            entry["status"] = "no_audio"
+            except Exception as exc:  # noqa: BLE001  corrupt zip / malformed chart
+                job["entry"]["status"] = "error"
+                job["entry"]["error"] = f"{type(exc).__name__}: {exc}"
+            counts["claimed"] = claimed
+            ready_q.put(job)
+        ready_q.put(None)
+
+    def score():
+        while True:
+            job = score_q.get()
+            if job is None:
+                break
+            entry, map_id = job["entry"], job["map_id"]
+            try:
+                if entry["status"] == "ok" and job["drum"] is not None:
+                    _score_from_stem(entry, job["gt"], job["drum"], args)
+            except Exception as exc:  # noqa: BLE001  odd audio must not kill the runner
+                entry["status"] = "error"
+                entry["error"] = f"{type(exc).__name__}: {exc}"
+            finally:
+                _write_result(work_dir, map_id, entry)
+                _release(work_dir, map_id)
+                if job["td"] is not None:
+                    shutil.rmtree(job["td"], ignore_errors=True)
+            counts["done"] += 1
+            s = entry.get("support_corr")
+            r = entry.get("recall")
+            log(f"[{_RUNNER}] ({counts['done']}) {map_id}  status={entry['status']}"
+                + (f"  sup={s:.2f} rec={r:.2f} off={entry.get('offset_ms',0):+.0f}ms"
+                   if s is not None else ""))
+
     sep = Separator()
     sep.load()
-    claimed = 0
-    for zp in zips:
-        if args.limit and claimed >= args.limit:
+    producer = threading.Thread(target=produce, daemon=True)
+    scorer = threading.Thread(target=score, daemon=True)
+    producer.start()
+    scorer.start()
+    # main thread = GPU: pull prepped jobs, separate (only those needing it), hand off.
+    while True:
+        job = ready_q.get()
+        if job is None:
             break
-        map_id = paradb.map_id_of_zip(zp)
-        if not _try_claim(work_dir, map_id, stale_s):
-            continue  # done by, or in flight on, another runner
-        claimed += 1
-        try:
+        if job["to_gpu"]:
             try:
-                entry = _score_map(zp, sep, stems_cache, args)
-            except Exception as exc:  # noqa: BLE001  one bad map must never kill the runner
-                # _score_map guards known failures; this catches the unexpected
-                # (BadZipFile, malformed chart, odd audio). Write an `error`
-                # result so the map is marked DONE, not re-claimed forever.
-                entry = {"zip": zp.name, "map_id": map_id, "status": "error",
-                         "error": f"{type(exc).__name__}: {exc}", "runner": _RUNNER}
-            _write_result(work_dir, map_id, entry)
-        finally:
-            _release(work_dir, map_id)
-        s = entry.get("support_corr")
-        log(f"[{_RUNNER}] ({claimed}) {map_id}  status={entry['status']}"
-            + (f"  support={s:.2f} off={entry.get('offset_ms',0):+.0f}ms n={entry.get('n_onsets',0)}"
-               if s is not None else ""))
-
-    log(f"[{_RUNNER}] claimed {claimed} maps this run")
-    _merge_and_report(work_dir, out_path, args.keep_support, log)
+                drum = sep.run_stems_all(job["mix"], job["td"], build_no_drums=False).drum_stem
+                drum_cached = stems_cache / f"{job['map_id']}.drum.flac"
+                tmp = drum_cached.with_suffix(f".{os.getpid()}.tmp")
+                tmp.write_bytes(Path(drum).read_bytes())  # atomic publish for other runners
+                os.replace(tmp, drum_cached)
+                job["drum"] = drum_cached
+            except Exception as exc:  # noqa: BLE001
+                job["entry"]["status"] = "sep_failed"
+                job["entry"]["error"] = f"{type(exc).__name__}: {exc}"
+        score_q.put(job)
+    score_q.put(None)
+    scorer.join()
+    log(f"[{_RUNNER}] claimed {counts['claimed']} maps this run, {counts['done']} scored")
 
 
 if __name__ == "__main__":

@@ -78,6 +78,48 @@ def support_score(
     }
 
 
+def recall_score(
+    onsets_by_lane: Mapping[str, Sequence[float]],
+    env: np.ndarray,
+    env_fps: float,
+    *,
+    confident_floor: float,
+    window_s: float = 0.05,
+    min_distance_s: float = 0.05,
+    prominence: float | None = None,
+) -> dict:
+    """Fraction of HIGH-CONFIDENCE audio onsets the chart covers (a RECALL gate).
+
+    `support_score` only catches PRECISION (charted notes with no transient); it
+    cannot catch a chart SIMPLER than the performance, one with 100% precision
+    but missing real hits the drummer played. This is the recall companion: detect
+    only the UNAMBIGUOUS drum-stem transients (onset-strength peaks >=
+    `confident_floor`, set high so we penalise missing OBVIOUS hits, not soft or
+    ambiguous ones) and check each has SOME charted onset within +/-`window_s`. A
+    low fraction means the chart leaves clear hits unlabelled (it would train the
+    model toward false negatives). Returns {fraction, n_confident, n_covered};
+    no confident onsets -> 1.0 (nothing to be missing).
+    """
+    from drumjot_dsp import peakpick
+
+    peaks = peakpick.pick_peaks(
+        np.asarray(env, dtype=float), env_fps,
+        threshold=confident_floor, min_distance_s=min_distance_s, prominence=prominence,
+    )
+    n_conf = int(peaks.size)
+    if n_conf == 0:
+        return {"fraction": 1.0, "n_confident": 0, "n_covered": 0}
+    chart = np.array(sorted(t for ts in onsets_by_lane.values() for t in ts), dtype=float)
+    covered = 0
+    for fr in peaks:
+        t = float(fr) / env_fps
+        if chart.size:
+            i = int(np.searchsorted(chart, t))
+            if any(0 <= j < chart.size and abs(t - chart[j]) <= window_s for j in (i - 1, i)):
+                covered += 1
+    return {"fraction": covered / n_conf, "n_confident": n_conf, "n_covered": covered}
+
+
 def filter_lanes_by_support(
     onsets_by_lane: Mapping[str, Sequence[float]],
     env: np.ndarray,
