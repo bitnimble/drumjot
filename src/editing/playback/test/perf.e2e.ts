@@ -148,6 +148,9 @@ function expectSmooth(label: string, steady: number[]): void {
   const msg =
     `${label}: median ${median}ms, p95 ${pct(steady, 0.95)}ms, max ${worst}ms, ` +
     `${slow}/${steady.length} frames over ${FRAME_BUDGET_60_MS}ms`;
+  // Log on every run (not just on failure): these medians are the signal the
+  // perf gate exists for, and `insert-latency` already logs unconditionally.
+  console.log(`[PERF] ${msg}`);
   expect(median, `${msg} - median must hold 120fps (<${FRAME_BUDGET_120_MS}ms)`).toBeLessThan(
     FRAME_BUDGET_120_MS,
   );
