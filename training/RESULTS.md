@@ -16,6 +16,59 @@ Scoring is `mir_eval` onset-F1 at ±50 ms (`metrics.onset_f1`).
 
 ---
 
+## 2026-06-21 · Adaptive params, take 2: REAL-domain corpus (A2MD) flips it positive
+
+Follow-up to the negative result below. That predictor was trained on the model's
+own *synthetic* training stems (in-domain, overconfident curves); the diagnosis
+was synth→real domain mismatch, and the fix was "build the corpus from curves that
+look like deployment -- real separated stems" (next-lever (a)). Did exactly that:
+197 real A2MD songs (dist≤0.10) run through our own separation, full-song MIDI drum
+onsets (channel-9-only), per-stem corpus built via the new **fresh-encode path**
+(`build_param_dataset_perstem.py` now plans + encodes stems not in the MERT cache).
+**Identity only, no augmentation**, to isolate the real-data variable -- 477 rows,
+5 lanes, 188 songs, ~13 min on the 1660. The 0.95 label-support gate + onset snap
+runs over every window.
+
+Re-eval on the same held-out ParaDB, per-lane **% of that lane's oracle gap
+captured** (negative = actively worse than today's global params):
+
+| predictor (corpus) | hc | ho | rd | cr | **mean captured** |
+|---|---|---|---|---|---|
+| synth-only (28,645 rows) | −66% | +19% | −23% | +23% | **−0.002 F1** |
+| **A2MD-only (477 rows)** | −12% | +24% | **+89%** | **+63%** | **+0.016 F1** |
+| union, synth+A2MD (29,122) | −51% | +25% | +25% | +31% | **+0.004 F1** |
+| determ self-cal (no training) | **+59%** | −169% | +6% | −61% |, |
+
+(oracle gap +0.042 F1; `current`/`determ`/`oracle` columns byte-identical across
+all three runs -- only the predictor changed.)
+
+**Takeaways:**
+1. **Real-domain data is the missing ingredient.** A2MD-only (+0.016) beats
+   synth-only (−0.002) despite **60× fewer rows** -- your call that it was a
+   data-diversity problem, not a dead end, was right.
+2. **Blending raw dilutes it.** The union (+0.004) ≈ synth-only: 477 real rows are
+   1.6% of the synthetic pool and get swamped. Real data must be **isolated or
+   heavily upweighted**, not poured into the synthetic corpus.
+3. **Cymbals are where real data wins most** -- ride −23%→**+89%**, crash
+   +23%→**+63%**. Synthetic STAR cymbals are clean/uniform; real A2MD cymbal timbre
+   is the diversity the predictor needed. (hp/rd corpus is thin at 33/30 rows, so
+   ride's +89% is encouraging but noisy.)
+4. **Closed-hat stays a deterministic-self-cal job.** determ +59% beats every
+   learned predictor (all net-negative on hc). The two methods are complementary.
+5. **Deployable policy = hybrid, per lane:** determ for **hc**; learned-on-real
+   (A2MD) for **rd / cr / ho**. Best-of-each capture ≈ hc 59% + rd 89% + cr 63% +
+   ho 24%, far more of the +0.042 gap than any single method.
+
+**Next:** grow the real corpus -- the other dist buckets (0.00 tight + 0.20 with
+the support gate dropping bad lanes), more A2MD songs, and augmentation *on top of*
+real audio (separation-artifact robustness on a real manifold, not a synthetic
+one); then the hybrid picker + a deploy safety-rail. Artifacts at
+`checkpoints/ovn3080/mixed_c3000_h256_s1/`: `a2md_corpus_id.npz`,
+`param_predictor_a2md.joblib`, `param_predictor_synth_a2md.joblib`,
+`eval_{synth,a2md,synth_a2md}.log`.
+
+---
+
 ## 2026-06-21 · Adaptive params: trained predictor does NOT beat global (negative)
 
 Full pipeline ran end-to-end overnight on the hat+cymbal checkpoint: built a
