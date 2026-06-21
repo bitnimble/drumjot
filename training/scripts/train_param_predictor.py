@@ -42,14 +42,20 @@ def _lane_defaults(lane: str) -> dict[str, float]:
 
 def main():
     ap = argparse.ArgumentParser(description="Fit the per-song param predictor")
-    ap.add_argument("--dataset", required=True, help="npz Table from build_param_dataset.py")
+    ap.add_argument("--dataset", required=True, nargs="+",
+                    help="one or more npz Tables (concatenated; e.g. synthetic + A2MD)")
     ap.add_argument("--out", required=True, help="output predictor .joblib")
     ap.add_argument("--val-frac", type=float, default=0.2, help="song fraction held out for MAE report")
     ap.add_argument("--min-rows", type=int, default=20, help="skip lanes with fewer train rows")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
-    table = dataset.Table.load(args.dataset)
+    tables = [dataset.Table.load(p) for p in args.dataset]
+    table = dataset.Table.concat(tables) if len(tables) > 1 else tables[0]
+    if len(tables) > 1:
+        print(f"concatenated {len(tables)} tables: "
+              + ", ".join(f"{os.path.basename(p)}={len(t)}"
+                          for p, t in zip(args.dataset, tables, strict=True)), flush=True)
     print(f"loaded {len(table)} rows, {len(table.lanes())} lanes, "
           f"{len(set(table.song.tolist()))} songs", flush=True)
     train_mask = _song_split(table.song, args.val_frac, args.seed)

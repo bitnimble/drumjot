@@ -63,6 +63,36 @@ def test_table_save_load_round_trip(tmp_path):
     np.testing.assert_array_equal(loaded.lane, table.lane)
 
 
+def _rows(song_id):
+    fps = 100.0
+    probs = _two_lane_probs(fps, 400)
+    wave, sr = _wave()
+    return dataset.build_rows_for_song(
+        probs, fps, ["k", "s"], {"k": 0.3, "s": 0.1},
+        {"k": [0.5, 1.5, 2.5], "s": [0.6, 1.6, 2.6]}, wave, sr, song_id=song_id, aug="a")
+
+
+def test_concat_stacks_tables_and_preserves_songs():
+    a = dataset.Table.from_rows(_rows("synthA") + _rows("synthB"))
+    b = dataset.Table.from_rows(_rows("a2md_1"))
+    cat = dataset.Table.concat([a, b])
+    assert len(cat) == len(a) + len(b)
+    assert set(cat.song.tolist()) == {"synthA", "synthB", "a2md_1"}
+    assert cat.feature_names == a.feature_names and cat.param_names == a.param_names
+    np.testing.assert_array_equal(cat.X[: len(a)], a.X)
+
+
+def test_concat_rejects_mismatched_feature_names():
+    a = dataset.Table.from_rows(_rows("s"))
+    b = dataset.Table.from_rows(_rows("t"))
+    b.feature_names = a.feature_names[:-1] + ("bogus",)  # plain class; mutate directly
+    try:
+        dataset.Table.concat([a, b])
+        raise AssertionError("expected ValueError on mismatched feature names")
+    except ValueError:
+        pass
+
+
 def test_training_matrices_select_lane_and_swept_params():
     fps = 100.0
     probs = _two_lane_probs(fps, 400)

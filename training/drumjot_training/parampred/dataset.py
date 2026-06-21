@@ -113,6 +113,28 @@ class Table:
             baseline_f1=[r.baseline_f1 for r in rows],
         )
 
+    @staticmethod
+    def concat(tables: Sequence[Table]) -> Table:
+        """Stack several corpora (e.g. synthetic + A2MD real-domain) into one.
+        All must share `feature_names`/`param_names` (same builder + checkpoint),
+        so we can train one predictor on the union without rebuilding either."""
+        tables = [t for t in tables if len(t)]
+        if not tables:
+            raise ValueError("no non-empty tables")
+        f0, p0 = tables[0].feature_names, tables[0].param_names
+        for t in tables[1:]:
+            if t.feature_names != f0 or t.param_names != p0:
+                raise ValueError("cannot concat tables with mismatched feature/param names")
+        cat = np.concatenate
+        return Table(
+            lane=cat([t.lane for t in tables]), song=cat([t.song for t in tables]),
+            aug=cat([t.aug for t in tables]), X=cat([t.X for t in tables]),
+            Y=cat([t.Y for t in tables]), swept=cat([t.swept for t in tables]),
+            oracle_f1=cat([t.oracle_f1 for t in tables]),
+            baseline_f1=cat([t.baseline_f1 for t in tables]),
+            feature_names=f0, param_names=p0,
+        )
+
     def __len__(self) -> int:
         return len(self.lane)
 

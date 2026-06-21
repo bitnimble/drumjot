@@ -13,12 +13,19 @@ worker threads runs augmentation AHEAD into a bounded queue; the main thread doe
 only encode + heads. Augmented work is bounded to `--aug-windows` windows/stem x
 `--variants` so an overnight run fits; identity uses those same windows (free).
 
+Datasets NOT in train.py's MERT cache (A2MD / MDB -- real songs through our
+separation) take a fresh-encode path instead: windows are planned on the fly and
+the identity window is encoded on the GPU (its probs are still cached, so a
+resumed build never re-encodes). This is the real-domain corpus that the
+synthetic-only predictor lacked.
+
 Per-window granularity: each window (+ its window-relative GT) is one oracle unit.
 Hat+cymbal: `--pitches h,c`. These are TRAINING datasets; ParaDB stays the test.
 
   PYTHONPATH=dsp:training python3 training/scripts/build_param_dataset_perstem.py \
       --checkpoint <ckpt> --out <table.npz> \
       --star-root .../star_balanced_sep --enst-root .../enst-sep --egmd-root .../egmd_sep \
+      --a2md-root .../a2md_sep \
       --feature-cache .../_cache_mert_pooled [--variants 4] [--aug-windows 1] [--workers 3]
 """
 import argparse
@@ -34,17 +41,31 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))  # training/
 
-from drumjot_training import clean, egmd, embeddings, enst, inference, postfilter, runtime, star  # noqa: E402
+from drumjot_training import (  # noqa: E402
+    a2md,
+    clean,
+    egmd,
+    embeddings,
+    enst,
+    inference,
+    postfilter,
+    runtime,
+    star,
+)
 from drumjot_training.parampred import dataset, probs_cache  # noqa: E402
 
 SR = embeddings.HB_SR  # 44100; encode resamples to MERT sr, high-band wants 44.1k
 WINDOW, SEARCH = 30.0, 3.0  # must match train.py (win = max_seconds or 30.0; window_search 3.0)
 
 _LOADERS = {
-    # name -> (perstem_index, restricted_onsets, annotation-attr, split-group attr)
+    # name -> (perstem_index, restricted_onsets, annotation-attr, split-group attr | None)
     "star": (star.perstem_index, star.restricted_onsets, "annotation_path", "split"),
     "enst": (enst.perstem_index, enst.restricted_onsets, "annotation_path", "drummer"),
     "egmd": (egmd.perstem_index, egmd.restricted_onsets, "midi_path", "split"),
+    # A2MD: real songs separated to per-instrument stems; full-song MIDI (drum
+    # onsets are channel-9-only, see a2md.py). NOT in the model's MERT cache, so
+    # _prepare_stem encodes it fresh. No split metadata (all of it is corpus).
+    "a2md": (a2md.perstem_index, a2md.restricted_onsets, "midi_path", None),
 }
 
 
@@ -52,6 +73,8 @@ def _iter_clips(name, root, pitches, max_clips, rng, splits=None):
     index_fn, onsets_fn, ann_attr, group_attr = _LOADERS[name]
     clips = [c for c in index_fn(root) if c.pitch in pitches]
     if splits:  # keep only clips whose split / drummer is requested (held-out vs train)
+        if group_attr is None:
+            raise SystemExit(f"--splits not supported for dataset '{name}' (no split metadata)")
         clips = [c for c in clips if getattr(c, group_attr) in splits]
     rng.shuffle(clips)
     if max_clips:
@@ -83,13 +106,25 @@ def _support_gate(wgt, wave_w, args, librosa):
 # ---- stage 1 (CPU worker threads): prepare encode-ready sub-items per stem ----
 def _prepare_stem(task, plan, meta, args, req_lanes):
     """Pure-CPU: load the stem wave, pick windows, and for each (window, variant)
-    build a sub-item ready for the GPU. No model / GPU here."""
+    build a sub-item ready for the GPU. No model / GPU here.
+
+    Stems in train.py's window-plan + MERT cache take the FREE identity path
+    (cached per-window features -> heads). Stems NOT in the cache (A2MD / MDB
+    real-domain data) plan windows fresh here and encode the identity window on
+    the GPU too (its probs are still cached, so resumes don't re-encode)."""
     import librosa
+
+    from drumjot_training import train
 
     stem_path, pitch, gt = task
     restrict = set(star.PERSTEM_TO_LANES.get(pitch, ())) & req_lanes
+    if not restrict:
+        return []
     wins = plan.get(probs_cache.window_plan_key(stem_path, WINDOW, SEARCH))
-    if not restrict or not wins:
+    cached = wins is not None
+    if not cached:  # A2MD/MDB: not in the model's MERT cache -> plan + encode fresh
+        wins = train.plan_windows(stem_path, WINDOW, SEARCH, max_windows=0)
+    if not wins:
         return []
     variant_tok = embeddings.feat_variant(meta.get("high_band", True))
     wave44, _ = librosa.load(stem_path, sr=SR, mono=True)
@@ -105,12 +140,24 @@ def _prepare_stem(task, plan, meta, args, req_lanes):
         wgt = _support_gate(wgt, wave_w, args, librosa)  # drop mis-aligned (lane) labels
         if not any(wgt.get(ln) for ln in restrict):
             continue  # the gate removed every lane this window carried
-        feat = probs_cache.load_window_features(
-            args.feature_cache, stem_path, start, length,
-            encoder=meta["encoder"], layer=meta["encoder_layer"], variant=variant_tok)
-        if feat is not None:
-            items.append(dict(kind="feat", payload=feat, wave=wave_w, gt=wgt,
-                              song=song_id, aug="identity", restrict=restrict))
+        if cached:  # free: cached per-window MERT features -> heads
+            feat = probs_cache.load_window_features(
+                args.feature_cache, stem_path, start, length,
+                encoder=meta["encoder"], layer=meta["encoder_layer"], variant=variant_tok)
+            if feat is not None:
+                items.append(dict(kind="feat", payload=feat, wave=wave_w, gt=wgt,
+                                  song=song_id, aug="identity", restrict=restrict))
+        else:  # not cached: encode the identity window on the GPU (probs-cached like a variant)
+            key = probs_cache.probs_key(
+                f"{stem_path}@{start:.3f}", "identity", encoder=meta["encoder"], layer=meta["encoder_layer"],
+                in_dim=meta["in_dim"], max_seconds=length, window_seconds=None)
+            hit = probs_cache.load_probs(args.probs_cache, key)
+            if hit is not None:
+                items.append(dict(kind="probs", payload=hit[0], wave=wave_w, gt=wgt,
+                                  song=song_id, aug="identity", restrict=restrict))
+            else:
+                items.append(dict(kind="encode", payload=wave_w, key=key, wave=wave_w, gt=wgt,
+                                  song=song_id, aug="identity", restrict=restrict))
         for v in range(1, args.variants + 1):
             aug_wave, recipe = probs_cache.variant_audio(f"{stem_path}@{start:.3f}", v, wave_w, SR, codec=args.codec)
             key = probs_cache.probs_key(
@@ -227,6 +274,7 @@ def main():
     ap.add_argument("--star-root", default=None)
     ap.add_argument("--enst-root", default=None)
     ap.add_argument("--egmd-root", default=None)
+    ap.add_argument("--a2md-root", default=None, help="A2MD separated root (real-domain; encoded fresh)")
     ap.add_argument("--feature-cache", default="/codebox-workspace/datasets/_cache_mert_pooled")
     ap.add_argument("--probs-cache", default="/codebox-workspace/datasets/_cache_param_probs")
     ap.add_argument("--pitches", default="h,c")
@@ -261,11 +309,13 @@ def main():
     Path(args.probs_cache).mkdir(parents=True, exist_ok=True)
     pitches = {p.strip() for p in args.pitches.split(",")}
     req_lanes = {ln.strip() for ln in args.lanes.split(",")}
-    roots = {k: v for k, v in {"star": args.star_root, "enst": args.enst_root, "egmd": args.egmd_root}.items() if v}
+    roots = {k: v for k, v in {"star": args.star_root, "enst": args.enst_root,
+                               "egmd": args.egmd_root, "a2md": args.a2md_root}.items() if v}
     if not roots:
-        ap.error("provide at least one of --star-root / --enst-root / --egmd-root")
+        ap.error("provide at least one of --star-root / --enst-root / --egmd-root / --a2md-root")
 
-    plan = json.loads((Path(args.feature_cache) / "_window_plan.json").read_text())
+    plan_path = Path(args.feature_cache) / "_window_plan.json"  # absent for a pure fresh-encode (A2MD-only) build
+    plan = json.loads(plan_path.read_text()) if plan_path.exists() else {}
     model, meta = inference.load_model(args.checkpoint, device)
     model = model.to(device)  # load_model leaves heads on CPU; run them on the GPU too
     encoder = embeddings.MertEncoder(name=meta["encoder"], layer=meta["encoder_layer"])
