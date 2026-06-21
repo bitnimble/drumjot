@@ -17,7 +17,7 @@ from collections.abc import Collection, Mapping, Sequence
 import numpy as np
 
 from drumjot_training import metrics
-from drumjot_training.parampred import features, oracle, report
+from drumjot_training.parampred import baseline, features, oracle, report
 
 
 def lane_gap_records(
@@ -51,6 +51,9 @@ def lane_gap_records(
         ores = oracle.oracle_lane_params(
             probs[i], fps, ref, seed=seed, grids=oracle.default_grids(seed), tolerance=tolerance
         )
+        det_f1 = _score_params(
+            probs[i], fps, ref, baseline.deterministic_params(probs[i], fps, seed), tolerance
+        )
         predicted_f1 = _predicted_f1(
             probs[i], fps, lane, ref, seed, predictor, waveform, sr, beat_period_s, tolerance
         )
@@ -61,8 +64,22 @@ def lane_gap_records(
             current_f1=ores.baseline_f1,
             predicted_f1=predicted_f1,
             oracle_f1=ores.f1,
+            deterministic_f1=det_f1,
         ))
     return records
+
+
+def _score_params(activation, fps, ref, params, tolerance) -> float:
+    """Pick onsets at `params` and return onset-F1 against `ref`."""
+    est = metrics.pick_onsets(
+        activation, fps,
+        threshold=params["threshold"],
+        min_distance_s=params["min_distance_s"],
+        prominence=params["prominence"],
+        decay_reset_frac=params["decay_reset_frac"],
+        decay_reset_floor=params["decay_reset_floor"],
+    )
+    return metrics.onset_f1(ref, est, tolerance)["f"]
 
 
 def _predicted_f1(
@@ -79,12 +96,4 @@ def _predicted_f1(
         params = predictor.predict_row(lane, x)
     except KeyError:
         return None  # lane never fit -> fall back to current
-    est = metrics.pick_onsets(
-        activation, fps,
-        threshold=params["threshold"],
-        min_distance_s=params["min_distance_s"],
-        prominence=params["prominence"],
-        decay_reset_frac=params["decay_reset_frac"],
-        decay_reset_floor=params["decay_reset_floor"],
-    )
-    return metrics.onset_f1(ref, est, tolerance)["f"]
+    return _score_params(activation, fps, ref, params, tolerance)

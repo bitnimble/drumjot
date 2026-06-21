@@ -32,6 +32,20 @@ def test_records_show_oracle_at_or_above_current():
     assert by_lane["s"].oracle_f1 > by_lane["s"].current_f1  # the prize is real on snare
 
 
+def test_records_carry_a_deterministic_point():
+    fps = 100.0
+    probs = _two_lane_probs(fps, 400)
+    gt = {"k": [0.5, 1.5, 2.5], "s": [0.6, 1.6, 2.6]}
+    recs = eval_gap.lane_gap_records(probs, fps, ["k", "s"], thresholds={"k": 0.3, "s": 0.1}, gt=gt)
+    for r in recs:
+        assert r.deterministic_f1 is not None
+        assert 0.0 <= r.deterministic_f1 <= 1.0
+    # on snare (spurious low bumps a global 0.1 threshold picks), the self-calibrated
+    # knee threshold should beat the current global params
+    s = next(r for r in recs if r.lane == "s")
+    assert s.deterministic_f1 >= s.current_f1
+
+
 def test_restrict_lanes_filters_records():
     fps = 100.0
     probs = _two_lane_probs(fps, 400)

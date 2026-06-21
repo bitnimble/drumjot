@@ -35,3 +35,23 @@ def test_format_report_mentions_lanes_and_columns():
     text = report.format_report(gaps, lane_order=("k", "hc"))
     assert "k" in text and "hc" in text
     assert "oracle" in text.lower()
+
+
+def test_deterministic_column_aggregates_and_renders():
+    recs = [
+        report.GapRecord(lane="k", current_f1=0.6, predicted_f1=0.7, oracle_f1=0.8, deterministic_f1=0.75),
+        report.GapRecord(lane="k", current_f1=0.8, predicted_f1=0.8, oracle_f1=0.9, deterministic_f1=0.85),
+    ]
+    g = report.aggregate(recs)["k"]
+    assert abs(g.deterministic_f1 - 0.80) < 1e-9          # mean(0.75, 0.85)
+    # det captured = (0.80 - 0.70) / (0.85 - 0.70) = 0.667
+    assert abs(g.det_captured_frac - (0.10 / 0.15)) < 1e-9
+    text = report.format_report(g and {"k": g})
+    assert "determ" in text.lower()
+
+
+def test_deterministic_absent_keeps_old_report():
+    # records without deterministic_f1 -> no determ column, det metrics are None
+    g = report.aggregate([_rec("k", 0.6, 0.7, 0.8)])["k"]
+    assert g.deterministic_f1 is None
+    assert "determ" not in report.format_report({"k": g}).lower()

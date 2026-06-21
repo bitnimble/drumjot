@@ -22,12 +22,19 @@ _EPS = 1e-9
 
 @dataclass(frozen=True)
 class GapRecord:
-    """One song's onset-F1 for one lane at the three operating points."""
+    """One song's onset-F1 for one lane at the operating points. `deterministic_f1`
+    (per-song self-calibrated params, no training) is optional."""
 
     lane: str
     current_f1: float
     predicted_f1: float
     oracle_f1: float
+    deterministic_f1: float | None = None
+
+
+def _captured_frac(captured: float, gap: float) -> float:
+    """`captured / gap`, with a zero gap (nothing to win) treated as fully captured."""
+    return 1.0 if gap <= _EPS else captured / gap
 
 
 @dataclass(frozen=True)
@@ -39,6 +46,7 @@ class LaneGap:
     current_f1: float
     predicted_f1: float
     oracle_f1: float
+    deterministic_f1: float | None = None
 
     @property
     def gap(self) -> float:
@@ -52,10 +60,14 @@ class LaneGap:
 
     @property
     def captured_frac(self) -> float:
-        """`captured` / `gap`, with a zero gap treated as fully captured."""
-        if self.gap <= _EPS:
-            return 1.0
-        return self.captured / self.gap
+        return _captured_frac(self.captured, self.gap)
+
+    @property
+    def det_captured_frac(self) -> float | None:
+        """Fraction of the gap the deterministic self-calibration captured."""
+        if self.deterministic_f1 is None:
+            return None
+        return _captured_frac(self.deterministic_f1 - self.current_f1, self.gap)
 
 
 def aggregate(records: Sequence[GapRecord]) -> dict[str, LaneGap]:
@@ -66,27 +78,46 @@ def aggregate(records: Sequence[GapRecord]) -> dict[str, LaneGap]:
     out: dict[str, LaneGap] = {}
     for lane, rs in by_lane.items():
         n = len(rs)
+        dets = [r.deterministic_f1 for r in rs if r.deterministic_f1 is not None]
         out[lane] = LaneGap(
             lane=lane,
             n_songs=n,
             current_f1=sum(r.current_f1 for r in rs) / n,
             predicted_f1=sum(r.predicted_f1 for r in rs) / n,
             oracle_f1=sum(r.oracle_f1 for r in rs) / n,
+            deterministic_f1=(sum(dets) / len(dets)) if dets else None,
         )
     return out
 
 
 def format_report(gaps: Mapping[str, LaneGap], lane_order: Sequence[str] | None = None) -> str:
-    """Render the per-lane gap table as text (the eval-harness headline)."""
+    """Render the per-lane gap table as text (the eval-harness headline). Adds a
+    `determ` (self-calibrated) column when any lane carries it."""
     order = [ln for ln in (lane_order or sorted(gaps)) if ln in gaps]
-    lines = [
-        "==== per-lane onset-F1: current (global) vs predicted (per-song) vs oracle ====",
-        f"  {'lane':4s} {'current':>8s} {'predict':>8s} {'oracle':>8s} {'gap':>7s} {'captured':>9s} {'songs':>6s}",
-    ]
+    has_det = any(gaps[ln].deterministic_f1 is not None for ln in order)
+    head = f"  {'lane':4s} {'current':>8s}"
+    if has_det:
+        head += f" {'determ':>8s}"
+    head += f" {'predict':>8s} {'oracle':>8s} {'gap':>7s}"
+    head += f" {'det%':>7s} {'pred%':>7s}" if has_det else f" {'captured':>9s}"
+    head += f" {'songs':>6s}"
+    title = (
+        "==== per-lane onset-F1: current vs determ (self-cal) vs predict vs oracle ===="
+        if has_det else
+        "==== per-lane onset-F1: current (global) vs predicted (per-song) vs oracle ===="
+    )
+    lines = [title, head]
     for ln in order:
         g = gaps[ln]
-        lines.append(
-            f"  {ln:4s} {g.current_f1:8.3f} {g.predicted_f1:8.3f} {g.oracle_f1:8.3f} "
-            f"{g.gap:+7.3f} {g.captured_frac * 100:8.1f}% {g.n_songs:6d}"
-        )
+        row = f"  {ln:4s} {g.current_f1:8.3f}"
+        if has_det:
+            row += f" {(g.deterministic_f1 if g.deterministic_f1 is not None else g.current_f1):8.3f}"
+        row += f" {g.predicted_f1:8.3f} {g.oracle_f1:8.3f} {g.gap:+7.3f}"
+        if has_det:
+            dcf = g.det_captured_frac
+            row += f" {(dcf * 100 if dcf is not None else 0.0):6.1f}% {g.captured_frac * 100:6.1f}%"
+        else:
+            row += f" {g.captured_frac * 100:8.1f}%"
+        row += f" {g.n_songs:6d}"
+        lines.append(row)
     return "\n".join(lines)

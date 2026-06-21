@@ -41,15 +41,18 @@ SR = embeddings.HB_SR  # 44100; encode resamples to MERT sr, high-band wants 44.
 WINDOW, SEARCH = 30.0, 3.0  # must match train.py (win = max_seconds or 30.0; window_search 3.0)
 
 _LOADERS = {
-    "star": (star.perstem_index, star.restricted_onsets, "annotation_path"),
-    "enst": (enst.perstem_index, enst.restricted_onsets, "annotation_path"),
-    "egmd": (egmd.perstem_index, egmd.restricted_onsets, "midi_path"),
+    # name -> (perstem_index, restricted_onsets, annotation-attr, split-group attr)
+    "star": (star.perstem_index, star.restricted_onsets, "annotation_path", "split"),
+    "enst": (enst.perstem_index, enst.restricted_onsets, "annotation_path", "drummer"),
+    "egmd": (egmd.perstem_index, egmd.restricted_onsets, "midi_path", "split"),
 }
 
 
-def _iter_clips(name, root, pitches, max_clips, rng):
-    index_fn, onsets_fn, ann_attr = _LOADERS[name]
+def _iter_clips(name, root, pitches, max_clips, rng, splits=None):
+    index_fn, onsets_fn, ann_attr, group_attr = _LOADERS[name]
     clips = [c for c in index_fn(root) if c.pitch in pitches]
+    if splits:  # keep only clips whose split / drummer is requested (held-out vs train)
+        clips = [c for c in clips if getattr(c, group_attr) in splits]
     rng.shuffle(clips)
     if max_clips:
         clips = clips[:max_clips]
@@ -209,6 +212,9 @@ def main():
     ap.add_argument("--probs-cache", default="/codebox-workspace/datasets/_cache_param_probs")
     ap.add_argument("--pitches", default="h,c")
     ap.add_argument("--lanes", default="hc,hp,ho,rd,cr")
+    ap.add_argument("--splits", default=None,
+                    help="comma list of split/drummer names to keep (e.g. test,validation,drummer_3 "
+                    "for held-out; training,train,drummer_1,drummer_2 for trained-on). Default: all.")
     ap.add_argument("--variants", type=int, default=4, help="augmented variants per window (plus free identity)")
     ap.add_argument("--aug-windows", type=int, default=1, help="windows per stem to augment (identity uses the same)")
     ap.add_argument("--max-clips-per-dataset", type=int, default=0, help="cap stems per dataset (0 = all)")
@@ -238,9 +244,10 @@ def main():
     encoder = embeddings.MertEncoder(name=meta["encoder"], layer=meta["encoder_layer"])
     rng = np.random.default_rng(args.seed)
 
+    splits = {s.strip() for s in args.splits.split(",")} if args.splits else None
     all_clips = []
     for name, root in roots.items():
-        cs = list(_iter_clips(name, root, pitches, args.max_clips_per_dataset, rng))
+        cs = list(_iter_clips(name, root, pitches, args.max_clips_per_dataset, rng, splits))
         print(f"{name}: {len(cs)} stems", flush=True)
         all_clips += cs
 
