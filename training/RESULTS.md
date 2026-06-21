@@ -57,6 +57,34 @@ of THIS song's peak-height histogram -- the deterministic baseline.py path), whi
 needs no cross-song transfer; (c) domain-invariant features. Artifacts kept at
 `checkpoints/ovn3080/mixed_c3000_h256_s1/` (param_corpus.npz, param_predictor.joblib).
 
+**Held-out check (STAR train vs test/val, free via cache):** confirms the model
+is less accurate on unseen stems (current F1 drops every lane) and the hat oracle
+gap ~doubles on held-out (hc +0.046->+0.096, ho +0.028->+0.062), BUT even held-out
+*synthetic* is far easier than real ParaDB (oracle F1 0.57-0.80 vs 0.20-0.54) and
+the gap STRUCTURE differs -- ride's oracle gap is +0.15 on STAR vs +0.02 on ParaDB
+(model-limited). So the synthetic->real gap dwarfs train->held-out; a predictor
+trained on synthetic (even held-out) won't transfer, and the big synthetic ride
+gap is exactly what taught it to over-adjust ride on ParaDB.
+
+**Deterministic self-calibration (knee threshold from each song's OWN curve, NO
+training) -- the first real win.** ParaDB:
+
+| lane | current | determ | predict | oracle | det captured |
+|---|---|---|---|---|---|
+| hc | 0.507 | **0.530** | 0.478 | 0.549 | **+54%** |
+| ho | 0.630 | 0.554 | 0.638 | 0.675 | -169% |
+| rd | 0.085 | 0.087 | 0.088 | 0.109 | +7% |
+| cr | 0.375 | 0.337 | 0.388 | 0.435 | -62% |
+
+Self-calibration **captures 54% of the closed-hat gap (0.507->0.530), beating both
+global and the learned predictor** -- but HURTS the sustained lanes (ho/cr).
+Mechanism: the knee rule needs a bimodal peak-height histogram -- clean for sharp
+percussive `hc`, smeared for ringing `ho`/`cr`/`rd`. **Shippable now: apply
+self-cal to `hc` only (free, +0.023 F1), keep global elsewhere.** Next: a
+ring-aware threshold rule for the sustained lanes (small 6-song ParaDB sample, so
+re-confirm as the test set grows). Added as the `determ` column in
+`eval_paradb.py --oracle-report`.
+
 ---
 
 ## 2026-06-20 · Adaptive per-song peak-pick params: oracle-gap gate (hat+cymbal ckpt)
