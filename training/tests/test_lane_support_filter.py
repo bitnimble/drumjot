@@ -40,3 +40,19 @@ def test_empty_lane_passes_through_and_is_not_reported():
         {"hc": [], "rd": [1.0]}, _env_with_peaks([100]), 100.0, support_floor=0.5, min_support=0.95)
     assert filt["hc"] == []
     assert "hc" not in sup and "rd" in sup
+
+
+def test_kept_onsets_are_snapped_to_the_transient():
+    fps = 100.0
+    env = _env_with_peaks([100, 200, 300])  # transients at 1.0/2.0/3.0 s
+    onsets = {"hc": [1.02, 1.98, 3.01]}      # a few ms off the peaks
+    filt, _ = clean.filter_lanes_by_support(onsets, env, fps, support_floor=0.5, min_support=0.95)
+    assert filt["hc"] == [1.0, 2.0, 3.0]     # snapped exactly onto the transients
+
+
+def test_snap_can_be_disabled():
+    fps = 100.0
+    env = _env_with_peaks([100, 200, 300])
+    onsets = {"hc": [1.02, 1.98, 3.01]}
+    filt, _ = clean.filter_lanes_by_support(onsets, env, fps, support_floor=0.5, min_support=0.95, snap=False)
+    assert filt["hc"] == [1.02, 1.98, 3.01]  # original times retained

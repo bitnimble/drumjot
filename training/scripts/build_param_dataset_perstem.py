@@ -75,7 +75,8 @@ def _support_gate(wgt, wave_w, args, librosa):
     env = librosa.onset.onset_strength(y=wave_w, sr=SR, hop_length=64).astype(np.float64)
     floor = postfilter.support_floor_from_env(env, args.support_percentile)
     filtered, _ = clean.filter_lanes_by_support(
-        wgt, env, SR / 64.0, support_floor=floor, min_support=args.min_support, window_s=0.05)
+        wgt, env, SR / 64.0, support_floor=floor, min_support=args.min_support,
+        window_s=args.support_window, snap=True)  # snap kept onsets onto their stem's transient
     return filtered
 
 
@@ -238,6 +239,9 @@ def main():
                     "(fraction landing on a real transient of its stem) is below this. 0 = off. "
                     "Applies to ALL datasets (no-op on clean labels; rescues noisy real ones like A2MD/ParaDB).")
     ap.add_argument("--support-percentile", type=float, default=60.0, help="adaptive support floor percentile")
+    ap.add_argument("--support-window", type=float, default=0.04,
+                    help="+/- window (s) for the support check + onset snap (kept onsets are snapped onto "
+                    "their stem's transient within this window)")
     ap.add_argument("--variants", type=int, default=4, help="augmented variants per window (plus free identity)")
     ap.add_argument("--aug-windows", type=int, default=1, help="windows per stem to augment (identity uses the same)")
     ap.add_argument("--max-clips-per-dataset", type=int, default=0, help="cap stems per dataset (0 = all)")

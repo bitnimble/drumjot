@@ -86,19 +86,23 @@ def filter_lanes_by_support(
     support_floor: float,
     min_support: float,
     window_s: float = 0.05,
+    snap: bool = True,
 ) -> tuple[dict[str, list[float]], dict[str, float]]:
-    """Per-(clip, lane) label-quality gate: drop a lane's onsets entirely when too
-    few of them are backed by a real transient in `env`.
+    """Per-(clip, lane) label-quality gate + onset snap.
 
     (Lane-level companion to `filter_by_support`, which gates whole clips.)
 
-    For each lane, `support_score` (envelope peak >= `support_floor` within
-    +/-`window_s`, i.e. our onset aligner's recoverability test) gives a support
-    fraction; lanes below `min_support` are zeroed out (their labels are
-    mislabeled / mis-aligned for THIS clip and would poison the corpus -- e.g. an
-    A2MD track whose ride MIDI doesn't match the recording). Returns
-    (filtered_onsets, support_by_lane); a lane with no onsets is passed through
-    untouched and omitted from the report. Dataset-agnostic.
+    For each lane, `forced_align.align_lane` snaps every onset to its window's
+    envelope peak and flags support (a peak >= `support_floor` within
+    +/-`window_s`). The lane's support fraction gates the WHOLE lane: below
+    `min_support` it's zeroed out (its labels are mislabeled / mis-aligned for THIS
+    clip and would poison the corpus -- e.g. an A2MD ride MIDI that doesn't match
+    the recording). A KEPT lane's onsets are returned at their **snapped** times
+    when `snap` (supported onsets moved onto the real transient; unsupported ones
+    -- a minority in a kept lane -- left at their original time, NOT dropped, so we
+    don't manufacture false-negative penalties for the oracle). A lane with no
+    onsets passes through untouched and is omitted from the report. Dataset-agnostic;
+    a near-no-op on clean labels (synthetic STAR scores ~1.0).
     """
     filtered: dict[str, list[float]] = {}
     support: dict[str, float] = {}
@@ -107,9 +111,12 @@ def filter_lanes_by_support(
         if not ts:
             filtered[lane] = []
             continue
-        frac = support_score({lane: ts}, env, env_fps, window_s=window_s, support_floor=support_floor)["fraction"]
-        support[lane] = frac
-        filtered[lane] = ts if frac >= min_support else []
+        aligned = forced_align.align_lane(ts, env, env_fps, window_s, support_floor)
+        support[lane] = sum(1 for _t, ok in aligned if ok) / len(aligned)
+        if support[lane] < min_support:
+            filtered[lane] = []
+        else:
+            filtered[lane] = sorted(t for t, _ok in aligned) if snap else ts
     return filtered, support
 
 
