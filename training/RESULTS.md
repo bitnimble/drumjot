@@ -73,13 +73,40 @@ net-negative alone, dragged down by ho/cr; learned alone leaves hc on the table)
 Caveat: the routing was read off these 6 ParaDB songs, so re-validate it on the
 larger dist0p20 A2MD corpus + MDB before trusting it as a constant.
 
+**Augmentation on real audio HURTS (don't do it).** Rebuilt the A2MD corpus with
+the +4 onset-preserving variants (gain/EQ/reverb/compression/noise/codec) -> 2,385
+rows (5x identity), retrained, re-evaluated:
+
+| A2MD predictor | mean captured | hybrid captured |
+|---|---|---|
+| identity-only (477 rows) | **+0.016** | **+0.023** |
+| +augmented (2,385 rows) | +0.006 | +0.014 |
+
+Augmenting *already-real, already-separated* stems pushes them OFF the deployment
+manifold (ParaDB is real + separated + un-augmented), so the off-distribution rows
+dilute the pure-real signal -- the same lesson as the synth+A2MD union, restated:
+**corpus value tracks closeness to the deployment distribution, and identity real
+data is closest.** Clearest on the stable `ho` lane (identical current 0.630 /
+oracle 0.675 across runs): predict 0.640 -> 0.619, i.e. augmentation flipped it
+from +0.010 to −0.011. So grow the corpus with **more real songs, not augmented
+copies.** Augmentation is presumably still right for the synthetic ADT datasets (it
+moves them *toward* realism); it's wrong for already-real audio.
+
+> **Eval-variance caveat:** the ParaDB harness is not run-to-run deterministic --
+> `Kaikai_Kitan` parsed as 1640 GT onsets here vs 1516 in the prior batch, shifting
+> the sparse `rd` lane's current/oracle (0.174->0.085). The dense lanes
+> (`hc`/`ho`/`cr`) were stable, so the conclusions rest on them; treat single-run
+> `rd` numbers as noisy. **Follow-up: make eval_paradb deterministic** (seed /
+> remove the per-map optimistic-fold dependence on model output) before trusting
+> small per-lane deltas.
+
 **Next:** grow the real corpus -- the other dist buckets (0.00 tight + 0.20 with
-the support gate dropping bad lanes), more A2MD songs, and augmentation *on top of*
-real audio (separation-artifact robustness on a real manifold, not a synthetic
-one); then the hybrid picker + a deploy safety-rail. Artifacts at
-`checkpoints/ovn3080/mixed_c3000_h256_s1/`: `a2md_corpus_id.npz`,
-`param_predictor_a2md.joblib`, `param_predictor_synth_a2md.joblib`,
-`eval_{synth,a2md,synth_a2md}.log`.
+the support gate dropping bad lanes) and more A2MD songs (dist0p20 separation
+running on the 3080); then the hybrid picker + a deploy safety-rail, and fix eval
+determinism. Artifacts at `checkpoints/ovn3080/mixed_c3000_h256_s1/`:
+`a2md_corpus_id.npz` (use this, not `_aug`), `param_predictor_a2md.joblib`,
+`param_predictor_synth_a2md.joblib`, `param_predictor_a2md_aug.joblib`,
+`eval_{synth,a2md,synth_a2md,a2md_aug}.log`.
 
 ---
 
