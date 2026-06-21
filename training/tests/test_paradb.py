@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from drumjot_training import clean, paradb
+from drumjot_training import clean, paradb, rlrr
 from drumjot_training.lanes import LANES
 
 
@@ -47,6 +47,22 @@ def test_pick_chart_prefers_hardest_deterministically(tmp_path):
     assert chart is not None and "Expert" in chart.name
     # no charts -> None
     assert paradb.pick_chart(tmp_path / "nope") is None
+
+
+def test_pick_chart_ignores_macos_appledouble_junk(tmp_path):
+    # macOS-zipped packs carry a binary __MACOSX/._<name>.rlrr resource fork next
+    # to every real chart; it's not JSON and must not be selected/parsed.
+    d = tmp_path / "Song"
+    d.mkdir()
+    _write_chart(d / "Song_Expert.rlrr", 3)
+    junk = tmp_path / "__MACOSX" / "Song"
+    junk.mkdir(parents=True)
+    (junk / "._Song_Expert.rlrr").write_bytes(b"\x00\x05\x16\x07\x00\x02\x00\x00")  # AppleDouble magic
+    (d / "._Song_Expert.rlrr").write_bytes(b"\x00\x05\x16\x07")  # sibling fork in the same dir
+    chart = paradb.pick_chart(tmp_path)
+    assert chart is not None
+    assert chart.name == "Song_Expert.rlrr" and "__MACOSX" not in chart.parts
+    assert rlrr.complexity(chart) == 3  # the selected one parses cleanly
 
 
 def test_containment_high_when_drums_in_song_low_when_backing():

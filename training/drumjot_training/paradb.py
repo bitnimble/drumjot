@@ -65,8 +65,17 @@ def pick_chart(root: str | Path) -> Path | None:
     """Hardest `.rlrr` in an extracted map dir, chosen deterministically
     (complexity, then difficulty name, then path; see `rlrr.pick_hardest`). A
     complexity tie between e.g. Expert + Hard charts otherwise resolves by
-    unstable rglob order, parsing a different GT per run."""
-    return rlrr.pick_hardest(Path(root).rglob("*.rlrr"))
+    unstable rglob order, parsing a different GT per run.
+
+    Excludes macOS AppleDouble junk: a pack zipped on macOS carries a
+    `__MACOSX/.../._<name>.rlrr` resource-fork sibling for every real chart,
+    which is binary (not JSON) and crashes the parser if `pick_hardest` reads it
+    for complexity. Drop anything under `__MACOSX/` or starting with `._`."""
+    charts = [
+        p for p in Path(root).rglob("*.rlrr")
+        if not p.name.startswith("._") and "__MACOSX" not in p.parts
+    ]
+    return rlrr.pick_hardest(charts)
 
 
 # ---------------------------------------------------------------------------
