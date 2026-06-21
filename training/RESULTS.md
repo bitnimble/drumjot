@@ -85,6 +85,32 @@ ring-aware threshold rule for the sustained lanes (small 6-song ParaDB sample, s
 re-confirm as the test set grows). Added as the `determ` column in
 `eval_paradb.py --oracle-report`.
 
+**MDB-Drums real-domain re-check (`eval_mdb.py`, 23 MedleyDB tracks) -- the
+deterministic win does NOT replicate, and per-song adaptation is not robust.**
+
+| lane | current | determ | predict | oracle | det% | pred% |
+|---|---|---|---|---|---|---|
+| hc | 0.641 | 0.652 | 0.667 | 0.733 | +11% | +28% |
+| hp | 0.353 | 0.332 | 0.352 | 0.379 | -80% | -4% |
+| ho | 0.595 | 0.572 | 0.623 | 0.695 | -24% | +28% |
+| rd | 0.679 | 0.656 | 0.708 | 0.743 | -36% | +46% |
+| cr | 0.515 | 0.509 | 0.538 | 0.668 | -4% | +15% |
+
+The two real datasets give **opposite verdicts**: on ParaDB deterministic self-cal
+won closed-hat (+54%) and the learned predictor failed; on MDB deterministic mostly
+HURTS (mean -26%) while the predictor mostly WINS (+15..+46%). Cause = curve
+cleanliness: ParaDB (commercial mix -> our separation) is messy (knee finds a real
+split; synthetic-trained predictor is OOD); MDB (cleaner MedleyDB-derived stems) is
+model-confident (global already near-optimal; knee over-adjusts; predictor back
+in-distribution). **Per-song peak-pick adaptation -- learned or deterministic --
+does not robustly beat well-tuned global thresholds on real audio; its sign flips
+with audio difficulty. Do not ship a blanket per-song-params change.**
+
+**Key positive diagnostic:** ride is **0.679 on MDB vs 0.085 on ParaDB** (same
+model/lane). The model CAN detect ride when the separated stem is clean; ParaDB
+ride dies in the commercial-mix separation. → the lever for the hard cymbal lanes
+is **separation quality**, not the peak-picker or the onset model.
+
 ---
 
 ## 2026-06-20 · Adaptive per-song peak-pick params: oracle-gap gate (hat+cymbal ckpt)
