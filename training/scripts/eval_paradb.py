@@ -39,145 +39,31 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "transcriber"))
 
 from drumjot_training import (  # noqa: E402
-    clean,
     embeddings,
     forced_align,
     inference,
     metrics,
+    paradb,
     postfilter,
     rlrr,
 )
 from drumjot_training.parampred import eval_gap, hybrid, regressor, report  # noqa: E402
 
-_AUDIO_EXTS = {".ogg", ".mp3", ".wav", ".flac", ".m4a", ".aac"}
-SEP_SR = 44100  # separate at full band so cymbal/hi-hat content survives
+SEP_SR = paradb.SEP_SR  # separate at full band so cymbal/hi-hat content survives
 
 # stems_per pitch -> the model lanes that legitimately belong to that isolated
 # stem. Onsets the model fires in any OTHER lane when fed this stem are
 # cross-instrument leakage (hallucination): discarded + counted. (MDX23C merges
-# ride+crash into one "cymbals" stem -> c; misc-perc has no stem.)
-STEM_TO_LANES = {
-    "k": ("k",),
-    "s": ("s", "ss"),
-    "h": ("hc", "hp", "ho"),
-    "c": ("rd", "cr"),
-    "t": ("t",),
-}
+# ride+crash into one "cymbals" stem -> c; misc-perc has no stem.) Shared with
+# the cull + training via the paradb module so the three can't drift.
+STEM_TO_LANES = paradb.PERSTEM_TO_LANES
 
-
-def _pick_rlrr(root: Path) -> Path | None:
-    """Hardest chart in an extracted map dir, chosen deterministically (complexity,
-    then difficulty name, then path) -- a complexity tie between e.g. Expert + Hard
-    charts otherwise resolves by unstable rglob order, parsing a different GT per run."""
-    return rlrr.pick_hardest(root.rglob("*.rlrr"))
-
-
-def _sum_tracks(root: Path, names: list[str], sr: int):
-    """Load + sum referenced tracks (mono, resampled). Returns waveform or None."""
-    import librosa
-
-    ys = []
-    for name in names:
-        base = Path(name).name
-        hits = [p for p in root.rglob(base) if p.suffix.lower() in _AUDIO_EXTS]
-        if not hits:
-            print(f"    WARN track not found in zip: {name}", flush=True)
-            continue
-        y, _ = librosa.load(str(hits[0]), sr=sr, mono=True)
-        ys.append(y.astype(np.float32))
-    if not ys:
-        return None
-    n = max(len(y) for y in ys)
-    out = np.zeros(n, dtype=np.float32)
-    for y in ys:
-        out[: len(y)] += y
-    return out
-
-
-def _pad_sum(a, b):
-    n = max(len(a), len(b))
-    out = np.zeros(n, dtype=np.float32)
-    out[: len(a)] += a
-    out[: len(b)] += b
-    return out
-
-
-def _containment(song, drums, sr, max_seconds):
-    """Raw-sample correlation of the drum track with the song mix.
-
-    ~0 when the song is drumless backing (those drums are NOT in it); clearly
-    positive when the song already contains those drums (a full mix = backing +
-    drums, so corr ~= drum energy fraction). Unlike an onset-support test this
-    isn't fooled by non-drum instruments hitting on the same beats.
-    """
-    n = min(len(song), len(drums))
-    if max_seconds is not None:
-        n = min(n, int(max_seconds * sr))
-    a = song[:n].astype(np.float64) - float(np.mean(song[:n]))
-    b = drums[:n].astype(np.float64) - float(np.mean(drums[:n]))
-    denom = float(np.linalg.norm(a) * np.linalg.norm(b)) or 1.0
-    return abs(float(a @ b) / denom)
-
-
-def build_mix(root, song_names, drum_names, sr, out_wav, max_seconds, corr_thresh):
-    """Reconstruct the full original song without double-counting drums:
-
-    - song tracks ONLY if they already contain the drums (full-mix map, even one
-      that also ships redundant drum stems -> don't add them);
-    - song + drum tracks if the song tracks are drumless backing (stems map).
-
-    Decided by drum/song signal correlation (see `_containment`), which is
-    robust to the coincident-onset problem that breaks an onset-support test.
-    Returns (ok, case_label).
-    """
-    import soundfile as sf
-
-    song = _sum_tracks(root, song_names, sr) if song_names else None
-    drums = _sum_tracks(root, drum_names, sr) if drum_names else None
-
-    if song is not None and drums is not None:
-        corr = _containment(song, drums, sr, max_seconds)
-        if corr > corr_thresh:  # song already contains these drums (full mix)
-            mix, case = song, f"song-only; drums already in song (corr {corr:.2f})"
-        else:  # drumless backing -> add the drum track to rebuild the full song
-            mix, case = _pad_sum(song, drums), f"backing+drums (corr {corr:.2f})"
-    elif song is not None:
-        mix, case = song, "song-only"
-    elif drums is not None:
-        mix, case = drums, "drums-only"
-    else:
-        return False, "no audio"
-
-    peak = float(np.max(np.abs(mix)) or 1.0)
-    sf.write(str(out_wav), mix / peak * 0.98, sr)  # float wav, headroom
-    return True, case
-
-
-def _global_offset(gt, env, env_fps, floor, window_s, search_s):
-    """Robust global GT->audio offset + chart-quality support.
-
-    offset = MEDIAN signed distance from each GT onset to its nearest envelope
-    peak (>= floor) within +/-search_s. The median is robust to dense drum peaks
-    and straggler onsets, unlike argmax-of-support (which, on a near-saturated
-    support plateau, overshoots the true offset by chasing a few outliers).
-    support = fraction of onsets within +/-window_s of a qualifying peak at
-    offset 0, used purely as a chart-accuracy / corruption signal.
-    """
-    half = round(search_s * env_fps)
-    n = env.size
-    deltas = []
-    for ts in gt.values():
-        for t in ts:
-            c = int(round(t * env_fps))
-            lo, hi = max(0, c - half), min(n, c + half + 1)
-            if lo >= hi:
-                continue
-            idx = lo + int(np.argmax(env[lo:hi]))
-            if float(env[idx]) >= floor:
-                deltas.append(idx / env_fps - t)
-    off = float(np.median(deltas)) if deltas else 0.0
-    s0 = clean.support_score(gt, env, env_fps, window_s=window_s, support_floor=floor)["fraction"]
-    return off, s0
+# Mix reconstruction + chart offset live in `drumjot_training.paradb` (shared with
+# the corpus-cull gate and the separation step). Thin aliases keep the call sites
+# below unchanged.
+_pick_rlrr = paradb.pick_chart
+build_mix = paradb.build_mix
+_global_offset = paradb.global_offset
 
 
 def _requested_lanes(args):
