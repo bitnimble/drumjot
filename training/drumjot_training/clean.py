@@ -78,6 +78,41 @@ def support_score(
     }
 
 
+def filter_lanes_by_support(
+    onsets_by_lane: Mapping[str, Sequence[float]],
+    env: np.ndarray,
+    env_fps: float,
+    *,
+    support_floor: float,
+    min_support: float,
+    window_s: float = 0.05,
+) -> tuple[dict[str, list[float]], dict[str, float]]:
+    """Per-(clip, lane) label-quality gate: drop a lane's onsets entirely when too
+    few of them are backed by a real transient in `env`.
+
+    (Lane-level companion to `filter_by_support`, which gates whole clips.)
+
+    For each lane, `support_score` (envelope peak >= `support_floor` within
+    +/-`window_s`, i.e. our onset aligner's recoverability test) gives a support
+    fraction; lanes below `min_support` are zeroed out (their labels are
+    mislabeled / mis-aligned for THIS clip and would poison the corpus -- e.g. an
+    A2MD track whose ride MIDI doesn't match the recording). Returns
+    (filtered_onsets, support_by_lane); a lane with no onsets is passed through
+    untouched and omitted from the report. Dataset-agnostic.
+    """
+    filtered: dict[str, list[float]] = {}
+    support: dict[str, float] = {}
+    for lane, ts in onsets_by_lane.items():
+        ts = list(ts)
+        if not ts:
+            filtered[lane] = []
+            continue
+        frac = support_score({lane: ts}, env, env_fps, window_s=window_s, support_floor=support_floor)["fraction"]
+        support[lane] = frac
+        filtered[lane] = ts if frac >= min_support else []
+    return filtered, support
+
+
 def audio_support_score(
     audio_path,
     onsets_by_lane: Mapping[str, Sequence[float]],

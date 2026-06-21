@@ -34,7 +34,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))  # training/
 
-from drumjot_training import egmd, embeddings, enst, inference, runtime, star  # noqa: E402
+from drumjot_training import clean, egmd, embeddings, enst, inference, postfilter, runtime, star  # noqa: E402
 from drumjot_training.parampred import dataset, probs_cache  # noqa: E402
 
 SR = embeddings.HB_SR  # 44100; encode resamples to MERT sr, high-band wants 44.1k
@@ -64,6 +64,21 @@ def _stem_seed(stem_path):
     return int(hashlib.sha1(str(stem_path).encode()).hexdigest()[:8], 16)
 
 
+def _support_gate(wgt, wave_w, args, librosa):
+    """Per-(window, lane) label-quality gate: drop a lane's GT when too few of its
+    onsets land on a real transient of THIS stem (mislabeled / mis-aligned -- e.g.
+    an A2MD ride that doesn't match the recording). Dataset-agnostic; a no-op on
+    clean labels (synthetic STAR scores ~1.0). Uses the ORIGINAL window audio so
+    the decision is identical for every augmented variant."""
+    if args.min_support <= 0.0:
+        return wgt
+    env = librosa.onset.onset_strength(y=wave_w, sr=SR, hop_length=64).astype(np.float64)
+    floor = postfilter.support_floor_from_env(env, args.support_percentile)
+    filtered, _ = clean.filter_lanes_by_support(
+        wgt, env, SR / 64.0, support_floor=floor, min_support=args.min_support, window_s=0.05)
+    return filtered
+
+
 # ---- stage 1 (CPU worker threads): prepare encode-ready sub-items per stem ----
 def _prepare_stem(task, plan, meta, args, req_lanes):
     """Pure-CPU: load the stem wave, pick windows, and for each (window, variant)
@@ -86,6 +101,9 @@ def _prepare_stem(task, plan, meta, args, req_lanes):
     for start, length in usable[: max(1, args.aug_windows)]:
         wgt = probs_cache.window_onsets(gt, start, length)
         wave_w = wave44[int(start * SR): int((start + length) * SR)]
+        wgt = _support_gate(wgt, wave_w, args, librosa)  # drop mis-aligned (lane) labels
+        if not any(wgt.get(ln) for ln in restrict):
+            continue  # the gate removed every lane this window carried
         feat = probs_cache.load_window_features(
             args.feature_cache, stem_path, start, length,
             encoder=meta["encoder"], layer=meta["encoder_layer"], variant=variant_tok)
@@ -215,6 +233,11 @@ def main():
     ap.add_argument("--splits", default=None,
                     help="comma list of split/drummer names to keep (e.g. test,validation,drummer_3 "
                     "for held-out; training,train,drummer_1,drummer_2 for trained-on). Default: all.")
+    ap.add_argument("--min-support", type=float, default=0.95,
+                    help="per-(window,lane) label-quality gate: drop a lane whose onsets' support "
+                    "(fraction landing on a real transient of its stem) is below this. 0 = off. "
+                    "Applies to ALL datasets (no-op on clean labels; rescues noisy real ones like A2MD/ParaDB).")
+    ap.add_argument("--support-percentile", type=float, default=60.0, help="adaptive support floor percentile")
     ap.add_argument("--variants", type=int, default=4, help="augmented variants per window (plus free identity)")
     ap.add_argument("--aug-windows", type=int, default=1, help="windows per stem to augment (identity uses the same)")
     ap.add_argument("--max-clips-per-dataset", type=int, default=0, help="cap stems per dataset (0 = all)")
