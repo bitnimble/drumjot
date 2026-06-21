@@ -16,6 +16,36 @@ Scoring is `mir_eval` onset-F1 at ±50 ms (`metrics.onset_f1`).
 
 ---
 
+## 2026-06-21 · More real data (A2MD dist0p20) HURTS, quality > quantity
+
+Ran dist0p20 separation on the 3080 (537 songs, 2.7x the dist<=0.10 set), rebuilt
+the identity corpus (1,310 rows, 0.95 support gate), retrained, re-evaluated. First
+comparison under the **deterministic chart pick** (`rlrr.pick_hardest`; the
+`current`/`determ`/`oracle` columns are now byte-identical across runs, so these
+deltas are real, not eval noise):
+
+| corpus | predict | hybrid |
+|---|---|---|
+| dist<=0.10 (197 songs, 477 rows) | **+0.017** | **+0.024** |
+| dist<=0.20 (537 songs, 1,310 rows) | +0.002 | +0.009 |
+
+More data made it **worse**, concentrated exactly in the lanes dist0p20 labels are
+sloppiest on: **crash +64%->+27%**, **open-hat +24%->−44%** (flipped harmful); ride
+still good but lower (+108%->+64%); closed-hat ~flat (determ-routed). The 0.95
+support gate drops the *worst* dist0p20 labels but the survivors still carry enough
+timing noise to teach slightly-wrong oracle params. **Quality beats quantity for
+the param corpus: the dist<=0.10 predictor (`param_predictor_a2md.joblib`) is the
+best artifact so far.** This is the same "closeness to the clean signal matters"
+lesson as the synth dilution + the augmentation-hurts result, a third time.
+
+**Next:** the support gate is the knob -- rebuild the 537-corpus with a stricter
+gate (`--min-support 0.98`) to test whether the GOOD parts of dist0p20 are
+recoverable (cheap: probs are cached, so it's a CPU-only re-gate, no GPU encode).
+If cymbals don't recover, just keep dist<=0.10. Artifacts: `a2md_corpus_id_v2.npz`,
+`param_predictor_a2md_v2.joblib`, `eval_a2md_{197,537}_det.log`.
+
+---
+
 ## 2026-06-21 · Adaptive params, take 2: REAL-domain corpus (A2MD) flips it positive
 
 Follow-up to the negative result below. That predictor was trained on the model's
