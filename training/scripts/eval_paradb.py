@@ -47,7 +47,7 @@ from drumjot_training import (  # noqa: E402
     postfilter,
     rlrr,
 )
-from drumjot_training.parampred import eval_gap, regressor, report  # noqa: E402
+from drumjot_training.parampred import eval_gap, hybrid, regressor, report  # noqa: E402
 
 _AUDIO_EXTS = {".ogg", ".mp3", ".wav", ".flac", ".m4a", ".aac"}
 SEP_SR = 44100  # separate at full band so cymbal/hi-hat content survives
@@ -467,6 +467,9 @@ def main():
         cap = sum(g.captured for g in gaps.values()) / len(gaps)
         src = "predicted" if predictor else "(no predictor: predicted == current)"
         print(f"  mean oracle gap {tot:+.3f} F1; mean captured {cap:+.3f} {src}", flush=True)
+        if predictor:  # the hybrid routes hc->determ, cymbals->learned (needs the predictor)
+            print("\n" + hybrid.format_hybrid(gaps, hybrid.DEFAULT_ROUTING, lane_order=order), flush=True)
+            print(f"  mean captured {hybrid.captured(gaps, hybrid.DEFAULT_ROUTING):+.3f} hybrid", flush=True)
 
     if flagged:
         print(f"\n{len(flagged)} SUSPECT maps (low support or large offset, review/exclude):", flush=True)

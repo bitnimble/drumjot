@@ -59,6 +59,20 @@ all three runs -- only the predictor changed.)
    (A2MD) for **rd / cr / ho**. Best-of-each capture ≈ hc 59% + rd 89% + cr 63% +
    ho 24%, far more of the +0.042 gap than any single method.
 
+**Hybrid picker, measured** (`parampred/hybrid.py`, `HybridParamPicker` +
+`DEFAULT_ROUTING`; wired into `eval_paradb --oracle-report`). Routing each lane to
+its winner and scoring on the same ParaDB gap table:
+
+| | determ-only | learned-only (A2MD) | **HYBRID** |
+|---|---|---|---|
+| mean captured of +0.042 gap | −0.022 F1 | +0.016 F1 | **+0.023 F1 (55%)** |
+
+Per-lane the hybrid takes hc 60% (determ), ho 22% / rd 88% / cr 63% (learned) --
+it beats *both* single methods because no single source wins every lane (determ is
+net-negative alone, dragged down by ho/cr; learned alone leaves hc on the table).
+Caveat: the routing was read off these 6 ParaDB songs, so re-validate it on the
+larger dist0p20 A2MD corpus + MDB before trusting it as a constant.
+
 **Next:** grow the real corpus -- the other dist buckets (0.00 tight + 0.20 with
 the support gate dropping bad lanes), more A2MD songs, and augmentation *on top of*
 real audio (separation-artifact robustness on a real manifold, not a synthetic
