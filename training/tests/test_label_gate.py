@@ -25,7 +25,25 @@ def test_clean_window_keeps_aligned_labels_and_caches(tmp_path):
     assert keep                                                       # well-aligned -> kept
     assert len(out["hc"]) == 3                                        # onsets retained (snapped)
     assert all(abs(t - s) < 0.04 for t, s in zip(sorted(out["hc"]), [0.5, 1.0, 1.5]))
-    assert list(cache.glob("*.support.json"))                        # side-cache written
+    assert list(cache.glob("*.support.*.json"))                      # side-cache written
     # second call resolves from the cache (no audio) and returns the same thing
     out2, keep2 = train._clean_window_labels(stem, onsets, cfg, cache, length=2.0, start=0.0)
     assert keep2 and out2["hc"] == out["hc"]
+
+
+def test_changing_gate_params_invalidates_the_cache(tmp_path):
+    stem = tmp_path / "h.flac"
+    _stem_with_clicks(stem)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    onsets = {"hc": [0.5, 1.0, 1.5]}
+
+    base = Config()
+    train._clean_window_labels(stem, onsets, base, cache, length=2.0, start=0.0)
+    # a different gate param must NOT reuse the prior verdict -> a distinct cache file
+    tighter = Config(label_support_window_s=0.02)
+    train._clean_window_labels(stem, onsets, tighter, cache, length=2.0, start=0.0)
+    files = {p.name for p in cache.glob("*.support.*.json")}
+    assert len(files) == 2                                            # one per param set
+    # and the algorithm version is baked into the filename
+    assert all(f".support.v{train._SUPPORT_CACHE_VERSION}-" in f for f in files)

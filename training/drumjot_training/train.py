@@ -434,6 +434,20 @@ def _rings_for_clip(
     return rings
 
 
+# Bump when the label-cleaning ALGORITHM changes (envelope recipe, snapping,
+# keep rule) -- it's part of the support-cache filename, so a bump invalidates
+# every cached verdict. The tunable params (min-support / window / percentile)
+# are folded into the filename too, so each param set caches separately and an
+# A/B sweep reuses each variant's cache instead of clobbering it.
+_SUPPORT_CACHE_VERSION = 1
+
+
+def _support_cache_suffix(cfg: Config) -> str:
+    return (f".support.v{_SUPPORT_CACHE_VERSION}"
+            f"-ms{cfg.label_min_support:g}-w{cfg.label_support_window_s:g}"
+            f"-p{cfg.label_support_percentile:g}.json")
+
+
 def _clean_window_labels(
     audio_path, onsets: dict[str, list[float]], cfg: Config, cache_dir: Path,
     length: float | None, start: float = 0.0,
@@ -447,14 +461,16 @@ def _clean_window_labels(
     SUPPRESS a present instrument (false negatives). Losing its crash too is fine
     given data abundance. Kept windows return SNAPPED onsets (precise timing).
 
-    Side-cached (`<key>.support.json`, like `_rings_for_clip`) so the audio is read
-    once. `onsets` are window-relative. A no-op-ish on clean labels (STAR ~1.0)."""
+    Side-cached (`<key>.support.v<ver>-ms..-w..-p..json`, like `_rings_for_clip`) so
+    the audio is read once. The gate params + an algorithm version are baked into the
+    filename, so changing any of them invalidates the cache (no stale verdicts).
+    `onsets` are window-relative. A no-op-ish on clean labels (STAR ~1.0)."""
     import json
 
     from drumjot_training import clean, postfilter
 
     key = embeddings.cache_key(audio_path, cfg.encoder, cfg.encoder_layer, length, start=start)
-    sp = Path(cache_dir) / f"{key}.support.json"
+    sp = Path(cache_dir) / f"{key}{_support_cache_suffix(cfg)}"
     if sp.exists():
         d = json.loads(sp.read_text())
         return {ln: list(v) for ln, v in d["onsets"].items()}, bool(d["keep"])
