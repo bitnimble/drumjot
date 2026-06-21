@@ -9,6 +9,54 @@ import { defineConfig, devices } from '@playwright/test';
 const E2E_PORT = Number(process.env.E2E_PORT ?? 5273);
 const E2E_URL = `http://localhost:${E2E_PORT}`;
 
+// Headless Chromium defaults to SwiftShader (CPU raster), whose per-frame
+// timings are contention-sensitive: software raster competes for CPU cores
+// with the parallel test workers (and any ML jobs on the box), which inflates
+// the worst frames and flakes the 120fps perf budget. We composite on the idle
+// AMD iGPU instead (Mesa radv, via ANGLE's Vulkan backend), taking raster off
+// the CPU entirely. The iGPU is the deliberate choice over the NVIDIA card:
+// it's never under ML load, so compositing never contends with training.
+//
+// Container prereqs: the AMD render node (/dev/dri/renderD128) must be passed
+// in, with the host 'render' group via `group_add` so the browser can open it
+// (see the compose config). The radeon Vulkan ICD ships in the image; no
+// vendor-JSON bind-mounts are needed.
+//
+// GPU is ON BY DEFAULT for the perf project (its frame-budget medians are only
+// meaningful on a real GPU). It's opt-in via E2E_GPU for the other projects:
+// they test correctness, not timing, run fully parallel, and many workers
+// sharing one render node would only add GPU contention for no benefit. Force
+// it off anywhere with E2E_GPU=0. `gpu_renderer.e2e.ts` (gated on E2E_GPU)
+// reports the active backend and fails if it's still software.
+const GPU_OFF = /^(0|false|off|no)$/i.test(process.env.E2E_GPU ?? '');
+// ANGLE's Vulkan backend on Mesa's radv driver. (gl-egl can't get a hardware
+// context from Mesa's libEGL headless here; radv enumerates the iGPU fine once
+// the render node is present.) --disable-gpu-sandbox: the GPU-process sandbox
+// otherwise blocks the driver from opening its device node in a container,
+// dropping ANGLE back to software.
+const AMD_GPU_ARGS = [
+  '--use-gl=angle',
+  '--use-angle=vulkan',
+  '--enable-features=Vulkan',
+  '--enable-gpu',
+  '--ignore-gpu-blocklist',
+  '--disable-gpu-sandbox',
+];
+// Pin the Vulkan loader to Mesa's radeon ICD so ANGLE can't fall through to
+// llvmpipe (software Vulkan) or any other ICD.
+const AMD_GPU_ENV = {
+  VK_DRIVER_FILES: '/usr/share/vulkan/icd.d/radeon_icd.json',
+  VK_ICD_FILENAMES: '/usr/share/vulkan/icd.d/radeon_icd.json',
+};
+// launchOptions.env replaces (not merges) the browser environment, so spread
+// process.env to keep PATH etc. `gpu` adds the iGPU args/env on top.
+const chromiumLaunch = (gpu: boolean) => ({
+  args: ['--no-sandbox', ...(gpu ? AMD_GPU_ARGS : [])],
+  env: { ...process.env, ...(gpu ? AMD_GPU_ENV : {}) },
+});
+const GPU_PERF = !GPU_OFF; // perf: default on
+const GPU_OTHER = !GPU_OFF && !!process.env.E2E_GPU; // functional/heavy: opt-in
+
 /**
  * Playwright e2e config for the Drumjot web app.
  *
@@ -57,7 +105,7 @@ export default defineConfig({
       testIgnore: ['**/perf.e2e.ts', '**/*.heavy.e2e.ts'],
       use: {
         ...devices['Desktop Chrome'],
-        launchOptions: { args: ['--no-sandbox'] },
+        launchOptions: chromiumLaunch(GPU_OTHER),
       },
     },
     // Perf specs measure per-frame timing against a tight 120fps budget, so
@@ -75,7 +123,8 @@ export default defineConfig({
       dependencies: ['functional'],
       use: {
         ...devices['Desktop Chrome'],
-        launchOptions: { args: ['--no-sandbox'] },
+        // GPU on by default here: the frame-budget medians need a real GPU.
+        launchOptions: chromiumLaunch(GPU_PERF),
       },
     },
     // Heavy specs load a real, full-length song (30 MB+ zip unpack + parallel
@@ -94,7 +143,7 @@ export default defineConfig({
       dependencies: ['perf'],
       use: {
         ...devices['Desktop Chrome'],
-        launchOptions: { args: ['--no-sandbox'] },
+        launchOptions: chromiumLaunch(GPU_OTHER),
       },
     },
   ],
