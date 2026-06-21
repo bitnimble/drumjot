@@ -24,7 +24,7 @@ def test_clean_window_keeps_aligned_labels_and_caches(tmp_path):
     out, keep = train._clean_window_labels(stem, onsets, cfg, cache, length=2.0, start=0.0)
     assert keep                                                       # well-aligned -> kept
     assert len(out["hc"]) == 3                                        # onsets retained (snapped)
-    assert all(abs(t - s) < 0.04 for t, s in zip(sorted(out["hc"]), [0.5, 1.0, 1.5]))
+    assert all(abs(t - s) < 0.04 for t, s in zip(sorted(out["hc"]), [0.5, 1.0, 1.5], strict=True))
     assert list(cache.glob("*.support.*.json"))                      # side-cache written
     # second call resolves from the cache (no audio) and returns the same thing
     out2, keep2 = train._clean_window_labels(stem, onsets, cfg, cache, length=2.0, start=0.0)

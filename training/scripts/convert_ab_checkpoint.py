@@ -34,7 +34,7 @@ def main():
     import torch
 
     obj = torch.load(args.src, map_location="cpu", weights_only=False)
-    sd = obj["state_dict"] if "state_dict" in obj else obj
+    sd = obj.get("state_dict", obj)
     lanes = tuple(obj["lanes"])
     hidden = int(obj["hidden"])
     layers = int(obj["num_layers"])
