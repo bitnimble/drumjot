@@ -20,6 +20,19 @@ _CHART = {
 }
 
 
+def test_load_handles_utf16_bom_chart(tmp_path):
+    # ~10% of community .rlrr files are UTF-16 (Windows BOM); load reads bytes so
+    # json.loads auto-detects the encoding instead of throwing UnicodeDecodeError.
+    import json
+
+    p = tmp_path / "utf16.rlrr"
+    p.write_text(json.dumps(_CHART), encoding="utf-16")  # FF FE BOM
+    assert p.read_bytes()[:2] == b"\xff\xfe"  # confirm it's really UTF-16-LE
+    o = rlrr.onsets_by_lane(p)  # would raise UnicodeDecodeError before the fix
+    assert o["k"] == [0.5] and o["cr"] == [2.0]
+    assert rlrr.complexity(p) == 3
+
+
 def test_onsets_by_lane_maps_and_refines_hihat():
     o = rlrr.onsets_by_lane(_CHART)
     assert o["k"] == [0.5]

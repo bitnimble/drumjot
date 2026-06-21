@@ -54,9 +54,14 @@ def lane_for_event(name: str, midi=None) -> str | None:
 
 
 def load(rlrr: object) -> dict:
-    """Accept a parsed dict or a path to an `.rlrr` JSON file."""
+    """Accept a parsed dict or a path to an `.rlrr` JSON file.
+
+    Read as BYTES, not text: ~10% of community maps ship a UTF-16 (BOM) `.rlrr`
+    (Windows-authored), which `read_text()` (UTF-8) rejects with a
+    UnicodeDecodeError. `json.loads` on bytes auto-detects UTF-8/16/32 (with or
+    without BOM) per the JSON spec, so those maps parse instead of being culled."""
     if isinstance(rlrr, (str, Path)):
-        return json.loads(Path(rlrr).read_text())
+        return json.loads(Path(rlrr).read_bytes())
     return rlrr  # type: ignore[return-value]
 
 
