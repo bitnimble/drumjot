@@ -14,6 +14,7 @@ use the GPU) and pick up where it left off.
 
 Output (perstem-consistent; a future a2md.perstem_index consumes it):
   annotation/<id>.mid                copied aligned MIDI (full-song; drum channel parsed later)
+  audio/sep_drum/<id>.flac           BS-Roformer combined drum stem
   audio/perstem/<pitch>/<id>.flac    MDX23C 5-class (pitch in k/s/h/c/t)
 
 Run on a GPU box with the transcriber `app` separator + MODELS_DIR; PYTHONPATH
@@ -70,11 +71,13 @@ def tracks_from_zip(zf: zipfile.ZipFile, max_dist: float):
 
 def out_paths(out: Path, tid: str):
     return {"mid": out / "annotation" / f"{tid}.mid",
+            "drum": out / "audio" / "sep_drum" / f"{tid}.flac",
             "per": {p: out / "audio" / "perstem" / p / f"{tid}.flac" for p in PITCHES}}
 
 
 def is_done(paths) -> bool:
-    return paths["mid"].exists() and all(p.exists() for p in paths["per"].values())
+    return (paths["mid"].exists() and paths["drum"].exists()
+            and all(p.exists() for p in paths["per"].values()))
 
 
 def _write_flac(y, sr, dst: Path) -> None:
@@ -137,6 +140,8 @@ def main():
 
                 drum = sep.run_stems_all(mix, tdp / "s1", build_no_drums=False).drum_stem
                 per = sep.run_stems_per(drum, tdp / "s2", build_residual=False).per_instrument
+                d_arr, d_sr = sf.read(str(drum), always_2d=True)
+                _write_flac(d_arr, d_sr, out_paths(out, tid)["drum"])  # persist combined drum stem
                 for p in PITCHES:
                     src = per.get(p)
                     if src and Path(src).exists():
