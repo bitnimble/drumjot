@@ -127,6 +127,21 @@ def _release(work_dir: Path, map_id: str) -> None:
         _claim_path(work_dir, map_id).unlink()
 
 
+def _publish_drum_flac(src: Path, dst: Path) -> None:
+    """FLAC-encode the separator's drum WAV into the shared stems cache, atomically.
+
+    Runs on the SCORER thread (off the GPU thread) so the NFS write + FLAC encode
+    overlap the next separation. FLAC ~3x smaller than the raw WAV the separator
+    emits, cutting both the NFS write and on-disk corpus size."""
+    import soundfile as sf
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    y, sr = sf.read(str(src))
+    tmp = dst.with_suffix(f".{os.getpid()}.tmp")
+    sf.write(str(tmp), y, sr, format="FLAC")
+    os.replace(tmp, dst)
+
+
 def _write_result(work_dir: Path, map_id: str, entry: dict) -> None:
     """Atomically write one map's scored entry (tmp + os.replace)."""
     dst = _result_path(work_dir, map_id)
@@ -178,7 +193,6 @@ def _score_from_stem(entry: dict, gt: dict, drum_path: Path, args) -> None:
       - support (PRECISION): fraction of charted onsets on a real transient.
       - recall: fraction of HIGH-CONFIDENCE audio onsets the chart covers
         (catches a chart simpler than the performance; missing real hits)."""
-    entry["drum_stem"] = Path(drum_path).name
     env, env_fps = forced_align.onset_envelope(drum_path, max_seconds=args.max_seconds)
     if env.size == 0 or float(np.max(env)) <= 0.0:
         entry["status"] = "silent_stem"
@@ -346,7 +360,7 @@ def _run_pipeline(zips, work_dir: Path, stems_cache: Path, stale_s: float, args,
             claimed += 1
             td = Path(tempfile.mkdtemp(prefix="paradbgate_"))
             job = {"map_id": map_id, "td": td, "gt": None, "mix": None,
-                   "drum": None, "to_gpu": False,
+                   "drum": None, "to_gpu": False, "publish": False,
                    "entry": {"zip": zp.name, "map_id": map_id, "status": "ok", "runner": _RUNNER}}
             try:
                 entry, gt, chart = _extract_parse(zp, td, args)
@@ -355,7 +369,7 @@ def _run_pipeline(zips, work_dir: Path, stems_cache: Path, stale_s: float, args,
                 if gt is not None:  # passed sanity
                     drum_cached = stems_cache / f"{map_id}.drum.flac"
                     if drum_cached.exists():
-                        job["drum"] = drum_cached  # already separated -> score from cache
+                        job["drum"] = drum_cached  # already separated -> score from cache (no re-publish)
                     else:
                         mix = td / "_mix.wav"
                         ok, case = paradb.build_mix(
@@ -384,6 +398,10 @@ def _run_pipeline(zips, work_dir: Path, stems_cache: Path, stale_s: float, args,
             try:
                 if entry["status"] == "ok" and job["drum"] is not None:
                     _score_from_stem(entry, job["gt"], job["drum"], args)
+                    if entry["status"] == "ok":
+                        entry["drum_stem"] = f"{map_id}.drum.flac"
+                        if job["publish"]:  # freshly separated -> cache it (FLAC, off the GPU thread)
+                            _publish_drum_flac(job["drum"], stems_cache / f"{map_id}.drum.flac")
             except Exception as exc:  # noqa: BLE001  odd audio must not kill the runner
                 entry["status"] = "error"
                 entry["error"] = f"{type(exc).__name__}: {exc}"
@@ -412,12 +430,11 @@ def _run_pipeline(zips, work_dir: Path, stems_cache: Path, stale_s: float, args,
             break
         if job["to_gpu"]:
             try:
-                drum = sep.run_stems_all(job["mix"], job["td"], build_no_drums=False).drum_stem
-                drum_cached = stems_cache / f"{job['map_id']}.drum.flac"
-                tmp = drum_cached.with_suffix(f".{os.getpid()}.tmp")
-                tmp.write_bytes(Path(drum).read_bytes())  # atomic publish for other runners
-                os.replace(tmp, drum_cached)
-                job["drum"] = drum_cached
+                # GPU thread does ONLY separation; the drum stem stays on local
+                # disk (job["td"]) and the scorer publishes it to the shared cache
+                # off-thread, so the NFS write never blocks the next separation.
+                job["drum"] = Path(sep.run_stems_all(job["mix"], job["td"], build_no_drums=False).drum_stem)
+                job["publish"] = True
             except Exception as exc:  # noqa: BLE001
                 job["entry"]["status"] = "sep_failed"
                 job["entry"]["error"] = f"{type(exc).__name__}: {exc}"
