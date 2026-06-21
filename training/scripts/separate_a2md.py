@@ -17,10 +17,13 @@ Output (perstem-consistent; a future a2md.perstem_index consumes it):
   audio/sep_drum/<id>.flac           BS-Roformer combined drum stem
   audio/perstem/<pitch>/<id>.flac    MDX23C 5-class (pitch in k/s/h/c/t)
 
-Run on a GPU box with the transcriber `app` separator + MODELS_DIR; PYTHONPATH
-must include dsp + training.
+Run on a GPU box (the 3080) with the transcriber `app` separator + MODELS_DIR;
+PYTHONPATH must include dsp + training. Use the transcriber venv interpreter
+(`transcriber/.venv/bin/python3`) so torch + the separator are on path, from the
+repo root:
 
-  MODELS_DIR=<cache> PYTHONPATH=dsp:training python3 training/scripts/separate_a2md.py \
+  MODELS_DIR=<cache> PYTHONPATH=dsp:training \
+  transcriber/.venv/bin/python3 training/scripts/separate_a2md.py \
       --zip /codebox-workspace/datasets/a2md/a2md_public.zip \
       --out /codebox-workspace/datasets/a2md_sep [--max-dist 0.10] [--scratch-dir /tmp/a2md]
 """
