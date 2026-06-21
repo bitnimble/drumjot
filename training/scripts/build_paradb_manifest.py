@@ -304,6 +304,10 @@ def main():
                     help="min spacing between confident audio onsets (s)")
     ap.add_argument("--recall-prominence", type=float, default=0.0,
                     help="prominence for confident-onset peaks (0=off)")
+    ap.add_argument("--scratch-dir", default=None,
+                    help="dir for per-map temp work (zip extract + mix wav + the separator's raw "
+                    "6-stem WAV dump). Point at a FAST local disk; on WSL the default /tmp can be a "
+                    "slow DrvFs mount, making the per-clip stem write dominate on a fast GPU.")
     ap.add_argument("--merge", action="store_true", help="just rebuild the manifest from results/ and exit")
     ap.add_argument("--report-only", action="store_true", help="rebuild + print the report, no separation")
     ap.add_argument("--log", default=None, help="tee stdout+stderr to this file")
@@ -316,6 +320,8 @@ def main():
     work_dir = Path(args.work_dir) if args.work_dir else out_path.parent / "_gate"
     (work_dir / "claims").mkdir(parents=True, exist_ok=True)
     (work_dir / "results").mkdir(parents=True, exist_ok=True)
+    if args.scratch_dir:
+        Path(args.scratch_dir).mkdir(parents=True, exist_ok=True)
 
     if args.merge or args.report_only:
         _merge_and_report(work_dir, out_path, args.keep_support, args.keep_recall, log)
@@ -358,7 +364,7 @@ def _run_pipeline(zips, work_dir: Path, stems_cache: Path, stale_s: float, args,
             if not _try_claim(work_dir, map_id, stale_s):
                 continue  # done by, or in flight on, another runner
             claimed += 1
-            td = Path(tempfile.mkdtemp(prefix="paradbgate_"))
+            td = Path(tempfile.mkdtemp(prefix="paradbgate_", dir=args.scratch_dir or None))
             job = {"map_id": map_id, "td": td, "gt": None, "mix": None,
                    "drum": None, "to_gpu": False, "publish": False,
                    "entry": {"zip": zp.name, "map_id": map_id, "status": "ok", "runner": _RUNNER}}
