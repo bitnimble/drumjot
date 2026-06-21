@@ -434,6 +434,45 @@ def _rings_for_clip(
     return rings
 
 
+def _clean_window_labels(
+    audio_path, onsets: dict[str, list[float]], cfg: Config, cache_dir: Path,
+    length: float | None, start: float = 0.0,
+) -> tuple[dict[str, list[float]], bool]:
+    """Snap a stem-window's onsets onto the stem's transients and decide KEEP/DROP.
+
+    Drops the WHOLE stem-window (`keep=False`) if ANY lane's support -- fraction of
+    onsets landing on a real transient within +/-`cfg.label_support_window_s` of the
+    stem's onset-strength envelope -- is below `cfg.label_min_support`: a window
+    whose ride MIDI doesn't match the recording would otherwise train the model to
+    SUPPRESS a present instrument (false negatives). Losing its crash too is fine
+    given data abundance. Kept windows return SNAPPED onsets (precise timing).
+
+    Side-cached (`<key>.support.json`, like `_rings_for_clip`) so the audio is read
+    once. `onsets` are window-relative. A no-op-ish on clean labels (STAR ~1.0)."""
+    import json
+
+    from drumjot_training import clean, postfilter
+
+    key = embeddings.cache_key(audio_path, cfg.encoder, cfg.encoder_layer, length, start=start)
+    sp = Path(cache_dir) / f"{key}.support.json"
+    if sp.exists():
+        d = json.loads(sp.read_text())
+        return {ln: list(v) for ln, v in d["onsets"].items()}, bool(d["keep"])
+    import librosa
+
+    y, sr = librosa.load(str(audio_path), sr=None, mono=True, offset=start,
+                         duration=length if length is not None else None)
+    env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=64).astype(np.float64)
+    floor = postfilter.support_floor_from_env(env, cfg.label_support_percentile)
+    snapped, support = clean.filter_lanes_by_support(
+        onsets, env, float(sr) / 64.0, support_floor=floor,
+        min_support=cfg.label_min_support, window_s=cfg.label_support_window_s, snap=True)
+    keep = all(s >= cfg.label_min_support for s in support.values())  # any lane fails -> drop window
+    out = snapped if keep else {}
+    sp.write_text(json.dumps({"onsets": out, "keep": keep}))
+    return out, keep
+
+
 # Shortest standalone window we'll emit (seconds). A tail below this is merged into
 # the previous window: MERT's conv feature extractor errors on a ~1-3s input, and
 # 5s (~375 MERT frames) is a safe floor that still keeps genuine short clips.
@@ -600,6 +639,7 @@ def materialize(
     variant = embeddings.feat_variant(cfg.high_band)
     new_frames: dict = {}
     n_enc = 0
+    n_dropped = 0
     ok: list[tuple] = []
     for i, spec in enumerate(specs):
         # spec: (audio, onsets_rel, weight_onsets_or_None, start, length) -- one
@@ -607,6 +647,11 @@ def materialize(
         # carries FULL-kit onsets for sibling loss weighting (per-stem mode).
         audio, onsets, weight_onsets, start, length = spec
         try:
+            if cfg.label_min_support > 0.0:  # label-quality gate + snap, BEFORE encoding
+                onsets, keep = _clean_window_labels(audio, onsets, cfg, cache_dir, length, start)
+                if not keep:
+                    n_dropped += 1
+                    continue
             key = embeddings.cache_key(audio, encoder.name, encoder.layer, length, variant, start)
             frames = index.get(key)
             if frames is None:
@@ -631,7 +676,8 @@ def materialize(
             log(f"  {tag}: {i + 1}/{len(specs)} windows ({n_enc} encoded)")
     if new_frames:
         _save_feature_index(cache_dir, new_frames)
-    log(f"{tag}: {len(ok)} windows ({n_enc} newly encoded, {len(ok) - n_enc} from cache)")
+    drop_note = f", {n_dropped} dropped (label support < {cfg.label_min_support})" if n_dropped else ""
+    log(f"{tag}: {len(ok)} windows ({n_enc} newly encoded, {len(ok) - n_enc} from cache){drop_note}")
     return CachedClips(ok, cfg, cache_dir, max_seconds)
 
 
@@ -1451,6 +1497,12 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--sib-pos-weight", type=float, default=Config.sib_pos_weight,
                     help="loss multiplier on co-occurring positives (hit under sibling "
                     "noise, the harder detection); 1 disables")
+    ap.add_argument("--label-min-support", type=float, default=Config.label_min_support,
+                    help="label-quality gate: snap onsets to the stem's transients and DROP a "
+                    "stem-window if any lane's support < this (mis-aligned MIDI poisons per-stem "
+                    "training). 0 disables. No-op on clean synthetic labels.")
+    ap.add_argument("--label-support-window", type=float, default=Config.label_support_window_s,
+                    help="+/- window (s) for the label support check + onset snap")
     ap.add_argument("--no-filter-report", action="store_true", help="skip the deterministic-filter F1 comparison")
     ap.add_argument("--out", type=str, default=None, help="save model.pt + meta.json here")
     ap.add_argument("--resume", type=str, default=None, help="checkpoint dir to warm-start weights from")
@@ -1469,6 +1521,7 @@ def main(argv: list[str] | None = None) -> None:
         high_band=args.high_band,
         lr=args.lr, weight_decay=args.weight_decay,
         sib_neg_weight=args.sib_neg_weight, sib_pos_weight=args.sib_pos_weight,
+        label_min_support=args.label_min_support, label_support_window_s=args.label_support_window,
     )
     train_specs, val_specs, cache = (
         _star_specs(args) if args.dataset == "star"

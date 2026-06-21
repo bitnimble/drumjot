@@ -32,6 +32,16 @@ class Config:
     peak_min_distance_s: float = 0.03
     onset_tolerance_s: float = 0.05  # +/-50 ms, standard ADT tolerance
 
+    # Label cleaning (per stem-window, against the stem's onset-strength envelope):
+    # snap kept onsets onto the real transient, and DROP the whole stem-window if
+    # ANY lane's support (fraction of onsets on a transient within +/-window) is
+    # below `label_min_support` -- a window whose ride MIDI doesn't match the
+    # recording is discarded (losing its crash too; fine given data abundance).
+    # Near-no-op on clean synthetic labels. 0 disables. See clean.filter_lanes_by_support.
+    label_min_support: float = 0.95
+    label_support_window_s: float = 0.04
+    label_support_percentile: float = 60.0
+
     # Per-lane head.
     head_hidden: int = 128
     head_layers: int = 2
