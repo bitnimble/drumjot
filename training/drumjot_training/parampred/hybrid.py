@@ -23,13 +23,16 @@ from drumjot_training.parampred import baseline, features, report
 DETERM, LEARNED, GLOBAL = "determ", "learned", "global"
 
 # Source per lane; any lane absent here uses the global seed (the conservative
-# rail). Chosen from the 6-song ParaDB gap table -- treat as a starting policy to
-# re-validate on the larger dist0p20 A2MD corpus + MDB, not a tuned constant.
+# rail). Cross-validated on TWO real-domain sets (ParaDB 6 songs + MDB 23): a lane
+# is routed to a non-global source only where that source captured gap on BOTH.
 DEFAULT_ROUTING: dict[str, str] = {
-    "hc": DETERM,   # dense closed-hat: self-cal knee wins (+59% of gap on ParaDB)
-    "ho": LEARNED,  # open-hat: determ catastrophic (-169%), learned +24%
-    "rd": LEARNED,  # ride: learned +89% (thin corpus -> noisy)
-    "cr": LEARNED,  # crash: learned +63%, determ -61%
+    "hc": DETERM,   # dense closed-hat: self-cal knee wins (ParaDB +59%, MDB +11%)
+    "ho": LEARNED,  # open-hat: learned positive both (ParaDB +24%, MDB +4.5%); determ catastrophic
+    "cr": LEARNED,  # crash: learned positive both (ParaDB +64%, MDB +13%); determ negative
+    # ride: NOT adapted -> global rail. Learned was +108% on ParaDB (4 songs, predict
+    # even beat oracle = overfit) but -40% on MDB; the thinnest lane everywhere
+    # (26-30 A2MD rows, <=7 test songs). Neither source beats `current` robustly.
+    "rd": GLOBAL,
 }
 
 

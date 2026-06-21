@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))  # training/
 
 from drumjot_training import embeddings, inference, mdb, runtime, star  # noqa: E402
-from drumjot_training.parampred import eval_gap, regressor, report  # noqa: E402
+from drumjot_training.parampred import eval_gap, hybrid, regressor, report  # noqa: E402
 
 
 def main():
@@ -82,6 +82,11 @@ def main():
     print(f"\n{used} tracks scored\n" + report.format_report(gaps, order), flush=True)
     det = [g.det_captured_frac for g in gaps.values() if g.det_captured_frac is not None]
     print(f"  mean determ captured {sum(det) / len(det) * 100:+.1f}% of gap" if det else "", flush=True)
+    caps = [g.captured for g in gaps.values()]  # captured = predicted_f1 - current_f1 (always float)
+    if predictor and caps:  # cross-check the ParaDB-derived hybrid routing on this independent set
+        print(f"  mean captured {sum(caps) / len(caps):+.3f} predicted", flush=True)
+        print("\n" + hybrid.format_hybrid(gaps, hybrid.DEFAULT_ROUTING, lane_order=order), flush=True)
+        print(f"  mean captured {hybrid.captured(gaps, hybrid.DEFAULT_ROUTING):+.3f} hybrid", flush=True)
 
 
 if __name__ == "__main__":

@@ -21,7 +21,7 @@ def test_routing_selects_the_winning_source_per_lane():
     r = hybrid.DEFAULT_ROUTING
     assert hybrid.hybrid_f1(_GAPS["hc"], r) == 0.526   # determ
     assert hybrid.hybrid_f1(_GAPS["ho"], r) == 0.640   # learned
-    assert hybrid.hybrid_f1(_GAPS["rd"], r) == 0.195   # learned
+    assert hybrid.hybrid_f1(_GAPS["rd"], r) == 0.174   # global rail (current): ride doesn't generalize
     assert hybrid.hybrid_f1(_GAPS["cr"], r) == 0.411   # learned
 
 
@@ -40,9 +40,9 @@ def test_captured_beats_each_method_alone():
     hyb = hybrid.captured(_GAPS, hybrid.DEFAULT_ROUTING)
     learned = sum(g.predicted_f1 - g.current_f1 for g in _GAPS.values()) / len(_GAPS)
     determ = sum(g.deterministic_f1 - g.current_f1 for g in _GAPS.values()) / len(_GAPS)
-    assert hyb > learned > 0       # hybrid > learned-only (which is the +0.016 result)
+    assert hyb > learned > 0       # hybrid > learned-only even with ride on the global rail
     assert hyb > determ            # and > determ-only (net-negative here)
-    assert abs(hyb - 0.0233) < 1e-3
+    assert abs(hyb - 0.018) < 1e-3  # hc determ + ho/cr learned + rd global
 
 
 def test_format_lists_each_lane_source():
@@ -52,8 +52,8 @@ def test_format_lists_each_lane_source():
 
 class _StubPredictor:
     def predict_row(self, lane, x):
-        if lane == "rd":
-            raise KeyError(lane)  # lane never fit
+        if lane == "ho":
+            raise KeyError(lane)  # a learned-routed lane the predictor never fit
         return {"threshold": 0.42, "min_distance_s": 0.03, "prominence": 0.1,
                 "decay_reset_frac": 0.5, "decay_reset_floor": 0.0}
 
@@ -80,7 +80,9 @@ def test_picker_routes_determ_learned_and_global():
     assert set(p_hc) == set(seed)
     # unrouted lane -> seed verbatim
     assert pick.params(act, fps, "k", seed, waveform=wave, sr=sr) == seed
-    # learned lane the predictor never fit (KeyError) -> seed rail
+    # ride is globally routed (doesn't generalize) -> seed verbatim
     assert pick.params(act, fps, "rd", seed, waveform=wave, sr=sr) == seed
+    # learned lane the predictor never fit (KeyError) -> seed rail
+    assert pick.params(act, fps, "ho", seed, waveform=wave, sr=sr) == seed
     # learned lane with no waveform -> seed rail
     assert pick.params(act, fps, "cr", seed) == seed

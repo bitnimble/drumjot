@@ -16,6 +16,44 @@ Scoring is `mir_eval` onset-F1 at ±50 ms (`metrics.onset_f1`).
 
 ---
 
+## 2026-06-21 · MDB cross-check: ParaDB param gains DON'T fully generalize
+
+Ran the dist<=0.10 predictor (`param_predictor_a2md.joblib`, the best ParaDB
+artifact) on **MDB-Drums (23 tracks)**, an independent real-domain test set, to
+check whether the hybrid routing (read off 6 ParaDB songs) is a real pattern or
+overfit. `eval_mdb.py` now prints the same predict + hybrid columns.
+
+| captured of oracle gap | ParaDB (6) | **MDB (23)** |
+|---|---|---|
+| determ self-cal | strong (hc +59%) | **-26%** |
+| learned predict | +0.017 F1 | **-0.006 F1** |
+| hybrid | +0.024 F1 | **+0.002 F1** |
+
+Per-lane, the routing splits into robust vs overfit:
+
+| lane | source | ParaDB | MDB | verdict |
+|---|---|---|---|---|
+| hc | determ | +59% | +11% | robust |
+| cr | learned | +64% | +13% | robust |
+| ho | learned | +24% | +4.5% | robust (weak) |
+| **rd** | learned | +108% | **-40%** | **overfit -> dropped** |
+
+**Honest read:** the headline ParaDB hybrid (+0.024) was partly fit to those 6
+songs; on independent MDB the predictor is net-neutral (-0.006) and the hybrid is
+barely positive (+0.002). **Ride was the blowup**, learned +108% on ParaDB (4
+songs; predict even *beat* the oracle = overfit) but -40% on MDB; it's the thinnest
+lane everywhere (26-30 A2MD train rows, <=7 test songs). Only `hc->determ` +
+`cr->learned` (+`ho` weakly) capture gap on BOTH sets.
+
+**Action:** revised `DEFAULT_ROUTING` to put **ride on the global rail** (no
+adaptation), cross-validated on both sets. With ride dropped the hybrid is small
+but positive on both (ParaDB ~+0.018, MDB ~+0.009). Net: adaptive params are a
+**real but modest** effect, NOT the big win the single ParaDB run suggested; a
+deploy decision now rides on whether ~+0.01-0.02 F1 on hat/crash is worth the
+machinery. Artifact + log: `param_predictor_a2md.joblib`, `eval_mdb_hybrid.log`.
+
+---
+
 ## 2026-06-21 · More real data (A2MD dist0p20) HURTS, quality > quantity
 
 Ran dist0p20 separation on the 3080 (537 songs, 2.7x the dist<=0.10 set), rebuilt
