@@ -20,6 +20,7 @@ mdb-sep), consumed by `perstem_index`:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -242,3 +243,60 @@ def restricted_onsets(onsets_path: str | Path, pitch: str) -> dict[str, list[flo
     full = onsets_by_lane(onsets_path)
     keep = set(PERSTEM_TO_LANES.get(pitch, ()))
     return {ln: (full[ln] if ln in keep else []) for ln in LANES}
+
+
+# ---------------------------------------------------------------------------
+# corpus selection + held-out split (consumes build_paradb_manifest.py output)
+# ---------------------------------------------------------------------------
+def load_manifest(path: str | Path) -> dict:
+    """Load `paradb_manifest.json` (map_id -> gate result entry)."""
+    return json.loads(Path(path).read_text())
+
+
+def kept_map_ids(
+    manifest: dict, *, min_support: float, min_recall: float, min_onsets: int = 0
+) -> list[str]:
+    """Map ids that pass the cull: status 'ok' AND support_corr >= `min_support`
+    AND recall >= `min_recall` (and >= `min_onsets` if set). Sorted (deterministic).
+    Shared by separate_paradb_dataset.py (build the train tree) and the param
+    dataset builder, so both agree on exactly which maps are 'kept'."""
+    out = []
+    for mid, e in manifest.items():
+        if e.get("status") != "ok":
+            continue
+        if e.get("support_corr", 0.0) < min_support or e.get("recall", 0.0) < min_recall:
+            continue
+        if min_onsets and e.get("n_onsets", 0) < min_onsets:
+            continue
+        out.append(e.get("map_id", mid))
+    return sorted(out)
+
+
+def _hash_frac(map_id: str, salt: str) -> float:
+    """Stable [0,1) hash of a map id (machine-independent; no RNG state)."""
+    h = hashlib.sha1(f"{salt}:{map_id}".encode()).hexdigest()
+    return (int(h[:8], 16) % 1_000_000) / 1_000_000.0
+
+
+def perstem_for_split(clips, split: str, *, val_frac: float = 0.05, salt: str = "paradb-val"):
+    """Split per-stem clips into train/validation by **map-id** hash (so all of a
+    song's stems land in the same split -> no cross-stem leakage). This is the
+    held-IN model val set (threshold tuning / early stop), distinct from the eval
+    HOLDOUT (`holdout_split`), which is excluded from the tree entirely. `split` is
+    'train' or 'validation'."""
+    want_val = split in ("validation", "val")
+    return [c for c in clips if (_hash_frac(c.map_id, salt) < val_frac) == want_val]
+
+
+def holdout_split(
+    map_ids, holdout_frac: float, *, salt: str = "paradb-eval"
+) -> tuple[list[str], list[str]]:
+    """Deterministic `(train_ids, eval_ids)` split by map-id hash: eval = the
+    `holdout_frac` of ids whose hash falls below the cut. Stable across runs and
+    machines (sha1, not RNG), so the held-out eval set is frozen + reproducible.
+    Frozen to `paradb_eval_ids.json` by separate_paradb_dataset.py; the same call
+    excludes those ids from BOTH the onset train tree and the param corpus."""
+    ev = sorted(m for m in map_ids if _hash_frac(m, salt) < holdout_frac)
+    evset = set(ev)
+    tr = sorted(m for m in map_ids if m not in evset)
+    return tr, ev

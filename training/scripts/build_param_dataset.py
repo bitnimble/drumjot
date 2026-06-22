@@ -13,7 +13,11 @@ without paying to re-separate every variant. The onsets don't move, so the
 chart's per-lane GT (and the once-computed global offset) stay valid for every
 variant; the oracle just re-sweeps on the new curve.
 
-POINT THIS AT A TRAINING CORPUS, NOT ParaDB -- ParaDB is the held-out test set.
+Sources: `--maps-dir` (a folder of training zips, e.g. A2MD), or `--paradb-sep` (a
+paradb-sep tree = the ParaDB KEPT-TRAINING split, with the held-out eval ids
+already excluded by separate_paradb_dataset.py). Never point `--maps-dir` at the
+raw ParaDB eval set -- the held-out eval maps must stay out of training. Pool
+multiple corpora at fit time: `train_param_predictor.py --dataset a2md.npz paradb.npz`.
 
 Must run where the transcriber app (separation) and drumjot_training (model) are
 importable, with a GPU (e.g. the sandbox). Mirrors eval_paradb's env:
@@ -110,9 +114,35 @@ def _offset_corrected_gt(gt, drum_stem, args):
     return {ln: [t + off for t in ts] for ln, ts in gt.items()}
 
 
+def _paradb_sep_maps(root, args):
+    """Maps from a `paradb-sep` tree (separate_paradb_dataset.py output): the
+    kept-training per-instrument stems + already-offset-corrected onsets. No
+    separation or offset-correction here -- it's all precomputed, so this reuses
+    that GPU work instead of re-separating. Returns [(map_id, gt, pieces)]."""
+    from drumjot_training import paradb
+
+    root = Path(root)
+    out = []
+    for oj in sorted((root / "onsets").glob("*.json")):
+        mid = oj.stem
+        pieces = {p: root / "perstem" / p / f"{mid}.flac" for p in ep.STEM_TO_LANES}
+        pieces = {p: a for p, a in pieces.items() if a.exists()}
+        if not pieces:
+            continue
+        gt = paradb.onsets_by_lane(oj)
+        if args.max_seconds is not None:
+            gt = {ln: [t for t in ts if t < args.max_seconds] for ln, ts in gt.items()}
+        out.append((mid, gt, pieces))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description="Build the param-predictor training corpus")
-    ap.add_argument("--maps-dir", required=True, help="folder of .zip labeled maps (NOT ParaDB test set)")
+    ap.add_argument("--maps-dir", default=None, help="folder of .zip labeled maps (NOT the ParaDB eval set)")
+    ap.add_argument("--paradb-sep", default=None,
+                    help="alternative source: a paradb-sep tree (kept-training stems + corrected onsets) "
+                    "from separate_paradb_dataset.py -- reuses its separation instead of re-separating. "
+                    "Pool the resulting table with the real corpus via train_param_predictor --dataset a.npz b.npz")
     ap.add_argument("--checkpoint", required=True, help="frozen onset checkpoint (model.pt + meta.json)")
     ap.add_argument("--out", required=True, help="output npz Table")
     ap.add_argument("--variants", type=int, default=6, help="augmented variants per song (plus the original)")
@@ -147,10 +177,18 @@ def main():
         stems_tmp = tempfile.TemporaryDirectory()
         stems_cache = Path(stems_tmp.name)
 
-    zips = sorted(Path(args.maps_dir).glob("*.zip"))
-    print(f"{len(zips)} maps; {args.variants} variants/song; checkpoint={args.checkpoint}", flush=True)
-
-    maps = _separate_maps(zips, stems_cache, args)
+    # source -> unified [(song_id, offset-corrected gt, {pitch: stem_path})]
+    if args.paradb_sep:
+        songs = _paradb_sep_maps(args.paradb_sep, args)
+        print(f"{len(songs)} paradb-sep maps (kept-training, pre-separated); "
+              f"{args.variants} variants/song; checkpoint={args.checkpoint}", flush=True)
+    else:
+        if not args.maps_dir:
+            ap.error("one of --maps-dir or --paradb-sep is required")
+        zips = sorted(Path(args.maps_dir).glob("*.zip"))
+        print(f"{len(zips)} maps; {args.variants} variants/song; checkpoint={args.checkpoint}", flush=True)
+        maps = _separate_maps(zips, stems_cache, args)
+        songs = [(zp.stem, _offset_corrected_gt(gt, drum, args), pieces) for zp, gt, drum, pieces in maps]
     if device == "cuda":
         torch.cuda.empty_cache()
 
@@ -159,9 +197,8 @@ def main():
     rng = np.random.default_rng(args.seed)
     rows: list[dataset.ParamSample] = []
 
-    for zp, gt, drum_stem, pieces in maps:
-        print(f"\n=== {zp.name} (rows) ===", flush=True)
-        gt_scored = _offset_corrected_gt(gt, drum_stem, args)
+    for song_id, gt_scored, pieces in songs:
+        print(f"\n=== {song_id} (rows) ===", flush=True)
         req = {ln.strip() for ln in args.lanes.split(",")} if args.lanes else None
         for v in range(args.variants + 1):
             for pitch, stem_path in pieces.items():
@@ -186,7 +223,7 @@ def main():
                     )
                     rows.extend(dataset.build_rows_for_song(
                         probs, fps, meta["lanes"], meta["thresholds"], gt_scored, wave, sr,
-                        song_id=zp.stem, aug=aug_label,
+                        song_id=song_id, aug=aug_label,
                         default_threshold=meta["peak_threshold"], tolerance=meta["onset_tolerance_s"],
                         restrict_lanes=restrict,
                     ))

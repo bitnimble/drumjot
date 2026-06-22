@@ -202,6 +202,33 @@ def test_recall_score_flags_missing_obvious_hits():
     assert r3["n_confident"] == 0 and r3["fraction"] == 1.0
 
 
+def test_kept_map_ids_applies_cull():
+    manifest = {
+        "A": {"map_id": "A", "status": "ok", "support_corr": 0.99, "recall": 0.97, "n_onsets": 500},
+        "B": {"map_id": "B", "status": "ok", "support_corr": 0.99, "recall": 0.80, "n_onsets": 500},  # low recall
+        "C": {"map_id": "C", "status": "ok", "support_corr": 0.90, "recall": 0.99, "n_onsets": 500},  # low support
+        "D": {"map_id": "D", "status": "no_chart"},                                                   # not ok
+        "E": {"map_id": "E", "status": "ok", "support_corr": 1.0, "recall": 1.0, "n_onsets": 10},      # too few
+    }
+    keep = paradb.kept_map_ids(manifest, min_support=0.95, min_recall=0.90, min_onsets=50)
+    assert keep == ["A"]
+    # looser cut keeps B + C too (sorted)
+    assert paradb.kept_map_ids(manifest, min_support=0.85, min_recall=0.75, min_onsets=50) == ["A", "B", "C"]
+
+
+def test_holdout_split_is_deterministic_and_disjoint():
+    ids = [f"M{i:05d}" for i in range(2000)]
+    tr1, ev1 = paradb.holdout_split(ids, 0.1)
+    tr2, ev2 = paradb.holdout_split(ids, 0.1)
+    assert (tr1, ev1) == (tr2, ev2)            # stable across calls
+    assert set(tr1).isdisjoint(ev1)            # disjoint
+    assert sorted(tr1 + ev1) == sorted(ids)    # partition (no loss)
+    assert 0.06 < len(ev1) / len(ids) < 0.14   # ~10% held out
+    # a smaller holdout is a subset of the larger one's eval set (monotone by hash)
+    _, ev_small = paradb.holdout_split(ids, 0.05)
+    assert set(ev_small).issubset(set(ev1))
+
+
 def test_merge_results_collects_entries(tmp_path):
     g = _load_gate_module()
     wd = _gate_dirs(tmp_path)

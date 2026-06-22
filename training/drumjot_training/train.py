@@ -26,6 +26,7 @@ from drumjot_training import (
     enst,
     metrics,
     midi_labels,
+    paradb,
     paths,
     runtime,
     star,
@@ -1296,6 +1297,26 @@ def _cap_by_windows(perstem_clips, n_windows: int, window: float = 30.0):
     return out
 
 
+def _paradb_perstem_specs(args) -> tuple[list, list, Path]:
+    """(train_specs, val_specs, cache_dir) for ParaDB per-instrument stems.
+
+    Reads the `paradb-sep` tree built by scripts/separate_paradb_dataset.py (the
+    held-out eval maps are already excluded from the tree; labels are the
+    offset-corrected GT in `onsets/<id>.json`). Train/val split by map-id hash
+    (all of a song's stems stay together). `--pool-cap` caps train to ~N windows
+    (0 = all). Point `DRUMJOT_PARADB` at the paradb-sep root."""
+    root = paths.dataset_path("paradb")
+    per = paradb.perstem_index(root)
+    tr = _cap_by_windows(paradb.perstem_for_split(per, "train"), args.pool_cap)
+    va = paradb.perstem_for_split(per, "validation")
+    spec = lambda c: (  # noqa: E731
+        c.audio_path,
+        paradb.restricted_onsets(c.onsets_path, c.pitch),
+        paradb.onsets_by_lane(c.onsets_path),
+    )
+    return [spec(c) for c in tr], [spec(c) for c in va], root / "_cache_mert"
+
+
 def _pooled_specs(args) -> tuple[list, list, Path]:
     """(train_specs, val_specs, cache_dir) pooling several SEPARATION-AWARE
     per-stem trees into one training set.
@@ -1346,8 +1367,13 @@ def _pooled_specs(args) -> tuple[list, list, Path]:
             tr = [c for c in allper if c.split == "train"]
             va = [c for c in allper if c.split == "validation"]
             ann_of, reader, p2l = (lambda c: c.midi_path), midi_labels.onsets_from_path, egmd.PERSTEM_TO_LANES
+        elif name == "paradb":
+            allper = paradb.perstem_index(root)  # held-out eval already excluded from the tree
+            tr = paradb.perstem_for_split(allper, "train")
+            va = paradb.perstem_for_split(allper, "validation")
+            ann_of, reader, p2l = (lambda c: c.onsets_path), paradb.onsets_by_lane, paradb.PERSTEM_TO_LANES
         else:
-            raise SystemExit(f"--pool-sources: unknown source {name!r} (use star/enst/egmd)")
+            raise SystemExit(f"--pool-sources: unknown source {name!r} (use star/enst/egmd/paradb)")
         # use each SOURCE's own pitch->lanes map (not STAR's) so a source whose
         # stem-pitch vocab ever diverges can't silently yield all-empty restricted
         # onsets. (They're identical today; this keeps it correct if one changes.)
@@ -1426,7 +1452,8 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="Drum-onset training (frozen MERT + per-lane heads)")
     ap.add_argument(
         "--dataset",
-        choices=("egmd", "egmd_perstem", "star", "star_perstem", "enst", "enst_perstem", "pooled"),
+        choices=("egmd", "egmd_perstem", "star", "star_perstem", "enst", "enst_perstem",
+                 "paradb_perstem", "pooled"),
         default="egmd",
     )
     ap.add_argument("--pool-sources", default="star,enst,egmd",
@@ -1545,6 +1572,7 @@ def main(argv: list[str] | None = None) -> None:
         else _enst_perstem_specs(args) if args.dataset == "enst_perstem"
         else _enst_specs(args) if args.dataset == "enst"
         else _egmd_perstem_specs(args) if args.dataset == "egmd_perstem"
+        else _paradb_perstem_specs(args) if args.dataset == "paradb_perstem"
         else _pooled_specs(args) if args.dataset == "pooled"
         else _egmd_specs(args)
     )
