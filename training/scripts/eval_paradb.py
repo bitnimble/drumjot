@@ -24,6 +24,10 @@ Usage:
   MODELS_DIR=/codebox-workspace/drumjot/models-cache \
   python3 eval_paradb.py --maps-dir <folder-of-zips> --checkpoint <dir> \
       [--window-seconds 30] [--stems-cache <dir>]
+
+LICENSE / SCOPE: ParaDB songs are copyrighted + the charts unlicensed. This is a
+RESEARCH measurement harness ONLY (held-out eval) -- not a step toward shipping a
+model trained on ParaDB data.
 """
 import argparse
 import os

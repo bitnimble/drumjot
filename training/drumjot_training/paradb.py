@@ -17,6 +17,11 @@ mdb-sep), consumed by `perstem_index`:
 
     <root>/perstem/<pitch>/<map_id>.flac   # pitch in k/s/h/c/t (MDX23C lanes)
     <root>/onsets/<map_id>.json            # offset-corrected 9-lane GT onsets
+
+LICENSE / SCOPE: ParaDB songs are copyrighted recordings and the crowdsourced
+charts are unlicensed. This whole pathway is RESEARCH-ONLY -- training
+experiments + held-out evaluation. We do NOT intend to ship a model trained on
+ParaDB data, and the held-out split is for measurement only.
 """
 from __future__ import annotations
 

@@ -29,6 +29,10 @@ write on a writer thread).
       --out-dir /codebox-workspace/datasets/paradb-sep \
       --eval-ids-out training/paradb_eval_ids.json \
       --min-support 0.97 --min-recall 0.90 --holdout-frac 0.05
+
+LICENSE / SCOPE: ParaDB songs are copyrighted + the charts unlicensed. This
+training tree is RESEARCH-ONLY; we do NOT intend to ship a model trained on
+ParaDB data, and the held-out eval ids are for measurement only.
 """
 from __future__ import annotations
 

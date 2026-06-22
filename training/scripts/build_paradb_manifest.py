@@ -47,6 +47,10 @@ merged `paradb_manifest.json` is rebuilt from `results/` at the end of every run
 
 Same command on every box. `--merge`/`--report-only` just rebuild + print from
 `results/` without separating.
+
+LICENSE / SCOPE: ParaDB songs are copyrighted + the charts unlicensed. This is
+RESEARCH-ONLY (training experiments + held-out eval); we do NOT intend to ship a
+model trained on ParaDB data.
 """
 from __future__ import annotations
 
