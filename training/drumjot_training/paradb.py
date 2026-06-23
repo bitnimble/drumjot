@@ -299,9 +299,31 @@ def holdout_split(
     """Deterministic `(train_ids, eval_ids)` split by map-id hash: eval = the
     `holdout_frac` of ids whose hash falls below the cut. Stable across runs and
     machines (sha1, not RNG), so the held-out eval set is frozen + reproducible.
-    Frozen to `paradb_eval_ids.json` by separate_paradb_dataset.py; the same call
-    excludes those ids from BOTH the onset train tree and the param corpus."""
+    Per-id: a map's assignment never flips as the kept set grows, so the split can
+    be frozen once the whole corpus is processed. Excludes those ids from BOTH the
+    onset train tree and the param corpus."""
     ev = sorted(m for m in map_ids if _hash_frac(m, salt) < holdout_frac)
     evset = set(ev)
     tr = sorted(m for m in map_ids if m not in evset)
     return tr, ev
+
+
+# Per-stem cull rule, applied LATER from the recorded `stem_scores/<id>.json`
+# index -- NOT at separation time. Precision gates every stem; recall gates only
+# k/s/c/t. Hi-hat is precision-only: its isolated stem is unreliable (the ~14 kHz
+# band-limit + separation bleed make recall conflate chart-simplification with
+# separation under-recovery), so a rich hat chart can read low and would be
+# wrongly dropped.
+RECALL_GATED_PITCHES = frozenset({"k", "s", "c", "t"})
+
+
+def keep_stem(
+    pitch: str, support: float, recall: float, *, min_support: float, min_recall: float
+) -> bool:
+    """Keep a per-stem example if its precision clears `min_support`, AND (for the
+    recall-gated pitches) its recall clears `min_recall`. Hi-hat is precision-only
+    (see `RECALL_GATED_PITCHES`). Scores come from the separation stage's per-stem
+    index; this is the cull-time rule, decoupled from the build."""
+    if support < min_support:
+        return False
+    return not (pitch in RECALL_GATED_PITCHES and recall < min_recall)
