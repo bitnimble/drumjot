@@ -13,12 +13,17 @@ above the chosen cut (`--min-support`/`--min-recall`); the **held-out eval** ids
 `--eval-ids-out` (commit it, it's the benchmark split, shared by the param
 corpus + eval_paradb).
 
-CHEAP relative to the gate: the expensive BS-Roformer drum extraction is already
-cached in `--stems-cache`, so this only runs MDX23C (per-instrument split) on the
-cached drum stem. Distributed (atomic per-map claim, same as the gate) +
-resumable (skips maps whose perstems + onsets json already exist) + pipelined
-(GPU split on the main thread; chart-parse on a producer thread; FLAC + onsets
-write on a writer thread).
+Reuses the gate's cached BS-Roformer drum stem (`--stems-cache`), so it runs only
+MDX23C (the per-instrument split) -- saving the BS-Roformer pass, though MDX23C
+itself is ~gate-scale (~100 s/map on the 1660). Distributed (atomic per-map
+claim, same as the gate) + resumable (skips maps already gated -> stem_scores
+written) + pipelined (GPU split on the main thread; chart-parse on a producer
+thread; per-stem P/R gate + FLAC + onsets write on a writer thread).
+
+PER-STEM P/R GATE: after MDX23C, each isolated instrument stem is scored
+precision + recall (see `_score_stem`); stems below `--stem-min-support`/
+`--stem-min-recall` are dropped (so a map that omits an instrument's lane can't
+poison that stem's training). All per-stem scores -> `stem_scores/<id>.json`.
 
   MODELS_DIR=/codebox-workspace/drumjot/models-cache \
   scripts/sandbox-run env PYTHONPATH=training:dsp:transcriber python3 \
@@ -56,33 +61,55 @@ for _p in ("training", "dsp", "transcriber"):
 import numpy as np  # noqa: E402
 import soundfile as sf  # noqa: E402
 
-from drumjot_training import clean, forced_align, paradb, postfilter, rlrr, runtime  # noqa: E402
+from drumjot_training import (  # noqa: E402
+    clean,
+    forced_align,
+    metrics,
+    paradb,
+    postfilter,
+    rlrr,
+    runtime,
+)
 
 _PERSTEM_PITCHES = ("k", "s", "h", "c", "t")
+# stem pitch -> a representative lane whose peak-pick params (min-distance +
+# decay-reset) suit that stem: k/s/t = clean, h = hat (ring), c = cymbal (ring).
+_STEM_PARAM_LANE = {"k": "k", "s": "s", "t": "t", "h": "hc", "c": "rd"}
 _RUNNER = f"{os.uname().nodename}:{os.getpid()}"
 
 
-def _score_stem(stem_path: Path, restricted: dict, drum_conf_floor: float, args):
+def _score_stem(stem_path: Path, restricted: dict, drum_conf_floor: float, pitch: str, args):
     """Per-stem precision + recall against the ISOLATED instrument stem.
 
     precision (support): fraction of the chart's onsets for this stem's lanes that
     land on a transient in this stem. recall: fraction of the stem's own
-    HIGH-CONFIDENCE onsets the chart covers -- this is what catches a map that
-    dropped this instrument's lane entirely (stem audio has clear hits, chart lane
-    empty -> recall ~0). Confident-onset floor = max(stem percentile, abs_frac x
-    the DRUM stem's percentile) so a genuinely SILENT stem (song lacks this
-    instrument) yields 0 confident onsets -> recall 1.0 (kept, a valid negative),
-    not a false drop. Returns (support, recall, n_confident)."""
+    HIGH-CONFIDENCE onsets the chart covers -- catches a map that dropped this
+    instrument's lane (stem audio has clear hits, chart lane empty -> recall ~0).
+
+    Confident onsets on an ISOLATED stem need care (a naive percentile floor
+    over-fires on the sparse stem + on cymbal/hi-hat ring):
+      - PEAK-RELATIVE height: `peak_frac` x the stem's own max envelope (robust to
+        the sparse-stem percentile), floored by `abs_frac` x the DRUM stem's
+        percentile so a SILENT stem (song lacks this instrument) yields 0 confident
+        onsets -> recall 1.0 (kept, valid negative), not a false drop.
+      - the lane's min-distance + decay-reset (hat/cym ring collapses to ONE onset,
+        not a phantom stream). prominence is omitted (its [0,1]-activation scale
+        doesn't map to the onset-strength envelope; height+min-dist+reset suffice).
+    Returns (support, recall, n_confident)."""
     env, fps = forced_align.onset_envelope(stem_path)
     if env.size == 0 or float(np.max(env)) <= 0.0:
         return 1.0, 1.0, 0  # silent stem -> vacuously fine (empty-negative example)
     supp_floor = postfilter.support_floor_from_env(env, args.stem_support_percentile)
     support = clean.support_score(
         restricted, env, fps, window_s=args.stem_window, support_floor=supp_floor)["fraction"]
-    conf_floor = max(postfilter.support_floor_from_env(env, args.stem_recall_percentile),
+    pp = metrics.LANE_PEAK_PARAMS.get(_STEM_PARAM_LANE.get(pitch, ""), metrics.DEFAULT_PEAK_PARAMS)
+    conf_floor = max(args.stem_recall_peak_frac * float(np.max(env)),
                      args.stem_recall_abs_frac * drum_conf_floor)
-    rec = clean.recall_score(restricted, env, fps, confident_floor=conf_floor,
-                             window_s=args.stem_window, min_distance_s=0.05)
+    rec = clean.recall_score(
+        restricted, env, fps, confident_floor=conf_floor, window_s=args.stem_window,
+        min_distance_s=pp["min_distance_s"], decay_reset_frac=pp["decay_reset_frac"],
+        decay_reset_floor=conf_floor,
+    )
     return support, rec["fraction"], rec["n_confident"]
 
 
@@ -163,10 +190,14 @@ def main():
     ap.add_argument("--stem-min-support", type=float, default=0.0, help="drop a stem below this precision")
     ap.add_argument("--stem-min-recall", type=float, default=0.0, help="drop a stem below this recall")
     ap.add_argument("--stem-support-percentile", type=float, default=60.0)
-    ap.add_argument("--stem-recall-percentile", type=float, default=92.0)
+    ap.add_argument("--stem-recall-percentile", type=float, default=92.0,
+                    help="DRUM-stem percentile used as the absolute reference for the silent-stem floor")
+    ap.add_argument("--stem-recall-peak-frac", type=float, default=0.25,
+                    help="confident-onset height = this x the stem's own max envelope (peak-relative; "
+                    "robust to the sparse-stem percentile that over-fires)")
     ap.add_argument("--stem-recall-abs-frac", type=float, default=0.15,
-                    help="confident-onset floor = max(stem pXX, this x DRUM-stem pXX); the abs term "
-                    "makes a SILENT stem yield 0 confident onsets (recall 1.0, kept) not a false drop")
+                    help="lower bound on the confident-onset floor = this x the DRUM-stem percentile, so "
+                    "a SILENT stem yields 0 confident onsets (recall 1.0, kept) not a false drop")
     ap.add_argument("--stem-window", type=float, default=0.05, help="+/- window for per-stem support/recall (s)")
     ap.add_argument("--work-dir", default=None, help="claims dir for multi-runner (default <out-dir>/_sep_claims)")
     ap.add_argument("--stale-minutes", type=float, default=60.0)
@@ -248,7 +279,7 @@ def main():
                         if p not in _PERSTEM_PITCHES or not src:
                             continue
                         restricted = {ln: job["onsets"].get(ln, []) for ln in paradb.PERSTEM_TO_LANES[p]}
-                        sup, rec, nconf = _score_stem(Path(src), restricted, drum_conf, args)
+                        sup, rec, nconf = _score_stem(Path(src), restricted, drum_conf, p, args)
                         keep = sup >= args.stem_min_support and rec >= args.stem_min_recall
                         scores[p] = {"support": round(sup, 4), "recall": round(rec, 4),
                                      "n_confident": nconf, "kept": keep}

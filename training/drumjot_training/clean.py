@@ -87,6 +87,8 @@ def recall_score(
     window_s: float = 0.05,
     min_distance_s: float = 0.05,
     prominence: float | None = None,
+    decay_reset_frac: float = 0.0,
+    decay_reset_floor: float = 0.0,
 ) -> dict:
     """Fraction of HIGH-CONFIDENCE audio onsets the chart covers (a RECALL gate).
 
@@ -105,6 +107,7 @@ def recall_score(
     peaks = peakpick.pick_peaks(
         np.asarray(env, dtype=float), env_fps,
         threshold=confident_floor, min_distance_s=min_distance_s, prominence=prominence,
+        decay_reset_frac=decay_reset_frac, decay_reset_floor=decay_reset_floor,
     )
     n_conf = int(peaks.size)
     if n_conf == 0:

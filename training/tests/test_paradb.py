@@ -39,15 +39,15 @@ def test_per_stem_gate_keeps_silent_drops_uncharted_active(tmp_path):
     active = tmp_path / "active.wav"
     sf.write(str(active), y, sr)
     args = SimpleNamespace(stem_support_percentile=60.0, stem_recall_percentile=92.0,
-                           stem_recall_abs_frac=0.15, stem_window=0.05)
+                           stem_recall_peak_frac=0.25, stem_recall_abs_frac=0.15, stem_window=0.05)
     # silent stem, chart HAS onsets for it -> vacuous (no audio onsets) -> kept (recall 1.0)
-    _sup, rec, n = sep._score_stem(silent, {"k": [0.3, 0.6]}, 0.5, args)
+    _sup, rec, n = sep._score_stem(silent, {"k": [0.3, 0.6]}, 0.5, "k", args)
     assert n == 0 and rec == 1.0
     # active stem, chart lane EMPTY (the missing-lane case) -> confident hits uncovered -> drop
-    _sup, rec, n = sep._score_stem(active, {"k": []}, 0.05, args)
+    _sup, rec, n = sep._score_stem(active, {"k": []}, 0.05, "k", args)
     assert n >= 3 and rec < 0.3
     # active stem, chart matches the audio -> high recall -> kept
-    _sup, rec, n = sep._score_stem(active, {"k": [0.3, 0.6, 0.9, 1.2]}, 0.05, args)
+    _sup, rec, n = sep._score_stem(active, {"k": [0.3, 0.6, 0.9, 1.2]}, 0.05, "k", args)
     assert rec > 0.7
 
 
