@@ -51,6 +51,22 @@ def test_per_stem_gate_keeps_silent_drops_uncharted_active(tmp_path):
     assert rec > 0.7
 
 
+def test_keep_stem_recall_gates_ksct_not_hat():
+    sep = _load_script("separate_paradb_dataset")
+    from types import SimpleNamespace
+    a = SimpleNamespace(stem_min_support=0.9, stem_min_recall=0.5)
+    # precision gates ALL stems (incl. hat)
+    assert not sep._keep_stem("h", support=0.8, recall=1.0, args=a)
+    assert not sep._keep_stem("k", support=0.8, recall=1.0, args=a)
+    # low recall drops k/s/c/t...
+    assert not sep._keep_stem("k", support=1.0, recall=0.3, args=a)
+    assert not sep._keep_stem("c", support=1.0, recall=0.3, args=a)
+    # ...but NOT hi-hat (precision-only): low hat recall is kept
+    assert sep._keep_stem("h", support=1.0, recall=0.01, args=a)
+    # all-good stems kept
+    assert sep._keep_stem("k", support=1.0, recall=0.9, args=a)
+
+
 def test_perstem_to_lanes_covers_all_lanes_no_overlap():
     flat = [ln for lanes in paradb.PERSTEM_TO_LANES.values() for ln in lanes]
     assert set(flat) == set(LANES)        # every lane has a stem

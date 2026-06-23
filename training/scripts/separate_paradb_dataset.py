@@ -21,9 +21,11 @@ written) + pipelined (GPU split on the main thread; chart-parse on a producer
 thread; per-stem P/R gate + FLAC + onsets write on a writer thread).
 
 PER-STEM P/R GATE: after MDX23C, each isolated instrument stem is scored
-precision + recall (see `_score_stem`); stems below `--stem-min-support`/
-`--stem-min-recall` are dropped (so a map that omits an instrument's lane can't
-poison that stem's training). All per-stem scores -> `stem_scores/<id>.json`.
+precision + recall (see `_score_stem`). Precision (`--stem-min-support`) gates
+ALL stems; recall (`--stem-min-recall`) gates only k/s/c/t -- hi-hat is
+precision-only because its isolated stem is unreliable (band-limit + bleed make
+recall conflate chart-simplification with separation failure). Dropped stems
+never reach training; all per-stem scores -> `stem_scores/<id>.json`.
 
   MODELS_DIR=/codebox-workspace/drumjot/models-cache \
   scripts/sandbox-run env PYTHONPATH=training:dsp:transcriber python3 \
@@ -75,7 +77,22 @@ _PERSTEM_PITCHES = ("k", "s", "h", "c", "t")
 # stem pitch -> a representative lane whose peak-pick params (min-distance +
 # decay-reset) suit that stem: k/s/t = clean, h = hat (ring), c = cymbal (ring).
 _STEM_PARAM_LANE = {"k": "k", "s": "s", "t": "t", "h": "hc", "c": "rd"}
+# Pitches whose per-stem RECALL is trustworthy enough to gate on. Hi-hat is
+# EXCLUDED: its isolated stem is unreliable (the ~14 kHz band-limit + separation
+# bleed), so hat recall conflates real chart-simplification with separation
+# under-recovery (a rich hat chart can read low) -- gating it drops good charts.
+# Hat is still PRECISION-gated; its recall is recorded but not enforced.
+_RECALL_GATED = frozenset({"k", "s", "c", "t"})
 _RUNNER = f"{os.uname().nodename}:{os.getpid()}"
+
+
+def _keep_stem(pitch: str, support: float, recall: float, args) -> bool:
+    """Keep a stem if its precision clears `--stem-min-support`, AND (for the
+    recall-gated pitches) its recall clears `--stem-min-recall`. Hi-hat is
+    precision-only (see `_RECALL_GATED`)."""
+    if support < args.stem_min_support:
+        return False
+    return not (pitch in _RECALL_GATED and recall < args.stem_min_recall)
 
 
 def _score_stem(stem_path: Path, restricted: dict, drum_conf_floor: float, pitch: str, args):
@@ -187,8 +204,10 @@ def main():
     # instrument lane -> that stem's audio has hits the chart never charted).
     # Defaults 0.0 = score+record but drop nothing (pick the cut from the printed
     # distribution, like the map gate, then re-run with thresholds).
-    ap.add_argument("--stem-min-support", type=float, default=0.0, help="drop a stem below this precision")
-    ap.add_argument("--stem-min-recall", type=float, default=0.0, help="drop a stem below this recall")
+    ap.add_argument("--stem-min-support", type=float, default=0.0, help="drop ANY stem below this precision")
+    ap.add_argument("--stem-min-recall", type=float, default=0.0,
+                    help="drop a k/s/c/t stem below this recall (hi-hat is precision-only: its isolated-stem "
+                    "recall is unreliable from the band-limit + bleed)")
     ap.add_argument("--stem-support-percentile", type=float, default=60.0)
     ap.add_argument("--stem-recall-percentile", type=float, default=92.0,
                     help="DRUM-stem percentile used as the absolute reference for the silent-stem floor")
@@ -280,7 +299,7 @@ def main():
                             continue
                         restricted = {ln: job["onsets"].get(ln, []) for ln in paradb.PERSTEM_TO_LANES[p]}
                         sup, rec, nconf = _score_stem(Path(src), restricted, drum_conf, p, args)
-                        keep = sup >= args.stem_min_support and rec >= args.stem_min_recall
+                        keep = _keep_stem(p, sup, rec, args)
                         scores[p] = {"support": round(sup, 4), "recall": round(rec, 4),
                                      "n_confident": nconf, "kept": keep}
                         stem_stats[p]["support"].append(sup)
