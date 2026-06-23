@@ -19,6 +19,15 @@ export const MixerStoreContext = React.createContext<MixerStore | null>(null);
 export const UniformWaveformsContext = React.createContext<boolean>(false);
 
 /**
+ * Toolbar toggle: draw bar lines + the score's beat grid over each
+ * audio-track waveform row (the grid families shown follow the score's
+ * `--grid-display-*` vars, so the waveform mirrors the score above it).
+ * Defaults to `true` (enabled by default, per the View menu). Read by
+ * `AudioTrackView` to mount its `WaveformGridOverlay`.
+ */
+export const WaveformGridLinesContext = React.createContext<boolean>(true);
+
+/**
  * View toggle "Visually merge layers": when true the score collapses tracks of
  * the same lane across layers into one row (no layer bands). Read by
  * `MixerView` to pick the row source. Defaults to `false` (layer-first).

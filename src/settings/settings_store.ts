@@ -69,6 +69,16 @@ export class SettingsStore implements Resettable {
   uniformWaveforms: boolean = true;
 
   /**
+   * When true, the audio-track waveform rows draw the same bar lines and
+   * beat grid the score shows above them (which sub-beat families are on
+   * follows {@link gridLines}, so a vertical line traces cleanly from the
+   * score down through every waveform). Purely a reference overlay, no
+   * data change. Default on; toggle off via the View dropdown for a clean
+   * waveform.
+   */
+  waveformGridLines: boolean = true;
+
+  /**
    * View-only "Visually merge layers". When true, the score collapses all
    * tracks of the same lane (across every `||` layer) into a single row and
    * drops the layer bands, showing the old flat per-lane view. Purely a
@@ -89,6 +99,7 @@ export class SettingsStore implements Resettable {
   reset(): void {
     this.gridLines = { ...DEFAULT_GRID_LINES };
     this.uniformWaveforms = true;
+    this.waveformGridLines = true;
     this.mergeLayers = false;
   }
 }

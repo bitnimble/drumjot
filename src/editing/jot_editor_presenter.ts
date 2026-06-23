@@ -413,6 +413,7 @@ export class JotEditorPresenter {
         settings: {
           gridLines: { ...settings.gridLines },
           uniformWaveforms: settings.uniformWaveforms,
+          waveformGridLines: settings.waveformGridLines,
           mergeLayers: settings.mergeLayers,
         },
         palette: [...this.jotEditorStore.viewConfig.palette],

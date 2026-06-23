@@ -114,6 +114,8 @@ export const Toolbar = observer(
     onToggleGridLine,
     uniformWaveforms,
     onSetUniformWaveforms,
+    waveformGridLines,
+    onSetWaveformGridLines,
     mergeLayers,
     onSetMergeLayers,
     autoFollowOnPlay,
@@ -185,6 +187,8 @@ export const Toolbar = observer(
     onToggleGridLine: (key: keyof GridLineSettings) => void;
     uniformWaveforms: boolean;
     onSetUniformWaveforms: (on: boolean) => void;
+    waveformGridLines: boolean;
+    onSetWaveformGridLines: (on: boolean) => void;
     mergeLayers: boolean;
     onSetMergeLayers: (on: boolean) => void;
     /** When true, transitioning to playing re-enables auto-follow if it
@@ -781,6 +785,12 @@ export const Toolbar = observer(
                   active={uniformWaveforms}
                   onToggle={() => onSetUniformWaveforms(!uniformWaveforms)}
                   title="Normalise each audio track's waveform so the median non-silent peak fills most of the row, regardless of the source recording's amplitude. Silence still renders as silence. Off = accurate, on = uniform (easier to see quiet recordings)."
+                />
+                <ToggleMenuItem
+                  label="Bar & beat lines"
+                  active={waveformGridLines}
+                  onToggle={() => onSetWaveformGridLines(!waveformGridLines)}
+                  title="Draw bar lines and the beat grid over each audio-track waveform, aligned with the score above. Which sub-beat lines show follows the Grid lines section below, so a vertical line traces cleanly from the score down through every waveform."
                 />
               </DropdownSection>
               <DropdownSection label="Grid lines">
