@@ -66,6 +66,15 @@ request, and pull in the linked docs when a task touches that area.
     perf alone with **`bun run e2e:perf`** (`--project=perf --no-deps`).
     Caveat: a functional failure skips the dependent `perf` project; fix
     functional first (or use `e2e:perf`).
+  - **Flaky perf under load.** The per-frame medians measure main-thread
+    busy time, so a loaded box (other builds, agents, GPU jobs) inflates
+    them. If a `perf` spec fails but **all three** hold: (1) it's only
+    *slightly* over (the failing metric is within ~2×, not an order of
+    magnitude, off, and the median is still near budget), (2) you're
+    confident your change touched **nothing** on the viewport / zoom /
+    scroll / per-frame render path, and (3) the functional suite is green, then treat it as system load, not a regression: skip it and say so.
+    Don't skip when your change *does* touch that path (re-measure on an
+    unloaded box or against baseline) or when it's badly over budget.
 - **No naked color literals in CSS modules**, `bun run lint:design`
   fails on hex / `rgb()`/`rgba()`/`hsl()`/`hsla()` in `src/**/*.css`
   outside `src/design_tokens.css`. Typography goes through `composes:`

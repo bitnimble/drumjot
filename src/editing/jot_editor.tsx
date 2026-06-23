@@ -34,7 +34,12 @@ import {
   PaletteContext,
 } from './jot_editor_contexts';
 import { GridLineSettingsContext } from '../settings/settings_contexts';
-import { MergeLayersContext, MixerStoreContext, UniformWaveformsContext } from './mixer/mixer_contexts';
+import {
+  MergeLayersContext,
+  MixerStoreContext,
+  UniformWaveformsContext,
+  WaveformGridLinesContext,
+} from './mixer/mixer_contexts';
 import { ViewportStoreContext } from './viewport/viewport_contexts';
 import {
   LyricsAlignStoreContext,
@@ -499,6 +504,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
             <GridLineSettingsContext.Provider value={settings.gridLines}>
               <MergeLayersContext.Provider value={settings.mergeLayers}>
               <UniformWaveformsContext.Provider value={settings.uniformWaveforms}>
+              <WaveformGridLinesContext.Provider value={settings.waveformGridLines}>
                 <FollowPlayheadContext.Provider value={followPlayheadContextValue}>
                   <div
                     className={styles.appContainer}
@@ -539,6 +545,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                       onToggleGridLine={(k) => settingsPresenter.toggleGridLine(k)}
                       uniformWaveforms={settings.uniformWaveforms}
                       onSetUniformWaveforms={(v) => settingsPresenter.setUniformWaveforms(v)}
+                      waveformGridLines={settings.waveformGridLines}
+                      onSetWaveformGridLines={(v) => settingsPresenter.setWaveformGridLines(v)}
                       mergeLayers={settings.mergeLayers}
                       onSetMergeLayers={(v) => settingsPresenter.setMergeLayers(v)}
                       autoFollowOnPlay={playback.autoFollowOnPlay}
@@ -638,6 +646,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                     <ToastContainer />
                   </div>
                 </FollowPlayheadContext.Provider>
+              </WaveformGridLinesContext.Provider>
               </UniformWaveformsContext.Provider>
               </MergeLayersContext.Provider>
             </GridLineSettingsContext.Provider>

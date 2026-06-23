@@ -9,14 +9,14 @@ import { BarBeat, WaveformChunk, buildChunkLayout } from './waveform_chunks';
 import { GutterResizeHandle } from 'src/ui/gutter_resize_handle/gutter_resize_handle';
 import { MuteButton, SoloButton } from 'src/ui/icon_button/icon_button';
 import { StructuralContext } from '../jot_editor_contexts';
-import { UniformWaveformsContext } from './mixer_contexts';
+import { UniformWaveformsContext, WaveformGridLinesContext } from './mixer_contexts';
 import { MixerStoreContext } from './mixer_contexts';
 import { ViewportStoreContext } from '../viewport/viewport_contexts';
 import styles from './mixer.module.css';
 import { Playhead } from '../playback/playhead';
 import { seekFromClick } from '../score/seek';
 import { BarView } from '../score/bar_view';
-import { barsRowWidthSeed } from '../utils/windowing';
+import { barsRowWidthSeed, intersectsBeatRange } from '../utils/windowing';
 import { AudioTrackOverflowMenu } from './overflow_menus';
 import { RowVolumeSlider } from './gutter_controls';
 import { MixerRowDragProps, useMixerRowDropTarget, MixerDragHandle } from './mixer_drag';
@@ -195,6 +195,7 @@ export const AudioTrackView = observer(
             dim={!audible}
             testId={`audio-track-waveform-${id}`}
           />
+          <WaveformGridOverlay structural={structural} testId={`audio-track-grid-${id}`} />
           <Playhead onSeek={onSeek} />
         </div>
       </div>
@@ -218,6 +219,73 @@ export const AudioTrackView = observer(
  * layers for this lane, so the row works whether the lane lives in
  * layer 0 or 1.
  */
+/**
+ * Bar + beat reference grid for one audio-track waveform row. Mounts only
+ * when the View → Waveforms → "Bar & beat lines" toggle is on (read off
+ * {@link WaveformGridLinesContext}); off ⇒ renders nothing.
+ *
+ * Renders one `.waveformGridBar` per visible bar in the layer's
+ * beat-space, identical to the score's `.bar` positioning, so the bar
+ * line (the div's right border) and the composed `.gridLayer*` overlays
+ * land directly beneath the matching score bar/beat lines above. Which
+ * sub-beat families show is inherited from the score root's
+ * `--grid-display-*` vars (the same ones the score grid reads), so the
+ * waveform mirrors whatever grid the score is showing.
+ *
+ * Windowed the same way as {@link AudioTrackWaveformCanvas} and the
+ * instrument rows: only bars whose beat span intersects the visible
+ * range mount, so a long song doesn't pay for thousands of off-screen
+ * grid bars. Lead-in bars (negative index) are skipped, like the score,
+ * which draws no grid over its hatched lead-in chrome.
+ */
+const WaveformGridOverlay = observer(
+  ({ structural, testId }: { structural: StructuralPresenter | null; testId?: string }) => {
+    const show = React.useContext(WaveformGridLinesContext);
+    const viewport = React.useContext(ViewportStoreContext);
+    const layer = structural?.layers[0];
+    // Cumulative beat position per bar, recomputed only when the bar
+    // structure changes (zoom-invariant, so scroll re-renders reuse it).
+    const bars = React.useMemo(() => {
+      if (!layer) return [];
+      const out: { index: number; startBeat: number; beats: number }[] = [];
+      let cursor = 0;
+      for (const b of layer.bars) {
+        out.push({ index: b.index, startBeat: cursor, beats: b.beats });
+        cursor += b.beats;
+      }
+      return out;
+    }, [layer]);
+    if (!show || bars.length === 0) return null;
+    const range = viewport?.visibleBeatRange ?? null;
+    return (
+      <div className={styles.waveformGrid} aria-hidden="true" data-testid={testId}>
+        {bars.map((bar) => {
+          if (bar.index < 0) return null;
+          if (!intersectsBeatRange(range, bar.startBeat, bar.beats)) return null;
+          return (
+            <div
+              key={bar.index}
+              className={styles.waveformGridBar}
+              style={
+                {
+                  ['--bar-start-beat' as string]: bar.startBeat,
+                  ['--bar-beats' as string]: bar.beats,
+                } as React.CSSProperties
+              }
+            >
+              <div className={styles.waveformGridMain} />
+              <div className={styles.waveformGridSubBeat16} />
+              <div className={styles.waveformGridSubBeatQuarterTriplet} />
+              <div className={styles.waveformGridSubBeatTriplet} />
+              <div className={styles.waveformGridSubBeat48} />
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+);
+
 const CHUNK_VIEWPORT_MARGIN_PX = 1200;
 
 const AudioTrackWaveformCanvas = observer(

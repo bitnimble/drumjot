@@ -26,6 +26,10 @@ export class SettingsPresenter {
     this.settings.uniformWaveforms = on;
   }
 
+  setWaveformGridLines(on: boolean) {
+    this.settings.waveformGridLines = on;
+  }
+
   setMergeLayers(on: boolean) {
     this.settings.mergeLayers = on;
   }
@@ -41,6 +45,9 @@ export class SettingsPresenter {
     if (settings.gridLines) this.settings.gridLines = { ...settings.gridLines };
     if (settings.uniformWaveforms !== undefined) {
       this.settings.uniformWaveforms = settings.uniformWaveforms;
+    }
+    if (settings.waveformGridLines !== undefined) {
+      this.settings.waveformGridLines = settings.waveformGridLines;
     }
     if (settings.mergeLayers !== undefined) this.settings.mergeLayers = settings.mergeLayers;
   }
@@ -71,5 +78,6 @@ export class SettingsPresenter {
 export type SettingsState = {
   gridLines?: GridLineSettings;
   uniformWaveforms?: boolean;
+  waveformGridLines?: boolean;
   mergeLayers?: boolean;
 };

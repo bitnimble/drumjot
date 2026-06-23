@@ -499,6 +499,54 @@
     transition: filter 120ms ease;
 }
 
+/* Bar + beat reference grid drawn over an audio-track waveform (View →
+   Waveforms → "Bar & beat lines"). One `.waveformGridBar` per visible
+   bar, absolutely positioned in the same beat-space the score's `.bar`
+   uses (`--bar-start-beat` / `--bar-beats` set inline, sized as a
+   percentage of `--layer-beats`), so each line lands directly under the
+   matching score bar/beat above. The right-edge border is the bar line;
+   the beat / sub-beat lines reuse the score's `.gridLayer*` overlays
+   verbatim via `composes`, so they inherit the same dashed/dotted look
+   AND the same `--grid-display-*` visibility vars (the waveform grid
+   shows whichever sub-beat families the score shows). `pointer-events:
+   none` so the lines never intercept a click-to-seek on the row. */
+.waveformGrid {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+.waveformGridBar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: calc(var(--bar-start-beat) / var(--layer-beats) * 100%);
+    width: calc(var(--bar-beats) / var(--layer-beats) * 100%);
+    box-sizing: border-box;
+    border-right: 2px solid var(--color-border-strong);
+    pointer-events: none;
+}
+
+.waveformGridMain {
+    composes: gridLayerMain from '../score/score.module.css';
+}
+
+.waveformGridSubBeat16 {
+    composes: gridLayerSubBeat16 from '../score/score.module.css';
+}
+
+.waveformGridSubBeatQuarterTriplet {
+    composes: gridLayerSubBeatQuarterTriplet from '../score/score.module.css';
+}
+
+.waveformGridSubBeatTriplet {
+    composes: gridLayerSubBeatTriplet from '../score/score.module.css';
+}
+
+.waveformGridSubBeat48 {
+    composes: gridLayerSubBeat48 from '../score/score.module.css';
+}
+
 /* Muted-track waveform: drop saturation hard and lighten so the row
    reads as silenced, while leaving enough hue to pair the wave with its
    instrument row at a glance. Applied as a CSS filter rather than
