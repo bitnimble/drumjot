@@ -11,12 +11,44 @@ from drumjot_training import clean, paradb, rlrr
 from drumjot_training.lanes import LANES
 
 
-def _load_gate_module():
-    path = Path(__file__).resolve().parent.parent / "scripts" / "build_paradb_manifest.py"
-    spec = importlib.util.spec_from_file_location("build_paradb_manifest", path)
+def _load_script(name):
+    path = Path(__file__).resolve().parent.parent / "scripts" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def _load_gate_module():
+    return _load_script("build_paradb_manifest")
+
+
+def test_per_stem_gate_keeps_silent_drops_uncharted_active(tmp_path):
+    # The per-stem recall gate must: NOT drop a genuinely silent stem (song lacks
+    # that instrument -> valid empty negative), but DROP an active stem whose lane
+    # the chart omitted (audio has clear hits, chart empty -> trains false negatives).
+    sf = pytest.importorskip("soundfile")
+    sep = _load_script("separate_paradb_dataset")
+    from types import SimpleNamespace
+    sr = 44100
+    silent = tmp_path / "silent.wav"
+    sf.write(str(silent), np.zeros(sr * 2, dtype="float32"), sr)
+    y = np.zeros(int(sr * 2.0), dtype="float32")
+    for t in (0.3, 0.6, 0.9, 1.2):  # 4 clear clicks
+        i = int(t * sr); y[i:i + 200] = 0.8
+    active = tmp_path / "active.wav"
+    sf.write(str(active), y, sr)
+    args = SimpleNamespace(stem_support_percentile=60.0, stem_recall_percentile=92.0,
+                           stem_recall_abs_frac=0.15, stem_window=0.05)
+    # silent stem, chart HAS onsets for it -> vacuous (no audio onsets) -> kept (recall 1.0)
+    _sup, rec, n = sep._score_stem(silent, {"k": [0.3, 0.6]}, 0.5, args)
+    assert n == 0 and rec == 1.0
+    # active stem, chart lane EMPTY (the missing-lane case) -> confident hits uncovered -> drop
+    _sup, rec, n = sep._score_stem(active, {"k": []}, 0.05, args)
+    assert n >= 3 and rec < 0.3
+    # active stem, chart matches the audio -> high recall -> kept
+    _sup, rec, n = sep._score_stem(active, {"k": [0.3, 0.6, 0.9, 1.2]}, 0.05, args)
+    assert rec > 0.7
 
 
 def test_perstem_to_lanes_covers_all_lanes_no_overlap():

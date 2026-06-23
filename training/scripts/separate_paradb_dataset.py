@@ -53,12 +53,37 @@ _REPO = Path(__file__).resolve().parents[2]
 for _p in ("training", "dsp", "transcriber"):
     sys.path.insert(0, str(_REPO / _p))
 
+import numpy as np  # noqa: E402
 import soundfile as sf  # noqa: E402
 
-from drumjot_training import paradb, rlrr, runtime  # noqa: E402
+from drumjot_training import clean, forced_align, paradb, postfilter, rlrr, runtime  # noqa: E402
 
 _PERSTEM_PITCHES = ("k", "s", "h", "c", "t")
 _RUNNER = f"{os.uname().nodename}:{os.getpid()}"
+
+
+def _score_stem(stem_path: Path, restricted: dict, drum_conf_floor: float, args):
+    """Per-stem precision + recall against the ISOLATED instrument stem.
+
+    precision (support): fraction of the chart's onsets for this stem's lanes that
+    land on a transient in this stem. recall: fraction of the stem's own
+    HIGH-CONFIDENCE onsets the chart covers -- this is what catches a map that
+    dropped this instrument's lane entirely (stem audio has clear hits, chart lane
+    empty -> recall ~0). Confident-onset floor = max(stem percentile, abs_frac x
+    the DRUM stem's percentile) so a genuinely SILENT stem (song lacks this
+    instrument) yields 0 confident onsets -> recall 1.0 (kept, a valid negative),
+    not a false drop. Returns (support, recall, n_confident)."""
+    env, fps = forced_align.onset_envelope(stem_path)
+    if env.size == 0 or float(np.max(env)) <= 0.0:
+        return 1.0, 1.0, 0  # silent stem -> vacuously fine (empty-negative example)
+    supp_floor = postfilter.support_floor_from_env(env, args.stem_support_percentile)
+    support = clean.support_score(
+        restricted, env, fps, window_s=args.stem_window, support_floor=supp_floor)["fraction"]
+    conf_floor = max(postfilter.support_floor_from_env(env, args.stem_recall_percentile),
+                     args.stem_recall_abs_frac * drum_conf_floor)
+    rec = clean.recall_score(restricted, env, fps, confident_floor=conf_floor,
+                             window_s=args.stem_window, min_distance_s=0.05)
+    return support, rec["fraction"], rec["n_confident"]
 
 
 def _claim(claims: Path, map_id: str, stale_s: float) -> bool:
@@ -84,10 +109,10 @@ def _release(claims: Path, map_id: str) -> None:
 
 
 def _done(out: Path, map_id: str) -> bool:
-    """A map is built when its onsets json + all 5 perstem flacs exist."""
-    if not (out / "onsets" / f"{map_id}.json").exists():
-        return False
-    return all((out / "perstem" / p / f"{map_id}.flac").exists() for p in _PERSTEM_PITCHES)
+    """Done once the per-stem gate has run (stem_scores written). Kept stems are
+    written; stems dropped by the gate are intentionally absent, so we must NOT
+    require all 5 -- that would re-process gated maps forever."""
+    return (out / "stem_scores" / f"{map_id}.json").exists()
 
 
 def _chart_onsets(zip_path: Path, offset_ms: float, offset_correct_min: float) -> dict:
@@ -130,6 +155,19 @@ def main():
     ap.add_argument("--holdout-frac", type=float, default=0.05, help="fraction of kept maps held out for eval")
     ap.add_argument("--offset-correct-min", type=float, default=0.025,
                     help="apply chart offset only if |offset| exceeds this (match the gate)")
+    # PER-STEM precision+recall gate: scored against each ISOLATED instrument stem,
+    # then drop individual stems below threshold (catches maps that omit a whole
+    # instrument lane -> that stem's audio has hits the chart never charted).
+    # Defaults 0.0 = score+record but drop nothing (pick the cut from the printed
+    # distribution, like the map gate, then re-run with thresholds).
+    ap.add_argument("--stem-min-support", type=float, default=0.0, help="drop a stem below this precision")
+    ap.add_argument("--stem-min-recall", type=float, default=0.0, help="drop a stem below this recall")
+    ap.add_argument("--stem-support-percentile", type=float, default=60.0)
+    ap.add_argument("--stem-recall-percentile", type=float, default=92.0)
+    ap.add_argument("--stem-recall-abs-frac", type=float, default=0.15,
+                    help="confident-onset floor = max(stem pXX, this x DRUM-stem pXX); the abs term "
+                    "makes a SILENT stem yield 0 confident onsets (recall 1.0, kept) not a false drop")
+    ap.add_argument("--stem-window", type=float, default=0.05, help="+/- window for per-stem support/recall (s)")
     ap.add_argument("--work-dir", default=None, help="claims dir for multi-runner (default <out-dir>/_sep_claims)")
     ap.add_argument("--stale-minutes", type=float, default=60.0)
     ap.add_argument("--scratch-dir", default=None, help="fast local dir for the MDX23C temp output")
@@ -155,6 +193,7 @@ def main():
     claims = Path(args.work_dir) if args.work_dir else out / "_sep_claims"
     claims.mkdir(parents=True, exist_ok=True)
     (out / "onsets").mkdir(parents=True, exist_ok=True)
+    (out / "stem_scores").mkdir(parents=True, exist_ok=True)
     stems_cache = Path(args.stems_cache)
     maps_dir = Path(args.maps_dir)
     stale_s = args.stale_minutes * 60.0
@@ -167,7 +206,8 @@ def main():
 
     ready_q: queue.Queue = queue.Queue(maxsize=3)
     write_q: queue.Queue = queue.Queue(maxsize=3)
-    counts = {"claimed": 0, "done": 0, "skipped": 0}
+    counts = {"claimed": 0, "done": 0, "skipped": 0, "dropped_stems": 0}
+    stem_stats = {p: {"support": [], "recall": [], "dropped": 0} for p in _PERSTEM_PITCHES}
 
     def produce():
         claimed = 0
@@ -200,10 +240,30 @@ def main():
             mid = job["id"]
             try:
                 if job["status"] == "ok":
+                    drum_env, _fps = forced_align.onset_envelope(job["drum"])
+                    drum_conf = (postfilter.support_floor_from_env(drum_env, args.stem_recall_percentile)
+                                 if drum_env.size else 0.0)
+                    scores, kept_any = {}, False
                     for p, src in job["per"].items():
-                        if p in _PERSTEM_PITCHES and src:
+                        if p not in _PERSTEM_PITCHES or not src:
+                            continue
+                        restricted = {ln: job["onsets"].get(ln, []) for ln in paradb.PERSTEM_TO_LANES[p]}
+                        sup, rec, nconf = _score_stem(Path(src), restricted, drum_conf, args)
+                        keep = sup >= args.stem_min_support and rec >= args.stem_min_recall
+                        scores[p] = {"support": round(sup, 4), "recall": round(rec, 4),
+                                     "n_confident": nconf, "kept": keep}
+                        stem_stats[p]["support"].append(sup)
+                        stem_stats[p]["recall"].append(rec)
+                        if keep:
                             _write_flac(Path(src), out / "perstem" / p / f"{mid}.flac")
-                    (out / "onsets" / f"{mid}.json").write_text(json.dumps(job["onsets"]))
+                            kept_any = True
+                        else:
+                            counts["dropped_stems"] += 1
+                            stem_stats[p]["dropped"] += 1
+                    # stem_scores is the done-marker (written even if all stems dropped)
+                    (out / "stem_scores" / f"{mid}.json").write_text(json.dumps(scores))
+                    if kept_any:
+                        (out / "onsets" / f"{mid}.json").write_text(json.dumps(job["onsets"]))
                     counts["done"] += 1
                 else:
                     counts["skipped"] += 1
@@ -238,8 +298,16 @@ def main():
         write_q.put(job)
     write_q.put(None)
     writer.join()
-    log(f"[{_RUNNER}] claimed {counts['claimed']}, built {counts['done']}, skipped {counts['skipped']} "
-        f"-> {out}")
+    log(f"[{_RUNNER}] claimed {counts['claimed']}, processed {counts['done']}, "
+        f"skipped {counts['skipped']}, dropped {counts['dropped_stems']} stems -> {out}")
+    # per-stem precision/recall distribution (this runner's maps) -> tune the cut
+    log("  per-stem P/R (this run):  pitch  n     sup med/min    rec med/min    dropped")
+    for p in _PERSTEM_PITCHES:
+        s, r = stem_stats[p]["support"], stem_stats[p]["recall"]
+        if not s:
+            continue
+        log(f"    {p:2s}  {len(s):4d}   sup {np.median(s):.2f}/{min(s):.2f}   "
+            f"rec {np.median(r):.2f}/{min(r):.2f}   dropped {stem_stats[p]['dropped']}")
 
 
 if __name__ == "__main__":
