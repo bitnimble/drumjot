@@ -1412,10 +1412,30 @@ def _pooled_specs(args) -> tuple[list, list, Path]:
             dirty = True
         return v
 
+    # Aligned (snap-to-audio) onsets are the DEFAULT target source: load the
+    # dataset-wide `_onsets_aligned.json` (keyed by stem audio path, produced by
+    # align_dataset_onsets.py at ingestion/backfill) and use a stem's snapped onsets
+    # as its restricted target when present, falling back to raw. No flag -- if the
+    # store is absent it's a transparent no-op. Override the path with
+    # DRUMJOT_ALIGNED_ONSETS (point it at /dev/null to force raw).
+    aligned_path = Path(os.environ.get(
+        "DRUMJOT_ALIGNED_ONSETS", "/codebox-workspace/datasets/_onsets_aligned.json"))
+    try:
+        aligned = json.loads(aligned_path.read_text()) if aligned_path.exists() else {}
+    except Exception:  # noqa: BLE001  missing/corrupt -> raw
+        aligned = {}
+    print(f"aligned onsets: {'ON' if aligned else 'OFF'} "
+          f"({len(aligned)} stems from {aligned_path})" if aligned
+          else f"aligned onsets: OFF (no store at {aligned_path}; using RAW)", flush=True)
+
     def _spec(c, ann_of, reader, p2l):
         full = _full(ann_of(c), reader)  # all output lanes + the `x` negative lane
         keep = set(p2l.get(c.pitch, ()))
-        restricted = {ln: (full[ln] if ln in keep else []) for ln in LANES}
+        al = aligned.get(str(c.audio_path))
+        if al is not None:  # snapped targets (this stem's own lanes), default when present
+            restricted = {ln: list(al.get(ln, [])) for ln in LANES}
+        else:
+            restricted = {ln: (full[ln] if ln in keep else []) for ln in LANES}
         return (c.audio_path, restricted, full)
 
     per_train: dict[str, list] = {}
@@ -1492,6 +1512,10 @@ def main(argv: list[str] | None = None) -> None:
         "0 still streams from the SSD cache (RAM stays bounded), just no prefetch overlap.",
     )
     ap.add_argument("--layer", type=int, default=10, help="MERT hidden layer (0-24)")
+    ap.add_argument("--head-hidden", type=int, default=Config.head_hidden,
+                    help="per-lane BiGRU hidden size (h128 default; h256 was the cym sweet spot)")
+    ap.add_argument("--head-layers", type=int, default=Config.head_layers,
+                    help="per-lane BiGRU layer count (default 2)")
     ap.add_argument("--seed", type=int, default=0,
                     help="torch init seed for reproducible head weights (multi-seed ablations)")
     ap.add_argument(
@@ -1570,6 +1594,7 @@ def main(argv: list[str] | None = None) -> None:
         lr=args.lr, weight_decay=args.weight_decay,
         sib_neg_weight=args.sib_neg_weight, sib_pos_weight=args.sib_pos_weight,
         label_min_support=args.label_min_support, label_support_window_s=args.label_support_window,
+        head_hidden=args.head_hidden, head_layers=args.head_layers,
     )
     train_specs, val_specs, cache = (
         _star_specs(args) if args.dataset == "star"

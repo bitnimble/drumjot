@@ -50,7 +50,7 @@ def iter_source(name, log):
     """Yield (audio_path:str, pitch, lanes, full_onsets) for every perstem clip of
     a source. full_onsets (all lanes, memoized per annotation) drives wrong-lane
     classification; lanes = the stem's own lanes (what we snap)."""
-    from drumjot_training import egmd, enst, midi_labels, paths, star
+    from drumjot_training import egmd, enst, midi_labels, paradb, paths, star
 
     cfg = {
         "star": (star.perstem_index, star.PERSTEM_TO_LANES,
@@ -59,6 +59,8 @@ def iter_source(name, log):
                  lambda c: c.annotation_path, enst.onsets_by_lane),
         "egmd": (egmd.perstem_index, egmd.PERSTEM_TO_LANES,
                  lambda c: c.midi_path, midi_labels.onsets_from_path),
+        "paradb": (paradb.perstem_index, paradb.PERSTEM_TO_LANES,
+                   lambda c: c.onsets_path, paradb.onsets_by_lane),
     }[name]
     index_fn, p2l, label_path, reader = cfg
     root = paths.dataset_path(name)
