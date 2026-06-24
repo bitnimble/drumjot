@@ -621,7 +621,7 @@ def _load_feature_index(cache_dir) -> dict:
 
 def _save_feature_index(cache_dir, new_frames: dict) -> None:
     """Atomic, merge-on-write: re-read the on-disk index and merge our new keys on
-    top before writing. So concurrent materializes (e.g. the 1660 + the 3080 on the
+    top before writing. So concurrent materializes (e.g. the two 3080 boxes on the
     same shared cache) don't clobber each other -- worst case a lost key is just
     re-backfilled from the .npy header next run (cheap)."""
     import json

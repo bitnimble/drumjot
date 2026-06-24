@@ -8,7 +8,7 @@ NO MERT. Augmented variants -- different audio -- are encoded on the GPU and
 persisted to a probs cache (probs_cache) so re-runs / more variants / resumed
 builds never re-encode.
 
-GPU-feeding pipeline (so the 1660 never waits on the CPU codec): a pool of CPU
+GPU-feeding pipeline (so the GPU never waits on the CPU codec): a pool of CPU
 worker threads runs augmentation AHEAD into a bounded queue; the main thread does
 only encode + heads. Augmented work is bounded to `--aug-windows` windows/stem x
 `--variants` so an overnight run fits; identity uses those same windows (free).

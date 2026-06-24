@@ -96,6 +96,18 @@ request, and pull in the linked docs when a task touches that area.
 - **Python**: `transcriber/.venv` (uv) is the primary dev loop; invoke
   `python3`. **Don't install/upgrade deps unprompted**, install ordering
   is fragile; flag dep changes and let the user run them.
+- **Long GPU runs need monitoring set up AT LAUNCH**, proactively, not
+  reactively when asked "how's progress?". Applies to ANY multi-hour GPU
+  job, training sweeps AND data separation / dataset generation. The
+  dangerous failure is a **silent CUDA hang**: the process stays alive
+  (`State R`, `nvidia-smi` ~99% util, GPU mem frozen) while producing
+  nothing, so liveness checks look healthy, only the **log mtime going
+  stale** reveals it. Stand up (1) a self-healing **watchdog** that
+  restarts a runner whose log is stale (idempotent runs make a spurious
+  restart free) and (2) a heartbeat **Monitor** (stall/error alerts +
+  hourly pulse) for boxes the watchdog can't reach. Full pattern + the
+  kill-then-verify-GPU-freed-before-relaunch sequence live in the
+  `long-run-monitoring` memory.
 - **Don't read skill files with Read**, use the `Skill` tool.
 - **ALWAYS use the `LSP` tool to find symbols, never grep/text search.**
   For any symbol-level question, where is this defined, who references

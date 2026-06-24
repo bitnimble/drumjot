@@ -27,8 +27,8 @@ next map's mix while the main thread separates the current map and a scorer
 thread scores+writes the previous one (mirrors separate_egmd_dataset.py).
 
 DISTRIBUTED (per-map claiming). Run this on as many boxes as you like at once
-(1660 + 3080 + sandbox); they cooperate over the shared `--work-dir` with NO
-coordination beyond the filesystem:
+(the local sandbox 3080 + the gaming-PC 3080); they cooperate over the shared
+`--work-dir` with NO coordination beyond the filesystem:
   - `results/<map_id>.json`  the scored entry; its existence == this map is DONE.
   - `claims/<map_id>.lock`   an atomic O_EXCL create == "I'm working on this".
 A runner claims the next map with no result and no live claim, scores it, writes

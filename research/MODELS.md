@@ -18,6 +18,12 @@
   This rules out 1B models at fp32 and makes fp16 mandatory for anything
   large.
 
+> **Update 2026-06-24:** the dev box was upgraded to an **RTX 3080, 10 GB,
+> Ampere (Tensor Cores + bf16)**, and a second 3080 box was added (two 3080s
+> total). The 6 GB / Turing / fp16-mandatory ceiling above is therefore
+> **relaxed** (more VRAM, bf16 available); the analysis is kept as-is because it
+> records why the current model choices were made under the old constraint.
+
 ---
 
 ## Complete list of models investigated
