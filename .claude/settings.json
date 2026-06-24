@@ -53,7 +53,7 @@
       "Bash(diff *)",
       "Bash(cmp *)",
       "Bash(ls *)",
-      "Bash(stat *)"
+      "Bash(stat *)",
       "Bash(echo *)",
       "Bash(printf *)",
       "Bash(pwd *)"
