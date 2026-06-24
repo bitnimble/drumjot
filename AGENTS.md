@@ -108,6 +108,18 @@ request, and pull in the linked docs when a task touches that area.
   hourly pulse) for boxes the watchdog can't reach. Full pattern + the
   kill-then-verify-GPU-freed-before-relaunch sequence live in the
   `long-run-monitoring` memory.
+- **Record every GPU run in `training/RESULTS.md`, reproducibly.** After
+  any proper GPU run (train/eval/sweep/probe) completes, append a dated
+  entry proactively (no need to ask). Each entry MUST be re-runnable from
+  itself: the **full verbatim command + all env vars** (`MODELS_DIR`,
+  `DRUMJOT_STAR/ENST/EGMD/PARADB`, `PYTHONPATH`, …) **and a complete
+  parameter list including defaults that aren't on the command line**
+  (`--label-min-support`, `--lr`, `--batch-size`, `--layer`, `--high-band`,
+  loss, sib weights, seed, es-* , encoder/layer/fps, box, bf16/TF32). When
+  you **change a default param value**, retroactively annotate every past
+  entry that used the old default with its explicit value, so historical
+  numbers stay interpretable. See the `persist-gpu-results-in-results-md`
+  memory.
 - **Don't read skill files with Read**, use the `Skill` tool.
 - **ALWAYS use the `LSP` tool to find symbols, never grep/text search.**
   For any symbol-level question, where is this defined, who references
