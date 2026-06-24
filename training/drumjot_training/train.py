@@ -32,7 +32,7 @@ from drumjot_training import (
     star,
 )
 from drumjot_training.config import Config
-from drumjot_training.lanes import sibling_matrix
+from drumjot_training.lanes import LANES, sibling_matrix
 from drumjot_training.model import MultiLaneHeads
 from drumjot_training.targets import (
     SUSTAINED_LANES,
@@ -1516,6 +1516,10 @@ def main(argv: list[str] | None = None) -> None:
                     help="per-lane BiGRU hidden size (h128 default; h256 was the cym sweet spot)")
     ap.add_argument("--head-layers", type=int, default=Config.head_layers,
                     help="per-lane BiGRU layer count (default 2)")
+    ap.add_argument("--lanes", default=None,
+                    help="comma-list lane subset to train, e.g. k,s,t,hc,ho,rd,cr (default: all 9). "
+                    "Fewer lanes = less forward_all VRAM (each lane is its own GRU). Onsets for "
+                    "omitted lanes are simply not targeted; sibling weighting skips them.")
     ap.add_argument("--seed", type=int, default=0,
                     help="torch init seed for reproducible head weights (multi-seed ablations)")
     ap.add_argument(
@@ -1595,6 +1599,7 @@ def main(argv: list[str] | None = None) -> None:
         sib_neg_weight=args.sib_neg_weight, sib_pos_weight=args.sib_pos_weight,
         label_min_support=args.label_min_support, label_support_window_s=args.label_support_window,
         head_hidden=args.head_hidden, head_layers=args.head_layers,
+        lanes=tuple(s.strip() for s in args.lanes.split(",")) if args.lanes else LANES,
     )
     train_specs, val_specs, cache = (
         _star_specs(args) if args.dataset == "star"
