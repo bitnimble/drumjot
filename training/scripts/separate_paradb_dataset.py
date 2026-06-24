@@ -291,7 +291,9 @@ def main():
 
     sep = Separator()
     sep.load(stems_all=False)  # MDX23C only; drum stems are already extracted (BS-Roformer cached)
-    from app.pipeline import separate as _sepmod  # report precision (always visible, not via INFO logger)
+    from app.pipeline import (
+        separate as _sepmod,  # report precision (always visible, not via INFO logger)
+    )
     log(f"separation precision: {'bf16 (MDX23C net; STFT fp32)' if _sepmod._BF16_SEP_PATCHED else 'fp32/TF32'}")
     producer = threading.Thread(target=produce, daemon=True)
     writer = threading.Thread(target=write, daemon=True)
