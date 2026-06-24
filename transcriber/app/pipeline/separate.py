@@ -43,9 +43,15 @@ _BF16_SEP_PATCHED = False
 
 
 def _bf16_separation_enabled() -> bool:
-    """True iff `DRUMJOT_SEP_BF16` is set AND the active CUDA device has NATIVE
-    bf16 (compute capability >= 8.0, i.e. Ampere+). Off by default."""
-    if os.environ.get("DRUMJOT_SEP_BF16", "").strip().lower() not in ("1", "true", "yes", "on"):
+    """Default ON for native-bf16 Ampere+ GPUs (compute capability >= 8.0).
+
+    bf16 MDX23C separation was validated ~equivalent to fp32 for our purposes
+    (onset-position agreement F1 0.999 over 100 maps, 1/500 gate-decision flips)
+    at ~1.9x; see RESULTS/commit history. Opt OUT with `DRUMJOT_SEP_BF16=0` (to
+    reproduce fp32 byte-for-byte). Always off on pre-Ampere / CPU (no fast native
+    bf16). NB this is the SHARED separator, so the default also applies to the
+    transcriber API (RoFormer Stage 1 stays fp32 regardless; only MDX23C is bf16)."""
+    if os.environ.get("DRUMJOT_SEP_BF16", "").strip().lower() in ("0", "false", "no", "off"):
         return False
     import torch
 
@@ -56,10 +62,10 @@ def _enable_bf16_separation() -> None:
     """Run the separators' matmul-heavy layers in bf16 (~1.9x on the MDX23C path,
     measured on a 3080) while keeping STFT/iSTFT + complex ops in fp32.
 
-    OPT-IN via `DRUMJOT_SEP_BF16`; the default path stays fp32/TF32. bf16 perturbs
-    the spectrally-rich stems (cymbals/hat/toms ~30-40 dB from the fp32 output;
-    kick/snare >40 dB; no NaNs, since bf16 keeps fp32's exponent range), so it's
-    for throughput experiments + a quality A/B, not silently on. Idempotent, and
+    Default ON for Ampere+ (opt out with `DRUMJOT_SEP_BF16=0`). bf16 perturbs the
+    spectrally-rich stems (cymbals/hat/toms ~25-40 dB from the fp32 output; kick/
+    snare >40 dB; no NaNs, since bf16 keeps fp32's exponent range) but was validated
+    not to move onsets or gate decisions (F1 0.999, 1/500 flips). Idempotent, and
     patches the model CLASSES so it also affects already-loaded instances.
 
     Scope: **MDX23C (Stage 2) only.** BS-/Mel-Band-RoFormer (Stage 1) is left fp32
@@ -222,7 +228,7 @@ class Separator:
         model and skip the other's ~700 MB of VRAM + load time. Called once at
         container startup and again defensively from each per-stage method.
         """
-        if _bf16_separation_enabled():  # opt-in bf16 matmul; idempotent class patch
+        if _bf16_separation_enabled():  # default-on bf16 (Ampere); opt out DRUMJOT_SEP_BF16=0
             _enable_bf16_separation()
         need_all = stems_all and self._stems_all is None
         need_per = stems_per and self._stems_per is None
