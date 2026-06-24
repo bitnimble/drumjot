@@ -1423,7 +1423,8 @@ def _pooled_specs(args) -> tuple[list, list, Path]:
     for name in sources:
         tr, va, ann_of, reader, p2l = info[name]
         per_train[name] = [_spec(c, ann_of, reader, p2l) for c in _cap_by_windows(tr, args.pool_cap)]
-        per_val[name] = [_spec(c, ann_of, reader, p2l) for c in va]
+        va_cap = _cap_by_windows(va, args.pool_val_cap) if args.pool_val_cap else va
+        per_val[name] = [_spec(c, ann_of, reader, p2l) for c in va_cap]
     if dirty:  # atomic so a ctrl-C can't leave a half-written cache
         tmp = ocp.with_name(ocp.name + ".tmp")
         tmp.write_text(json.dumps(onsets_cache))
@@ -1462,6 +1463,10 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--pool-cap", type=int, default=0,
                     help="pooled mode: target train WINDOWS per dataset source (~N*max-seconds of "
                     "audio; predictable, unlike a clip count over varying lengths); 0 = all")
+    ap.add_argument("--pool-val-cap", type=int, default=0,
+                    help="pooled mode: cap val WINDOWS per source (0 = all). The per-source val splits "
+                    "are otherwise uncapped (1000s of windows -> slow first-run label-gate + per-epoch "
+                    "eval); cap it for a bounded, fast A/B val set.")
     ap.add_argument("--pool-balance", action="store_true",
                     help="pooled mode: oversample smaller sources up to the largest (<=5x) so the big "
                     "synthetic sets don't drown the small real-acoustic one (ENST)")
