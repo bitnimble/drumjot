@@ -39,6 +39,68 @@ from app.pipeline.provision import provision_custom_models
 
 log = logging.getLogger(__name__)
 
+_BF16_SEP_PATCHED = False
+
+
+def _bf16_separation_enabled() -> bool:
+    """True iff `DRUMJOT_SEP_BF16` is set AND the active CUDA device has NATIVE
+    bf16 (compute capability >= 8.0, i.e. Ampere+). Off by default."""
+    if os.environ.get("DRUMJOT_SEP_BF16", "").strip().lower() not in ("1", "true", "yes", "on"):
+        return False
+    import torch
+
+    return torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8
+
+
+def _enable_bf16_separation() -> None:
+    """Run the separators' matmul-heavy layers in bf16 (~1.9x on the MDX23C path,
+    measured on a 3080) while keeping STFT/iSTFT + complex ops in fp32.
+
+    OPT-IN via `DRUMJOT_SEP_BF16`; the default path stays fp32/TF32. bf16 perturbs
+    the spectrally-rich stems (cymbals/hat/toms ~30-40 dB from the fp32 output;
+    kick/snare >40 dB; no NaNs, since bf16 keeps fp32's exponent range), so it's
+    for throughput experiments + a quality A/B, not silently on. Idempotent, and
+    patches the model CLASSES so it also affects already-loaded instances.
+
+    Scope: **MDX23C (Stage 2) only.** BS-/Mel-Band-RoFormer (Stage 1) is left fp32
+    on purpose -- measured on a 3080, bf16 makes its drum-stem output deviate from
+    fp32 by ~the signal's own energy (~0 to -2 dB, effectively broken, though it
+    neither errors nor NaNs): the band-split rotary transformer's deep complex/
+    spectral path is too precision-sensitive for bf16's 7-bit mantissa. MDX23C's
+    complex STFT primitives have no bf16 kernel either, so we keep STFT fp32 and
+    bf16-autocast only the conv body: fp32-guard `STFT.__call__`/`inverse`, autocast
+    `TFC_TDF_net.forward`.
+    """
+    global _BF16_SEP_PATCHED
+    if _BF16_SEP_PATCHED:
+        return
+    import torch
+
+    # --- MDX23C ---
+    from audio_separator.separator.uvr_lib_v5 import tfc_tdf_v3 as _mdx
+
+    _call, _inv, _fwd = _mdx.STFT.__call__, _mdx.STFT.inverse, _mdx.TFC_TDF_net.forward
+
+    def _mdx_call(self, x):
+        with torch.autocast("cuda", enabled=False):
+            return _call(self, x.float())
+
+    def _mdx_inv(self, x):
+        with torch.autocast("cuda", enabled=False):
+            return _inv(self, x.float())
+
+    def _mdx_fwd(self, x):
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            return _fwd(self, x)
+
+    _mdx.STFT.__call__, _mdx.STFT.inverse, _mdx.TFC_TDF_net.forward = _mdx_call, _mdx_inv, _mdx_fwd
+
+    # BS-/Mel-Band-RoFormer (Stage 1) intentionally left fp32 -- bf16 breaks its
+    # output (see docstring); only the MDX23C Stage-2 split runs bf16.
+
+    _BF16_SEP_PATCHED = True
+    log.info("bf16 separation ENABLED (DRUMJOT_SEP_BF16): MDX23C matmul=bf16, STFT=fp32; RoFormer stays fp32")
+
 
 # Map of stem-token substrings found in the separated stem filenames ->
 # Drumjot DSL pitch letter. Aligned with `src/midi/gm.ts` defaults so a
@@ -160,6 +222,8 @@ class Separator:
         model and skip the other's ~700 MB of VRAM + load time. Called once at
         container startup and again defensively from each per-stage method.
         """
+        if _bf16_separation_enabled():  # opt-in bf16 matmul; idempotent class patch
+            _enable_bf16_separation()
         need_all = stems_all and self._stems_all is None
         need_per = stems_per and self._stems_per is None
         if not need_all and not need_per:
