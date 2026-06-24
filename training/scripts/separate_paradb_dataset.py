@@ -209,6 +209,8 @@ def main():
     claims.mkdir(parents=True, exist_ok=True)
     (out / "onsets").mkdir(parents=True, exist_ok=True)
     (out / "stem_scores").mkdir(parents=True, exist_ok=True)
+    if args.scratch_dir:  # else mkdtemp fails per-map (e.g. /dev/shm/sep_scratch absent after a reboot)
+        Path(args.scratch_dir).mkdir(parents=True, exist_ok=True)
     stems_cache = Path(args.stems_cache)
     maps_dir = Path(args.maps_dir)
     stale_s = args.stale_minutes * 60.0
@@ -288,7 +290,7 @@ def main():
                 log(f"  [{_RUNNER}] {counts['done']} indexed")
 
     sep = Separator()
-    sep.load()
+    sep.load(stems_all=False)  # MDX23C only; drum stems are already extracted (BS-Roformer cached)
     producer = threading.Thread(target=produce, daemon=True)
     writer = threading.Thread(target=write, daemon=True)
     producer.start()

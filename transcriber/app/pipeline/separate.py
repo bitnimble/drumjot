@@ -149,14 +149,20 @@ class Separator:
         self._larsnet: dict[str, Any] | None = None
         self._larsnet_device: str = "cpu"
 
-    def load(self) -> None:
-        """Idempotently load both separator models.
+    def load(self, *, stems_all: bool = True, stems_per: bool = True) -> None:
+        """Idempotently load the requested separator models.
 
-        Called once at container startup from the FastAPI lifespan hook,
-        and again defensively from the per-stage methods so callers that
-        bypass the lifespan (e.g. unit tests) still work.
+        `stems_all` = BS-Roformer Stage-1 (drum-stem extraction); `stems_per` =
+        MDX23C Stage-2 (per-instrument split). The FastAPI lifespan (and unit
+        tests) load both via the no-arg default; a caller that runs only one
+        stage -- e.g. the batch per-instrument data generator, which feeds
+        pre-extracted drum stems straight into Stage 2 -- can load just that
+        model and skip the other's ~700 MB of VRAM + load time. Called once at
+        container startup and again defensively from each per-stage method.
         """
-        if self._stems_all is not None and self._stems_per is not None:
+        need_all = stems_all and self._stems_all is None
+        need_per = stems_per and self._stems_per is None
+        if not need_all and not need_per:
             return
 
         # Neither model is in audio-separator's registry — inject them and
@@ -200,26 +206,28 @@ class Separator:
         )
 
         t0 = time.perf_counter()
-        log.info("Loading stems_all separator (%s) ...", settings.demucs_model)
-        self._stems_all = AS(**common)
-        self._stems_all.load_model(model_filename=settings.demucs_model)
-        _maybe_compile_model(self._stems_all)
-        log.info(
-            "stems_all ready in %.2fs (%s)",
-            time.perf_counter() - t0,
-            settings.demucs_model,
-        )
+        if need_all:
+            log.info("Loading stems_all separator (%s) ...", settings.demucs_model)
+            self._stems_all = AS(**common)
+            self._stems_all.load_model(model_filename=settings.demucs_model)
+            _maybe_compile_model(self._stems_all)
+            log.info(
+                "stems_all ready in %.2fs (%s)",
+                time.perf_counter() - t0,
+                settings.demucs_model,
+            )
 
         t1 = time.perf_counter()
-        log.info("Loading stems_per separator (%s) ...", settings.drum_pieces_model)
-        self._stems_per = AS(**common)
-        self._stems_per.load_model(model_filename=settings.drum_pieces_model)
-        _maybe_compile_model(self._stems_per)
-        log.info(
-            "stems_per ready in %.2fs (%s)",
-            time.perf_counter() - t1,
-            settings.drum_pieces_model,
-        )
+        if need_per:
+            log.info("Loading stems_per separator (%s) ...", settings.drum_pieces_model)
+            self._stems_per = AS(**common)
+            self._stems_per.load_model(model_filename=settings.drum_pieces_model)
+            _maybe_compile_model(self._stems_per)
+            log.info(
+                "stems_per ready in %.2fs (%s)",
+                time.perf_counter() - t1,
+                settings.drum_pieces_model,
+            )
         log.info(
             "Separator ready (total %.2fs).",
             time.perf_counter() - t0,
@@ -276,7 +284,7 @@ class Separator:
         drums-only input, the noisy "Failed to build drumless mix" warning the
         empty piano/guitar stems otherwise trigger.
         """
-        self.load()
+        self.load(stems_per=False)
         assert self._stems_all is not None
 
         out_dir = work_dir / "stems_all"
@@ -344,7 +352,7 @@ class Separator:
         on the supported kit pieces. Diagnostic-only; surfaced into the
         debug bundle but not consumed by any downstream stage.
         """
-        self.load()
+        self.load(stems_all=False)
         assert self._stems_per is not None
 
         out_dir = work_dir / "stems_per"
