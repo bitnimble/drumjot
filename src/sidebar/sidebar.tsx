@@ -1,52 +1,64 @@
 import classNames from 'classnames';
-import { PanelRightClose, PanelRightOpen } from 'lucide-react';
+import { Pin, PinOff } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { SidebarStoreContext, SidebarPresenterContext } from './sidebar_contexts';
 import { SIDEBAR_PANELS } from './panels/sidebar_panels';
+import type { SidebarPresenter } from './sidebar_presenter';
 import styles from './sidebar.module.css';
 
 /**
- * Collapsible right-hand sidebar spanning the full page height. A persistent
- * vertical rail of icon buttons sits at the right edge; selecting an item opens
- * the panel area to its left. The rail's top holds the collapse/open button,
- * then a divider, then one button per registered panel (see
- * {@link SIDEBAR_PANELS}).
+ * Collapsible right-hand sidebar. A persistent vertical rail of icon buttons
+ * sits at the right edge; selecting an item opens the panel area. The rail's
+ * top holds the float/pin button, then a divider, then one button per
+ * registered panel (see {@link SIDEBAR_PANELS}).
  *
- * The rail items and the panel body are both driven off that registry, so a
- * new panel is a single entry there, this component renders whichever the
- * registry lists.
- *
- * The sidebar is a flex sibling of the main content column, so opening it
- * narrows the score's measured width and the score's scroll virtualization
- * (driven by the container ResizeObserver) automatically stops rendering
- * anything that would fall under the panel.
+ * A panel opens **floating** by default: it overlays the score (which keeps
+ * its full width) and is rendered into the score region by {@link
+ * SidebarFloatingPanel} (so it's bounded to the score area, not the minimap /
+ * transport below). The rail's topmost button **pins** it instead, docking the
+ * panel here as a flex sibling so opening it narrows the score's measured width
+ * and the score's scroll virtualization stops rendering anything that falls
+ * under it. A floating panel is dismissed by an outside click or Escape; a
+ * pinned one stays until re-toggled.
  */
 export const Sidebar = observer(function Sidebar() {
   const store = React.useContext(SidebarStoreContext);
   const presenter = React.useContext(SidebarPresenterContext);
+  // Outside-click / Escape dismissal for a floating panel. Mounted here (the
+  // rail is always rendered) so it tracks float-open state regardless of where
+  // the floating panel body itself renders.
+  useFloatingDismiss(!!store?.expanded && !store?.pinned, presenter ?? null);
   if (!store || !presenter) return null;
-  const { expanded, activePanel } = store;
+  const { expanded, activePanel, pinned } = store;
   const active = SIDEBAR_PANELS.find((p) => p.id === activePanel);
 
   return (
     <aside className={styles.sidebar} data-testid="sidebar" data-expanded={expanded || undefined}>
-      {expanded && active && (
-        <div className={styles.panel} data-testid="sidebar-panel">
+      {expanded && pinned && active && (
+        <div
+          className={styles.panel}
+          data-testid="sidebar-panel"
+          data-sidebar-mode="pinned"
+        >
           {active.render()}
         </div>
       )}
       <div className={styles.rail}>
         <button
           type="button"
-          className={styles.railButton}
-          onClick={() => presenter.toggleExpanded()}
-          aria-label={expanded ? 'Collapse sidebar' : 'Open sidebar'}
-          aria-expanded={expanded}
-          title={expanded ? 'Collapse sidebar' : 'Open sidebar'}
-          data-testid="sidebar-toggle"
+          className={classNames(styles.railButton, expanded && pinned && styles.railButtonActive)}
+          onClick={() => presenter.togglePin()}
+          aria-label={expanded && pinned ? 'Unpin panel' : 'Pin panel'}
+          aria-pressed={expanded && pinned}
+          title={
+            expanded && pinned
+              ? 'Unpin panel (float over the score)'
+              : 'Pin panel (dock beside the score)'
+          }
+          data-testid="sidebar-pin-toggle"
         >
-          {expanded ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
+          {expanded && pinned ? <PinOff size={18} /> : <Pin size={18} />}
         </button>
         <div className={styles.railDivider} role="separator" aria-orientation="horizontal" />
         {SIDEBAR_PANELS.map((panel) => {
@@ -71,3 +83,113 @@ export const Sidebar = observer(function Sidebar() {
     </aside>
   );
 });
+
+/**
+ * The floating panel body, rendered into the score region (`.jotContainer`) by
+ * the editor so it's clipped to the score area and overlays the bars without
+ * reflowing them. Shows only when a panel is open and not pinned; the pinned
+ * panel renders inside {@link Sidebar} as a docked flex sibling instead.
+ *
+ * Sits just left of the always-docked rail (the score's right edge), so the
+ * two read as one surface. `data-sidebar-float` marks it as "inside" for the
+ * dismissal hook, so clicks within it never close it.
+ */
+export const SidebarFloatingPanel = observer(function SidebarFloatingPanel() {
+  const store = React.useContext(SidebarStoreContext);
+  if (!store || !store.expanded || store.pinned) return null;
+  const active = SIDEBAR_PANELS.find((p) => p.id === store.activePanel);
+  if (!active) return null;
+  return (
+    <div
+      className={styles.floatingPanel}
+      data-testid="sidebar-panel"
+      data-sidebar-mode="floating"
+      data-sidebar-float
+    >
+      {active.render()}
+    </div>
+  );
+});
+
+/** Movement (px) past which an empty-score press is a marquee drag, not a
+ *  dismissing click. Mirrors the tap/drag threshold used by the score's own
+ *  touch handling. */
+const MARQUEE_DRAG_PX = 8;
+
+/**
+ * Dismiss a floating sidebar panel on an outside interaction. While `active`,
+ * a document-level pointer/key listener collapses the panel (via
+ * `presenter.collapse()`) when the user clicks away, with deliberate
+ * exceptions so the panel survives the interactions that feed it:
+ *
+ * - clicks inside the panel or on the rail are ignored;
+ * - clicking a note (which drives the Note properties panel) keeps it open;
+ * - a marquee selection drag on empty score keeps it open, but a plain click
+ *   on empty score (which clears the selection) dismisses it;
+ * - a click anywhere else (toolbar, minimap, transport, page chrome) dismisses;
+ * - Escape dismisses.
+ *
+ * Pinned panels never mount this (they stay until re-toggled).
+ */
+function useFloatingDismiss(active: boolean, presenter: SidebarPresenter | null): void {
+  const presenterRef = React.useRef(presenter);
+  presenterRef.current = presenter;
+  React.useEffect(() => {
+    if (!active) return;
+    const controller = new AbortController();
+    const { signal } = controller;
+    const dismiss = () => presenterRef.current?.collapse();
+
+    const onMouseDown = (e: MouseEvent) => {
+      const target = e.target instanceof Element ? e.target : null;
+      if (!target) return;
+      // Interactions that keep the floating panel open.
+      if (target.closest('[data-sidebar-float]')) return; // inside the panel body
+      if (target.closest('[data-testid="sidebar"]')) return; // the rail (buttons own their state)
+      if (target.closest('[data-note-id]')) return; // selecting a note
+      // Transient popups the panel spawns (the Layers ⋯ menu, a colour picker)
+      // portal to <body>, so they read as "outside" the panel even though they
+      // belong to it. Exclude the standard popup ARIA roles so interacting with
+      // them doesn't dismiss the panel underneath.
+      if (target.closest('[role="menu"], [role="dialog"], [role="listbox"]')) return;
+      if (target.closest('[data-jot-scroller]')) {
+        // Empty score: a plain click clears the selection (dismiss), a drag is
+        // a marquee selection (keep). Can't tell yet, so resolve on release.
+        watchEmptyScorePress(e, signal, dismiss);
+        return;
+      }
+      // Anywhere else (toolbar, minimap, transport, page chrome).
+      dismiss();
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') dismiss();
+    };
+    document.addEventListener('mousedown', onMouseDown, { capture: true, signal });
+    document.addEventListener('keydown', onKeyDown, { signal });
+    return () => controller.abort();
+  }, [active]);
+}
+
+/** Resolve an empty-score press into dismiss (plain click) vs keep (marquee
+ *  drag) once it ends. Watches movement until release; a drag past
+ *  {@link MARQUEE_DRAG_PX} cancels the dismissal. */
+function watchEmptyScorePress(
+  downEvent: MouseEvent,
+  outerSignal: AbortSignal,
+  dismiss: () => void
+): void {
+  const startX = downEvent.clientX;
+  const startY = downEvent.clientY;
+  const inner = new AbortController();
+  const stop = () => inner.abort();
+  outerSignal.addEventListener('abort', stop, { once: true });
+  const onMove = (e: MouseEvent) => {
+    if (Math.hypot(e.clientX - startX, e.clientY - startY) > MARQUEE_DRAG_PX) stop(); // marquee: keep open
+  };
+  const onUp = () => {
+    stop();
+    dismiss(); // released without dragging ⇒ plain click ⇒ dismiss
+  };
+  document.addEventListener('mousemove', onMove, { signal: inner.signal });
+  document.addEventListener('mouseup', onUp, { signal: inner.signal });
+}

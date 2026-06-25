@@ -12,8 +12,9 @@ request, and pull in the linked docs when a task touches that area.
 
 - **Close the loop; don't stop for a rubber-stamp.** If you would end a
   turn asking a question whose answer is obviously "yes, continue" /
-  "yes, do it", don't, just do it. You can edit, run
-  `scripts/check*`/`build`/`e2e`, and validate yourself, so prefer acting
+  "yes, do it", don't, just do it. You can edit, run the post-change
+  checks (`scripts/check-py` / the `bun run` scripts) plus `build`/`e2e`,
+  and validate yourself, so prefer acting
   and verifying over asking. If you spot something unconditionally better
   (cleanup, dead code, an obvious fix) while working, fix it rather than
   asking whether to, that's the job. Reserve questions for genuine forks
@@ -21,13 +22,19 @@ request, and pull in the linked docs when a task touches that area.
   irreversible/destructive actions (push, delete, data loss), those still
   warrant a pause.
 - **Use `bun`, never npm/yarn. Use `bunx`, never npx.**
-- **After any code change, run `scripts/check*`**, never invoke
-  pytest / bun test / tsc / stylelint / playwright directly. Those direct
-  invocations are **denied** by the permission config; the scripts get
-  venv activation, cwd, and autofix flags right. They autofix where
-  possible and exit non-zero on first failure.
-  - `scripts/check`, both sides (py then ts); default after a
-    cross-cutting change.
+- **After any code change, run the post-change checks.** Never invoke
+  pytest / ruff / playwright directly, those are **denied** by the
+  permission config. **Python** keeps wrapper scripts (venv activation,
+  cwd, autofix); **TypeScript** has no wrapper, run the `package.json`
+  scripts directly (see `.claude/settings.json` for the allow-list; raw
+  `tsc`/`bunx stylelint`/`bunx vite` are redirected to these).
+  - **TypeScript** (`bun run …`, repo root): `typecheck` (tsc `--noEmit`),
+    `test` (bun unit tests; trailing args pass through, e.g.
+    `bun run test src/editing/store.test.ts`), `lint:design` (stylelint
+    `--fix`, autofixes the CSS). `bun run build` runs lint:design + tsc + Vite
+    in one shot, the agent compile-check. There's no combined
+    typecheck+test+lint command, run the ones the change touches (and
+    always `bun run e2e` for `src/**`, below).
   - `scripts/check-py [pytest args]`, ruff `--fix` + pytest across **all
     first-party Python** (transcriber + `training/` + `dsp/`), all from
     `transcriber/.venv` (`training`/`dsp` go on `PYTHONPATH`). A bare run
@@ -39,8 +46,6 @@ request, and pull in the linked docs when a task touches that area.
     training/tests`).
   - `scripts/test-py [pytest args]`, pytest only (no ruff); for
     iterating on a failing test.
-  - `scripts/check-ts [bun test args]`, stylelint `--fix` + tsc
-    `--noEmit` + bun test.
 - **Don't run `bun run dev`**, it's a human-only long-running watch. For
   a "does it compile?" smoke test use **`bun run build`** (lint:design +
   tsc + Vite), which is agent-friendly.
@@ -48,9 +53,9 @@ request, and pull in the linked docs when a task touches that area.
   under `src/**` (`.ts`/`.tsx`/`.css`) or `tests/**` (shared fixtures),
   run **`bun run e2e`** (or a scoped `bun run e2e <spec>` while iterating,
   but a full pass before you claim done) and confirm it's green,
-  `scripts/check-ts` (tsc + unit + lint) does **not** exercise real
-  browser behaviour, so it can't catch a broken interaction, selector, or
-  render. E2E specs live next to the feature they cover, at
+  `bun run typecheck`/`test`/`lint:design` do **not** exercise real
+  browser behaviour, so they can't catch a broken interaction, selector,
+  or render. E2E specs live next to the feature they cover, at
   **`src/<feature>/test/*.e2e.ts`** (shared fixtures in repo-root `tests/fixtures/`).
   The specs are coupled to the UI (toolbar menu structure, `data-testid`s,
   the ⋯ overflow): if your change moves or renames those, **update the
@@ -212,14 +217,18 @@ Frontend (`bun`, repo root):
 | Command | What it does |
 |---|---|
 | `bun install` | Install deps. |
+| `bun run typecheck` | tsc `--noEmit`. |
+| `bun run test` | bun unit tests (trailing args → single-file iteration). |
+| `bun run lint:design` | stylelint `--fix` over `src/**/*.css` (autofixes). |
 | `bun run build` | lint:design + tsc `--noEmit` + Vite build. Agent compile-check. |
 | `bun run e2e` | Playwright suite (auto-spawns dev server). See below. |
 
 `bun test` is scoped to `src/` via `bunfig.toml` and matches `*.test.ts`
 unit files; Playwright covers the co-located `src/**/test/*.e2e.ts`
 specs (the distinct `.e2e.ts` suffix keeps the two runners from
-overlapping, see `bunfig.toml`). Go through `scripts/check-ts` for the
-post-change loop.
+overlapping, see `bunfig.toml`). The frontend post-change loop is just
+these `bun run` scripts directly (no wrapper script); run `bun run e2e`
+for any `src/**` change.
 
 Transcriber (Docker or the local venv): see
 [docs/transcriber-pipeline.md](docs/transcriber-pipeline.md#build--run).

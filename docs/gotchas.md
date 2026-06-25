@@ -115,7 +115,7 @@ project, not history.
 ## Sanity checklist if something breaks
 
 - `bun run build` fails → usually a TS error from a type-rename ripple;
-  `scripts/check-ts` gives the full list.
+  `bun run typecheck` gives the full list.
 - A `src/parser/__tests__/` test fails → the parser is the most
   load-bearing TS piece; revert the last parser change and re-run.
 - Transcriber Docker build fails on madmom → `beats.py` falls back to

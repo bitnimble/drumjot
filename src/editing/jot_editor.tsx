@@ -94,7 +94,7 @@ import { TranscribePresenter } from './transcribe/transcribe_presenter';
 import { RecentTranscriptionsPicker } from './transcribe/recent_transcriptions';
 import { ToastContainer } from '../ui/toasts/toast_container';
 import { Toolbar } from '../toolbar/toolbar';
-import { Sidebar } from '../sidebar/sidebar';
+import { Sidebar, SidebarFloatingPanel } from '../sidebar/sidebar';
 import { SidebarStore } from '../sidebar/sidebar_store';
 import { SidebarPresenter } from '../sidebar/sidebar_presenter';
 import { SidebarStoreContext, SidebarPresenterContext } from '../sidebar/sidebar_contexts';
@@ -563,6 +563,14 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                       transcribeMode={transcribe.transcribeMode}
                       onSetTranscribeMode={(m) => transcribePresenter.setTranscribeMode(m)}
                     />
+                    {/* Score region: the score (or empty state) plus the
+                        floating sidebar panel overlaid on its right edge. The
+                        panel is a SIBLING of the score container (not inside
+                        it) so its pointer events don't bubble into the score's
+                        marquee / pan / wheel handlers; `position: relative`
+                        here bounds the panel to the score area so it never
+                        covers the minimap / transport below. */}
+                    <div className={styles.scoreRegion}>
                     {structural ? (
                       <JotEditor
                         viewport={viewport}
@@ -593,6 +601,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                         onOpenZip={(file) => fileDrop.openFiles([file])}
                       />
                     )}
+                    <SidebarFloatingPanel />
+                    </div>
                     <Minimap
                       jotEditorStore={jotEditorStore}
                       viewport={viewport}
