@@ -212,11 +212,12 @@ def test_train_loop_runs_batched_over_variable_lengths():
 
 
 def test_train_loop_keep_best_restores_per_lane_peak(monkeypatch):
-    # keep_best is PER-LANE and only accepts an epoch atop a confirmed two-epoch
-    # rise (curve[-3] < curve[-2] < curve[-1]) -- so a lucky spike is rejected.
-    # Schedule: k climbs to its peak @3 (atop a rise); s SPIKES to its global max
-    # 0.9 @1 (NOT atop a rise) then genuinely climbs to 0.7 @5. Expect k@3, s@5
-    # (the 0.9 spike is rejected -> s restored from 0.7, not 0.9).
+    # keep_best is PER-LANE and only accepts an epoch with no decline over the last
+    # two (curve[-3] <= curve[-2] <= curve[-1]: a climb or a PLATEAU top) -- a lucky
+    # spike is rejected, a plateau-top is kept. Schedule: k climbs to its peak @3;
+    # s SPIKES to its global max 0.9 @1 (rejected: not a rise) then reaches its best
+    # 0.6 @5 via a PLATEAU (0.5, 0.5, 0.6) -- which a strict < rule would wrongly
+    # reject. Expect k@3, s@5 (s restored from 0.6, NOT the 0.9 spike).
     from drumjot_training import train
     from drumjot_training.config import Config
     from drumjot_training.model import MultiLaneHeads
@@ -231,7 +232,7 @@ def test_train_loop_keep_best_restores_per_lane_peak(monkeypatch):
     model = MultiLaneHeads(in_dim=8, hidden=8, num_layers=1, lane_names=("k", "s"))
 
     sched = iter([{"k": 0.1, "s": 0.1}, {"k": 0.2, "s": 0.9}, {"k": 0.3, "s": 0.2},
-                  {"k": 0.5, "s": 0.4}, {"k": 0.4, "s": 0.6}, {"k": 0.45, "s": 0.7}])
+                  {"k": 0.5, "s": 0.5}, {"k": 0.4, "s": 0.5}, {"k": 0.45, "s": 0.6}])
     snaps: list[dict] = []
 
     # the batched val path scores via _f1_from_probs(probs, clip, cfg); patch it to
@@ -245,8 +246,9 @@ def test_train_loop_keep_best_restores_per_lane_peak(monkeypatch):
     hist = train.train_loop(model, clips, cfg, epochs=6, batch_size=2, val_clips=val,
                             keep_best=True, early_stop=False, log=lambda s: None)
     assert hist["vf1_k"] == [0.1, 0.2, 0.3, 0.5, 0.4, 0.45]
-    assert hist["vf1_s"] == [0.1, 0.9, 0.2, 0.4, 0.6, 0.7]
-    assert hist["best_epoch_by_lane"] == [3.0, 5.0]  # s@1 spike (0.9) rejected: not a rise
+    assert hist["vf1_s"] == [0.1, 0.9, 0.2, 0.5, 0.5, 0.6]
+    # s@5 (0.6) reached via a plateau (0.5, 0.5, 0.6); the 0.9 spike @1 is rejected
+    assert hist["best_epoch_by_lane"] == [3.0, 5.0]
     # each head restored from its OWN best epoch: k's params from ep3, s's from ep5
     sd = model.state_dict()
     for k in sd:

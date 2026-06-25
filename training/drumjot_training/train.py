@@ -796,11 +796,12 @@ def train_loop(
     `keep_best`.
 
     `keep_best` restores each lane's head from the epoch where THAT lane's val F1
-    peaked, but only among epochs that sit atop a confirmed two-epoch rise
-    (`curve[-3] < curve[-2] < curve[-1]`) -- the low-signal hat/crash curves are
-    noise early (open-hat spikes to its run-max at epoch 0 then collapses), so an
-    unfiltered per-lane argmax locks in a lucky spike. A lane that never sustains
-    a rise keeps its final-epoch weights."""
+    peaked, but only among epochs with no decline over the last two
+    (`curve[-3] <= curve[-2] <= curve[-1]`: a sustained climb or a plateau top, not
+    a lucky spike) -- the low-signal hat/crash curves are noise early (open-hat
+    spikes to its run-max at epoch 0 then collapses), so an unfiltered per-lane
+    argmax locks in a spike. A lane that never sustains a rise keeps its
+    final-epoch weights."""
     import math
 
     import torch
@@ -982,15 +983,17 @@ def train_loop(
                     lf = sum(vals) / len(vals)
                     history.setdefault(f"vf1_{lane}", []).append(lf)  # per-epoch per-lane curve
                     epoch_lane_f1[lane] = lf
-                    # Only accept an epoch as a per-lane "best" if val F1 rose for two
-                    # consecutive epochs INTO it (curve[-3] < curve[-2] < curve[-1]) -- a
-                    # confirmed climb, not a lucky spike. The low-signal hat/crash curves
-                    # are noise early (open-hat spikes to its run-max at epoch 0 then
-                    # collapses), which an unfloored argmax would lock in. Needs >=3 epochs
-                    # of history, so epochs 0-1 never qualify. A lane that never sustains a
-                    # rise keeps its final-epoch weights (the strict=False restore below).
+                    # Only accept an epoch as a per-lane "best" if val F1 did NOT decline
+                    # over the last two epochs (curve[-3] <= curve[-2] <= curve[-1]) -- a
+                    # sustained climb OR a plateau top, not a lucky spike or a post-peak
+                    # straggler. <= (not <) so a plateau still qualifies (a real peak often
+                    # arrives via flat steps, e.g. ride 0.62, 0.62, 0.63). The low-signal
+                    # hat/crash curves are noise early (open-hat spikes to its run-max at
+                    # epoch 0 then collapses), which an unfiltered argmax would lock in.
+                    # Needs >=3 epochs of history, so epochs 0-1 never qualify. A lane that
+                    # never sustains a rise keeps its final-epoch weights (restore below).
                     curve = history[f"vf1_{lane}"]
-                    rising = len(curve) >= 3 and curve[-3] < curve[-2] < curve[-1]
+                    rising = len(curve) >= 3 and curve[-3] <= curve[-2] <= curve[-1]
                     if keep_best and rising and lf > best_lane_f1[lane]:
                         best_lane_f1[lane], best_lane_epoch[lane] = lf, epoch
                         pref = f"heads.{lane}."
