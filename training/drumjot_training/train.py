@@ -807,6 +807,13 @@ def train_loop(
     import torch
     from torch.utils.data import DataLoader
 
+    # The model's per-head output order MUST match cfg.lanes -- targets/loss/val all
+    # index in cfg.lanes order. A mismatch silently trains the wrong heads (no shape
+    # error), so assert it loudly instead.
+    if tuple(model.lane_names) != tuple(cfg.lanes):
+        raise ValueError(
+            f"model heads {tuple(model.lane_names)} != cfg.lanes {tuple(cfg.lanes)}; "
+            "build MultiLaneHeads(..., lane_names=cfg.lanes)")
     device = next(model.parameters()).device
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     pw = torch.as_tensor(pos_weight, dtype=torch.float32, device=device)
@@ -1670,7 +1677,12 @@ def main(argv: list[str] | None = None) -> None:
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
     in_dim = embeddings.feat_dim(cfg.high_band)
-    model = MultiLaneHeads(in_dim=in_dim, hidden=cfg.head_hidden, num_layers=cfg.head_layers)
+    # lane_names=cfg.lanes is REQUIRED: without it the model builds all global LANES
+    # heads in LANES order, but targets/loss/pos_weight/val are indexed in cfg.lanes
+    # order -- with a --lanes subset the heads misalign with their targets (the
+    # selected lanes get no gradient and stay at init). Keep it in lockstep.
+    model = MultiLaneHeads(in_dim=in_dim, hidden=cfg.head_hidden, num_layers=cfg.head_layers,
+                           lane_names=cfg.lanes)
     if args.resume:
         sd = torch.load(Path(args.resume) / "model.pt", map_location="cpu")
         model.load_state_dict(sd)
