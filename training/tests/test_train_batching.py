@@ -212,8 +212,11 @@ def test_train_loop_runs_batched_over_variable_lengths():
 
 
 def test_train_loop_keep_best_restores_per_lane_peak(monkeypatch):
-    # keep_best is PER-LANE: each head is restored from the epoch where THAT lane's
-    # val F1 peaked (lanes overfit at different times -- here k peaks @1, s @3).
+    # keep_best is PER-LANE and only accepts an epoch atop a confirmed two-epoch
+    # rise (curve[-3] < curve[-2] < curve[-1]) -- so a lucky spike is rejected.
+    # Schedule: k climbs to its peak @3 (atop a rise); s SPIKES to its global max
+    # 0.9 @1 (NOT atop a rise) then genuinely climbs to 0.7 @5. Expect k@3, s@5
+    # (the 0.9 spike is rejected -> s restored from 0.7, not 0.9).
     from drumjot_training import train
     from drumjot_training.config import Config
     from drumjot_training.model import MultiLaneHeads
@@ -227,23 +230,27 @@ def test_train_loop_keep_best_restores_per_lane_peak(monkeypatch):
     )]
     model = MultiLaneHeads(in_dim=8, hidden=8, num_layers=1, lane_names=("k", "s"))
 
-    sched = iter([{"k": 0.1, "s": 0.1}, {"k": 0.9, "s": 0.3},   # k peaks @ epoch 1
-                  {"k": 0.5, "s": 0.5}, {"k": 0.4, "s": 0.9}])   # s peaks @ epoch 3
+    sched = iter([{"k": 0.1, "s": 0.1}, {"k": 0.2, "s": 0.9}, {"k": 0.3, "s": 0.2},
+                  {"k": 0.5, "s": 0.4}, {"k": 0.4, "s": 0.6}, {"k": 0.45, "s": 0.7}])
     snaps: list[dict] = []
 
-    def fake_eval(m, c, cf, th=None):  # 1 val clip -> called once per epoch
-        snaps.append({k: v.detach().clone() for k, v in m.state_dict().items()})
+    # the batched val path scores via _f1_from_probs(probs, clip, cfg); patch it to
+    # drive the per-lane F1 schedule and snapshot end-of-epoch weights (1 val clip
+    # -> called once per epoch, right after that epoch's training step).
+    def fake_f1(probs, clip, cf, thresholds=None):
+        snaps.append({k: v.detach().clone() for k, v in model.state_dict().items()})
         return next(sched)
 
-    monkeypatch.setattr(train, "evaluate_clip", fake_eval)
-    hist = train.train_loop(model, clips, cfg, epochs=4, batch_size=2, val_clips=val,
-                            keep_best=True, log=lambda s: None)
-    assert hist["best_epoch_by_lane"] == [1.0, 3.0]  # k@1, s@3 (cfg.lanes order)
-    assert hist["vf1_k"] == [0.1, 0.9, 0.5, 0.4] and hist["vf1_s"] == [0.1, 0.3, 0.5, 0.9]
-    # each head restored from its OWN best epoch: k's params from ep1, s's from ep3
+    monkeypatch.setattr(train, "_f1_from_probs", fake_f1)
+    hist = train.train_loop(model, clips, cfg, epochs=6, batch_size=2, val_clips=val,
+                            keep_best=True, early_stop=False, log=lambda s: None)
+    assert hist["vf1_k"] == [0.1, 0.2, 0.3, 0.5, 0.4, 0.45]
+    assert hist["vf1_s"] == [0.1, 0.9, 0.2, 0.4, 0.6, 0.7]
+    assert hist["best_epoch_by_lane"] == [3.0, 5.0]  # s@1 spike (0.9) rejected: not a rise
+    # each head restored from its OWN best epoch: k's params from ep3, s's from ep5
     sd = model.state_dict()
     for k in sd:
-        src = snaps[1] if k.startswith("heads.k.") else snaps[3]
+        src = snaps[3] if k.startswith("heads.k.") else snaps[5]
         assert torch.equal(sd[k], src[k])
 
 

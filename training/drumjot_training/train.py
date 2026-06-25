@@ -793,7 +793,14 @@ def train_loop(
     open-hat) keeps the whole run going. `epochs` is the absolute cap, and nothing
     stops before `es_min_epochs`. Records `history["stopped_epoch"]`. Uses the
     per-lane val curves, which it computes when `early_stop` even without
-    `keep_best`."""
+    `keep_best`.
+
+    `keep_best` restores each lane's head from the epoch where THAT lane's val F1
+    peaked, but only among epochs that sit atop a confirmed two-epoch rise
+    (`curve[-3] < curve[-2] < curve[-1]`) -- the low-signal hat/crash curves are
+    noise early (open-hat spikes to its run-max at epoch 0 then collapses), so an
+    unfiltered per-lane argmax locks in a lucky spike. A lane that never sustains
+    a rise keeps its final-epoch weights."""
     import math
 
     import torch
@@ -802,6 +809,8 @@ def train_loop(
     device = next(model.parameters()).device
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     pw = torch.as_tensor(pos_weight, dtype=torch.float32, device=device)
+    if pw.ndim == 0:
+        pw = pw.expand(len(cfg.lanes))  # scalar -> per-lane (the bce/focal split indexes pw)
     if pw.ndim == 1:
         pw = pw.view(-1, 1)  # (n_lanes, 1) broadcasts over (B, n_lanes, T)
     # sibling-aware weighting (lanes.CONFUSABLE): S (n_lanes, n_lanes) marks each
@@ -973,7 +982,16 @@ def train_loop(
                     lf = sum(vals) / len(vals)
                     history.setdefault(f"vf1_{lane}", []).append(lf)  # per-epoch per-lane curve
                     epoch_lane_f1[lane] = lf
-                    if keep_best and lf > best_lane_f1[lane]:
+                    # Only accept an epoch as a per-lane "best" if val F1 rose for two
+                    # consecutive epochs INTO it (curve[-3] < curve[-2] < curve[-1]) -- a
+                    # confirmed climb, not a lucky spike. The low-signal hat/crash curves
+                    # are noise early (open-hat spikes to its run-max at epoch 0 then
+                    # collapses), which an unfloored argmax would lock in. Needs >=3 epochs
+                    # of history, so epochs 0-1 never qualify. A lane that never sustains a
+                    # rise keeps its final-epoch weights (the strict=False restore below).
+                    curve = history[f"vf1_{lane}"]
+                    rising = len(curve) >= 3 and curve[-3] < curve[-2] < curve[-1]
+                    if keep_best and rising and lf > best_lane_f1[lane]:
                         best_lane_f1[lane], best_lane_epoch[lane] = lf, epoch
                         pref = f"heads.{lane}."
                         for k, v in sd.items():
