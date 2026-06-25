@@ -62,16 +62,18 @@ itself, a content-aware **minimap** scrubber, and the playback transport.
 ### Other useful commands
 
 ```bash
-scripts/check          # post-change: both sides (lint --fix + typecheck + tests)
-scripts/check-ts       # post-change: frontend (stylelint --fix + tsc + bun test)
-                       #   the canonical wrapper; runs tsc / bun test with the
-                       #   right cwd + flags. Pass a path to scope bun test.
-bun run build          # production build (lint:design + tsc + Vite) — compile check
+# Frontend post-change checks, run the package.json scripts directly:
+bun run typecheck      # tsc --noEmit
+bun run test           # bun unit tests (pass a path to scope, e.g. .../store.test.ts)
+bun run lint:design    # stylelint --fix over src/**/*.css (autofixes)
+bun run build          # production build (lint:design + tsc + Vite), compile check
 bun run preview        # serve the production build
 bun run e2e            # Playwright suite (auto-spawns a dev server)
 bun run e2e:perf       # the 120fps perf specs only, in isolation
 bun run storybook      # Storybook dev server (see below)
 bun run build-storybook # static Storybook build (compile check for stories)
+
+scripts/check-py       # Python post-change: ruff --fix + pytest (uses transcriber/.venv)
 ```
 
 Tests live in a `test/` subfolder per feature (`src/<feature>/test/`):

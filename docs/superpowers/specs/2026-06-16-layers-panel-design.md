@@ -279,7 +279,7 @@ change needs a human/bundle check); (B) the `lane`/`layerId` contraction.
 
 ## Verification
 
-After each phase: `scripts/check-ts` (stylelint + tsc + bun unit) and, since
+After each phase: `bun run typecheck`/`test`/`lint:design` (tsc + bun unit + stylelint) and, since
 every phase touches `src/**`, `bun run e2e` (full pass before claiming a phase
 done; scoped `bun run e2e <spec>` while iterating). `bun run build` for a quick
 compile smoke. Update e2e specs coupled to changed UI in the same phase. Commit

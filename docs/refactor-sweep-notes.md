@@ -10,7 +10,7 @@ unit-test cleanup + dedup audit + Storybook. Branch
 - Per-feature extraction progress.
 
 Each completed slice is a green-gated commit (`bun run build` +
-`scripts/check-ts` + `bun run e2e`).
+`bun run typecheck`/`test` + `bun run e2e`).
 
 > **Perf-gate caveat (re-run on a quiet box).** Later in the session the
 > shared host got busy (load ~6-7 on 12 cores, lots of background work, the
@@ -18,7 +18,7 @@ Each completed slice is a green-gated commit (`bun run build` +
 > the 3×120fps perf specs (`src/playback/tests/perf.e2e.ts`) started flaking:
 > they need the box quiet to measure the tight 8.3ms median / ≤10%-slow-frame
 > budget. **The functional gates are unaffected**, `bun run build`,
-> `scripts/check-ts` (291 unit), and all 23 functional e2e stay green for every
+> `bun run typecheck`/`test` (291 unit), and all 23 functional e2e stay green for every
 > commit. For perf-adjacent structural moves made while the box was loaded I
 > verified perf-neutrality by *baseline comparison*: stash the change, run the
 > perf spec on the pre-change commit under the same load, confirm the change is

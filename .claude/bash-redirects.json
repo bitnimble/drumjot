@@ -3,8 +3,6 @@
   "redirects": [
     {
       "commands": [
-        "Bash(bun run typecheck *)",
-        "Bash(bun typecheck *)",
         "Bash(bun x tsc *)",
         "Bash(bunx vite *)",
         "Bash(bunx stylelint *)",
@@ -12,11 +10,9 @@
         "Bash(bun tsc *)",
         "Bash(tsc *)",
         "Bash(bun test *)",
-        "Bash(bun run test *)",
-        "Bash(bun run lint *)",
         "Bash(bunx --bun vite *)"
       ],
-      "reason": "Use `scripts/check-ts` instead of invoking tsc / bun test / stylelint directly. It chains stylelint --fix + tsc --noEmit + bun test in the right cwd; trailing args pass through to `bun test` so single-file iteration still works (`scripts/check-ts src/editing/store.test.ts`). See AGENTS.md §3."
+      "reason": "Run the package.json scripts instead of the raw tools (TypeScript has no wrapper script): `bun run typecheck` (tsc --noEmit), `bun run test` (bun test; trailing args pass through, e.g. `bun run test src/editing/store.test.ts`), `bun run lint:design` (stylelint), or `bun run build` (lint:design + tsc + vite). See AGENTS.md §3."
     },
     {
       "commands": ["Bash(gh *)"],

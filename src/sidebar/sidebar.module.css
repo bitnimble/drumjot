@@ -22,6 +22,29 @@
     overflow: auto;
 }
 
+/* Floating placement: an overlay pinned to the right edge of the score region
+   (`.scoreRegion` in jot_editor, which renders it as a sibling of the score
+   container so panel events don't bubble into the score's marquee / pan
+   handlers). `top`/`bottom: 0` keep it to the score area's height only, so it
+   never covers the minimap / transport below. Elevated above the score with a
+   left border + shadow so it reads as a separate surface; `z-index` clears the
+   score container it overlays. */
+.floatingPanel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 360px;
+    box-sizing: border-box;
+    overflow: auto;
+    background: var(--color-bg-base);
+    border-left: 1px solid var(--color-border);
+    box-shadow: var(--shadow-lg);
+    /* Above the score container it overlays, including the vertical scrollbar
+       (z:5) that lives at the score's right edge under the panel. */
+    z-index: 10;
+}
+
 .panelBody {
     padding: 12px 14px;
 }
