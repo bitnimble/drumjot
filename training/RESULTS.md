@@ -16,6 +16,49 @@ Scoring is `mir_eval` onset-F1 at ±50 ms (`metrics.onset_f1`).
 
 ---
 
+## 2026-06-26 · A/B v3: ParaDB vs no-ParaDB (snap-only, FIXED lanes), first VALID read. ParaDB ~neutral on MDB.
+
+First trustworthy ParaDB-effect A/B (post `f02dea9` lane fix; **A/B v2 was invalid**, its rd/cr
+never trained). Both arms **snap-only** (aligned store ON, gate OFF via `--label-min-support 0`),
+h256, 7-lane (k,s,t,hc,ho,rd,cr), cap400, **batch16**, seed0, keep_best (plateau), 70-ep early-stop.
+**local = prev+paradb** (`ab3_paradb`, early-stopped ~ep55), **gaming = prev** (`ab3_prev`, ep70).
+Both silence baselines healthy (all lanes ~0, the fix holds in the full run).
+
+**MDB-Drums onset-F1 (23 tracks):**
+
+| lane | paradb (cur) | prev (cur) | paradb (oracle) | prev (oracle) |
+|---|---|---|---|---|
+| hc | 0.722 | 0.742 | 0.777 | 0.799 |
+| ho | 0.188 | 0.426 | 0.537 | 0.531 |
+| rd | 0.588 | 0.607 | 0.629 | 0.645 |
+| cr | 0.358 | 0.213 | 0.657 | 0.761 |
+
+**Verdict: adding ParaDB does NOT improve real-domain (MDB) cymbal/hat detection.** At **oracle**
+(threshold-independent ceiling, the fair model-quality read) paradb ≈ prev on hc/ho/rd (±0.02) and
+prev is **better on cr** (+0.10). The `current` columns are confounded by per-arm threshold transfer
+to MDB (prev's cr threshold mis-transfers: current 0.213 vs oracle 0.761, making paradb's cr *look*
+better at current despite a lower ceiling). Consistent with the long-standing finding that ParaDB
+gains overfit its ~6-song domain and don't generalize to MDB. **Caveats:** cap400 (not full data),
+few MDB songs on cymbal lanes (rd 7, cr/ho 17), noisy → directional, not definitive; MDB has no
+k/s/t stems so this is cymbal/hat only.
+
+**Reproduce (per arm; local RTX 3080 = paradb, gaming RTX 3080 = prev):**
+```
+MODELS_DIR=/codebox-workspace/drumjot/models-cache DRUMJOT_STAR=…/star_balanced_sep \
+DRUMJOT_ENST=…/enst-sep DRUMJOT_EGMD=…/egmd_sep [DRUMJOT_PARADB=…/paradb-sep] \
+DRUMJOT_ALIGNED_ONSETS=/codebox-workspace/datasets/_onsets_aligned.json \
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True OMP_NUM_THREADS=8 PYTHONPATH=training:dsp \
+python3 -m drumjot_training.train --dataset pooled \
+  --pool-sources <paradb: star,enst,egmd,paradb | prev: star,enst,egmd> \
+  --pool-cap 400 --pool-val-cap 60 --pool-balance --pool-cache …/_cache_mert_pooled \
+  --head-hidden 256 --lanes k,s,t,hc,ho,rd,cr --batch-size 16 --epochs 70 --keep-best \
+  --early-stop --no-filter-report --seed 0 --label-min-support 0 --out …/ab3_<paradb|prev>
+```
+Other params = train.py defaults @ `f02dea9` (bce loss, pos_weight cap 50, aux_act_weight 0.5,
+sigma 1.5, MERT-v1-330M L10 @75fps, high_band on, bf16+TF32). Eval: `eval_mdb.py --lanes hc,ho,rd,cr`.
+
+---
+
 ## 2026-06-25 · ROOT CAUSE of the "broken cymbals": `--lanes` built the model without `lane_names` (one-line bug). Snap helps, gate hurts.
 
 **The bug.** `train.py` main built `MultiLaneHeads(...)` **without `lane_names=cfg.lanes`**, so the
