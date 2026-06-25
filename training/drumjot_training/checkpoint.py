@@ -67,11 +67,21 @@ def load(out_dir: str | Path, device: str = "cpu"):
         lane_names=tuple(meta["lanes"]),
     )
     sd = torch.load(out / "model.pt", map_location=device)
-    # Old checkpoints predate the auxiliary activity head (`.act` per lane);
-    # inference only uses the onset path, so missing act weights are fine,
-    # anything ELSE missing/unexpected is a real mismatch and must raise.
+    # Tolerate two benign kinds of state_dict drift; raise on anything else:
+    #  - missing `.act.*`: older checkpoints predate the auxiliary activity head;
+    #    inference uses only the onset path, so those are fine.
+    #  - UNEXPECTED whole heads for lanes outside `meta["lanes"]`: a checkpoint
+    #    may carry MORE heads than we load -- trained with the full lane vocab
+    #    but reported on a subset (the `--lanes` runs), or loaded after a vocab
+    #    reduction (the hp->hc merge). Those extra heads are simply ignored.
     missing, unexpected = model.load_state_dict(sd, strict=False)
-    bad = [k for k in missing if ".act." not in k] + list(unexpected)
+    keep = set(meta["lanes"])
+
+    def _extra_head(k: str) -> bool:
+        p = k.split(".")
+        return len(p) >= 2 and p[0] == "heads" and p[1] not in keep
+
+    bad = [k for k in missing if ".act." not in k] + [k for k in unexpected if not _extra_head(k)]
     if bad:
         raise RuntimeError(f"checkpoint mismatch in {out}: {bad}")
     model.eval()
