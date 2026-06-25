@@ -12,7 +12,7 @@
       "Bash(mcp__plugin_playwright_playwright_browser_click)",
       "Bash(mcp__plugin_playwright_playwright_browser_evaluate)",
 
-      "Bash(mcp__plugin_linear_linear)",
+      "mcp__plugin_linear_linear*",
 
       "Bash(bun install)",
       "Bash(bun run build *)",
