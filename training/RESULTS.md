@@ -16,6 +16,59 @@ Scoring is `mir_eval` onset-F1 at ±50 ms (`metrics.onset_f1`).
 
 ---
 
+## 2026-06-25 · ROOT CAUSE of the "broken cymbals": `--lanes` built the model without `lane_names` (one-line bug). Snap helps, gate hurts.
+
+**The bug.** `train.py` main built `MultiLaneHeads(...)` **without `lane_names=cfg.lanes`**, so the
+model had all 8 global `LANES` heads in `LANES` order while targets / loss / pos_weight / sibling /
+aux-activity / val are indexed in **`cfg.lanes`** order. With any `--lanes` subset the orderings
+diverge → the selected lanes get **zero gradient**, stay at random init (~0.5 sigmoid on silence,
+~0 onset-F1). `--lanes hc,ho,rd,cr` left all four cymbal/hat heads untrained; the A/B v2
+(`--lanes k,s,t,hc,ho,rd,cr`) left **rd/cr** untrained. **This, not snap/gate, h128, data, or
+paradb (all chased + exonerated); is the entire cymbal regression.** Introduced by `a498466`
+(--lanes); fixed in `f02dea9` (`lane_names=cfg.lanes` + a `train_loop` guard asserting
+`model.lane_names == cfg.lanes`). **⇒ the cymbal numbers of `ab2_prev` / `ab2_paradb` (A/B v2) are
+invalid, both were `--lanes`-bugged (rd/cr never trained).** Pre-bug checkpoints (≤06-21, no
+`--lanes`) were always healthy; a historical silence sweep confirmed the break is 06-25-only.
+
+**Confirmation, C3 3-way (h128, cap100; the smallest/fastest config, all-broken pre-fix).**
+Silence baseline (sigmoid on 8 s of zeros) + MDB-Drums onset-F1 (23 tracks, `current` thresholds):
+
+| arm (post-fix) | hc | ho | rd | cr | silence rd / cr |
+|---|---|---|---|---|---|
+| pre-fix (any) |, |, | **0.004** | **0.000** | **0.44 / 0.49** (untrained) |
+| raw (no snap/no gate) | 0.665 | 0.328 | 0.486 | 0.332 | 0.000 / 0.004 |
+| snap (aligned, gate off) | **0.714** | 0.266 | **0.581** | **0.509** | 0.000 / 0.005 |
+| snapgate (aligned + gate) | 0.626 | 0.214 | 0.548 | 0.462 | 0.000 / 0.002 |
+
+rd/cr recovered ~0 → 0.49–0.58 / 0.33–0.51, comparable to the prior healthy 5-lane c3000/h256
+checkpoint (rd 0.679 / cr 0.515) at 1/30 the data.
+
+**Recipe signal (directional, cap100 is tiny, confirm at scale):** offline **snap (aligned
+onsets) HELPS** sharp-attack lanes (rd +0.10, cr +0.18, hc +0.05 vs raw; slightly hurts soft
+open-hat, ho −0.06). The **label-quality gate HURTS** every lane (snapgate < snap), matching the
+relative-floor over-drop concern (`label_support_percentile=60` collapses to the noise floor on
+sparse cymbal windows). ⇒ lean **aligned-onsets ON + `--label-min-support 0`** (gate off).
+
+**Reproduce (per arm; local RTX 3080):**
+```
+MODELS_DIR=/codebox-workspace/drumjot/models-cache \
+DRUMJOT_STAR=/codebox-workspace/datasets/star_balanced_sep DRUMJOT_ENST=/codebox-workspace/datasets/enst-sep \
+DRUMJOT_EGMD=/codebox-workspace/datasets/egmd_sep DRUMJOT_PARADB=/codebox-workspace/datasets/paradb-sep \
+DRUMJOT_ALIGNED_ONSETS=<raw:/dev/null | snap:/codebox-workspace/datasets/_onsets_aligned.json> \
+OMP_NUM_THREADS=8 PYTHONPATH=training:dsp python3 -m drumjot_training.train \
+  --dataset pooled --pool-sources star,enst,egmd,paradb --pool-cap 100 --pool-val-cap 30 --pool-balance \
+  --pool-cache /codebox-workspace/datasets/_cache_mert_pooled --head-hidden 128 --lanes hc,ho,rd,cr \
+  --epochs 30 --es-min-epochs 12 --no-keep-best --early-stop --no-filter-report --seed 0 \
+  --label-min-support <raw,snap:0 | snapgate:0.95> --out <dir>
+```
+Other params = train.py defaults @ `f02dea9`: loss=bce (focal none), pos_weight cap 50,
+sib_pos_weight 3.0, aux_act_weight 0.5 (SUSTAINED_LANES ho/rd/cr), sigma_frames 1.5,
+label_support_percentile 60, label_support_window_s 0.04, encoder MERT-v1-330M layer 10 @75 fps,
+high_band on (in_dim 1040), bf16 autocast + TF32 (Ampere). Eval: `eval_mdb.py --checkpoint <dir>
+--lanes hc,ho,rd,cr` (MDB has only h/c stems); silence = 8 s zeros → sigmoid mean.
+
+---
+
 ## 2026-06-21 · MDB cross-check: ParaDB param gains DON'T fully generalize
 
 Ran the dist<=0.10 predictor (`param_predictor_a2md.joblib`, the best ParaDB
