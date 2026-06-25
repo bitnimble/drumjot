@@ -12,7 +12,7 @@ def test_core_folding():
 
 def test_hat_subclasses():
     assert star.lane_for_star_class("CHH") == "hc"
-    assert star.lane_for_star_class("PHH") == "hp"
+    assert star.lane_for_star_class("PHH") == "hc"  # pedal folds into closed
     assert star.lane_for_star_class("OHH") == "ho"
 
 

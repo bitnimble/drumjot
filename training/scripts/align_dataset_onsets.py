@@ -41,7 +41,7 @@ sys.path.insert(0, os.path.join(_HERE, "..", "..", "dsp"))  # dsp/
 # Per-lane snap windows (s). cym validated at 0.12; tighter on denser lanes so a
 # good label isn't yanked onto a neighbour. Unknown lanes fall back to 0.05.
 SNAP_WINDOW = {"k": 0.05, "s": 0.05, "ss": 0.05, "t": 0.05,
-               "hc": 0.06, "hp": 0.06, "ho": 0.07, "rd": 0.10, "cr": 0.12,
+               "hc": 0.06, "ho": 0.07, "rd": 0.10, "cr": 0.12,
                "mc": 0.12, "mp": 0.05}
 DEFAULT_WINDOW = 0.05
 

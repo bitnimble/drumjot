@@ -19,7 +19,6 @@ def test_to_pitch_preserves_all_classes():
         "ss": [0.7],  # side stick stays its own pitch
         "t": [1.1],
         "hc": [0.1],  # closed -> h
-        "hp": [0.2],  # pedal stays its own pitch (not folded into h)
         "ho": [0.4],  # open -> H
         "rd": [1.0],  # ride -> d
         "cr": [2.0],  # crash -> c
@@ -32,10 +31,9 @@ def test_to_pitch_preserves_all_classes():
     assert p["ss"] == [0.7]
     assert p["t"] == [1.1]
     assert p["h"] == [0.1]
-    assert p["hp"] == [0.2]
     assert p["H"] == [0.4]
     assert p["d"] == [1.0]
     assert p["c"] == [2.0]
     assert "mc" not in p  # mc removed: legacy-checkpoint output is dropped
     assert "mp" not in p  # mp removed: legacy-checkpoint output is dropped
-    assert len(p) == 9
+    assert len(p) == 8

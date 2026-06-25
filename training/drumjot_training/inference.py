@@ -19,7 +19,7 @@ from drumjot_training.lanes import LANES
 # a distinct pitch (and a distinct GM note via onsets_midi.PITCH_TO_MIDI), so
 # nothing is merged back down. Existing pipeline letters are reused where they
 # line up (h=closed hat, H=open hat, d=ride, c=crash); the rest get new pitch
-# keys (ss=side stick, hp=pedal hat). Any folding for display (e.g. side stick
+# keys (ss=side stick). Any folding for display (e.g. side stick
 # onto the snare track) happens later, in the frontend's MIDI->Jot conversion,
 # not here.
 LANE_TO_PITCH: dict[str, str] = {
@@ -28,7 +28,6 @@ LANE_TO_PITCH: dict[str, str] = {
     "ss": "ss",
     "t": "t",
     "hc": "h",
-    "hp": "hp",
     "ho": "H",
     "rd": "d",
     "cr": "c",

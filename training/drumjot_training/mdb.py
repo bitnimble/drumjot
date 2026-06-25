@@ -19,13 +19,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-# MDB subclass label -> our 9-lane vocab. TMB (tambourine) -> None (dropped).
+# MDB subclass label -> our 8-lane vocab. TMB (tambourine) -> None (dropped).
 MDB_TO_LANE: dict[str, str | None] = {
     "KD": "k",
     "SD": "s", "SDB": "s", "SDG": "s", "SDF": "s", "SDD": "s", "SDNS": "s",
     "SST": "ss",
     "HIT": "t", "MHT": "t", "HFT": "t", "LFT": "t",
-    "CHH": "hc", "PHH": "hp", "OHH": "ho",
+    "CHH": "hc", "PHH": "hc", "OHH": "ho",
     "RDC": "rd", "RDB": "rd",
     "CRC": "cr", "CHC": "cr", "SPC": "cr",
     "TMB": None,  # tambourine -- not a kit lane, dropped

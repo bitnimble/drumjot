@@ -23,7 +23,7 @@ _CYM = {"min_distance_s": 0.070, "prominence": 0.20, "decay_reset_frac": 0.6, "d
 DEFAULT_PEAK_PARAMS = dict(_CLEAN)
 LANE_PEAK_PARAMS: dict[str, dict[str, float]] = {
     "k": dict(_CLEAN), "s": dict(_CLEAN), "ss": dict(_CLEAN), "t": dict(_CLEAN),
-    "hc": dict(_HAT), "hp": dict(_HAT), "ho": dict(_HAT),
+    "hc": dict(_HAT), "ho": dict(_HAT),
     "rd": dict(_CYM), "cr": dict(_CYM),
     # legacy: lets old 10/11-lane checkpoints (mc/mp lanes) still peak-pick
     "mc": dict(_CYM), "mp": dict(_CLEAN),

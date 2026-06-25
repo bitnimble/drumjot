@@ -11,7 +11,7 @@ Prediction = our DEPLOYMENT path: per-instrument stems, model run per stem, keep
 only that stem's lanes (PERSTEM_TO_LANES) -- cross-instrument leakage discarded,
 exactly like the transcriber. So this is the "given our separation" condition.
 
-  KD = k        SD = s+ss     HH = hc+hp+ho     TT = t      CY = rd+cr
+  KD = k        SD = s+ss     HH = hc+ho        TT = t      CY = rd+cr
 
 CONDITIONS / CAVEATS (printed in the report too):
 - Per-stem isolation discards cross-instrument false positives -> mildly optimistic
@@ -41,11 +41,11 @@ sys.path.insert(0, _HERE)
 sys.path.insert(0, os.path.join(_HERE, ".."))
 sys.path.insert(0, os.path.join(_HERE, "..", "..", "dsp"))
 
-# fixed 9-lane -> 5-class fold (the published ADT taxonomy)
+# fixed 8-lane -> 5-class fold (the published ADT taxonomy)
 FOLD5: dict[str, tuple[str, ...]] = {
     "KD": ("k",),
     "SD": ("s", "ss"),
-    "HH": ("hc", "hp", "ho"),
+    "HH": ("hc", "ho"),
     "TT": ("t",),
     "CY": ("rd", "cr"),
 }

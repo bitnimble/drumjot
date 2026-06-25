@@ -45,7 +45,7 @@ SEP_SR = 44100  # separate at full band so cymbal/hi-hat content survives
 PERSTEM_TO_LANES: dict[str, tuple[str, ...]] = {
     "k": ("k",),
     "s": ("s", "ss"),
-    "h": ("hc", "hp", "ho"),
+    "h": ("hc", "ho"),
     "c": ("rd", "cr"),
     "t": ("t",),
 }

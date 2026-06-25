@@ -29,7 +29,7 @@ _STAR_TO_LANE: dict[str, str] = {
     "SS": "ss",
     "HT": "t", "MT": "t", "LT": "t",
     "CHH": "hc",
-    "PHH": "hp",
+    "PHH": "hc",
     "OHH": "ho",
     "RD": "rd", "RC": "rd",  # RC: defensive ride alias (some kit CSVs use it)
     "RB": "rd",              # ride bell folds into ride (same physical cymbal)
@@ -110,7 +110,7 @@ def for_split(clips: Iterable[StarClip], split: str) -> list[StarClip]:
 PERSTEM_TO_LANES: dict[str, tuple[str, ...]] = {
     "k": ("k",),
     "s": ("s", "ss"),
-    "h": ("hc", "hp", "ho"),
+    "h": ("hc", "ho"),
     "c": ("rd", "cr"),
     "t": ("t",),
 }

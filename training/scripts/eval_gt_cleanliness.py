@@ -34,7 +34,7 @@ sys.path.insert(0, _HERE)
 sys.path.insert(0, os.path.join(_HERE, ".."))
 sys.path.insert(0, os.path.join(_HERE, "..", "..", "dsp"))
 
-FOLD5 = {"KD": ("k",), "SD": ("s", "ss"), "HH": ("hc", "hp", "ho"), "TT": ("t",), "CY": ("rd", "cr")}
+FOLD5 = {"KD": ("k",), "SD": ("s", "ss"), "HH": ("hc", "ho"), "TT": ("t",), "CY": ("rd", "cr")}
 LANE_TO_CLASS = {ln: c for c, lns in FOLD5.items() for ln in lns}
 
 

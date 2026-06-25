@@ -24,7 +24,7 @@ DRUM_CHANNEL = 9  # GM percussion (MIDI channel 10, 1-indexed)
 PERSTEM_TO_LANES: dict[str, tuple[str, ...]] = {
     "k": ("k",),
     "s": ("s", "ss"),
-    "h": ("hc", "hp", "ho"),
+    "h": ("hc", "ho"),
     "c": ("rd", "cr"),
     "t": ("t",),
 }

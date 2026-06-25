@@ -29,7 +29,7 @@ import time
 from pathlib import Path
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-LANES_ORDER = ("hc", "hp", "ho", "rd", "cr", "k", "s", "ss", "t")
+LANES_ORDER = ("hc", "ho", "rd", "cr", "k", "s", "ss", "t")
 
 
 def _timeout_for(cap: int, hidden: int) -> int:

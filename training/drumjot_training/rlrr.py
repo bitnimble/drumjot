@@ -25,7 +25,7 @@ from drumjot_training.lanes import LANES
 _CLASS_TO_LANE: dict[str, str] = {
     "BP_Kick_C": "k",
     "BP_Snare_C": "s",
-    "BP_HiHat_C": "hc",  # refined by event.midi (46->ho, 44->hp)
+    "BP_HiHat_C": "hc",  # refined by event.midi (46->ho, 44->hc)
     "BP_Crash13_C": "cr", "BP_Crash15_C": "cr", "BP_Crash17_C": "cr",
     # BP_China15_C deliberately unmapped: the `mc` lane was removed (china drops)
     "BP_FloorTom_C": "t", "BP_Tom1_C": "t", "BP_Tom2_C": "t",
@@ -33,7 +33,7 @@ _CLASS_TO_LANE: dict[str, str] = {
     # Tambourine/Cowbell deliberately unmapped: the `mp` lane was removed
     # (see lanes.py); they drop like the tuned/aux percussion classes.
 }
-_HIHAT_MIDI_TO_LANE = {42: "hc", 46: "ho", 44: "hp"}
+_HIHAT_MIDI_TO_LANE = {42: "hc", 46: "ho", 44: "hc"}
 _INSTANCE_RE = re.compile(r"^(BP_.+_C)_\d+$")
 
 
@@ -87,7 +87,7 @@ def _bimodal_hihat_open_vel(events):
 
 
 def onsets_by_lane(rlrr: object) -> dict[str, list[float]]:
-    """Per-lane sorted onset times (seconds). Always returns all 10 lanes.
+    """Per-lane sorted onset times (seconds). Always returns all 8 lanes.
 
     Hi-hat openness: `event.midi` (46/44) wins; otherwise, if the whole hi-hat
     track uses exactly two velocities, the quieter ones are taken as open (`ho`),
@@ -140,13 +140,13 @@ def audio_tracks(rlrr: object) -> list[str]:
 # and ride / crash. Each group has a parent label used when the chart doesn't
 # make the distinction.
 _GROUPS: dict[str, tuple[str, ...]] = {
-    "h": ("hc", "hp", "ho"),
+    "h": ("hc", "ho"),
     "cym": ("rd", "cr"),
 }
 _GROUPED = {s for subs in _GROUPS.values() for s in subs}
 
 # Stable order for aggregating/printing comparison labels (parents + subs).
-REPORT_ORDER = ("k", "s", "ss", "t", "h", "hc", "hp", "ho", "cym", "rd", "cr")
+REPORT_ORDER = ("k", "s", "ss", "t", "h", "hc", "ho", "cym", "rd", "cr")
 
 
 def has_lane_track(rlrr: object, lane: str) -> bool:

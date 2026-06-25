@@ -278,7 +278,7 @@ def main():
     ap.add_argument("--feature-cache", default="/codebox-workspace/datasets/_cache_mert_pooled")
     ap.add_argument("--probs-cache", default="/codebox-workspace/datasets/_cache_param_probs")
     ap.add_argument("--pitches", default="h,c")
-    ap.add_argument("--lanes", default="hc,hp,ho,rd,cr")
+    ap.add_argument("--lanes", default="hc,ho,rd,cr")
     ap.add_argument("--splits", default=None,
                     help="comma list of split/drummer names to keep (e.g. test,validation,drummer_3 "
                     "for held-out; training,train,drummer_1,drummer_2 for trained-on). Default: all.")

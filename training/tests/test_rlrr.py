@@ -8,7 +8,7 @@ _CHART = {
         {"name": "BP_Snare_C_1", "time": "1.0000", "vel": 90},  # time as 4-dp string
         {"name": "BP_HiHat_C_1", "time": 0.25, "vel": 80},  # closed (no midi)
         {"name": "BP_HiHat_C_1", "time": 0.75, "vel": 80, "midi": 46},  # open
-        {"name": "BP_HiHat_C_2", "time": 0.90, "vel": 80, "midi": 44},  # pedal
+        {"name": "BP_HiHat_C_2", "time": 0.90, "vel": 80, "midi": 44},  # pedal -> closed
         {"name": "BP_Crash15_C_1", "time": 2.0},
         {"name": "BP_China15_C_1", "time": 2.5},  # -> dropped (mc lane removed)
         {"name": "BP_Ride17_C_1", "time": 1.5},
@@ -37,9 +37,8 @@ def test_onsets_by_lane_maps_and_refines_hihat():
     o = rlrr.onsets_by_lane(_CHART)
     assert o["k"] == [0.5]
     assert o["s"] == [1.0]  # string time parsed
-    assert o["hc"] == [0.25]  # no midi -> closed
+    assert o["hc"] == [0.25, 0.90]  # no-midi closed + midi 44 (pedal folds to closed)
     assert o["ho"] == [0.75]  # midi 46 -> open
-    assert o["hp"] == [0.90]  # midi 44 -> pedal
     assert o["cr"] == [2.0]
     assert "mc" not in o  # china dropped (mc lane removed)
     assert o["rd"] == [1.5]

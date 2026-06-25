@@ -139,7 +139,7 @@ def main():
                     help="optional ParamRegressor joblib artifact; when set, the oracle report adds a "
                     "'predicted' column scoring the predictor's per-song params (label-free inference).")
     ap.add_argument("--lanes", default=None,
-                    help="comma-separated lanes to restrict the --oracle-report to (e.g. hc,hp,ho,rd,cr for a "
+                    help="comma-separated lanes to restrict the --oracle-report to (e.g. hc,ho,rd,cr for a "
                     "hi-hat+cymbal checkpoint); stems carrying none of them are skipped. Default: all "
                     "checkpoint lanes.")
     ap.add_argument("--log", default=None,

@@ -2,7 +2,7 @@ import drumjot_training.lanes as lanes
 
 
 def test_lanes_are_the_expanded_set():
-    assert lanes.LANES == ("k", "s", "ss", "t", "hc", "hp", "ho", "rd", "cr")
+    assert lanes.LANES == ("k", "s", "ss", "t", "hc", "ho", "rd", "cr")
 
 
 def test_kick():
@@ -26,7 +26,7 @@ def test_toms_merged():
 
 def test_hat_subclasses_split():
     assert lanes.lane_for_gm_note(42) == "hc"  # closed
-    assert lanes.lane_for_gm_note(44) == "hp"  # pedal
+    assert lanes.lane_for_gm_note(44) == "hc"  # pedal folds into closed
     assert lanes.lane_for_gm_note(46) == "ho"  # open
 
 

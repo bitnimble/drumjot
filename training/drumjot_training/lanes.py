@@ -1,9 +1,10 @@
 """Drum lane vocabulary for the onset-detection training set.
 
-9-lane set: kick, snare, side-stick, toms (merged), the three hi-hat
-articulations (closed / pedal / open), ride, and crash. General-MIDI
-percussion notes fold into these lanes; anything outside the kit maps to None
-and is dropped by callers.
+8-lane set: kick, snare, side-stick, toms (merged), the two hi-hat
+articulations (closed / open), ride, and crash. General-MIDI percussion notes
+fold into these lanes; anything outside the kit maps to None and is dropped by
+callers. Pedal hi-hat (GM 44) folds into closed hi-hat (`hc`): there's no
+separate pedal-hat lane.
 
 `mc` (misc cymbals: splash / china / ride-bell) was REMOVED (2026-06): the
 per-stem separators don't isolate these rare add-on cymbals and they're low
@@ -23,7 +24,7 @@ Jot-load time (integration detail, not handled here).
 from __future__ import annotations
 
 LANES: tuple[str, ...] = (
-    "k", "s", "ss", "t", "hc", "hp", "ho", "rd", "cr",
+    "k", "s", "ss", "t", "hc", "ho", "rd", "cr",
 )
 
 LANE_NAMES: dict[str, str] = {
@@ -32,7 +33,6 @@ LANE_NAMES: dict[str, str] = {
     "ss": "side stick",
     "t": "toms",
     "hc": "closed hi-hat",
-    "hp": "pedal hi-hat",
     "ho": "open hi-hat",
     "rd": "ride",
     "cr": "crash",
@@ -48,7 +48,7 @@ _GM_NOTE_TO_LANE: dict[int, str] = {
     38: "s", 40: "s",
     41: "t", 43: "t", 45: "t", 47: "t", 48: "t", 50: "t",
     42: "hc",                                  # closed hi-hat
-    44: "hp",                                  # pedal hi-hat
+    44: "hc",                                  # pedal hi-hat (folds into closed)
     46: "ho",                                  # open hi-hat
     49: "cr", 57: "cr",                        # crash 1 / 2
     51: "rd", 59: "rd", 53: "rd",              # ride 1 / 2 / bell
@@ -73,10 +73,9 @@ CONFUSABLE: dict[str, tuple[str, ...]] = {
     "s": ("ss",),
     "ss": ("s", "k"),
     "t": ("k",),
-    "hc": ("ho", "hp", "cr", "rd"),
-    "hp": ("hc", "ho", "s", "k"),                # hp fired heavily on snare/kick stems
-    "ho": ("hc", "hp", "cr", "rd"),
-    "rd": ("hc", "ho", "hp", "cr"),              # hat->ride: the #1 measured leak
+    "hc": ("ho", "cr", "rd"),
+    "ho": ("hc", "cr", "rd"),
+    "rd": ("hc", "ho", "cr"),                     # hat->ride: the #1 measured leak
     "cr": ("rd", "ho", "hc"),
 }
 

@@ -36,7 +36,7 @@ from drumjot_training.inference import LANE_TO_PITCH  # noqa: E402
 # DSL pitch -> GM MIDI note, aligned with transcriber onsets_midi.PITCH_TO_MIDI
 # and src/midi/from_midi.ts so the frontend parses the notes back to these lanes.
 PITCH_TO_MIDI = {
-    "k": 36, "s": 38, "ss": 37, "t": 50, "h": 42, "H": 46, "hp": 44,
+    "k": 36, "s": 38, "ss": 37, "t": 50, "h": 42, "H": 46,
     "d": 51, "c": 49, "mc": 55, "mp": 56,
 }
 
@@ -155,12 +155,12 @@ def main():
         # The frontend's from_midi (src/midi/gm.ts) FOLDS several GM notes onto
         # one DSL letter: side-stick->s, pedal/open hi-hat->h, splash/china->c,
         # cowbell->b. So the parsed jot only has pitches {k,s,h,t,c,d,...}; the
-        # mapping keys MUST be those folded pitches. A key like 'H'/'hp'/'mc'/'ss'
+        # mapping keys MUST be those folded pitches. A key like 'H'/'mc'/'ss'
         # has no matching jot pitch -> the viewer treats it as an orphan stem and
         # renders that file a SECOND time (the duplicate-waveform bug). Mapping
         # keys here are only folded pitches the model actually produced notes for,
         # so every key resolves to a real jot pitch and each stem appears once.
-        GM_FOLD = {"ss": "s", "hp": "h", "H": "h", "mc": "c", "mp": "b"}
+        GM_FOLD = {"ss": "s", "H": "h", "mc": "c", "mp": "b"}
         folded_to_stem = {GM_FOLD.get(p, p): s for p, s in pitch_to_stem.items()}
         folded_notes = {GM_FOLD.get(p, p) for p in onsets_by_pitch}
         needed_stems = {folded_to_stem[fp] for fp in folded_notes if fp in folded_to_stem}

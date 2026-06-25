@@ -279,7 +279,7 @@ def _selftest():
                 ln = lanes[int(rng.integers(0, len(lanes)))]
                 onsets[ln].append(f / fps)
                 # plant separable signal in HB cols by lane (esp rd vs cr)
-                sig = {"rd": 3.0, "cr": -3.0, "hc": 1.5, "ho": -1.5, "hp": 0.0}[ln]
+                sig = {"rd": 3.0, "cr": -3.0, "hc": 1.5, "ho": -1.5}[ln]
                 feats[f : f + 8, MERT_DIM:] += sig
             clips.append(types.SimpleNamespace(features=feats, onsets_by_lane=onsets))
         return clips

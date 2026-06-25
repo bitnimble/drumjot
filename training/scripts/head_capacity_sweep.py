@@ -62,8 +62,8 @@ from drumjot_training.train import (  # noqa: E402
 )
 
 CYM_LANES = {"rd", "cr"}
-HAT_LANES = {"hc", "hp", "ho"}
-LANES_CH: tuple[str, ...] = ("hc", "hp", "ho", "rd", "cr")  # report order
+HAT_LANES = {"hc", "ho"}
+LANES_CH: tuple[str, ...] = ("hc", "ho", "rd", "cr")  # report order
 
 
 def _pitch_to_stem(p2l) -> dict:

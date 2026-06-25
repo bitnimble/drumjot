@@ -33,7 +33,8 @@ def test_restricted_onsets_keeps_only_the_stems_lanes(tmp_path):
 
 
 def test_distinguishes_hat_and_cymbal_articulations(tmp_path):
-    # 42 closed, 44 pedal, 46 open hat; 49 crash, 51 ride -> all land in distinct lanes
+    # 42 closed + 44 pedal both fold to hc; 46 open hat; 49 crash, 51 ride
     p = _midi([(9, 42), (9, 44), (9, 46), (9, 49), (9, 51)], tmp_path)
     out = a2md.drum_onsets_by_lane(p)
-    assert out["hc"] and out["hp"] and out["ho"] and out["cr"] and out["rd"]
+    assert len(out["hc"]) == 2  # closed (42) + pedal (44) both -> hc
+    assert out["ho"] and out["cr"] and out["rd"]

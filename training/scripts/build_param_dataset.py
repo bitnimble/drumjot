@@ -148,7 +148,7 @@ def main():
     ap.add_argument("--variants", type=int, default=6, help="augmented variants per song (plus the original)")
     ap.add_argument("--no-codec", dest="codec", action="store_false", help="skip lossy-codec augmentation")
     ap.add_argument("--lanes", default=None,
-                    help="comma-separated lanes to build rows for (e.g. hc,hp,ho,rd,cr); stems carrying none "
+                    help="comma-separated lanes to build rows for (e.g. hc,ho,rd,cr); stems carrying none "
                     "of them are skipped (the model never runs on them). Default: all checkpoint lanes.")
     ap.add_argument("--stems-cache", default=None, help="dir to cache separated stems across runs")
     ap.add_argument("--max-seconds", type=float, default=None)

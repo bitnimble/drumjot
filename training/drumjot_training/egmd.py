@@ -82,7 +82,7 @@ def take_duration(clips: Sequence[EgmdClip], max_seconds: float) -> list[EgmdCli
 PERSTEM_TO_LANES: dict[str, tuple[str, ...]] = {
     "k": ("k",),
     "s": ("s", "ss"),
-    "h": ("hc", "hp", "ho"),
+    "h": ("hc", "ho"),
     "c": ("rd", "cr"),
     "t": ("t",),
 }

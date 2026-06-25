@@ -29,7 +29,7 @@ def main():
     ap.add_argument("--mdb-root", default="/codebox-workspace/datasets/MDBDrums")
     ap.add_argument("--sep-root", default="/codebox-workspace/datasets/mdb-sep/perstem")
     ap.add_argument("--param-predictor", default=None, help="optional ParamRegressor joblib (predict column)")
-    ap.add_argument("--lanes", default="hc,hp,ho,rd,cr")
+    ap.add_argument("--lanes", default="hc,ho,rd,cr")
     ap.add_argument("--max-seconds", type=float, default=None)
     ap.add_argument("--window-seconds", type=float, default=30.0)
     ap.add_argument("--log", default=None)
@@ -78,7 +78,7 @@ def main():
         print("no records (check --sep-root has the perstem stems)", flush=True)
         return
     gaps = report.aggregate(records)
-    order = [ln for ln in ("hc", "hp", "ho", "rd", "cr") if ln in gaps]
+    order = [ln for ln in ("hc", "ho", "rd", "cr") if ln in gaps]
     print(f"\n{used} tracks scored\n" + report.format_report(gaps, order), flush=True)
     det = [g.det_captured_frac for g in gaps.values() if g.det_captured_frac is not None]
     print(f"  mean determ captured {sum(det) / len(det) * 100:+.1f}% of gap" if det else "", flush=True)

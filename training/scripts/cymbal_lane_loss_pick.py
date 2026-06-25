@@ -30,7 +30,7 @@ sys.path.insert(0, _HERE)
 sys.path.insert(0, os.path.join(_HERE, ".."))
 sys.path.insert(0, os.path.join(_HERE, "..", "..", "dsp"))
 
-LANES = ("hc", "hp", "ho", "rd", "cr")
+LANES = ("hc", "ho", "rd", "cr")
 CKPTS = {
     "bce": "/codebox-workspace/checkpoints/loss_ab_bce.pt",
     "focal": "/codebox-workspace/checkpoints/loss_ab_focal.pt",

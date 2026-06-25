@@ -48,7 +48,7 @@ _ENST_TO_LANE: dict[str, str] = {
     "sd": "s", "rs": "s",                         # snare; rim shot = full snare hit
     "cs": "ss",                                   # cross stick = side stick
     "chh": "hc", "hh": "hc",                      # closed hi-hat (bare hh -> closed)
-    "phh": "hp",                                  # pedal hi-hat (rare in ENST)
+    "phh": "hc",                                  # pedal hi-hat folds into closed
     "ohh": "ho",                                  # open hi-hat
     "lt": "t", "mt": "t", "lmt": "t", "lft": "t",  # toms
     "ltr": "t", "mtr": "t", "lftr": "t",          # tom rim hits -> tom
@@ -165,7 +165,7 @@ def for_split(
 PERSTEM_TO_LANES: dict[str, tuple[str, ...]] = {
     "k": ("k",),
     "s": ("s", "ss"),
-    "h": ("hc", "hp", "ho"),
+    "h": ("hc", "ho"),
     "c": ("rd", "cr"),
     "t": ("t",),
 }
