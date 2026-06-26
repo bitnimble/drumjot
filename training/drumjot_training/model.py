@@ -25,9 +25,9 @@ class OnsetHead(nn.Module):
     onset logits, so old checkpoints (no `act` weights) stay loadable."""
 
     def __init__(self, in_dim: int, hidden: int = 128, num_layers: int = 2,
-                 calibrate: bool = True):
+                 auto_calibrate: bool = True):
         super().__init__()
-        self.calibrate = calibrate
+        self.auto_calibrate = auto_calibrate
         self.gru = nn.GRU(
             in_dim,
             hidden,
@@ -60,7 +60,7 @@ class OnsetHead(nn.Module):
 
     def _calibrate(self, onset: torch.Tensor, h: torch.Tensor,
                    mask: torch.Tensor | None) -> torch.Tensor:
-        if not self.calibrate:  # bypass (calib stays at zero-init => never used)
+        if not self.auto_calibrate:  # bypass (calib stays at zero-init => never used)
             return onset
         # Detach the pool input: the calib head adapts to the GRU representation but
         # cannot reshape it (no grad flows GRU->pool->calib). This stops the
@@ -94,12 +94,12 @@ class MultiLaneHeads(nn.Module):
         hidden: int = 128,
         num_layers: int = 2,
         lane_names: tuple[str, ...] = LANES,
-        calibrate: bool = True,
+        auto_calibrate: bool = True,
     ):
         super().__init__()
         self.lane_names = tuple(lane_names)
         self.heads = nn.ModuleDict(
-            {lane: OnsetHead(in_dim, hidden, num_layers, calibrate) for lane in self.lane_names}
+            {lane: OnsetHead(in_dim, hidden, num_layers, auto_calibrate) for lane in self.lane_names}
         )
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:

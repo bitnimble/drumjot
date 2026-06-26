@@ -16,25 +16,27 @@ Scoring is `mir_eval` onset-F1 at ±50 ms (`metrics.onset_f1`).
 
 ---
 
-## 2026-06-26 · Per-clip calibration head (learned-peak-pick Phase 1): net-NEGATIVE at cap100, detach doesn't rescue. cap100 can't validate it.
+## 2026-06-26 · Per-clip auto-calibration head (learned-peak-pick Phase 1): net-NEGATIVE at cap100, detach doesn't rescue. cap100 can't validate it.
 
 Tested a learned per-clip onset-**calibration** head (`model.OnsetHead.calib`: a mean+max
 pool of the head's GRU states → per-clip `(bias, log-scale)` applied as `exp(scale)*logit −
 bias`). Goal: close the `current`→`oracle` *threshold-transfer* gap end-to-end (a learned
-per-clip operating point). Clean **RNG-controlled paired A/B** via `--no-calibrate` (the calib
+per-clip operating point). Clean **RNG-controlled paired A/B** via `--no-auto-calibrate` (the calib
 is CONSTRUCTED either way, so the GRU init is identical; only *applied+trained* when on). 2
 seeds (0,1), snap-only, h128, cap100, 4-lane (hc,ho,rd,cr), no-keep-best, +paradb.
 
-**3-way, 2-seed mean MDB onset-F1 (current / oracle):**
+**3-way, 2-seed mean MDB onset-F1 (fixed threshold / cheating):**
+(display rename this session: **fixed threshold** = old `current` column, **cheating** = old
+`oracle`/per-song-best; flag `--no-auto-calibrate`. Older entries below still use current/oracle.)
 
-| lane | OFF (no calib) | calib (joint) | calib + detach |
+| lane | off (no auto-calib) | auto-calib (joint) | auto-calib (detach) |
 |---|---|---|---|
 | hc | **0.674 / 0.734** | 0.651 / 0.702 | 0.634 / 0.668 |
 | ho | **0.266 / 0.288** | 0.246 / 0.251 | 0.226 / 0.243 |
 | rd | 0.566 / 0.584 | 0.559 / 0.587 | **0.574 / 0.606** |
 | cr | **0.430 / 0.545** | 0.404 / 0.531 | 0.384 / 0.497 |
 
-**Verdict: OFF wins current AND oracle on hc/ho/cr** (calib+detach wins rd only). Both calib
+**Verdict: off wins fixed-threshold AND cheating on hc/ho/cr** (auto-calib+detach wins rd only). Both auto-calib
 variants LOWER the **oracle** (threshold-independent ranking) on hc/ho/cr by ~0.02–0.07;
 **detaching the calib pool from the GRU gradient did NOT recover it** → the harm is not
 primarily GRU co-adaptation. **Root reason:** at cap100 the OFF baseline already has tiny
@@ -46,7 +48,7 @@ artifact, absent at cap100 → **cap100 cannot validate calibration**. Also stra
 calibration at best chases `current` *up to* the oracle, at a ranking cost, so the higher-value
 lever is train-side ride↔crash discrimination, which raises the ceiling itself.
 
-**Status:** code kept behind `--calibrate` (commits `9041746` head, `1f2a329` flag, `b7606a3`
+**Status:** code kept behind `--auto-calibrate` (commits `9041746` head, `1f2a329` flag, `b7606a3`
 detach). Open: re-test at cap400 (where the mis-transfer gap is real) before final shelve, vs
 pivot to discrimination. **cap100 default should be OFF.**
 
@@ -56,7 +58,7 @@ python3 -m drumjot_training.train --dataset pooled --pool-sources star,enst,egmd
   --pool-cap 100 --pool-val-cap 30 --pool-balance --pool-cache …/_cache_mert_pooled \
   --head-hidden 128 --lanes hc,ho,rd,cr --epochs 30 --es-min-epochs 12 --no-keep-best \
   --early-stop --no-filter-report --label-min-support 0 --seed $S \
-  [calib off: --no-calibrate] [detach: edit _calibrate, commit b7606a3] --out …/calibab_<v>_s$S
+  [off: --no-auto-calibrate] [detach: edit _calibrate, commit b7606a3] --out …/calibab_<v>_s$S
 ```
 Other params = train.py defaults @ `b7606a3` (bce, pos_weight cap 50, sib 8/3, aux_act 0.5,
 sigma 1.5, MERT-v1-330M L10 @75fps, high_band, bf16+TF32). Eval `eval_mdb.py --lanes hc,ho,rd,cr`.

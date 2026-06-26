@@ -1,14 +1,16 @@
-"""Oracle-gap report: current vs predicted vs oracle, per lane.
+"""Oracle-gap report: fixed-threshold vs predicted vs cheating, per lane.
 
 Aggregates per-(song, lane) onset-F1 at three operating points into the headline
-the whole effort is judged on (design spec §eval integration):
+the whole effort is judged on (design spec §eval integration). Display labels in
+parentheses (the internal field names keep the historical current/oracle terms):
 
-- **current** - today's single global-tuned param per lane,
+- **fixed threshold** (current) - today's single global-tuned param per lane,
 - **predicted** - the param predictor's per-song params,
-- **oracle** - the per-song best (the ceiling),
+- **cheating** (oracle) - the per-song best threshold, chosen against GT (the
+  un-deployable ceiling),
 
-and the **fraction of the oracle gap captured** = (predicted - current) /
-(oracle - current). A zero gap (oracle == current, nothing to win) counts as
+and the **fraction of the cheating gap captured** = (predicted - fixed) /
+(cheating - fixed). A zero gap (cheating == fixed, nothing to win) counts as
 fully captured rather than dividing by zero. Pure Python, no numpy.
 """
 from __future__ import annotations
@@ -95,16 +97,16 @@ def format_report(gaps: Mapping[str, LaneGap], lane_order: Sequence[str] | None 
     `determ` (self-calibrated) column when any lane carries it."""
     order = [ln for ln in (lane_order or sorted(gaps)) if ln in gaps]
     has_det = any(gaps[ln].deterministic_f1 is not None for ln in order)
-    head = f"  {'lane':4s} {'current':>8s}"
+    head = f"  {'lane':4s} {'fixed':>8s}"
     if has_det:
         head += f" {'determ':>8s}"
-    head += f" {'predict':>8s} {'oracle':>8s} {'gap':>7s}"
+    head += f" {'predict':>8s} {'cheating':>8s} {'gap':>7s}"
     head += f" {'det%':>7s} {'pred%':>7s}" if has_det else f" {'captured':>9s}"
     head += f" {'songs':>6s}"
     title = (
-        "==== per-lane onset-F1: current vs determ (self-cal) vs predict vs oracle ===="
+        "==== per-lane onset-F1: fixed-threshold vs determ (self-cal) vs predict vs cheating (per-song best) ===="
         if has_det else
-        "==== per-lane onset-F1: current (global) vs predicted (per-song) vs oracle ===="
+        "==== per-lane onset-F1: fixed-threshold (global) vs predicted (per-song) vs cheating (per-song best) ===="
     )
     lines = [title, head]
     for ln in order:

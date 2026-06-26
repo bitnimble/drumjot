@@ -378,9 +378,9 @@ def test_calibrate_flag_bypass_and_rng_parity():
     # RNG), so the GRU/proj init is identical for calibrate on vs off -- the whole
     # point of the flag (a clean paired A/B isolates the calib EFFECT, not init luck).
     torch.manual_seed(0)
-    on = MultiLaneHeads(in_dim=8, hidden=8, num_layers=1, lane_names=("k",), calibrate=True)
+    on = MultiLaneHeads(in_dim=8, hidden=8, num_layers=1, lane_names=("k",), auto_calibrate=True)
     torch.manual_seed(0)
-    off = MultiLaneHeads(in_dim=8, hidden=8, num_layers=1, lane_names=("k",), calibrate=False)
+    off = MultiLaneHeads(in_dim=8, hidden=8, num_layers=1, lane_names=("k",), auto_calibrate=False)
     for p_on, p_off in zip(on.heads["k"].gru.parameters(), off.heads["k"].gru.parameters(),
                            strict=True):
         assert torch.equal(p_on, p_off)

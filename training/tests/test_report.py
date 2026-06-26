@@ -34,7 +34,7 @@ def test_format_report_mentions_lanes_and_columns():
     gaps = report.aggregate([_rec("k", 0.6, 0.7, 0.8), _rec("hc", 0.4, 0.55, 0.7)])
     text = report.format_report(gaps, lane_order=("k", "hc"))
     assert "k" in text and "hc" in text
-    assert "oracle" in text.lower()
+    assert "cheating" in text.lower()  # display label for the per-song-best (oracle) column
 
 
 def test_deterministic_column_aggregates_and_renders():

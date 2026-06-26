@@ -1544,10 +1544,10 @@ def main(argv: list[str] | None = None) -> None:
                     help="per-lane BiGRU hidden size (h128 default; h256 was the cym sweet spot)")
     ap.add_argument("--head-layers", type=int, default=Config.head_layers,
                     help="per-lane BiGRU layer count (default 2)")
-    ap.add_argument("--no-calibrate", dest="calibrate", action="store_false",
-                    help="bypass the per-clip onset calibration head (still CONSTRUCTED "
+    ap.add_argument("--no-auto-calibrate", dest="auto_calibrate", action="store_false",
+                    help="bypass the per-clip onset auto-calibration head (still CONSTRUCTED "
                          "for RNG/init parity with a calibrated run -- for a clean A/B)")
-    ap.set_defaults(calibrate=Config.calibrate)
+    ap.set_defaults(auto_calibrate=Config.auto_calibrate)
     ap.add_argument("--lanes", default=None,
                     help="comma-list lane subset to train, e.g. k,s,t,hc,ho,rd,cr (default: all 9). "
                     "Fewer lanes = less forward_all VRAM (each lane is its own GRU). Onsets for "
@@ -1630,7 +1630,7 @@ def main(argv: list[str] | None = None) -> None:
         lr=args.lr, weight_decay=args.weight_decay,
         sib_neg_weight=args.sib_neg_weight, sib_pos_weight=args.sib_pos_weight,
         label_min_support=args.label_min_support, label_support_window_s=args.label_support_window,
-        head_hidden=args.head_hidden, head_layers=args.head_layers, calibrate=args.calibrate,
+        head_hidden=args.head_hidden, head_layers=args.head_layers, auto_calibrate=args.auto_calibrate,
         lanes=tuple(s.strip() for s in args.lanes.split(",")) if args.lanes else LANES,
     )
     train_specs, val_specs, cache = (
@@ -1687,7 +1687,7 @@ def main(argv: list[str] | None = None) -> None:
     # order -- with a --lanes subset the heads misalign with their targets (the
     # selected lanes get no gradient and stay at init). Keep it in lockstep.
     model = MultiLaneHeads(in_dim=in_dim, hidden=cfg.head_hidden, num_layers=cfg.head_layers,
-                           lane_names=cfg.lanes, calibrate=cfg.calibrate)
+                           lane_names=cfg.lanes, auto_calibrate=cfg.auto_calibrate)
     if args.resume:
         sd = torch.load(Path(args.resume) / "model.pt", map_location="cpu")
         model.load_state_dict(sd)
