@@ -126,6 +126,25 @@ def detect_all_pitches_learned(
                     )
                 )
 
+    # Tom sub-classification (part of the model's post-processing, not a separate
+    # pipeline stage): split the merged `t` lane into distinct toms
+    # (floor/low/mid/high) by per-song pitch clustering, reusing the tom + kick
+    # stems the model already consumed. Each onset is re-filed under its tom
+    # pitch key (f/tl/tm/t, low->high). Degrades to the merged `t` lane on any
+    # failure. See docs/tom-subclassification.md.
+    toms = by_pitch.pop("t", None)
+    if toms:
+        from drumjot_training import tom_subclassify
+
+        keys = tom_subclassify.subclassify(
+            per_instrument_stems.get("t"),
+            [c.time for c in toms],
+            per_instrument_stems.get("k"),
+            [c.time for c in by_pitch.get("k", ())],
+        )
+        for cand, key in zip(toms, keys, strict=True):
+            by_pitch.setdefault(key, []).append(cand)
+
     for cands in by_pitch.values():
         cands.sort(key=lambda c: c.time)
     return by_pitch

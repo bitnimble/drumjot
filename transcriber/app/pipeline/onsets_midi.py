@@ -90,6 +90,8 @@ PITCH_TO_MIDI: dict[str, int] = {
     "c": 49,  # Crash 1
     "d": 51,  # Ride 1
     "t": 50,  # High tom
+    "tm": 47,  # Low-mid tom (tom sub-classification tier)
+    "tl": 45,  # Low tom (tom sub-classification tier)
     "f": 41,  # Low floor tom
     "p": 39,  # Hand clap
     "b": 56,  # Cowbell
