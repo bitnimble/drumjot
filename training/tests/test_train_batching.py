@@ -392,3 +392,19 @@ def test_calibrate_flag_bypass_and_rng_parity():
     h, _ = off.heads["k"].gru(x)
     raw = off.heads["k"].proj(h).squeeze(-1)
     assert torch.allclose(off(x)[:, 0], raw, atol=1e-6)
+
+
+def test_tune_thresholds_from_probs_beats_fixed_half():
+    from drumjot_training import train
+    from drumjot_training.config import Config
+    cfg = Config(lanes=("k",), encoder_fps=100.0)
+    # one clip: 'k' onsets at frames 10/30/50 peaking at 0.45, flat 0.05 elsewhere.
+    # A fixed 0.5 detects nothing (F1=0); tuning must drop below 0.5 to find them.
+    T = 100
+    probs = np.full((1, T), 0.05, dtype=np.float32)
+    for f in (10, 30, 50):
+        probs[0, f] = 0.45
+    onsets = {"k": [0.10, 0.30, 0.50]}
+    thr = train._tune_thresholds_from_probs([(probs, onsets)], cfg)
+    assert thr["k"] < 0.5                       # tuned below the missed-everything 0.5
+    assert thr["k"] >= cfg.rare_thr_floor       # rare lane (3 onsets) floored at 0.3

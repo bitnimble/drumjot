@@ -202,22 +202,17 @@ def mean_f1(model, clips: Sequence[Clip], cfg: Config) -> float:
     return sum(per_clip) / len(per_clip) if per_clip else 0.0
 
 
-def tune_thresholds(
-    model, val_clips: Sequence[Clip], cfg: Config, grid: Sequence[float] | None = None
+def _tune_thresholds_from_probs(
+    probs_onsets: Sequence[tuple], cfg: Config, grid: Sequence[float] | None = None
 ) -> dict[str, float]:
-    """Per-lane peak threshold maximizing mean held-out F1 on `val_clips`.
-
-    Thresholds are hyperparameters tuned on validation (not test). Lanes with
-    no val onsets keep `cfg.peak_threshold`. RARE lanes (fewer than
-    `cfg.rare_lane_min_onsets` val onsets) only consider thresholds >=
-    `cfg.rare_thr_floor`: tuning on a handful of clips once drove ride to 0.10
-    and flooded real audio with false positives (see RESULTS.md)."""
+    """Per-lane peak threshold maximizing mean F1 over precomputed
+    `(probs (n_lanes, T), onsets_by_lane)` pairs -- the grid-sweep core of
+    `tune_thresholds`, factored out so the per-epoch val can reuse the probs it
+    ALREADY computed (no extra forwards). Lanes with no val onsets keep
+    `cfg.peak_threshold`; RARE lanes (< `cfg.rare_lane_min_onsets` onsets) only
+    consider thresholds >= `cfg.rare_thr_floor` (tuning on a handful of clips once
+    drove ride to 0.10 and flooded real audio with false positives, see RESULTS.md)."""
     grid = grid or (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8)
-    # keep only probs + onsets per clip (not the feature-heavy Clip), so a
-    # streaming val set isn't fully resident at once. Batched forward (grouped by
-    # length, no padding) -> same probs as per-clip, far fewer kernel launches.
-    _pb = _clip_probs_batched(model, val_clips)
-    probs_onsets = [(_pb[i], c.onsets_by_lane) for i, c in enumerate(val_clips)]
     best: dict[str, float] = {}
     for i, lane in enumerate(cfg.lanes):
         n_ref = sum(len(onsets.get(lane, [])) for _, onsets in probs_onsets)
@@ -238,6 +233,21 @@ def tune_thresholds(
                 best_f1, best_thr = mean, thr
         best[lane] = best_thr
     return best
+
+
+def tune_thresholds(
+    model, val_clips: Sequence[Clip], cfg: Config, grid: Sequence[float] | None = None
+) -> dict[str, float]:
+    """Per-lane peak threshold maximizing mean held-out F1 on `val_clips`.
+
+    Thresholds are hyperparameters tuned on validation (not test). See
+    `_tune_thresholds_from_probs` for the rare-lane handling."""
+    # keep only probs + onsets per clip (not the feature-heavy Clip), so a
+    # streaming val set isn't fully resident at once. Batched forward (grouped by
+    # length, no padding) -> same probs as per-clip, far fewer kernel launches.
+    _pb = _clip_probs_batched(model, val_clips)
+    probs_onsets = [(_pb[i], c.onsets_by_lane) for i, c in enumerate(val_clips)]
+    return _tune_thresholds_from_probs(probs_onsets, cfg, grid)
 
 
 def collate_clips(clips: Sequence[Clip]):
@@ -976,7 +986,15 @@ def train_loop(
                 # but ~max_batch fewer kernel launches (the serial val was the big
                 # per-epoch fixed cost on this launch-latency-bound small head).
                 _vp = _clip_probs_batched(model, val_clips)
-                per = [_f1_from_probs(_vp[i], c, cfg) for i, c in enumerate(val_clips)]
+                # Score val_f1 at this epoch's per-lane TUNED thresholds (swept on the
+                # probs we just computed, no extra forwards), not a flat 0.5. A fixed
+                # 0.5 is the wrong operating point for low-threshold lanes (cr/rd/ho
+                # tune to ~0.1), so the 0.5 curve mis-ranked epochs and keep_best /
+                # early-stop effectively chose blind. The tuned curve is the deployable
+                # metric, so best-epoch selection tracks real per-lane quality.
+                _ep_thr = _tune_thresholds_from_probs(
+                    [(_vp[i], c.onsets_by_lane) for i, c in enumerate(val_clips)], cfg)
+                per = [_f1_from_probs(_vp[i], c, cfg, _ep_thr) for i, c in enumerate(val_clips)]
                 clip_macros = []
                 for c, pl in zip(val_clips, per, strict=True):
                     present = [pl[ln] for ln in cfg.lanes if c.onsets_by_lane.get(ln)]
