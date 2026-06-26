@@ -921,7 +921,8 @@ def train_loop(
                 fw = sibling_weight(Y, sib_act, cfg.sib_pos_weight, cfg.sib_neg_weight)
             opt.zero_grad()
             with runtime.autocast():  # bf16 fwd on Ampere+; FP32 no-op elsewhere
-                logits, act_logits = model.forward_all(X)
+                # mask bounds each head's per-clip calibration pool to real frames
+                logits, act_logits = model.forward_all(X, mask)
                 # per-lane loss: BCE on bce_idx lanes + focal on focal_idx lanes.
                 # Independent heads -> summing the two (separately normalised) terms
                 # is correct; each head only sees its own lane's loss gradient.

@@ -67,9 +67,11 @@ def load(out_dir: str | Path, device: str = "cpu"):
         lane_names=tuple(meta["lanes"]),
     )
     sd = torch.load(out / "model.pt", map_location=device)
-    # Tolerate two benign kinds of state_dict drift; raise on anything else:
+    # Tolerate three benign kinds of state_dict drift; raise on anything else:
     #  - missing `.act.*`: older checkpoints predate the auxiliary activity head;
     #    inference uses only the onset path, so those are fine.
+    #  - missing `.calib.*`: older checkpoints predate the per-clip calibration head;
+    #    a zero-init calib is identity, so those load as plain (uncalibrated) heads.
     #  - UNEXPECTED whole heads for lanes outside `meta["lanes"]`: a checkpoint
     #    may carry MORE heads than we load -- trained with the full lane vocab
     #    but reported on a subset (the `--lanes` runs), or loaded after a vocab
@@ -81,7 +83,8 @@ def load(out_dir: str | Path, device: str = "cpu"):
         p = k.split(".")
         return len(p) >= 2 and p[0] == "heads" and p[1] not in keep
 
-    bad = [k for k in missing if ".act." not in k] + [k for k in unexpected if not _extra_head(k)]
+    bad = ([k for k in missing if ".act." not in k and ".calib." not in k]
+           + [k for k in unexpected if not _extra_head(k)])
     if bad:
         raise RuntimeError(f"checkpoint mismatch in {out}: {bad}")
     model.eval()

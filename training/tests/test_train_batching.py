@@ -342,3 +342,31 @@ def test_report_scores_output_lanes_only(monkeypatch):
         train, "evaluate_clip", lambda m, c, cf, th=None: {ln: 0.5 for ln in cf.lanes}
     )
     train._report(None, [clip], cfg, {})  # must not raise KeyError on `zz`
+
+
+def test_calibration_head_identity_init_shift_and_mask():
+    from drumjot_training.model import MultiLaneHeads
+    torch.manual_seed(0)
+    m = MultiLaneHeads(in_dim=8, hidden=8, num_layers=1, lane_names=("k", "s"))
+    # zero-init calib => identity at start (bias 0, scale exp(0)=1)
+    for ln in m.lane_names:
+        assert float(m.heads[ln].calib.weight.detach().abs().sum()) == 0.0
+        assert float(m.heads[ln].calib.bias.detach().abs().sum()) == 0.0
+    x = torch.randn(2, 20, 8)
+    out0 = m(x)
+    assert out0.shape == (2, 2, 20)
+    # a per-clip bias on the k head shifts ONLY k's logits by -bias (scale stays 1,
+    # weight still 0 so calib output == its bias regardless of the pooled input)
+    m.heads["k"].calib.bias.data = torch.tensor([3.0, 0.0])
+    out1 = m(x)
+    assert torch.allclose(out1[:, 0], out0[:, 0] - 3.0, atol=1e-4)  # k shifted
+    assert torch.allclose(out1[:, 1], out0[:, 1], atol=1e-6)        # s untouched
+    # the mask must bound the calibration pool: a huge pad tail changes the pooled
+    # summary (hence the calib) only when NOT masked
+    m.heads["k"].calib.weight.data.normal_(std=0.5)
+    xp = torch.cat([x, 50.0 * torch.randn(2, 6, 8)], dim=1)
+    mask = torch.zeros(2, 26, dtype=torch.bool)
+    mask[:, :20] = True
+    masked = m(xp, mask)
+    nomask = m(xp, None)
+    assert not torch.allclose(masked[:, 0], nomask[:, 0], atol=1e-3)
