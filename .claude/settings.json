@@ -59,7 +59,11 @@
       "Bash(pwd *)"
     ],
     "deny": [
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Write(tmp_*)",
+      "Edit(tmp_*)",
+      "Write(**/tmp_*)",
+      "Edit(**/tmp_*)"
     ],
     "defaultMode": "acceptEdits"
   },
