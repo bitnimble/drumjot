@@ -18,6 +18,7 @@ a working CUDA torch.
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 import numpy as np
@@ -43,6 +44,14 @@ HB_NFFT = 2048
 FEAT_VARIANT = "hb16"  # cache-key token; bump when the feature recipe changes
 FEAT_DIM = MERT_DIM + HB_BANDS  # model input width (1040) -- default (hb on)
 
+# Single on-disk MERT feature cache for the whole project: EVERY MERT encode over
+# audio -- training clips AND eval/inference windows (via embed_clip) -- reads/writes
+# here, so a given (clip|window, encoder, layer, variant) is encoded once, ever.
+# Keyed by content (path+window+encoder+layer+variant), so unrelated callers never
+# collide. Override per-machine with DRUMJOT_MERT_CACHE (e.g. the gaming box's local
+# SSD). embed_clip defaults to this; pass cache_dir=None to opt a call out.
+MERT_CACHE_DIR = os.environ.get("DRUMJOT_MERT_CACHE", "/codebox-workspace/mert_cache")
+
 
 def feat_variant(high_band: bool = True) -> str:
     """Cache-key token for a feature recipe: "hb16" (default) or "" (raw MERT)."""
@@ -61,6 +70,7 @@ def cache_key(
     window: float | None = None,
     variant: str = FEAT_VARIANT,
     start: float = 0.0,
+    cache_dtype: str = "float16",
 ) -> str:
     """Stable cache key for a clip's features under encoder+layer (+window cap).
 
@@ -70,10 +80,17 @@ def cache_key(
 
     `start` is the window offset (seconds) for multi-window clips; it's appended
     to the key ONLY when non-zero, so the default (whole-clip-from-0) keys are
-    byte-identical to pre-windowing caches and existing features are reused."""
+    byte-identical to pre-windowing caches and existing features are reused.
+
+    `cache_dtype` is appended ONLY when non-`float16`, so the legacy fp16 cache
+    (the project default) keeps its existing keys, while other precisions (e.g.
+    eval/inference at float32) land in a separate keyspace -- one shared cache dir
+    never mixes precisions under one key, so there's no first-writer-wins ambiguity."""
     raw = f"{Path(audio_path).expanduser().absolute()}|{encoder}|{layer}|{window}|{variant}"
     if start:
         raw += f"|s{start:g}"
+    if cache_dtype != "float16":
+        raw += f"|{cache_dtype}"
     return hashlib.sha1(raw.encode()).hexdigest()
 
 
@@ -217,7 +234,7 @@ def make_encoder(name: str = MERT_NAME, layer: int = 10, device: str | None = No
 def embed_clip(
     audio_path: str | Path,
     encoder: MertEncoder,
-    cache_dir: str | Path | None = None,
+    cache_dir: str | Path | None = MERT_CACHE_DIR,
     max_seconds: float | None = None,
     cache_dtype: str = "float16",
     high_band: bool = True,
@@ -242,9 +259,10 @@ def embed_clip(
     which halves the cache size + per-epoch read bandwidth (so the cache fits
     in the OS page cache) at no real cost, MERT features sit well within fp16
     range and training autocasts to bf16 anyway. Pass `"float32"` for a
-    full-precision cache. The dtype is not part of the cache key, so an
-    existing cache is reused as-is (loaded at whatever precision it was
-    written); delete `_cache_mert` to re-encode at a new precision.
+    full-precision cache. `cache_dtype` IS part of the cache key for non-float16
+    precisions (float16 keeps the legacy key for backward compat), so float16 and
+    float32 features of the same clip never collide in a shared cache dir -- each
+    (clip, dtype) is encoded once. (`MERT_CACHE_DIR` is that shared dir.)
 
     `high_band` (default True) appends the 6-20 kHz block. The model width is
     `feat_dim(high_band)` and the cache key carries `feat_variant(...)` so each
@@ -255,7 +273,8 @@ def embed_clip(
     if cache_dir is not None:
         cache_dir = Path(cache_dir)
         cache_dir.mkdir(parents=True, exist_ok=True)
-        key = cache_key(audio_path, encoder.name, encoder.layer, max_seconds, variant, start_seconds)
+        key = cache_key(audio_path, encoder.name, encoder.layer, max_seconds, variant,
+                        start_seconds, cache_dtype)
         cache_file = cache_dir / f"{key}.npy"
         if cache_file.exists():
             return np.load(cache_file)

@@ -71,15 +71,12 @@ def lane_probs(audio_path, model, meta: dict, encoder=None, max_seconds: float |
     runtime.configure_backends()
     enc = encoder or embeddings.MertEncoder(name=meta["encoder"], layer=meta["encoder_layer"])
     y = embeddings.load_audio(audio_path, sr=enc.sr)
-    if max_seconds is not None:
-        y = y[: int(max_seconds * enc.sr)]
-    feat = enc.encode(y, enc.sr)
     use_hb = meta.get("high_band", int(meta.get("in_dim", embeddings.MERT_DIM)) > embeddings.MERT_DIM)
-    if use_hb:
-        import numpy as np
-
-        hb = embeddings.highband_features(audio_path, feat.shape[0], max_seconds)
-        feat = np.concatenate([feat, hb], axis=1)
+    # cached encode (+ high-band) via the shared project MERT cache (fp32, byte-identical).
+    # embed_clip applies max_seconds itself, so pass the full y (no manual truncation).
+    feat = embeddings.embed_clip(
+        audio_path, enc, max_seconds=max_seconds, high_band=use_hb,
+        cache_dtype="float32", y_full=y)
     device = next(model.parameters()).device
     x = torch.as_tensor(feat, dtype=torch.float32, device=device).unsqueeze(0)
     with torch.no_grad(), runtime.autocast():
@@ -136,13 +133,14 @@ def stitched_probs(
         seg = y[s : s + chunk] if chunk else y
         if chunk and len(seg) < enc.sr // 10:  # skip a <0.1s tail
             continue
-        feat = enc.encode(seg, enc.sr)
-        if use_hb:
-            s44 = int(round(s / enc.sr * embeddings.HB_SR))
-            n44 = int(round(len(seg) / enc.sr * embeddings.HB_SR))
-            feat = np.concatenate(
-                [feat, embeddings.highband_from_wave(y44[s44 : s44 + n44], feat.shape[0])], axis=1
-            )
+        # cached encode (+ high-band) via the shared project MERT cache: each window
+        # is encoded once, ever (embeddings.MERT_CACHE_DIR). fp32 keeps it
+        # byte-identical to the un-cached path; y/y44 are already loaded so embed_clip
+        # slices them in-memory (no re-decode). Window starts are exact multiples of
+        # the step, so the [start, start+len] slice == the old y[s:s+chunk].
+        feat = embeddings.embed_clip(
+            audio_path, enc, max_seconds=len(seg) / enc.sr, start_seconds=s / enc.sr,
+            high_band=use_hb, cache_dtype="float32", y_full=y, y44_full=y44)
         x = torch.as_tensor(feat, dtype=torch.float32, device=device).unsqueeze(0)
         with torch.no_grad(), runtime.autocast():
             probs = torch.sigmoid(model(x))[0].float().cpu().numpy()  # (L, Tc)

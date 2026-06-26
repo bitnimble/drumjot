@@ -22,6 +22,16 @@ def test_missing_model_offline_raises_clear_fetch_error():
         embeddings.MertEncoder(name="drumjot-nonexistent/not-a-real-model")
 
 
+def test_cache_key_dtype_and_window_keyspace():
+    # fp16 (default) keeps the LEGACY key (no dtype token) -> the existing cache still hits
+    base = embeddings.cache_key("/x/a.flac", "enc", 10, 30.0)
+    assert embeddings.cache_key("/x/a.flac", "enc", 10, 30.0, cache_dtype="float16") == base
+    # a non-fp16 precision lands in its own keyspace -> fp16/fp32 never collide in one dir
+    assert embeddings.cache_key("/x/a.flac", "enc", 10, 30.0, cache_dtype="float32") != base
+    # window offset is keyed too -> stitched_probs windows don't collide on one key
+    assert embeddings.cache_key("/x/a.flac", "enc", 10, 30.0, start=28.0) != base
+
+
 class _StubEncoder:
     name, layer, sr = "enc", 10, 24000
 

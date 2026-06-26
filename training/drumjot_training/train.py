@@ -1426,13 +1426,14 @@ def _pooled_specs(args) -> tuple[list, list, Path]:
         # onsets. (They're identical today; this keeps it correct if one changes.)
         info[name] = (tr, va, ann_of, reader, p2l)
 
-    # Feature cache: default beside the sep trees (NFS), but --pool-cache should
-    # point it at LOCAL NVMe -- the .npy features are re-encodable scratch (~50 GB
-    # for --pool-cap 1000) and local reads keep the GPU compute-bound instead of
-    # NFS-throttled, with no large-RAM/page-cache requirement.
+    # Feature cache: defaults to the shared project MERT cache (embeddings.MERT_CACHE_DIR,
+    # env DRUMJOT_MERT_CACHE) so training shares one cache with eval/inference and a clip
+    # is encoded once, ever. --pool-cache overrides it (e.g. the gaming box points at LOCAL
+    # NVMe -- the .npy are re-encodable scratch, ~50 GB for --pool-cap 1000, and local reads
+    # keep the GPU compute-bound instead of NFS-throttled).
     cache = (
         Path(args.pool_cache) if getattr(args, "pool_cache", None)
-        else Path(os.path.commonpath(roots)) / "_cache_mert_pooled"
+        else Path(embeddings.MERT_CACHE_DIR)
     )
     cache.mkdir(parents=True, exist_ok=True)
 
