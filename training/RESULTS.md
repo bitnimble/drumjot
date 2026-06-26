@@ -31,8 +31,12 @@ disagree on direction.**
 **Verdict: NO benefit -- hypothesis (1) not supported.** The 2-seed mean leans *worse* (the ring may
 slightly *help* cr), but the cr signal is noise-dominated: cr `fixed` swings ±0.18 seed-to-seed.
 Two durable findings:
-- **cap100 cannot resolve cr levers**: the cr seed-noise floor (±0.18) dwarfs any plausible lever
-  (~0.05). Future cr A/Bs need cap400+ and/or many seeds.
+- **cr-lever noise is the EVAL set + seeds, NOT the training cap** (decomposed via per-song cr F1
+  on the 17 MDB cr songs across the 4 ckpts): eval-set bootstrap SE ±0.065 (±0.13 at 95%,
+  cap-INDEPENDENT, one song flipping 1.0→0.0 moves the mean ~0.06); paired same-song seed variance
+  ±0.11; paired aux effect +0.038 (s0) / −0.184 (s1), i.e. no consistent signal. So cap400 would
+  NOT fix the eval noise; the leverage is **more seeds** (avg the ±0.11) + a **bigger real cr eval
+  set** (shrink the ±0.13 floor). (Earlier "cap100 is the limit" framing was wrong/unproven.)
 - **aux-lane A/B confound**: `masked_bce` normalizes over the aux-lane UNION (`denom = frames *
   n_aux_lanes`, train.py:314), so dropping cr rescales ho/rd's aux gradient ~1.5x. hc (no aux) was
   bit-identical across arms -- the sanity that flagged it. A per-lane aux normalization would
