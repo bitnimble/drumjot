@@ -62,7 +62,11 @@ class OnsetHead(nn.Module):
                    mask: torch.Tensor | None) -> torch.Tensor:
         if not self.calibrate:  # bypass (calib stays at zero-init => never used)
             return onset
-        bg = self.calib(self._pool(h, mask))                  # (B, 2)
+        # Detach the pool input: the calib head adapts to the GRU representation but
+        # cannot reshape it (no grad flows GRU->pool->calib). This stops the
+        # co-adaptation that dragged the oracle/ranking down when calib was trained
+        # jointly; the GRU still learns onset ranking via proj (scaled by exp(scale)).
+        bg = self.calib(self._pool(h.detach(), mask))         # (B, 2)
         bias, log_scale = bg[:, 0:1], bg[:, 1:2]
         return torch.exp(log_scale.clamp(-3.0, 3.0)) * onset - bias  # (B,1) bcasts over (B,T)
 
