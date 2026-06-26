@@ -16,6 +16,50 @@ Scoring is `mir_eval` onset-F1 at ±50 ms (`metrics.onset_f1`).
 
 ---
 
+## 2026-06-26 · val_f1 fix: per-epoch val scores at TUNED thresholds -> keep_best works (sensible epochs; +hc/ho/rd on MDB)
+
+The per-epoch `val_f1` (keep_best / early-stop signal) scored at a flat 0.5, but the deployable
+per-lane thresholds tune to ~0.1-0.3, so the 0.5 curve mis-ranked epochs and keep_best picked
+near-blind (e.g. cr restored from ep2). Fixed (`d200ce6`): each epoch tunes per-lane thresholds
+on the val probs it ALREADY computes (`_tune_thresholds_from_probs`, no extra forwards) and
+scores val_f1 there -- the deployable metric.
+
+Validation: keep_best ON (tuned val_f1) vs the no-keep-best `off` baseline (`calibab_off`, final
+epoch), 2 seeds, cap100/snap/h128/4-lane/+paradb/plain (`--no-auto-calibrate`).
+
+keep_best per-lane restore epochs (now SENSIBLE, not cr@~2):
+`seed0 hc@2 ho@21 rd@6 cr@17` · `seed1 hc@9 ho@11 rd@2 cr@6`.
+
+**MDB 2-seed mean (fixed / cheating), keep_best (tuned val_f1) vs no-keep-best off:**
+
+| lane | keep_best | off (no-keep-best) | Δ fixed / Δ cheating |
+|---|---|---|---|
+| hc | 0.715 / 0.802 | 0.674 / 0.734 | +0.041 / +0.068 |
+| ho | 0.363 / 0.443 | 0.266 / 0.288 | **+0.097 / +0.155** |
+| rd | 0.560 / 0.632 | 0.566 / 0.584 | -0.006 / +0.048 |
+| cr | 0.401 / 0.539 | 0.430 / 0.545 | -0.029 / -0.006 |
+
+**Verdict: the fix makes keep_best work.** It restores sensible per-lane epochs (cr@17 vs the old
+blind cr@2) and improves MDB on hc/ho/rd -- **ho big (+0.097 fixed / +0.155 cheating)**. cr is the
+lone exception (slightly worse): its pooled-val -> MDB transfer is unreliable (synthetic/clean val
+crash is easier than real MDB crash with ride bleed), so the best-VAL cr epoch doesn't transfer --
+exactly the ride-crash confusion the aux/sib levers target. **Caveat:** the baseline is no-keep-best
+(pre-fix), not a keep_best+old-0.5 arm, so this validates the new REGIME, not keep_best in pure
+isolation; the epoch-selection (cr@17 not cr@2) is the direct mechanism check. keep_best default
+stays ON. Also: per-epoch val now does a per-lane grid sweep (CPU, on already-computed probs),
+~negligible vs the forward/backward.
+
+**Reproduce (per arm; local RTX 3080):** same env as the A/B v3 entry below, then per seed S:
+```
+python3 -m drumjot_training.train --dataset pooled --pool-sources star,enst,egmd,paradb \
+  --pool-cap 100 --pool-val-cap 30 --pool-balance --pool-cache …/_cache_mert_pooled \
+  --head-hidden 128 --lanes hc,ho,rd,cr --epochs 30 --es-min-epochs 12 --early-stop \
+  --no-filter-report --label-min-support 0 --no-auto-calibrate --seed $S --out …/kbval_s$S
+```
+(`--keep-best` is the default.) Other params = train.py defaults @ `374561b`. Eval `eval_mdb.py --lanes hc,ho,rd,cr`.
+
+---
+
 ## 2026-06-26 · Per-clip auto-calibration head (learned-peak-pick Phase 1): net-NEGATIVE at cap100, detach doesn't rescue. cap100 can't validate it.
 
 Tested a learned per-clip onset-**calibration** head (`model.OnsetHead.calib`: a mean+max
