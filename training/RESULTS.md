@@ -16,6 +16,40 @@ Scoring is `mir_eval` onset-F1 at ±50 ms (`metrics.onset_f1`).
 
 ---
 
+## 2026-06-26 · cr lever test 1 (drop crash from aux ring objective): NO benefit; cap100 too noisy for cr A/Bs
+
+Proposal (1) for ride-crash confusion: drop cr from the aux ring-activity objective (`--aux-lanes
+ho,rd`) -- hypothesis was the ring/wash objective teaches cr to follow ride wash (false positives).
+Clean isolation: `--no-keep-best --no-early-stop` (fixed 30 ep); the first attempt (keep_best +
+early-stop) was confounded -- the keep_best argmax over the 13-clip cr val amplified cross-arm
+drift, scattering the restored epochs. crin vs crout, 2 seeds, cap100/snap/h128/4-lane/+paradb/plain.
+
+cr MDB onset-F1 (fixed / cheating), 2-seed mean: **crin 0.428 / 0.545** vs **crout 0.356 / 0.494**.
+Per-seed cr fixed: s0 crout 0.412 > crin 0.370 (+); s1 crout 0.300 << crin 0.485 (--). **Seeds
+disagree on direction.**
+
+**Verdict: NO benefit -- hypothesis (1) not supported.** The 2-seed mean leans *worse* (the ring may
+slightly *help* cr), but the cr signal is noise-dominated: cr `fixed` swings ±0.18 seed-to-seed.
+Two durable findings:
+- **cap100 cannot resolve cr levers**: the cr seed-noise floor (±0.18) dwarfs any plausible lever
+  (~0.05). Future cr A/Bs need cap400+ and/or many seeds.
+- **aux-lane A/B confound**: `masked_bce` normalizes over the aux-lane UNION (`denom = frames *
+  n_aux_lanes`, train.py:314), so dropping cr rescales ho/rd's aux gradient ~1.5x. hc (no aux) was
+  bit-identical across arms -- the sanity that flagged it. A per-lane aux normalization would
+  decouple, if we keep doing aux-lane A/Bs.
+
+**Reproduce (per arm; local RTX 3080):** same env as A/B v3 below, per seed S and M in {crin,crout}:
+```
+python3 -m drumjot_training.train --dataset pooled --pool-sources star,enst,egmd,paradb \
+  --pool-cap 100 --pool-val-cap 30 --pool-balance --pool-cache …/_cache_mert_pooled \
+  --head-hidden 128 --lanes hc,ho,rd,cr --epochs 30 --no-keep-best --no-early-stop \
+  --no-filter-report --label-min-support 0 --no-auto-calibrate \
+  [crout: --aux-lanes ho,rd] --seed $S --out …/auxab2_${M}_s$S
+```
+Other params = train.py defaults @ `374561b`. Eval `eval_mdb.py --lanes hc,ho,rd,cr`.
+
+---
+
 ## 2026-06-26 · val_f1 fix: per-epoch val scores at TUNED thresholds -> keep_best works (sensible epochs; +hc/ho/rd on MDB)
 
 The per-epoch `val_f1` (keep_best / early-stop signal) scored at a flat 0.5, but the deployable
