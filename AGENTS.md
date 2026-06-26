@@ -249,16 +249,23 @@ does `uv pip install -e .` against `transcriber/pyproject.toml`.
 
 **Pass non-trivial code as a file, not inline.** Only a simple one-liner
 goes inline as `scripts/sandbox-py '<code>'`. For anything multi-line,
-`Write()` it to a temp file in this repo under a **random/unique name**
-(e.g. `tmp_a1b2c3.py`, not a fixed `tmp.py`; other agents may be running
-concurrently and would collide) and run
-`scripts/sandbox-py /abs/path/in/repo/tmp_a1b2c3.py`; the repo is
+`Write()` it into the gitignored **`tmp/` scratch folder** under a
+**random/unique name** (e.g. `tmp/a1b2c3.py`, not a fixed `tmp/x.py`; other
+agents may be running concurrently and would collide) and run
+`scripts/sandbox-py /abs/path/in/repo/tmp/a1b2c3.py`; the repo is
 volume-mounted at the **same path** inside the sandbox, so it resolves
 identically.
+- **All scratch goes in `tmp/`, NOT a `tmp_*`-prefixed file.** `Write()` /
+  `Edit()` to any `tmp_*` path (repo root or nested) is **DENIED** by
+  `.claude/settings.json` (`deny: Write/Edit(tmp_*)`), so a `tmp_foo.py` just
+  gets blocked. Use `tmp/foo.py` (plain name, no `tmp_` prefix). Both `/tmp/`
+  and `/tmp_*` are gitignored, so neither surfaces as untracked, but only
+  `tmp/` is writable.
 Multi-line inline code trips the harness into a permission confirmation
 even though `scripts/sandbox-*` is allowlisted; a file argument doesn't.
-Same for `scripts/sandbox-bun` (write a `.ts`/`.js` temp file) and shell
-via `scripts/sandbox-run`. Delete the temp file when done.
+Same for `scripts/sandbox-bun` (write a `tmp/*.ts`/`.js` file) and shell
+via `scripts/sandbox-run`. Delete the scratch file when done (or just leave
+it in `tmp/`, which is gitignored).
 
 The scripts auto-start the `drumjot-sandbox` container if stopped and
 fall back to `sudo docker`; they print the build/run recipe if it
