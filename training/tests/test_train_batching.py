@@ -370,3 +370,25 @@ def test_calibration_head_identity_init_shift_and_mask():
     masked = m(xp, mask)
     nomask = m(xp, None)
     assert not torch.allclose(masked[:, 0], nomask[:, 0], atol=1e-3)
+
+
+def test_calibrate_flag_bypass_and_rng_parity():
+    from drumjot_training.model import MultiLaneHeads
+    # RNG/init parity: the calib head is CONSTRUCTED either way (consumes the same
+    # RNG), so the GRU/proj init is identical for calibrate on vs off -- the whole
+    # point of the flag (a clean paired A/B isolates the calib EFFECT, not init luck).
+    torch.manual_seed(0)
+    on = MultiLaneHeads(in_dim=8, hidden=8, num_layers=1, lane_names=("k",), calibrate=True)
+    torch.manual_seed(0)
+    off = MultiLaneHeads(in_dim=8, hidden=8, num_layers=1, lane_names=("k",), calibrate=False)
+    for p_on, p_off in zip(on.heads["k"].gru.parameters(), off.heads["k"].gru.parameters(),
+                           strict=True):
+        assert torch.equal(p_on, p_off)
+    assert torch.equal(on.heads["k"].proj.weight, off.heads["k"].proj.weight)
+    # bypass: with calibrate off, a NONZERO calib has no effect -- forward == raw proj
+    off.heads["k"].calib.weight.data.normal_()
+    off.heads["k"].calib.bias.data = torch.tensor([5.0, 1.0])
+    x = torch.randn(2, 10, 8)
+    h, _ = off.heads["k"].gru(x)
+    raw = off.heads["k"].proj(h).squeeze(-1)
+    assert torch.allclose(off(x)[:, 0], raw, atol=1e-6)

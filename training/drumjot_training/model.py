@@ -24,8 +24,10 @@ class OnsetHead(nn.Module):
     which a pure onset target never shows the head. Inference uses only the
     onset logits, so old checkpoints (no `act` weights) stay loadable."""
 
-    def __init__(self, in_dim: int, hidden: int = 128, num_layers: int = 2):
+    def __init__(self, in_dim: int, hidden: int = 128, num_layers: int = 2,
+                 calibrate: bool = True):
         super().__init__()
+        self.calibrate = calibrate
         self.gru = nn.GRU(
             in_dim,
             hidden,
@@ -58,6 +60,8 @@ class OnsetHead(nn.Module):
 
     def _calibrate(self, onset: torch.Tensor, h: torch.Tensor,
                    mask: torch.Tensor | None) -> torch.Tensor:
+        if not self.calibrate:  # bypass (calib stays at zero-init => never used)
+            return onset
         bg = self.calib(self._pool(h, mask))                  # (B, 2)
         bias, log_scale = bg[:, 0:1], bg[:, 1:2]
         return torch.exp(log_scale.clamp(-3.0, 3.0)) * onset - bias  # (B,1) bcasts over (B,T)
@@ -86,11 +90,12 @@ class MultiLaneHeads(nn.Module):
         hidden: int = 128,
         num_layers: int = 2,
         lane_names: tuple[str, ...] = LANES,
+        calibrate: bool = True,
     ):
         super().__init__()
         self.lane_names = tuple(lane_names)
         self.heads = nn.ModuleDict(
-            {lane: OnsetHead(in_dim, hidden, num_layers) for lane in self.lane_names}
+            {lane: OnsetHead(in_dim, hidden, num_layers, calibrate) for lane in self.lane_names}
         )
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:

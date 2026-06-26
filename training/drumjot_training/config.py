@@ -45,6 +45,11 @@ class Config:
     # Per-lane head.
     head_hidden: int = 128
     head_layers: int = 2
+    # Per-clip onset calibration (model.OnsetHead.calib): a learned per-clip
+    # operating-point shift on the onset logit. On by default; --no-calibrate
+    # bypasses it (the calib weights are still CONSTRUCTED so the RNG stream --
+    # and thus the GRU init -- is identical to a calibrated run, for a clean A/B).
+    calibrate: bool = True
 
     # Optimisation. AdamW (decoupled weight decay) + a warmup->cosine LR
     # schedule; both are strict improvements over plain Adam/constant-LR for a
