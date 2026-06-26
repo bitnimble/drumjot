@@ -45,6 +45,13 @@ class Config:
     # Per-lane head.
     head_hidden: int = 128
     head_layers: int = 2
+    # Lanes that get the auxiliary ring-activity objective. None ->
+    # targets.SUSTAINED_LANES (ho,rd,cr). --aux-lanes overrides, e.g. `ho,rd` drops
+    # crash from the aux objective: the ring/wash objective may be teaching cr to
+    # follow the ride wash (false positives), so dropping it is the ride-crash
+    # discrimination A/B. Only changes which lanes the aux LOSS supervises; the aux
+    # targets themselves are still built for SUSTAINED_LANES (unused rows ignored).
+    aux_lanes: tuple[str, ...] | None = None
     # Per-clip onset AUTO-CALIBRATION (model.OnsetHead.calib): a learned per-clip
     # operating-point shift on the onset logit. On by default; --no-auto-calibrate
     # bypasses it (the calib weights are still CONSTRUCTED so the RNG stream --

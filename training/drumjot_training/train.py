@@ -836,7 +836,8 @@ def train_loop(
     sib_on = cfg.sib_neg_weight != 1.0 or cfg.sib_pos_weight != 1.0
     S = torch.as_tensor(sibling_matrix(cfg.lanes), dtype=torch.bool, device=device)
     # aux ring-activity rows + a unit pos_weight for the activity BCE
-    sus_idx = [i for i, ln in enumerate(cfg.lanes) if ln in SUSTAINED_LANES]
+    _aux_lanes = cfg.aux_lanes if cfg.aux_lanes is not None else SUSTAINED_LANES
+    sus_idx = [i for i, ln in enumerate(cfg.lanes) if ln in _aux_lanes]
     one_pw = torch.ones(len(sus_idx), 1, device=device)
     # per-lane loss selection. Heads are independent (each lane its own OnsetHead
     # over frozen features), so a per-lane loss has NO cross-lane interaction --
@@ -1570,6 +1571,10 @@ def main(argv: list[str] | None = None) -> None:
                     help="comma-list lane subset to train, e.g. k,s,t,hc,ho,rd,cr (default: all 9). "
                     "Fewer lanes = less forward_all VRAM (each lane is its own GRU). Onsets for "
                     "omitted lanes are simply not targeted; sibling weighting skips them.")
+    ap.add_argument("--aux-lanes", default=None,
+                    help="comma-list lanes that get the aux ring-activity objective "
+                         "(default: SUSTAINED_LANES = ho,rd,cr). e.g. --aux-lanes ho,rd drops "
+                         "crash from the aux objective (ride-crash discrimination A/B).")
     ap.add_argument("--seed", type=int, default=0,
                     help="torch init seed for reproducible head weights (multi-seed ablations)")
     ap.add_argument(
@@ -1650,6 +1655,7 @@ def main(argv: list[str] | None = None) -> None:
         label_min_support=args.label_min_support, label_support_window_s=args.label_support_window,
         head_hidden=args.head_hidden, head_layers=args.head_layers, auto_calibrate=args.auto_calibrate,
         lanes=tuple(s.strip() for s in args.lanes.split(",")) if args.lanes else LANES,
+        aux_lanes=tuple(s.strip() for s in args.aux_lanes.split(",")) if args.aux_lanes else None,
     )
     train_specs, val_specs, cache = (
         _star_specs(args) if args.dataset == "star"
