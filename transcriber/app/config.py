@@ -72,6 +72,15 @@ class Settings(BaseSettings):
     # (non-commercial) - see `app/pipeline/larsnet/__init__.py`.
     provision_larsnet: bool = True
 
+    # --- Onset backend ---
+    # The trained frozen-MERT + per-lane-heads model (training/, run PER STEM via
+    # pipeline/learned_onsets.py) is the DEFAULT onset detector. A request can fall
+    # back to the ADTOF detector (below) with the `onset_backend=adtof` form param.
+    # `learned_onsets_checkpoint` is a run dir (model.pt + meta.json with tuned
+    # per-lane thresholds, e.g. the patched ab3_prev). Override per-machine via env.
+    use_learned_onsets: bool = True
+    learned_onsets_checkpoint: Path = Path("/codebox-workspace/datasets/ab3_prev")
+
     # --- ADTOF onset detector tuning ---
     # ADTOF (xavriley/ADTOF-pytorch Frame_RNN) is a fixed pretrained
     # model whose weights ship inside the package — there is no model /

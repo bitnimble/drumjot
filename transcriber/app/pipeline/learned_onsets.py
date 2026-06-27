@@ -80,6 +80,16 @@ def detect_all_pitches_learned(
     "is this a hit?" confidence `adtof_onsets` provides). One MERT encoder is
     built once and reused across stems.
     """
+    # drumjot_training / drumjot_dsp (the training package) aren't installed in the
+    # transcriber venv -- add the monorepo's training/ + dsp/ to sys.path so this stage
+    # can import them. A path/editable dep in transcriber/pyproject.toml would be cleaner
+    # but needs an install; a Docker image running this must include training/ + dsp/.
+    import sys
+
+    repo_root = Path(__file__).resolve().parents[3]  # transcriber/app/pipeline/ -> repo root
+    for pkg_root in (repo_root / "training", repo_root / "dsp"):
+        if pkg_root.is_dir() and str(pkg_root) not in sys.path:
+            sys.path.insert(0, str(pkg_root))
     from drumjot_training import embeddings, enst, inference, metrics
 
     dev = device or _resolve_device()

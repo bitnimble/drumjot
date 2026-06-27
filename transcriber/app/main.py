@@ -313,6 +313,7 @@ async def transcribe(
     quantise: bool = Form(default=True),
     quantise_use_llm: bool = Form(default=True),
     llm_model: str = Form(default=""),
+    onset_backend: str = Form(default=""),
     debug: bool = Form(default=False),
 ) -> StreamingResponse:
     """Streaming NDJSON response: one event per pipeline stage bookend
@@ -390,6 +391,9 @@ async def transcribe(
         quantise=quantise,
         quantise_use_llm=quantise_use_llm,
         llm_model=llm_model or settings.llm_model,
+        use_learned_onsets=(onset_backend.strip().lower() == "learned")
+        if onset_backend else settings.use_learned_onsets,
+        learned_onsets_checkpoint=str(settings.learned_onsets_checkpoint),
     )
     separator: Separator = request.app.state.separator
 
@@ -498,6 +502,7 @@ async def transcribe_resume(
     quantise: bool = Form(default=True),
     quantise_use_llm: bool = Form(default=True),
     llm_model: str = Form(default=""),
+    onset_backend: str = Form(default=""),
 ) -> StreamingResponse:
     """Re-run the pipeline from `resume_stage` onward, hydrating any
     artifacts produced by earlier stages from `resume_folder`.
@@ -540,6 +545,9 @@ async def transcribe_resume(
         quantise=quantise,
         quantise_use_llm=quantise_use_llm,
         llm_model=resolved_model,
+        use_learned_onsets=(onset_backend.strip().lower() == "learned")
+        if onset_backend else settings.use_learned_onsets,
+        learned_onsets_checkpoint=str(settings.learned_onsets_checkpoint),
     )
     separator: Separator = request.app.state.separator
     run_log = RunLog()
