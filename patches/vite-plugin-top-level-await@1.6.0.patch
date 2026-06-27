@@ -1,0 +1,12 @@
+diff --git a/dist/esbuild.js b/dist/esbuild.js
+index 9f0e38f9869ea8b291fe4f8b0b2d3da28528fa34..8f103ca5c4690bc606a006b4ccc41ba4819b41a9 100644
+--- a/dist/esbuild.js
++++ b/dist/esbuild.js
+@@ -11,6 +11,6 @@ function requireFrom(self, contextModuleName, wantedModuleName) {
+     const virtualModule = new Module(contextModulePath, module);
+     virtualModule.filename = contextModulePath;
+     virtualModule.paths = Module._nodeModulePaths(path_1.default.dirname(contextModulePath));
+-    return virtualModule.require(wantedModuleName);
++    return Module.createRequire(contextModulePath)(wantedModuleName);
+ }
+ exports.default = requireFrom(module, "vite", "esbuild");
