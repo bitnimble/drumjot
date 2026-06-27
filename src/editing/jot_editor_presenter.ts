@@ -614,7 +614,7 @@ export class JotEditorPresenter {
    * Load a transcriber debug `.zip` bundle: parse the embedded
    * `final.jot`, load every audio track in the manifest's `mapping`, and
    * stash the manifest (stage timings + log stream) on the provenance
-   * store so the {@link DebugPanel} can show it.
+   * store so the sidebar's Debug panel can show it.
    *
    * Behaves like {@link loadParadbMap}: replaces the current song
    * wholesale (drops previously loaded audio tracks, resets the lane
@@ -736,7 +736,8 @@ export class JotEditorPresenter {
   /**
    * Apply an already-parsed debug bundle: replace the current song with
    * the bundle's score (MIDI → jot), load each audio track, pair stems
-   * with their instrument rows, and mount the manifest on the DebugPanel.
+   * with their instrument rows, and mount the manifest for the sidebar's
+   * Debug panel.
    *
    * Returns `true` if a score was loaded, `false` if `prediction.mid`
    * could not be turned into a jot (the audio tracks still load either

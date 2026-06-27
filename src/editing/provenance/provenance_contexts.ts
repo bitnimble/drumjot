@@ -5,7 +5,8 @@ import { ProvenancePresenter } from './provenance_presenter';
 
 /**
  * Routes the {@link ProvenanceStore} to deep consumers that read debug-
- * bundle / provenance state (today: `FilteredOnsetView`'s pinned-popover
+ * bundle / provenance state (the sidebar's `DebugView` for the loaded
+ * manifest's stage timings + logs; `FilteredOnsetView`'s pinned-popover
  * identity). `null` outside the view.
  */
 export const ProvenanceStoreContext = React.createContext<ProvenanceStore | null>(null);

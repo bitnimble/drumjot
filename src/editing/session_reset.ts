@@ -26,9 +26,9 @@
  *
  * **What does NOT reset.** Genuinely global / session-level preferences that
  * a page refresh is the only thing that should clear: the sidebar's
- * open/width, the zoom level + viewport gutter, the transcribe form + recent-
- * runs picker, and the DebugPanel's open/height chrome. Those stores are
- * simply absent from the registry. Per-song display settings that the user
+ * open/active-panel/pin state, the zoom level + viewport gutter, and the
+ * transcribe form + recent-runs picker. Those stores are simply absent from
+ * the registry. Per-song display settings that the user
  * asked to travel with the song (the grid-line overlay, the colour palette)
  * DO reset, and are then re-applied from a loaded save file's editor metadata
  * (see `src/editing/persistence/`).

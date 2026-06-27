@@ -4,7 +4,7 @@ import { makeAutoObservable } from 'mobx';
  *  its own `activePanel` state); the view registry in `panels/sidebar_panels`
  *  maps each id to its rail icon + panel body and is `satisfies`-checked against
  *  this union, so a new panel is a new member here plus a registry entry. */
-export type SidebarPanelId = 'layers' | 'note_properties';
+export type SidebarPanelId = 'layers' | 'note_properties' | 'debug';
 
 /**
  * Right-sidebar UI state: whether the panel is expanded, which panel is

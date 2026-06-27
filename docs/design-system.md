@@ -70,8 +70,8 @@ work, so colors still flow through tokens.
 when selector is single :local class name"*). When typography is needed
 on an element targeted by a compound selector (an `<h4>` in a card, a
 `<dt>` in a `<dl>`), inline the props and leave a comment naming the use
-case it mirrors. Current exceptions: `.debugPanelColumn h4`
-(toolbar.module.css), `.debugDetailsList dt` (score.module.css).
+case it mirrors. Current exceptions: `.debugDetailsList dt`
+(score.module.css).
 
 ## The rules (1–3 enforced by stylelint via `.stylelintrc.json`)
 

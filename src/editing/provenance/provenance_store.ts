@@ -25,9 +25,8 @@ function canonicalProvenanceLane(transcriberLane: string): string {
 
 /**
  * Transcriber debug-bundle state: the manifest (logs + stage timings)
- * behind the DebugPanel, the per-note onset provenance behind the
- * selection label + filtered-onset ghosts, and the DebugPanel's own
- * open/height chrome.
+ * behind the sidebar Debug panel, and the per-note onset provenance behind
+ * the selection label + filtered-onset ghosts.
  *
  * Pure data: observables + derived computeds. The bundle-loading
  * orchestration that populates these (applyDebugBundle, clearNoteProvenance)
@@ -37,7 +36,7 @@ export class ProvenanceStore {
   /**
    * Last loaded transcriber debug bundle (`.zip`), if any. Carries the
    * captured logs + per-stage timings produced server-side during a
-   * transcribe run, so the UI's DebugPanel can show what happened end-
+   * transcribe run, so the sidebar's Debug panel can show what happened end-
    * to-end without requiring a `docker compose logs` round trip.
    * Replaced when a new bundle is loaded; otherwise survives jot/audio
    * changes.
@@ -67,12 +66,6 @@ export class ProvenanceStore {
    * so we can't use it); `undefined` means none pinned. Hover-only popovers
    * don't go through here. */
   pinnedFilteredOnsetKey: string | undefined = undefined;
-  /** Whether the DebugPanel is expanded, small UI state, kept here so
-   * the toolbar toggle and the panel itself stay in sync. */
-  debugPanelOpen: boolean = false;
-  /** Height of the DebugPanel (px) when expanded; adjusted by dragging
-   * the resize handle along its top edge. */
-  debugPanelHeight: number = 280;
 
   constructor() {
     makeAutoObservable(this);

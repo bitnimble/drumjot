@@ -1,0 +1,135 @@
+/* DebugView: the body of the right sidebar's Debug panel, rendered when a
+   transcriber debug bundle has been loaded (the `Load > Load zip` action
+   populates it). Portrait layout for the narrow sidebar column: a run
+   summary, the per-stage timings, then the captured log stream, stacked
+   vertically. The enclosing sidebar panel owns the scroll (overflow: auto),
+   so the sections flow naturally rather than each scrolling on its own. */
+.debugView {
+    composes: body from '../../typography.module.css';
+    color: var(--color-text-strong);
+}
+
+/* Run summary: bundle filename, the stage/log counts + total elapsed, and
+   the started-at timestamp, each on its own line. */
+.summary {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.summaryFilename {
+    composes: bodySm from '../../typography.module.css';
+    color: var(--color-text-strong);
+    word-break: break-word;
+}
+
+.summaryStats {
+    composes: bodySm from '../../typography.module.css';
+    color: var(--color-text-faint-strong);
+}
+
+.section {
+    margin-top: 14px;
+}
+
+.sectionTitle {
+    composes: metaLabel from '../../typography.module.css';
+    margin: 0 0 6px;
+    color: var(--color-text-faint-alt);
+}
+
+/* Placeholder shown when no bundle is loaded, or a section has nothing to
+   show. */
+.empty {
+    composes: bodySm from '../../typography.module.css';
+    color: var(--color-text-faint-strong);
+    margin: 0;
+}
+
+.stageList {
+    composes: mono from '../../typography.module.css';
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.stageRow {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 2px 0;
+    border-bottom: 1px dotted var(--color-border-soft);
+}
+
+.stageName {
+    color: var(--color-text-strong);
+    word-break: break-word;
+}
+
+.stageElapsed {
+    color: var(--color-text-faint);
+    flex: 0 0 auto;
+}
+
+/* Logs: a sunken, bordered box to set it apart from the panel surface. Each
+   entry is a two-line block, the meta row (timestamp · level · logger) on
+   top and the message wrapping below, so it fits the narrow column without
+   horizontal scrolling. */
+.logList {
+    composes: mono from '../../typography.module.css';
+    margin: 0;
+    padding: 6px 10px;
+    list-style: none;
+    background: var(--color-bg-neutral);
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--radius-md);
+}
+
+.logRow {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 3px 0;
+}
+
+.logRow + .logRow {
+    border-top: 1px dotted var(--color-border-soft);
+}
+
+.logMeta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.logTimestamp {
+    color: var(--color-text-faint-strong);
+    flex: 0 0 auto;
+}
+
+.logLevel {
+    /* stylelint-disable-next-line property-disallowed-list -- bold weight on top of the row's `mono` composition so log levels (WARNING, ERROR) read as the meta row's anchor. */
+    font-weight: 600;
+    color: var(--color-text-muted);
+    flex: 0 0 auto;
+}
+
+.logLevelWARNING {
+    color: var(--color-accent-on-text-alt);
+}
+
+.logLevelERROR {
+    color: var(--color-error-alt);
+}
+
+.logLogger {
+    color: var(--color-blue-info);
+    word-break: break-word;
+}
+
+.logMessage {
+    color: var(--color-text);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
