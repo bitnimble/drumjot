@@ -41,7 +41,9 @@ test('Model selection persists across New ↔ Resume tab switch', async ({ page 
   // Flip Model away from its default so the assertion below proves the
   // value rode through the tab switch rather than just matching the
   // default on both sides.
-  const modelSelect = page.getByLabel('Model');
+  // Anchor to the label start: the onset-detector select's options include
+  // "Drumjot Model", which `getByLabel('Model')` (substring) would also match.
+  const modelSelect = page.getByLabel(/^Model/);
   await modelSelect.selectOption('claude-opus-4-7');
   await expect(modelSelect).toHaveValue('claude-opus-4-7');
 

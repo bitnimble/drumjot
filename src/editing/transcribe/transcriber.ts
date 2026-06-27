@@ -125,7 +125,7 @@ export type OnsetBackend = 'learned' | 'adtof';
 /** Human-readable label per {@link OnsetBackend}, for the Transcribe-menu
  *  selector. Kept here so the wire value ↔ label mapping stays single-sourced. */
 export const ONSET_BACKEND_LABELS: Record<OnsetBackend, string> = {
-  learned: 'Learned (MERT)',
+  learned: 'Drumjot Model',
   adtof: 'ADTOF',
 };
 
