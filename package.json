@@ -52,15 +52,11 @@
     "typescript": "^5.7.2",
     "vite": "^6.0.5",
     "vite-css-modules": "^1.16.0",
-    "vite-plugin-top-level-await": "^1.6.0",
     "vite-plugin-wasm": "^3.6.0"
   },
   "browserslist": [
     "last 2 years",
     "not dead",
     "not op_mini all"
-  ],
-  "patchedDependencies": {
-    "vite-plugin-top-level-await@1.6.0": "patches/vite-plugin-top-level-await@1.6.0.patch"
-  }
+  ]
 }

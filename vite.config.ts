@@ -2,7 +2,6 @@ import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { patchCssModules } from 'vite-css-modules';
 import wasm from 'vite-plugin-wasm';
-import topLevelAwait from 'vite-plugin-top-level-await';
 import path from 'node:path';
 
 // We want Vite's file watcher + module-graph invalidation pipeline to
@@ -93,11 +92,18 @@ export default defineConfig({
   // of this plugin). Bonus: it also de-duplicates composed styles instead
   // of inlining button.module.css into all ~20 consumers. Needs build
   // target es2022, which we already set below.
-  // `wasm()` + `topLevelAwait()` let the dev server load `loro-crdt`'s
-  // WebAssembly module (the reactive Jot document's CRDT engine). Vite's
-  // dev ESM transform can't handle the wasm import on its own; the prod
-  // build bundles it via rollup. This is loro-crdt's own recommended setup.
-  plugins: [patchCssModules(), wasm(), topLevelAwait(), react(), noHmrPushPlugin],
+  // `wasm()` lets Vite load `loro-crdt`'s WebAssembly module (the reactive
+  // Jot document's CRDT engine). The WASM glue instantiates asynchronously, so
+  // it relies on TOP-LEVEL AWAIT. vite-plugin-wasm normally pairs with
+  // vite-plugin-top-level-await to downlevel that TLA, but that's only needed
+  // for old targets: with `build.target: 'esnext'` (below) the TLA passes
+  // through natively, which every browser we support handles (TLA is baseline
+  // since 2021; our browserslist is evergreen/last-2-years). So we DROP
+  // vite-plugin-top-level-await entirely. Bonus: it called node's
+  // `new Module().require` at load, which bun doesn't implement, so it broke a
+  // clean `bun install` build (Docker) until then. See vite-plugin-wasm's
+  // README ("unless you target esnext") and oven-sh/bun#9860.
+  plugins: [patchCssModules(), wasm(), react(), noHmrPushPlugin],
   resolve: {
     alias: {
       src: path.resolve(__dirname, 'src'),
@@ -107,7 +113,12 @@ export default defineConfig({
     target: ESBUILD_TARGET,
   },
   build: {
-    target: ESBUILD_TARGET,
+    // `esnext` (not ESBUILD_TARGET) so the WASM glue's top-level await passes
+    // through to the output instead of needing vite-plugin-top-level-await to
+    // downlevel it (see the plugins comment). esnext ⊇ es2022, so the class-
+    // field behaviour ESBUILD_TARGET guards still holds. Safe for our
+    // evergreen/last-2-years browserslist (TLA is baseline since 2021).
+    target: 'esnext',
   },
   optimizeDeps: {
     // The esbuild dep-prebundler can't process loro's wasm; let Vite serve

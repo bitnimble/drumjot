@@ -32,13 +32,6 @@ WORKDIR /build
 # scripts/ comes along because package.json's postinstall hook runs
 # scripts/copy-kuromoji-dict.mjs; it has to exist before `bun install`.
 COPY package.json bun.lock bunfig.toml ./
-# bun patchedDependencies: the patch must be present before install so
-# `bun install` applies it. vite-plugin-top-level-await calls node's
-# `new Module().require`, which bun doesn't support -- it crashes vite's
-# config load on a clean install (the host's pre-existing node_modules dodges
-# the path, a fresh container install does not). The patch swaps in
-# `createRequire`. See patches/vite-plugin-top-level-await@1.6.0.patch.
-COPY patches/ ./patches/
 COPY scripts/ ./scripts/
 RUN bun install --frozen-lockfile
 
