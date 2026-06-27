@@ -14,9 +14,9 @@
 #     (feeds the frontend-dev + proxy bind mounts; native/WSL Docker = the repo
 #     path, e.g. $HOME/code/drumjot).
 #   - DRUMJOT_DATA_ROOT = a local-SSD dir for the model cache / debug / outputs
-#     (see docker-compose.base.yml). The transcriber half runs the same baked
-#     image as prod, so the learned-onset model + checkpoint notes in
-#     docker-compose.prod.yml apply here too.
+#     (see docker-compose.base.yml). The transcriber half runs the same image as
+#     prod, so the learned-onset model goes in the same place
+#     (${DRUMJOT_DATA_ROOT}/models-cache/learned-onsets/; see prod header).
 #
 # Routing (same external surface as prod):
 #   host :5173       -> frontend-proxy (Caddy) container :5173

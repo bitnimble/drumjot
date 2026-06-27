@@ -473,12 +473,13 @@ def _do_beats(
 def _learned_checkpoint_ready(checkpoint: str) -> bool:
     """True when `checkpoint` is a run dir carrying the learned-onset model.
 
-    The model is provided at runtime via a volume mount (docker-compose maps
-    DRUMJOT_LEARNED_CHECKPOINT -> LEARNED_ONSETS_CHECKPOINT), NOT baked into the
-    image. Both files are required: `model.pt` (weights) and `meta.json` (tuned
-    per-lane thresholds). When absent, a transcribe that requests the learned
-    backend fails with a clear error (see `_learned_onsets`); startup is
-    unaffected because the model is only loaded at transcribe time."""
+    The model is provided at runtime in the mounted models cache, NOT baked into
+    the image: LEARNED_ONSETS_CHECKPOINT points at /models/learned-onsets (host
+    ${DRUMJOT_DATA_ROOT}/models-cache/learned-onsets). Both files are required:
+    `model.pt` (weights) and `meta.json` (tuned per-lane thresholds). When
+    absent, a transcribe that requests the learned backend fails with a clear
+    error (see `_learned_onsets`); startup is unaffected because the model is
+    only loaded at transcribe time."""
     if not checkpoint:
         return False
     d = Path(checkpoint)
@@ -498,10 +499,10 @@ def _learned_onsets(
         raise RuntimeError(
             "onsets: the learned-onset model (the default backend) was requested "
             "but no checkpoint (model.pt + meta.json) was found at "
-            f"{options.learned_onsets_checkpoint or '(unset)'!r}. Mount a checkpoint "
-            "directory there (docker-compose: set DRUMJOT_LEARNED_CHECKPOINT to a "
-            "host dir holding model.pt + meta.json) or pass onset_backend=adtof to "
-            "use the ADTOF detector instead."
+            f"{options.learned_onsets_checkpoint or '(unset)'!r}. Place the run "
+            "dir's model.pt + meta.json in the models cache "
+            "(docker-compose: ${DRUMJOT_DATA_ROOT}/models-cache/learned-onsets) "
+            "or pass onset_backend=adtof to use the ADTOF detector instead."
         )
     assert ctx.structure is not None  # caller (_do_onsets) guards this
     from app.pipeline.learned_onsets import detect_all_pitches_learned

@@ -187,15 +187,9 @@ COPY --from=frontend-builder /build/dist /app/web
 
 # Beat Transformer checkpoint (optional). If the directory is empty the image
 # still builds; BT just fails-loud at first use when BEAT_TRACKER=beat_transformer
-# is set. See transcriber/checkpoints/README.md.
+# is set. See transcriber/checkpoints/README.md. (The learned-onset model is NOT
+# baked -- it lives in the mounted models cache; see the /models block below.)
 COPY transcriber/checkpoints/ ./checkpoints/
-# The learned-onset model (the DEFAULT onset backend) is NOT baked into the
-# image -- like the other model weights it's provided at runtime, here via a
-# volume mount (docker-compose maps DRUMJOT_LEARNED_CHECKPOINT -> this path).
-# The image only declares WHERE to look; if nothing is mounted the learned stage
-# raises a clear error only when a transcribe actually requests it (runner.py),
-# never at startup. Override per deploy via LEARNED_ONSETS_CHECKPOINT.
-ENV LEARNED_ONSETS_CHECKPOINT=/learned-onsets
 
 # Benchmark harness code (datasets/ and results/ are intentionally NOT
 # copied; they're host-mounted at runtime via docker-compose volumes
@@ -207,18 +201,27 @@ COPY transcriber/benchmarks/__init__.py \
 COPY transcriber/benchmarks/core/ ./benchmarks/core/
 COPY transcriber/benchmarks/loaders/ ./benchmarks/loaders/
 
-# Models cache lives on a Docker volume so weights persist across rebuilds.
-# Pre-create the runtime-writable paths and chown them to the `app` user.
-# A named-volume mount onto a directory the image owns at app:app will
-# inherit that ownership on FIRST creation; if you already have a
-# models-cache volume from a previous root-owned run, you'll need to
-# `docker compose down -v` once for the new ownership to stick.
+# Runtime-writable paths. /models holds ALL model weights so they persist across
+# container recreation AND image rebuilds: the separation models (downloaded by
+# provision.py), the MERT encoder (HF cache), the torch cache, and the
+# user-provided learned-onset checkpoint (below). They're BIND-mounted from the
+# host (see docker-compose), so the HOST directory's ownership is what applies at
+# runtime, not the chown below (which only affects the non-mounted /app). Make
+# sure ${DRUMJOT_DATA_ROOT}/models-cache is writable by UID:GID 1000 (the `app`
+# user; override via --build-arg APP_UID/APP_GID). Bind mounts persist
+# regardless of `docker compose down -v` (that removes only named volumes).
 RUN mkdir -p /models /debug /app/benchmarks/datasets /app/benchmarks/results \
     && chown -R app:app /app /models /debug
 ENV AUDIO_SEPARATOR_MODEL_FILE_DIR=/models \
     HF_HOME=/models/huggingface \
     TRANSFORMERS_CACHE=/models/huggingface \
     TORCH_HOME=/models/torch
+# The learned-onset model (the default onset backend) lives in the models cache
+# under its own subfolder: drop the run dir's model.pt + meta.json into
+# ${DRUMJOT_DATA_ROOT}/models-cache/learned-onsets on the host. NOT baked; if
+# absent, only a transcribe that requests the learned backend errors (runner.py),
+# never startup. Override the path via LEARNED_ONSETS_CHECKPOINT.
+ENV LEARNED_ONSETS_CHECKPOINT=/models/learned-onsets
 
 USER app:app
 
