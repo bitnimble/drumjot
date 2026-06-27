@@ -1,7 +1,4 @@
 *.pt
 *.ckpt
-# Learned-onset checkpoint artifacts: placed at build time, never committed
-# (model.pt is already covered by *.pt above; meta.json is per-model).
-learned_onsets/meta.json
 !.gitignore
 !README.md

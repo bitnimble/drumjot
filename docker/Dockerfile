@@ -185,19 +185,17 @@ RUN chmod +x /app/entrypoint.sh
 # on :5173 with SPA fallback to index.html (see Caddyfile).
 COPY --from=frontend-builder /build/dist /app/web
 
-# Checkpoints baked from transcriber/checkpoints/ (both optional; the image
-# builds even if a subdir is empty):
-#   - beat_transformer.pt -- the Beat Transformer tracker (used only when
-#     BEAT_TRACKER=beat_transformer). See transcriber/checkpoints/README.md.
-#   - learned_onsets/{model.pt,meta.json} -- the trained frozen-MERT onset
-#     model, which is the DEFAULT onset backend. Drop a run dir here before
-#     building (e.g. the patched ab3_prev). If it's absent the learned stage
-#     degrades to ADTOF at runtime (runner.py logs a warning). See
-#     transcriber/checkpoints/learned_onsets/README.md.
+# Beat Transformer checkpoint (optional). If the directory is empty the image
+# still builds; BT just fails-loud at first use when BEAT_TRACKER=beat_transformer
+# is set. See transcriber/checkpoints/README.md.
 COPY transcriber/checkpoints/ ./checkpoints/
-# Point the learned-onset backend at the baked checkpoint. Overridable per
-# deploy via the LEARNED_ONSETS_CHECKPOINT env var (or transcriber/.env).
-ENV LEARNED_ONSETS_CHECKPOINT=/app/checkpoints/learned_onsets
+# The learned-onset model (the DEFAULT onset backend) is NOT baked into the
+# image -- like the other model weights it's provided at runtime, here via a
+# volume mount (docker-compose maps DRUMJOT_LEARNED_CHECKPOINT -> this path).
+# The image only declares WHERE to look; if nothing is mounted the learned stage
+# raises a clear error only when a transcribe actually requests it (runner.py),
+# never at startup. Override per deploy via LEARNED_ONSETS_CHECKPOINT.
+ENV LEARNED_ONSETS_CHECKPOINT=/learned-onsets
 
 # Benchmark harness code (datasets/ and results/ are intentionally NOT
 # copied; they're host-mounted at runtime via docker-compose volumes

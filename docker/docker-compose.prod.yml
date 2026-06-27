@@ -5,19 +5,24 @@
 #
 # Usage (run from the repo root):
 #   cp transcriber/.env.example transcriber/.env   # populate ANTHROPIC_API_KEY
-#   # Bake the default (learned) onset model into the image -- see
-#   # transcriber/checkpoints/learned_onsets/README.md:
-#   cp /path/to/run_dir/{model.pt,meta.json} transcriber/checkpoints/learned_onsets/
+#   # The default (learned) onset model is MOUNTED, not baked: point
+#   # DRUMJOT_LEARNED_CHECKPOINT at a host dir holding the run dir's
+#   # model.pt + meta.json (defaults to the local box's copy). Without one,
+#   # learned transcribes error clearly; onset_backend=adtof needs no model.
 #   docker compose -f docker/docker-compose.prod.yml up --build
 #
 # Then open http://localhost:5173 (SPA + /api proxy); the transcriber API is
 # also exposed directly on :8861.
 #
-# Deploying on another host (e.g. a gaming PC), beyond the two steps above:
+# Deploying on another host (e.g. a gaming PC):
 #   - Volumes: the persisted dirs default to /codebox-workspace/drumjot/* (the
 #     local box). Point them at LOCAL SSD via DRUMJOT_DATA_ROOT (shell env or a
 #     docker/.env next to this file), e.g. DRUMJOT_DATA_ROOT=$HOME/drumjot_data.
 #     Don't put them on NFS, the multi-GB model cache will crawl.
+#   - Learned-onset model: set DRUMJOT_LEARNED_CHECKPOINT to a host dir holding
+#     the run dir's model.pt + meta.json (mounted read-only at /learned-onsets).
+#     The dir must exist; if it lacks the model only a learned transcribe errors
+#     (clearly), never startup. Use onset_backend=adtof to run without it.
 #   - GPU: needs the NVIDIA Container Toolkit + a driver new enough for the
 #     image's CUDA 12.8 torch (>=570; a CUDA-13/580+ driver is forward-
 #     compatible in-container). On WSL, verify CUDA init on the first run

@@ -473,10 +473,12 @@ def _do_beats(
 def _learned_checkpoint_ready(checkpoint: str) -> bool:
     """True when `checkpoint` is a run dir carrying the learned-onset model.
 
-    The Docker image bakes the model under /app/checkpoints/learned_onsets
-    (docker/Dockerfile); a deploy that didn't place one there should degrade to
-    the ADTOF backend rather than failing every request. Both files are
-    required: `model.pt` (weights) and `meta.json` (tuned per-lane thresholds)."""
+    The model is provided at runtime via a volume mount (docker-compose maps
+    DRUMJOT_LEARNED_CHECKPOINT -> LEARNED_ONSETS_CHECKPOINT), NOT baked into the
+    image. Both files are required: `model.pt` (weights) and `meta.json` (tuned
+    per-lane thresholds). When absent, a transcribe that requests the learned
+    backend fails with a clear error (see `_learned_onsets`); startup is
+    unaffected because the model is only loaded at transcribe time."""
     if not checkpoint:
         return False
     d = Path(checkpoint)
@@ -492,9 +494,14 @@ def _learned_onsets(
     isolation; see `learned_onsets.py`). Emits every trained class as its own
     pitch (no merge to 5); the ADTOF hihat/cymbal splitters and the filter LLM
     are skipped because the model already separates and calibrates them."""
-    if not options.learned_onsets_checkpoint:
+    if not _learned_checkpoint_ready(options.learned_onsets_checkpoint):
         raise RuntimeError(
-            "onsets: use_learned_onsets is set but learned_onsets_checkpoint is empty"
+            "onsets: the learned-onset model (the default backend) was requested "
+            "but no checkpoint (model.pt + meta.json) was found at "
+            f"{options.learned_onsets_checkpoint or '(unset)'!r}. Mount a checkpoint "
+            "directory there (docker-compose: set DRUMJOT_LEARNED_CHECKPOINT to a "
+            "host dir holding model.pt + meta.json) or pass onset_backend=adtof to "
+            "use the ADTOF detector instead."
         )
     assert ctx.structure is not None  # caller (_do_onsets) guards this
     from app.pipeline.learned_onsets import detect_all_pitches_learned
@@ -521,22 +528,11 @@ def _do_onsets(
             "onsets: beat structure missing (expected beats.json from a "
             "previous run, or resume_stage<=beats to regenerate)."
         )
-    # Learned onsets are the default, but degrade to ADTOF if no checkpoint was
-    # baked / mounted (e.g. an image built without a model) so the deploy still
-    # works instead of failing every request. Flip the flag once here so the
-    # downstream per-class splitters + filter-skip logic stay consistent.
-    if options.use_learned_onsets and not _learned_checkpoint_ready(
-        options.learned_onsets_checkpoint
-    ):
-        logging.getLogger(__name__).warning(
-            "onsets: use_learned_onsets is set but no checkpoint (model.pt + "
-            "meta.json) was found at %r -- falling back to the ADTOF backend. "
-            "Bake a run dir into the image "
-            "(transcriber/checkpoints/learned_onsets/) or set "
-            "LEARNED_ONSETS_CHECKPOINT to a valid run dir.",
-            options.learned_onsets_checkpoint or "(unset)",
-        )
-        options.use_learned_onsets = False
+    # Learned onsets are the default. The checkpoint is NOT baked into the image
+    # (mounted at runtime; see docker-compose + _learned_checkpoint_ready); when
+    # it's absent `_learned_onsets` raises a clear error so the failure happens
+    # only on a transcribe that actually requests the learned backend, never at
+    # startup. Pass `onset_backend=adtof` to use ADTOF without a checkpoint.
     # ADTOF runs the noisy lanes (hihat / merged cymbal) on the
     # in-distribution drum stem; pass it through. None on a resume that
     # didn't cache it, `detect_onsets_adtof` falls back to the isolated

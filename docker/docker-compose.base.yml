@@ -67,6 +67,15 @@ services:
       # without docker cp.
       - ${DRUMJOT_DATA_ROOT:-/codebox-workspace/drumjot}/benchmarks/datasets:/app/benchmarks/datasets
       - ${DRUMJOT_DATA_ROOT:-/codebox-workspace/drumjot}/benchmarks/results:/app/benchmarks/results
+      # The learned-onset model checkpoint (the DEFAULT onset backend): a host
+      # directory holding `model.pt` + `meta.json`, mounted read-only where the
+      # image expects it (LEARNED_ONSETS_CHECKPOINT=/learned-onsets). NOT baked
+      # into the image. Point DRUMJOT_LEARNED_CHECKPOINT at YOUR copy of the run
+      # dir (the default is the local box's). If the mounted dir lacks the model
+      # nothing fails at startup -- only a transcribe that actually uses the
+      # learned backend errors, clearly, telling you to mount it or pass
+      # onset_backend=adtof. The host dir must exist (compose bind-mounts it).
+      - ${DRUMJOT_LEARNED_CHECKPOINT:-/codebox-workspace/datasets/ab3_prev}:/learned-onsets:ro
     # GPU passthrough. The compose-spec `gpus: all` form (compose >=2.30)
     # is the equivalent of the CLI's `--gpus all` flag and sets
     # NVIDIA_VISIBLE_DEVICES / NVIDIA_DRIVER_CAPABILITIES implicitly.
