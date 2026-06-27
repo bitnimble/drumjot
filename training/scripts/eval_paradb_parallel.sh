@@ -10,7 +10,7 @@
 # Paths default to the research box; override via env.
 #   eval_paradb_parallel.sh [N] [maps-dir]
 set -u
-N=${1:-8}
+N=${1:-6}  # 6 batched workers fit the ~10GB 3080 with headroom; 8 can OOM
 MAPS_DIR=${2:-${MAPS_DIR:-/codebox-workspace/datasets/paradb_tier1_102/zips}}
 CKPT=${CKPT:-/codebox-workspace/datasets/ab3_prev}
 PRED=${PRED:-/codebox-workspace/checkpoints/ovn3080/mixed_c3000_h256_s1/param_predictor_a2md.joblib}
@@ -20,6 +20,7 @@ WORK=${WORK:-/codebox-workspace/datasets/paradb_parallel}
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PYPATH=${PYTHONPATH:-$HERE/..:$HERE/../../dsp}
 export PYTHONPATH=$PYPATH
+export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}  # cut fragmentation OOM
 rm -rf "$WORK"; mkdir -p "$WORK"
 
 echo "== classify (cached vs needs-encoding) =="
@@ -38,6 +39,10 @@ for i in $(seq 0 $((N - 1))); do
 done
 fail=0; for p in "${pids[@]}"; do wait "$p" || fail=1; done
 echo "== workers done (fail=$fail) =="
+if [ "$fail" -ne 0 ]; then
+  echo "ABORT: a worker failed (OOM? see $WORK/shard_*.out) -- refusing to merge a PARTIAL result." >&2
+  exit 1
+fi
 
 echo "== merge =="
-python3 "$HERE/merge_paradb_shards.py" "$WORK"/shard_*.pkl --predictor
+python3 "$HERE/merge_paradb_shards.py" "$WORK"/shard_*.pkl --predictor --expect "$N"

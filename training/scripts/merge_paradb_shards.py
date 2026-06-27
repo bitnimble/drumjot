@@ -27,7 +27,13 @@ def main():
                     help="the shards used --param-predictor (enables the predicted/hybrid columns)")
     ap.add_argument("--no-oracle", action="store_true",
                     help="the shards ran without --oracle-report (skip the oracle/hybrid block)")
+    ap.add_argument("--expect", type=int, default=0,
+                    help="expected shard-dump count; abort if fewer (a crashed worker writes no "
+                    "dump, so a silent partial merge would under-report songs)")
     args = ap.parse_args()
+    if args.expect and len(args.dumps) != args.expect:
+        raise SystemExit(f"expected {args.expect} shard dumps, got {len(args.dumps)} -- a worker "
+                         "likely crashed (no dump); aborting rather than merge a partial result")
 
     agg: dict = defaultdict(lambda: defaultdict(list))
     leak: dict = defaultdict(lambda: {"matched": 0, "leaked": 0, "to": Counter()})
