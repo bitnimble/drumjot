@@ -186,6 +186,33 @@ inference, the cym+hat sweep harness (`CYM_LANES`/`LANES_CH`), and eval_paradb.
 
 ---
 
+## 2026-06-28, learned-onset eval: device fix + windowing alignment + head batching + parallel eval
+
+**Scope: infer/eval** (no `train` effect; old checkpoints decode the same within bf16 noise).
+
+- **`checkpoint.load` moves the model to `device`.** Was a bug: `load_state_dict` copied weights into
+  the CPU-constructed module and `map_location` only placed the state_dict, so the heads ran on
+  **CPU** regardless of the arg (~2s/window). Pure speed (~8x), affects the deployed transcriber too.
+  **Default: on. Revert:** drop the `model.to(device)` line.
+- **`stitched_probs` default windowing = training's** (non-overlapping `plan_windows` cuts + fp16)
+  instead of overlapping center-crop/fp32. Shares the MERT cache with training; an A/B showed no F1
+  change (RESULTS 2026-06-28). **Default: aligned. Revert:** `legacy_overlap=True` (eval_mdb
+  `--legacy-overlap`).
+- **`embeddings.cache_key` resolves symlinks** (`.resolve()`), so a symlinked eval stem hits the
+  cache written under the real path. Real paths unchanged (no invalidation). **Revert:** `.absolute()`.
+- **MERT + the separator load lazily.** A fully-cached run loads neither big model. **Revert:** eager
+  construct in `MertEncoder.__init__` / restore `sep = Separator()` upfront in eval_paradb.
+- **Windows batched through the heads.** `OnsetHead.forward(pack=True)` runs a padded batch through
+  the BiGRU via `pack_padded_sequence` (numerically identical to per-window; ~1.8x).
+  `inference.WINDOW_BATCH=16` bounds VRAM. **Revert:** `WINDOW_BATCH=1`. Training (`forward_all`, no
+  `pack`) untouched.
+- **Parallel sharded eval** (`eval_paradb_parallel.sh`, `classify_paradb_cache.py`,
+  `merge_paradb_shards.py`; eval_paradb `--shard/--maps-list/--dump/--require-cached`). Cache-aware
+  routing pins uncached songs to one encoder worker; cache-only workers share one GPU.
+  **Interaction:** GPU-bound once the heads are batched, so it helps most with a warm MERT cache.
+
+---
+
 ## 2026-06-10, "v3 architecture" batch (deliberately stacked; first trained model will carry ALL of these)
 
 Decision: stacked on purpose (limited run budget). If the first v3 run loses

@@ -16,6 +16,60 @@ Scoring is `mir_eval` onset-F1 at ±50 ms (`metrics.onset_f1`).
 
 ---
 
+## 2026-06-28 · ParaDB-102 adaptive-param eval (#5): predictor is a WASH on real domain; eval pipeline aligned + ~8x faster
+
+Real-domain confirmation of the adaptive-param-predictor question (#5), on **102 tier-1 ParaDB
+songs** (support_corr≥0.95, recall≥0.9, ≥20 cr onsets; the subset with pre-separated MDX23C perstem
+stems → zero fresh separation). Model `ab3_prev` (7-lane k,s,t,hc,ho,rd,cr, h256), trained on
+**star,enst,egmd only, NO ParaDB → zero leakage**. `--oracle-report` + the A2MD param predictor.
+
+Per-lane onset-F1 (fixed / determ self-cal / predicted / per-song oracle), with % of the oracle gap captured:
+
+| lane | fixed | determ | predict | oracle | gap | det% | pred% | songs |
+|---|---|---|---|---|---|---|---|---|
+| hc | 0.427 | 0.432 | 0.429 | 0.486 | +0.059 | 8.1% | 3.0% | 102 |
+| ho | 0.221 | 0.223 | 0.214 | 0.265 | +0.044 | 4.2% | −16.4% | 15 |
+| rd | 0.189 | 0.200 | 0.223 | 0.241 | +0.052 | 21.8% | 66.1% | 90 |
+| cr | 0.344 | 0.219 | 0.349 | 0.463 | +0.118 | −106.2% | 4.2% | 102 |
+
+**mean oracle gap +0.068 F1; mean captured +0.008 (predict), +0.001 (hybrid).**
+
+**Verdict: the adaptive predictor is a WASH on the real domain**; confirms the MDB finding (predict
+net-negative / hybrid −0.035 there). Genuine per-song oracle headroom exists (+0.068) but neither the
+deterministic self-cal nor the learned predictor realizes it (helps rd, hurts ho, barely moves hc/cr).
+**Not worth pursuing.** (Absolute F1s are below MDB's hc 0.74 / cr 0.60. ParaDB is harder: real
+songs, hand-charts, ride+crash sharing one MDX23C stem.)
+
+**Eval-pipeline changes this run** (code in CHANGELOG; all leave F1 unchanged within bf16 noise):
+device-fix (heads were silently on CPU → GPU, ~8x), eval windowing aligned to training
+(non-overlapping `plan_windows` + fp16, shares the MERT cache; A/B vs the old overlapping center-crop
+= no F1 change), per-clip windows batched through the heads (~1.8x), lazy MERT/separator + parallel
+sharded eval (`eval_paradb_parallel.sh`, cache-aware routing). Full 102-song `--oracle-report` eval:
+~3.3 h (pre-fix, extrapolated) → ~26 min (device-fix) → **~17.5 min** (8-way parallel + batched);
+routine F1-only evals (no 2nd oracle pass) ~half again.
+
+**Reproduce (sandbox; local RTX 3080; bf16 autocast + TF32):**
+```
+MODELS_DIR=/codebox-workspace/drumjot/models-cache DRUMJOT_MERT_CACHE=/codebox-workspace/mert_cache \
+PYTHONPATH=training:dsp python3 training/scripts/eval_paradb.py \
+  --maps-dir /codebox-workspace/datasets/paradb_tier1_102/zips \
+  --checkpoint /codebox-workspace/datasets/ab3_prev \
+  --param-predictor /codebox-workspace/checkpoints/ovn3080/mixed_c3000_h256_s1/param_predictor_a2md.joblib \
+  --oracle-report --lanes hc,ho,rd,cr \
+  --stems-cache /codebox-workspace/datasets/paradb_tier1_200/stems_cache
+# identical result, ~1.5x faster: training/scripts/eval_paradb_parallel.sh 8 (inside the sandbox)
+```
+Defaults (not on the CLI): `--window-seconds 30 --max-seconds None --min-support 0.8
+--support-percentile 60 --align-window 0.03 --offset-window 0.05 --offset-correct-min 0.025
+--drum-corr-threshold 0.5` (offset-correct ON, `--full-drum` OFF), `inference.WINDOW_BATCH=16`,
+windowing = aligned default (`legacy_overlap` OFF). `ab3_prev` meta thresholds: cr **0.7** (patched),
+k0.5 s0.5 t0.8 hc0.6 ho0.6 rd0.5; `peak_min_distance_s`/`peak_threshold`/`onset_tolerance_s=0.05` =
+checkpoint values; encoder MERT-v1-330M layer 10, high_band, ~75 fps. Predictor: `param_predictor_a2md.joblib`
+(sklearn HistGradientBoostingRegressor), `hybrid.DEFAULT_ROUTING` = hc→determ, ho→learned, rd→global, cr→learned.
+**RESEARCH-ONLY** (ParaDB songs are copyrighted + charts unlicensed; held-out eval, never a training input here).
+
+---
+
 ## 2026-06-26 · cr lever test 1 (drop crash from aux ring objective): NO benefit; cap100 too noisy for cr A/Bs
 
 Proposal (1) for ride-crash confusion: drop cr from the aux ring-activity objective (`--aux-lanes
