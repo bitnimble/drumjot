@@ -45,6 +45,11 @@ services:
     extends:
       file: docker-compose.base.yml
       service: drumjot
+    # GPU passthrough. Set HERE, not in the base file: `extends:` doesn't apply
+    # the `gpus` field to the created container on some engines (renders in
+    # `compose config` but DeviceRequests comes up null -> CPU-only). See the
+    # base file's GPU note. No GPU on this host? Comment this out (CPU fallback).
+    gpus: all
     environment:
       # Tells docker/entrypoint.sh to skip Caddyfile.frontend when
       # assembling the runtime Caddyfile - the in-container :5173

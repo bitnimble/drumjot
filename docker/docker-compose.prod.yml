@@ -28,20 +28,25 @@
 #     compatible in-container). On WSL, verify CUDA init on the first run
 #     (`docker compose ... logs`); the cu128-on-WSL caveat in training/
 #     pyproject is about NATIVE wheels, not the containerized runtime. No GPU =
-#     comment out `gpus: all` in the base file (CPU fallback, slow).
+#     comment out the `gpus: all` line in this file (CPU fallback, slow).
 #   - First learned transcribe after a fresh /models volume downloads the
 #     frozen MERT-v1-330M encoder (~1.3 GB) into the HF cache once.
 #
 # For live-reload frontend work without an image rebuild, use
 # docker/docker-compose.dev.yml instead. Both files extend
-# docker/docker-compose.base.yml for the shared image / volume / GPU /
-# env_file configuration.
+# docker/docker-compose.base.yml for the shared image / volume / env_file
+# configuration (GPU passthrough is set per-variant, not in base; see below).
 
 services:
   drumjot:
     extends:
       file: docker-compose.base.yml
       service: drumjot
+    # GPU passthrough. Set HERE, not in the base file: `extends:` doesn't apply
+    # the `gpus` field to the created container on some engines (renders in
+    # `compose config` but DeviceRequests comes up null -> CPU-only). See the
+    # base file's GPU note. No GPU on this host? Comment this out (CPU fallback).
+    gpus: all
     environment:
       # Tells docker/entrypoint.sh to include Caddyfile.frontend
       # when assembling the runtime Caddyfile, binding the :5173

@@ -5,14 +5,15 @@
 #
 # What lives here: everything that doesn't vary between prod and dev -
 # image build, container env_file, host volume mounts, non-root user,
-# GPU passthrough, restart policy. Port mappings and the
-# DISABLE_FRONTEND env live in the variant files since they're exactly
-# what flips between modes.
+# restart policy. Port mappings, the DISABLE_FRONTEND env, AND GPU
+# passthrough live in the variant files: the first two flip between modes,
+# and `gpus: all` has to be set directly on each variant service because
+# `extends:` doesn't reliably apply it (see the GPU note further down).
 #
 # Notes:
-# - `gpus: all` requires the NVIDIA Container Toolkit on the host. If
-#   you don't have a GPU, comment it out and the container will fall
-#   back to CPU automatically (slow).
+# - GPU passthrough (`gpus: all`) lives in docker-compose.{dev,prod}.yml,
+#   not here, and requires the NVIDIA Container Toolkit on the host. No
+#   GPU? Comment out that line and the container falls back to CPU (slow).
 services:
   drumjot:
     build:
@@ -74,13 +75,15 @@ services:
       # without docker cp.
       - ${DRUMJOT_DATA_ROOT:-/codebox-workspace/drumjot}/benchmarks/datasets:/app/benchmarks/datasets
       - ${DRUMJOT_DATA_ROOT:-/codebox-workspace/drumjot}/benchmarks/results:/app/benchmarks/results
-    # GPU passthrough. The compose-spec `gpus: all` form (compose >=2.30)
-    # is the equivalent of the CLI's `--gpus all` flag and sets
-    # NVIDIA_VISIBLE_DEVICES / NVIDIA_DRIVER_CAPABILITIES implicitly.
-    # Replaces the older `runtime: nvidia` + `deploy.resources.reservations`
-    # mechanisms, both of which proved insufficient with the modern
-    # NVIDIA Container Toolkit on this host.
-    gpus: all
+    # GPU passthrough (`gpus: all`) is intentionally NOT here. `extends:` does
+    # not apply the compose-spec `gpus` field to the created container on all
+    # engines: it renders in `docker compose config` but the container comes up
+    # with HostConfig.DeviceRequests == null (observed on docker-ce 28.1.1 +
+    # compose 2.35, native docker in WSL) -> torch.cuda.is_available() is False
+    # -> audio-separator silently runs CPU-only. A standalone service with
+    # `gpus: all` works fine, so the field must be set DIRECTLY on each variant
+    # service rather than inherited. See the `gpus: all` line in
+    # docker-compose.{dev,prod}.yml.
     mem_limit: 8g
     memswap_limit: 8g
     restart: unless-stopped
