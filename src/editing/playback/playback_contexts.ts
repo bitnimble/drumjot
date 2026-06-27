@@ -1,4 +1,17 @@
 import React from 'react';
+import type { PlaybackStore } from './playback_store';
+import type { PlaybackPresenter } from './playback_presenter';
+
+/**
+ * The transport store + presenter, provided once at the JotEditor level so
+ * non-transport surfaces can read/drive playback state without prop
+ * plumbing. Today the Edit menu's Alignment section reads the live
+ * drum-beat / audio offsets off {@link PlaybackStoreContext} and nudges
+ * them through {@link PlaybackPresenterContext}. `null` outside the View
+ * (tests / standalone renders), where consumers no-op.
+ */
+export const PlaybackStoreContext = React.createContext<PlaybackStore | null>(null);
+export const PlaybackPresenterContext = React.createContext<PlaybackPresenter | null>(null);
 
 /**
  * Whether the score auto-scrolls to keep the playhead centred during
