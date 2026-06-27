@@ -216,6 +216,55 @@ describe('LayersPresenter', () => {
     expect(layerIdOfTrack(jot, s)).toBe('v0');
   });
 
+  it('clusters a per-lane audio stem into a named group above its instrument', () => {
+    const { jot, p } = setup('| h s k |');
+    const [, , k] = tracksIn(jot, 'v0');
+    // A transcribe stem for lane `k` lands as a runtime audio track.
+    jot.tracks.set('audio:k1', { id: 'audio:k1', kind: 'audio', audioId: 'k1' });
+    p.placeRuntimeAudioTrack('audio:k1', ['k']);
+    // The stem + its instrument now share a group, stem directly above.
+    const g = groupIdOfTrack(jot, k);
+    expect(g).not.toBeNull();
+    expect(groupIdOfTrack(jot, 'audio:k1')).toBe(g);
+    expect(jot.trackGroups.get(g!)?.name).toBe('Kick'); // named after the instrument
+    // Slot order is [stem, instrument] so the stem renders flush above its row.
+    const slot = [...[...jot.ordering][0].slots].find((s) => s.groupId === g)!;
+    expect([...slot.tracks].map((t) => t.trackId)).toEqual(['audio:k1', k]);
+    // The instrument lane is now a sibling of the stem (audio colour inherits it).
+    expect(groupSiblingInstrumentLanes(jot, 'audio:k1')).toEqual(['k']);
+  });
+
+  it('folds every dependent instrument of a shared stem into one group', () => {
+    // A cymbal-split stem backs both crash (`c`) and ride (`d`).
+    const { jot, p } = setup('| c d k |');
+    const [c, d] = tracksIn(jot, 'v0');
+    jot.tracks.set('audio:cym', { id: 'audio:cym', kind: 'audio', audioId: 'cym' });
+    p.placeRuntimeAudioTrack('audio:cym', ['c', 'd']);
+    const g = groupIdOfTrack(jot, c);
+    expect(g).not.toBeNull();
+    expect(jot.trackGroups.get(g!)?.name).toBe('Crash'); // named after the primary lane
+    // Both instruments + the stem share the group: [stem, crash, ride].
+    expect(groupIdOfTrack(jot, d)).toBe(g);
+    expect(groupIdOfTrack(jot, 'audio:cym')).toBe(g);
+    const slot = [...[...jot.ordering][0].slots].find((s) => s.groupId === g)!;
+    expect([...slot.tracks].map((t) => t.trackId)).toEqual(['audio:cym', c, d]);
+    expect(groupSiblingInstrumentLanes(jot, 'audio:cym')).toEqual(['c', 'd']);
+  });
+
+  it('drops a laneless / unmatched audio stem loose at the top', () => {
+    const { jot, p } = setup('| h s k |');
+    // A drumless backing stem carries no lane.
+    jot.tracks.set('audio:mix', { id: 'audio:mix', kind: 'audio', audioId: 'mix' });
+    p.placeRuntimeAudioTrack('audio:mix', []);
+    // A stem for a lane the song doesn't contain stays loose too.
+    jot.tracks.set('audio:ride', { id: 'audio:ride', kind: 'audio', audioId: 'ride' });
+    p.placeRuntimeAudioTrack('audio:ride', ['d']);
+    expect(groupIdOfTrack(jot, 'audio:mix')).toBeNull();
+    expect(groupIdOfTrack(jot, 'audio:ride')).toBeNull();
+    // Both sit at the very top of the layer (most-recent-first).
+    expect(tracksIn(jot, 'v0').slice(0, 2)).toEqual(['audio:ride', 'audio:mix']);
+  });
+
   it('prunes an emptied loose run when its last track leaves', () => {
     const { jot, p } = setup('| h | || | k |');
     const [h] = tracksIn(jot, 'v0');

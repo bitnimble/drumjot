@@ -125,6 +125,15 @@ export class AudioTrack implements Track {
    */
   private _laneOverride: string | undefined = undefined;
   /**
+   * Every instrument lane this stem maps to (the load-time mapping), primary
+   * first. Usually one, but a shared stem maps to several at once, the cymbal
+   * split emits one `stem_c` file the manifest declares for both crash and ride.
+   * The post-load grouping clusters ALL of these instruments under the stem;
+   * {@link lane} (colour/tiebreak) still tracks just the primary. Fixed at
+   * construction, so non-observable.
+   */
+  readonly mappedLanes: readonly string[];
+  /**
    * What the loader believes the audio is. Drives the per-row overflow
    * menu's enable matrix. Undefined is treated as `unknown`.
    */
@@ -148,6 +157,8 @@ export class AudioTrack implements Track {
       sourceBlob: Blob;
       durationSec: number;
       lane?: string;
+      /** Extra lanes this stem also backs (a shared stem); see {@link mappedLanes}. */
+      extraLanes?: readonly string[];
       role?: AudioTrackRole;
     },
     private readonly getCtx: () => MixerContext | undefined,
@@ -158,13 +169,17 @@ export class AudioTrack implements Track {
     this.sourceBlob = fields.sourceBlob;
     this.durationSec = fields.durationSec;
     this._laneOverride = fields.lane;
+    this.mappedLanes = [
+      ...(fields.lane !== undefined ? [fields.lane] : []),
+      ...(fields.extraLanes ?? []),
+    ];
     this.role = fields.role;
     // `_color` + `_laneOverride` are the mutable observable fields and
     // `lane` is a computed (derives from the mixer group); the buffer /
     // blob are large immutables that don't need MobX wrappers.
     makeAutoObservable<
       this,
-      'getCtx' | 'id' | 'filename' | 'buffer' | 'sourceBlob' | 'durationSec' | 'role'
+      'getCtx' | 'id' | 'filename' | 'buffer' | 'sourceBlob' | 'durationSec' | 'mappedLanes' | 'role'
     >(this, {
       getCtx: false,
       id: false,
@@ -172,6 +187,7 @@ export class AudioTrack implements Track {
       buffer: false,
       sourceBlob: false,
       durationSec: false,
+      mappedLanes: false,
       role: false,
     });
   }

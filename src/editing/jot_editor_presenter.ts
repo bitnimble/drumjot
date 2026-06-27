@@ -176,11 +176,12 @@ export class JotEditorPresenter {
   async loadAudioTrack(
     file: File,
     lane?: string,
-    role?: AudioTrackRole
+    role?: AudioTrackRole,
+    extraLanes?: readonly string[]
   ): Promise<AudioTrackId | undefined> {
     return this.withLoading(`Loading ${file.name}…`, async () => {
       try {
-        return await jotPlayer.loadAudioTrack(file, lane, role);
+        return await jotPlayer.loadAudioTrack(file, lane, role, extraLanes);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         toastStore.showError(`Audio track load failed: ${message}`);
@@ -816,12 +817,16 @@ export class JotEditorPresenter {
         // in the manifest, which is good enough since the tint is
         // cosmetic and both siblings live in the same colour family.
         const primaryKey = track.keys.find((k) => k !== NO_DRUMS_KEY);
+        // Sibling lanes a shared stem also backs (the cymbal split's `stem_c`
+        // serving both crash and ride): every other non-`no_drums` key. The
+        // post-load grouping folds all of these instrument rows under the stem.
+        const extraLanes = track.keys.filter((k) => k !== NO_DRUMS_KEY && k !== primaryKey);
         // Role classification: any track whose only key is `no_drums`
         // is the Demucs drumless mix; everything else came from the
         // per-lane split (a key shared between multiple lanes still
         // counts as a single drum piece for menu purposes).
         const role: AudioTrackRole = primaryKey === undefined ? 'no-drums' : 'drum-piece';
-        const id = await this.loadAudioTrack(track.file, primaryKey, role);
+        const id = await this.loadAudioTrack(track.file, primaryKey, role, extraLanes);
         return { keys: track.keys, id };
       })
     );
