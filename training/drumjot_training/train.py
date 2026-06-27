@@ -20,6 +20,7 @@ from pathlib import Path
 import numpy as np
 
 from drumjot_training import (
+    adtof,
     checkpoint,
     egmd,
     embeddings,
@@ -1452,8 +1453,13 @@ def _pooled_specs(args) -> tuple[list, list, Path]:
             tr = paradb.perstem_for_split(allper, "train")
             va = paradb.perstem_for_split(allper, "validation")
             ann_of, reader, p2l = (lambda c: c.onsets_path), paradb.onsets_by_lane, paradb.PERSTEM_TO_LANES
+        elif name == "adtof":
+            allper = adtof.perstem_index(root)
+            tr = adtof.perstem_for_split(allper, "train")
+            va = adtof.perstem_for_split(allper, "validation")
+            ann_of, reader, p2l = (lambda c: c.annotation_path), adtof.onsets_by_lane, adtof.PERSTEM_TO_LANES
         else:
-            raise SystemExit(f"--pool-sources: unknown source {name!r} (use star/enst/egmd/paradb)")
+            raise SystemExit(f"--pool-sources: unknown source {name!r} (use star/enst/egmd/paradb/adtof)")
         # use each SOURCE's own pitch->lanes map (not STAR's) so a source whose
         # stem-pitch vocab ever diverges can't silently yield all-empty restricted
         # onsets. (They're identical today; this keeps it correct if one changes.)
@@ -1559,8 +1565,9 @@ def main(argv: list[str] | None = None) -> None:
         default="egmd",
     )
     ap.add_argument("--pool-sources", default="star,enst,egmd",
-                    help="pooled mode: comma-list of sep-tree sources to combine (DRUMJOT_<SRC> "
-                    "must point at each sep tree, e.g. star_balanced_sep / enst-sep / egmd-sep)")
+                    help="pooled mode: comma-list of sep-tree sources to combine "
+                    "(star/enst/egmd/paradb/adtof; DRUMJOT_<SRC> must point at each sep tree, "
+                    "e.g. star_balanced_sep / enst-sep / egmd-sep / adtof-sep)")
     ap.add_argument("--pool-cap", type=int, default=0,
                     help="pooled mode: target train WINDOWS per dataset source (~N*max-seconds of "
                     "audio; predictable, unlike a clip count over varying lengths); 0 = all")
