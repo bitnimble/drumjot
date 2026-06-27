@@ -180,11 +180,13 @@
     white-space: nowrap;
 }
 
-/* A member of a group: indented under the group header, and its drop-line
-   reaches further left to still span the whole band. */
+/* A member of a group: indented under the group header. Its drop-line keeps
+   the same 6px reach as a loose tile (it does NOT over-reach to the band edge),
+   so the line stays indented by the group's 16px margin, making "inside the
+   group at the end" visually distinct from "after the group" (which uses the
+   full-width end-of-layer / loose lines). */
 .trackInGroup {
     margin-left: 16px;
-    --line-reach-left: 22px;
 }
 
 /* Move-insertion line: a 2px accent line floating in the gap above/below a
@@ -228,9 +230,12 @@
     right: 0;
 }
 
+/* Reach up over the 6px margin-gap above the tile so hovering the gap between
+   two rows lands "before this row" rather than falling through to the band's
+   append-at-end handler. */
 .dropZoneBefore {
-    top: 0;
-    height: 30%;
+    top: -6px;
+    height: calc(30% + 6px);
 }
 
 .dropZoneInto {
