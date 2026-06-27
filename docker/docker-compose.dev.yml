@@ -9,6 +9,15 @@
 #   cp transcriber/.env.example transcriber/.env   # populate ANTHROPIC_API_KEY
 #   docker compose -f docker/docker-compose.dev.yml up --build
 #
+# On a host other than the local box, set two env vars (docker/.env or shell):
+#   - DRUMJOT_REPO_DIR  = the repo's absolute path as the Docker daemon sees it
+#     (feeds the frontend-dev + proxy bind mounts; native/WSL Docker = the repo
+#     path, e.g. $HOME/code/drumjot).
+#   - DRUMJOT_DATA_ROOT = a local-SSD dir for the model cache / debug / outputs
+#     (see docker-compose.base.yml). The transcriber half runs the same baked
+#     image as prod, so the learned-onset model + checkpoint notes in
+#     docker-compose.prod.yml apply here too.
+#
 # Routing (same external surface as prod):
 #   host :5173       -> frontend-proxy (Caddy) container :5173
 #                         /api/* -> drumjot:8001 (transcriber edge router)
@@ -69,8 +78,14 @@ services:
     expose:
       - '5173'
     volumes:
-      # Bind the entire repo so vite watches the live tree.
-      - /capsule/config/docker-volume/codebox/home/bitnimble/code/drumjot:/workdir
+      # Bind the entire repo so vite watches the live tree. The source is the
+      # path the DOCKER DAEMON sees the repo at (not necessarily the CLI's cwd):
+      # the local box runs its daemon in a VM where the tree is bridged to the
+      # /capsule/... path below, hence the absolute default. On a normal host
+      # (e.g. the gaming PC, native/WSL Docker) set DRUMJOT_REPO_DIR to the
+      # repo's absolute path (e.g. $HOME/code/drumjot) in a docker/.env or the
+      # shell. The same var feeds the Caddyfile.dev mount on frontend-proxy.
+      - ${DRUMJOT_REPO_DIR:-/capsule/config/docker-volume/codebox/home/bitnimble/code/drumjot}:/workdir
     # No environment needed: Vite no longer proxies /api (the frontend-proxy
     # below routes it to the transcriber), so it doesn't read TRANSCRIBER_URL.
     depends_on:
@@ -88,7 +103,7 @@ services:
     ports:
       - 5173:5173
     volumes:
-      - /capsule/config/docker-volume/codebox/home/bitnimble/code/drumjot/docker/Caddyfile.dev:/etc/caddy/Caddyfile:ro
+      - ${DRUMJOT_REPO_DIR:-/capsule/config/docker-volume/codebox/home/bitnimble/code/drumjot}/docker/Caddyfile.dev:/etc/caddy/Caddyfile:ro
     depends_on:
       - frontend-dev
       - drumjot

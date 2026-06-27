@@ -619,6 +619,7 @@ dependencies = [
     { name = "soundfile" },
     { name = "torch" },
     { name = "torchaudio" },
+    { name = "transformers" },
     { name = "unidic-lite" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -655,6 +656,7 @@ requires-dist = [
     { name = "soundfile", specifier = ">=0.12" },
     { name = "torch", specifier = ">=2.8,<2.12", index = "https://download.pytorch.org/whl/cu128" },
     { name = "torchaudio", specifier = ">=2.8,<2.12", index = "https://download.pytorch.org/whl/cu128" },
+    { name = "transformers", specifier = ">=4.40" },
     { name = "unidic-lite", specifier = ">=1.0.8" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
