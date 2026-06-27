@@ -36,6 +36,8 @@ def run_metadata(cfg: Config, thresholds: dict[str, float], in_dim: int = FEAT_D
         "in_dim": in_dim,
         "high_band": cfg.high_band,  # whether the heads expect the high-band block
         "aux_activity": True,  # heads carry the auxiliary ring-activity output
+        "cymbal_softmax": cfg.cymbal_softmax,  # rd/cr decoded as a joint 3-way softmax
+
         "thresholds": {k: float(v) for k, v in thresholds.items()},
     }
 

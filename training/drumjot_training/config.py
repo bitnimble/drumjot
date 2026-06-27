@@ -57,6 +57,15 @@ class Config:
     # bypasses it (the calib weights are still CONSTRUCTED so the RNG stream --
     # and thus the GRU init -- is identical to a calibrated run, for a clean A/B).
     auto_calibrate: bool = True
+    # Joint ride/crash discrimination (experiment): train the cymbal lanes (rd, cr)
+    # with a 3-way softmax {none, ride, crash} -- `none` is the fixed-0 reference, so
+    # the rd/cr logits are unchanged in shape -- instead of two independent BCE
+    # heads. Forces the model to COMMIT to one cymbal type per onset (attacks the
+    # ride<->crash both-fire confusion on the merged MDX23C cymbals stem). The SAME
+    # softmax is applied to the rd/cr rows at val/threshold-tune/eval (meta flag
+    # `cymbal_softmax`). Off => independent sigmoid+BCE heads (the baseline).
+    cymbal_softmax: bool = False
+    cymbal_ce_weight: float = 1.0  # scale of the cymbal CE term vs the per-lane BCE
 
     # Optimisation. AdamW (decoupled weight decay) + a warmup->cosine LR
     # schedule; both are strict improvements over plain Adam/constant-LR for a

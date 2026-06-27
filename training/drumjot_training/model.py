@@ -129,3 +129,20 @@ class MultiLaneHeads(nn.Module):
         (B, T; True = real frame) bounds each head's per-clip calibration pool."""
         pairs = [self.heads[lane].forward_all(x, mask) for lane in self.lane_names]
         return torch.stack([p[0] for p in pairs], dim=1), torch.stack([p[1] for p in pairs], dim=1)
+
+
+def activate_onsets(logits, lane_names, cymbal_softmax: bool = False):
+    """Onset LOGITS -> probabilities for peak-picking. Per-lane sigmoid, EXCEPT
+    (when `cymbal_softmax`) the rd/cr rows, which become a joint 3-way softmax
+    {none=0, ride, crash} -> per-cymbal-type posteriors. Shared by training
+    val/threshold-tuning AND inference so the operating point is computed
+    identically everywhere. `logits` is (..., n_lanes, T); returns the same shape."""
+    probs = torch.sigmoid(logits)
+    if cymbal_softmax and "rd" in lane_names and "cr" in lane_names:
+        rd, cr = lane_names.index("rd"), lane_names.index("cr")
+        rl, cl = logits[..., rd, :], logits[..., cr, :]
+        sm = torch.softmax(torch.stack([torch.zeros_like(rl), rl, cl], dim=-2), dim=-2)
+        probs = probs.clone()
+        probs[..., rd, :] = sm[..., 1, :]
+        probs[..., cr, :] = sm[..., 2, :]
+    return probs

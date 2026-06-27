@@ -80,7 +80,10 @@ def lane_probs(audio_path, model, meta: dict, encoder=None, max_seconds: float |
     device = next(model.parameters()).device
     x = torch.as_tensor(feat, dtype=torch.float32, device=device).unsqueeze(0)
     with torch.no_grad(), runtime.autocast():
-        return torch.sigmoid(model(x))[0].float().cpu().numpy(), meta["encoder_fps"]
+        from drumjot_training.model import activate_onsets
+        return activate_onsets(
+            model(x), meta["lanes"], meta.get("cymbal_softmax", False)
+        )[0].float().cpu().numpy(), meta["encoder_fps"]
 
 
 # How many windows to push through the heads in one padded+packed batch. The BiGRU
@@ -113,6 +116,7 @@ def stitched_probs(
     import torch
 
     from drumjot_training import embeddings
+    from drumjot_training.model import activate_onsets
 
     runtime.configure_backends()
     enc = encoder or embeddings.MertEncoder(name=meta["encoder"], layer=meta["encoder_layer"])
@@ -163,7 +167,8 @@ def stitched_probs(
                 x[j, : f.shape[0]] = torch.as_tensor(f, dtype=torch.float32, device=device)
                 mask[j, : f.shape[0]] = True
             with torch.no_grad(), runtime.autocast():
-                probs = torch.sigmoid(model(x, mask=mask, pack=True)).float().cpu().numpy()  # (B, L, bmax)
+                probs = activate_onsets(model(x, mask=mask, pack=True), meta["lanes"],
+                                        meta.get("cymbal_softmax", False)).float().cpu().numpy()  # (B, L, bmax)
             for j, (start, _length) in enumerate(bw):
                 pj = probs[j, :, : batch[j].shape[0]]  # drop pad frames
                 f0 = int(round(start * fps))
@@ -196,7 +201,7 @@ def stitched_probs(
             high_band=use_hb, cache_dtype="float32", y_full=y, y44_full=y44)
         x = torch.as_tensor(feat, dtype=torch.float32, device=device).unsqueeze(0)
         with torch.no_grad(), runtime.autocast():
-            probs = torch.sigmoid(model(x))[0].float().cpu().numpy()  # (L, Tc)
+            probs = activate_onsets(model(x), meta["lanes"], meta.get("cymbal_softmax", False))[0].float().cpu().numpy()  # (L, Tc)
         tc = probs.shape[1]
         lo = 0 if si == 0 else margin
         hi = tc if si == len(starts) - 1 else max(lo, tc - margin)

@@ -33,7 +33,7 @@ from drumjot_training import (
 )
 from drumjot_training.config import Config
 from drumjot_training.lanes import LANES, sibling_matrix
-from drumjot_training.model import MultiLaneHeads
+from drumjot_training.model import MultiLaneHeads, activate_onsets
 from drumjot_training.targets import (
     SUSTAINED_LANES,
     onsets_to_target,
@@ -115,7 +115,7 @@ def build_clip(
     )
 
 
-def _clip_probs(model, clip: Clip) -> np.ndarray:
+def _clip_probs(model, clip: Clip, cymbal_softmax: bool = False) -> np.ndarray:
     """Sigmoid activations (n_lanes, T) for one clip."""
     import torch
 
@@ -123,10 +123,10 @@ def _clip_probs(model, clip: Clip) -> np.ndarray:
     device = next(model.parameters()).device
     x = torch.as_tensor(clip.features, dtype=torch.float32, device=device).unsqueeze(0)
     with torch.no_grad(), runtime.autocast():
-        return torch.sigmoid(model(x))[0].float().cpu().numpy()
+        return activate_onsets(model(x), model.lane_names, cymbal_softmax)[0].float().cpu().numpy()
 
 
-def _clip_probs_batched(model, clips: Sequence[Clip], max_batch: int = 16):
+def _clip_probs_batched(model, clips: Sequence[Clip], max_batch: int = 16, cymbal_softmax: bool = False):
     """Sigmoid activations per clip, but BATCHED across clips for speed -- returns a
     list of (n_lanes, T) arrays aligned to `clips`.
 
@@ -154,7 +154,7 @@ def _clip_probs_batched(model, clips: Sequence[Clip], max_batch: int = 16):
                 chunk = idxs[s:s + max_batch]
                 x = torch.stack([torch.as_tensor(clips[j].features, dtype=torch.float32, device=device)
                                  for j in chunk])
-                p = torch.sigmoid(model(x)).float().cpu().numpy()  # (B, n_lanes, T)
+                p = activate_onsets(model(x), model.lane_names, cymbal_softmax).float().cpu().numpy()  # (B, n_lanes, T)
                 for k, j in enumerate(chunk):
                     out[j] = p[k]
     return out
@@ -245,7 +245,7 @@ def tune_thresholds(
     # keep only probs + onsets per clip (not the feature-heavy Clip), so a
     # streaming val set isn't fully resident at once. Batched forward (grouped by
     # length, no padding) -> same probs as per-clip, far fewer kernel launches.
-    _pb = _clip_probs_batched(model, val_clips)
+    _pb = _clip_probs_batched(model, val_clips, cymbal_softmax=cfg.cymbal_softmax)
     probs_onsets = [(_pb[i], c.onsets_by_lane) for i, c in enumerate(val_clips)]
     return _tune_thresholds_from_probs(probs_onsets, cfg, grid)
 
@@ -338,6 +338,28 @@ def masked_focal(logits, targets, mask, alpha: float = 2.0, beta: float = 4.0, f
     m = mask.unsqueeze(1)  # (B, 1, T)
     npos = (pos * m).sum().clamp_min(1.0)
     return (loss * m).sum() / npos
+
+
+def masked_cymbal_ce(rc_logits, rc_targets, mask, pos_weight=1.0):
+    """Joint 3-way soft cross-entropy {none, ride, crash} for the cymbal lanes, with
+    `none` the fixed-0 reference class. `rc_logits` / `rc_targets` are (B, 2, T) for
+    (ride, crash) -- the rd, cr rows. A softmax over [0, ride, crash] forces the
+    model to COMMIT to ONE cymbal type per onset (kills the ride<->crash both-fire
+    confusion on the merged cymbals stem). Soft target = normalized [(1-r)(1-c), r, c]
+    from the per-lane Gaussians. Onset frames are upweighted by `pos_weight` (the
+    rare cymbal onsets, mirroring the per-lane BCE pos_weight); mean over valid
+    frames so the magnitude sits alongside the BCE terms."""
+    import torch
+    from torch.nn import functional as F
+
+    z = torch.zeros_like(rc_logits[:, :1])  # `none` logit = 0 (fixed reference)
+    logp = F.log_softmax(torch.cat([z, rc_logits], dim=1), dim=1)  # (B, 3, T)
+    rt, ct = rc_targets[:, 0], rc_targets[:, 1]  # (B, T) ride/crash Gaussians
+    tgt = torch.stack([(1.0 - rt) * (1.0 - ct), rt, ct], dim=1)  # (B, 3, T)
+    tgt = tgt / tgt.sum(dim=1, keepdim=True).clamp_min(1e-6)
+    ce = -(tgt * logp).sum(dim=1)  # (B, T)
+    w = 1.0 + (pos_weight - 1.0) * torch.clamp(rt + ct, max=1.0)  # upweight onset frames
+    return (ce * w * mask).sum() / mask.sum().clamp_min(1.0)
 
 
 def _cap_onsets(onsets: dict[str, list[float]], max_seconds: float | None) -> dict[str, list[float]]:
@@ -852,8 +874,16 @@ def train_loop(
         focal_idx, bce_idx = list(range(len(cfg.lanes))), []
     else:
         focal_idx, bce_idx = [], list(range(len(cfg.lanes)))
+    # joint cymbal softmax: pull rd+cr OUT of the per-lane bce/focal split; train them
+    # jointly as a 3-way {none, ride, crash} CE (commit to ONE cymbal type per onset).
+    cym_idx: list[int] = []
+    if cfg.cymbal_softmax and "rd" in cfg.lanes and "cr" in cfg.lanes:
+        cym_idx = [cfg.lanes.index("rd"), cfg.lanes.index("cr")]
+        focal_idx = [i for i in focal_idx if i not in cym_idx]
+        bce_idx = [i for i in bce_idx if i not in cym_idx]
     log(f"  loss: focal={[cfg.lanes[i] for i in focal_idx] or 'none'} "
-        f"bce={[cfg.lanes[i] for i in bce_idx] or 'none'}")
+        f"bce={[cfg.lanes[i] for i in bce_idx] or 'none'} "
+        f"cymbal-CE={[cfg.lanes[i] for i in cym_idx] or 'none'} (weight {cfg.cymbal_ce_weight})")
     history: dict[str, list[float]] = {"train_loss": []}
     # keep_best: PER-LANE early stopping. Each lane's head is an independent
     # OnsetHead, so we snapshot each lane's head params at the epoch where THAT
@@ -944,6 +974,9 @@ def train_loop(
                 if focal_idx:
                     fwf = fw[:, focal_idx] if fw is not None else None
                     terms.append(masked_focal(logits[:, focal_idx], Y[:, focal_idx], mask, frame_weight=fwf))
+                if cym_idx:  # joint 3-way ride/crash CE (replaces rd/cr BCE)
+                    terms.append(cfg.cymbal_ce_weight * masked_cymbal_ce(
+                        logits[:, cym_idx], Y[:, cym_idx], mask, pos_weight=pw[cym_idx].max()))
                 loss = sum(terms)
                 if cfg.aux_act_weight > 0.0:
                     # auxiliary ring-activity BCE, sustained lanes only (the
@@ -986,7 +1019,7 @@ def train_loop(
                 # Batched forward (grouped by length, no padding) == per-clip probs,
                 # but ~max_batch fewer kernel launches (the serial val was the big
                 # per-epoch fixed cost on this launch-latency-bound small head).
-                _vp = _clip_probs_batched(model, val_clips)
+                _vp = _clip_probs_batched(model, val_clips, cymbal_softmax=cfg.cymbal_softmax)
                 # Score val_f1 at this epoch's per-lane TUNED thresholds (swept on the
                 # probs we just computed, no extra forwards), not a flat 0.5. A fixed
                 # 0.5 is the wrong operating point for low-threshold lanes (cr/rd/ho
@@ -1568,6 +1601,13 @@ def main(argv: list[str] | None = None) -> None:
                     help="bypass the per-clip onset auto-calibration head (still CONSTRUCTED "
                          "for RNG/init parity with a calibrated run -- for a clean A/B)")
     ap.set_defaults(auto_calibrate=Config.auto_calibrate)
+    ap.add_argument("--cymbal-softmax", dest="cymbal_softmax", action="store_true",
+                    help="train rd+cr jointly as a 3-way softmax {none,ride,crash} (commit to ONE "
+                         "cymbal type per onset) instead of independent BCE heads; the eval applies "
+                         "the same softmax to the rd/cr rows. Ride/crash discrimination experiment.")
+    ap.set_defaults(cymbal_softmax=Config.cymbal_softmax)
+    ap.add_argument("--cymbal-ce-weight", type=float, default=Config.cymbal_ce_weight,
+                    help="scale of the joint cymbal CE term vs the per-lane BCE (default 1.0)")
     ap.add_argument("--lanes", default=None,
                     help="comma-list lane subset to train, e.g. k,s,t,hc,ho,rd,cr (default: all 9). "
                     "Fewer lanes = less forward_all VRAM (each lane is its own GRU). Onsets for "
@@ -1655,6 +1695,7 @@ def main(argv: list[str] | None = None) -> None:
         sib_neg_weight=args.sib_neg_weight, sib_pos_weight=args.sib_pos_weight,
         label_min_support=args.label_min_support, label_support_window_s=args.label_support_window,
         head_hidden=args.head_hidden, head_layers=args.head_layers, auto_calibrate=args.auto_calibrate,
+        cymbal_softmax=args.cymbal_softmax, cymbal_ce_weight=args.cymbal_ce_weight,
         lanes=tuple(s.strip() for s in args.lanes.split(",")) if args.lanes else LANES,
         aux_lanes=tuple(s.strip() for s in args.aux_lanes.split(",")) if args.aux_lanes else None,
     )
