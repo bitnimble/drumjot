@@ -140,11 +140,17 @@ request, and pull in the linked docs when a task touches that area.
   grepping for a function/class/variable/type name, stop and use `LSP`.
 - **Prefer built-in tools over ad-hoc bash.** Reach for `Read` / `Edit` /
   `Write` for files, the `LSP` tool for symbol-level questions
-  (definition / references / hover), and the `Skill` tool for skills, before shelling out. Avoid ad-hoc shell scripting (`echo`/`printf`/`cat`/
-  `sed`/`grep`/`find`/`for`-loops); the permission hook denies many of
-  them outright and trips a confirmation on multi-line inline code. When
-  you genuinely need a text search, a single clean `git grep` is fine, but
-  default to the dedicated tools and the project's `scripts/*` wrappers.
+  (definition / references / hover), the `Find` / `Grep` tools to locate
+  files / content, and the `Skill` tool for skills before shelling out, the
+  dedicated tools are more token-efficient than parsing raw shell output.
+  `grep` / `rg` / `git grep` **are** allowed, but reach for raw search only
+  where the dedicated tools fall short, a complex glob / regex, or piping
+  matches into another command, not as the default. `cat` / `sed` / `awk` /
+  `find` stay redirected to `Read` / `Edit` / `Find`. Their command-executing
+  flags (`rg --pre` / `--pre-glob` / `--hostname-bin`, `git grep -O` /
+  `--open-files-in-pager`) are **denied** in `.claude/settings.json`, they run
+  an arbitrary command, so they're not read-only. Multi-line inline code also
+  trips a confirmation; put non-trivial scripts in a `tmp/*` file.
 
 ### Frontend store / presenter / component architecture
 

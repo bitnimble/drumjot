@@ -56,14 +56,26 @@
       "Bash(stat *)",
       "Bash(echo *)",
       "Bash(printf *)",
-      "Bash(pwd *)"
+      "Bash(pwd *)",
+
+      "Bash(grep *)",
+      "Bash(rg *)",
+      "Bash(git grep *)"
     ],
     "deny": [
       "Bash(git push *)",
       "Write(tmp_*)",
       "Edit(tmp_*)",
       "Write(**/tmp_*)",
-      "Edit(**/tmp_*)"
+      "Edit(**/tmp_*)",
+
+      "Bash(rg --pre*)",
+      "Bash(rg *--pre*)",
+      "Bash(rg *--hostname-bin*)",
+      "Bash(git grep -O*)",
+      "Bash(git grep *-O*)",
+      "Bash(git grep --open-files-in-pager*)",
+      "Bash(git grep *--open-files-in-pager*)"
     ],
     "defaultMode": "acceptEdits"
   },
