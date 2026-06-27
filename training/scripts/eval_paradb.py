@@ -110,6 +110,56 @@ def _accumulate_gap(gap_records, model, meta, encoder, gt_scored, drum_stem, pie
         ))
 
 
+def print_reports(agg, leak, gap_records, flagged, *, oracle_report, predictor):
+    """Render the per-lane F1 + leakage + oracle-gap + flagged reports from the
+    accumulated maps. Shared by the single-process run and the shard merge
+    (merge_paradb_shards.py) so both print identically. `predictor` is used only
+    for its truthiness (whether to add the predicted/hybrid columns)."""
+    def _m(v):
+        return sum(v) / len(v) if v else 0.0
+
+    print("\n==== ParaDB per-lane onset-F1: bare peak-pick vs +shared deterministic picker ====", flush=True)
+    print("  label  F_bare F_pick   dF    P_bare>P_pick  R_bare>R_pick  maps", flush=True)
+    print("  (F_pick = deployed picker = the headline number; h/cym folded, hc/ho/rd/cr split)", flush=True)
+    for label in rlrr.REPORT_ORDER:
+        a = agg[label]
+        if not a["f"]:
+            continue
+        fb, fp = _m(a["fb"]), _m(a["f"])
+        print(
+            f"  {label:4s} {fb:6.3f} {fp:6.3f} {fp - fb:+6.3f}   {_m(a['pb']):.3f}>{_m(a['p']):.3f}  "
+            f"{_m(a['rb']):.3f}>{_m(a['r']):.3f}  {len(a['f'])}",
+            flush=True,
+        )
+
+    print("\n==== cross-instrument leakage (onsets fired in the WRONG lane, discarded) ====", flush=True)
+    print("  stem  matched  leaked  leak%   top wrong lanes", flush=True)
+    for pitch in ("k", "s", "h", "c", "t"):
+        d = leak[pitch]
+        tot = d["matched"] + d["leaked"]
+        if not tot:
+            continue
+        top = ", ".join(f"{ln}:{n}" for ln, n in d["to"].most_common(3))
+        print(f"  {pitch:4s} {d['matched']:7d} {d['leaked']:7d} {100 * d['leaked'] / tot:5.1f}%   {top}", flush=True)
+
+    if oracle_report and gap_records:
+        gaps = report.aggregate(gap_records)
+        order = [ln for ln in rlrr.REPORT_ORDER if ln in gaps] or sorted(gaps)
+        print("\n" + report.format_report(gaps, lane_order=order), flush=True)
+        tot = sum(g.gap for g in gaps.values()) / len(gaps)
+        cap = sum(g.captured for g in gaps.values()) / len(gaps)
+        src = "predicted" if predictor else "(no predictor: predicted == current)"
+        print(f"  mean oracle gap {tot:+.3f} F1; mean captured {cap:+.3f} {src}", flush=True)
+        if predictor:  # the hybrid routes hc->determ, cymbals->learned (needs the predictor)
+            print("\n" + hybrid.format_hybrid(gaps, hybrid.DEFAULT_ROUTING, lane_order=order), flush=True)
+            print(f"  mean captured {hybrid.captured(gaps, hybrid.DEFAULT_ROUTING):+.3f} hybrid", flush=True)
+
+    if flagged:
+        print(f"\n{len(flagged)} SUSPECT maps (low support or large offset, review/exclude):", flush=True)
+        for name, s0, off in flagged:
+            print(f"  {name}: support@0={s0:.2f} offset={off * 1000:+.0f}ms", flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser(description="Evaluate learned model on ParaDB maps")
     ap.add_argument("--maps-dir", required=True, help="folder of .zip ParaDB maps")
@@ -144,6 +194,22 @@ def main():
                     "checkpoint lanes.")
     ap.add_argument("--log", default=None,
                     help="tee stdout+stderr to this file (self-log; no manual redirect needed)")
+    ap.add_argument("--shard", default=None,
+                    help="process only a stride 'I/N' of the maps (maps[I::N]) -- run N "
+                    "processes over disjoint subsets in parallel, then combine with "
+                    "--dump + merge_paradb_shards.py. Cache-hit shards load neither the "
+                    "separator nor MERT, so they share one GPU.")
+    ap.add_argument("--dump", default=None,
+                    help="pickle (agg, leak, gap_records, flagged) here instead of printing "
+                    "the report; merge_paradb_shards.py combines shard dumps into one report.")
+    ap.add_argument("--maps-list", default=None,
+                    help="file of newline-separated .zip paths to process (overrides the "
+                    "--maps-dir glob + --shard); the parallel orchestrator writes one per "
+                    "worker so it can pin all uncached songs to one GPU encoder worker.")
+    ap.add_argument("--require-cached", action="store_true",
+                    help="skip (don't score) any song whose MERT features aren't fully cached, "
+                    "so this worker never loads the encoder -- for the cache-only workers in a "
+                    "parallel run (the single encoder worker omits this and does the uncached).")
     args = ap.parse_args()
 
     import gc
@@ -162,9 +228,17 @@ def main():
         stems_tmp = tempfile.TemporaryDirectory()
         stems_cache = Path(stems_tmp.name)
 
-    zips = sorted(Path(args.maps_dir).glob("*.zip"))
+    if args.maps_list:
+        zips = [Path(p) for p in Path(args.maps_list).read_text().splitlines() if p.strip()]
+    else:
+        zips = sorted(Path(args.maps_dir).glob("*.zip"))
+        if args.shard:
+            si, sn = (int(x) for x in args.shard.split("/"))
+            zips = zips[si::sn]
+    _scope = f"shard {args.shard}" if args.shard else ("from maps-list" if args.maps_list else "")
     print(
-        f"{len(zips)} maps; checkpoint={args.checkpoint}; max_seconds={args.max_seconds}; "
+        f"{len(zips)} maps{f' ({_scope})' if _scope else ''}; "
+        f"checkpoint={args.checkpoint}; max_seconds={args.max_seconds}; "
         "adaptive hat/cymbal folding (per-map, optimistic)",
         flush=True,
     )
@@ -173,8 +247,18 @@ def main():
     # stems (stems_per: kick/snare/hi-hat/cymbals/toms). MERT is NOT loaded yet
     # so the separator and MERT never coexist on a small GPU. ----
     maps: list[tuple] = []  # (zip_path, gt, drum_stem, {pitch: stem_path})
-    sep = Separator()
-    sep.load()
+    # Lazily construct the separator on the first cache MISS: a fully-cached run
+    # (eval over pre-separated stems) never loads BS-Roformer/MDX23C, so several
+    # sharded eval processes can share one GPU.
+    sep = None
+
+    def _sep():
+        nonlocal sep
+        if sep is None:
+            sep = Separator()
+            sep.load()
+        return sep
+
     for zp in zips:
         print(f"\n=== {zp.name} (separate) ===", flush=True)
         with tempfile.TemporaryDirectory() as td:
@@ -204,7 +288,7 @@ def main():
                     print("  no resolvable audio; skipping", flush=True)
                     continue
                 print(f"  mix: {case}", flush=True)
-                drum_cached.write_bytes(Path(sep.run_stems_all(mix_wav, root).drum_stem).read_bytes())
+                drum_cached.write_bytes(Path(_sep().run_stems_all(mix_wav, root).drum_stem).read_bytes())
             if args.full_drum:
                 print("  full drum stem (no per-instrument split)", flush=True)
                 pieces = {}
@@ -214,7 +298,7 @@ def main():
                     print("  using cached per-instrument stems", flush=True)
                     pieces = dict(piece_cached)
                 else:
-                    per = sep.run_stems_per(drum_cached, root).per_instrument  # {pitch: path}
+                    per = _sep().run_stems_per(drum_cached, root).per_instrument  # {pitch: path}
                     pieces = {}
                     for p, path in per.items():
                         if p in STEM_TO_LANES:
@@ -224,7 +308,7 @@ def main():
             maps.append((zp, gt, drum_cached, pieces, aux_keep))
 
     # free the separator's GPU memory before loading MERT (no coexistence)
-    del sep
+    sep = None
     gc.collect()
     if device == "cuda":
         torch.cuda.empty_cache()
@@ -240,6 +324,12 @@ def main():
     gap_records: list[report.GapRecord] = []
 
     for zp, gt, drum_stem, pieces, aux_keep in maps:
+        if args.require_cached:  # cache-only worker: never load the encoder
+            to_check = [drum_stem] if args.full_drum else list(pieces.values())
+            if not all(embeddings.windows_cached(sp, encoder, meta, args.window_seconds, args.max_seconds)
+                       for sp in to_check):
+                print(f"\n=== {zp.name} (skip: not fully cached; encoder worker handles it) ===", flush=True)
+                continue
         print(f"\n=== {zp.name} (score) ===", flush=True)
         # alignment / quality check against the combined drum-stem envelope
         env, env_fps = forced_align.onset_envelope(drum_stem, max_seconds=args.max_seconds)
@@ -320,50 +410,21 @@ def main():
             agg[label]["pb"].append(mb["p"])
             agg[label]["rb"].append(mb["r"])
 
-    # ---- reports ----
-    def _m(v):
-        return sum(v) / len(v) if v else 0.0
+    # ---- reports (or dump the raw accumulators for a sharded run, which
+    # merge_paradb_shards.py combines into one identical report) ----
+    if args.dump:
+        import pickle
 
-    print("\n==== ParaDB per-lane onset-F1: bare peak-pick vs +shared deterministic picker ====", flush=True)
-    print("  label  F_bare F_pick   dF    P_bare>P_pick  R_bare>R_pick  maps", flush=True)
-    print("  (F_pick = deployed picker = the headline number; h/cym folded, hc/ho/rd/cr split)", flush=True)
-    for label in rlrr.REPORT_ORDER:
-        a = agg[label]
-        if not a["f"]:
-            continue
-        fb, fp = _m(a["fb"]), _m(a["f"])
-        print(
-            f"  {label:4s} {fb:6.3f} {fp:6.3f} {fp - fb:+6.3f}   {_m(a['pb']):.3f}>{_m(a['p']):.3f}  "
-            f"{_m(a['rb']):.3f}>{_m(a['r']):.3f}  {len(a['f'])}",
-            flush=True,
-        )
-
-    print("\n==== cross-instrument leakage (onsets fired in the WRONG lane, discarded) ====", flush=True)
-    print("  stem  matched  leaked  leak%   top wrong lanes", flush=True)
-    for pitch in ("k", "s", "h", "c", "t"):
-        d = leak[pitch]
-        tot = d["matched"] + d["leaked"]
-        if not tot:
-            continue
-        top = ", ".join(f"{ln}:{n}" for ln, n in d["to"].most_common(3))
-        print(f"  {pitch:4s} {d['matched']:7d} {d['leaked']:7d} {100 * d['leaked'] / tot:5.1f}%   {top}", flush=True)
-
-    if args.oracle_report and gap_records:
-        gaps = report.aggregate(gap_records)
-        order = [ln for ln in rlrr.REPORT_ORDER if ln in gaps] or sorted(gaps)
-        print("\n" + report.format_report(gaps, lane_order=order), flush=True)
-        tot = sum(g.gap for g in gaps.values()) / len(gaps)
-        cap = sum(g.captured for g in gaps.values()) / len(gaps)
-        src = "predicted" if predictor else "(no predictor: predicted == current)"
-        print(f"  mean oracle gap {tot:+.3f} F1; mean captured {cap:+.3f} {src}", flush=True)
-        if predictor:  # the hybrid routes hc->determ, cymbals->learned (needs the predictor)
-            print("\n" + hybrid.format_hybrid(gaps, hybrid.DEFAULT_ROUTING, lane_order=order), flush=True)
-            print(f"  mean captured {hybrid.captured(gaps, hybrid.DEFAULT_ROUTING):+.3f} hybrid", flush=True)
-
-    if flagged:
-        print(f"\n{len(flagged)} SUSPECT maps (low support or large offset, review/exclude):", flush=True)
-        for name, s0, off in flagged:
-            print(f"  {name}: support@0={s0:.2f} offset={off * 1000:+.0f}ms", flush=True)
+        Path(args.dump).write_bytes(pickle.dumps((
+            {k: dict(v) for k, v in agg.items()},  # drop the lambda factories so it pickles
+            {k: {"matched": d["matched"], "leaked": d["leaked"], "to": dict(d["to"])}
+             for k, d in leak.items()},
+            gap_records, flagged,
+        )))
+        print(f"\ndumped {len(maps)} maps' records -> {args.dump}", flush=True)
+        return
+    print_reports(agg, leak, gap_records, flagged,
+                  oracle_report=args.oracle_report, predictor=predictor)
 
 
 if __name__ == "__main__":
