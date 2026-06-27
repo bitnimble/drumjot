@@ -1500,13 +1500,17 @@ def _pooled_specs(args) -> tuple[list, list, Path]:
         return v
 
     # Aligned (snap-to-audio) onsets are the DEFAULT target source: load the
-    # dataset-wide `_onsets_aligned.json` (keyed by stem audio path, produced by
+    # dataset-wide store (keyed by stem audio path, produced by
     # align_dataset_onsets.py at ingestion/backfill) and use a stem's snapped onsets
     # as its restricted target when present, falling back to raw. No flag -- if the
     # store is absent it's a transparent no-op. Override the path with
     # DRUMJOT_ALIGNED_ONSETS (point it at /dev/null to force raw).
+    # Default is SNAP-ONLY (`_onsets_aligned_snaponly.json`): snaps onsets to the
+    # transient but DISCARDS nothing. An A/B (RESULTS) found snap-only beats the
+    # snap+filter store (`_onsets_aligned.json`, which also drops false/wrong-lane
+    # onsets) -- the filter over-drops real soft hits on sparse lanes.
     aligned_path = Path(os.environ.get(
-        "DRUMJOT_ALIGNED_ONSETS", "/codebox-workspace/datasets/_onsets_aligned.json"))
+        "DRUMJOT_ALIGNED_ONSETS", "/codebox-workspace/datasets/_onsets_aligned_snaponly.json"))
     try:
         aligned = json.loads(aligned_path.read_text()) if aligned_path.exists() else {}
     except Exception:  # noqa: BLE001  missing/corrupt -> raw
