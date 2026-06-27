@@ -216,11 +216,18 @@ ENV AUDIO_SEPARATOR_MODEL_FILE_DIR=/models \
     HF_HOME=/models/huggingface \
     TRANSFORMERS_CACHE=/models/huggingface \
     TORCH_HOME=/models/torch \
-    DRUMJOT_MERT_CACHE=/models/mert-cache
+    DRUMJOT_MERT_CACHE=/models/mert-cache \
+    TORCHINDUCTOR_CACHE_DIR=/models/torchinductor
 # DRUMJOT_MERT_CACHE: drumjot_training.embeddings defaults this to the local
 # dev box's /codebox-workspace/mert_cache, which doesn't exist in the container
 # (and the app user can't mkdir at /). Point it at the persisted /models mount
 # so the learned-onset backend can write MERT features; created on first use.
+#
+# TORCHINDUCTOR_CACHE_DIR: the separation models are wrapped in torch.compile
+# (separate.py:_maybe_compile_model). Inductor's compiled-kernel cache otherwise
+# lands in ephemeral /tmp and is wiped on every container recreate, so the first
+# separation re-pays the full ~30s compile each restart. Persist it in /models
+# so the compile survives restarts (cache hit -> no recompile after the first).
 # The learned-onset model (the default onset backend) lives in the models cache
 # under its own subfolder: drop the run dir's model.pt + meta.json into
 # ${DRUMJOT_DATA_ROOT}/models-cache/learned-onsets on the host. NOT baked; if
