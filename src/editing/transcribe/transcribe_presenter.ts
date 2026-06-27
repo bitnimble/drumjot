@@ -4,6 +4,7 @@ import {
   BeatInput,
   DrumSeparator,
   LlmModel,
+  OnsetBackend,
   stemUrl,
   transcriber,
   TranscribeProgress,
@@ -85,6 +86,7 @@ export class TranscribePresenter {
         debug: this.transcribe.transcribeOptions.debug,
         beatInput: this.transcribe.transcribeOptions.beatInput,
         drumSeparator: this.transcribe.transcribeOptions.drumSeparator,
+        onsetBackend: this.transcribe.transcribeOptions.onsetBackend,
         llmModel: this.transcribe.transcribeOptions.llmModel,
         quantise: this.transcribe.transcribeOptions.quantise,
         quantiseUseLlm: this.transcribe.transcribeOptions.quantiseUseLlm,
@@ -129,6 +131,7 @@ export class TranscribePresenter {
         resumeStage: stage,
         beatInput: this.transcribe.transcribeOptions.beatInput,
         drumSeparator: this.transcribe.transcribeOptions.drumSeparator,
+        onsetBackend: this.transcribe.transcribeOptions.onsetBackend,
         llmModel: this.transcribe.transcribeOptions.llmModel,
         quantise: this.transcribe.transcribeOptions.quantise,
         quantiseUseLlm: this.transcribe.transcribeOptions.quantiseUseLlm,
@@ -346,6 +349,10 @@ export class TranscribePresenter {
 
   setDrumSeparator(separator: DrumSeparator) {
     this.transcribe.transcribeOptions.drumSeparator = separator;
+  }
+
+  setOnsetBackend(backend: OnsetBackend) {
+    this.transcribe.transcribeOptions.onsetBackend = backend;
   }
 
   setLlmModel(model: LlmModel) {

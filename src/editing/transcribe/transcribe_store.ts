@@ -3,6 +3,7 @@ import {
   BeatInput,
   DrumSeparator,
   LlmModel,
+  OnsetBackend,
   TranscribeStage,
   TranscriptionSummary,
 } from 'src/editing/transcribe/transcriber';
@@ -29,6 +30,8 @@ export type TranscribeOptions = {
   beatInput: BeatInput;
   /** Stage-2 separator: `mdx23c` (default) or the opt-in `larsnet`. */
   drumSeparator: DrumSeparator;
+  /** Onset detector backend: `learned` (default, the MERT model) or `adtof`. */
+  onsetBackend: OnsetBackend;
   /** Model for the three Opus-by-default classification stages. */
   llmModel: LlmModel;
   /** Run the optional `quantise` pipeline stage. False = no snap; every
@@ -56,6 +59,7 @@ export class TranscribeStore {
     debug: true,
     beatInput: 'full_mix',
     drumSeparator: 'mdx23c',
+    onsetBackend: 'learned',
     llmModel: 'claude-haiku-4-5-20251001',
     quantise: true,
     quantiseUseLlm: false,

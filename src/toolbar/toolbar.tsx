@@ -11,6 +11,9 @@ import {
   LLM_MODEL_LABELS,
   LLM_MODEL_ORDER,
   LlmModel,
+  ONSET_BACKEND_LABELS,
+  ONSET_BACKEND_ORDER,
+  OnsetBackend,
   TranscribeStage,
   TranscriptionSummary,
 } from 'src/editing/transcribe/transcriber';
@@ -103,6 +106,7 @@ export const Toolbar = observer(
     lyricsAlignBusyPhase,
     onSetBeatInput,
     onSetDrumSeparator,
+    onSetOnsetBackend,
     onSetLlmModel,
     onSetQuantise,
     onSetQuantiseUseLlm,
@@ -173,6 +177,7 @@ export const Toolbar = observer(
     lyricsAlignBusyPhase: 'idle' | 'queued' | 'aligning';
     onSetBeatInput: (input: BeatInput) => void;
     onSetDrumSeparator: (separator: DrumSeparator) => void;
+    onSetOnsetBackend: (backend: OnsetBackend) => void;
     onSetLlmModel: (model: LlmModel) => void;
     onSetQuantise: (enabled: boolean) => void;
     onSetQuantiseUseLlm: (enabled: boolean) => void;
@@ -530,6 +535,24 @@ export const Toolbar = observer(
                     {DRUM_SEPARATOR_ORDER.map((s) => (
                       <option key={s} value={s}>
                         {DRUM_SEPARATOR_LABELS[s]}
+                      </option>
+                    ))}
+                  </Select>
+                </label>
+                <label
+                  className={sharedStyles.toolbarCheckbox}
+                  title="Onset detector. Learned (the trained MERT model, default) emits all drum classes per stem; ADTOF is the prior Frame-RNN detector. Applies to both New and Resume."
+                >
+                  <span>Onset detector</span>
+                  <Select
+                    className={sharedStyles.samplesSelect}
+                    value={transcribeOptions.onsetBackend}
+                    disabled={uploading}
+                    onChange={(e) => onSetOnsetBackend(e.target.value as OnsetBackend)}
+                  >
+                    {ONSET_BACKEND_ORDER.map((b) => (
+                      <option key={b} value={b}>
+                        {ONSET_BACKEND_LABELS[b]}
                       </option>
                     ))}
                   </Select>

@@ -117,6 +117,21 @@ export const DRUM_SEPARATOR_LABELS: Record<DrumSeparator, string> = {
 /** Selector order. */
 export const DRUM_SEPARATOR_ORDER: readonly DrumSeparator[] = ['mdx23c', 'larsnet'];
 
+/** Onset detector backend. `learned` (default) = the trained frozen-MERT +
+ *  per-lane-heads model, run per stem; `adtof` = the ADTOF Frame-RNN detector.
+ *  See `transcriber/app/pipeline/runner.py` (`use_learned_onsets`). */
+export type OnsetBackend = 'learned' | 'adtof';
+
+/** Human-readable label per {@link OnsetBackend}, for the Transcribe-menu
+ *  selector. Kept here so the wire value ↔ label mapping stays single-sourced. */
+export const ONSET_BACKEND_LABELS: Record<OnsetBackend, string> = {
+  learned: 'Learned (MERT)',
+  adtof: 'ADTOF',
+};
+
+/** Selector order. */
+export const ONSET_BACKEND_ORDER: readonly OnsetBackend[] = ['learned', 'adtof'];
+
 /**
  * Anthropic model used by the three classification stages
  * (`filter`; `hihat_split`; `cymbal_split`). The `quantise` stage's
@@ -212,6 +227,12 @@ export type TranscribeOptions = {
    */
   drumSeparator?: DrumSeparator;
   /**
+   * Onset detector backend. `learned` (default) = the trained frozen-MERT
+   * model; `adtof` = the ADTOF Frame-RNN. Omitted = server default
+   * (`Settings.use_learned_onsets`, currently `learned`).
+   */
+  onsetBackend?: OnsetBackend;
+  /**
    * Anthropic model for the three classification stages (filter,
    * hihat_split, cymbal_split). Omitted = server falls back to
    * `Settings.llm_model`.
@@ -265,6 +286,8 @@ export type ResumeOptions = {
   beatInput?: BeatInput;
   /** Same semantics as {@link TranscribeOptions.drumSeparator}. */
   drumSeparator?: DrumSeparator;
+  /** Same semantics as {@link TranscribeOptions.onsetBackend}. */
+  onsetBackend?: OnsetBackend;
   /** Same semantics as {@link TranscribeOptions.llmModel}. */
   llmModel?: LlmModel;
   /** Same semantics as {@link TranscribeOptions.quantise}. */
@@ -635,6 +658,9 @@ export class TranscriberClient {
     }
     if (options.drumSeparator !== undefined) {
       form.append('drum_separator', options.drumSeparator);
+    }
+    if (options.onsetBackend !== undefined) {
+      form.append('onset_backend', options.onsetBackend);
     }
     if (options.llmModel !== undefined) {
       form.append('llm_model', options.llmModel);

@@ -54,3 +54,36 @@ test('Model selection persists across New ↔ Resume tab switch', async ({ page 
   // value resets to the default.
   await expect(modelSelect).toHaveValue('claude-opus-4-7');
 });
+
+test('Onset-detector selection persists across New ↔ Resume tab switch', async ({ page }) => {
+  await page.route('**/api/transcribe/list', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        {
+          folder: 'fake_run',
+          original_filename: 'fake.wav',
+          requested_at: '2026-05-01T00:00:00Z',
+          last_run_at: null,
+          last_resume_stage: null,
+          resumable_stages: [],
+        },
+      ]),
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Transcribe', exact: false }).click();
+  const resumeTab = page.getByTestId('transcribe-tab-resume');
+  await expect(resumeTab).toBeEnabled();
+
+  // Default is the learned model; flip to ADTOF so the assertion proves the
+  // value rode through the tab switch rather than matching the default on both.
+  const onsetSelect = page.getByLabel('Onset detector');
+  await onsetSelect.selectOption('adtof');
+  await expect(onsetSelect).toHaveValue('adtof');
+
+  await resumeTab.click();
+  await expect(onsetSelect).toHaveValue('adtof');
+});
