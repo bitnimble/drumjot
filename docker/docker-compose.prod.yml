@@ -5,7 +5,27 @@
 #
 # Usage (run from the repo root):
 #   cp transcriber/.env.example transcriber/.env   # populate ANTHROPIC_API_KEY
+#   # Bake the default (learned) onset model into the image -- see
+#   # transcriber/checkpoints/learned_onsets/README.md:
+#   cp /path/to/run_dir/{model.pt,meta.json} transcriber/checkpoints/learned_onsets/
 #   docker compose -f docker/docker-compose.prod.yml up --build
+#
+# Then open http://localhost:5173 (SPA + /api proxy); the transcriber API is
+# also exposed directly on :8861.
+#
+# Deploying on another host (e.g. a gaming PC), beyond the two steps above:
+#   - Volumes: the persisted dirs default to /codebox-workspace/drumjot/* (the
+#     local box). Point them at LOCAL SSD via DRUMJOT_DATA_ROOT (shell env or a
+#     docker/.env next to this file), e.g. DRUMJOT_DATA_ROOT=$HOME/drumjot_data.
+#     Don't put them on NFS, the multi-GB model cache will crawl.
+#   - GPU: needs the NVIDIA Container Toolkit + a driver new enough for the
+#     image's CUDA 12.8 torch (>=570; a CUDA-13/580+ driver is forward-
+#     compatible in-container). On WSL, verify CUDA init on the first run
+#     (`docker compose ... logs`); the cu128-on-WSL caveat in training/
+#     pyproject is about NATIVE wheels, not the containerized runtime. No GPU =
+#     comment out `gpus: all` in the base file (CPU fallback, slow).
+#   - First learned transcribe after a fresh /models volume downloads the
+#     frozen MERT-v1-330M encoder (~1.3 GB) into the HF cache once.
 #
 # For live-reload frontend work without an image rebuild, use
 # docker/docker-compose.dev.yml instead. Both files extend

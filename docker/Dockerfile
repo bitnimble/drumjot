@@ -122,6 +122,16 @@ RUN python3.11 -m pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cu128 \
         'torch>=2.8,<2.12' 'torchaudio>=2.8,<2.12'
 
+# Layer 2.5: the shared in-repo DSP package (../dsp -> drumjot-dsp). The
+# transcriber lists `drumjot-dsp` as a dependency but supplies its source only
+# via `[tool.uv.sources]` (a uv-only path dep) -- pip can't fetch it from PyPI,
+# so the editable transcriber install below would FAIL to resolve it without
+# this. `--no-deps`: dsp needs only numpy/scipy (already present from Layer 1).
+# Its own layer so a transcriber-pyproject edit doesn't re-copy it and a dsp
+# edit (rare) doesn't invalidate the multi-GB torch layer above.
+COPY dsp/ ./dsp/
+RUN python3.11 -m pip install --no-cache-dir --no-deps -e ./dsp
+
 # Layer 3: editable install of the transcriber package. This is the
 # only layer that re-runs when pyproject.toml changes; torch/torchaudio
 # above stay cached. `--extra-index-url` on this install too so any
@@ -133,6 +143,23 @@ COPY transcriber/pyproject.toml ./
 RUN python3.11 -m pip install --no-cache-dir \
         --extra-index-url https://download.pytorch.org/whl/cu128 \
         -e .
+
+# Layer 3.5: the in-repo training package (../training -> drumjot_training).
+# The learned-onset stage (pipeline/learned_onsets.py, the DEFAULT onset
+# backend) imports `drumjot_training` to run the frozen-MERT model. It isn't a
+# formal transcriber dependency (on the dev box it's loaded via a sys.path
+# shim; see learned_onsets.py), so install it as an editable package here and
+# the import resolves in the image with no path hacks. `--no-deps`: all its
+# deps are already satisfied (torch/torchaudio from Layer 2; transformers +
+# librosa + soundfile + scipy + numpy + mir_eval + mido + drumjot-dsp from the
+# transcriber install above) -- WITHOUT --no-deps pip would try to pull
+# training's `torch>=2.9` from the DEFAULT (cu13) index and clobber the cu128
+# build. Only the package + its manifest are copied (not tests/scripts), and it
+# sits AFTER Layer 3 so a training-code edit doesn't re-run the transcriber
+# install.
+COPY training/pyproject.toml ./training/pyproject.toml
+COPY training/drumjot_training/ ./training/drumjot_training/
+RUN python3.11 -m pip install --no-cache-dir --no-deps -e ./training
 
 # ADTOF pretrained weights are NOT provisioned separately: the
 # adtof_pytorch wheel bundles its Frame_RNN weights, so they come in
@@ -158,10 +185,19 @@ RUN chmod +x /app/entrypoint.sh
 # on :5173 with SPA fallback to index.html (see Caddyfile).
 COPY --from=frontend-builder /build/dist /app/web
 
-# Beat Transformer checkpoint (optional). If the directory is empty
-# the image still builds; BT just fails-loud at first use when
-# BEAT_TRACKER=beat_transformer is set. See transcriber/checkpoints/README.md.
+# Checkpoints baked from transcriber/checkpoints/ (both optional; the image
+# builds even if a subdir is empty):
+#   - beat_transformer.pt -- the Beat Transformer tracker (used only when
+#     BEAT_TRACKER=beat_transformer). See transcriber/checkpoints/README.md.
+#   - learned_onsets/{model.pt,meta.json} -- the trained frozen-MERT onset
+#     model, which is the DEFAULT onset backend. Drop a run dir here before
+#     building (e.g. the patched ab3_prev). If it's absent the learned stage
+#     degrades to ADTOF at runtime (runner.py logs a warning). See
+#     transcriber/checkpoints/learned_onsets/README.md.
 COPY transcriber/checkpoints/ ./checkpoints/
+# Point the learned-onset backend at the baked checkpoint. Overridable per
+# deploy via the LEARNED_ONSETS_CHECKPOINT env var (or transcriber/.env).
+ENV LEARNED_ONSETS_CHECKPOINT=/app/checkpoints/learned_onsets
 
 # Benchmark harness code (datasets/ and results/ are intentionally NOT
 # copied; they're host-mounted at runtime via docker-compose volumes

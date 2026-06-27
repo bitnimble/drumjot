@@ -21,7 +21,7 @@ requires-python = ">=3.11"
 dependencies = [
     "torch>=2.9,<2.12",
     "torchaudio>=2.9,<2.12",
-    "transformers>=4.40,<5",
+    "transformers>=4.40",  # 5.x works (dev box + trainer run 5.9.0); no upper cap
     "librosa>=0.10.2",
     "soundfile>=0.12",
     "scipy>=1.11",

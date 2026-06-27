@@ -45,6 +45,15 @@ dependencies = [
     "scipy>=1.11",
     "numpy>=1.26",
     "drumjot-dsp",  # shared peak-picker etc. (../dsp; see [tool.uv.sources])
+    # Frozen MERT encoder for the learned-onset backend -- the DEFAULT onset
+    # detector now (training/ + pipeline/learned_onsets.py runs MERT-v1-330M
+    # per stem). transformers was already present transitively (via
+    # ctc-forced-aligner below), but the learned stage is first-class, so we
+    # declare it. No upper cap: the dev box + trainer run transformers 5.x
+    # fine (the `<5` once carried in training/pyproject was stale). MERT
+    # weights download from the HF hub on first use into HF_HOME
+    # (=/models/huggingface in Docker, a persisted volume).
+    "transformers>=4.40",
     # Beat tracking + downbeat detection (the rhythmic structure backbone)
     "madmom @ git+https://github.com/CPJKU/madmom.git@main",
     "cython>=3.0",

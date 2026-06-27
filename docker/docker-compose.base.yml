@@ -39,28 +39,34 @@ services:
       # toggle isn't accidentally pinned in a shared env file.
       - ../transcriber/.env
     volumes:
-      - /codebox-workspace/drumjot/models-cache:/models
+      # Host data root for every persisted volume below (model cache, debug,
+      # outputs, lyrics cache, benchmark fixtures/results). Defaults to the
+      # local box's /codebox-workspace/drumjot; point it at a LOCAL-SSD path on
+      # another host (e.g. the gaming PC) via DRUMJOT_DATA_ROOT in the shell
+      # env or a docker/.env file. Keep it on local disk: NFS is far too slow
+      # for the multi-GB model cache (separators + the MERT encoder).
+      - ${DRUMJOT_DATA_ROOT:-/codebox-workspace/drumjot}/models-cache:/models
       # Debug artifact volume. Files written here by the transcriber
       # (drum stems, per-instrument stems, beats.json, initial.jot, etc.)
       # are immediately accessible on the host under ./debug/ so you can
       # listen back to stems or replay the refinement loop.
-      - /codebox-workspace/drumjot/debug:/debug
+      - ${DRUMJOT_DATA_ROOT:-/codebox-workspace/drumjot}/debug:/debug
       # Stem deliverables (drumless + drum-only FLACs). Always populated
       # per request and served back to the caller as URLs. Kept separate
       # from /debug so the operator can prune debug freely without
       # invalidating live response URLs the frontend is still using.
-      - /codebox-workspace/drumjot/outputs:/outputs
+      - ${DRUMJOT_DATA_ROOT:-/codebox-workspace/drumjot}/outputs:/outputs
       # Cache for /lyrics/align (separated vocals + CTC forced-alignment
       # results). Content-addressed, LRU-bounded. Safe to nuke; entries
       # refill on demand. See `app/cache.py`.
-      - /codebox-workspace/drumjot/cache:/cache
+      - ${DRUMJOT_DATA_ROOT:-/codebox-workspace/drumjot}/cache:/cache
       # Benchmark fixture + output volumes. Pasting dataset files into
       # transcriber/benchmarks/datasets/<dataset>/ on the host makes
       # them visible inside the container; benchmark results land in
       # ./benchmarks/results/ on the host so partial runs are inspectable
       # without docker cp.
-      - /codebox-workspace/drumjot/benchmarks/datasets:/app/benchmarks/datasets
-      - /codebox-workspace/drumjot/benchmarks/results:/app/benchmarks/results
+      - ${DRUMJOT_DATA_ROOT:-/codebox-workspace/drumjot}/benchmarks/datasets:/app/benchmarks/datasets
+      - ${DRUMJOT_DATA_ROOT:-/codebox-workspace/drumjot}/benchmarks/results:/app/benchmarks/results
     # GPU passthrough. The compose-spec `gpus: all` form (compose >=2.30)
     # is the equivalent of the CLI's `--gpus all` flag and sets
     # NVIDIA_VISIBLE_DEVICES / NVIDIA_DRIVER_CAPABILITIES implicitly.

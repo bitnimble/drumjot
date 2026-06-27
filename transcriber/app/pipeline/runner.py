@@ -470,6 +470,19 @@ def _do_beats(
         sink.write_json("beats.json", beats_dump(ctx.structure))
 
 
+def _learned_checkpoint_ready(checkpoint: str) -> bool:
+    """True when `checkpoint` is a run dir carrying the learned-onset model.
+
+    The Docker image bakes the model under /app/checkpoints/learned_onsets
+    (docker/Dockerfile); a deploy that didn't place one there should degrade to
+    the ADTOF backend rather than failing every request. Both files are
+    required: `model.pt` (weights) and `meta.json` (tuned per-lane thresholds)."""
+    if not checkpoint:
+        return False
+    d = Path(checkpoint)
+    return (d / "model.pt").is_file() and (d / "meta.json").is_file()
+
+
 def _learned_onsets(
     ctx: PipelineContext, options: PipelineOptions,
 ) -> dict[str, list[OnsetCandidate]]:
@@ -508,9 +521,25 @@ def _do_onsets(
             "onsets: beat structure missing (expected beats.json from a "
             "previous run, or resume_stage<=beats to regenerate)."
         )
+    # Learned onsets are the default, but degrade to ADTOF if no checkpoint was
+    # baked / mounted (e.g. an image built without a model) so the deploy still
+    # works instead of failing every request. Flip the flag once here so the
+    # downstream per-class splitters + filter-skip logic stay consistent.
+    if options.use_learned_onsets and not _learned_checkpoint_ready(
+        options.learned_onsets_checkpoint
+    ):
+        logging.getLogger(__name__).warning(
+            "onsets: use_learned_onsets is set but no checkpoint (model.pt + "
+            "meta.json) was found at %r -- falling back to the ADTOF backend. "
+            "Bake a run dir into the image "
+            "(transcriber/checkpoints/learned_onsets/) or set "
+            "LEARNED_ONSETS_CHECKPOINT to a valid run dir.",
+            options.learned_onsets_checkpoint or "(unset)",
+        )
+        options.use_learned_onsets = False
     # ADTOF runs the noisy lanes (hihat / merged cymbal) on the
     # in-distribution drum stem; pass it through. None on a resume that
-    # didn't cache it — `detect_onsets_adtof` falls back to the isolated
+    # didn't cache it, `detect_onsets_adtof` falls back to the isolated
     # stem when the drum stem is absent.
     if options.use_learned_onsets:
         ctx.onsets_by_pitch = _learned_onsets(ctx, options)
