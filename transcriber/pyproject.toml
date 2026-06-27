@@ -178,9 +178,6 @@ extend-exclude = [
     "build",
     "debug",
     "models",
-    # Vendored verbatim from polimi-ispl/larsnet; kept byte-for-byte so it
-    # can be re-synced. The Drumjot glue lives in larsnet/__init__.py.
-    "app/pipeline/larsnet/unet.py",
 ]
 
 [tool.ruff.lint]

@@ -538,7 +538,6 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                       onCancelTranscribe={() => transcribePresenter.cancelTranscribe()}
                       lyricsAlignBusyPhase={lyricsAlign.lyricsAlignBusyPhase}
                       onSetBeatInput={(b) => transcribePresenter.setBeatInput(b)}
-                      onSetDrumSeparator={(s) => transcribePresenter.setDrumSeparator(s)}
                       onSetOnsetBackend={(b) => transcribePresenter.setOnsetBackend(b)}
                       onSetLlmModel={(m) => transcribePresenter.setLlmModel(m)}
                       onSetQuantise={(v) => transcribePresenter.setQuantise(v)}

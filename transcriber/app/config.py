@@ -62,16 +62,6 @@ class Settings(BaseSettings):
     # stems.
     vocals_model: str = "UVR-MDX-NET-Voc_FT.onnx"
 
-    # Provision the opt-in LarsNet Stage-2 separator's checkpoints at
-    # startup (alongside the BS-Roformer / MDX23C weights). When True,
-    # `provision.py` fetches the five U-Net checkpoints (~590 MB) from the
-    # `JosefKuchar/LarsNet` HF mirror into `<models_dir>/larsnet/`. LarsNet
-    # is selected per-request via the `drum_separator` form param (default
-    # is still MDX23C); set this False to skip the download on deploys that
-    # never use it. NOTE: the LarsNet weights are CC BY-NC 4.0
-    # (non-commercial) - see `app/pipeline/larsnet/__init__.py`.
-    provision_larsnet: bool = True
-
     # --- Onset backend ---
     # The trained frozen-MERT + per-lane-heads model (training/, run PER STEM via
     # pipeline/learned_onsets.py) is the DEFAULT onset detector. A request can fall
