@@ -86,7 +86,12 @@ def cache_key(
     (the project default) keeps its existing keys, while other precisions (e.g.
     eval/inference at float32) land in a separate keyspace -- one shared cache dir
     never mixes precisions under one key, so there's no first-writer-wins ambiguity."""
-    raw = f"{Path(audio_path).expanduser().absolute()}|{encoder}|{layer}|{window}|{variant}"
+    # `.resolve()` (not `.absolute()`): follow symlinks to the real file, so a
+    # symlinked input (e.g. the eval's stems_cache/maps__<id>.<p>.flac -> the
+    # training perstem stem) shares the cache entry the training run wrote under
+    # the real path. Real paths resolve to themselves, so existing keys are
+    # unchanged (no cache invalidation).
+    raw = f"{Path(audio_path).expanduser().resolve()}|{encoder}|{layer}|{window}|{variant}"
     if start:
         raw += f"|s{start:g}"
     if cache_dtype != "float16":
@@ -156,33 +161,52 @@ class MertEncoder:
 
     def __init__(self, name: str = MERT_NAME, layer: int = 10, device: str | None = None):
         import torch
-        from transformers import AutoModel, Wav2Vec2FeatureExtractor
+        from transformers import Wav2Vec2FeatureExtractor
 
         self.name = name
         self.layer = layer
         self.fps = MERT_FPS
         self.dim = MERT_DIM
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        # The ~1.3GB weights load LAZILY on first encode: a run that hits the
+        # feature cache for every clip (eval over pre-encoded stems) never pays the
+        # GPU load, which lets many such shards share one GPU. The feature
+        # extractor is tiny + gives `self.sr`, so it loads now.
+        self._model = None
         try:
             self._fe = Wav2Vec2FeatureExtractor.from_pretrained(name, trust_remote_code=True)
-            self._model = AutoModel.from_pretrained(name, trust_remote_code=True).to(self.device)
         except Exception as e:  # noqa: BLE001
-            # The package forces HF offline (see __init__), so this means the
-            # model isn't in the local cache -- never a network hiccup. Point at
-            # the one-time fetch step instead of leaking a cryptic HF OSError.
-            raise RuntimeError(
-                f"MERT model {name!r} is not available offline (HF_HUB_OFFLINE is on by "
-                f"default). Fetch it ONCE with:\n"
-                f"    python training/scripts/fetch_models.py\n"
-                f"then re-run. (underlying error: {type(e).__name__}: {e})"
-            ) from e
-        self._model.eval()
+            raise self._offline_error(e) from e
         self.sr = int(self._fe.sampling_rate)
+
+    def _offline_error(self, e: Exception) -> RuntimeError:
+        # The package forces HF offline (see __init__), so a load failure means the
+        # model isn't in the local cache -- never a network hiccup. Point at the
+        # one-time fetch step instead of leaking a cryptic HF OSError.
+        return RuntimeError(
+            f"MERT model {self.name!r} is not available offline (HF_HUB_OFFLINE is on by "
+            f"default). Fetch it ONCE with:\n"
+            f"    python training/scripts/fetch_models.py\n"
+            f"then re-run. (underlying error: {type(e).__name__}: {e})"
+        )
+
+    def _ensure_model(self):
+        """Load (once) the frozen MERT weights. No-op after the first call."""
+        if self._model is not None:
+            return
+        from transformers import AutoModel
+
+        try:
+            self._model = AutoModel.from_pretrained(self.name, trust_remote_code=True).to(self.device)
+        except Exception as e:  # noqa: BLE001
+            raise self._offline_error(e) from e
+        self._model.eval()
 
     def encode(self, waveform: np.ndarray, sr: int) -> np.ndarray:
         """Return frozen layer-`layer` features (frames, dim) for `waveform`."""
         import torch
 
+        self._ensure_model()
         if sr != self.sr:
             import librosa
 
@@ -201,6 +225,7 @@ class MertEncoder:
         layers costs one encode, not N."""
         import torch
 
+        self._ensure_model()
         if sr != self.sr:
             import librosa
 
@@ -217,6 +242,7 @@ class MertEncoder:
         index. MERT-v1-330M returns 25."""
         import torch
 
+        self._ensure_model()
         y = np.zeros(int(0.2 * self.sr), dtype=np.float32)
         inputs = self._fe(y, sampling_rate=self.sr, return_tensors="pt").to(self.device)
         with torch.no_grad(), runtime.autocast():
@@ -293,3 +319,46 @@ def embed_clip(
     if cache_file is not None:
         np.save(cache_file, feat)
     return feat
+
+
+def clip_cached(
+    audio_path: str | Path,
+    encoder: MertEncoder,
+    cache_dir: str | Path | None = MERT_CACHE_DIR,
+    max_seconds: float | None = None,
+    cache_dtype: str = "float16",
+    high_band: bool = True,
+    start_seconds: float = 0.0,
+) -> bool:
+    """True iff this clip's features are already in `cache_dir` (no MERT encode
+    needed). Mirrors `embed_clip`'s cache key so the two can't drift -- lets the
+    parallel eval route not-yet-cached songs onto a single GPU encoder worker."""
+    if cache_dir is None:
+        return False
+    key = cache_key(audio_path, encoder.name, encoder.layer, max_seconds,
+                    feat_variant(high_band), start_seconds, cache_dtype)
+    return (Path(cache_dir) / f"{key}.npy").exists()
+
+
+def windows_cached(
+    audio_path: str | Path,
+    encoder: MertEncoder,
+    meta: dict,
+    window_seconds: float | None = 30.0,
+    max_seconds: float | None = None,
+    cache_dtype: str = "float16",
+) -> bool:
+    """True iff EVERY `plan_windows` window of this clip is cached, i.e. scoring it
+    needs no MERT encode. Uses the SAME windowing + key as `inference.stitched_probs`,
+    so a True guarantees that path is a pure cache read (the encoder never loads)."""
+    from drumjot_training.train import plan_windows
+
+    high_band = meta.get("high_band", int(meta.get("in_dim", MERT_DIM)) > MERT_DIM)
+    wins = plan_windows(audio_path, window_seconds or 30.0, 3.0, 0)
+    if max_seconds is not None:
+        wins = [(s, min(length, max_seconds - s)) for s, length in wins if s < max_seconds]
+    return all(
+        clip_cached(audio_path, encoder, max_seconds=length, cache_dtype=cache_dtype,
+                    high_band=high_band, start_seconds=s)
+        for s, length in wins
+    )

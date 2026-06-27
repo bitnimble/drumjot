@@ -70,8 +70,24 @@ class OnsetHead(nn.Module):
         bias, log_scale = bg[:, 0:1], bg[:, 1:2]
         return torch.exp(log_scale.clamp(-3.0, 3.0)) * onset - bias  # (B,1) bcasts over (B,T)
 
-    def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
+    def _run_gru(self, x: torch.Tensor, mask: torch.Tensor | None, pack: bool) -> torch.Tensor:
+        """GRU over (B, T, in_dim). With `pack` + a `mask`, run each sequence at its
+        TRUE length via pack_padded_sequence, so a padded batch of windows is
+        numerically identical to per-window forwards (the backward GRU never reads
+        pad). Without `pack` (training / single clip) it's the plain GRU, unchanged."""
+        if pack and mask is not None:
+            lengths = mask.sum(dim=1).to("cpu", dtype=torch.int64)
+            packed = nn.utils.rnn.pack_padded_sequence(
+                x, lengths, batch_first=True, enforce_sorted=False)
+            out, _ = self.gru(packed)
+            h, _ = nn.utils.rnn.pad_packed_sequence(out, batch_first=True, total_length=x.shape[1])
+            return h
         h, _ = self.gru(x)
+        return h
+
+    def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None,
+                pack: bool = False) -> torch.Tensor:
+        h = self._run_gru(x, mask, pack)
         return self._calibrate(self.proj(h).squeeze(-1), h, mask)
 
     def forward_all(self, x: torch.Tensor, mask: torch.Tensor | None = None
@@ -102,8 +118,9 @@ class MultiLaneHeads(nn.Module):
             {lane: OnsetHead(in_dim, hidden, num_layers, auto_calibrate) for lane in self.lane_names}
         )
 
-    def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
-        outs = [self.heads[lane](x, mask) for lane in self.lane_names]
+    def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None,
+                pack: bool = False) -> torch.Tensor:
+        outs = [self.heads[lane](x, mask, pack) for lane in self.lane_names]
         return torch.stack(outs, dim=1)
 
     def forward_all(self, x: torch.Tensor, mask: torch.Tensor | None = None

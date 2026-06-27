@@ -32,6 +32,10 @@ def main():
     ap.add_argument("--lanes", default="hc,ho,rd,cr")
     ap.add_argument("--max-seconds", type=float, default=None)
     ap.add_argument("--window-seconds", type=float, default=30.0)
+    ap.add_argument("--legacy-overlap", action="store_true",
+                    help="Score with the OLD overlapping center-crop stitch (fp32) "
+                         "instead of the default training-aligned windowing "
+                         "(non-overlapping plan_windows cuts + fp16). For A/B only.")
     ap.add_argument("--log", default=None)
     args = ap.parse_args()
 
@@ -65,7 +69,8 @@ def main():
             if predictor is not None:
                 wave, sr = librosa.load(str(stem), sr=embeddings.HB_SR, mono=True)
             probs, fps = inference.stitched_probs(
-                stem, model, meta, encoder, args.max_seconds, args.window_seconds)
+                stem, model, meta, encoder, args.max_seconds, args.window_seconds,
+                legacy_overlap=args.legacy_overlap)
             records += eval_gap.lane_gap_records(
                 probs, fps, meta["lanes"], meta["thresholds"], gt_full,
                 default_threshold=meta["peak_threshold"], tolerance=meta["onset_tolerance_s"],

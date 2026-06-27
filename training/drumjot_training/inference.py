@@ -83,21 +83,32 @@ def lane_probs(audio_path, model, meta: dict, encoder=None, max_seconds: float |
         return torch.sigmoid(model(x))[0].float().cpu().numpy(), meta["encoder_fps"]
 
 
+# How many windows to push through the heads in one padded+packed batch. The BiGRU
+# parallelises over the batch, so batching is the main inference-speed lever (the
+# head forward is the GPU cost once the MERT features are cached); bounded so a long
+# song's many windows don't blow up VRAM (especially under parallel eval).
+WINDOW_BATCH = 16
+
+
 def stitched_probs(
     audio_path, model, meta: dict, encoder=None,
     max_seconds: float | None = None, window_seconds: float | None = 30.0,
-    overlap_seconds: float = 2.0,
+    overlap_seconds: float = 2.0, legacy_overlap: bool = False,
 ):
     """One global `(probs (n_lanes, T_total), fps)` for the whole clip.
 
-    Long audio is encoded in overlapping ~`window_seconds` chunks (bounds MERT's
-    O(n^2) attention / VRAM) whose probability curves are STITCHED center-crop
-    into one timeline before any peak-picking: each interior chunk contributes
-    its middle (half the overlap trimmed from each edge), so no onset lands at a
-    window boundary where it can't be a local max and the decay-reset filter
-    never resets mid-ring. If the checkpoint was trained with the high-band
-    block (`meta["in_dim"] > MERT_DIM`), the 6-20 kHz features are computed from
-    the 44.1 kHz audio and appended per chunk."""
+    Default: the SAME windowing + precision the model trained on -- non-
+    overlapping `plan_windows` cuts (~`window_seconds`, nudged to low-RMS gaps so
+    a window edge never bisects a hit), each window scored in FULL and
+    concatenated, fp16 features. This matches the trained regime (an A/B showed no
+    F1 difference vs the old overlapping stitch -- see RESULTS) AND shares the MERT
+    cache with training (same resolved path / window / dtype), so stems encoded
+    during training are reused for free.
+
+    `legacy_overlap=True` restores the prior scheme: overlapping ~`window_seconds`
+    chunks at fp32, STITCHED center-crop (half the overlap trimmed per interior
+    edge). If the checkpoint was trained with the high-band block
+    (`meta["in_dim"] > MERT_DIM`), the 6-20 kHz features are appended per chunk."""
     import numpy as np
     import torch
 
@@ -118,6 +129,48 @@ def stitched_probs(
         y44, _ = librosa.load(str(audio_path), sr=embeddings.HB_SR, mono=True)
         if max_seconds is not None:
             y44 = y44[: int(max_seconds * embeddings.HB_SR)]
+
+    # Default: the TRAINING windowing -- non-overlapping `plan_windows` cuts
+    # (nudged to low-RMS gaps so an edge never bisects a hit), each window scored
+    # in FULL (no overlap, no centre-crop), fp16 features. Matches the trained
+    # regime (A/B = parity, see RESULTS) and shares the MERT cache with training.
+    # Windows are contiguous, so concatenating their probs tiles the song.
+    if not legacy_overlap:
+        from drumjot_training.train import plan_windows
+
+        wins = plan_windows(audio_path, window_seconds or 30.0, 3.0, 0)
+        if max_seconds is not None:  # cap the planned windows to the analysed span
+            wins = [(s, min(length, max_seconds - s)) for s, length in wins if s < max_seconds]
+        total = int(np.ceil(len(y) / enc.sr * fps)) + 2
+        out = np.zeros((len(meta["lanes"]), total), dtype=np.float32)
+        written = 0
+        # Encode every window (a cache hit is instant), then run the heads on the
+        # windows as PADDED+PACKED batches: the BiGRU parallelises across the batch,
+        # so N windows cost ~one forward instead of N. pack_padded_sequence makes the
+        # batched output numerically identical to per-window forwards.
+        feats = [
+            embeddings.embed_clip(
+                audio_path, enc, max_seconds=length, start_seconds=start,
+                high_band=use_hb, cache_dtype="float16", y_full=y, y44_full=y44)
+            for start, length in wins
+        ]
+        for b0 in range(0, len(feats), WINDOW_BATCH):
+            batch, bw = feats[b0 : b0 + WINDOW_BATCH], wins[b0 : b0 + WINDOW_BATCH]
+            bmax = max(f.shape[0] for f in batch)
+            x = torch.zeros((len(batch), bmax, batch[0].shape[1]), dtype=torch.float32, device=device)
+            mask = torch.zeros((len(batch), bmax), dtype=torch.bool, device=device)
+            for j, f in enumerate(batch):
+                x[j, : f.shape[0]] = torch.as_tensor(f, dtype=torch.float32, device=device)
+                mask[j, : f.shape[0]] = True
+            with torch.no_grad(), runtime.autocast():
+                probs = torch.sigmoid(model(x, mask=mask, pack=True)).float().cpu().numpy()  # (B, L, bmax)
+            for j, (start, _length) in enumerate(bw):
+                pj = probs[j, :, : batch[j].shape[0]]  # drop pad frames
+                f0 = int(round(start * fps))
+                gh = min(total, f0 + pj.shape[1])
+                out[:, f0:gh] = pj[:, : gh - f0]
+                written = max(written, gh)
+        return out[:, :written], fps
 
     chunk = int(window_seconds * enc.sr) if window_seconds else 0
     if not chunk or len(y) <= chunk:
