@@ -251,6 +251,21 @@ describe('LayersPresenter', () => {
     expect(groupSiblingInstrumentLanes(jot, 'audio:cym')).toEqual(['c', 'd']);
   });
 
+  it('reuses an instrument group the user already made when its stem loads', () => {
+    const { jot, p } = setup('| h s k |');
+    const [, , k] = tracksIn(jot, 'v0');
+    // The user grouped the kick row first (a named group of their own).
+    const g = p.createGroup(k, 'My kit')!;
+    // Then its stem loads: it joins that existing group above the instrument,
+    // without minting a second group or renaming the user's.
+    jot.tracks.set('audio:k1', { id: 'audio:k1', kind: 'audio', audioId: 'k1' });
+    p.placeRuntimeAudioTrack('audio:k1', ['k']);
+    expect(groupIdOfTrack(jot, 'audio:k1')).toBe(g);
+    expect(jot.trackGroups.get(g)?.name).toBe('My kit'); // user's name preserved
+    const slot = [...[...jot.ordering][0].slots].find((s) => s.groupId === g)!;
+    expect([...slot.tracks].map((t) => t.trackId)).toEqual(['audio:k1', k]);
+  });
+
   it('drops a laneless / unmatched audio stem loose at the top', () => {
     const { jot, p } = setup('| h s k |');
     // A drumless backing stem carries no lane.

@@ -147,7 +147,10 @@ export class LayersPresenter {
     slot.tracks.insert(gloc.ti, { trackId: audioTrackId });
 
     // Fold each dependent instrument into the group, in order, beneath the
-    // primary (each lands right after the previously-placed member).
+    // primary (each lands right after the previously-placed member). Every
+    // `instr` id came from walking `jot.ordering`, so each is placed and each
+    // anchor, the primary, then each just-moved sibling; is in `layer`; so no
+    // `moveTrackAfter` here can no-op, and advancing `anchor` is always safe.
     let anchor = primary.id;
     for (let i = 1; i < instr.length; i++) {
       this.moveTrackAfter(instr[i].id, layer.layerId, anchor);
