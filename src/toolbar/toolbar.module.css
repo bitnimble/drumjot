@@ -1,6 +1,5 @@
 /* Toolbar chrome: the header strip, its dropdown menus, file-picker
    buttons, transcribe button, zoom slider, and sample-progress indicator.
-   (The transcriber DebugPanel drawer lives in `../provenance/debug_panel`.)
    Shared form patterns (toolbarCheckbox, samplesSelect, statusPill*)
    live in jot_editor.module.css and are composed via classNames(). */
 

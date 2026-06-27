@@ -107,7 +107,6 @@ import {
   NotePropertiesStoreContext,
   NotePropertiesPresenterContext,
 } from './note_properties/note_properties_contexts';
-import { DebugPanel } from './provenance/debug_panel';
 import { useFileDrop } from './drag_drop/use_file_drop';
 import { DropOverlay } from './drag_drop/drop_overlay';
 import { DropConfirmModal } from './drag_drop/drop_confirm_modal';
@@ -180,7 +179,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
   const settingsPresenter = new SettingsPresenter(settings);
   const viewportPresenter = new ViewportPresenter(viewport, jotEditorStore);
   const mixerPresenter = new MixerPresenter(mixer, jotEditorStore);
-  const provenancePresenter = new ProvenancePresenter(provenance, viewport);
+  const provenancePresenter = new ProvenancePresenter(provenance);
   const playbackPresenter = new PlaybackPresenter(playback, jotEditorStore);
   const lyricsPresenter = new LyricsPresenter(lyricsAlign, jotEditorStore);
   const jotEditorPresenter = new JotEditorPresenter(
@@ -619,7 +618,6 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                       />
                     )}
                     {structural && <EditingToolbar />}
-                    <DebugPanel provenance={provenance} presenter={provenancePresenter} />
                     </div>
                     <Sidebar />
                     <LyricsSearchModal

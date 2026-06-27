@@ -1,23 +1,19 @@
 import { makeAutoObservable } from 'mobx';
 import { DebugBundleManifest, NoteProvenanceFile } from 'src/editing/provenance/debug_zip';
 import { ProvenanceStore } from './provenance_store';
-import { ViewportStore } from '../viewport/viewport_store';
 import type { Resettable } from '../session_reset';
 
 /**
  * Mutations over {@link ProvenanceStore}, the debug-bundle / per-note
- * provenance state behind the filtered-onset overlays and the DebugPanel.
- * Reads {@link ViewportStore} only to clamp the panel height against the
- * live viewport.
+ * provenance state behind the filtered-onset overlays and the sidebar Debug
+ * panel.
  */
 export class ProvenancePresenter implements Resettable {
   readonly provenance: ProvenanceStore;
-  readonly viewport: ViewportStore;
 
-  constructor(provenance: ProvenanceStore, viewport: ViewportStore) {
+  constructor(provenance: ProvenanceStore) {
     this.provenance = provenance;
-    this.viewport = viewport;
-    makeAutoObservable(this, { provenance: false, viewport: false });
+    makeAutoObservable(this, { provenance: false });
   }
 
   /** Replace the toolbar's `Show filtered` checkbox state. */
@@ -29,21 +25,9 @@ export class ProvenancePresenter implements Resettable {
     this.provenance.pinnedFilteredOnsetKey = key;
   }
 
-  /** Toggle the DebugPanel's open state without forgetting the bundle. */
-  toggleDebugPanel() {
-    this.provenance.debugPanelOpen = !this.provenance.debugPanelOpen;
-  }
-
-  /** Resize the DebugPanel. Clamped so it can't shrink past the header or
-   * grow past the viewport (with headroom for the toolbar). */
-  setDebugPanelHeight(px: number): void {
-    const max = Math.max(120, this.viewport._viewportHeight - 160);
-    this.provenance.debugPanelHeight = Math.min(max, Math.max(80, px));
-  }
-
   /**
    * Mount a freshly-loaded debug bundle's provenance: the manifest (logs
-   * + stage timings behind the DebugPanel) and the per-note onset
+   * + stage timings behind the sidebar Debug panel) and the per-note onset
    * provenance behind the selection label / filtered-onset ghosts. Always
    * resets the visibility toggle so a new bundle reads as just "the score"
    * until the operator opts into the ghost overlays. `noteProvenance` is
@@ -71,9 +55,9 @@ export class ProvenancePresenter implements Resettable {
   /**
    * Session reset: drop the loaded bundle's per-song debug state (manifest,
    * per-note provenance, the filtered-onset overlay toggle + pin). The
-   * DebugPanel's open/height chrome is UI state, not per-song, so it
-   * survives the load. The debug-bundle loader runs this and then mounts
-   * its own manifest/provenance afterwards.
+   * sidebar's open/active-panel state is UI chrome owned by SidebarStore, not
+   * per-song, so it survives the load. The debug-bundle loader runs this and
+   * then mounts its own manifest/provenance afterwards.
    */
   reset(): void {
     this.provenance.lastDebugBundle = undefined;

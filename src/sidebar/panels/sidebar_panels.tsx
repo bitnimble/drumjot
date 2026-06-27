@@ -1,8 +1,9 @@
-import { FileText, Layers, type LucideIcon } from 'lucide-react';
+import { Bug, FileText, Layers, type LucideIcon } from 'lucide-react';
 import React from 'react';
 import type { SidebarPanelId } from '../sidebar_store';
 import { LayersPanel } from './layers_panel';
 import { NotePropertiesPanel } from './note_properties_panel';
+import { DebugPanel } from './debug_panel';
 
 /**
  * One entry per sidebar panel: its id, the rail icon + label, and the panel
@@ -30,4 +31,5 @@ export const SIDEBAR_PANELS = [
     Icon: FileText,
     render: () => <NotePropertiesPanel />,
   },
+  { id: 'debug', label: 'Debug', Icon: Bug, render: () => <DebugPanel /> },
 ] as const satisfies readonly SidebarPanelDef[];

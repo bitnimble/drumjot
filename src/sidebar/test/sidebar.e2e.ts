@@ -93,6 +93,18 @@ test('renaming a layer via its ⋯ menu updates the header', async ({ page }) =>
   await expect(firstLayer).toContainText('Hands');
 });
 
+test('clicking the Debug item opens the panel with an empty state until a bundle loads', async ({
+  page,
+}) => {
+  await page.getByTestId('sidebar-item-debug').click();
+  await expect(page.getByTestId('sidebar-panel')).toBeVisible();
+  const panel = page.getByTestId('debug-panel');
+  await expect(panel).toBeVisible();
+  // No transcriber debug bundle is loaded in this spec, so the panel shows its
+  // muted placeholder rather than stage timings / logs.
+  await expect(panel).toContainText('No debug bundle loaded.');
+});
+
 test('a panel opens floating by default', async ({ page }) => {
   await page.getByTestId('sidebar-item-layers').click();
   const panel = page.getByTestId('sidebar-panel');
