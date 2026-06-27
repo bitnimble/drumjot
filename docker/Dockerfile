@@ -215,7 +215,12 @@ RUN mkdir -p /models /debug /app/benchmarks/datasets /app/benchmarks/results \
 ENV AUDIO_SEPARATOR_MODEL_FILE_DIR=/models \
     HF_HOME=/models/huggingface \
     TRANSFORMERS_CACHE=/models/huggingface \
-    TORCH_HOME=/models/torch
+    TORCH_HOME=/models/torch \
+    DRUMJOT_MERT_CACHE=/models/mert-cache
+# DRUMJOT_MERT_CACHE: drumjot_training.embeddings defaults this to the local
+# dev box's /codebox-workspace/mert_cache, which doesn't exist in the container
+# (and the app user can't mkdir at /). Point it at the persisted /models mount
+# so the learned-onset backend can write MERT features; created on first use.
 # The learned-onset model (the default onset backend) lives in the models cache
 # under its own subfolder: drop the run dir's model.pt + meta.json into
 # ${DRUMJOT_DATA_ROOT}/models-cache/learned-onsets on the host. NOT baked; if
