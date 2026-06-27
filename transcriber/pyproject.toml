@@ -22,6 +22,14 @@ dependencies = [
     # are the real risk. If the madmom install step fails on a fresh
     # build, pin a specific madmom commit known to work on numpy 2.
     "audio-separator[gpu]>=0.44",
+    # Pin onnxruntime-gpu to its CUDA-12 line. audio-separator[gpu] pulls
+    # onnxruntime-gpu, whose default PyPI wheel moved to a CUDA-13 build at 1.26
+    # (links libcudart.so.13). The image is CUDA 12.4 + torch cu128, so the
+    # CUDA-12 build (<=1.25.x, links libcudart.so.12) is the one that matches --
+    # and it still runs on newer CUDA-13 drivers (CUDA is backward compatible).
+    # Without this the container dies at `import onnxruntime`: "libcudart.so.13:
+    # cannot open shared object file". Bump the cap only alongside a CUDA-13 base.
+    "onnxruntime-gpu>=1.19,<1.26",
     # PyTorch + torchaudio. Capped at <2.12 because torch 2.12 dropped
     # CUDA 12.x wheel builds entirely (the cu128 index only goes up to
     # 2.11.0), without the cap, `uv lock --upgrade` would land on
