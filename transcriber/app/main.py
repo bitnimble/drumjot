@@ -63,7 +63,6 @@ from app.pipeline.resume import (
 )
 from app.pipeline.runner import (
     BeatInput,
-    DrumSeparator,
     PipelineCancelled,
     PipelineContext,
     PipelineOptions,
@@ -309,7 +308,6 @@ async def transcribe(
     file: UploadFile = File(...),
     include_candidates: bool = Form(default=False),
     beat_input: BeatInput = Form(default=settings.beat_input_default),
-    drum_separator: DrumSeparator = Form(default="mdx23c"),
     quantise: bool = Form(default=True),
     quantise_use_llm: bool = Form(default=True),
     llm_model: str = Form(default=""),
@@ -340,9 +338,9 @@ async def transcribe(
     request_id = new_request_id()
     set_request_id(request_id)
     log.info(
-        "Transcribe request: %s (%s bytes) beat_input=%s drum_separator=%s "
+        "Transcribe request: %s (%s bytes) beat_input=%s "
         "quantise=%s llm_model=%s debug=%s",
-        file.filename, file.size, beat_input, drum_separator, quantise,
+        file.filename, file.size, beat_input, quantise,
         llm_model or settings.llm_model, debug,
     )
 
@@ -365,7 +363,6 @@ async def transcribe(
     run_log = RunLog()
     request_options = {
         "beat_input": beat_input,
-        "drum_separator": drum_separator,
         "include_candidates": include_candidates,
         "quantise": quantise,
         "quantise_use_llm": quantise_use_llm,
@@ -387,7 +384,6 @@ async def transcribe(
     ctx = PipelineContext(audio_path=in_path, work_dir=work_dir)
     options = PipelineOptions(
         beat_input=beat_input,
-        drum_separator=drum_separator,
         quantise=quantise,
         quantise_use_llm=quantise_use_llm,
         llm_model=llm_model or settings.llm_model,
@@ -498,7 +494,6 @@ async def transcribe_resume(
     resume_stage: Stage = Form(...),
     include_candidates: bool = Form(default=False),
     beat_input: BeatInput = Form(default=settings.beat_input_default),
-    drum_separator: DrumSeparator = Form(default="mdx23c"),
     quantise: bool = Form(default=True),
     quantise_use_llm: bool = Form(default=True),
     llm_model: str = Form(default=""),
@@ -530,9 +525,9 @@ async def transcribe_resume(
     resume_dir = _resolve_resume_dir(resume_folder)
     resolved_model = llm_model or settings.llm_model
     log.info(
-        "Resume request from %s (resume_stage=%s beat_input=%s drum_separator=%s "
+        "Resume request from %s (resume_stage=%s beat_input=%s "
         "quantise=%s llm_model=%s)",
-        resume_dir, resume_stage.value, beat_input, drum_separator, quantise,
+        resume_dir, resume_stage.value, beat_input, quantise,
         resolved_model,
     )
 
@@ -541,7 +536,6 @@ async def transcribe_resume(
     output_sink = make_output_sink(resume_dir.name, settings.outputs_dir)
     options = PipelineOptions(
         beat_input=beat_input,
-        drum_separator=drum_separator,
         quantise=quantise,
         quantise_use_llm=quantise_use_llm,
         llm_model=resolved_model,
@@ -553,7 +547,6 @@ async def transcribe_resume(
     run_log = RunLog()
     request_options = {
         "beat_input": beat_input,
-        "drum_separator": drum_separator,
         "include_candidates": include_candidates,
         "quantise": quantise,
         "quantise_use_llm": quantise_use_llm,

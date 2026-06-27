@@ -99,24 +99,6 @@ export type TranscribeStage =
  *  See `transcriber/app/pipeline/runner.py::BeatInput`. */
 export type BeatInput = 'full_mix' | 'drum_stem';
 
-/** Stage-2 (drum-stem → per-instrument) separator.
- *  See `transcriber/app/pipeline/runner.py::DrumSeparator`.
- *  `mdx23c` = jarredou MDX23C DrumSep (default; cleaner, slower).
- *  `larsnet` = LarsNet five-U-Net separator (faster, bleedier,
- *  CC-BY-NC weights). */
-export type DrumSeparator = 'mdx23c' | 'larsnet';
-
-/** Human-readable label for each {@link DrumSeparator}, for the
- *  Transcribe-menu selector. Kept here so the wire value ↔ label mapping
- *  stays single-sourced. */
-export const DRUM_SEPARATOR_LABELS: Record<DrumSeparator, string> = {
-  mdx23c: 'MDX23C',
-  larsnet: 'LarsNet (faster)',
-};
-
-/** Selector order. */
-export const DRUM_SEPARATOR_ORDER: readonly DrumSeparator[] = ['mdx23c', 'larsnet'];
-
 /** Onset detector backend. `learned` (default) = the trained frozen-MERT +
  *  per-lane-heads model, run per stem; `adtof` = the ADTOF Frame-RNN detector.
  *  See `transcriber/app/pipeline/runner.py` (`use_learned_onsets`). */
@@ -221,12 +203,6 @@ export type TranscribeOptions = {
    */
   beatInput?: BeatInput;
   /**
-   * Stage-2 separator. `mdx23c` (default) = jarredou MDX23C DrumSep;
-   * `larsnet` = the opt-in LarsNet separator (faster, bleedier,
-   * CC-BY-NC). Omitted = server default (`mdx23c`).
-   */
-  drumSeparator?: DrumSeparator;
-  /**
    * Onset detector backend. `learned` (default) = the trained frozen-MERT
    * model; `adtof` = the ADTOF Frame-RNN. Omitted = server default
    * (`Settings.use_learned_onsets`, currently `learned`).
@@ -284,8 +260,6 @@ export type ResumeOptions = {
   resumeStage: TranscribeStage;
   includeCandidates?: boolean;
   beatInput?: BeatInput;
-  /** Same semantics as {@link TranscribeOptions.drumSeparator}. */
-  drumSeparator?: DrumSeparator;
   /** Same semantics as {@link TranscribeOptions.onsetBackend}. */
   onsetBackend?: OnsetBackend;
   /** Same semantics as {@link TranscribeOptions.llmModel}. */
@@ -655,9 +629,6 @@ export class TranscriberClient {
     }
     if (options.beatInput !== undefined) {
       form.append('beat_input', options.beatInput);
-    }
-    if (options.drumSeparator !== undefined) {
-      form.append('drum_separator', options.drumSeparator);
     }
     if (options.onsetBackend !== undefined) {
       form.append('onset_backend', options.onsetBackend);

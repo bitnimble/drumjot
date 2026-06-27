@@ -46,7 +46,7 @@ The toolbar (left → right) gives you:
   load synced **Lyrics** (LRCLIB search, `.lrc` file, or pasted text).
 - **Transcribe** — upload audio (or **Resume** a previous run from a
   chosen pipeline stage) to render a Jot. Options: beat input
-  (full-mix / drum-stem), drum separator (MDX23C / LarsNet), LLM model,
+  (full-mix / drum-stem), onset detector, LLM model,
   and an optional quantise stage with an LLM-adjustment pass. Needs the
   transcriber service (see the next section).
 - **View** — horizontal zoom, reference grid lines (beats / 16ths /

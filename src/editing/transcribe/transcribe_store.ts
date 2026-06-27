@@ -1,7 +1,6 @@
 import { makeAutoObservable } from 'mobx';
 import {
   BeatInput,
-  DrumSeparator,
   LlmModel,
   OnsetBackend,
   TranscribeStage,
@@ -28,8 +27,6 @@ export type TranscribeStatus =
 export type TranscribeOptions = {
   debug: boolean;
   beatInput: BeatInput;
-  /** Stage-2 separator: `mdx23c` (default) or the opt-in `larsnet`. */
-  drumSeparator: DrumSeparator;
   /** Onset detector backend: `learned` (default, the MERT model) or `adtof`. */
   onsetBackend: OnsetBackend;
   /** Model for the three Opus-by-default classification stages. */
@@ -58,7 +55,6 @@ export class TranscribeStore {
   transcribeOptions: TranscribeOptions = {
     debug: true,
     beatInput: 'full_mix',
-    drumSeparator: 'mdx23c',
     onsetBackend: 'learned',
     llmModel: 'claude-haiku-4-5-20251001',
     quantise: true,

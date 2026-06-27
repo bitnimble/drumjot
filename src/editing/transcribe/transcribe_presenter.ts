@@ -2,7 +2,6 @@ import { makeAutoObservable, runInAction } from 'mobx';
 import { ParseError } from 'src/schema/dsl/parser/errors';
 import {
   BeatInput,
-  DrumSeparator,
   LlmModel,
   OnsetBackend,
   stemUrl,
@@ -85,7 +84,6 @@ export class TranscribePresenter {
       const response = await transcriber.transcribe(file, {
         debug: this.transcribe.transcribeOptions.debug,
         beatInput: this.transcribe.transcribeOptions.beatInput,
-        drumSeparator: this.transcribe.transcribeOptions.drumSeparator,
         onsetBackend: this.transcribe.transcribeOptions.onsetBackend,
         llmModel: this.transcribe.transcribeOptions.llmModel,
         quantise: this.transcribe.transcribeOptions.quantise,
@@ -130,7 +128,6 @@ export class TranscribePresenter {
         resumeFolder: folder,
         resumeStage: stage,
         beatInput: this.transcribe.transcribeOptions.beatInput,
-        drumSeparator: this.transcribe.transcribeOptions.drumSeparator,
         onsetBackend: this.transcribe.transcribeOptions.onsetBackend,
         llmModel: this.transcribe.transcribeOptions.llmModel,
         quantise: this.transcribe.transcribeOptions.quantise,
@@ -345,10 +342,6 @@ export class TranscribePresenter {
 
   setBeatInput(input: BeatInput) {
     this.transcribe.transcribeOptions.beatInput = input;
-  }
-
-  setDrumSeparator(separator: DrumSeparator) {
-    this.transcribe.transcribeOptions.drumSeparator = separator;
   }
 
   setOnsetBackend(backend: OnsetBackend) {

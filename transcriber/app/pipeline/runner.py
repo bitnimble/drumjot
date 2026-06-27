@@ -130,12 +130,6 @@ class PipelineCancelled(Exception):
 
 
 BeatInput = Literal["full_mix", "drum_stem"]
-# Which Stage-2 (drum-stem -> per-instrument) separator to use.
-#   `mdx23c`  = jarredou 5-stem MDX23C DrumSep (default; cleaner, slower).
-#   `larsnet` = LarsNet five-U-Net separator (opt-in; ~20-40x faster,
-#               bleedier, CC-BY-NC weights). Same five output lanes, so the
-#               choice is invisible to every downstream stage.
-DrumSeparator = Literal["mdx23c", "larsnet"]
 
 
 # Progress event payload published by the pipeline as stages start/end
@@ -172,10 +166,6 @@ def _safe_progress(progress: ProgressCallback | None, event: ProgressEvent) -> N
 @dataclass
 class PipelineOptions:
     beat_input: BeatInput = "full_mix"
-    # Stage-2 separator selection. `mdx23c` (default) = jarredou MDX23C
-    # DrumSep; `larsnet` = the opt-in LarsNet five-U-Net separator. Both
-    # emit the same k/s/t/h/c lanes so only `_do_stems_per` branches on it.
-    drum_separator: DrumSeparator = "mdx23c"
     # Whether to run the optional `quantise` stage. Enabled by default;
     # set False to skip both the geometric snap and the LLM residual pass,
     # leaving `kept_by_pitch` as the filter stage produced it (raw seconds;
@@ -348,7 +338,7 @@ def _run_stage(
     if stage is Stage.STEMS_ALL:
         _do_stems_all(ctx, separator, output_sink)
     elif stage is Stage.STEMS_PER:
-        _do_stems_per(ctx, separator, options, output_sink)
+        _do_stems_per(ctx, separator, output_sink)
     elif stage is Stage.BEATS:
         _do_beats(ctx, options, sink)
     elif stage is Stage.ONSETS:
@@ -383,7 +373,6 @@ def _do_stems_all(
 def _do_stems_per(
     ctx: PipelineContext,
     separator: Separator,
-    options: PipelineOptions,
     output_sink: OutputSink | None,
 ) -> None:
     if ctx.drum_stem is None or not ctx.drum_stem.exists():
@@ -391,10 +380,7 @@ def _do_stems_per(
             "stems_per: drum stem missing (expected stems_all/drum_stem.<ext> "
             "from a previous run, or resume_stage<=stems_all to regenerate)."
         )
-    if options.drum_separator == "larsnet":
-        result = separator.run_stems_per_larsnet(ctx.drum_stem, ctx.work_dir)
-    else:
-        result = separator.run_stems_per(ctx.drum_stem, ctx.work_dir)
+    result = separator.run_stems_per(ctx.drum_stem, ctx.work_dir)
     ctx.per_instrument_stems = result.per_instrument
     ctx.residual_stem = result.residual
     # Export the per-instrument stems as soon as splitting is done — they
