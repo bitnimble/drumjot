@@ -88,4 +88,7 @@ def load(out_dir: str | Path, device: str = "cpu"):
     if bad:
         raise RuntimeError(f"checkpoint mismatch in {out}: {bad}")
     model.eval()
-    return model, meta
+    # `map_location` only places the loaded state_dict; `load_state_dict` copies
+    # into the CPU-constructed params, so the module itself is still on CPU. Move
+    # it to the requested device or every head forward runs on CPU (~2s/window).
+    return model.to(device), meta
