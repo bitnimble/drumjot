@@ -1,7 +1,8 @@
-/* Playback chrome: the bottom transport bar (play/pause/stop, speed,
-   kit, drum/audio offsets), the master volume slider, and the
-   travelling playhead line+label (rendered both by the timeline header
-   and the mixer rows; all three share these styles). */
+/* Playback chrome: the bottom transport bar (play/pause/stop + master
+   volume; the drum/audio alignment offsets moved to the Edit menu's
+   Alignment section), and the travelling playhead line+label (rendered
+   both by the timeline header and the mixer rows; all three share these
+   styles). */
 
 .playbackBar {
     /* Three tracks: a shrinkable left spacer, the centred transport
@@ -17,7 +18,7 @@
     grid-template-columns: minmax(0, 1fr) auto minmax(auto, 1fr);
     align-items: center;
     gap: 10px;
-    padding: 10px 24px;
+    padding: 5px 24px;
     border-top: 1px solid var(--color-border-soft);
     background: var(--color-bg-overlay);
     backdrop-filter: blur(4px);
@@ -35,16 +36,16 @@
 }
 
 /* Narrow viewports (mobile portrait, split-screen tablets). The
-   three-track grid is wider than the screen once the offset stack and
-   master fader are both present, so collapse to a single column and
-   let the aux row wrap. The empty spacer drops out so the transport
-   group sits on its own line above the master + offset controls. */
+   three-track grid can outgrow the screen once the master fader sits
+   beside the transport group, so collapse to a single column and let
+   the aux row wrap. The empty spacer drops out so the transport group
+   sits on its own line above the master volume control. */
 @media (max-width: 640px) {
     .playbackBar {
         grid-template-columns: 1fr;
         justify-items: center;
         gap: 8px;
-        padding: 8px 12px;
+        padding: 4px 12px;
     }
 
     .transportSpacer {
@@ -74,55 +75,16 @@
     gap: 10px;
 }
 
-/* Two-row stack for the Beat + Audio offset rows. A 3-column grid
-   (label / stepper / unit) ensures the numeric stepper column lines up
-   vertically between the rows; the label and unit columns are auto-
-   sized so labels of different lengths ("Beat" / "Audio") extend
-   outward from the shared stepper axis without throwing the steppers
-   off-centre. Right-align the labels and left-align the units so each
-   side extends AWAY from the stepper. */
-.offsetStack {
-    display: grid;
-    grid-template-columns: auto auto auto;
-    align-items: center;
-    justify-content: end;
-    column-gap: 6px;
-    row-gap: 2px;
-}
-
-/* Each `OffsetControl` renders as a `<label>` wrapping three children
-   (label span, NumberStepper, unit span). `display: contents` lets
-   those children participate directly in the parent grid so all six
-   end up in two rows of three columns; the label element keeps its
-   click-to-focus semantics, only its generated box is removed.
-   Without this, each label would form its own flex line and the
-   steppers would shift left/right with their label widths. */
-.offsetStack > label {
-    display: contents;
-}
-
-/* Right-align the label span (column 1) and left-align the unit span
-   (column 3) so they read as text extending OUTWARD from the shared
-   stepper column. The stepper itself is the middle child and centred
-   in its column by default. */
-.offsetStack > label > span:first-child {
-    justify-self: end;
-}
-
-.offsetStack > label > span:last-child {
-    justify-self: start;
-}
-
 .transportButton {
     composes: reset from '../../ui/button/button.module.css';
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 52px;
-    height: 52px;
+    width: 26px;
+    height: 26px;
     line-height: 1;
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-xl);
+    border-radius: var(--radius-lg);
     background: var(--color-bg-base);
     color: var(--color-text);
 }
@@ -274,16 +236,16 @@
     text-align: center;
 }
 
-/* Square toggle living in transportAux. Flat-orange filled when follow
-   is on, outlined when off; sized to sit between the 52px transport
-   buttons and the inline label controls without dominating. */
+/* Square toggle living in transportCenter. Flat-orange filled when
+   follow is on, outlined when off; sized to sit alongside the transport
+   buttons without dominating. */
 .followToggle {
     composes: reset from '../../ui/button/button.module.css';
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
+    width: 24px;
+    height: 24px;
     border: 1px solid var(--color-accent-strong);
     border-radius: var(--radius-sm);
     background: var(--color-accent-strong);

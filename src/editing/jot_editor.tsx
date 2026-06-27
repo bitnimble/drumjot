@@ -50,7 +50,11 @@ import {
   ProvenancePresenterContext,
   ProvenanceStoreContext,
 } from './provenance/provenance_contexts';
-import { FollowPlayheadContext } from './playback/playback_contexts';
+import {
+  FollowPlayheadContext,
+  PlaybackStoreContext,
+  PlaybackPresenterContext,
+} from './playback/playback_contexts';
 import { AudioTrackControls, MixerView, LayerControls } from './mixer/mixer';
 import { Logo } from 'src/ui/logo/logo';
 import { Minimap } from './minimap/minimap';
@@ -505,6 +509,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
               <MergeLayersContext.Provider value={settings.mergeLayers}>
               <UniformWaveformsContext.Provider value={settings.uniformWaveforms}>
               <WaveformGridLinesContext.Provider value={settings.waveformGridLines}>
+                <PlaybackStoreContext.Provider value={playback}>
+                <PlaybackPresenterContext.Provider value={playbackPresenter}>
                 <FollowPlayheadContext.Provider value={followPlayheadContextValue}>
                   <div
                     className={styles.appContainer}
@@ -614,7 +620,6 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                     {structural && (
                       <PlaybackBar
                         jotEditorStore={jotEditorStore}
-                        playback={playback}
                         presenter={playbackPresenter}
                       />
                     )}
@@ -657,6 +662,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                     <ToastContainer />
                   </div>
                 </FollowPlayheadContext.Provider>
+                </PlaybackPresenterContext.Provider>
+                </PlaybackStoreContext.Provider>
               </WaveformGridLinesContext.Provider>
               </UniformWaveformsContext.Provider>
               </MergeLayersContext.Provider>
@@ -1384,9 +1391,11 @@ const JotEditor = observer((props: JotEditorProps) => {
                 // analogue in this no-native-scroll model).
                 data-jot-scroll-content
               >
-                <h2 className={styles.title}>{formatDisplayTitle(source) || 'Untitled jot'}</h2>
-                <p className={styles.subtitle}>{formatSubtitle(source, tempo)}</p>
-                <Legend palette={palette} />
+                <div className={styles.headerRow}>
+                  <h2 className={styles.title}>{formatDisplayTitle(source) || 'Untitled jot'}</h2>
+                  <p className={styles.subtitle}>{formatSubtitle(source, tempo)}</p>
+                  <Legend palette={palette} />
+                </div>
                 <TimelineHeader onSeek={onSeek} onResizeGutterStart={onResizeGutterStart} />
                 <MixerView
                   config={config}

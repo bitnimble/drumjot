@@ -306,32 +306,40 @@
    `width: fit-content` keeps the pinned box narrow so it doesn't span
    the full scroll width and create stray hit areas / overlap
    downstream sticky chrome. */
-.title {
-    composes: heading from '../typography.module.css';
+/* The whole score header on one compact row: title, subtitle
+   (bpm / time signature / volume) and the colour legend laid out
+   horizontally instead of stacked, to keep the header short. Owns the
+   horizontal sticky counter-transform and the 24px gutter for all three
+   children, so the children themselves are plain inline blocks. */
+.headerRow {
     composes: scrollStickyHorizontal;
-    margin: 0 0 4px 0;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    column-gap: 16px;
+    row-gap: 6px;
+    margin: 0 0 8px 0;
     padding: 0 24px;
     width: fit-content;
+}
+
+.title {
+    composes: heading from '../typography.module.css';
+    margin: 0;
 }
 
 .subtitle {
     composes: body from '../typography.module.css';
-    composes: scrollStickyHorizontal;
     color: var(--color-text-muted-alt);
-    margin: 0 0 20px 0;
-    padding: 0 24px;
-    width: fit-content;
+    margin: 0;
 }
 
 .legend {
     composes: body from '../typography.module.css';
-    composes: scrollStickyHorizontal;
     display: flex;
     gap: 12px;
     flex-wrap: wrap;
-    margin-bottom: 16px;
-    padding: 0 24px;
-    width: fit-content;
+    margin: 0;
 }
 
 .legendChip {

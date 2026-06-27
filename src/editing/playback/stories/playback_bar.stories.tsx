@@ -26,17 +26,17 @@ type Story = StoryObj;
 /** One PlaybackBar backed by a fresh document/playback store + presenter
  *  trio; `withJot` seeds a loaded jot so the transport controls light up. */
 function Bar({ withJot }: { withJot: boolean }) {
-  const { jotEditorStore, playback, presenter } = React.useMemo(() => {
+  const { jotEditorStore, presenter } = React.useMemo(() => {
     const jotEditorStore = new JotEditorStore();
     const playback = new PlaybackStore(jotEditorStore);
     const presenter = new PlaybackPresenter(playback, jotEditorStore);
     if (withJot) {
       runInAction(() => jotEditorStore.loadSource(rockJot));
     }
-    return { jotEditorStore, playback, presenter };
+    return { jotEditorStore, presenter };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  return <PlaybackBar jotEditorStore={jotEditorStore} playback={playback} presenter={presenter} />;
+  return <PlaybackBar jotEditorStore={jotEditorStore} presenter={presenter} />;
 }
 
 /** Both transport states in one place. */
