@@ -32,7 +32,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["ruff>=0.6", "pytest>=8"]
+# matplotlib is dev-only (activation-curve / eval debug plots). On the trainer box
+# `uv sync --extra dev` installs it.
+dev = ["ruff>=0.6", "pytest>=8", "matplotlib>=3.8"]
 
 # torch/torchaudio from the cu130 wheel index (CUDA 13.x). The wheel's CUDA
 # major must match the host GPU driver: on a CUDA-13 driver a cu128 build fails
