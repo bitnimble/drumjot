@@ -1,4 +1,5 @@
 import { reaction } from 'mobx';
+import { defaultKindForLane, getInstrumentMetadata } from 'src/instruments/instruments';
 import { jotPlayer } from 'src/editing/playback/player';
 import { lyricsStore } from 'src/lyrics/store';
 import { audioTrackEntityId, lyricsTrackEntityId } from 'src/schema/ordering';
@@ -42,8 +43,10 @@ export class LayersPresenter {
 
   /**
    * Reconcile the session-only audio/lyrics tracks with `tracks` + `ordering`:
-   * create + place (top of layer 0) any that are newly loaded, remove any whose
-   * runtime track is gone. Idempotent; respects an existing placement.
+   * create + place any that are newly loaded, remove any whose runtime track is
+   * gone. Idempotent; respects an existing placement. Lyrics drop loose at the
+   * top of layer 0; a per-lane audio stem instead clusters into a named group
+   * directly above its instrument row (see {@link placeRuntimeAudioTrack}).
    */
   private syncRuntimeTracks(audioIds: readonly string[], lyricsIds: readonly string[]): void {
     const jot = this.getJot();
@@ -60,12 +63,110 @@ export class LayersPresenter {
       }
     }
     // Add + place newcomers (lyrics first, then audio, mirroring the old order).
-    const add = (tid: string, value: Track) => {
-      if (!jot.tracks.has(tid)) jot.tracks.set(tid, value);
+    for (const id of lyricsIds) {
+      const tid = lyricsTrackId(id);
+      if (!jot.tracks.has(tid)) jot.tracks.set(tid, { id: tid, kind: 'lyrics', lyricsId: id });
       if (!this.locate(tid)) this.placeAtTopOfFirstLayer(tid);
-    };
-    for (const id of lyricsIds) add(lyricsTrackId(id), { id: lyricsTrackId(id), kind: 'lyrics', lyricsId: id });
-    for (const id of audioIds) add(audioTrackId(id), { id: audioTrackId(id), kind: 'audio', audioId: id });
+    }
+    for (const id of audioIds) {
+      const tid = audioTrackId(id);
+      if (!jot.tracks.has(tid)) jot.tracks.set(tid, { id: tid, kind: 'audio', audioId: id });
+      // The load-time lane mapping (a transcribe / debug-bundle stem) clusters
+      // the stem with its instrument row(s); read the full set off the runtime
+      // track (a shared stem backs several lanes, the cymbal split).
+      if (!this.locate(tid)) {
+        this.placeRuntimeAudioTrack(tid, jotPlayer.audioTracks.get(id)?.mappedLanes ?? []);
+      }
+    }
+  }
+
+  /**
+   * Place a freshly-loaded audio stem. When its load-time `lanes` back one or
+   * more instrument rows, cluster the stem and EVERY one of those instruments
+   * into a single named group, with the stem directly above its primary
+   * instrument, restoring the post-transcribe "group by instrument" layout the
+   * debug-bundle loader used to apply. A shared stem (the cymbal split's one
+   * file backing both crash and ride) thus folds all its dependent rows under
+   * it. A laneless / unmatched stem (a backing mix, the drumless `no_drums`
+   * stem, or a stem for a lane this song lacks) drops loose at the top instead.
+   */
+  placeRuntimeAudioTrack(trackId: string, lanes: readonly string[]): void {
+    if (this.clusterAudioWithInstruments(trackId, lanes)) return;
+    this.placeAtTopOfFirstLayer(trackId);
+  }
+
+  /** The first instrument track carrying `lane`, anywhere in the ordering, or
+   *  undefined when no row plays it. */
+  private findInstrumentTrackByLane(lane: string): string | undefined {
+    const jot = this.getJot();
+    if (!jot) return undefined;
+    for (const layer of jot.ordering) {
+      for (const slot of layer.slots) {
+        for (const t of slot.tracks) {
+          const tr = jot.tracks.get(t.trackId) as Track | undefined;
+          if (tr && tr.kind === 'instrument' && tr.lane === lane) return t.trackId;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Cluster `audioTrackId` with the instrument rows for `lanes` into one named
+   * group: the stem sits directly above its primary instrument (the first lane
+   * with a row), the group takes that instrument's position + label, and every
+   * other dependent instrument is folded in beneath. Reuses the primary's group
+   * when it already sits in one. Returns false (caller drops the stem loose)
+   * when none of the lanes back a placed instrument row.
+   */
+  private clusterAudioWithInstruments(audioTrackId: string, lanes: readonly string[]): boolean {
+    const jot = this.getJot();
+    if (!jot) return false;
+    // Resolve the placed instrument rows for these lanes, primary first, deduped
+    // (a shared stem can repeat a lane; distinct lanes never share a track).
+    const instr: Array<{ lane: string; id: string }> = [];
+    for (const lane of lanes) {
+      const id = this.findInstrumentTrackByLane(lane);
+      if (id !== undefined && !instr.some((x) => x.id === id)) instr.push({ lane, id });
+    }
+    if (instr.length === 0) return false;
+    const primary = instr[0];
+
+    const loc = this.locate(primary.id);
+    if (!loc) return false;
+    if (jot.ordering.at(loc.li)!.slots.at(loc.si)!.groupId === null) {
+      if (this.createGroup(primary.id, this.instrumentLabel(primary.lane)) === undefined) return false;
+    }
+    // Re-locate: createGroup moved the instrument into its own group slot. Slot
+    // the stem directly above it.
+    const gloc = this.locate(primary.id);
+    if (!gloc) return false;
+    const layer = jot.ordering.at(gloc.li)!;
+    const slot = layer.slots.at(gloc.si)!;
+    if (slot.groupId === null) return false;
+    slot.tracks.insert(gloc.ti, { trackId: audioTrackId });
+
+    // Fold each dependent instrument into the group, in order, beneath the
+    // primary (each lands right after the previously-placed member). Every
+    // `instr` id came from walking `jot.ordering`, so each is placed and each
+    // anchor, the primary, then each just-moved sibling; is in `layer`; so no
+    // `moveTrackAfter` here can no-op, and advancing `anchor` is always safe.
+    let anchor = primary.id;
+    for (let i = 1; i < instr.length; i++) {
+      this.moveTrackAfter(instr[i].id, layer.layerId, anchor);
+      anchor = instr[i].id;
+    }
+    return true;
+  }
+
+  /** A lane's display label: its `Instrument.name`, else the kind's default
+   *  label (recovering the kind from the lane letter when it's `custom`). */
+  private instrumentLabel(lane: string): string {
+    const instrument = this.getJot()?.instruments.get(lane);
+    if (instrument?.name) return instrument.name;
+    let kind = instrument?.kind ?? 'custom';
+    if (kind === 'custom') kind = defaultKindForLane(lane);
+    return getInstrumentMetadata(kind).label;
   }
 
   /** Insert a track at the very top of layer 0 (the loose run there, or a new

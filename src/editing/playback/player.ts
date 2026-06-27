@@ -849,6 +849,7 @@ export class JotPlayer {
     file: File,
     lane?: string,
     role?: AudioTrackRole,
+    extraLanes?: readonly string[],
   ): Promise<AudioTrackId> {
     runInAction(() => {
       this.audioTrackError = undefined;
@@ -864,7 +865,7 @@ export class JotPlayer {
       preloadStretch(ctx);
       const { buffer, sourceBlob } = await decodeAudioTrackFile(ctx, file);
       const id = this.allocateAudioTrackId();
-      this.installAudioTrack(id, file.name, buffer, sourceBlob, lane, role);
+      this.installAudioTrack(id, file.name, buffer, sourceBlob, lane, role, extraLanes);
       return id;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -929,6 +930,7 @@ export class JotPlayer {
     sourceBlob: Blob,
     lane?: string,
     role?: AudioTrackRole,
+    extraLanes?: readonly string[],
   ): void {
     const prev = this.audioTracks.get(id);
     const track = new AudioTrack(
@@ -939,6 +941,7 @@ export class JotPlayer {
         sourceBlob,
         durationSec: buffer.duration,
         lane,
+        extraLanes,
         role,
       },
       () => this.mixerContext,
