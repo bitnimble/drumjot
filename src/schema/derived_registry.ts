@@ -53,7 +53,7 @@ class ValueSlot<T> implements ValueSlotApi<T> {
   constructor(private readonly name: string) {}
 
   define(impl: () => T): void {
-    if (this.impl.get() !== undefined) {
+    if (this.impl.get() != null) {
       throw new Error(`derived field '${this.name}' is already defined`);
     }
     runInAction(() => this.impl.set(impl));
@@ -63,10 +63,10 @@ class ValueSlot<T> implements ValueSlotApi<T> {
   // too early (and threw) re-runs once the implementation is installed.
   read(): T {
     const impl = this.impl.get();
-    if (impl === undefined) {
+    if (impl == null) {
       throw new Error(`derived field '${this.name}' was read before it was defined`);
     }
-    if (this.memo === undefined) this.memo = computed(() => this.impl.get()!());
+    if (this.memo == null) this.memo = computed(() => this.impl.get()!());
     return this.memo.get();
   }
 }
@@ -78,7 +78,7 @@ class FnSlot<A, T> implements FnSlotApi<A, T> {
   constructor(private readonly name: string) {}
 
   define(impl: (arg: A) => T): void {
-    if (this.impl.get() !== undefined) {
+    if (this.impl.get() != null) {
       throw new Error(`derived field '${this.name}' is already defined`);
     }
     runInAction(() => this.impl.set(impl));
@@ -86,10 +86,10 @@ class FnSlot<A, T> implements FnSlotApi<A, T> {
 
   read(arg: A): T {
     const impl = this.impl.get();
-    if (impl === undefined) {
+    if (impl == null) {
       throw new Error(`derived field '${this.name}' was read before it was defined`);
     }
-    if (this.memo === undefined) this.memo = computedFn((a: A) => this.impl.get()!(a));
+    if (this.memo == null) this.memo = computedFn((a: A) => this.impl.get()!(a));
     return this.memo(arg);
   }
 }
@@ -144,7 +144,7 @@ export function createDerivedRegistry<D extends Record<string, AnySlot>>(decl: D
   }
   surface[RESOLVE] = (slot: AnySlot): DerivedReadSlot => {
     const live = bySlot.get(slot);
-    if (live === undefined) {
+    if (live == null) {
       throw new Error(`derived: slot '${slot.name}' is not part of this registry`);
     }
     return live;
