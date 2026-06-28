@@ -3,18 +3,7 @@ import { ChevronDown } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { ExampleJot } from 'src/fakes/fakes';
-import {
-  BeatInput,
-  LLM_MODEL_LABELS,
-  LLM_MODEL_ORDER,
-  LlmModel,
-  ONSET_BACKEND_LABELS,
-  ONSET_BACKEND_ORDER,
-  OnsetBackend,
-  TranscribeStage,
-  TranscriptionSummary,
-} from 'src/editing/transcribe/transcriber';
-import sharedStyles from '../editing/jot_editor.module.css';
+import { TranscriptionSummary } from 'src/editing/transcribe/transcriber';
 import {
   DropdownButton,
   DropdownSection,
@@ -22,50 +11,14 @@ import {
   SubmenuItem,
   ToggleMenuItem,
 } from 'src/ui/dropdown/dropdown';
-import { Checkbox } from 'src/ui/checkbox/checkbox';
 import { Logo } from 'src/ui/logo/logo';
-import { Tabs } from 'src/ui/tabs/tabs';
-import { formatTranscriptionSummary, RecentTranscriptionsPicker } from '../editing/transcribe/recent_transcriptions';
+import { RecentTranscriptionsPicker } from '../editing/transcribe/recent_transcriptions';
 import styles from './toolbar.module.css';
 import type { GridLineSettings } from 'src/settings/settings_store';
-import type { TranscribeOptions, TranscribeStatus } from 'src/editing/transcribe/transcribe_store';
 import { PlaybackKitSubmenu, PlaybackSpeedItem, AudioLatencyItem } from './playback_menu';
 import { ZoomControl, ThemeSection } from './view_menu';
 import { EditMenu } from './edit_menu';
 import { DrumLoadingIndicator, LyricsAlignBusyPill, TranscribeBusyPill } from './toolbar_status';
-
-/** Stage labels in pipeline order, shown verbatim in the resume stage
- *  picker. Mirrors `Stage` in `transcriber/app/pipeline/runner.py`. */
-const STAGE_ORDER: readonly TranscribeStage[] = [
-  'stems_all',
-  'stems_per',
-  'beats',
-  'onsets',
-  'filter',
-  'quantise',
-  'transcribe',
-];
-
-/**
- * Native `<select>` that releases focus once a value is committed.
- *
- * The global spacebar play/pause shortcut deliberately ignores
- * keystrokes while a SELECT is focused (so arrow/space can drive the
- * open list), which means a dropdown that keeps focus after the user
- * picks a value would silently swallow the shortcut until they click
- * elsewhere. Routing every dropdown through this wrapper makes the
- * correct behaviour the default — new dropdowns can't reintroduce the
- * regression. All native `<select>` props pass straight through.
- */
-export const Select = ({ onChange, ...rest }: React.ComponentPropsWithoutRef<'select'>) => (
-  <select
-    {...rest}
-    onChange={(e) => {
-      onChange?.(e);
-      e.currentTarget.blur();
-    }}
-  />
-);
 
 /**
  * Toolbar dropdown trigger label with a trailing caret indicator. The
@@ -85,10 +38,6 @@ export const Toolbar = observer(
     examples,
     currentId,
     onSelect,
-    transcribeStatus,
-    transcribeOptions,
-    onTranscribe,
-    onResumeTranscribe,
     onNewJot,
     onSaveJot,
     onLoadJot,
@@ -99,13 +48,7 @@ export const Toolbar = observer(
     onLoadLyricsFile,
     onOpenLyricsTextLoad,
     onOpenLyricsSearch,
-    onCancelTranscribe,
     lyricsAlignBusyPhase,
-    onSetBeatInput,
-    onSetOnsetBackend,
-    onSetLlmModel,
-    onSetQuantise,
-    onSetQuantiseUseLlm,
     onSetZoom,
     hasNoteProvenance,
     showFilteredOnsets,
@@ -123,22 +66,12 @@ export const Toolbar = observer(
     recentTranscriptions,
     recentTranscriptionsLoaded,
     recentTranscriptionsLoading,
-    selectedResumeFolder,
-    selectedResumeStage,
-    onSetSelectedResumeFolder,
-    onSetSelectedResumeStage,
     onRefreshRecentTranscriptions,
-    onLoadRecentTranscription,
-    transcribeMode,
-    onSetTranscribeMode,
+    onOpenRecentTranscription,
   }: {
     examples: readonly ExampleJot[];
     currentId: string | undefined;
     onSelect: (id: string) => void;
-    transcribeStatus: TranscribeStatus;
-    transcribeOptions: TranscribeOptions;
-    onTranscribe: (file: File) => void;
-    onResumeTranscribe: (folder: string, stage: TranscribeStage) => void;
     /** Start a fresh, empty jot (default kit lanes, one empty bar, no audio).
      *  Prompts before discarding unsaved changes is the caller's job. */
     onNewJot: () => void;
@@ -165,17 +98,11 @@ export const Toolbar = observer(
      *  against the current jot's title/artist; the toolbar's only job
      *  is to surface the entry point. */
     onOpenLyricsSearch: () => void;
-    onCancelTranscribe: () => void;
     /** Aggregate lyrics-alignment state, for the toolbar busy pill (which
      *  doesn't display *which* row; the per-row spinner does). `queued`
      *  means waiting behind another GPU job; `aligning` means actively
      *  running. See `JotEditorStore.lyricsAlignBusyPhase`. */
     lyricsAlignBusyPhase: 'idle' | 'queued' | 'aligning';
-    onSetBeatInput: (input: BeatInput) => void;
-    onSetOnsetBackend: (backend: OnsetBackend) => void;
-    onSetLlmModel: (model: LlmModel) => void;
-    onSetQuantise: (enabled: boolean) => void;
-    onSetQuantiseUseLlm: (enabled: boolean) => void;
     onSetZoom: (z: number) => void;
     /** True iff a filter-mode debug bundle is loaded — gates the
      * `Show filtered` checkbox so it's only present when there's
@@ -204,34 +131,17 @@ export const Toolbar = observer(
     recentTranscriptionsLoaded: boolean;
     /** Whether a refresh is in flight; drives the Recent submenu spinner. */
     recentTranscriptionsLoading: boolean;
-    selectedResumeFolder: string | undefined;
-    selectedResumeStage: TranscribeStage | undefined;
-    onSetSelectedResumeFolder: (folder: string | undefined) => void;
-    onSetSelectedResumeStage: (stage: TranscribeStage | undefined) => void;
     onRefreshRecentTranscriptions: () => void;
-    /** Load a previous transcription's already-produced debug bundle
-     *  (no pipeline re-run). Used by the Load → Recent submenu. */
-    onLoadRecentTranscription: (folder: string) => void;
-    /** Active flow inside the Transcribe dropdown; `new` for a fresh
-     *  upload, `resume` for re-running from a previous debug folder. */
-    transcribeMode: 'new' | 'resume';
-    onSetTranscribeMode: (mode: 'new' | 'resume') => void;
+    /** Open the transcribe dialog (replace mode) for a previous run, so the
+     *  user can pick a resume stage + options before re-running it. */
+    onOpenRecentTranscription: (folder: string) => void;
   }) => {
-    const fileInputRef = React.useRef<HTMLInputElement>(null);
     const jotInputRef = React.useRef<HTMLInputElement>(null);
     const midiInputRef = React.useRef<HTMLInputElement>(null);
     const zipInputRef = React.useRef<HTMLInputElement>(null);
     const scoreParadbInputRef = React.useRef<HTMLInputElement>(null);
     const audioTrackInputRef = React.useRef<HTMLInputElement>(null);
     const lyricsInputRef = React.useRef<HTMLInputElement>(null);
-    const uploading = transcribeStatus.phase === 'uploading';
-
-    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) onTranscribe(file);
-      // Reset so picking the same file twice in a row still fires onChange.
-      e.target.value = '';
-    };
 
     const handleJotFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
@@ -315,16 +225,6 @@ export const Toolbar = observer(
                   };
                   return (
                     <>
-                      <RecentTranscriptionsPicker
-                        variant="menu"
-                        triggerLabel="Recent"
-                        items={recentTranscriptions}
-                        loaded={recentTranscriptionsLoaded}
-                        loading={recentTranscriptionsLoading}
-                        onRefresh={onRefreshRecentTranscriptions}
-                        onPick={onLoadRecentTranscription}
-                        onAfterPick={closeAll}
-                      />
                       {examples.length > 0 && (
                         <>
                           <SubmenuItem label="Examples">
@@ -468,227 +368,21 @@ export const Toolbar = observer(
                   );
                 }}
               </SubmenuItem>
+              {/* Recent transcriptions: picking one opens the transcribe
+                  dialog (replace mode) to choose a resume stage + options,
+                  then re-runs it as a wholesale jot replacement. */}
+              <RecentTranscriptionsPicker
+                variant="menu"
+                triggerLabel="Recent"
+                items={recentTranscriptions}
+                loaded={recentTranscriptionsLoaded}
+                loading={recentTranscriptionsLoading}
+                onRefresh={onRefreshRecentTranscriptions}
+                onPick={onOpenRecentTranscription}
+                onAfterPick={close}
+              />
             </>
           )}
-        </DropdownButton>
-        <DropdownButton
-          label={
-            <ToolbarDropdownLabel>
-              {uploading ? 'Transcribing…' : 'Transcribe'}
-            </ToolbarDropdownLabel>
-          }
-          className={styles.transcribeButton}
-          panelClassName={dropdownStyles.dropdownPanelWide}
-          title="Transcribe an audio file using the filter pathway (MIDI). The debug bundle loads automatically when the run completes."
-          onOpen={onRefreshRecentTranscriptions}
-        >
-          {(close) => {
-            const selectedSummary = recentTranscriptions.find(
-              (s) => s.folder === selectedResumeFolder
-            );
-            const resumableSet = new Set(selectedSummary?.resumable_stages ?? []);
-            const canResume =
-              selectedResumeFolder !== undefined &&
-              selectedResumeStage !== undefined &&
-              resumableSet.has(selectedResumeStage);
-            const noRecentRuns = recentTranscriptions.length === 0;
-            // Force the visible flow back to `new` whenever there's
-            // nothing resumable; otherwise a stale `resume` selection
-            // would render an empty form on first open of the dropdown.
-            const effectiveMode = noRecentRuns ? 'new' : transcribeMode;
-            return (
-              <>
-                {/* Shared options sit ABOVE the tab strip so they read
-                    as "applies to both modes" rather than belonging to
-                    the active tab's body. */}
-                <label
-                  className={sharedStyles.toolbarCheckbox}
-                  title="Which audio feeds the beat tracker. `full_mix` (default) is madmom's training distribution; `drum_stem` can help on tracks with heavy non-drum syncopation. Applies to both New and Resume."
-                >
-                  <span>Beat input</span>
-                  <Select
-                    className={sharedStyles.samplesSelect}
-                    value={transcribeOptions.beatInput}
-                    disabled={uploading}
-                    onChange={(e) => onSetBeatInput(e.target.value as BeatInput)}
-                  >
-                    <option value="full_mix">full mix</option>
-                    <option value="drum_stem">drum stem</option>
-                  </Select>
-                </label>
-                <label
-                  className={sharedStyles.toolbarCheckbox}
-                  title="Onset detector. Learned (the trained MERT model, default) emits all drum classes per stem; ADTOF is the prior Frame-RNN detector. Applies to both New and Resume."
-                >
-                  <span>Onset detector</span>
-                  <Select
-                    className={sharedStyles.samplesSelect}
-                    value={transcribeOptions.onsetBackend}
-                    disabled={uploading}
-                    onChange={(e) => onSetOnsetBackend(e.target.value as OnsetBackend)}
-                  >
-                    {ONSET_BACKEND_ORDER.map((b) => (
-                      <option key={b} value={b}>
-                        {ONSET_BACKEND_LABELS[b]}
-                      </option>
-                    ))}
-                  </Select>
-                </label>
-                <label
-                  className={sharedStyles.toolbarCheckbox}
-                  title="Anthropic model used by the three classification stages (filter; hihat_split; cymbal_split). Quantise stays on Haiku regardless. Opus is the highest-quality default; Haiku is ~15× cheaper for what is mostly pattern-matching. Applies to both New and Resume."
-                >
-                  <span>Model</span>
-                  <Select
-                    className={sharedStyles.samplesSelect}
-                    value={transcribeOptions.llmModel}
-                    disabled={uploading}
-                    onChange={(e) => onSetLlmModel(e.target.value as LlmModel)}
-                  >
-                    {LLM_MODEL_ORDER.map((m) => (
-                      <option key={m} value={m}>
-                        {LLM_MODEL_LABELS[m]}
-                      </option>
-                    ))}
-                  </Select>
-                </label>
-                <label
-                  className={sharedStyles.toolbarCheckbox}
-                  title="Run the optional quantise stage. Off skips snapping entirely; every onset keeps its raw detected time, the MIDI emitter writes it as a near-grid tick + sub-slot offset, and the UI / playback honour the offset so nothing re-snaps on load. Applies to both New and Resume."
-                >
-                  <span>Quantise</span>
-                  <Checkbox
-                    checked={transcribeOptions.quantise}
-                    disabled={uploading}
-                    onChange={(e) => onSetQuantise(e.target.checked)}
-                  />
-                </label>
-                <label
-                  className={classNames(sharedStyles.toolbarCheckbox, styles.subCheckbox)}
-                  title="Run the LLM residual pass inside the quantise stage. Off skips that pass entirely; geometric + envelope + grid still run. No-op when Quantise is off."
-                >
-                  <span>Include LLM adjustment</span>
-                  <Checkbox
-                    checked={transcribeOptions.quantise && transcribeOptions.quantiseUseLlm}
-                    disabled={uploading || !transcribeOptions.quantise}
-                    onChange={(e) => onSetQuantiseUseLlm(e.target.checked)}
-                  />
-                </label>
-                <Tabs
-                  ariaLabel="Transcribe mode"
-                  value={effectiveMode}
-                  onChange={onSetTranscribeMode}
-                  options={[
-                    { value: 'new', label: 'New', testId: 'transcribe-tab-new' },
-                    {
-                      value: 'resume',
-                      label: 'Resume',
-                      disabled: noRecentRuns,
-                      title: noRecentRuns
-                        ? 'No previous runs available to resume.'
-                        : 'Resume a previous run from a chosen pipeline stage.',
-                      testId: 'transcribe-tab-resume',
-                    },
-                  ]}
-                />
-                {effectiveMode === 'new' ? (
-                  <button
-                    type="button"
-                    className={styles.transcribeButton}
-                    onClick={() => {
-                      fileInputRef.current?.click();
-                      close();
-                    }}
-                    disabled={uploading}
-                    title="Pick an audio file to transcribe via the filter pathway. The debug bundle is loaded automatically when the run finishes."
-                  >
-                    {uploading ? 'Transcribing…' : 'Select file'}
-                  </button>
-                ) : (
-                  <>
-                    <label
-                      className={classNames(sharedStyles.toolbarCheckbox, styles.resumeField)}
-                      title="Pick a previous /transcribe run by its original filename + request time. The picker reads /transcribe/list off the server; recent runs land first."
-                    >
-                      <span>Previous run</span>
-                      <Select
-                        className={sharedStyles.samplesSelect}
-                        value={selectedResumeFolder ?? ''}
-                        disabled={uploading}
-                        onChange={(e) => onSetSelectedResumeFolder(e.target.value || undefined)}
-                      >
-                        <option value="">Select a previous run...</option>
-                        {recentTranscriptions.map((s) => (
-                          <option key={s.folder} value={s.folder}>
-                            {formatTranscriptionSummary(s)}
-                          </option>
-                        ))}
-                      </Select>
-                    </label>
-                    <label
-                      className={classNames(sharedStyles.toolbarCheckbox, styles.resumeField)}
-                      title="Pick the stage to resume from. Stages whose prerequisites are missing on disk for the selected run are disabled."
-                    >
-                      <span>From stage</span>
-                      <Select
-                        className={sharedStyles.samplesSelect}
-                        value={selectedResumeStage ?? ''}
-                        disabled={uploading || selectedResumeFolder === undefined}
-                        onChange={(e) =>
-                          onSetSelectedResumeStage(
-                            (e.target.value || undefined) as TranscribeStage | undefined
-                          )
-                        }
-                      >
-                        <option value="">Select stage...</option>
-                        {STAGE_ORDER.map((stage) => (
-                          <option
-                            key={stage}
-                            value={stage}
-                            disabled={
-                              selectedResumeFolder !== undefined && !resumableSet.has(stage)
-                            }
-                          >
-                            {stage}
-                          </option>
-                        ))}
-                      </Select>
-                    </label>
-                    <button
-                      type="button"
-                      className={styles.transcribeButton}
-                      onClick={() => {
-                        if (
-                          selectedResumeFolder !== undefined &&
-                          selectedResumeStage !== undefined
-                        ) {
-                          onResumeTranscribe(selectedResumeFolder, selectedResumeStage);
-                          close();
-                        }
-                      }}
-                      disabled={uploading || !canResume}
-                      title="Re-run the pipeline from the chosen stage against the selected debug folder."
-                    >
-                      Resume
-                    </button>
-                  </>
-                )}
-                {uploading && (
-                  <button
-                    type="button"
-                    className={styles.cancelButton}
-                    onClick={() => {
-                      onCancelTranscribe();
-                      close();
-                    }}
-                    title="Abort the in-flight transcription request."
-                  >
-                    Stop transcription
-                  </button>
-                )}
-              </>
-            );
-          }}
         </DropdownButton>
         {/* Hidden file inputs live outside the dropdown panels so the
             refs stay mounted whether or not a menu is open. */}
@@ -735,19 +429,6 @@ export const Toolbar = observer(
           accept=".lrc,.txt,text/plain"
           className={styles.hiddenInput}
           onChange={handleLyricsFileChange}
-        />
-        <input
-          ref={fileInputRef}
-          type="file"
-          // The Python backend decodes audio via librosa + soundfile +
-          // ffmpeg, so anything ffmpeg understands works. Trust the
-          // browser's `audio/*` filter; if the OS hasn't tagged a file
-          // (rare on macOS / Linux, occasionally on Windows for .opus),
-          // the user can switch the picker to "All files" and pick it
-          // manually.
-          accept="audio/*"
-          className={styles.hiddenInput}
-          onChange={handleFileChange}
         />
         <span className={styles.toolbarDivider} aria-hidden="true" />
         <DropdownButton
@@ -852,7 +533,7 @@ export const Toolbar = observer(
         <div className={styles.toolbarSpacer} aria-hidden="true" />
         <DrumLoadingIndicator />
         <LyricsAlignBusyPill phase={lyricsAlignBusyPhase} />
-        <TranscribeBusyPill status={transcribeStatus} />
+        <TranscribeBusyPill />
       </div>
     );
   }

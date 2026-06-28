@@ -57,6 +57,12 @@
     border-color: var(--color-error-border);
 }
 
+.toastWarning {
+    background: var(--color-warning-bg);
+    color: var(--color-warning);
+    border-color: var(--color-warning-border);
+}
+
 @keyframes toastDropIn {
     from {
         opacity: 0;

@@ -5,8 +5,8 @@ import { Instrument } from 'src/schema/dsl/dsl';
 import type { StructBar } from 'src/editing/structure/structure_store';
 import { ViewConfig } from 'src/editing/viewport/view_config';
 import { InstrumentTrack, trackKey } from 'src/editing/tracks/tracks';
-import { GutterResizeHandle } from 'src/ui/gutter_resize_handle/gutter_resize_handle';
 import { MuteButton, SoloButton } from 'src/ui/icon_button/icon_button';
+import { TrackGutter } from 'src/editing/track_gutter/track_gutter';
 import { StructuralContext } from '../jot_editor_contexts';
 import { MixerStoreContext } from './mixer_contexts';
 import { NoteProvenanceContext } from '../provenance/provenance_contexts';
@@ -315,33 +315,34 @@ export const InstrumentTrackView = observer(
         onDragLeave={drop.onDragLeave}
         onDrop={drop.onDrop}
       >
-        <div className={styles.instrumentTrackGutter}>
-          <MixerDragHandle
-            idx={idx}
-            onDragStartIdx={onDragStartIdx}
-            onResetDrag={onResetDrag}
-            ariaLabel={labelText}
-          />
-          <GutterResizeHandle onResizeStart={onResizeGutterStart} />
-          {/* Two-row stack mirroring the audio-track row: header (label +
-              overflow trigger) on top, slider + M/S on a second line
-              below. */}
-          <div className={styles.instrumentTrackContent}>
-            <div className={styles.instrumentTrackHeader}>
-              <div
-                className={classNames(styles.instrumentTrackLabel, !audible && styles.musicTrackLabelDim)}
-                title={instrumentName ? `${instrumentName} (lane ${lane})` : `Lane ${lane}`}
-              >
-                <span className={styles.gutterLane}>{lane}</span>
-                {instrumentName && <span className={styles.instrumentTrackName}>{instrumentName}</span>}
-              </div>
-              {instrumentTrack && (
-                <InstrumentTrackOverflowMenu
-                  instrumentTrack={instrumentTrack}
-                  trackLabel={labelText}
-                />
-              )}
-            </div>
+        <TrackGutter
+          variant="creamStrong"
+          headerAlign="center"
+          labelDirection="row"
+          labelClassName={styles.instrumentTrackLabel}
+          labelTitle={instrumentName ? `${instrumentName} (lane ${lane})` : `Lane ${lane}`}
+          dim={!audible}
+          onResizeGutterStart={onResizeGutterStart}
+          dragHandle={
+            <MixerDragHandle
+              idx={idx}
+              onDragStartIdx={onDragStartIdx}
+              onResetDrag={onResetDrag}
+              ariaLabel={labelText}
+            />
+          }
+          primary={
+            <>
+              <span className={styles.gutterLane}>{lane}</span>
+              {instrumentName && <span className={styles.instrumentTrackName}>{instrumentName}</span>}
+            </>
+          }
+          overflow={
+            instrumentTrack && (
+              <InstrumentTrackOverflowMenu instrumentTrack={instrumentTrack} trackLabel={labelText} />
+            )
+          }
+          body={
             <div className={styles.instrumentTrackControls}>
               <RowVolumeSlider
                 value={layerControls.volumeFor(rowKeys[0])}
@@ -367,8 +368,8 @@ export const InstrumentTrackView = observer(
                 onTitle={`Unsolo ${lane}`}
               />
             </div>
-          </div>
-        </div>
+          }
+        />
         <div
           className={styles.barsRow}
           data-bars-row

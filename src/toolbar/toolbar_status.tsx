@@ -1,10 +1,11 @@
 import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
+import React from 'react';
 import { jotPlayer } from 'src/editing/playback/player';
 import { SampleLoadProgress } from 'src/editing/playback/sample_storage';
 import { TranscribeStage } from 'src/editing/transcribe/transcriber';
+import { TranscribeStoreContext } from 'src/editing/transcribe/transcribe_contexts';
 import sharedStyles from '../editing/jot_editor.module.css';
-import type { TranscribeStatus } from 'src/editing/transcribe/transcribe_store';
 import styles from './toolbar.module.css';
 
 /** Human-readable label for one pipeline stage, used in the status
@@ -121,26 +122,41 @@ export const LyricsAlignBusyPill = observer(
 );
 
 /**
- * Busy pill for an in-flight transcribe / resume call. Surfaces the
- * live pipeline stage (and substage detail, if any) alongside the
- * filename so the operator can see what the server is actually
- * working on; fed from the NDJSON progress stream via
- * `JotEditorStore.applyProgress`. Completion (success or failure) drops
- * back to nothing; the user-visible result surfaces as a toast.
+ * Persistent top-right pill for any in-flight transcription, fed from the
+ * {@link TranscribeStore} via context. Covers both flows: per-track `append`
+ * (inserting into the current jot) and `replace` (recent / resume). Surfaces
+ * the live pipeline stage + substage alongside the filename. When several
+ * tracks transcribe at once it shows the first plus an "+N more" count; the
+ * per-track gutter spinners show exactly which rows are working. Completion
+ * drops back to nothing; the result surfaces as a toast.
  */
-export const TranscribeBusyPill = observer(({ status }: { status: TranscribeStatus }) => {
-  if (status.phase !== 'uploading') return null;
-  const stagePart = status.stage
-    ? ` · ${formatStageLabel(status.stage)}${status.substage ? ` (${status.substage})` : ''}`
+export const TranscribeBusyPill = observer(() => {
+  const store = React.useContext(TranscribeStoreContext);
+  if (!store) return null;
+  const tracks = [...store.trackStatuses.values()];
+  const replace = store.replaceStatus;
+  // Prefer the per-track append flow; fall back to the replace flow.
+  const active =
+    tracks.length > 0
+      ? tracks[0]
+      : replace.phase === 'uploading'
+        ? { filename: replace.filename, stage: replace.stage, substage: replace.substage }
+        : undefined;
+  if (!active) return null;
+  const extra = tracks.length > 1 ? ` +${tracks.length - 1} more` : '';
+  const stagePart = active.stage
+    ? ` · ${formatStageLabel(active.stage)}${active.substage ? ` (${active.substage})` : ''}`
     : '';
   return (
     <span
       className={classNames(sharedStyles.statusPill, sharedStyles.statusPillBusy)}
-      title={status.substage ?? status.stage ?? 'starting'}
+      title={active.substage ?? active.stage ?? 'starting'}
+      data-testid="transcribe-busy"
     >
       <span className={styles.statusPillSpinner} aria-hidden="true" />
-      Transcribing {status.filename}
-      {stagePart}…
+      Transcribing {active.filename}
+      {stagePart}
+      {extra}…
     </span>
   );
 });

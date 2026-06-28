@@ -22,6 +22,13 @@ request, and pull in the linked docs when a task touches that area.
   irreversible/destructive actions (push, delete, data loss), those still
   warrant a pause.
 - **Use `bun`, never npm/yarn. Use `bunx`, never npx.**
+- **Name things by what they do, not where they came from or what
+  they belong to.** A symbol's name should describe its behaviour /
+  meaning (`append` / `replace`, `MergeResult`, `transcribeStatuses`),
+  not its call site, owner, or origin (`audioMenuMode`,
+  `fromOverflowMenu`, `dialogTranscribeThing`). Only qualify by
+  origin/owner when it's the only way to disambiguate two
+  same-behaviour names in the same scope.
 - **After any code change, run the post-change checks.** Never invoke
   pytest / ruff / playwright directly, those are **denied** by the
   permission config. **Python** keeps wrapper scripts (venv activation,

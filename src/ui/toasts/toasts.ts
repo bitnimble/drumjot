@@ -1,7 +1,7 @@
 import { makeAutoObservable, runInAction } from 'mobx';
 import type { ReactNode } from 'react';
 
-export type ToastKind = 'success' | 'error';
+export type ToastKind = 'success' | 'error' | 'warning';
 
 export type Toast = {
   id: string;
@@ -42,7 +42,7 @@ class ToastStore {
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor() {
-    makeAutoObservable(this, { showSuccess: false, showError: false });
+    makeAutoObservable(this, { showSuccess: false, showError: false, showWarning: false });
   }
 
   showSuccess(message: ReactNode, opts: ShowToastOpts = {}): string {
@@ -51,6 +51,12 @@ class ToastStore {
 
   showError(message: ReactNode, opts: ShowToastOpts = {}): string {
     return this.show('error', message, opts);
+  }
+
+  /** Sticky like an error (the user should read what was changed), but
+   *  amber rather than red, the action succeeded, it just had side effects. */
+  showWarning(message: ReactNode, opts: ShowToastOpts = {}): string {
+    return this.show('warning', message, opts);
   }
 
   show(kind: ToastKind, message: ReactNode, opts: ShowToastOpts = {}): string {

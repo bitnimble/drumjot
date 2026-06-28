@@ -82,6 +82,10 @@
     --color-busy-bg: #fff3e6;
     --color-busy-border: #ffd4a8;
 
+    --color-warning: #8a5a00;
+    --color-warning-bg: #fff3e0;
+    --color-warning-border: #ffd9a0;
+
     /* ─── Toggle accent (solo button yellow) ──────────────────────── */
     --color-toggle-active: #f2b300;
     --color-toggle-active-border: #d99f00;
@@ -239,6 +243,10 @@
 
     --color-busy-bg: #3a2e1d;
     --color-busy-border: #5a4628;
+
+    --color-warning: #e6b35c;
+    --color-warning-bg: #3a2e1d;
+    --color-warning-border: #5a4628;
 
     /* ─── Toggle accent (solo button yellow) ──────────────────────── */
     --color-toggle-active: #f2b300;

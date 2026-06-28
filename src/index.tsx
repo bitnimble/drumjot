@@ -222,7 +222,8 @@ if (mount) {
   // in flight. Browsers no longer honour custom messages here; setting
   // returnValue just triggers the native "Leave site?" confirm.
   window.addEventListener('beforeunload', (event) => {
-    if (app.transcribe.transcribeStatus.phase === 'uploading') {
+    const t = app.transcribe;
+    if (t.trackStatuses.size > 0 || t.replaceStatus.phase === 'uploading') {
       event.preventDefault();
       event.returnValue = '';
     }

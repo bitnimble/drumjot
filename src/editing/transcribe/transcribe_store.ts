@@ -1,4 +1,4 @@
-import { makeAutoObservable } from 'mobx';
+import { makeAutoObservable, observable } from 'mobx';
 import {
   BeatInput,
   LlmModel,
@@ -6,21 +6,29 @@ import {
   TranscribeStage,
   TranscriptionSummary,
 } from 'src/editing/transcribe/transcriber';
+import { AudioTrackId } from 'src/editing/playback/audio_tracks';
 
-/** Long-running transcribe indicator. Only the in-flight `uploading`
- *  phase is modelled here; success and failure surface as toasts. */
+/** Live per-track transcribe progress. Absence of an entry for a track means
+ *  idle; presence means a transcription is in flight. Fed from the NDJSON
+ *  progress stream so the track gutter spinner can show the current stage. */
+export type TranscribeTrackStatus = {
+  filename: string;
+  /** Current pipeline stage (`stems_all`, `beats`, `transcribe`, …); absent
+   *  until the first stage event arrives. */
+  stage?: TranscribeStage;
+  /** Optional in-stage detail (e.g. "filtering 3/5 instruments"). */
+  substage?: string;
+};
+
+/** Long-running indicator for the wholesale-replace (recent / resume) flow,
+ *  which has no owning track. Only the in-flight `uploading` phase is modelled;
+ *  success and failure surface as toasts. */
 export type TranscribeStatus =
   | { phase: 'idle' }
   | {
       phase: 'uploading';
       filename: string;
-      /** Current pipeline stage (`stems_all`, `beats`, `transcribe`, …)
-       *  reported by the server's NDJSON progress stream. `undefined`
-       *  until the first stage event arrives; the initial "uploading"
-       *  read covers everything before the first stage starts. */
       stage?: TranscribeStage;
-      /** Optional in-stage detail, e.g. "filtering 3/5 instruments
-       *  (latest: snare)". Cleared whenever the stage advances. */
       substage?: string;
     };
 
@@ -43,13 +51,27 @@ export type TranscribeOptions = {
 };
 
 /**
- * Transcribe / resume UI state: the in-flight status pill, the form
- * options, and the recent-runs picker. Pure data (observables only); the
- * upload / resume / refresh orchestration and the in-flight
- * `AbortController` live on the presenter.
+ * Which transcribe dialog is open and what it targets:
+ *  - `append`: transcribe one loaded audio track and insert the result into
+ *    the current jot (an extra `||` layer). `audioTrackId` is the source.
+ *  - `replace`: re-run a previous server-side run (`folder`) from a chosen
+ *    `resumeStage` and replace the whole jot with its output.
+ */
+export type TranscribeDialogState =
+  | { mode: 'append'; audioTrackId: AudioTrackId }
+  | { mode: 'replace'; folder: string; resumeStage: TranscribeStage | undefined };
+
+/**
+ * Transcribe / resume UI state: per-track in-flight progress, the form
+ * options, the recent-runs list, and the open dialog. Pure data (observables
+ * only); the upload / resume / refresh orchestration and the in-flight
+ * `AbortController`s live on the presenter.
  */
 export class TranscribeStore {
-  transcribeStatus: TranscribeStatus = { phase: 'idle' };
+  /** Per-track append-flow progress, keyed by audio track id. */
+  trackStatuses: Map<AudioTrackId, TranscribeTrackStatus> = new Map();
+  /** Wholesale-replace (recent / resume) flow progress; no owning track. */
+  replaceStatus: TranscribeStatus = { phase: 'idle' };
   /** UI-controlled options for the next transcribe call. `debug=true`
    *  so the run is resumable. */
   transcribeOptions: TranscribeOptions = {
@@ -60,32 +82,16 @@ export class TranscribeStore {
     quantise: true,
     quantiseUseLlm: false,
   };
-  /** Server-side picker of recent /transcribe runs that can be resumed.
-   *  Populated by the presenter's refresh; an empty array before the
-   *  first fetch (the picker shows "Loading…" in that state). */
+  /** Server-side picker of recent /transcribe runs that can be resumed. */
   recentTranscriptions: TranscriptionSummary[] = [];
-  /** True once the recent-runs list has been fetched at least once
-   *  (success or empty). The Load → Recent submenu uses this to decide
-   *  whether to issue the initial fetch on first open or use the cache. */
+  /** True once the recent-runs list has been fetched at least once. */
   recentTranscriptionsLoaded: boolean = false;
-  /** True while an in-flight recent-runs refresh is resolving. Drives the
-   *  spinner inside the Load → Recent submenu. */
+  /** True while an in-flight recent-runs refresh is resolving. */
   recentTranscriptionsLoading: boolean = false;
-  /** Folder name of the currently-selected recent transcription, or
-   *  `undefined` when nothing is selected. Drives the stage picker (we
-   *  read `resumable_stages` off the matching summary). */
-  selectedResumeFolder: string | undefined = undefined;
-  /** Stage the user has picked to resume from. `undefined` until they
-   *  pick one; reset whenever {@link selectedResumeFolder} changes so
-   *  stale picks from one folder can't leak into another folder's
-   *  request. */
-  selectedResumeStage: TranscribeStage | undefined = undefined;
-  /** Which flow the Transcribe dropdown is showing: a fresh upload
-   *  (`new`) or resume-from-debug-folder (`resume`). Defaults to `new`
-   *  since that's the only flow available before any runs exist. */
-  transcribeMode: 'new' | 'resume' = 'new';
+  /** The open transcribe dialog, or `undefined` when none is open. */
+  dialog: TranscribeDialogState | undefined = undefined;
 
   constructor() {
-    makeAutoObservable(this);
+    makeAutoObservable(this, { trackStatuses: observable.shallow });
   }
 }

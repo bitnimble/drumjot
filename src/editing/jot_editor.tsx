@@ -25,6 +25,11 @@ import {
 } from './playback/audio_worklet_warning_modal';
 import { LyricsSearchModal } from './lyrics/lyrics_search_modal';
 import { LyricsTextLoadModal } from './lyrics/lyrics_text_modal';
+import { TranscribeDialog } from './transcribe/transcribe_dialog';
+import {
+  TranscribeStoreContext,
+  TranscribePresenterContext,
+} from './transcribe/transcribe_contexts';
 import { NewJotConfirmModal } from './new_jot_confirm_modal';
 import { SelectionContext } from 'src/editing/selection/selection';
 import {
@@ -485,6 +490,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     );
 
     return (
+        <TranscribeStoreContext.Provider value={transcribe}>
+        <TranscribePresenterContext.Provider value={transcribePresenter}>
         <LayersStoreContext.Provider value={layers}>
         <LayersPresenterContext.Provider value={layersPresenter}>
         <NotePropertiesStoreContext.Provider value={noteProperties}>
@@ -521,10 +528,6 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                       examples={jotEditorStore.examples}
                       currentId={jotEditorStore.currentExampleId}
                       onSelect={(id) => jotEditorPresenter.loadExample(id)}
-                      transcribeStatus={transcribe.transcribeStatus}
-                      transcribeOptions={transcribe.transcribeOptions}
-                      onTranscribe={(file) => transcribePresenter.transcribeAudio(file)}
-                      onResumeTranscribe={(folder, stage) => transcribePresenter.resumeTranscribe(folder, stage)}
                       onNewJot={onNewJot}
                       onSaveJot={() => jotEditorPresenter.saveMutableFile()}
                       onLoadJot={(file) => jotEditorPresenter.loadJotFile(file)}
@@ -535,13 +538,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                       onLoadLyricsFile={(file) => jotEditorPresenter.loadLyricsFile(file)}
                       onOpenLyricsTextLoad={() => lyricsPresenter.setLyricsTextOpen(true)}
                       onOpenLyricsSearch={() => lyricsPresenter.setLyricsSearchOpen(true)}
-                      onCancelTranscribe={() => transcribePresenter.cancelTranscribe()}
                       lyricsAlignBusyPhase={lyricsAlign.lyricsAlignBusyPhase}
-                      onSetBeatInput={(b) => transcribePresenter.setBeatInput(b)}
-                      onSetOnsetBackend={(b) => transcribePresenter.setOnsetBackend(b)}
-                      onSetLlmModel={(m) => transcribePresenter.setLlmModel(m)}
-                      onSetQuantise={(v) => transcribePresenter.setQuantise(v)}
-                      onSetQuantiseUseLlm={(v) => transcribePresenter.setQuantiseUseLlm(v)}
                       onSetZoom={setZoomCentered}
                       hasNoteProvenance={provenance.noteProvenance !== undefined}
                       showFilteredOnsets={provenance.showFilteredOnsets}
@@ -559,14 +556,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                       recentTranscriptions={transcribe.recentTranscriptions}
                       recentTranscriptionsLoaded={transcribe.recentTranscriptionsLoaded}
                       recentTranscriptionsLoading={transcribe.recentTranscriptionsLoading}
-                      selectedResumeFolder={transcribe.selectedResumeFolder}
-                      selectedResumeStage={transcribe.selectedResumeStage}
-                      onSetSelectedResumeFolder={(f) => transcribePresenter.setSelectedResumeFolder(f)}
-                      onSetSelectedResumeStage={(s) => transcribePresenter.setSelectedResumeStage(s)}
                       onRefreshRecentTranscriptions={() => transcribePresenter.refreshRecentTranscriptions()}
-                      onLoadRecentTranscription={(folder) => transcribePresenter.loadRecentTranscription(folder)}
-                      transcribeMode={transcribe.transcribeMode}
-                      onSetTranscribeMode={(m) => transcribePresenter.setTranscribeMode(m)}
+                      onOpenRecentTranscription={(folder) => transcribePresenter.openReplaceDialog(folder)}
                     />
                     {/* Score region: the score (or empty state) plus the
                         floating sidebar panel overlaid on its right edge. The
@@ -636,6 +627,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                       onClose={() => lyricsPresenter.setLyricsTextOpen(false)}
                       presenter={lyricsPresenter}
                     />
+                    <TranscribeDialog />
                     <AudioWorkletWarningModal
                       state={audioWorkletState}
                       open={audioWorkletWarningOpen}
@@ -684,6 +676,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
         </NotePropertiesStoreContext.Provider>
         </LayersPresenterContext.Provider>
         </LayersStoreContext.Provider>
+        </TranscribePresenterContext.Provider>
+        </TranscribeStoreContext.Provider>
     );
   });
 
@@ -2026,7 +2020,7 @@ const EmptyState = observer(
               loaded={transcribe.recentTranscriptionsLoaded}
               loading={transcribe.recentTranscriptionsLoading}
               onRefresh={() => transcribePresenter.refreshRecentTranscriptions()}
-              onPick={(folder) => transcribePresenter.loadRecentTranscription(folder)}
+              onPick={(folder) => transcribePresenter.openReplaceDialog(folder)}
             />
           </div>
         </div>
