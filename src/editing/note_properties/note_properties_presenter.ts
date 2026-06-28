@@ -41,12 +41,11 @@ export class NotePropertiesPresenter {
    *  track for the note's layer (mirrors a cross-lane drag). */
   setLane(lane: string): void {
     const jot = this.jotEditorStore.jot;
-    const structural = this.jotEditorStore.structural;
     if (!jot) return;
     this.commit((el) => {
       if (el.lane === lane) return undefined;
       const curLayer = el.trackId !== undefined ? layerIdOfTrack(jot, el.trackId) : undefined;
-      const targetLayer = structural?.ownerLayerFor(lane) ?? curLayer;
+      const targetLayer = jot.ownerLayerFor(lane) ?? curLayer;
       const trackId =
         targetLayer !== undefined
           ? this.layersPresenter.ensureInstrumentTrack(targetLayer, lane)
@@ -154,7 +153,7 @@ export class NotePropertiesPresenter {
   // ---------- internals ----------
 
   private bars(): Bar[] {
-    return (this.jotEditorStore.structural?.layers[0]?.bars ?? []).map((b) => ({
+    return (this.jotEditorStore.jot?.renderedLayers[0]?.bars ?? []).map((b) => ({
       id: b.id,
       index: b.index,
       beats: b.beats,
