@@ -35,7 +35,7 @@
  * worker iterates bars, so each section gets its real audio-time
  * mapping regardless of the bar's role.
  */
-import type { StructuralPresenter } from 'src/editing/structure/structural_presenter';
+import type { MutableJot } from 'src/schema/schema';
 import { toTempoBars } from 'src/editing/structure/structure_store';
 import { buildBarTempos } from 'src/schema/dsl/tempo';
 
@@ -117,19 +117,20 @@ const EMPTY_LAYOUT: ChunkLayout = { bars: [], totalBeats: 0, chunks: [] };
  * Per-bar `{{ bpm }}` overrides are honoured the same way `events.ts`
  * / `buildTimeline` do: sticky until the next override.
  *
- * Reads ONLY the zoom-invariant structural layers, so the returned
+ * Reads ONLY the zoom-invariant derived fields off the model
+ * (`renderedLayers` / `tempoSource` / `barDrift`), so the returned
  * `bars[*].startBeat / .beats / .startSec / .durationSec` and the derived
- * `chunks[*]` are stable across zoom changes. Callers can memo on the
- * `StructuralPresenter` and reuse the result across every wheel tick.
+ * `chunks[*]` are stable across zoom changes. Callers can memo on the `jot`
+ * identity and reuse the result across every wheel tick.
  */
-export function buildChunkLayout(structural: StructuralPresenter): ChunkLayout {
-  const structureLayer = structural.layers[0];
+export function buildChunkLayout(jot: MutableJot): ChunkLayout {
+  const structureLayer = jot.renderedLayers[0];
   if (!structureLayer || structureLayer.bars.length === 0) return EMPTY_LAYOUT;
 
   // View bars include the synthetic virtual lead-in; flag it so tempo-event
   // anchoring (indexed against the source bars) stays aligned.
   const tempoBars = toTempoBars(structureLayer.bars);
-  const tempos = buildBarTempos(structural.tempoSource, tempoBars);
+  const tempos = buildBarTempos(jot.tempoSource, tempoBars);
   const durations: number[] = new Array(structureLayer.bars.length);
   for (let i = 0; i < structureLayer.bars.length; i++) {
     durations[i] = tempos[i].durationSec;
@@ -138,7 +139,7 @@ export function buildChunkLayout(structural: StructuralPresenter): ChunkLayout {
   // Per-bar drift, indexed against the SOURCE bars (skipping the synthetic
   // virtual lead-in) exactly like tempo-event anchoring, so a drifting bar's
   // drift lands on the right view bar.
-  const barDrift = structural.barDrift;
+  const barDrift = jot.barDrift;
 
   let leadBars = 0;
   for (const b of structureLayer.bars) {

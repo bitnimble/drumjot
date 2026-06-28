@@ -81,12 +81,12 @@ export class PlaybackPresenter implements Resettable {
     reaction(
       () => {
         if (jotPlayer.state !== 'playing' && jotPlayer.state !== 'paused') return null;
-        const { structural } = this.jotEditorStore;
-        return structural ? jotToEvents(structural) : null;
+        const { jot } = this.jotEditorStore;
+        return jot ? jotToEvents(jot) : null;
       },
       () => {
-        const { structural } = this.jotEditorStore;
-        if (structural) jotPlayer.refreshDrumSchedule(structural);
+        const { jot } = this.jotEditorStore;
+        if (jot) jotPlayer.refreshDrumSchedule(jot);
       },
       { equals: comparer.structural }
     );
@@ -114,12 +114,12 @@ export class PlaybackPresenter implements Resettable {
   }
 
   async playCurrent(): Promise<void> {
-    const { structural, tempo } = this.jotEditorStore;
-    if (!structural || !tempo) return;
-    // Pass the laid-out structural presenter + tempo (not the raw source) so
-    // the player's timeline reads live bar widths, the playhead then tracks
-    // correctly across zoom changes.
-    await jotPlayer.play(structural, tempo);
+    const { jot, tempo } = this.jotEditorStore;
+    if (!jot || !tempo) return;
+    // Drum events come off the reactive model (`jot.musicalLayers` /
+    // `tempoSource`); `tempo` still drives the live timeline so the playhead
+    // tracks bar widths across zoom changes.
+    await jotPlayer.play(jot, tempo);
   }
 
   stopPlayback(): void {
@@ -173,7 +173,7 @@ export class PlaybackPresenter implements Resettable {
       this.setSongLeadIn(this.playback.songLeadInSec + deltaSec);
     }
     structural.setDrumOffset(beats);
-    jotPlayer.refreshDrumSchedule(structural);
+    jotPlayer.refreshDrumSchedule(jot);
   }
 
   /**

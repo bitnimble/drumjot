@@ -34,6 +34,7 @@ import { NewJotConfirmModal } from './new_jot_confirm_modal';
 import { SelectionContext } from 'src/editing/selection/selection';
 import {
   BarTimingsContext,
+  JotContext,
   StructuralContext,
   TempoContext,
   TempoEditContext,
@@ -1359,6 +1360,7 @@ const JotEditor = observer((props: JotEditorProps) => {
     target.addEventListener('pointercancel', onUp);
   };
   return (
+    <JotContext.Provider value={jot}>
     <StructuralContext.Provider value={structural}>
       <TempoContext.Provider value={tempo}>
         <TempoEditContext.Provider value={tempoEdit}>
@@ -1420,6 +1422,7 @@ const JotEditor = observer((props: JotEditorProps) => {
         </TempoEditContext.Provider>
       </TempoContext.Provider>
     </StructuralContext.Provider>
+    </JotContext.Provider>
   );
 });
 

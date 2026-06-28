@@ -231,3 +231,20 @@ export function buildStructural(
   const registry = createJotDerivedRegistry();
   return buildJotPeers(dslToMutable(source, registry), registry, viewConfig).structural;
 }
+
+/**
+ * Store-free model builder: the reactive {@link MutableJot} for a plain `Jot`,
+ * with the structure-domain derived fields installed (the peers are built so
+ * `jot.musicalLayers` / `tempoSource` etc. resolve). For one-shot consumers
+ * (playback `jotToEvents`, unit tests) that read the model's derived fields.
+ * Returns `{ jot, structural }` so a caller can also drive the structure (e.g.
+ * `structural.setDrumOffset`) and see it reflected in the model's derived reads.
+ */
+export function buildJotModel(
+  source: Jot,
+  viewConfig: ViewConfig = new ViewConfig()
+): { jot: MutableJot; structural: StructuralPresenter } {
+  const registry = createJotDerivedRegistry();
+  const peers = buildJotPeers(dslToMutable(source, registry), registry, viewConfig);
+  return { jot: peers.doc.model, structural: peers.structural };
+}
