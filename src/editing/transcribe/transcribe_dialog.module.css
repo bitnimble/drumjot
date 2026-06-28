@@ -29,8 +29,8 @@
     color: var(--color-text-muted-alt);
 }
 
+/* Geometry only; the field chrome comes from the shared <Select>. */
 .select {
-    composes: field from '../../ui/form/form.module.css';
     flex: 0 0 auto;
     min-width: 140px;
 }
