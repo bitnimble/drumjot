@@ -65,7 +65,11 @@ export const Minimap = observer(
     playbackPresenter: PlaybackPresenter;
   }) => {
     const structural = jotEditorStore.structural;
-  const tempo = jotEditorStore.tempo;
+  const jot = jotEditorStore.jot;
+  // Read the derived timeline into a variable so its identity (which changes on
+  // a tempo edit) is what the layout `useMemo` / peaks `useEffect` depend on,
+  // not the stable `jot` reference. `jot` alone never changes across edits.
+  const tempoTimeline = jot?.tempoTimeline;
   const containerRef = React.useRef<HTMLDivElement>(null);
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
 
@@ -90,11 +94,11 @@ export const Minimap = observer(
   const { bars, totalDuration, firstStartSec, hasContent } = React.useMemo(
     () =>
       computeBarLayouts(
-        tempo?.timeline.bars ?? [],
+        tempoTimeline?.bars ?? [],
         structural?.layers[0]?.bars ?? [],
         width
       ),
-    [structural, tempo, width]
+    [structural, tempoTimeline, width]
   );
 
   // ─── Waveform peaks (worker-computed at minimap resolution) ─────────
@@ -120,12 +124,12 @@ export const Minimap = observer(
       !hasContent ||
       width <= 0 ||
       bars.length === 0 ||
-      !tempo
+      !tempoTimeline
     ) {
       setPeaks(null);
       return;
     }
-    const timeline = tempo.timeline;
+    const timeline = tempoTimeline;
     const slices: BarSlice[] = timeline.bars.map((t, i) => ({
       x: bars[i]?.x ?? 0,
       width: bars[i]?.width ?? 0,
@@ -171,7 +175,7 @@ export const Minimap = observer(
     // its string key rather than the array itself; otherwise the effect
     // would refire on every Minimap render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [audibleAudioTrackIdsKey, bars, width, hasContent, songLeadInSec, tempo]);
+  }, [audibleAudioTrackIdsKey, bars, width, hasContent, songLeadInSec, tempoTimeline]);
 
   // ─── Note marks (color-coded per lane, plotted in minimap-px) ──────
   // Driven by a MobX `reaction` rather than computed in the render body so
@@ -355,7 +359,7 @@ export const Minimap = observer(
     window.addEventListener('pointercancel', onUp);
   };
 
-  if (!structural || !tempo) return null;
+  if (!structural || !jot) return null;
 
   return (
     <div

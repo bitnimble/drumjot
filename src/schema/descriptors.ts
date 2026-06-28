@@ -76,13 +76,54 @@ export interface LazyDescriptor<D extends Descriptor = Descriptor> {
   resolve: () => D;
 }
 
+/**
+ * A slot for a nullary derived field: a value a feature presenter computes and
+ * installs, read off the model like a stored field. The type `T` is the single
+ * source of truth, flowing to the model surface ({@link Infer}) and to the
+ * registry's `define`. Identity is the object itself, so two slots that share a
+ * field name in different subtrees never collide; `name` is filled by
+ * `declareDerived` for error messages, `__t` is phantom (never assigned, it only
+ * carries `T` for inference).
+ */
+export interface DerivedSlot<T> {
+  readonly derivedKind: 'value';
+  name: string;
+  readonly __t?: T;
+}
+
+/** A slot for a keyed (function-valued) derived field, backed by a
+ *  per-argument-memoised `computedFn`. Like {@link DerivedSlot} but the read
+ *  takes an argument of type `A`. */
+export interface DerivedFnSlot<A, T> {
+  readonly derivedKind: 'fn';
+  name: string;
+  readonly __a?: A;
+  readonly __t?: T;
+}
+
+export type AnySlot = DerivedSlot<unknown> | DerivedFnSlot<unknown, unknown>;
+
+/**
+ * A first-class derived field declared inline in a schema `record`. Carries NO
+ * backing Loro container: the engine resolves a read through the per-document
+ * derived registry (by the slot's identity) to the implementation a presenter
+ * installed via `define`. Reading a field whose implementation was never
+ * installed throws at the point of read.
+ */
+export interface DerivedDescriptor<S extends AnySlot = AnySlot> {
+  [KIND]: true;
+  kind: 'derived';
+  slot: S;
+}
+
 export type Descriptor =
   | RegDescriptor
   | RecordDescriptor
   | IdMapDescriptor
   | MovableListDescriptor
   | UnionDescriptor
-  | LazyDescriptor;
+  | LazyDescriptor
+  | DerivedDescriptor;
 
 export function isDescriptor(v: unknown): v is Descriptor {
   return typeof v === 'object' && v !== null && KIND in v;
@@ -121,6 +162,14 @@ export function union<V extends Record<string, RecordDescriptor>>(
  *  return type breaks the cyclic-initializer error. */
 export function lazy<D extends Descriptor = Descriptor>(resolve: () => D): LazyDescriptor<D> {
   return { [KIND]: true, kind: 'lazy', resolve };
+}
+
+/** Declare a derived field in a schema `record`, bound to `slot` (from
+ *  `slot()` / `fnSlot()` via `declareDerived`). The slot's type flows to the
+ *  model surface and to the registry's `define`; the implementation is installed
+ *  later by the owning presenter. */
+export function derived<S extends AnySlot>(slot: S): DerivedDescriptor<S> {
+  return { [KIND]: true, kind: 'derived', slot };
 }
 
 // ---------- Surface types ----------
@@ -187,6 +236,14 @@ export type Infer<D, N extends number = 15> =
   : D extends MovableListDescriptor<infer V> ? ReactiveList<Infer<V, Depths[N]>>
   : D extends UnionDescriptor<infer V> ? Infer<V[keyof V], Depths[N]>
   : D extends LazyDescriptor<infer R> ? Infer<R, Depths[N]>
+  : D extends DerivedDescriptor<infer S> ? InferSlot<S>
+  : never;
+
+/** A derived field's model surface: a plain value for a nullary slot, a keyed
+ *  function for an `fnSlot`. */
+type InferSlot<S> =
+  S extends DerivedFnSlot<infer A, infer T> ? (arg: A) => T
+  : S extends DerivedSlot<infer T> ? T
   : never;
 
 type InferField<X, N extends number> =
@@ -194,7 +251,8 @@ type InferField<X, N extends number> =
 
 /** Project a record's fields, making any field whose value admits
  *  `undefined` (an optional Zod leaf) an optional *key*, matching Zod's
- *  own `infer`, rather than a required key of `T | undefined`. */
+ *  own `infer`, rather than a required key of `T | undefined`. Derived fields
+ *  stay required keys (the getter is always present). */
 type InferRecord<F, N extends number> = Prettify<
   MakeUndefinedOptional<{ [K in keyof F]: InferField<F[K], Depths[N]> }>
 >;
@@ -234,8 +292,11 @@ type InitField<X, N extends number> =
   X extends Descriptor ? Init<X, N> : X extends ZodType ? z.infer<X> : never;
 
 // Every field is optional for initialization: you seed the data you have
-// (a missing scalar is just unset; a missing collection starts empty).
-type InitRecord<F, N extends number> = Prettify<{ [K in keyof F]?: InitField<F[K], Depths[N]> }>;
+// (a missing scalar is just unset; a missing collection starts empty). Derived
+// fields aren't stored, so they're dropped from the seed shape entirely.
+type InitRecord<F, N extends number> = Prettify<{
+  [K in keyof F as F[K] extends DerivedDescriptor ? never : K]?: InitField<F[K], Depths[N]>;
+}>;
 
 /**
  * Plain-data snapshot shape: the immutable JSON projection you'd serialize
@@ -259,8 +320,12 @@ export type Snapshot<D, N extends number = 15> =
 type SnapshotField<X, N extends number> =
   X extends Descriptor ? Snapshot<X, N> : X extends ZodType ? z.infer<X> : never;
 
+// Derived fields aren't stored, so they never appear in a snapshot (which keeps
+// a `Snapshot` assignable to `Init` for a lossless round-trip).
 type SnapshotRecord<F, N extends number> = Prettify<
-  MakeUndefinedOptional<{ [K in keyof F]: SnapshotField<F[K], Depths[N]> }>
+  MakeUndefinedOptional<{
+    [K in keyof F as F[K] extends DerivedDescriptor ? never : K]: SnapshotField<F[K], Depths[N]>;
+  }>
 >;
 
 export function movableList<V extends Descriptor>(value: V): MovableListDescriptor<V> {

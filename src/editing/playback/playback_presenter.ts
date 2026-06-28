@@ -148,8 +148,8 @@ export class PlaybackPresenter implements Resettable {
    * reschedules in-flight playback so the change is heard immediately.
    */
   setDrumOffset(beats: number): void {
-    const { structural, tempo } = this.jotEditorStore;
-    if (!structural || !tempo) return;
+    const { structural, jot } = this.jotEditorStore;
+    if (!structural || !jot) return;
     // Slider semantics: the user is re-labeling note positions on the
     // notational grid (e.g. "this hit is on 1/48, not 3/48"), not
     // re-timing the drums against the audio recording. So when the
@@ -165,7 +165,7 @@ export class PlaybackPresenter implements Resettable {
     // caveat as the Drum-offset row in the debug panel.
     const deltaBeats = beats - structural.drumOffsetBeats;
     if (Math.abs(deltaBeats) > 1e-12) {
-      const { dominantBpm } = tempo.dominantBpmAndTime;
+      const { dominantBpm } = jot.dominantBpmAndTime;
       const bpm = dominantBpm ?? 120;
       const deltaSec = (deltaBeats * 60) / bpm;
       // Shift songLeadIn the opposite way to the note shift so the audio

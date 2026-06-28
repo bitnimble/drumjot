@@ -227,10 +227,8 @@ export class LyricsPresenter implements Resettable {
       if (t.durationSec > longestAudio) longestAudio = t.durationSec;
     }
     if (longestAudio > 0) return longestAudio;
-    if (this.jotEditorStore.tempo) {
-      const tl = this.jotEditorStore.tempo.timeline;
-      if (tl.totalDurationSec > 0) return tl.totalDurationSec;
-    }
+    const tl = this.jotEditorStore.jot?.tempoTimeline;
+    if (tl && tl.totalDurationSec > 0) return tl.totalDurationSec;
     return 60;
   }
 

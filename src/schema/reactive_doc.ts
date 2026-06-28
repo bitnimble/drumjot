@@ -2,6 +2,7 @@ import { LoroDoc, LoroMap, LoroMovableList, type ContainerID } from 'loro-crdt';
 import { observable, runInAction } from 'mobx';
 import type {
   Descriptor,
+  DerivedDescriptor,
   IdMapDescriptor,
   Infer,
   Init,
@@ -13,6 +14,7 @@ import type {
   Snapshot,
   UnionDescriptor,
 } from './descriptors';
+import { type DerivedResolver, RESOLVE } from './derived_registry';
 
 /** Root container name holding the top-level record. */
 export const ROOT = 'root';
@@ -106,19 +108,20 @@ function buildNode(
   desc: Descriptor,
   container: LoroMap | LoroMovableList,
   doc: LoroDoc,
-  registry: Registry
+  registry: Registry,
+  derived: DerivedResolver | undefined
 ): BuiltNode {
   switch (desc.kind) {
     case 'record':
-      return buildRecordNode(desc, container as LoroMap, doc, registry);
+      return buildRecordNode(desc, container as LoroMap, doc, registry, derived);
     case 'union':
-      return buildUnionNode(desc, container as LoroMap, doc, registry);
+      return buildUnionNode(desc, container as LoroMap, doc, registry, derived);
     case 'idMap':
-      return buildIdMapNode(desc, container as LoroMap, doc, registry);
+      return buildIdMapNode(desc, container as LoroMap, doc, registry, derived);
     case 'movableList':
-      return buildMovableListNode(desc, container as LoroMovableList, doc, registry);
+      return buildMovableListNode(desc, container as LoroMovableList, doc, registry, derived);
     case 'lazy':
-      return buildNode((desc as LazyDescriptor).resolve(), container, doc, registry);
+      return buildNode((desc as LazyDescriptor).resolve(), container, doc, registry, derived);
     default:
       throw new Error(`reactive_doc: cannot build a node for kind '${(desc as Descriptor).kind}'`);
   }
@@ -133,14 +136,15 @@ function buildUnionNode(
   desc: UnionDescriptor,
   lmap: LoroMap,
   doc: LoroDoc,
-  registry: Registry
+  registry: Registry,
+  derived: DerivedResolver | undefined
 ): { surface: Record<string, unknown>; dispose: () => void } {
   const kind = lmap.get(desc.discriminant) as string | undefined;
   const variant = kind !== undefined ? desc.variants[kind] : undefined;
   if (!variant) {
     throw new Error(`reactive_doc: union has no variant for ${desc.discriminant}='${kind}'`);
   }
-  return buildRecordNode(variant, lmap, doc, registry);
+  return buildRecordNode(variant, lmap, doc, registry, derived);
 }
 
 /** Resolve a collection's entry descriptor (through `lazy`) and assert it's
@@ -165,7 +169,8 @@ function buildRecordNode(
   desc: RecordDescriptor,
   lmap: LoroMap,
   doc: LoroDoc,
-  registry: Registry
+  registry: Registry,
+  derived: DerivedResolver | undefined
 ): { surface: Record<string, unknown>; dispose: () => void } {
   const cache = observable.map<string, unknown>({}, { deep: false });
   const childSurfaces: Record<string, unknown> = {};
@@ -179,7 +184,10 @@ function buildRecordNode(
 
   for (const key of Object.keys(fields)) {
     const field = fields[key];
-    if (field.kind === 'reg') continue;
+    // Registers are cached scalars; derived fields carry no backing container
+    // (they resolve through the derived registry at read time). Neither needs a
+    // child container built here.
+    if (field.kind === 'reg' || field.kind === 'derived') continue;
     // Container-typed field: ensure its child container exists, build its
     // node now so the surface is stable for the node's lifetime.
     // `ensureMergeable*` (not `getOrCreateContainer`) for schema-fixed
@@ -188,17 +196,17 @@ function buildRecordNode(
     // container ids and one peer's subtree is silently dropped.
     if (field.kind === 'record') {
       const child = lmap.ensureMergeableMap(key);
-      const built = buildRecordNode(field, child, doc, registry);
+      const built = buildRecordNode(field, child, doc, registry, derived);
       childSurfaces[key] = built.surface;
       childDisposers.push(built.dispose);
     } else if (field.kind === 'idMap') {
       const child = lmap.ensureMergeableMap(key);
-      const built = buildIdMapNode(field, child, doc, registry);
+      const built = buildIdMapNode(field, child, doc, registry, derived);
       childSurfaces[key] = built.surface;
       childDisposers.push(built.dispose);
     } else if (field.kind === 'movableList') {
       const child = lmap.ensureMergeableMovableList(key);
-      const built = buildMovableListNode(field, child, doc, registry);
+      const built = buildMovableListNode(field, child, doc, registry, derived);
       childSurfaces[key] = built.surface;
       childDisposers.push(built.dispose);
     } else {
@@ -239,6 +247,8 @@ function buildRecordNode(
           commit(doc);
         },
       });
+    } else if (field.kind === 'derived') {
+      defineDerivedProperty(surface, key, (field as DerivedDescriptor).slot, derived);
     } else {
       Object.defineProperty(surface, key, {
         enumerable: true,
@@ -254,6 +264,35 @@ function buildRecordNode(
   return { surface, dispose };
 }
 
+/**
+ * Define a derived field's getter on a record surface. A nullary slot returns
+ * the resolved value; a keyed slot returns a stable function that reads
+ * per-argument. Resolution happens at read time so a doc built without a
+ * registry still constructs, and throws only if the field is actually read; a
+ * read inside a MobX reaction stays reactive (re-runs on late `define`).
+ */
+function defineDerivedProperty(
+  surface: Record<string, unknown>,
+  key: string,
+  slot: DerivedDescriptor['slot'],
+  derived: DerivedResolver | undefined
+): void {
+  let boundFn: ((arg: unknown) => unknown) | undefined;
+  Object.defineProperty(surface, key, {
+    enumerable: true,
+    get: () => {
+      if (!derived) {
+        throw new Error(`reactive_doc: derived field '${key}' read but no derived registry was provided`);
+      }
+      const live = derived[RESOLVE](slot);
+      if (slot.derivedKind === 'fn') {
+        return (boundFn ??= (arg: unknown) => live.read(arg));
+      }
+      return live.read();
+    },
+  });
+}
+
 // ---------- idMap node ----------
 
 /**
@@ -265,7 +304,8 @@ function buildIdMapNode(
   desc: IdMapDescriptor,
   lmap: LoroMap,
   doc: LoroDoc,
-  registry: Registry
+  registry: Registry,
+  derived: DerivedResolver | undefined
 ): { surface: ObservableIdMap; dispose: () => void } {
   // Validate the entry kind up front (resolving `lazy`); entries are built
   // per-id via the node dispatcher so they can be records or unions.
@@ -285,7 +325,7 @@ function buildIdMapNode(
         const present = raw !== undefined;
         if (present && !entries.has(id)) {
           const child = raw as LoroMap;
-          const built = buildNode(entryDesc, child, doc, registry);
+          const built = buildNode(entryDesc, child, doc, registry, derived);
           entryDisposers.set(id, built.dispose);
           entries.set(id, built.surface as Record<string, unknown>);
         } else if (!present && entries.has(id)) {
@@ -412,7 +452,8 @@ function buildMovableListNode(
   desc: MovableListDescriptor,
   llist: LoroMovableList,
   doc: LoroDoc,
-  registry: Registry
+  registry: Registry,
+  derived: DerivedResolver | undefined
 ): { surface: ObservableList; dispose: () => void } {
   entryDescriptor(desc.value, 'movableList');
   const entryDesc = desc.value;
@@ -430,7 +471,7 @@ function buildMovableListNode(
       seen.add(cid);
       let entry = childrenByCid.get(cid);
       if (!entry) {
-        const built = buildNode(entryDesc, child, doc, registry);
+        const built = buildNode(entryDesc, child, doc, registry, derived);
         entry = { surface: built.surface as Record<string, unknown>, dispose: built.dispose };
         childrenByCid.set(cid, entry);
       }
@@ -523,6 +564,8 @@ function populateRecord(
     const v = value[key];
     if (field.kind === 'reg') {
       lmap.set(key, v as never);
+    } else if (field.kind === 'derived') {
+      continue; // not stored; the seed shape excludes it, this is belt-and-braces
     } else if (field.kind === 'record') {
       populateRecord(field, lmap.ensureMergeableMap(key), v as Record<string, unknown>);
     } else if (field.kind === 'idMap') {
@@ -580,7 +623,11 @@ export function createReactiveDoc<S extends RecordDescriptor>(
   // Deep initial state as a plain object, `idMap`s as records keyed by id,
   // `movableList`s as arrays. Populated through Loro so the cache hydrates
   // via the same event path as every later write.
-  initial?: Init<S>
+  initial?: Init<S>,
+  // The per-document derived registry. Required only if the schema declares
+  // `derived(...)` fields; absent, building still succeeds and a derived read
+  // throws. The model resolves a derived read through this by slot identity.
+  derived?: DerivedResolver
 ): ReactiveDoc<S> {
   // Erase `Init<S>` to a plain object up front (through `unknown`, no
   // narrowing) so nothing in the body forces it to expand, its recursive
@@ -607,7 +654,7 @@ export function createReactiveDoc<S extends RecordDescriptor>(
 
   // Build the node tree (creating child containers + registering nodes),
   // then commit once to flush those creations through the event path.
-  const root = buildRecordNode(schema, rootMap, doc, registry);
+  const root = buildRecordNode(schema, rootMap, doc, registry, derived);
   const surface = root.surface;
   doc.commit();
 
