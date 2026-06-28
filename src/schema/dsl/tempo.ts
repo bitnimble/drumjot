@@ -15,10 +15,25 @@
  * the resulting `durationSec` / `segments`. A within-bar `(beat) -> sec`
  * lookup uses {@link beatToSecWithinBar}.
  */
-import { BpmTransition, Jot, TempoEvent } from 'src/schema/dsl/dsl';
+import { BpmTransition, TempoEvent } from 'src/schema/dsl/dsl';
 
 /** Default tempo when neither tempoEvents nor globalMetadata.bpm is set. */
 export const DEFAULT_BPM = 120;
+
+/**
+ * The slice of a jot the tempo maths reads: the barIndex-anchored sticky
+ * tempo events plus the initial/global bpm. A DSL `Jot` satisfies this
+ * structurally (load/export paths), as does the live reactive→barIndex
+ * projection the editor builds from the reactive model
+ * (`StructuralPresenter.tempoSource`). Keeping these pure helpers on this
+ * minimal shape (rather than the DSL `Jot`) is what lets the editor read
+ * tempo straight off the reactive document, with no frozen DSL snapshot in
+ * the runtime path.
+ */
+export type TempoJot = {
+  tempoEvents?: readonly TempoEvent[];
+  globalMetadata: { bpm?: number | BpmTransition };
+};
 
 /**
  * Resolve a `Metadata.bpm` field (a number, a {@link BpmTransition}, or
@@ -42,7 +57,7 @@ export function resolveBpm(
  * The initial tempo before any `tempoEvents` fire. Equals
  * `globalMetadata.bpm` if set, else `DEFAULT_BPM`.
  */
-export function initialBpm(jot: Jot): number {
+export function initialBpm(jot: TempoJot): number {
   return resolveBpm(jot.globalMetadata.bpm, DEFAULT_BPM);
 }
 
@@ -125,7 +140,7 @@ export type BarTempos = {
  * Sort tempoEvents canonically. Multiple events at the same anchor are
  * kept in their source order (the parser emits them in encounter order).
  */
-function sortedEvents(jot: Jot): TempoEvent[] {
+function sortedEvents(jot: TempoJot): readonly TempoEvent[] {
   const events = jot.tempoEvents ?? [];
   if (events.length <= 1) return events;
   return events
@@ -180,7 +195,7 @@ function globalBpmAt(segs: GlobalSeg[], trailing: number, x: number): number {
  * segment carrying the tempo in force there.
  */
 export function buildBarTempos(
-  jot: Jot,
+  jot: TempoJot,
   // `synthetic` bars (e.g. the view-only virtual lead-in) carry no
   // tempo-event anchors of their own, `jot.tempoEvents` are indexed against
   // the SOURCE bars, which don't include them, so they're skipped for
@@ -345,7 +360,7 @@ export function msOffsetToBeats(offsetMs: number, secPerBeat: number): number {
  * headers, ad-hoc conversions). For timeline construction prefer
  * {@link buildBarTempos} so intra-bar segments are visible.
  */
-export function tempoAt(jot: Jot, barIndex: number, beat: number): number {
+export function tempoAt(jot: TempoJot, barIndex: number, beat: number): number {
   let bpm = initialBpm(jot);
   for (const ev of sortedEvents(jot)) {
     if (

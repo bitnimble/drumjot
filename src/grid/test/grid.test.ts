@@ -1,13 +1,8 @@
 import { describe, expect, it } from 'bun:test';
-import { Jot } from 'src/schema/dsl/dsl';
 import { DEFAULT_GRID_DIVISION, gridDivisionFor, slotsPerQuarter } from 'src/grid/grid';
 
-function jotWith(gridDivision?: number): Jot {
-  return {
-    title: '',
-    globalMetadata: { bpm: 120, time: { count: 4, unit: 4 }, ...(gridDivision !== undefined ? { gridDivision } : {}) },
-    layers: [{ bars: [] }],
-  };
+function jotWith(gridDivision?: number): { gridDivision?: number } {
+  return gridDivision !== undefined ? { gridDivision } : {};
 }
 
 describe('gridDivisionFor', () => {

@@ -293,8 +293,7 @@ export const InstrumentTrackView = observer(
       [mixer]
     );
     const instrumentForLane = React.useCallback(
-      (p: string): Instrument =>
-        structural.source.globalMetadata.instrumentMapping?.[p] ?? { kind: 'custom' },
+      (p: string): Instrument => structural.instrumentFor(p),
       [structural]
     );
     return (

@@ -104,15 +104,15 @@ export const EditMenu = observer(() => {
   if (!editing || !presenter) return null;
   const snapping = editing.snappingEnabled;
 
-  // Alignment section data, read off the playback store. `source`
-  // presence gates the Beat row (a drum-grid offset only makes sense with
-  // a jot loaded); the audio offset row appears once any backing audio
-  // track exists. `gridDivision` converts the stored quarter-note beats to
-  // the 1/N-note units the Beat stepper shows.
-  const source = playback?.jotEditorStore.source;
+  // Alignment section data, read off the playback store. A loaded jot
+  // gates the Beat row (a drum-grid offset only makes sense with a jot
+  // loaded); the audio offset row appears once any backing audio track
+  // exists. `gridDivision` converts the stored quarter-note beats to the
+  // 1/N-note units the Beat stepper shows.
+  const jot = playback?.jotEditorStore.jot;
   const hasAudioTracks = jotPlayer.audioTracks.size > 0;
-  const gridDivision = source ? gridDivisionFor(source) : DEFAULT_GRID_DIVISION;
-  const showAlignment = !!playback && !!playbackPresenter && (!!source || hasAudioTracks);
+  const gridDivision = jot ? gridDivisionFor(jot) : DEFAULT_GRID_DIVISION;
+  const showAlignment = !!playback && !!playbackPresenter && (!!jot || hasAudioTracks);
   return (
     <DropdownButton
       label={<ToolbarDropdownLabel>Edit</ToolbarDropdownLabel>}
@@ -156,7 +156,7 @@ export const EditMenu = observer(() => {
           </DropdownSection>
           {showAlignment && (
             <DropdownSection label="Alignment">
-              {source && (
+              {jot && (
                 <AlignmentMenuItem
                   label="Beat"
                   unit={`/${gridDivision}`}

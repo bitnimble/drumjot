@@ -129,7 +129,7 @@ export const PlaybackBar = observer(
   }) => (
   <div className={styles.playbackBar}>
     <PlaybackControls
-      hasJot={!!jotEditorStore.source}
+      hasJot={!!jotEditorStore.jot}
       playerState={jotPlayer.state}
       playerError={jotPlayer.errorMessage}
       onTogglePlayPause={() => presenter.togglePlayPause()}

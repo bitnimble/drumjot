@@ -104,8 +104,8 @@ async function loadParadbMapFromPath(page: Page, zipPath: string): Promise<void>
   await page.waitForFunction(
     () => {
       const title = (
-        window as unknown as { drumjot: { jotEditorStore: { source?: { title: string } } } }
-      ).drumjot.jotEditorStore.source?.title;
+        window as unknown as { drumjot: { jotEditorStore: { jot?: { title: string } } } }
+      ).drumjot.jotEditorStore.jot?.title;
       return !!title && title !== 'Simple rock loop';
     },
     null,

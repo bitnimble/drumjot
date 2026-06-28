@@ -27,6 +27,7 @@ import { ViewportStore } from 'src/editing/viewport/viewport_store';
 import { MixerStore } from 'src/editing/mixer/mixer_store';
 import { parse } from 'src/schema/dsl/parser/parser';
 import { writeDsl } from 'src/schema/dsl/writer';
+import { mutableToDsl } from 'src/schema/dsl/to_dsl';
 import { jotPlayer } from 'src/editing/playback/player';
 // Side-effect import: instantiates the theme controller so the
 // `<html data-theme>` attribute is in sync with the user's saved choice
@@ -124,14 +125,15 @@ class Drumjot {
 
   /** Serialize the currently-loaded song back to DSL (.jot) source text,
    *  the inverse of {@link loadDsl}. Empty string when nothing is loaded.
-   *  Round-trips through {@link writeDsl} over the source jot.
+   *  Exports the CURRENT reactive document (`mutableToDsl` -> `writeDsl`), so
+   *  edits made since load are reflected.
    *
-   *  Lossy: the DSL is the *subset* format, it reflects only the originally-
-   *  loaded source, not edits made since (those live in the mutable
-   *  document). Use {@link saveMutable} for a lossless, edit-preserving save. */
+   *  Still the *subset* format: the DSL can't carry the editor metadata
+   *  (mixer, palette, display settings) a mutable `.jot` does, so use
+   *  {@link saveMutable} for a lossless save. */
   toDsl(): string {
-    const source = this.jotEditorStore.source;
-    return source ? writeDsl(source) : '';
+    const jot = this.jotEditorStore.jot;
+    return jot ? writeDsl(mutableToDsl(jot)) : '';
   }
 
   /** Save the current session to a mutable `.jot` file (browser download).

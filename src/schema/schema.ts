@@ -294,6 +294,16 @@ export const JotSchema = record({
   leadBars: z.number().optional(),
   /** Producer grid density (1/N-of-a-whole-note); advisory. */
   gridDivision: z.number().optional(),
+  /** Opaque, loader-supplied song metadata not otherwise modelled as a
+   *  first-class field (artist, a global `vol`, free-text `comment`, the RLRR
+   *  provenance sidecar, and any custom keys), stored verbatim as a JSON
+   *  string. Seeded once at load from the DSL `globalMetadata` residual (the
+   *  keys left after `bpm`/`time`/`instrumentMapping`/`songLeadIn`/`leadBars`/
+   *  `gridDivision`/`title` are lifted to their own fields); read for the
+   *  score header's artist/subtitle and re-emitted by the DSL exporter. Kept
+   *  opaque because the RLRR sidecar is arbitrarily nested provenance the
+   *  editor never structurally edits. */
+  globalMetadataJson: z.string().optional(),
   /** `||` layers by id; a single-layer jot has one (or none → primary). */
   layers: idMap(LayerSchema),
   /** First-class tracks (instrument / audio / lyrics) by id; a note's home. */

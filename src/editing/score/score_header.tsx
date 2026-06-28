@@ -1,20 +1,34 @@
 import { observer } from 'mobx-react-lite';
-import { Jot } from 'src/schema/dsl/dsl';
+import type { MutableJot } from 'src/schema/schema';
 import type { TempoPresenter } from 'src/editing/playback/tempo_presenter';
 import type { PaletteStore } from 'src/editing/palette/palette_store';
 import sharedStyles from '../jot_editor.module.css';
 
+/** Parse the opaque `globalMetadataJson` residual (artist / vol / provenance /
+ *  custom keys) back into a plain object for the header's display reads. The
+ *  structurally-modelled metadata (title, bpm, time) is read from its own
+ *  reactive field instead. Returns `{}` when absent or malformed. */
+function residualMetadata(jot: MutableJot): Record<string, unknown> {
+  const raw = jot.globalMetadataJson;
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Read the artist string from wherever a loader plausibly stashed it.
  * Today only the RLRR (Paradiddle map) loader surfaces an artist, on
- * `globalMetadata.rlrr.recordingMetadata.artist`; a top-level
- * `globalMetadata.artist` is accepted too so hand-authored DSL or a
- * future loader can populate it directly. Anything non-string or empty
- * returns `undefined`, which makes the call site fall back to the
- * title alone.
+ * `rlrr.recordingMetadata.artist`; a top-level `artist` key is accepted too
+ * so hand-authored DSL or a future loader can populate it directly. Anything
+ * non-string or empty returns `undefined`, which makes the call site fall
+ * back to the title alone.
  */
-export function extractArtist(source: Jot): string | undefined {
-  const meta = source.globalMetadata as Record<string, unknown>;
+export function extractArtist(jot: MutableJot): string | undefined {
+  const meta = residualMetadata(jot);
   const direct = meta.artist;
   if (typeof direct === 'string' && direct.trim() !== '') return direct.trim();
   const rlrr = meta.rlrr as { recordingMetadata?: { artist?: unknown } } | undefined;
@@ -30,28 +44,29 @@ export function extractArtist(source: Jot): string | undefined {
  * alone. Empty when the jot has neither title nor artist; the caller
  * shows the "Untitled jot" placeholder in that case.
  */
-export function formatDisplayTitle(source: Jot): string {
-  const title = source.title.trim();
-  const artist = extractArtist(source);
+export function formatDisplayTitle(jot: MutableJot): string {
+  const title = jot.title.trim();
+  const artist = extractArtist(jot);
   if (title && artist) return `${title} - ${artist}`;
   if (title) return title;
   if (artist) return artist;
   return '';
 }
 
-export function formatSubtitle(source: Jot, tempo: TempoPresenter): string {
+export function formatSubtitle(jot: MutableJot, tempo: TempoPresenter): string {
   const parts: string[] = [];
-  const { bpm: globalBpm, time: globalTime, vol } = source.globalMetadata;
+  const vol = residualMetadata(jot).vol;
   const { dominantBpm, dominantTime } = tempo.dominantBpmAndTime;
 
   if (dominantBpm !== undefined) parts.push(`${dominantBpm} bpm`);
-  else if (typeof globalBpm === 'number') parts.push(`${globalBpm} bpm`);
-  else if (globalBpm) parts.push(`${globalBpm.start ?? '?'}-${globalBpm.end} bpm`);
+  else parts.push(`${jot.bpm} bpm`);
 
-  const time = dominantTime ?? globalTime;
-  if (time) parts.push(`${time.count}/${time.unit}`);
+  if (dominantTime) parts.push(`${dominantTime.count}/${dominantTime.unit}`);
   if (typeof vol === 'string') parts.push(vol);
-  else if (vol) parts.push(`${vol.start ?? '?'} -> ${vol.end}`);
+  else if (vol && typeof vol === 'object') {
+    const v = vol as { start?: unknown; end?: unknown };
+    parts.push(`${v.start ?? '?'} -> ${v.end}`);
+  }
   return parts.join('  -  ');
 }
 

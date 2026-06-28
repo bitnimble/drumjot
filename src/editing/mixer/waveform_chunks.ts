@@ -119,7 +119,7 @@ export function buildChunkLayout(structural: StructuralPresenter): ChunkLayout {
 
   // View bars include the synthetic virtual lead-in; flag it so tempo-event
   // anchoring (indexed against the source bars) stays aligned.
-  const tempos = buildBarTempos(structural.source, toTempoBars(structureLayer.bars));
+  const tempos = buildBarTempos(structural.tempoSource, toTempoBars(structureLayer.bars));
   const durations: number[] = new Array(structureLayer.bars.length);
   for (let i = 0; i < structureLayer.bars.length; i++) {
     durations[i] = tempos[i].durationSec;

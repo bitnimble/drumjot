@@ -22,15 +22,15 @@ export class PlaybackPresenter implements Resettable {
     this.jotEditorStore = jotEditorStore;
     makeAutoObservable(this, { playback: false, jotEditorStore: false });
     // Seed the player's live `songLeadIn` epoch from each loaded jot's
-    // transcribed lead-in (`globalMetadata.songLeadIn`, jot seconds <= 0).
-    // Tracking `document.source` (an observable reference) re-fires whenever
-    // a new jot is loaded, resetting the offset to that recording's value;
-    // manual nudges via the Offset control persist until the next load. We
-    // read the raw `source.globalMetadata` (not a laid-out peer) so seeding
-    // doesn't force a layout pass.
+    // transcribed lead-in (the reactive `songLeadIn` register, jot seconds
+    // <= 0). Reading it off the reactive document re-fires both when a new
+    // jot loads (the `mutableDoc` ref swaps) and if the value is ever edited,
+    // resetting the offset to that recording's value; manual nudges via the
+    // Offset control persist until the next change. Reading the register
+    // (not a laid-out peer) keeps seeding off the layout pass.
     reaction(
       () => {
-        const raw = this.jotEditorStore.source?.globalMetadata.songLeadIn;
+        const raw = this.jotEditorStore.jot?.songLeadIn;
         return typeof raw === 'number' && raw < 0 ? raw : 0;
       },
       (songLeadIn) => this.setSongLeadIn(songLeadIn),
