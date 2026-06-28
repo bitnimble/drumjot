@@ -188,8 +188,12 @@ export class StructuralPresenter implements LaidOutJot {
     return this.musicalLayers.map((layer) => withVirtualLeadIn(layer, preRollSec, bpm));
   }
 
+  /** Delegates to the viewport {@link LayoutStore} (the owner of zoom-derived
+   *  layout scale); kept on the presenter only to satisfy the `LaidOutJot`
+   *  contract `buildTimeline` reads. Cross-domain consumers read
+   *  `jotEditorStore.layout.pxPerBeat` directly. */
   get pxPerBeat(): number {
-    return ((this.viewConfig.barWidth as number) * this.layoutStore.densityFactor) / 4;
+    return this.layoutStore.pxPerBeat;
   }
 
   /** Ordered lane list across all layers (lanes that carry a note).

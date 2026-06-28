@@ -47,6 +47,9 @@ export class JotEditorStore {
   palette: PaletteStore | undefined;
   /** Per-bar tempo segments, dominant bpm/time, and the audio timeline. */
   tempo: TempoPresenter | undefined;
+  /** Viewport layout scale (`pxPerBeat`, density factor, bar pixel geometry)
+   *  for the loaded song; zoom-driven, not document data. */
+  layout: LayoutStore | undefined;
 
   /**
    * Shared layout config threaded into every loaded song's peers, so the
@@ -140,6 +143,7 @@ export class JotEditorStore {
       this.structural = undefined;
       this.palette = undefined;
       this.tempo = undefined;
+      this.layout = undefined;
       return;
     }
     const registry = createJotDerivedRegistry();
@@ -170,6 +174,7 @@ export class JotEditorStore {
     this.structural = peers.structural;
     this.palette = peers.palette;
     this.tempo = peers.tempo;
+    this.layout = peers.layout;
   }
 }
 
@@ -210,7 +215,7 @@ function buildJotPeers(
     registry
   );
   const tempo = new TempoPresenter(structural, registry);
-  return { doc, structural, palette, tempo };
+  return { doc, structural, palette, tempo, layout: layoutStore };
 }
 
 /**

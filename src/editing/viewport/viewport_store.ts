@@ -114,7 +114,7 @@ export class ViewportStore implements Resettable {
    * environments still render the full score.
    */
   get visibleBeatRange(): { startBeat: number; endBeat: number } | null {
-    const ppb = this.jotEditorStore.structural?.pxPerBeat ?? 0;
+    const ppb = this.jotEditorStore.layout?.pxPerBeat ?? 0;
     const vw = this._viewportWidth;
     if (ppb <= 0 || vw <= 0) return null;
     const buffer = vw;
