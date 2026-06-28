@@ -26,6 +26,10 @@ def run_metadata(cfg: Config, thresholds: dict[str, float], in_dim: int = FEAT_D
         "lanes": list(cfg.lanes),
         "encoder": cfg.encoder,
         "encoder_layer": cfg.encoder_layer,
+        # Per-lane MERT layer map {lane: layer} when the heads span >1 layer; None
+        # for the single-layer model (every head reads `encoder_layer`). Inference
+        # routes each head to its layer when this is set. (See model.MultiLaneHeads.)
+        "lane_layers": cfg.lane_layer_map() if cfg.is_multilayer() else None,
         "encoder_fps": cfg.encoder_fps,
         "sigma_frames": cfg.sigma_frames,
         "peak_threshold": cfg.peak_threshold,
@@ -67,6 +71,7 @@ def load(out_dir: str | Path, device: str = "cpu"):
         hidden=meta["head_hidden"],
         num_layers=meta["head_layers"],
         lane_names=tuple(meta["lanes"]),
+        lane_layers=meta.get("lane_layers"),  # per-lane-layer routing (None on old/single-layer)
     )
     sd = torch.load(out / "model.pt", map_location=device)
     # Tolerate three benign kinds of state_dict drift; raise on anything else:

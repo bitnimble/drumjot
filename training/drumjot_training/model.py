@@ -102,7 +102,15 @@ class OnsetHead(nn.Module):
 
 
 class MultiLaneHeads(nn.Module):
-    """One `OnsetHead` per lane; forward -> (B, n_lanes, T) logits in `lane_names` order."""
+    """One `OnsetHead` per lane; forward -> (B, n_lanes, T) logits in `lane_names` order.
+
+    `lane_layers` (None by default) engages PER-LANE-LAYER routing: when set
+    ({lane: MERT layer}), forward expects `x` to be a `{layer: tensor}` dict and
+    feeds each head ONLY its assigned layer's features (the per-lane layer sweep
+    found different lanes peak at different MERT depths). When None, `x` is a single
+    tensor shared by every head (the default single-layer path). The heads are
+    identical either way -- only WHICH feature tensor each one reads changes -- so a
+    per-lane-layer checkpoint and a single-layer one have the same weight shapes."""
 
     def __init__(
         self,
@@ -111,23 +119,35 @@ class MultiLaneHeads(nn.Module):
         num_layers: int = 2,
         lane_names: tuple[str, ...] = LANES,
         auto_calibrate: bool = True,
+        lane_layers: dict[str, int] | None = None,
     ):
         super().__init__()
         self.lane_names = tuple(lane_names)
+        self.lane_layers = dict(lane_layers) if lane_layers else None
         self.heads = nn.ModuleDict(
             {lane: OnsetHead(in_dim, hidden, num_layers, auto_calibrate) for lane in self.lane_names}
         )
 
-    def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None,
+    def _x_for(self, x, lane: str) -> torch.Tensor:
+        """This lane's head input: when `x` is a {layer: tensor} dict (per-lane-layer
+        routing), the tensor for the lane's assigned layer; when `x` is a single
+        tensor, `x` itself (every head shares it -- the single-layer path)."""
+        if isinstance(x, dict):
+            assert self.lane_layers is not None, "dict features need lane_layers (per-lane routing)"
+            return x[self.lane_layers[lane]]
+        return x
+
+    def forward(self, x, mask: torch.Tensor | None = None,
                 pack: bool = False) -> torch.Tensor:
-        outs = [self.heads[lane](x, mask, pack) for lane in self.lane_names]
+        outs = [self.heads[lane](self._x_for(x, lane), mask, pack) for lane in self.lane_names]
         return torch.stack(outs, dim=1)
 
-    def forward_all(self, x: torch.Tensor, mask: torch.Tensor | None = None
+    def forward_all(self, x, mask: torch.Tensor | None = None
                     ) -> tuple[torch.Tensor, torch.Tensor]:
         """(onset logits (B, n_lanes, T), activity logits (B, n_lanes, T)). `mask`
-        (B, T; True = real frame) bounds each head's per-clip calibration pool."""
-        pairs = [self.heads[lane].forward_all(x, mask) for lane in self.lane_names]
+        (B, T; True = real frame) bounds each head's per-clip calibration pool.
+        `x` is a single tensor (single-layer) or a {layer: tensor} dict (per-lane)."""
+        pairs = [self.heads[lane].forward_all(self._x_for(x, lane), mask) for lane in self.lane_names]
         return torch.stack([p[0] for p in pairs], dim=1), torch.stack([p[1] for p in pairs], dim=1)
 
 
