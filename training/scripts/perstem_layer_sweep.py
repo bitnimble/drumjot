@@ -180,6 +180,11 @@ def main():
                         per_lane[ln].append(f1[ln])
             for ln, v in per_lane.items():
                 results[li][ln].append(sum(v) / len(v))
+            # report THIS fit immediately (incremental visibility while the sweep runs;
+            # the per-layer summary + full matrix still print later). One line per (layer, seed).
+            fit = " ".join(f"{ln}={sum(per_lane[ln]) / len(per_lane[ln]):.2f}"
+                           for ln in cfg.lanes if per_lane.get(ln))
+            print(f"  L{li:2d} seed{seed}: {fit}", flush=True)
             del model
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
