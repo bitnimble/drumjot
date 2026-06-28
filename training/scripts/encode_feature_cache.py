@@ -213,8 +213,12 @@ def main():
                     help="low-energy cut nudge radius (must match training)")
     ap.add_argument("--cache-dtype", choices=("float16", "float32"), default="float16")
     ap.add_argument("--workers", type=int, default=6,
-                    help="parallel loader threads (overlap NFS audio reads with the GPU; raise if "
-                    "the GPU is still I/O-starved, lower if NFS/RAM is the limit)")
+                    help="ENCODE-phase loader threads that prefetch audio for the GPU. Encoding is "
+                    "GPU-bound, so ~6-8 saturates the prefetch; much higher just adds RAM + GIL "
+                    "contention on the GPU thread (no speedup). For the planning knob see --plan-workers.")
+    ap.add_argument("--plan-workers", type=int, default=None,
+                    help="PLANNING-phase threads (pure NFS I/O, no GPU) -- safe to raise to ~core "
+                    "count to saturate the link. Default: = --workers.")
     ap.add_argument("--writers", type=int, default=4, help="background .npy writer threads")
     ap.add_argument("--no-pipeline", action="store_true",
                     help="use the simple serial materialize instead of the load-once/prefetch "
@@ -263,8 +267,9 @@ def main():
 
     # FULL windowing (max_windows=0) for BOTH splits -- exactly what train.main() now does.
     win = args.max_seconds or 30.0
-    tr_w = train._window_specs(train_specs, win, args.window_search, 0, plan_cache_dir=cache, workers=args.workers)
-    va_w = train._window_specs(val_specs, win, args.window_search, 0, plan_cache_dir=cache, workers=args.workers)
+    plan_workers = args.plan_workers if args.plan_workers is not None else args.workers
+    tr_w = train._window_specs(train_specs, win, args.window_search, 0, plan_cache_dir=cache, workers=plan_workers)
+    va_w = train._window_specs(val_specs, win, args.window_search, 0, plan_cache_dir=cache, workers=plan_workers)
     print(f"\nfull windowing: {len(train_specs)} train clips -> {len(tr_w)} windows | "
           f"{len(val_specs)} val clips -> {len(va_w)} windows", flush=True)
     print(f"cache dir: {cache}  (resumable: already-cached windows are skipped)\n", flush=True)
