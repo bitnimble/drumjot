@@ -2,7 +2,7 @@ import { makeAutoObservable } from 'mobx';
 import { computedFn } from 'mobx-utils';
 import { Instrument } from 'src/schema/dsl/dsl';
 import { defaultMixerSortKey } from 'src/instruments/mixer_order';
-import type { StructuralPresenter } from 'src/editing/structure/structural_presenter';
+import type { MutableJot } from 'src/schema/schema';
 import { AudioTrackFilter, AudioTrackId, isAudioTrackAudibleUnder } from 'src/editing/playback/audio_tracks';
 import { isAudibleUnder, PlayerFilter } from 'src/editing/playback/player';
 import {
@@ -32,13 +32,13 @@ export function clampVolume(v: number): number {
  * mixer-order reaction that wraps this doesn't re-evaluate on every wheel
  * tick; lane identity is a function of the source DSL, not the layout.
  */
-export function collectJotLanes(structural: StructuralPresenter | undefined): string[] {
-  if (!structural) return [];
-  // `structural.lanes` is the `computed.struct` lane set (lanes that carry a
-  // note), so this, and the mixer-order reaction wrapping it, is stable across
-  // an in-lane note edit; only a lane appearing/disappearing perturbs it.
-  const instrumentFor = (lane: string): Instrument => structural.instrumentFor(lane);
-  const out = [...structural.lanes];
+export function collectJotLanes(jot: MutableJot | undefined): string[] {
+  if (!jot) return [];
+  // `jot.lanes` is the `computed.struct` lane set (lanes that carry a note), so
+  // this, and the mixer-order reaction wrapping it, is stable across an in-lane
+  // note edit; only a lane appearing/disappearing perturbs it.
+  const instrumentFor = (lane: string): Instrument => jot.instrumentFor(lane);
+  const out = [...jot.lanes];
   out.sort((a, b) => {
     const ka = defaultMixerSortKey(a, instrumentFor(a));
     const kb = defaultMixerSortKey(b, instrumentFor(b));
@@ -181,7 +181,7 @@ export class MixerStore implements MixerContext {
    * track a single MobX-memoised computed rather than re-walking the jot.
    */
   get jotLanes(): readonly string[] {
-    return collectJotLanes(this.jotEditorStore.structural);
+    return collectJotLanes(this.jotEditorStore.jot);
   }
 
   /**

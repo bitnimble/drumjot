@@ -206,7 +206,8 @@ function buildJotPeers(
     palette,
     layoutStore,
     () => mutable,
-    viewConfig
+    viewConfig,
+    registry
   );
   const tempo = new TempoPresenter(structural, registry);
   return { doc, structural, palette, tempo };

@@ -335,6 +335,22 @@ export const JotSchema = record({
   tempoTimeline: derived(Derived.tempoTimeline),
   /** Dominant bpm + time signature; implemented by `TempoPresenter`. */
   dominantBpmAndTime: derived(Derived.dominantBpmAndTime),
+  /** Ordered lane list; implemented by `StructuralPresenter`. */
+  lanes: derived(Derived.lanes),
+  /** Rendered structural layers; implemented by `StructuralPresenter`. */
+  musicalLayers: derived(Derived.musicalLayers),
+  /** Per-lane row data (keyed); implemented by `StructuralPresenter`. */
+  barsForLane: derived(Derived.barsForLane),
+  /** Tempo projection for the tempo maths; implemented by `StructuralPresenter`. */
+  tempoSource: derived(Derived.tempoSource),
+  /** Per-bar performance drift; implemented by `StructuralPresenter`. */
+  barDrift: derived(Derived.barDrift),
+  /** Lane → instrument (keyed); implemented by `StructuralPresenter`. */
+  instrumentFor: derived(Derived.instrumentFor),
+  /** Owning layer id for a lane (keyed); implemented by `StructuralPresenter`. */
+  ownerLayerFor: derived(Derived.ownerLayerFor),
+  /** Rendered structural layers (with virtual lead-in); implemented by `StructuralPresenter`. */
+  renderedLayers: derived(Derived.renderedLayers),
 });
 
 // ---------- Consumer types ----------
