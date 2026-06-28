@@ -129,7 +129,11 @@ def build_note_provenance(
             tick_time = quantised_time if quantised_time is not None else float(c.time)
             if kept and in_range and midi_note is not None:
                 b = structure.bars[bar]
-                local = max(0.0, float(tick_time) - float(b.start_time))
+                # MUST mirror `onsets_to_midi_bytes` exactly (drift excluded
+                # from the note tick; it rides separately in barDrift), else the
+                # frontend's `(tick, pitch)` provenance lookup misses every note.
+                real_start = float(b.start_time) + float(getattr(b, "drift_sec", 0.0))
+                local = max(0.0, float(tick_time) - real_start)
                 tick = bar_start_tick[bar] + int(round(
                     local * TICKS_PER_BEAT * midi_tempos[bar] / 60.0
                 ))

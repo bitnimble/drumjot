@@ -8,8 +8,8 @@ import { MIN_BEAT_WIDTH, positionLyricLines } from '../lyric_layout';
 const TIMELINE: JotTimeline = {
   totalDurationSec: 4,
   bars: [
-    { startSec: 0, durationSec: 2 },
-    { startSec: 2, durationSec: 2 },
+    { startSec: 0, durationSec: 2, driftSec: 0 },
+    { startSec: 2, durationSec: 2, driftSec: 0 },
   ],
   tempos: [],
   rendered: undefined,

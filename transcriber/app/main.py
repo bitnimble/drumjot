@@ -1675,6 +1675,20 @@ def _build_debug_zip_if_possible(
                 log.warning(
                     "debug_bundle: could not read %s: %s", candidate, exc
                 )
+    # The transcription container (tempoMap) follows the same fresh-run /
+    # resume-scavenge pattern as note_provenance: written during transcribe,
+    # read back from the resume folder when that stage was skipped.
+    transcription: dict[str, object] | None = ctx.transcription
+    if transcription is None and ctx.audio_path.parent.name:
+        candidate = ctx.audio_path.parent / "transcription.json"
+        if candidate.is_file():
+            try:
+                import json as _json
+                transcription = _json.loads(candidate.read_text())
+            except (OSError, ValueError) as exc:
+                log.warning(
+                    "debug_bundle: could not read %s: %s", candidate, exc
+                )
     try:
         build_debug_zip(
             output_sink=output_sink,
@@ -1683,6 +1697,7 @@ def _build_debug_zip_if_possible(
             metadata=metadata,
             predicted_midi=predicted_midi,
             note_provenance=note_provenance,
+            transcription=transcription,
             per_instrument_stem_pitches=list(ctx.per_instrument_stems.keys()),
             run_log=run_log,
         )

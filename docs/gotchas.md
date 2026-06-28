@@ -48,12 +48,29 @@ project, not history.
   adding a new scheduling path must push their stop fns onto
   `this.scheduledStops` for Stop to remain truthful.
 
-- **The playback module assumes one global BPM.** The timeline anchors to
-  `globalMetadata.bpm` because `toMidi` only emits one `setTempo` at tick
-  0, per-bar `{{ bpm }}` overrides aren't carried into the MIDI bytes
-  that drive playback. If MIDI export ever emits multiple tempo events,
-  `playback/events.ts` and `playback/timeline.ts` need updating in
-  lockstep.
+- **Tempo is a per-bar event stream, not one global BPM.** The timeline
+  (`playback/timeline.ts`) and event scheduler (`playback/events.ts`) read
+  `jot.tempoEvents` (sticky changes + ramps, including the song's initial
+  tempo as the event at the drums-enter downbeat); there is no
+  `globalMetadata.bpm`. `toMidi` emits the matching `set_tempo` events
+  (stepwise, ramp-aware). Anything that needs "the" BPM must walk the event
+  list (`tempo.initialBpm` / `dominantBpm`), not read a single field.
+
+- **Drift lives on the grid, applied once per consumer.** The transcriber
+  smooths per-bar performance drift OUT of the displayed tempo map and ships
+  it separately (`transcription.json` `barDrift` → `jot.barDrift`). Consumers
+  re-apply it and MUST agree on the same per-bar media span,
+  `[startSec+drift, nextStartSec+nextDrift) − songLeadIn`: the waveform
+  stretch (`waveform_compute.ts`), the playback `DriftMap` (`drift_map.ts`,
+  driving playhead/synth/seek), the minimap, and, by *exclusion*, the note
+  ticks. The MIDI note offset is emitted relative to the bar's REAL downbeat
+  (`onsets_midi.py` / `note_provenance.py` subtract `drift_sec`), so the
+  editor adds drift via the grid and the note keeps only its sub-grid
+  micro-timing. Baking drift into BOTH the grid and the note double-counts
+  it. Touch one, audit all of them. (`note_provenance.py`'s tick MUST stay
+  byte-identical to `onsets_midi.py`'s, or the `(tick, pitch)` provenance
+  lookup misses.) Metronomic recordings have all-zero drift, so every path
+  collapses to the flat `jot − songLeadIn` and is unaffected.
 
 - **smplr's TR-808 group names are non-obvious**: `hihat-close` (no
   trailing `d`), `mid-tom` (not `tom-mid`), no separate `ride` group

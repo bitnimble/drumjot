@@ -135,6 +135,10 @@ export const Minimap = observer(
       width: bars[i]?.width ?? 0,
       startSec: t.startSec,
       durationSec: t.durationSec,
+      // Apply the same per-bar drift stretch as the main track (sub-pixel at
+      // minimap scale, but keeps every waveform renderer in agreement).
+      driftSec: t.driftSec,
+      nextDriftSec: timeline.bars[i + 1]?.driftSec ?? t.driftSec,
     }));
     let cancelled = false;
     Promise.all(

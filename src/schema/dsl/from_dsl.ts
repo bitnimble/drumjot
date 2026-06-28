@@ -13,7 +13,6 @@
  */
 import type { Element as DslElement, Jot as DslJot, Metadata, TimeSignature } from 'src/schema/dsl/dsl';
 import { elementWeight, sumWeights } from 'src/schema/dsl/element_metrics';
-import { initialBpm } from 'src/schema/dsl/tempo';
 import { ACCENT_VELOCITY, GHOST_VELOCITY, VOLUME_TO_VELOCITY } from 'src/dynamics/dynamics';
 import type { Init } from '../descriptors';
 import { createMutableJot, JotSchema } from '../schema';
@@ -325,11 +324,11 @@ export function dslToInit(jot: DslJot): Init<typeof JotSchema> {
 
   return omitUndef({
     title: jot.title,
-    bpm: initialBpm(jot),
     songLeadIn: gm.songLeadIn,
     leadBars: gm.leadBars,
     gridDivision: gm.gridDivision,
     globalMetadataJson: residualMetadataJson(gm),
+    barDriftJson: jot.barDrift ? JSON.stringify(jot.barDrift) : undefined,
     layers,
     tracks: trackBuilder.tracks,
     trackGroups: {},

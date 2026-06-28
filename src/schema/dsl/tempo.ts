@@ -2,8 +2,10 @@
  * Tempo resolution helpers shared by every consumer that needs to map a
  * jot's bar/beat positions to wall-clock time.
  *
- * The single runtime source of truth for tempo is `Jot.tempoEvents`. The
- * pre-first-event span uses `Jot.globalMetadata.bpm` (else 120). Inline
+ * The single source of truth for tempo is `Jot.tempoEvents`, including the
+ * initial tempo, which is just the event anchored at the song's start
+ * (the drums-enter downbeat). There is no `globalMetadata.bpm`; the span
+ * before the first event defaults to 120 (see {@link initialBpm}). Inline
  * `{{bpm}}` blocks and `{bpm}` modifiers on notes/groups get hoisted into
  * `tempoEvents` by the parser; other producers (from_midi, the rlrr parser)
  * populate `tempoEvents` directly. No runtime path reads
@@ -32,7 +34,7 @@ export const DEFAULT_BPM = 120;
  */
 export type TempoJot = {
   tempoEvents?: readonly TempoEvent[];
-  globalMetadata: { bpm?: number | BpmTransition };
+  globalMetadata: { leadBars?: number };
 };
 
 /**
@@ -54,11 +56,30 @@ export function resolveBpm(
 }
 
 /**
- * The initial tempo before any `tempoEvents` fire. Equals
- * `globalMetadata.bpm` if set, else `DEFAULT_BPM`.
+ * The tempo in force at the very start of the song, equivalently, the
+ * "first BPM in the song". Tempo lives entirely in `jot.tempoEvents`; the
+ * initial tempo is just the event anchored at the song's start (the
+ * drums-enter downbeat, i.e. bar `leadBars`). There is no
+ * `globalMetadata.bpm` any more.
+ *
+ * The first event counts as the explicit initial only when it sits at-or-
+ * before that start anchor; an event that first fires mid-song means the
+ * song plays at `DEFAULT_BPM` until then. Seeding `buildBarTempos` /
+ * `tempoAt` with this value also makes the pre-drum lead-in bars inherit
+ * the song's opening tempo (the first event extrapolated backward).
+ *
+ * For the tempo the song spends the *most* time at (the header's headline
+ * number), use `pickDominantBpmAndTime` instead.
  */
 export function initialBpm(jot: TempoJot): number {
-  return resolveBpm(jot.globalMetadata.bpm, DEFAULT_BPM);
+  const events = sortedEvents(jot);
+  if (events.length === 0) return DEFAULT_BPM;
+  const leadBars = jot.globalMetadata.leadBars ?? 0;
+  const first = events[0];
+  if (first.barIndex <= leadBars && first.beat <= 0) {
+    return resolveBpm(first.bpm, DEFAULT_BPM);
+  }
+  return DEFAULT_BPM;
 }
 
 /**

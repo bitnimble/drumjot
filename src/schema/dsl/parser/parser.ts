@@ -28,10 +28,10 @@ import { preprocessMacros } from './preprocess';
  *   1. Macro preprocessing (textual `[$name=...]` / `[$name]` substitution).
  *   2. Recursive-descent parse of the resulting text into a Jot.
  *   3. Hoist every `bpm` declaration (global, bar-opening, mid-bar, group,
- *      note) into `jot.tempoEvents`; strip `bpm` from element/bar
- *      metadata. After this step `jot.tempoEvents` is the single
- *      runtime source of truth for tempo and no `metadata.bpm` survives
- *      anywhere except `jot.globalMetadata.bpm` (the initial tempo).
+ *      note) into `jot.tempoEvents`; strip `bpm` from all metadata
+ *      (including `globalMetadata`). After this step `jot.tempoEvents` is
+ *      the single source of truth for tempo, the initial tempo is its
+ *      first event, and no `metadata.bpm` survives anywhere.
  */
 export function parse(src: string): Jot {
   const { text } = preprocessMacros(src);
@@ -64,7 +64,8 @@ type Item =
    * next element pushed into the current bar (its index in
    * `bar.elements`). Markers seen before the first `|` (anacrusis
    * section) are dropped; the global / bar-opening tempo path already
-   * carries those via `globalMetadata.bpm` and the `barActive` snapshot.
+   * carries those via the bar-0 opening bpm (hoisted to the first
+   * tempoEvent) and the `barActive` snapshot.
    */
   | { kind: 'tempoMarker'; bpm: number | BpmTransition };
 

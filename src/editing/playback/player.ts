@@ -52,7 +52,8 @@ import {
   preloadStretch,
 } from './audio_tracks';
 import { stretchInitFailure } from './stretch_node';
-import { EMPTY_TIMELINE, JotTimeline } from './timeline';
+import { buildDriftMap, DriftMap } from './drift_map';
+import { BarTiming, EMPTY_TIMELINE, JotTimeline } from './timeline';
 import { waveformWorker } from './waveform_worker_client';
 
 export type PlayerState = 'idle' | 'loading' | 'playing' | 'paused';
@@ -211,6 +212,19 @@ const POST_LOAD_SETTLE_SECONDS = 0.2;
 export const PLAYBACK_SPEED_MIN = 0.25;
 export const PLAYBACK_SPEED_MAX = 2.0;
 export const PLAYBACK_SPEED_STEP = 0.25;
+
+// Memoise the drift map on the timeline's bars-array identity (a fresh ref per
+// `buildTimeline`) so `JotPlayer.driftMap` can stay a pure computed yet rebuild
+// only when the timeline or audio alignment actually changes, the rAF read
+// path hits this WeakMap, not `buildDriftMap`'s per-call allocations.
+const _driftMapByBars = new WeakMap<readonly BarTiming[], { songLeadIn: number; map: DriftMap }>();
+function driftMapFor(bars: readonly BarTiming[], songLeadIn: number): DriftMap {
+  const hit = _driftMapByBars.get(bars);
+  if (hit && hit.songLeadIn === songLeadIn) return hit.map;
+  const map = buildDriftMap(bars, songLeadIn);
+  _driftMapByBars.set(bars, { songLeadIn, map });
+  return map;
+}
 
 // `audioLatencyMs` bounds. Narrow enough that a stray keypress cannot
 // park the playhead seconds away from the audio.
@@ -967,7 +981,7 @@ export class JotPlayer {
         now,
         jotOffset,
         this.playbackSpeed,
-        this.songLeadInSec,
+        this.driftMap,
         (sid) => audioTrackGainUnder(sid, this.currentAudioTrackFilter)
       );
     }
@@ -1063,7 +1077,7 @@ export class JotPlayer {
       clamped,
       now,
       jotOffset,
-      this.songLeadInSec,
+      this.driftMap,
       (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter),
     );
     this.scheduleTailTimer(lastTime);
@@ -1097,7 +1111,7 @@ export class JotPlayer {
       now,
       jotOffset,
       this.playbackSpeed,
-      this.songLeadInSec,
+      this.driftMap,
       (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter)
     );
     // The auto-stop fires when the latest of (last drum event, last
@@ -1143,7 +1157,24 @@ export class JotPlayer {
    * account.
    */
   currentJotTime(audioTime: number): number {
-    return this.startJotTime + (audioTime - this.startContextTime) * this.playbackSpeed;
+    // Media (recorded-audio) time advances linearly with the AudioContext
+    // clock at `playbackSpeed`; jot time does NOT when the recording drifts,
+    // so map media → jot through the drift map. With no drift the two closures
+    // cancel and this is exactly `startJotTime + elapsed * speed` as before.
+    const map = this.driftMap;
+    const elapsedMedia = (audioTime - this.startContextTime) * this.playbackSpeed;
+    return map.mediaToJot(map.jotToMedia(this.startJotTime) + elapsedMedia);
+  }
+
+  /**
+   * Drift-aware jot ↔ media conversion for the current timeline + live audio
+   * alignment. A pure computed (no observable writes); the rebuild is memoised
+   * by {@link driftMapFor} on the bars-array ref (fresh per `buildTimeline`) +
+   * `songLeadInSec`, so `currentJotTime` reading it every rAF stays
+   * allocation-free even though, off-reaction, MobX doesn't cache the computed.
+   */
+  private get driftMap(): DriftMap {
+    return driftMapFor(this.timeline.bars, this.songLeadInSec);
   }
 
   /**
@@ -1206,7 +1237,7 @@ export class JotPlayer {
         now,
         target,
         this.playbackSpeed,
-        this.songLeadInSec,
+        this.driftMap,
         (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter)
       );
     }
@@ -1288,7 +1319,7 @@ export class JotPlayer {
         audioStartTime,
         anchorJot,
         this.playbackSpeed,
-        this.songLeadInSec,
+        this.driftMap,
         (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter)
       );
       // The stretch worklet preloads on first audio-track load; if it
@@ -1372,7 +1403,7 @@ export class JotPlayer {
         now,
         jotOffset,
         this.playbackSpeed,
-        this.songLeadInSec,
+        this.driftMap,
         (id) => audioTrackGainUnder(id, this.currentAudioTrackFilter)
       );
     }
@@ -1453,7 +1484,7 @@ export class JotPlayer {
     // start sits before the audio's own t=0 (playhead in the pre-roll / virtual
     // lead-in). Omitting the delay would under-count the tail and auto-stop
     // could fire before the audio finishes.
-    const rawInput = this.startJotTime - this.songLeadInSec;
+    const rawInput = this.driftMap.jotToMedia(this.startJotTime);
     const mediaOffset = Math.max(0, rawInput);
     const speed = this.playbackSpeed;
     const leadInDelaySec = rawInput < 0 ? -rawInput / speed : 0;
@@ -1498,6 +1529,11 @@ export class JotPlayer {
     // float drift) into a hard error abort.
     let silentlySkipped = 0;
     const speed = this.playbackSpeed;
+    // Schedule against MEDIA time so notes line up with the recording through
+    // any per-bar drift. No drift → `jotToMedia` is `jot - songLeadIn` and the
+    // delta below collapses to `ev.time - fromOffset` (the old formula).
+    const map = this.driftMap;
+    const fromMedia = map.jotToMedia(fromOffset);
 
     for (const ev of this.events) {
       if (ev.time < fromOffset) {
@@ -1525,7 +1561,7 @@ export class JotPlayer {
       const defaultGain = DEFAULT_PITCH_GAIN[ev.lane] ?? 1;
       const floored = Math.max(MIN_PLAYBACK_VELOCITY, Math.round(ev.velocity * defaultGain));
       const velocity = Math.max(1, Math.min(127, Math.round(floored * vol)));
-      const t = audioStartTime + (ev.time - fromOffset) / speed;
+      const t = audioStartTime + (map.jotToMedia(ev.time) - fromMedia) / speed;
       const stopFn = drums.start({ note: ev.midiNote, time: t, velocity });
       this.scheduledStops.push(stopFn);
       scheduled++;

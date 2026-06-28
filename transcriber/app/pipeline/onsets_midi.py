@@ -150,34 +150,20 @@ def onsets_to_midi_bytes(
             compute_bar_tick_grid(structure, initial_tempo_bpm)
         )
 
-        # Tick-0 set_tempo at the song-level baseline. The per-bar
-        # set_tempo loop below then re-emits each bar's actual tempo at
-        # its start tick, so a DAW reading the full tempo map still gets
-        # exact per-bar audio durations.
+        # Tick-0 set_tempo at the song-level baseline (covers the empty
+        # lead-in before bar 0). The per-beat loop below re-emits the
+        # actual tempo from bar 0's downbeat on.
         lead_micros = int(round(60_000_000 / max(lead_tempo, 1e-6)))
         timeline.append((0, 0, 0, mido.MetaMessage(
             "set_tempo", tempo=lead_micros, time=0)))
-        prev_micros: int | None = lead_micros
+
+        # Per-bar time-signature meta (bar 0's at tick 0 so the lead-in has
+        # a meter; later changes ride the bar start tick).
         prev_ts: tuple[int, int] | None = None
         for i, b in enumerate(bars):
-            st = bar_start_tick[i]
-            # Per-bar tempo at the bar's start tick (not tick 0). The
-            # lead-in already has its own set_tempo above; emitting
-            # bar 0's tempo here means a DAW gets exact per-bar audio
-            # durations while a "first-tempo-only" player keeps using
-            # the song-level lead_tempo (the right behaviour for a
-            # constant-tempo recording).
-            micros = int(round(60_000_000 / max(midi_tempos[i], 1e-6)))
-            if micros != prev_micros:
-                timeline.append((st, 0, 0, mido.MetaMessage(
-                    "set_tempo", tempo=micros, time=0)))
-                prev_micros = micros
             ts = (int(b.time_signature[0]), int(b.time_signature[1]))
             if ts != prev_ts:
-                # TS for bar 0 still goes at tick 0 so the DAW knows the
-                # meter for the lead-in; later TS changes ride the bar
-                # start tick like the set_tempo events.
-                ts_tick = 0 if i == 0 else st
+                ts_tick = 0 if i == 0 else bar_start_tick[i]
                 timeline.append((ts_tick, 0, 0, mido.MetaMessage(
                     "time_signature",
                     numerator=ts[0],
@@ -185,6 +171,24 @@ def onsets_to_midi_bytes(
                     time=0,
                 )))
                 prev_ts = ts
+
+        # Per-beat set_tempo so a linear-in-time ramp survives the MIDI as a
+        # stepwise tempo track `src/midi/from_midi.ts::detectRampRuns` can
+        # reconstruct (it needs >= RAMP_MIN_POINTS monotonic steps); a
+        # constant song dedups to a single event. The per-beat quarter-note
+        # tempo comes from the regularized beat gaps (meter-aware via
+        # `4/den`), so it integrates to the same bar-boundary times as the
+        # per-bar `midi_tempos` the onsets are still placed against: the two
+        # maps agree at every bar line and differ only intra-bar inside a
+        # ramp. That residual is the best-effort MIDI tier; the exact ramp
+        # rides the `transcription.json` sidecar on the happy path.
+        prev_micros: int | None = lead_micros
+        for _beat_index, tick, bpm in _beat_tempo_points(structure, bar_start_tick):
+            micros = int(round(60_000_000 / max(bpm, 1e-6)))
+            if micros != prev_micros:
+                timeline.append((tick, 0, 0, mido.MetaMessage(
+                    "set_tempo", tempo=micros, time=0)))
+                prev_micros = micros
 
         skipped = 0
         for pitch, cands in onsets_by_pitch.items():
@@ -204,7 +208,14 @@ def onsets_to_midi_bytes(
                 # hit for provenance. Prefer it when present.
                 q = getattr(c, "quantised_time", None)
                 t = float(q if q is not None else (getattr(c, "time", 0.0) or 0.0))
-                local = max(0.0, t - float(b.start_time))
+                # Place the note relative to the bar's REAL recorded downbeat
+                # (regularised grid start + drift), not the bare grid start, so
+                # the note tick carries only its sub-grid micro-timing. The
+                # per-bar drift travels separately (transcription.json barDrift)
+                # and the editor re-applies it to the whole bar via its DriftMap;
+                # baking drift into the note here too would double-count it.
+                real_start = float(b.start_time) + float(getattr(b, "drift_sec", 0.0))
+                local = max(0.0, t - real_start)
                 tick = bar_start_tick[bar] + int(round(
                     local * TICKS_PER_BEAT * midi_tempos[bar] / 60.0
                 ))
@@ -336,11 +347,19 @@ def _bar_duration_tempo_bpm(bars: list[Any], i: int) -> float:
     duration.
 
     Duration is taken from `bars[i+1].start_time - bars[i].start_time`
-    when a next bar exists (the most reliable signal — directly anchored
+    when a next bar exists (the most reliable signal, directly anchored
     to the next downbeat), else from `bar.end_time - start_time`, else
     a final fallback to `bar.tempo_bpm` so structures without `end_time`
     (e.g. duck-typed test bars) degrade gracefully rather than dividing
     by zero.
+
+    For a constant-tempo song this reads one flat BPM across every bar
+    even though the value is span-derived: `beats._finalize_bar_tempos`
+    has already regularized the beat grid to a uniform pulse upstream
+    (every bar spans the same number of identical-length beats), so the
+    DBN's per-bar frame-quantization jitter, the source of the old
+    2-3 BPM `{{ bpm }}` churn in the editor, is gone before we get here.
+    Genuine tempo changes keep their per-bar spans and so their contour.
     """
     b = bars[i]
     start = float(getattr(b, "start_time", 0.0))
@@ -359,6 +378,116 @@ def _bar_duration_tempo_bpm(bars: list[Any], i: int) -> float:
     den = int(b.time_signature[1])
     quarter_notes = num * 4.0 / max(den, 1)
     return quarter_notes * 60.0 / dur
+
+
+def _beat_tempo_points(
+    structure: Any, bar_start_tick: list[int]
+) -> list[tuple[int, int, float]]:
+    """`(beat_index, tick, quarter_note_bpm)` for every in-range beat, in
+    tick-ascending order.
+
+    The tempo is the local quarter-note rate implied by the regularized
+    gap to the next beat (`(4/den) · 60 / gap`), so it's correct under
+    compound meters and integrates, bar by bar, to the same boundary times
+    as `compute_bar_tick_grid`'s per-bar `midi_tempos`. Feeding these as
+    stepwise `set_tempo` events lets a linear-in-time ramp survive the MIDI
+    (a metronomic song collapses to one event after the caller's dedup),
+    which `src/midi/from_midi.ts::detectRampRuns` reconstructs into a
+    `BpmTransition` when no `transcription.json` sidecar is present.
+    `build_tempo_map` reuses the same `(tick, bpm)` per beat so the sidecar
+    and the MIDI agree exactly.
+
+    Each beat's tick is its musical position on the bar grid
+    (`bar_start_tick[bar] + (beat_in_bar - 1) · beat_ticks`), independent
+    of the (jitter-free) regularized time; only the tempo varies.
+    """
+    bars = getattr(structure, "bars", None) or []
+    beats = getattr(structure, "beats", None) or []
+    n = len(beats)
+    points: list[tuple[int, int, float]] = []
+    for k, beat in enumerate(beats):
+        bar = int(getattr(beat, "bar_index", -1))
+        if bar < 0 or bar >= len(bars) or bar >= len(bar_start_tick):
+            continue
+        den = int(bars[bar].time_signature[1])
+        beat_ticks = TICKS_PER_BEAT * 4 // max(den, 1)
+        tick = bar_start_tick[bar] + (int(beat.beat_in_bar) - 1) * beat_ticks
+        if k + 1 < n:
+            gap = float(beats[k + 1].time) - float(beat.time)
+        elif k > 0:
+            gap = float(beat.time) - float(beats[k - 1].time)
+        else:
+            gap = 0.5
+        if gap <= 0:
+            continue
+        bpm = (4.0 / max(den, 1)) * 60.0 / gap
+        points.append((k, tick, bpm))
+    return points
+
+
+def build_tempo_map(structure: Any) -> dict[str, Any]:
+    """Tick-based tempo map for the `transcription.json` sidecar.
+
+    Projects `structure.tempo_segments` onto the same musical tick grid +
+    quarter-note tempi the MIDI uses (via `_beat_tempo_points`), so the
+    high-fidelity sidecar and the best-effort MIDI agree exactly. Returns::
+
+        {
+          "initial_bpm": <float>,                 # tempo before any event
+          "events": [
+            {"tick": <int>, "bpm": <float>},                       # step
+            {"tick": <int>,                                        # ramp
+             "bpm": {"start": <float>, "end": <float>, "end_tick": <int>},
+             "shape": "linear"},
+          ],
+        }
+
+    A constant song yields just `initial_bpm` and no events (the frontend
+    then emits one `globalMetadata.bpm` and zero `tempoEvents`). A ramp
+    segment becomes one linear `BpmTransition`-shaped event; a later
+    constant segment a step. Ticks are in `prediction.mid`'s PPQ so the
+    frontend reuses its existing tick→(bar, beat) anchoring.
+    """
+    bars = getattr(structure, "bars", None) or []
+    segments = getattr(structure, "tempo_segments", None) or []
+    initial = float(getattr(structure, "initial_tempo", 120.0) or 120.0)
+    if not bars or not segments:
+        return {"initial_bpm": initial, "events": []}
+
+    bar_start_tick, _mt, _lb, _lt = compute_bar_tick_grid(structure, initial)
+    by_beat = {
+        beat_index: (tick, bpm)
+        for beat_index, tick, bpm in _beat_tempo_points(structure, bar_start_tick)
+    }
+    if not by_beat:
+        return {"initial_bpm": initial, "events": []}
+
+    def at(beat_index: int) -> tuple[int, float] | None:
+        return by_beat.get(beat_index)
+
+    first = at(segments[0].start_beat)
+    initial_bpm = first[1] if first is not None else initial
+    events: list[dict[str, Any]] = []
+    for i, seg in enumerate(segments):
+        start = at(seg.start_beat)
+        if start is None:
+            continue
+        if seg.is_ramp():
+            end = at(seg.end_beat)
+            if end is None or end[0] <= start[0]:
+                continue
+            events.append({
+                "tick": int(start[0]),
+                "bpm": {
+                    "start": round(start[1], 4),
+                    "end": round(end[1], 4),
+                    "end_tick": int(end[0]),
+                },
+                "shape": "linear",
+            })
+        elif i > 0:
+            events.append({"tick": int(start[0]), "bpm": round(start[1], 4)})
+    return {"initial_bpm": round(initial_bpm, 4), "events": events}
 
 
 def _safe_denominator(den: int) -> int:

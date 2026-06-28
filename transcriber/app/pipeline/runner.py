@@ -73,6 +73,7 @@ from app.pipeline.note_provenance import build_note_provenance
 from app.pipeline.onsets_midi import onsets_to_midi_bytes
 from app.pipeline.quantise import quantise_kept_onsets
 from app.pipeline.separate import PITCH_DISPLAY_NAMES, Separator
+from app.pipeline.transcription import build_transcription
 from app.run_log import current_run_log
 
 log = logging.getLogger(__name__)
@@ -263,6 +264,11 @@ class PipelineContext:
     # and rejected) for the UI. Shipped inside the debug bundle as
     # `note_provenance.json`. See `note_provenance.build_note_provenance`.
     note_provenance: dict[str, Any] | None = None
+    # Drumjot-native transcription container (currently the tick-based
+    # tempoMap). Shipped inside the debug bundle as `transcription.json`;
+    # the frontend prefers it over the MIDI tempo track. See
+    # `transcription.build_transcription`.
+    transcription: dict[str, Any] | None = None
     # Set by the HTTP layer when the client disconnects (Stop button).
     # Checked between stages and inside the LLM stage's parallel pool;
     # the current stage cannot be interrupted (native code) but the
@@ -922,9 +928,16 @@ def _do_transcribe(
         reasons_by_pitch=ctx.filter_reasons,
     )
 
+    # Drumjot-native transcription container (currently the tick-based
+    # tempoMap). The high-fidelity tier the frontend prefers over the MIDI
+    # tempo track; built from the same structure the MIDI was rendered from
+    # so the two agree.
+    ctx.transcription = build_transcription(ctx.structure)
+
     if sink is not None:
         sink.write_bytes("prediction.mid", midi_bytes)
         sink.write_json("note_provenance.json", ctx.note_provenance)
+        sink.write_json("transcription.json", ctx.transcription)
 
 
 def _probe_duration(audio_path: Path) -> float:

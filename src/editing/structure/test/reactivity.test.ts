@@ -35,7 +35,6 @@ function peers(model: MutableJot): StructuralPresenter {
 function model(): MutableJot {
   return createMutableJot({
     title: '',
-    bpm: 120,
     bars: [
       { id: 'b1', tsCount: 4, tsUnit: 4 },
       { id: 'b2', tsCount: 4, tsUnit: 4 },

@@ -26,8 +26,9 @@ async function eventBpms(page: Page): Promise<number[]> {
   );
 }
 
-async function initialBpm(page: Page): Promise<number> {
-  return page.evaluate(() => (window as any).drumjot.jotEditorStore.jot.bpm);
+/** Assert a bpm pill showing exactly `bpm` is mounted. */
+async function expectPill(page: Page, bpm: number): Promise<void> {
+  await expect(page.getByTestId('bpm-pill').filter({ hasText: `${bpm} bpm` })).toHaveCount(1);
 }
 
 test('edits an existing bpm pill in place', async ({ page }) => {
@@ -52,7 +53,8 @@ test('clamps an edit to the 20-400 range', async ({ page }) => {
   const input = page.getByTestId('bpm-pill-input');
   await input.fill('9999');
   await input.press('Enter');
-  expect(await initialBpm(page)).toBe(400);
+  // Editing the initial pill upserts the leading tempo event, clamped to 400.
+  await expectPill(page, 400);
 });
 
 test('clearing an event pill deletes the tempo change', async ({ page }) => {
@@ -106,5 +108,5 @@ test('the initial-tempo pill is editable but not deletable', async ({ page }) =>
   const input = page.getByTestId('bpm-pill-input');
   await input.fill('128');
   await input.press('Enter');
-  expect(await initialBpm(page)).toBe(128);
+  await expectPill(page, 128);
 });

@@ -27,11 +27,13 @@ describe('TempoEditPresenter', () => {
     expect(markers[1].globalBeat).toBeGreaterThan(0);
   });
 
-  it('edits the initial tempo in place via the initial pill', () => {
-    const { store, tempo } = load(TWO_BARS_WITH_CHANGE);
+  it('edits the initial tempo via the initial pill, materialising the leading event', () => {
+    const { tempo } = load(TWO_BARS_WITH_CHANGE);
     tempo.commitMarker({ kind: 'initial' }, '160');
-    expect(store.jot!.bpm).toBe(160);
+    // Editing the initial pill upserts the event on the first bar's downbeat,
+    // so it now renders as that (deletable) event at 160.
     expect(tempo.bpmMarkers[0].bpm).toBe(160);
+    expect(tempo.bpmMarkers[0].source.kind).toBe('event');
   });
 
   it('mutates an existing event in place (stable id, not delete+add)', () => {
@@ -44,11 +46,11 @@ describe('TempoEditPresenter', () => {
   });
 
   it('clamps edits to [20, 400] integers', () => {
-    const { store, tempo } = load(TWO_BARS_WITH_CHANGE);
+    const { tempo } = load(TWO_BARS_WITH_CHANGE);
     tempo.commitMarker({ kind: 'initial' }, '5000');
-    expect(store.jot!.bpm).toBe(400);
+    expect(tempo.bpmMarkers[0].bpm).toBe(400);
     tempo.commitMarker({ kind: 'initial' }, '1');
-    expect(store.jot!.bpm).toBe(20);
+    expect(tempo.bpmMarkers[0].bpm).toBe(20);
   });
 
   it('deletes an event when its pill is cleared, but never the initial pill', () => {
@@ -58,9 +60,9 @@ describe('TempoEditPresenter', () => {
     expect(store.jot!.tempoEvents.size).toBe(0);
     expect(tempo.bpmMarkers.map((m) => m.source.kind)).toEqual(['initial']);
 
-    // Clearing the initial pill is a no-op (the base tempo can't be removed).
+    // Clearing the initial placeholder is a no-op (it's the 120 default, no event).
     tempo.commitMarker({ kind: 'initial' }, '');
-    expect(store.jot!.bpm).toBe(120);
+    expect(tempo.bpmMarkers[0].bpm).toBe(120);
   });
 
   it('canDelete is true for events, false for the initial pill', () => {
@@ -93,5 +95,24 @@ describe('TempoEditPresenter', () => {
     const id = tempo.createTempoChangeAtX((leadInBeats + 4) * ppb);
     expect(store.jot!.tempoEvents.size).toBe(before);
     expect(store.jot!.tempoEvents.get(id!)?.bpm).toBe(140);
+  });
+
+  it('handles a jot with a pre-roll: the initial pill IS the drums-enter event', () => {
+    // A transcribed jot with a 1-bar pre-roll anchors its initial tempo at the
+    // drums-enter bar (barIndex == leadBars), NOT bar 0. The presenter must
+    // recognise it as the leading event (one 137 pill), not emit a phantom 120
+    // initial placeholder alongside it, and `initialBpm` must read it (not 120).
+    const { store, tempo } = load(
+      `{{ leadBars: 1, time: "4/4" }}\n| . . . . |\n{{ bpm: 137 }}\n| k s k s |`,
+    );
+    expect(store.structural!.layers[0]!.bars[0]!.index).toBeLessThan(0); // lead-in bar
+    expect(tempo.bpmMarkers.map((m) => ({ bpm: m.bpm, kind: m.source.kind }))).toEqual([
+      { bpm: 137, kind: 'event' },
+    ]);
+
+    // Editing it lands on the drums-enter bar (one event, mutated in place).
+    tempo.commitMarker(tempo.bpmMarkers[0].source, '150');
+    expect(tempo.bpmMarkers[0].bpm).toBe(150);
+    expect(store.jot!.tempoEvents.size).toBe(1);
   });
 });

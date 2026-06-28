@@ -13,7 +13,7 @@ function fakeTimeline(
 ): JotTimeline {
   return {
     totalDurationSec: rows.reduce((acc, r) => Math.max(acc, r.startSec + r.durationSec), 0),
-    bars: rows.map((r) => ({ startSec: r.startSec, durationSec: r.durationSec })),
+    bars: rows.map((r) => ({ startSec: r.startSec, durationSec: r.durationSec, driftSec: 0 })),
     tempos: [],
     rendered: undefined,
   };

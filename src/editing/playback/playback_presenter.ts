@@ -158,7 +158,7 @@ export class PlaybackPresenter implements Resettable {
     // the audio-track waveform tracks the noteheads instead of sliding
     // out from under them. Uses the dominant bpm (the tempo the song
     // spends the most audio time at, excluding lead-in bars) rather
-    // than globalMetadata.bpm, because transcribed bundles store a
+    // than the initial-tempo event, because transcribed bundles store a
     // back-solved lead-in tempo as the first setTempo event and that
     // value can be very different from the song's actual rate. Per-bar
     // tempo variation still leaves a few-ms-per-note residual; same

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { initialBpm } from 'src/schema/dsl/tempo';
 import { parseRlrr } from 'src/schema/rlrr/parser';
 import { RlrrFile } from 'src/schema/rlrr/schema';
 
@@ -37,7 +38,7 @@ describe('parseRlrr lead-in handling', () => {
     );
 
     expect(jot.globalMetadata.songLeadIn).toBeCloseTo(-2.625, 6);
-    expect(jot.globalMetadata.bpm).toBeCloseTo(90.859977722167969, 6);
+    expect(initialBpm(jot)).toBeCloseTo(90.859977722167969, 6);
     // The hit rebases to beat 0 — first slot of bar 0 is the note, not a rest.
     expect(jot.layers[0].bars[0].elements[0].kind).toBe('note');
   });
@@ -54,7 +55,7 @@ describe('parseRlrr lead-in handling', () => {
     );
 
     expect(jot.globalMetadata.songLeadIn).toBeCloseTo(-1.0, 6);
-    expect(jot.globalMetadata.bpm).toBe(174);
+    expect(initialBpm(jot)).toBe(174);
     expect(jot.layers[0].bars[0].elements[0].kind).toBe('note');
   });
 
@@ -65,14 +66,14 @@ describe('parseRlrr lead-in handling', () => {
     const jot = parseRlrr(makeRlrr([{ bpm: 120, time: 0 }], 0.5));
 
     expect(jot.globalMetadata.songLeadIn).toBeCloseTo(-0.5, 6);
-    expect(jot.globalMetadata.bpm).toBe(120);
+    expect(initialBpm(jot)).toBe(120);
   });
 
   it('drum at time 0 yields no lead-in', () => {
     const jot = parseRlrr(makeRlrr([{ bpm: 120, time: 0 }], 0));
 
     expect(jot.globalMetadata.songLeadIn).toBeUndefined();
-    expect(jot.globalMetadata.bpm).toBe(120);
+    expect(initialBpm(jot)).toBe(120);
   });
 
   it('takes songLeadIn from the first drum even when a later bpm event would shift it (pickup-shaped chart)', () => {
@@ -93,6 +94,6 @@ describe('parseRlrr lead-in handling', () => {
     );
 
     expect(jot.globalMetadata.songLeadIn).toBeCloseTo(-0.5, 6);
-    expect(jot.globalMetadata.bpm).toBe(120);
+    expect(initialBpm(jot)).toBe(120);
   });
 });

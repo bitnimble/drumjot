@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { createBlankJot } from 'src/editing/new_jot';
+import { initialBpm } from 'src/schema/dsl/tempo';
 import { JotEditorStore } from 'src/editing/jot_editor_store';
 import { LayersStore } from 'src/editing/layers/layers_store';
 
@@ -20,7 +21,8 @@ describe('createBlankJot', () => {
   it('defaults to 120 bpm, 4/4, a title, and one empty bar', () => {
     const jot = createBlankJot();
     expect(jot.title).toBe('New Jot');
-    expect(jot.globalMetadata.bpm).toBe(120);
+    // No `bpm` field; the initial tempo defaults to 120 via `tempoEvents`.
+    expect(initialBpm(jot)).toBe(120);
     expect(jot.globalMetadata.time).toEqual({ count: 4, unit: 4 });
     expect(jot.layers).toHaveLength(1);
     expect(jot.layers[0].bars).toHaveLength(1);

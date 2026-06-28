@@ -150,10 +150,17 @@ export function parseRlrr(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
 
   // Emit tempo events at each RLRR `bpmEvent` (post-drumsT0 rebase),
   // anchored at (barIndex, beat-within-bar) so mid-bar tempo changes
-  // survive into the runtime tempo timeline. The initial tempo
-  // (segment at startSeconds=0) is already on `globalMetadata.bpm`;
-  // tempoTimeline[1..] are the genuine changes.
+  // survive into the runtime tempo timeline. The initial tempo is the
+  // first event, at the drums-enter downbeat (bar 0, beat 0); there is no
+  // `globalMetadata.bpm` any more. tempoTimeline[1..] are the genuine
+  // later changes.
   const tempoEvents: TempoEvent[] = [];
+  // Materialise the initial tempo as the first event only when it differs
+  // from the 120 default (matching the DSL hoist + from_midi); a default
+  // chart relies on `tempo.initialBpm`'s 120 fallback.
+  if (Math.abs(initialBpm - 120) > 1e-6) {
+    tempoEvents.push({ barIndex: 0, beat: 0, bpm: initialBpm });
+  }
   for (let i = 1; i < tempoTimeline.length; i++) {
     const seg = tempoTimeline[i];
     const barIdx = Math.max(0, Math.floor(seg.startBeats / barBeats));
@@ -199,7 +206,6 @@ export function parseRlrr(rlrr: RlrrFile, options: RlrrToJotOptions = {}): Jot {
   if (rlrr.recordingMetadata) rlrrSidecar.recordingMetadata = rlrr.recordingMetadata;
 
   const globalMetadata: Metadata = {
-    bpm: initialBpm,
     time,
     instrumentMapping,
     rlrr: rlrrSidecar,

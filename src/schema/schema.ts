@@ -287,8 +287,6 @@ export const InstrumentSchema = record({
  */
 export const JotSchema = record({
   title: z.string(),
-  /** Initial/global tempo in force before any per-bar override or event. */
-  bpm: z.number(),
   /** Jot time (seconds, bar-1 = 0) at which the recorded audio begins; the
    *  lead-in alignment (<= 0). `media = jot - songLeadIn`. The derived runtime
    *  anchors live in the `Epochs` record. */
@@ -301,12 +299,18 @@ export const JotSchema = record({
    *  first-class field (artist, a global `vol`, free-text `comment`, the RLRR
    *  provenance sidecar, and any custom keys), stored verbatim as a JSON
    *  string. Seeded once at load from the DSL `globalMetadata` residual (the
-   *  keys left after `bpm`/`time`/`instrumentMapping`/`songLeadIn`/`leadBars`/
+   *  keys left after `time`/`instrumentMapping`/`songLeadIn`/`leadBars`/
    *  `gridDivision`/`title` are lifted to their own fields); read for the
    *  score header's artist/subtitle and re-emitted by the DSL exporter. Kept
    *  opaque because the RLRR sidecar is arbitrarily nested provenance the
    *  editor never structurally edits. */
   globalMetadataJson: z.string().optional(),
+  /** Per-bar performance drift seconds (indexed by `layers[0].bars`, lead-in
+   *  bars = 0), JSON-encoded. Immutable load-time recording-alignment data
+   *  (the deviation the tempo map smooths away); the waveform/playhead re-apply
+   *  it. JSON-stringified like `globalMetadataJson` since it's never
+   *  structurally edited, and dropped on DSL export (recording-specific). */
+  barDriftJson: z.string().optional(),
   /** `||` layers by id; a single-layer jot has one (or none → primary). */
   layers: idMap(LayerSchema),
   /** First-class tracks (instrument / audio / lyrics) by id; a note's home. */

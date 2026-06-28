@@ -41,8 +41,9 @@ describe('appendTranscription', () => {
     expect(s.bars.length).toBe(2);
     expect(lanes(s)).toEqual(['k', 's']);
     expect(layerCount(s)).toBe(1);
-    expect(s.bpm).toBe(140);
-    expect(Object.keys(s.tempoEvents).length).toBe(1);
+    const events = Object.values(s.tempoEvents);
+    expect(events.length).toBe(1);
+    expect((events[0] as { bpm: number }).bpm).toBe(140);
   });
 
   it('appends a new layer, preserving existing notes (same grid)', () => {
@@ -86,7 +87,6 @@ describe('appendTranscription', () => {
 
     expect(result.replacedTempoCount).toBe(1);
     const s = handle.snapshot();
-    expect(s.bpm).toBe(90);
     const events = Object.values(s.tempoEvents);
     expect(events.length).toBe(1);
     expect((events[0] as { bpm: number }).bpm).toBe(90);

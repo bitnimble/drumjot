@@ -2,8 +2,9 @@
  * Time-to-pixel mapping for the playback playhead.
  *
  * Tempo follows `jot.tempoEvents` (sticky tempo changes anchored at
- * `(barIndex, beat)`, mid-bar precision) on top of the initial
- * `globalMetadata.bpm`. Browser playback does NOT go through the MIDI
+ * `(barIndex, beat)`, mid-bar precision), whose first event at the
+ * drums-enter downbeat is the initial tempo (the span before it defaults
+ * to 120; see `tempo.initialBpm`). Browser playback does NOT go through the MIDI
  * bytes; the scheduler in `events.ts` walks the same per-bar tempo
  * segments so the playhead, the audio-track waveform and the scheduled
  * drums all share one clock.
@@ -52,6 +53,9 @@ export interface LaidOutJot {
   /** The barIndex-anchored tempo events + initial bpm, projected live off the
    *  reactive document (no frozen DSL snapshot). Drives the tempo walk. */
   tempoSource: TempoJot;
+  /** Per-bar performance drift seconds (indexed by `layers[0]` bars, lead-in
+   *  = 0); feeds the drift-aware `DriftMap` + waveform stretch. */
+  barDrift: readonly number[];
   pxPerBeat: number;
   config: ViewConfig;
 }
@@ -62,10 +66,10 @@ export interface LaidOutJot {
  * `index`) whose bpm is artificially scaled to fit the audio pre-roll.
  *
  * Used by the subtitle formatter (cosmetic), and by `store.setDrumOffset`
- * to convert a beat-shift delta to the audio-compensation seconds.
- * `globalMetadata.bpm` is the initial tempo (before any tempoEvent
- * fires), which for transcribed bundles is the back-solved lead-in
- * tempo and can differ markedly from the song's playing tempo.
+ * to convert a beat-shift delta to the audio-compensation seconds. This is
+ * distinct from `tempo.initialBpm` (the song-start tempo event), which for
+ * transcribed bundles can differ markedly from the tempo the song spends
+ * the most time at.
  */
 export function pickDominantBpmAndTime(jot: LaidOutJot): {
   dominantBpm: number | undefined;
@@ -119,6 +123,13 @@ export function pickDominantBpmAndTime(jot: LaidOutJot): {
 export type BarTiming = {
   startSec: number;
   durationSec: number;
+  /**
+   * Performance drift at this bar's downbeat (seconds) from `jot.barDrift`:
+   * how far the real recorded downbeat sits past the uniform grid. Feeds the
+   * {@link DriftMap} so the playhead / synth / seek align to the recording.
+   * 0 for a metronomic recording, lead-in, or synthetic bar.
+   */
+  driftSec: number;
 };
 
 export type JotTimeline = {
@@ -163,9 +174,15 @@ export function buildTimeline(rendered: LaidOutJot): JotTimeline {
   // Per-bar tempo segments come from `jot.tempoEvents`. Mid-bar tempo
   // changes are honoured natively: each bar's `durationSec` is the sum
   // of its constant-tempo intra-bar segments.
-  const tempos = buildBarTempos(rendered.tempoSource, toTempoBars(layer.bars));
+  const tempoBars = toTempoBars(layer.bars);
+  const tempos = buildBarTempos(rendered.tempoSource, tempoBars);
   const durations: number[] = new Array(layer.bars.length);
   for (let i = 0; i < layer.bars.length; i++) durations[i] = tempos[i].durationSec;
+
+  // Per-bar drift, indexed against the SOURCE bars (skipping the synthetic
+  // virtual lead-in) exactly like tempo-event anchoring and `buildChunkLayout`,
+  // so the playhead/synth map and the waveform stretch agree bar-for-bar.
+  const barDrift = rendered.barDrift;
 
   // Anchor bar 1 (= the first non-lead-in bar) at jot time 0, so the
   // audio scheduler's "media = jot - songLeadIn" identity lines up the
@@ -190,8 +207,12 @@ export function buildTimeline(rendered: LaidOutJot): JotTimeline {
 
   const bars: BarTiming[] = new Array(layer.bars.length);
   let cursor = -leadOffsetSec;
+  let sourceIdx = 0;
   for (let i = 0; i < layer.bars.length; i++) {
-    bars[i] = { startSec: cursor, durationSec: durations[i] };
+    const synthetic = tempoBars[i].synthetic ?? false;
+    const driftSec = synthetic ? 0 : barDrift[sourceIdx] ?? 0;
+    if (!synthetic) sourceIdx++;
+    bars[i] = { startSec: cursor, durationSec: durations[i], driftSec };
     cursor += durations[i];
   }
   // `cursor` now sits at the end of the last bar in jot time. The total

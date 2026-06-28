@@ -73,6 +73,15 @@ export type BarBeat = {
   startSec: number;
   /** Jot duration this bar occupies. */
   durationSec: number;
+  /**
+   * Performance drift at this bar's downbeat (seconds): how far the real
+   * recorded downbeat sits past the uniform grid (`globalMetadata.barDrift`).
+   * The waveform renderer maps this bar's uniform pixel span onto the bar's
+   * REAL audio span (`[startSec + drift, nextStartSec + nextDrift)` minus the
+   * lead-in), aligning transients to the bar lines at render time. 0 for a
+   * metronomic recording / lead-in / synthetic bar.
+   */
+  driftSec: number;
 };
 
 /**
@@ -119,11 +128,17 @@ export function buildChunkLayout(structural: StructuralPresenter): ChunkLayout {
 
   // View bars include the synthetic virtual lead-in; flag it so tempo-event
   // anchoring (indexed against the source bars) stays aligned.
-  const tempos = buildBarTempos(structural.tempoSource, toTempoBars(structureLayer.bars));
+  const tempoBars = toTempoBars(structureLayer.bars);
+  const tempos = buildBarTempos(structural.tempoSource, tempoBars);
   const durations: number[] = new Array(structureLayer.bars.length);
   for (let i = 0; i < structureLayer.bars.length; i++) {
     durations[i] = tempos[i].durationSec;
   }
+
+  // Per-bar drift, indexed against the SOURCE bars (skipping the synthetic
+  // virtual lead-in) exactly like tempo-event anchoring, so a drifting bar's
+  // drift lands on the right view bar.
+  const barDrift = structural.barDrift;
 
   let leadBars = 0;
   for (const b of structureLayer.bars) {
@@ -136,13 +151,18 @@ export function buildChunkLayout(structural: StructuralPresenter): ChunkLayout {
   const bars: BarBeat[] = new Array(structureLayer.bars.length);
   let cursorBeat = 0;
   let cursorSec = -leadOffsetSec;
+  let sourceIdx = 0;
   for (let i = 0; i < structureLayer.bars.length; i++) {
     const sb = structureLayer.bars[i];
+    const synthetic = tempoBars[i].synthetic ?? false;
+    const driftSec = synthetic ? 0 : barDrift[sourceIdx] ?? 0;
+    if (!synthetic) sourceIdx++;
     bars[i] = {
       startBeat: cursorBeat,
       beats: sb.beats,
       startSec: cursorSec,
       durationSec: durations[i],
+      driftSec,
     };
     cursorBeat += sb.beats;
     cursorSec += durations[i];

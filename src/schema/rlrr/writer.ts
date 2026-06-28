@@ -2,8 +2,8 @@
  * Drumjot Jot -> Paradiddle `.rlrr` conversion.
  *
  * Assumptions (tagged [S#] inline):
- *  [S1] Tempo is taken from `globalMetadata.bpm` (initial) plus
- *       `jot.tempoEvents` for sticky tempo changes. Each tempoEvent
+ *  [S1] Tempo is taken from `tempo.initialBpm` (the song-start tempo
+ *       event) plus `jot.tempoEvents` for sticky tempo changes. Each tempoEvent
  *       (mid-bar OK) becomes a separate RLRR `bpmEvent` at the event's
  *       wall-clock time; `BpmTransition` values are flattened to
  *       `start` (else `end`) since RLRR has no transition concept.

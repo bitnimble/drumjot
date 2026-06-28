@@ -23,7 +23,7 @@ import { action, comparer, computed, makeObservable, observable } from 'mobx';
 import { computedFn } from 'mobx-utils';
 import { Instrument, TempoEvent } from 'src/schema/dsl/dsl';
 import { isDyadic } from 'src/schema/dsl/element_metrics';
-import { DEFAULT_BPM, type TempoJot } from 'src/schema/dsl/tempo';
+import { initialBpm, type TempoJot } from 'src/schema/dsl/tempo';
 import { DEFAULT_GRID_DIVISION } from 'src/grid/grid';
 import type { MutableJot } from 'src/schema/schema';
 import { ViewConfig } from 'src/editing/viewport/view_config';
@@ -107,7 +107,26 @@ export class StructuralPresenter implements LaidOutJot {
       if (barIndex === undefined) continue;
       tempoEvents.push({ barIndex, beat: ev.beat, bpm: ev.bpm });
     }
-    return { tempoEvents, globalMetadata: { bpm: jot.bpm } };
+    // `barIndexById` counts ALL non-anacrusis bars (lead-in included), so the
+    // drums-enter bar (where the initial-tempo event lives) sits at
+    // barIndex == leadBars. Pass that so `initialBpm` recognises it as the
+    // song-start event rather than reading the 120 default.
+    return { tempoEvents, globalMetadata: { leadBars: jot.leadBars ?? 0 } };
+  }
+
+  /** Per-bar performance drift seconds, indexed by `layers[0].bars` (lead-in
+   *  bars = 0), decoded from the reactive doc's `barDriftJson`. Empty for a
+   *  metronomic recording or a hand-authored jot. Feeds the waveform stretch
+   *  (`buildChunkLayout`) and the playback `DriftMap` (`buildTimeline`). */
+  get barDrift(): readonly number[] {
+    const json = this.getJot()?.barDriftJson;
+    if (!json) return [];
+    try {
+      const parsed: unknown = JSON.parse(json);
+      return Array.isArray(parsed) ? (parsed as number[]) : [];
+    } catch {
+      return [];
+    }
   }
 
   /** Producer grid density (1/N-of-a-whole-note), read live off the reactive
@@ -151,7 +170,7 @@ export class StructuralPresenter implements LaidOutJot {
   get layers(): StructLayer[] {
     const jot = this.getJot();
     const preRollSec = Math.max(0, -(jot?.songLeadIn ?? 0));
-    const bpm = jot?.bpm ?? DEFAULT_BPM;
+    const bpm = initialBpm(this.tempoSource);
     return this.musicalLayers.map((layer) => withVirtualLeadIn(layer, preRollSec, bpm));
   }
 
@@ -199,7 +218,7 @@ export class StructuralPresenter implements LaidOutJot {
     if (base.some((b) => b.index < 0)) return base;
     const jot = this.getJot();
     const preRollSec = Math.max(0, -(jot?.songLeadIn ?? 0));
-    const bpm = jot?.bpm ?? DEFAULT_BPM;
+    const bpm = initialBpm(this.tempoSource);
     const firstReal = base.find((b) => b.index === 1) ?? base[0];
     const oneBarBeats = (firstReal.tsCount * 4) / firstReal.tsUnit;
     const preRollBeats = (preRollSec * bpm) / 60;

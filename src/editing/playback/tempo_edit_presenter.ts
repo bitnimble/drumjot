@@ -1,11 +1,13 @@
 /**
  * The tempo-editing domain: the single writer for sticky tempo changes and the
  * song's initial tempo. Reads the reactive document for the editable BPM
- * "markers" the timeline header paints (each flat `tempoEvent` plus the
- * `globalMetadata` initial bpm), and mutates `jot.tempoEvents` / `jot.bpm`
- * through one atomic CRDT op each (so undo/redo treats a tempo change as a
- * single step). Gradual `BpmTransition` ramps are NOT editable here, they carry
- * no flat marker and stay read-only (authored via DSL).
+ * "markers" the timeline header paints (each flat `tempoEvent`, plus an initial
+ * pill for the song-start tempo) and mutates `jot.tempoEvents` through one
+ * atomic CRDT op each (so undo/redo treats a tempo change as a single step).
+ * Tempo lives entirely in `tempoEvents`: the initial tempo is just the event at
+ * the first source bar's downbeat, so the initial pill upserts/edits that
+ * event (there is no separate `jot.bpm`). Gradual `BpmTransition` ramps are NOT
+ * editable here, they carry no flat marker and stay read-only (authored via DSL).
  *
  * Counterpart to the read-only {@link TempoPresenter}: that derives the
  * per-bar tempo segments / timeline the renderer consumes; this is the write
@@ -16,15 +18,16 @@ import { computedFn } from 'mobx-utils';
 import { computed, makeObservable } from 'mobx';
 import type { JotEditorStore } from 'src/editing/jot_editor_store';
 import { LEAD_IN_BAR_ID } from 'src/editing/structure/structure_store';
-import { tempoAt } from 'src/schema/dsl/tempo';
+import { initialBpm, tempoAt } from 'src/schema/dsl/tempo';
 
 /** The lowest / highest BPM an edit may set. Integers only. */
 export const MIN_BPM = 20;
 export const MAX_BPM = 400;
 
-/** Where an editable BPM pill is anchored + what backs it. `initial` edits the
- *  song's initial tempo (`jot.bpm`) and can't be deleted; `event` edits/deletes
- *  a flat `tempoEvent` by its stable id. */
+/** Where an editable BPM pill is anchored + what backs it. `initial` is the
+ *  song-start placeholder shown when no flat event sits on the first bar's
+ *  downbeat; editing it upserts that event (so it then renders as an `event`
+ *  pill). `event` edits/deletes a flat `tempoEvent` by its stable id. */
 export type BpmMarkerSource = { kind: 'initial' } | { kind: 'event'; id: string };
 
 export type BpmMarker = {
@@ -57,6 +60,10 @@ export class TempoEditPresenter {
     if (!structural || !jot || !bars) return [];
 
     const { sourceBarStart, barIndexById } = this.barIndex(bars);
+    // The drums-enter bar's source index (lead-in bars sit before it); the
+    // initial tempo event lives on that bar's downbeat, matching `tempoSource` /
+    // `initialBpm`. 0 for a jot with no pre-roll.
+    const leadBars = jot.leadBars ?? 0;
     const markers: BpmMarker[] = [];
     let hasLeadingEvent = false;
     for (const ev of jot.tempoEvents.values()) {
@@ -68,12 +75,18 @@ export class TempoEditPresenter {
         bpm: Math.round(ev.bpm),
         source: { kind: 'event', id: ev.id },
       });
-      if (barIndex === 0 && ev.beat === 0) hasLeadingEvent = true;
+      if (barIndex === leadBars && ev.beat === 0) hasLeadingEvent = true;
     }
     if (!hasLeadingEvent) {
-      // The initial tempo renders at the very start (the lead-in), matching the
-      // pre-edit header. Editing it writes `jot.bpm`.
-      markers.push({ globalBeat: 0, bpm: Math.round(jot.bpm), source: { kind: 'initial' } });
+      // No event on the drums-enter downbeat: show the song-start tempo
+      // (`initialBpm`, = DEFAULT_BPM when nothing's anchored there yet) as a
+      // placeholder pill at the very start (before any lead-in); editing it
+      // upserts the leading event on the drums-enter bar.
+      markers.push({
+        globalBeat: 0,
+        bpm: Math.round(initialBpm(structural.tempoSource)),
+        source: { kind: 'initial' },
+      });
     }
     markers.sort((a, b) => a.globalBeat - b.globalBeat);
     return markers;
@@ -137,12 +150,26 @@ export class TempoEditPresenter {
     });
   }
 
-  /** Set the song's initial tempo (the value before any event fires). */
+  /** Set the song's initial tempo by upserting the flat event on the
+   *  drums-enter bar's downbeat (the first rendered bar, `index >= 1`; the
+   *  initial tempo IS that event). Skips any pre-roll lead-in bars (negative
+   *  index), where the event would be invisible to `initialBpm`. One CRDT op. */
   setInitialBpm(bpm: number): void {
     const jot = this.jotEditorStore.jot;
-    if (!jot) return;
+    const bars = this.jotEditorStore.structural?.layers[0]?.bars;
+    if (!jot || !bars) return;
+    const first = bars.find((b) => b.index >= 1);
+    if (!first) return;
+    const clamped = clampBpm(bpm);
     runInAction(() => {
-      jot.bpm = clampBpm(bpm);
+      const existingId = this.flatEventAt(first.id, 0);
+      const existing = existingId ? jot.tempoEvents.get(existingId) : undefined;
+      if (existing) {
+        existing.bpm = clamped;
+      } else {
+        const id = `t_${crypto.randomUUID()}`;
+        jot.tempoEvents.set(id, { id, barId: first.id, beat: 0, bpm: clamped });
+      }
     });
   }
 

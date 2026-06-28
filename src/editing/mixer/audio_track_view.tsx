@@ -526,11 +526,16 @@ const AudioTrackWaveformChunk = observer(
       // of the chunk get a negative `x`, bars to the right get `x >=
       // widthPx`; the worker's clamp drops both groups without an
       // explicit filter on our side.
-      const barSlices: BarSlice[] = bars.map((b) => ({
+      const barSlices: BarSlice[] = bars.map((b, idx) => ({
         x: (b.startBeat - chunk.startBeat) * renderedScale,
         width: b.beats * renderedScale,
         startSec: b.startSec,
         durationSec: b.durationSec,
+        driftSec: b.driftSec,
+        // The next bar's drift, so the worker can map this bar's pixels onto
+        // its REAL audio span (its width covers `durationSec + (nextDrift -
+        // drift)` of recording). Last bar: no next → same drift (no stretch).
+        nextDriftSec: bars[idx + 1]?.driftSec ?? b.driftSec,
       }));
       const fire = () => {
         waveformWorker.renderChunk(

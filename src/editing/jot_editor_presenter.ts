@@ -768,11 +768,19 @@ export class JotEditorPresenter {
     });
 
     // The bundle's score is the `prediction.mid` produced by the
-    // transcribe stage; `src/midi/from_midi.ts` converts it to a Jot.
+    // transcribe stage; `src/midi/from_midi.ts` converts it to a Jot. When
+    // the bundle shipped a `transcription.json` tempo map, pass it through
+    // so the score's tempo (ramps included) comes from the exact sidecar
+    // rather than the lossy MIDI tempo track.
     let scoreLoaded = false;
     if (bundle.predictionMidi) {
       try {
-        const jot = fromMidi(bundle.predictionMidi);
+        const jot = fromMidi(
+          bundle.predictionMidi,
+          {},
+          bundle.tempoMap ?? undefined,
+          bundle.barDrift ?? undefined,
+        );
         if (!jot.title) {
           const derivedTitle = titleFromFilename(fallbackName);
           if (derivedTitle) jot.title = derivedTitle;

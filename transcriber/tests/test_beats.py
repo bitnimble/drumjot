@@ -10,14 +10,39 @@ import numpy as np
 import pytest
 
 from app.pipeline.beats import (
+    _DRIFT_DEADBAND_SEC,
     BarInfo,
     BeatStructure,
     BeatTick,
     _choose_time_signature,
     _coarse_offset_from_envelope,
+    _finalize_bar,
+    _finalize_bar_tempos,
     _pad_trailing_bars,
+    _summarize,
     align_beats_to_onsets,
 )
+from app.pipeline.onsets_midi import compute_bar_tick_grid
+
+
+def _ramp_beat_times(b0: float, b1: float, n_beats: int) -> list[float]:
+    """Absolute times of `n_beats + 1` beats for a linear-in-time tempo
+    ramp from `b0` to `b1` BPM, matching `src/schema/dsl/tempo.ts`.
+
+    Tempo is linear in time, so `bpm² is linear in beat`:
+    `bpm(d) = sqrt(b0² + (b1²-b0²)·d/L)` over `L = n_beats` beats, and the
+    time to reach beat `d` is `120·L·(bpm(d)-b0)/(b1²-b0²)` seconds (the
+    closed-form integral; the constant case `b0==b1` reduces to `d·60/b0`).
+    """
+    L = float(n_beats)
+    times: list[float] = []
+    for d in range(n_beats + 1):
+        if abs(b1 - b0) < 1e-9:
+            times.append(d * 60.0 / b0)
+        else:
+            bpm_d = (b0 * b0 + (b1 * b1 - b0 * b0) * (d / L)) ** 0.5
+            times.append(120.0 * L * (bpm_d - b0) / (b1 * b1 - b0 * b0))
+    return times
 
 # ---------- _choose_time_signature ----------
 
@@ -255,6 +280,467 @@ def test_align_no_op_when_no_onsets() -> None:
     align_beats_to_onsets(structure, [])
     for i, b in enumerate(structure.beats):
         assert b.time == i * 0.5
+
+
+# ---------- constant-tempo grid denoising (_finalize_bar_tempos) ----------
+
+
+def _frame_quantized_constant_structure(
+    *, tempo_bpm: float, fps: float, n_bars: int, count: int = 4
+) -> BeatStructure:
+    """Build a BeatStructure for a perfectly constant-tempo song whose
+    beat times are frame-quantized to `fps`, mimicking a DBN tracker.
+
+    Frame quantization is the real-world jitter source: each beat lands on
+    the nearest `1/fps` frame, so consecutive bars' downbeat-to-downbeat
+    spans differ by up to ±1 frame even though the underlying tempo never
+    changes. That ±1-frame span wobble is what `_bar_duration_tempo_bpm`
+    (the MIDI tempo source) turns into a 2-3 BPM swing per bar.
+    """
+    beat_gap = 60.0 / tempo_bpm
+    beats: list[BeatTick] = []
+    for i in range(n_bars * count):
+        true_t = i * beat_gap
+        q_t = round(true_t * fps) / fps  # snap to the frame grid
+        beats.append(
+            BeatTick(time=q_t, beat_in_bar=(i % count) + 1, bar_index=i // count)
+        )
+    bars: list[BarInfo] = []
+    for b_idx in range(n_bars):
+        bb = beats[b_idx * count:(b_idx + 1) * count]
+        bars.append(_finalize_bar(b_idx, bb))
+    structure = _summarize(beats, bars)
+    return structure
+
+
+def test_constant_tempo_midi_grid_is_flat_despite_frame_jitter() -> None:
+    # Regression for the BPM jitter seen in the editor: a metronomic song
+    # whose DBN beat times are frame-quantized must emit ONE flat MIDI
+    # tempo across every bar, not a 2-3 BPM swing per bar. The MIDI tempo
+    # the editor reads comes from `compute_bar_tick_grid`'s per-bar
+    # `_bar_duration_tempo_bpm` (downbeat-to-downbeat span), so it's the
+    # value we assert on.
+    structure = _frame_quantized_constant_structure(
+        tempo_bpm=120.0, fps=43.07, n_bars=16
+    )
+
+    # Sanity: the raw per-bar spans really do jitter before finalization,
+    # otherwise the test wouldn't be exercising the bug.
+    _, raw_tempos, _, _ = compute_bar_tick_grid(structure, 120.0)
+    assert max(raw_tempos) - min(raw_tempos) > 0.5  # multi-BPM swing present
+
+    _finalize_bar_tempos(structure)
+
+    assert structure.has_tempo_changes is False
+    _, midi_tempos, _, _ = compute_bar_tick_grid(structure, structure.initial_tempo)
+    # Every bar must now carry the same MIDI tempo (no per-bar set_tempo
+    # churn => no tempoEvents => flat BPM in the editor).
+    assert max(midi_tempos) - min(midi_tempos) < 1e-6
+    # ...and it must be the true tempo, not drifted by the quantization.
+    assert midi_tempos[0] == pytest.approx(120.0, abs=0.2)
+
+
+def test_constant_tempo_resamples_beats_to_uniform_pulse() -> None:
+    # The denoising works by snapping the beat grid itself to a uniform
+    # pulse, so onset attribution stays self-consistent with the flat
+    # tempo map. Inter-beat gaps must all be equal afterward.
+    structure = _frame_quantized_constant_structure(
+        tempo_bpm=100.0, fps=43.07, n_bars=12
+    )
+    _finalize_bar_tempos(structure)
+
+    gaps = np.diff([b.time for b in structure.beats])
+    assert float(gaps.max() - gaps.min()) < 1e-9
+    assert float(np.mean(gaps)) == pytest.approx(60.0 / 100.0, abs=1e-3)
+
+
+def test_genuine_tempo_change_is_not_flattened() -> None:
+    # A real per-bar accelerando must keep its rising tempo; the constant
+    # denoising only fires when a single flat line fits the whole song.
+    beats: list[BeatTick] = []
+    bars: list[BarInfo] = []
+    t = 0.0
+    n_bars = 12
+    for b_idx in range(n_bars):
+        # Ramp from 100 -> ~150 BPM over the song.
+        bpm = 100.0 + b_idx * 5.0
+        gap = 60.0 / bpm
+        bb = [
+            BeatTick(time=t + j * gap, beat_in_bar=j + 1, bar_index=b_idx)
+            for j in range(4)
+        ]
+        beats.extend(bb)
+        bars.append(_finalize_bar(b_idx, bb))
+        t += 4 * gap
+    structure = _summarize(beats, bars)
+    _finalize_bar_tempos(structure)
+
+    assert structure.has_tempo_changes is True
+    # Tempo still rises across the song (contour preserved, not pinned flat).
+    assert structure.bars[-1].tempo_bpm - structure.bars[1].tempo_bpm > 20.0
+
+
+# ---------- tempo map / segmentation (TempoSegment) ----------
+
+
+def _structure_from_beat_times(times: list[float], count: int = 4) -> BeatStructure:
+    beats = [
+        BeatTick(time=t, beat_in_bar=(i % count) + 1, bar_index=i // count)
+        for i, t in enumerate(times)
+    ]
+    n_bars = (len(times) + count - 1) // count
+    bars = [
+        _finalize_bar(b, beats[b * count:(b + 1) * count])
+        for b in range(n_bars)
+        if beats[b * count:(b + 1) * count]
+    ]
+    return _summarize(beats, bars)
+
+
+def test_constant_song_is_one_constant_segment() -> None:
+    structure = _frame_quantized_constant_structure(
+        tempo_bpm=120.0, fps=43.07, n_bars=16
+    )
+    _finalize_bar_tempos(structure)
+
+    assert len(structure.tempo_segments) == 1
+    seg = structure.tempo_segments[0]
+    assert seg.is_ramp() is False
+    assert seg.start_bpm == pytest.approx(120.0, abs=0.2)
+    assert seg.end_bpm == pytest.approx(seg.start_bpm, abs=1e-9)
+    assert structure.has_tempo_changes is False
+
+
+def test_single_accelerando_is_one_ramp_segment() -> None:
+    # A clean linear-in-time accelerando 110 -> 140 BPM over 64 beats, with
+    # realistic frame quantization on top. It must collapse to ONE ramp
+    # segment whose endpoints recover the true tempi, not a staircase.
+    times = _ramp_beat_times(110.0, 140.0, 64)
+    fps = 43.07
+    times = [round(t * fps) / fps for t in times]  # frame-quantize
+    structure = _structure_from_beat_times(times)
+    _finalize_bar_tempos(structure)
+
+    assert len(structure.tempo_segments) == 1
+    seg = structure.tempo_segments[0]
+    assert seg.is_ramp() is True
+    assert seg.start_bpm == pytest.approx(110.0, abs=2.0)
+    assert seg.end_bpm == pytest.approx(140.0, abs=2.0)
+    assert structure.has_tempo_changes is True
+
+
+def test_ramp_regularized_beats_are_monotonic_and_accelerating() -> None:
+    times = _ramp_beat_times(100.0, 150.0, 48)
+    fps = 43.07
+    times = [round(t * fps) / fps for t in times]
+    structure = _structure_from_beat_times(times)
+    _finalize_bar_tempos(structure)
+
+    gaps = np.diff([b.time for b in structure.beats])
+    # Strictly accelerating => every inter-beat gap shorter than the last,
+    # with no frame-quantization wobble surviving.
+    assert np.all(gaps > 0)
+    assert np.all(np.diff(gaps) < 1e-9)
+
+
+def _concat_ramp_blocks(blocks: list[tuple[float, float, int]]) -> list[float]:
+    """Stitch `(start_bpm, end_bpm, n_beats)` blocks into one continuous,
+    phase-consistent beat-time list (each block's first beat coincides with
+    the previous block's last)."""
+    times = [0.0]
+    cursor = 0.0
+    for b0, b1, nb in blocks:
+        seg = _ramp_beat_times(b0, b1, nb)  # nb + 1 points, seg[0] == 0
+        for t in seg[1:]:
+            times.append(cursor + t)
+        cursor = times[-1]
+    return times
+
+
+def _quantize(times: list[float], fps: float = 43.07) -> list[float]:
+    return [round(t * fps) / fps for t in times]
+
+
+def test_localized_ramp_between_steady_sections() -> None:
+    # Steady verse -> push into the chorus -> steady chorus. The old
+    # single-global-ramp fit could not represent flat-curved-flat and fell
+    # back to a staircase; multi-segment must surface a real ramp in the
+    # middle with constant sections around it.
+    times = _quantize(
+        _concat_ramp_blocks([(120.0, 120.0, 24), (120.0, 140.0, 12), (140.0, 140.0, 24)])
+    )
+    structure = _structure_from_beat_times(times)
+    _finalize_bar_tempos(structure)
+
+    segs = structure.tempo_segments
+    assert structure.has_tempo_changes is True
+    assert any(s.is_ramp() for s in segs)
+    # Overall the map climbs from ~120 to ~140.
+    assert min(s.start_bpm for s in segs) == pytest.approx(120.0, abs=4.0)
+    assert max(s.end_bpm for s in segs) == pytest.approx(140.0, abs=4.0)
+    # Beats stay strictly monotonic across the segment seams.
+    gaps = np.diff([b.time for b in structure.beats])
+    assert np.all(gaps > 0)
+
+
+def test_two_separate_accelerandos() -> None:
+    # Two distinct gradual events separated by a long steady stretch. The
+    # dominant plateau means a single straight tempo line can't span both
+    # ramps (unlike a near-collinear up-flat-up), so the map must keep them
+    # as separate ramps with a constant section between.
+    times = _quantize(
+        _concat_ramp_blocks(
+            [
+                (112.0, 132.0, 8),
+                (132.0, 132.0, 40),
+                (132.0, 152.0, 8),
+            ]
+        )
+    )
+    structure = _structure_from_beat_times(times)
+    _finalize_bar_tempos(structure)
+
+    ramps = [s for s in structure.tempo_segments if s.is_ramp()]
+    assert len(ramps) >= 2
+    assert structure.has_tempo_changes is True
+
+
+def test_hard_tempo_step_splits_into_two_constants() -> None:
+    # An abrupt 120 -> 140 jump (no gradual change) must split into two
+    # constant segments at the step, not be smeared into one ramp.
+    times = _quantize(
+        _concat_ramp_blocks([(120.0, 120.0, 24), (140.0, 140.0, 24)])
+    )
+    structure = _structure_from_beat_times(times)
+    _finalize_bar_tempos(structure)
+
+    segs = structure.tempo_segments
+    assert len(segs) >= 2
+    assert structure.has_tempo_changes is True
+    # The map spans from ~120 to ~140 with the bulk of each side flat.
+    assert min(s.start_bpm for s in segs) == pytest.approx(120.0, abs=5.0)
+    assert max(s.end_bpm for s in segs) == pytest.approx(140.0, abs=5.0)
+
+
+def test_step_boundary_refined_to_the_change_beat() -> None:
+    # 16 beats at 120 then 16 at 150, a sudden step at beat ~16. Greedy
+    # growth overshoots the split into the new tempo; the change-point
+    # refinement must pull the boundary back onto the beat the tempo
+    # actually changed, so the faster segment starts at ~beat 16/17 (not the
+    # late greedy split ~20) and reads a clean ~150 with no contamination.
+    times = _concat_ramp_blocks([(120.0, 120.0, 16), (150.0, 150.0, 16)])
+    structure = _structure_from_beat_times(times)
+    _finalize_bar_tempos(structure)
+
+    fast = [s for s in structure.tempo_segments if s.start_bpm > 135.0]
+    assert len(fast) == 1
+    assert fast[0].start_beat == pytest.approx(16, abs=1)
+    assert fast[0].start_bpm == pytest.approx(150.0, abs=2.0)
+    # And the slow side stays a clean ~120 right up to the step.
+    slow = [s for s in structure.tempo_segments if s.start_bpm < 135.0]
+    assert slow[0].start_bpm == pytest.approx(120.0, abs=2.0)
+
+
+def test_constant_song_has_negligible_drift() -> None:
+    # A metronomic song: the per-bar drift channel must stay ~0 (the
+    # smoothing + deadband strip the DBN frame-quantization noise), so the
+    # waveform isn't spuriously stretched.
+    structure = _frame_quantized_constant_structure(
+        tempo_bpm=120.0, fps=100.0, n_bars=16
+    )
+    _finalize_bar_tempos(structure)
+    drift = [b.drift_sec for b in structure.bars]
+    assert max(abs(d) for d in drift) < 0.012
+
+
+def _wandering_beat_times(amp: float, period: int, n: int) -> list[float]:
+    """120-BPM beats whose times wander sinusoidally by ±`amp` seconds, a
+    pre-click recording that smoothly speeds up and slows down. The wander is
+    sub-threshold, so it's judged one segment; it survives as drift, not as a
+    tempo change."""
+    return [
+        0.5 * i + amp * float(np.sin(2.0 * np.pi * i / period)) for i in range(n)
+    ]
+
+
+def test_sustained_drift_is_captured() -> None:
+    # A smoothly wandering (drifting) tempo: the model flattens it to one
+    # tempo, but the drift channel must record the ±wander so the editor can
+    # still align the bar lines + waveform to the recording.
+    structure = _structure_from_beat_times(_wandering_beat_times(0.06, 48, 96))
+    _finalize_bar_tempos(structure)
+    drift = [b.drift_sec for b in structure.bars]
+    # The wander (well above the deadband) is preserved, not smoothed away.
+    assert max(drift) - min(drift) > 0.03
+
+
+def test_sub_threshold_long_bar_drift_not_zeroed() -> None:
+    # One bar runs 60 ms long (the drummer held it); the tempo model never
+    # emits a BPM change (the drift stays sub-threshold), but the drift
+    # channel must NOT zero it - `model + drift` has to still reconstruct the
+    # real bar lines so the waveform + notes stay aligned to the recording.
+    times: list[float] = []
+    t = 0.0
+    for i in range(48):
+        times.append(t)
+        t += 0.5
+        if i == 23:  # extra 60 ms before bar 6's downbeat
+            t += 0.06
+    structure = _structure_from_beat_times(times)
+    _finalize_bar_tempos(structure)
+
+    assert structure.has_tempo_changes is False  # still one flat tempo
+    # Not zeroed: the drift carries real signal.
+    assert max(abs(b.drift_sec) for b in structure.bars) > _DRIFT_DEADBAND_SEC
+    # And `regularized_start + drift` reconstructs the real grid, so the long
+    # bar shows up as clearly the longest reconstructed bar (the LS fit
+    # absorbs some of it into the tempo, but the drift recovers the rest).
+    recon = np.array([b.start_time + b.drift_sec for b in structure.bars])
+    durs = np.diff(recon)
+    assert float(durs.max() - np.median(durs)) > 0.025
+
+
+def test_transcription_carries_bar_drift() -> None:
+    from app.pipeline.transcription import build_transcription
+
+    structure = _structure_from_beat_times(_wandering_beat_times(0.06, 48, 96))
+    _finalize_bar_tempos(structure)
+    payload = build_transcription(structure)
+
+    bar_drift = payload["barDrift"]
+    assert len(bar_drift) == len(structure.bars)
+    assert max(bar_drift) - min(bar_drift) > 0.03
+
+
+def test_step_refinement_survives_frame_quantization() -> None:
+    times = _quantize(_concat_ramp_blocks([(126.0, 126.0, 20), (96.0, 96.0, 20)]))
+    structure = _structure_from_beat_times(times)
+    _finalize_bar_tempos(structure)
+
+    fast = [s for s in structure.tempo_segments if s.start_bpm > 110.0]
+    slow = [s for s in structure.tempo_segments if s.start_bpm < 110.0]
+    assert fast and slow
+    # The step (beat ~20) is recovered within a beat despite ±1-frame jitter.
+    assert min(s.start_beat for s in slow) == pytest.approx(20, abs=2)
+
+
+# ---------- Phase 2: ramp-aware stepwise MIDI set_tempo ----------
+
+
+def _render_set_tempos(structure: BeatStructure) -> list[tuple[int, float]]:
+    """Render the structure to onsets MIDI and read back `(abs_tick, bpm)`
+    for every `set_tempo` event."""
+    import io
+
+    import mido
+
+    from app.pipeline.onsets_midi import onsets_to_midi_bytes
+
+    class _Onset:
+        def __init__(self, t: float, bar: int) -> None:
+            self.time = t
+            self.strength = 1.0
+            self.bar = bar
+
+    onsets = {"k": [_Onset(b.start_time, b.index) for b in structure.bars]}
+    raw = onsets_to_midi_bytes(
+        onsets, initial_tempo_bpm=structure.initial_tempo, structure=structure
+    )
+    mid = mido.MidiFile(file=io.BytesIO(raw))
+    out: list[tuple[int, float]] = []
+    for track in mid.tracks:
+        abs_tick = 0
+        for msg in track:
+            abs_tick += msg.time
+            if msg.type == "set_tempo":
+                out.append((abs_tick, 60_000_000 / msg.tempo))
+    return out
+
+
+def test_constant_song_emits_single_midi_tempo() -> None:
+    # Regression guard: the per-beat tempo emission must still collapse a
+    # metronomic song to exactly one tempo value (no per-bar churn).
+    structure = _frame_quantized_constant_structure(
+        tempo_bpm=120.0, fps=43.07, n_bars=16
+    )
+    _finalize_bar_tempos(structure)
+    tempos = _render_set_tempos(structure)
+    distinct = {round(bpm, 2) for _, bpm in tempos}
+    assert len(distinct) == 1
+    assert next(iter(distinct)) == pytest.approx(120.0, abs=0.3)
+
+
+def test_ramp_emits_stepwise_increasing_midi_tempo() -> None:
+    # A ramp must survive the MIDI as >= RAMP_MIN_POINTS (4) monotonically
+    # increasing set_tempo steps so `detectRampRuns` can rebuild it on the
+    # MIDI-only path.
+    times = _quantize(_ramp_beat_times(110.0, 150.0, 64))
+    structure = _structure_from_beat_times(times)
+    _finalize_bar_tempos(structure)
+    tempos = _render_set_tempos(structure)
+
+    # Exclude the tick-0 lead-in event: it's the pre-roll tempo (`from_midi`
+    # consumes it as the lead-in duration, not part of the song's contour),
+    # and a sub-frame regularization pre-roll can back-solve it to a very
+    # high BPM by design (see compute_bar_tick_grid).
+    bpms = [bpm for tick, bpm in tempos if tick > 0]
+    assert len(bpms) >= 4  # enough monotonic steps for detectRampRuns
+    assert all(b >= a - 1e-6 for a, b in zip(bpms, bpms[1:], strict=False))
+    assert bpms[0] == pytest.approx(110.0, abs=4.0)
+    assert bpms[-1] == pytest.approx(150.0, abs=4.0)
+
+
+# ---------- Phase 3: transcription.json tempoMap ----------
+
+
+def test_transcription_constant_has_no_tempo_events() -> None:
+    from app.pipeline.transcription import TRANSCRIPTION_FORMAT, build_transcription
+
+    structure = _frame_quantized_constant_structure(
+        tempo_bpm=120.0, fps=43.07, n_bars=16
+    )
+    _finalize_bar_tempos(structure)
+    payload = build_transcription(structure)
+
+    assert payload["format"] == TRANSCRIPTION_FORMAT
+    tempo_map = payload["tempoMap"]
+    assert tempo_map["initial_bpm"] == pytest.approx(120.0, abs=0.3)
+    assert tempo_map["events"] == []  # frontend -> one bpm, zero tempoEvents
+
+
+def test_transcription_ramp_is_one_linear_event() -> None:
+    from app.pipeline.transcription import build_transcription
+
+    times = _quantize(_ramp_beat_times(110.0, 150.0, 64))
+    structure = _structure_from_beat_times(times)
+    _finalize_bar_tempos(structure)
+    tempo_map = build_transcription(structure)["tempoMap"]
+
+    events = tempo_map["events"]
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["shape"] == "linear"
+    assert isinstance(ev["bpm"], dict)
+    assert ev["bpm"]["start"] == pytest.approx(110.0, abs=4.0)
+    assert ev["bpm"]["end"] == pytest.approx(150.0, abs=4.0)
+    assert ev["bpm"]["end_tick"] > ev["tick"]
+    assert tempo_map["initial_bpm"] == pytest.approx(110.0, abs=4.0)
+
+
+def test_transcription_localized_ramp_has_ramp_then_step() -> None:
+    from app.pipeline.transcription import build_transcription
+
+    times = _quantize(
+        _concat_ramp_blocks([(120.0, 120.0, 24), (120.0, 140.0, 12), (140.0, 140.0, 24)])
+    )
+    structure = _structure_from_beat_times(times)
+    _finalize_bar_tempos(structure)
+    events = build_transcription(structure)["tempoMap"]["events"]
+
+    # A linear ramp event somewhere, and the map climbs to ~140.
+    assert any(isinstance(e["bpm"], dict) for e in events)
+    ticks = [e["tick"] for e in events]
+    assert ticks == sorted(ticks)  # tick-ascending
 
 
 def test_align_preserves_per_bar_tempo_under_humanized_onsets() -> None:

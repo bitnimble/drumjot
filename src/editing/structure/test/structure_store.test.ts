@@ -11,7 +11,6 @@ describe('grouping', () => {
   it('groups top-level note elements into bars and per-lane tracks, sorted by beat', () => {
     const { model } = createMutableJot({
       title: '',
-      bpm: 120,
       bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
       elements: {
         n2: { kind: 'note', id: 'n2', barId: 'b1', beat: 2, duration: 1, lane: 'k', modifiers: [] },
@@ -31,7 +30,6 @@ describe('grouping', () => {
   it('flags off-grid (non-dyadic) onsets as not straight', () => {
     const { model } = createMutableJot({
       title: '',
-      bpm: 120,
       bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
       elements: {
         on: { kind: 'note', id: 'on', barId: 'b1', beat: 1, duration: 1, lane: 'k', modifiers: [] },
@@ -47,7 +45,6 @@ describe('grouping', () => {
   it('is reactive: adding an element updates the derived structure', () => {
     const { model } = createMutableJot({
       title: '',
-      bpm: 120,
       bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
       elements: {},
       instruments: {},
@@ -75,7 +72,6 @@ describe('bar indexing', () => {
   it('numbers a plain bar 1, lead-in negative, anacrusis 0', () => {
     const { model: plain } = createMutableJot({
       title: '',
-      bpm: 120,
       bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
       elements: {},
       instruments: {},
@@ -84,7 +80,6 @@ describe('bar indexing', () => {
 
     const { model: lead } = createMutableJot({
       title: '',
-      bpm: 120,
       leadBars: 1,
       bars: [
         { id: 'b0', tsCount: 4, tsUnit: 4 },
@@ -97,7 +92,6 @@ describe('bar indexing', () => {
 
     const { model: ana } = createMutableJot({
       title: '',
-      bpm: 120,
       bars: [
         { id: 'b0', tsCount: 4, tsUnit: 4, anacrusis: true },
         { id: 'b1', tsCount: 4, tsUnit: 4 },
@@ -117,7 +111,6 @@ describe('groups & tuplets', () => {
   it('scales a group that fills its duration with no tuplet bracket', () => {
     const { model } = createMutableJot({
       title: '',
-      bpm: 120,
       bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
       elements: {
         g: {
@@ -142,7 +135,6 @@ describe('groups & tuplets', () => {
   it('emits a group frame span for an in-place (scale-1) group, fully closed', () => {
     const { model } = createMutableJot({
       title: '',
-      bpm: 120,
       bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
       elements: {
         g: {
@@ -173,7 +165,6 @@ describe('groups & tuplets', () => {
   it('also frames a tuplet group (frame + bracket coexist)', () => {
     const { model } = createMutableJot({
       title: '',
-      bpm: 120,
       bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
       elements: {
         g: {
@@ -201,7 +192,6 @@ describe('groups & tuplets', () => {
   it('distributes a multi-bar group: notes land in their true bars, frame clipped + open-edged', () => {
     const { model } = createMutableJot({
       title: '',
-      bpm: 120,
       bars: [
         { id: 'b1', tsCount: 4, tsUnit: 4 },
         { id: 'b2', tsCount: 4, tsUnit: 4 },
@@ -244,7 +234,6 @@ describe('groups & tuplets', () => {
   it('brackets a group whose children overflow its duration as a tuplet, scaling onsets', () => {
     const { model } = createMutableJot({
       title: '',
-      bpm: 120,
       bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
       elements: {
         // 3 eighths (natural span 1.5) compressed into 1 beat → triplet.
@@ -278,7 +267,6 @@ describe('pattern spans', () => {
   it('instantiates a pattern element: span named/coloured + body notes expanded', () => {
     const { model } = createMutableJot({
       title: '',
-      bpm: 120,
       bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
       patterns: {
         p1: {
@@ -311,7 +299,6 @@ describe('lead-in (musical structure)', () => {
   it('materialises explicit leadBars as negative-indexed bars (no synthesis here)', () => {
     const { model } = createMutableJot({
       title: '',
-      bpm: 120,
       leadBars: 1,
       bars: [
         { id: 'b0', tsCount: 4, tsUnit: 4 },
@@ -330,7 +317,6 @@ describe('lead-in (musical structure)', () => {
   it('adds no synthetic bar for a songLeadIn-only song (that is a view concern)', () => {
     const { model } = createMutableJot({
       title: '',
-      bpm: 120,
       songLeadIn: -3,
       bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
       elements: {

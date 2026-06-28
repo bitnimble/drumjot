@@ -9,6 +9,7 @@ import { fromMidi } from 'src/midi/from_midi';
 import { allocateLanesForMidi } from 'src/midi/gm';
 import { toMidi } from 'src/midi/to_midi';
 import { parse } from 'src/schema/dsl/parser/parser';
+import { initialBpm } from 'src/schema/dsl/tempo';
 
 const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const DRUM_CHANNEL_IDX = 9;
@@ -223,7 +224,7 @@ describe('fromMidi tempo-ramp detection', () => {
     // and equal delta (+15 bpm), a textbook linear ramp.
     const tempos = Array.from({ length: 9 }, (_, i) => ({ tick: i * 480, bpm: 120 + i * 15 }));
     const jot = fromMidi(buildTempoSeqMidi(tempos, 8));
-    expect(jot.globalMetadata.bpm).toBe(120);
+    expect(initialBpm(jot)).toBe(120);
     expect(jot.tempoEvents).toHaveLength(1);
     const ev = jot.tempoEvents![0];
     expect(typeof ev.bpm).toBe('object');
@@ -277,9 +278,62 @@ describe('fromMidi tempo-ramp detection', () => {
       { tick: 8 * 480, bpm: 100 },
     ];
     const jot = fromMidi(buildTempoSeqMidi(tempos, 12));
-    expect(jot.globalMetadata.bpm).toBe(120);
+    expect(initialBpm(jot)).toBe(120);
     expect(jot.tempoEvents).toHaveLength(2);
     for (const ev of jot.tempoEvents!) expect(typeof ev.bpm).toBe('number');
+  });
+});
+
+describe('fromMidi with transcription.json tempoMap', () => {
+  it('a jittery MIDI tempo track is overridden flat by an empty-event map', () => {
+    // Per-beat wobbling tempos: the MIDI-only path would scatter tempoEvents.
+    const tempos = [
+      { tick: 0, bpm: 120 },
+      { tick: 480, bpm: 122 },
+      { tick: 960, bpm: 119 },
+      { tick: 1440, bpm: 121 },
+      { tick: 1920, bpm: 118 },
+    ];
+    const bytes = buildTempoSeqMidi(tempos, 12);
+    // Sanity: without the sidecar the wobble survives as tempo events.
+    expect((fromMidi(bytes).tempoEvents ?? []).length).toBeGreaterThan(0);
+
+    const jot = fromMidi(bytes, {}, { initial_bpm: 120, events: [] });
+    expect(initialBpm(jot)).toBe(120);
+    expect(jot.tempoEvents ?? []).toHaveLength(0);
+  });
+
+  it('a sidecar ramp event becomes one BpmTransition', () => {
+    const bytes = buildTempoSeqMidi([{ tick: 0, bpm: 120 }], 12);
+    const jot = fromMidi(bytes, {}, {
+      initial_bpm: 120,
+      events: [
+        { tick: 0, bpm: { start: 120, end: 180, end_tick: 8 * 480 }, shape: 'linear' },
+      ],
+    });
+    expect(initialBpm(jot)).toBe(120);
+    expect(jot.tempoEvents).toHaveLength(1);
+    const ev = jot.tempoEvents![0];
+    expect(ev.barIndex).toBe(0);
+    expect(ev.beat).toBeCloseTo(0, 3);
+    expect(ev.bpm).toMatchObject({ start: 120, end: 180 });
+    expect((ev.bpm as { duration: number }).duration).toBeCloseTo(8, 1);
+  });
+
+  it('a sidecar step event anchors at the right (bar, beat)', () => {
+    const bytes = buildTempoSeqMidi([{ tick: 0, bpm: 120 }], 12);
+    // Tick 6*480 = bar 1 (4/4), beat 2 (0-indexed quarter offset).
+    const jot = fromMidi(bytes, {}, {
+      initial_bpm: 120,
+      events: [{ tick: 6 * 480, bpm: 150 }],
+    });
+    expect(initialBpm(jot)).toBe(120);
+    expect(jot.tempoEvents).toHaveLength(1);
+    const ev = jot.tempoEvents![0];
+    expect(typeof ev.bpm).toBe('number');
+    expect(ev.bpm).toBe(150);
+    expect(ev.barIndex).toBe(1);
+    expect(ev.beat).toBeCloseTo(2, 3);
   });
 });
 
@@ -300,7 +354,7 @@ describe('MIDI <-> Jot synthetic baseline', () => {
     });
 
     const jot = fromMidi(bytes);
-    expect(jot.globalMetadata.bpm).toBe(120);
+    expect(initialBpm(jot)).toBe(120);
     expect(jot.globalMetadata.time).toEqual({ count: 4, unit: 4 });
     expect(jot.layers).toHaveLength(1);
     expect(jot.layers[0].bars).toHaveLength(1);
@@ -368,7 +422,10 @@ describe('MIDI <-> Jot synthetic baseline', () => {
       ],
     });
     const jot = fromMidi(bytes);
-    expect(jot.globalMetadata.bpm).toBe(92);
+    // The initial tempo is the song-start tempoEvent now, carrying the raw
+    // BPM (92 stored as integer µs/qn reads back as ~91.99999); the display
+    // layer rounds. The old `globalMetadata.bpm` was pre-rounded.
+    expect(initialBpm(jot)).toBeCloseTo(92, 2);
     expect(jot.globalMetadata.time).toEqual({ count: 7, unit: 8 });
 
     const re = parseMidi(toMidi(jot));
@@ -479,7 +536,7 @@ describe('MIDI <-> Jot synthetic baseline', () => {
     }
     const spliced = new Uint8Array(writeMidi(parsed));
     const jot = fromMidi(spliced);
-    expect(jot.globalMetadata.bpm).toBe(120);
+    expect(initialBpm(jot)).toBe(120);
     expect(jot.tempoEvents).toEqual([
       { barIndex: 0, beat: 2, bpm: 60 },
     ]);
@@ -790,7 +847,7 @@ describe('MIDI fixture round trips', () => {
       it('preserves first tempo and time signature', () => {
         const jot = fromMidi(bytes);
         const inputBpm = firstTempoBpm(inputMidi) ?? 120;
-        expect(jot.globalMetadata.bpm).toBe(inputBpm);
+        expect(initialBpm(jot)).toBe(inputBpm);
 
         const inputTime = firstTimeSig(inputMidi) ?? { count: 4, unit: 4 };
         expect(jot.globalMetadata.time).toEqual(inputTime);
@@ -819,4 +876,44 @@ describe('MIDI fixture round trips', () => {
       });
     });
   }
+});
+
+describe('fromMidi barDrift ingestion', () => {
+  const tpq = 480;
+  const bar = tpq * 4; // 4/4
+
+  it('passes per-drum-bar drift through to jot.barDrift (no lead-in)', () => {
+    // Kicks on the downbeat of bars 0, 1, 2 → 3 drum bars, no leading rests.
+    const bytes = buildMidi({
+      ticksPerBeat: tpq,
+      notes: [
+        { tick: 0, note: 36, velocity: 100 },
+        { tick: bar, note: 36, velocity: 100 },
+        { tick: bar * 2, note: 36, velocity: 100 },
+      ],
+    });
+    const jot = fromMidi(bytes, {}, undefined, [0, 0.02, 0.05]);
+    expect(jot.barDrift?.slice(0, 3)).toEqual([0, 0.02, 0.05]);
+  });
+
+  it('re-indexes drum-bar drift onto layers[0].bars, zeroing the lead-in', () => {
+    // First bar is silent (all rests) → leadBars = 1; the two drum bars carry
+    // drift, indexed by drum bar, so they land on layers[0].bars[1..2].
+    const bytes = buildMidi({
+      ticksPerBeat: tpq,
+      notes: [
+        { tick: bar, note: 36, velocity: 100 }, // drum bar 0
+        { tick: bar * 2, note: 36, velocity: 100 }, // drum bar 1
+      ],
+    });
+    const jot = fromMidi(bytes, {}, undefined, [0.01, 0.04]);
+    expect(jot.globalMetadata.leadBars).toBe(1);
+    expect(jot.barDrift?.slice(0, 3)).toEqual([0, 0.01, 0.04]);
+  });
+
+  it('omits barDrift for a metronomic (all-zero) recording', () => {
+    const bytes = buildMidi({ ticksPerBeat: tpq, notes: [{ tick: 0, note: 36, velocity: 100 }] });
+    expect(fromMidi(bytes, {}, undefined, [0, 0, 0]).barDrift).toBeUndefined();
+    expect(fromMidi(bytes).barDrift).toBeUndefined();
+  });
 });

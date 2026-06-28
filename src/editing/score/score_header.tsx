@@ -57,8 +57,10 @@ export function formatSubtitle(jot: MutableJot): string {
   const vol = residualMetadata(jot).vol;
   const { dominantBpm, dominantTime } = jot.dominantBpmAndTime;
 
+  // The headline tempo is the one the song spends the most of its duration
+  // at (the duration-weighted majority); tempo has no single
+  // `globalMetadata.bpm` to fall back on, an empty jot simply shows no bpm.
   if (dominantBpm !== undefined) parts.push(`${dominantBpm} bpm`);
-  else parts.push(`${jot.bpm} bpm`);
 
   if (dominantTime) parts.push(`${dominantTime.count}/${dominantTime.unit}`);
   if (typeof vol === 'string') parts.push(vol);
