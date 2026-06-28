@@ -1,0 +1,84 @@
+/* Transcribe options dialog. Shares the modal + button + form primitives so
+   it reads as a sibling of the lyrics loaders. */
+
+.backdrop {
+    composes: backdrop from '../../ui/modal/modal.module.css';
+}
+
+.panel {
+    composes: panel from '../../ui/modal/modal.module.css';
+    width: min(440px, 100%);
+    max-height: calc(100vh - 48px);
+    max-height: calc(100dvh - 48px);
+}
+
+.header {
+    composes: header from '../../ui/modal/modal.module.css';
+}
+
+.title {
+    composes: title from '../../ui/modal/modal.module.css';
+}
+
+.close {
+    composes: close from '../../ui/button/button.module.css';
+}
+
+.body {
+    composes: body from '../../ui/modal/modal.module.css';
+}
+
+.subtitle {
+    composes: bodyMd from '../../typography.module.css';
+    margin: 0 0 4px;
+    color: var(--color-text-muted-alt);
+}
+
+/* One option row: label on the left, control on the right. */
+.field {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    cursor: pointer;
+}
+
+.field > span:first-child {
+    flex: 0 1 auto;
+}
+
+/* The dependent "Include LLM adjustment" sub-option sits indented under
+   Quantise. */
+.subField {
+    padding-left: 16px;
+    color: var(--color-text-muted-alt);
+}
+
+.select {
+    composes: field from '../../ui/form/form.module.css';
+    flex: 0 0 auto;
+    min-width: 140px;
+}
+
+.footer {
+    composes: footer from '../../ui/modal/modal.module.css';
+}
+
+.footerSpacer {
+    flex: 1 1 auto;
+}
+
+.secondaryButton {
+    composes: secondary from '../../ui/button/button.module.css';
+    border-radius: var(--radius-sm);
+}
+
+.primaryButton {
+    composes: primary from '../../ui/button/button.module.css';
+    border-radius: var(--radius-sm);
+}
+
+.primaryButton:disabled {
+    opacity: 0.6;
+}

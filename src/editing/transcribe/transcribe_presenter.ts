@@ -9,42 +9,54 @@ import {
   TranscribeProgress,
   TranscribeStage,
 } from 'src/editing/transcribe/transcriber';
+import { fromMidi } from 'src/midi/from_midi';
+import { AudioTrackId } from 'src/editing/playback/audio_tracks';
+import { jotPlayer } from 'src/editing/playback/player';
 import { transcribeSuccessToastMessage } from '../../ui/toasts/toasts_messages';
 import { toastStore } from '../../ui/toasts/toasts';
-import { isBackendUnreachable } from 'src/net/backend_fetch';
+import { backendFetch, isBackendUnreachable } from 'src/net/backend_fetch';
 import { TranscribeStore } from './transcribe_store';
 import { JotEditorPresenter } from '../jot_editor_presenter';
+import { appendTranscription } from './append_transcription';
 
 /**
  * Dependencies the transcribe presenter orchestrates over.
  */
 export type TranscribePresenterDeps = {
   transcribe: TranscribeStore;
-  /** Sibling presenter: the transcribe flow auto-loads its result bundle
-   *  (score + audio + provenance) through the shared document loader, and
-   *  the recent-runs picker reuses the loading overlay. */
+  /** Sibling presenter: the replace (recent / resume) flow auto-loads its
+   *  result bundle through the shared document loader, and the append flow
+   *  reads the loaded document off its store to mutate in place. */
   jotEditorPresenter: JotEditorPresenter;
 };
 
+/** Audio-track display name: filename with its extension stripped. Used both
+ *  as the inserted layer's label and the toast/progress text. */
+function audioTrackLabel(filename: string): string {
+  return filename.replace(/\.[^./\\]+$/, '') || filename;
+}
+
 /**
- * Transcribe orchestration for the jot editor: the `/transcribe` and
- * `/resume` flows, the streamed-progress pill, the recent-runs picker,
- * and the transcribe form options. The post-run artifact load (score,
- * audio tracks, note provenance) is delegated to {@link JotEditorPresenter}.
+ * Transcribe orchestration for the jot editor. Two flows:
  *
- * Formerly the catch-all `JotEditorStore` orchestration; the per-domain
- * presenters (document / mixer / playback / provenance / lyrics /
- * viewport / settings) were split out around it.
+ *  - **append** (per audio track): re-upload a loaded track's source bytes,
+ *    convert the predicted MIDI to a jot, and insert it into the *current*
+ *    document as a new `||` layer ({@link appendTranscription}) without
+ *    dropping the session's audio tracks / lyrics / mixer.
+ *  - **replace** (recent / resume): re-run a previous server run from a chosen
+ *    stage and load its debug bundle as a wholesale document replacement
+ *    (delegated to {@link JotEditorPresenter}).
+ *
+ * Also owns the transcribe dialog state, the form options, and the recent-runs
+ * refresh.
  */
 export class TranscribePresenter {
-  /**
-   * Controller for the in-flight `/transcribe` request, if any. The
-   * "Stop" toolbar button calls `.abort()` here; the request's
-   * AbortSignal is passed into `transcriber.transcribe` which forwards
-   * it to `fetch` so the request is genuinely cancelled at the
-   * network layer rather than just discarding the response.
-   */
-  transcribeController: AbortController | undefined;
+  /** One in-flight append request per audio track (mirrors lyrics align):
+   *  concurrent per-track transcriptions don't cancel each other, and a second
+   *  transcribe on the SAME track aborts the first. Non-observable. */
+  private readonly trackControllers: Map<AudioTrackId, AbortController> = new Map();
+  /** The single in-flight replace (recent / resume) request, if any. */
+  private replaceController: AbortController | undefined;
 
   readonly transcribe: TranscribeStore;
   readonly jotEditorPresenter: JotEditorPresenter;
@@ -53,32 +65,72 @@ export class TranscribePresenter {
     this.transcribe = deps.transcribe;
     this.jotEditorPresenter = deps.jotEditorPresenter;
     makeAutoObservable(this, {
-      transcribeController: false,
       transcribe: false,
       jotEditorPresenter: false,
     });
   }
 
-  /**
-   * Upload an audio file to the transcriber service, parse the returned
-   * Drumjot DSL, and load the resulting Jot. Updates `transcribeStatus`
-   * so the toolbar can show progress / errors.
-   *
-   * A single in-flight transcription is tracked via `transcribeController`.
-   * Calling `cancelTranscribe()` aborts the underlying `fetch` request and
-   * surfaces a cancelled state on the toolbar; starting a new
-   * transcription while one is in flight will abort the previous one
-   * first (defensive - the UI disables the button during upload, but the
-   * console-level `loadDsl` API doesn't).
-   */
-  async transcribeAudio(file: File): Promise<void> {
-    if (this.transcribeController) {
-      this.transcribeController.abort();
+  // --- dialog ---
+
+  /** Open the append dialog for an audio track (transcribe → insert here). */
+  openAppendDialog(audioTrackId: AudioTrackId): void {
+    this.transcribe.dialog = { mode: 'append', audioTrackId };
+    void this.refreshRecentTranscriptions();
+  }
+
+  /** Open the replace dialog for a previous run (resume → replace the jot). */
+  openReplaceDialog(folder: string): void {
+    this.transcribe.dialog = { mode: 'replace', folder, resumeStage: undefined };
+    void this.refreshRecentTranscriptions();
+  }
+
+  closeDialog(): void {
+    this.transcribe.dialog = undefined;
+  }
+
+  setDialogResumeStage(stage: TranscribeStage | undefined): void {
+    const dialog = this.transcribe.dialog;
+    if (dialog?.mode !== 'replace') return;
+    this.transcribe.dialog = { ...dialog, resumeStage: stage };
+  }
+
+  /** Run the dialog's configured action and close it. */
+  confirmDialog(): void {
+    const dialog = this.transcribe.dialog;
+    if (!dialog) return;
+    this.closeDialog();
+    if (dialog.mode === 'append') {
+      void this.transcribeAudioTrack(dialog.audioTrackId);
+    } else if (dialog.resumeStage !== undefined) {
+      void this.resumeReplace(dialog.folder, dialog.resumeStage);
     }
+  }
+
+  // --- append flow (per audio track → insert into current jot) ---
+
+  /**
+   * Transcribe a loaded audio track and insert the result into the current
+   * jot as a new layer. The track's source bytes are re-uploaded; progress
+   * streams into the per-track status (gutter spinner + busy pill). On success
+   * the predicted MIDI is converted and merged in place via
+   * {@link appendTranscription}; a warning toast fires when pre-existing
+   * content was changed.
+   */
+  async transcribeAudioTrack(id: AudioTrackId): Promise<void> {
+    const track = jotPlayer.audioTracks.get(id);
+    if (!track) return;
+    const store = this.jotEditorPresenter.jotEditorStore;
+    if (!store.loroDoc || !store.jot) {
+      toastStore.showError('Load or create a jot before transcribing into it.');
+      return;
+    }
+    const prev = this.trackControllers.get(id);
+    if (prev) prev.abort();
     const controller = new AbortController();
-    this.transcribeController = controller;
+    this.trackControllers.set(id, controller);
+    const file = new File([track.sourceBlob], track.filename, { type: track.sourceBlob.type });
     runInAction(() => {
-      this.transcribe.transcribeStatus = { phase: 'uploading', filename: file.name };
+      this.transcribe.trackStatuses.set(id, { filename: track.filename });
     });
     try {
       const response = await transcriber.transcribe(file, {
@@ -89,39 +141,106 @@ export class TranscribePresenter {
         quantise: this.transcribe.transcribeOptions.quantise,
         quantiseUseLlm: this.transcribe.transcribeOptions.quantiseUseLlm,
         signal: controller.signal,
-        onProgress: (event) => this.applyProgress(file.name, event),
+        onProgress: (event) => this.applyTrackProgress(id, track.filename, event),
       });
-      await this.applyTranscribeResponse(response, file.name, controller.signal);
+      await this.applyAppendResponse(id, track.filename, response, controller.signal);
     } catch (err) {
       this.handleTranscribeError(err, controller, 'Transcribe');
     } finally {
-      if (this.transcribeController === controller) {
-        this.transcribeController = undefined;
-      }
-      // The folder list has a new entry (the just-finished run); refresh
-      // best-effort so the picker is up to date without the operator
-      // having to reopen the dropdown.
+      if (this.trackControllers.get(id) === controller) this.trackControllers.delete(id);
+      runInAction(() => this.transcribe.trackStatuses.delete(id));
       void this.refreshRecentTranscriptions();
     }
   }
 
   /**
-   * Re-run the transcribe pipeline from a chosen stage against a
-   * previously-cached debug folder. Same status / auto-load semantics as
-   * {@link transcribeAudio}: progress pill while in flight, the response
-   * either parses straight (DSL mode) or auto-loads the rebuilt debug
-   * bundle (filter mode), and the resume controller shares
-   * `transcribeController` so the Stop button cancels both flows.
+   * Fetch the predicted MIDI, convert it to a jot, and merge it into the live
+   * document as a new layer. Only the MIDI is pulled (not the whole debug
+   * bundle): the append flow keeps the existing audio tracks, so the bundle's
+   * own stems aren't wanted.
    */
-  async resumeTranscribe(folder: string, stage: TranscribeStage): Promise<void> {
-    if (this.transcribeController) {
-      this.transcribeController.abort();
+  private async applyAppendResponse(
+    id: AudioTrackId,
+    filename: string,
+    response: Awaited<ReturnType<typeof transcriber.transcribe>>,
+    signal: AbortSignal
+  ): Promise<void> {
+    const midiUrl = stemUrl(response.prediction_midi_url ?? null);
+    if (!midiUrl) {
+      toastStore.showError('Transcriber returned no predicted MIDI.');
+      return;
     }
+    const res = await backendFetch(midiUrl, { signal });
+    if (!res.ok) throw new Error(`Fetch predicted MIDI failed (${res.status})`);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const jot = fromMidi(bytes);
+
+    const store = this.jotEditorPresenter.jotEditorStore;
+    const doc = store.loroDoc;
+    const model = store.jot;
+    // The jot may have been unloaded/replaced while the request was in flight.
+    if (!doc || !model) return;
+
+    const layerName = audioTrackLabel(filename);
+    const result = appendTranscription(doc, model, jot, { layerName });
+
+    const parts: string[] = [];
+    if (result.replacedTempoCount > 0) {
+      parts.push(
+        `replaced ${result.replacedTempoCount} existing tempo event${result.replacedTempoCount === 1 ? '' : 's'}`
+      );
+    }
+    if (result.hadNotes) {
+      parts.push('existing notes were kept but may need realignment to the new tempo/bar grid');
+    }
+    if (parts.length > 0) {
+      toastStore.showWarning(`Inserted transcription of ${filename}. Heads up: ${parts.join('; ')}.`);
+    } else {
+      toastStore.showSuccess(`Transcribed ${filename} into the current jot.`);
+    }
+  }
+
+  private applyTrackProgress(id: AudioTrackId, filename: string, event: TranscribeProgress): void {
+    runInAction(() => {
+      const status = this.transcribe.trackStatuses.get(id);
+      // Ignore late events once the track's status was cleared (abort / done).
+      if (!status) return;
+      if (event.kind === 'stage' && event.phase === 'start') {
+        this.transcribe.trackStatuses.set(id, { filename, stage: event.stage });
+      } else if (event.kind === 'substage') {
+        this.transcribe.trackStatuses.set(id, {
+          filename,
+          stage: event.stage,
+          substage: event.detail,
+        });
+      }
+    });
+  }
+
+  /** Abort the in-flight transcription for one audio track, if any. */
+  cancelTrackTranscribe(id: AudioTrackId): void {
+    const controller = this.trackControllers.get(id);
+    if (!controller) return;
+    controller.abort();
+    this.trackControllers.delete(id);
+    runInAction(() => this.transcribe.trackStatuses.delete(id));
+  }
+
+  // --- replace flow (recent / resume → wholesale document replace) ---
+
+  /**
+   * Re-run the pipeline from a chosen stage against a previous run's debug
+   * folder and load the rebuilt bundle as a wholesale replacement of the
+   * current document (score + audio tracks + provenance), mirroring the
+   * historical Transcribe-dropdown Resume behaviour.
+   */
+  async resumeReplace(folder: string, stage: TranscribeStage): Promise<void> {
+    if (this.replaceController) this.replaceController.abort();
     const controller = new AbortController();
-    this.transcribeController = controller;
+    this.replaceController = controller;
     const label = `${folder} from ${stage}`;
     runInAction(() => {
-      this.transcribe.transcribeStatus = { phase: 'uploading', filename: label };
+      this.transcribe.replaceStatus = { phase: 'uploading', filename: label };
     });
     try {
       const response = await transcriber.resume({
@@ -133,55 +252,42 @@ export class TranscribePresenter {
         quantise: this.transcribe.transcribeOptions.quantise,
         quantiseUseLlm: this.transcribe.transcribeOptions.quantiseUseLlm,
         signal: controller.signal,
-        onProgress: (event) => this.applyProgress(label, event),
+        onProgress: (event) => this.applyReplaceProgress(label, event),
       });
-      // The resumed run reuses the original folder, so the original
-      // upload filename is the most informative pill label — fall back
-      // to the resume folder name when the server doesn't know it.
       const fallbackName =
-        this.transcribe.recentTranscriptions.find((t) => t.folder === folder)?.original_filename ?? folder;
-      await this.applyTranscribeResponse(response, fallbackName, controller.signal);
+        this.transcribe.recentTranscriptions.find((t) => t.folder === folder)?.original_filename ??
+        folder;
+      await this.applyReplaceResponse(response, fallbackName, controller.signal);
     } catch (err) {
       this.handleTranscribeError(err, controller, 'Resume');
     } finally {
-      if (this.transcribeController === controller) {
-        this.transcribeController = undefined;
-      }
+      if (this.replaceController === controller) this.replaceController = undefined;
       void this.refreshRecentTranscriptions();
     }
   }
 
   /**
-   * Shared post-transcribe handling. The backend produces a MIDI
-   * prediction; we auto-load the bundled debug.zip so the score (via
-   * `from_midi.ts`), audio tracks, and note provenance hydrate in one
-   * go without the user having to download and re-load the zip by hand.
+   * Shared post-replace handling: the backend produced a debug bundle; auto-
+   * load it so the score, audio tracks, and provenance hydrate in one go.
    */
-  private async applyTranscribeResponse(
-    response: Awaited<ReturnType<typeof transcriber.transcribe>>,
+  private async applyReplaceResponse(
+    response: Awaited<ReturnType<typeof transcriber.resume>>,
     fallbackName: string,
     signal: AbortSignal
   ): Promise<void> {
     const bundleUrl = stemUrl(response.debug_zip_url ?? null);
     if (!bundleUrl) {
       runInAction(() => {
-        this.transcribe.transcribeStatus = { phase: 'idle' };
+        this.transcribe.replaceStatus = { phase: 'idle' };
       });
       toastStore.showError('Transcriber returned no debug bundle.');
       return;
     }
     const ok = await this.jotEditorPresenter.autoLoadDebugBundle(bundleUrl, fallbackName, signal);
-    if (!ok) {
-      // The auto-loader already surfaced the specific failure as an
-      // error toast; clear the busy pill back to idle and bail.
-      runInAction(() => {
-        this.transcribe.transcribeStatus = { phase: 'idle' };
-      });
-      return;
-    }
     runInAction(() => {
-      this.transcribe.transcribeStatus = { phase: 'idle' };
+      this.transcribe.replaceStatus = { phase: 'idle' };
     });
+    if (!ok) return;
     toastStore.showSuccess(
       transcribeSuccessToastMessage({
         filename: fallbackName,
@@ -200,33 +306,14 @@ export class TranscribePresenter {
     );
   }
 
-  /** Shared transcribe / resume failure handler. Routes aborts to idle
-   *  (user cancelled), everything else to the error pill. */
-  /**
-   * Fold one streamed `TranscribeProgress` event into the live
-   * `transcribeStatus` pill so the user sees the pipeline advancing
-   * through each stage. `stage` events with `phase='start'` set the
-   * current stage and clear any substage label from the previous one;
-   * `substage` events overwrite the in-stage detail without changing
-   * the stage itself. `phase='end'` is ignored for UI purposes — the
-   * pill rolls straight from one stage's `start` to the next stage's
-   * `start`, which reads more clearly than briefly showing "(done)".
-   */
-  private applyProgress(filename: string, event: TranscribeProgress): void {
+  private applyReplaceProgress(filename: string, event: TranscribeProgress): void {
     runInAction(() => {
-      const status = this.transcribe.transcribeStatus;
-      // If the request was aborted or already terminal (success/error)
-      // before this late event fires, ignore — late progress shouldn't
-      // resurrect the spinner over an idle/success/error pill.
+      const status = this.transcribe.replaceStatus;
       if (status.phase !== 'uploading') return;
       if (event.kind === 'stage' && event.phase === 'start') {
-        this.transcribe.transcribeStatus = {
-          phase: 'uploading',
-          filename,
-          stage: event.stage,
-        };
+        this.transcribe.replaceStatus = { phase: 'uploading', filename, stage: event.stage };
       } else if (event.kind === 'substage') {
-        this.transcribe.transcribeStatus = {
+        this.transcribe.replaceStatus = {
           phase: 'uploading',
           filename,
           stage: event.stage,
@@ -236,44 +323,34 @@ export class TranscribePresenter {
     });
   }
 
+  /** Shared transcribe / resume failure handler. Routes aborts + transport
+   *  failures to a quiet reset; real errors to an error toast. Only the replace
+   *  flow owns `replaceStatus`, so an append error doesn't silence a concurrent
+   *  replace's progress (append per-track statuses are cleared in their own
+   *  per-track `finally`). */
   private handleTranscribeError(err: unknown, controller: AbortController, verb: string): void {
-    // AbortError surfaces as DOMException with name='AbortError' (and
-    // wraps as TypeError in some runtimes when the fetch was already
-    // aborted at start). Treat the user-initiated cancellation
-    // distinctly from real errors so we don't show a scary red pill.
     const isAbort =
       controller.signal.aborted || (err instanceof DOMException && err.name === 'AbortError');
-    if (isAbort) {
+    if (this.replaceController === controller) {
       runInAction(() => {
-        this.transcribe.transcribeStatus = { phase: 'idle' };
+        this.transcribe.replaceStatus = { phase: 'idle' };
       });
-      return;
     }
-    // Transport failure: backendFetch already showed the generic "Server is
-    // down" toast, so just reset the pill instead of stacking a second toast.
-    if (isBackendUnreachable(err)) {
-      runInAction(() => {
-        this.transcribe.transcribeStatus = { phase: 'idle' };
-      });
-      return;
-    }
+    if (isAbort || isBackendUnreachable(err)) return;
     const message =
       err instanceof ParseError
         ? `${verb} returned invalid DSL: ${err.message}`
         : err instanceof Error
           ? err.message
           : String(err);
-    runInAction(() => {
-      this.transcribe.transcribeStatus = { phase: 'idle' };
-    });
     toastStore.showError(`${verb} failed: ${message}`);
   }
 
+  // --- recent runs ---
+
   /**
-   * Refresh the recent-transcriptions picker from the server. Failures
-   * are logged but never surfaced — the picker just stays as-is, which
-   * is the right behaviour when the backend is briefly unavailable.
-   * Safe to call from a fire-and-forget context.
+   * Refresh the recent-transcriptions list from the server. Failures are
+   * logged but never surfaced. Safe to call fire-and-forget.
    */
   async refreshRecentTranscriptions(): Promise<void> {
     runInAction(() => {
@@ -284,14 +361,10 @@ export class TranscribePresenter {
       runInAction(() => {
         this.transcribe.recentTranscriptions = list;
         this.transcribe.recentTranscriptionsLoaded = true;
-        // Drop the selection if its target folder vanished server-side
-        // (e.g. operator pruned the debug dir between dropdown opens).
-        if (
-          this.transcribe.selectedResumeFolder !== undefined &&
-          !list.some((s) => s.folder === this.transcribe.selectedResumeFolder)
-        ) {
-          this.transcribe.selectedResumeFolder = undefined;
-          this.transcribe.selectedResumeStage = undefined;
+        // Drop a stale dialog selection if its folder vanished server-side.
+        const dialog = this.transcribe.dialog;
+        if (dialog?.mode === 'replace' && !list.some((s) => s.folder === dialog.folder)) {
+          this.transcribe.dialog = undefined;
         }
       });
     } catch (err) {
@@ -304,37 +377,7 @@ export class TranscribePresenter {
     }
   }
 
-  /**
-   * Load a previously produced transcription's debug bundle straight from
-   * the server's `/outputs/<folder>/debug.zip` without re-running any
-   * pipeline stage. The bundle carries the kept-onset MIDI score, the
-   * per-stem audio, and the run's logs / stage timings, so this is the
-   * cheap way to reopen a finished run.
-   *
-   * Errors land on the shared status pill, mirroring the explicit
-   * "Load zip" debug-bundle file picker. Wrapped in `withLoading` so the
-   * modal overlay reads as one continuous load even though the inner
-   * `applyDebugBundle` may itself trigger nested audio-track loads.
-   */
-  async loadRecentTranscription(folder: string): Promise<void> {
-    const url = stemUrl(`/outputs/${encodeURIComponent(folder)}/debug.zip`);
-    if (!url) return;
-    const summary = this.transcribe.recentTranscriptions.find((s) => s.folder === folder);
-    const fallbackName = summary?.original_filename ?? folder;
-    return this.jotEditorPresenter.loadDebugBundleFromUrl(url, fallbackName);
-  }
-
-  /**
-   * Abort the in-flight transcription, if any. No-op when nothing is
-   * running. The next `transcribeAudio` call resumes normally.
-   */
-  cancelTranscribe() {
-    if (!this.transcribeController) return;
-    this.transcribeController.abort();
-    this.transcribeController = undefined;
-  }
-
-  // --- transcribe (form options + resume picker) ---
+  // --- form options ---
 
   setDebug(enabled: boolean) {
     this.transcribe.transcribeOptions.debug = enabled;
@@ -358,21 +401,5 @@ export class TranscribePresenter {
 
   setQuantiseUseLlm(enabled: boolean) {
     this.transcribe.transcribeOptions.quantiseUseLlm = enabled;
-  }
-
-  setSelectedResumeFolder(folder: string | undefined) {
-    this.transcribe.selectedResumeFolder = folder;
-    // Clearing the folder (or picking a different one) invalidates any
-    // stage selection, different folders have different `resumable_stages`,
-    // so a stale pick could land on a stage missing its prerequisites.
-    this.transcribe.selectedResumeStage = undefined;
-  }
-
-  setSelectedResumeStage(stage: TranscribeStage | undefined) {
-    this.transcribe.selectedResumeStage = stage;
-  }
-
-  setTranscribeMode(mode: 'new' | 'resume') {
-    this.transcribe.transcribeMode = mode;
   }
 }

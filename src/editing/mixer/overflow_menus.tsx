@@ -67,12 +67,23 @@ export function splitDrumPiecesState(role: AudioTrackRole | undefined): AudioTra
 export const AudioTrackOverflowMenu = observer(({
   track,
   trackLabel,
+  transcribing,
+  onTranscribe,
+  onCancelTranscribe,
   onSplitFromMix,
   onSplitDrumPieces,
   onClear,
 }: {
   track: AudioTrack;
   trackLabel: string;
+  /** Whether a transcription is in flight for this track. When true the menu
+   *  collapses to a single "Cancel transcription" item. */
+  transcribing?: boolean;
+  /** Transcribe this track's audio and insert the result into the current jot.
+   *  Absent ⇒ the item is hidden (no transcribe presenter in scope). */
+  onTranscribe?: (id: AudioTrackId) => void;
+  /** Abort the in-flight transcription for this track. */
+  onCancelTranscribe?: (id: AudioTrackId) => void;
   onSplitFromMix: (id: AudioTrackId) => void;
   onSplitDrumPieces: (id: AudioTrackId) => void;
   onClear: (id: AudioTrackId) => void;
@@ -85,8 +96,41 @@ export const AudioTrackOverflowMenu = observer(({
       className={styles.overflowTrigger}
       title={`More actions for ${trackLabel}`}
     >
-      {(close) => (
+      {(close) =>
+        transcribing && onCancelTranscribe ? (
+          <button
+            type="button"
+            className={dropdownStyles.dropdownItem}
+            role="menuitem"
+            onClick={() => {
+              onCancelTranscribe(track.id);
+              close();
+            }}
+            data-testid={`audio-track-cancel-transcribe-${track.id}`}
+            title={`Stop the in-flight transcription of "${trackLabel}".`}
+          >
+            Cancel transcription
+          </button>
+        ) : (
         <>
+          {onTranscribe && (
+            <>
+              <button
+                type="button"
+                className={dropdownStyles.dropdownItem}
+                role="menuitem"
+                onClick={() => {
+                  onTranscribe(track.id);
+                  close();
+                }}
+                data-testid={`audio-track-transcribe-${track.id}`}
+                title={`Transcribe "${trackLabel}" to drum notation and insert it into the current jot as a new layer.`}
+              >
+                Transcribe…
+              </button>
+              <span className={dropdownStyles.dropdownDivider} aria-hidden="true" />
+            </>
+          )}
           <AudioTrackMenuItem
             label="Split into drums + backing"
             state={mixState}
@@ -132,7 +176,8 @@ export const AudioTrackOverflowMenu = observer(({
             Remove track
           </button>
         </>
-      )}
+        )
+      }
     </DropdownButton>
   );
 });

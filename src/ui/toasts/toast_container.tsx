@@ -27,7 +27,9 @@ export const ToastContainer = observer(() => {
           key={toast.id}
           className={classNames(
             styles.toast,
-            toast.kind === 'success' ? styles.toastSuccess : styles.toastError,
+            toast.kind === 'success' && styles.toastSuccess,
+            toast.kind === 'error' && styles.toastError,
+            toast.kind === 'warning' && styles.toastWarning,
           )}
           role="status"
           title={toast.title}

@@ -6,8 +6,11 @@ import { AudioTrack, AudioTrackId } from 'src/editing/playback/audio_tracks';
 import { jotPlayer } from 'src/editing/playback/player';
 import { waveformWorker, BarSlice } from 'src/editing/playback/waveform_worker_client';
 import { BarBeat, WaveformChunk, buildChunkLayout } from './waveform_chunks';
-import { GutterResizeHandle } from 'src/ui/gutter_resize_handle/gutter_resize_handle';
 import { MuteButton, SoloButton } from 'src/ui/icon_button/icon_button';
+import { TrackGutter, type TrackBusy } from 'src/editing/track_gutter/track_gutter';
+import { TranscribeStoreContext, TranscribePresenterContext } from 'src/editing/transcribe/transcribe_contexts';
+import { STAGE_ORDER } from 'src/editing/transcribe/transcriber';
+import type { TranscribeTrackStatus } from 'src/editing/transcribe/transcribe_store';
 import { StructuralContext } from '../jot_editor_contexts';
 import { UniformWaveformsContext, WaveformGridLinesContext } from './mixer_contexts';
 import { MixerStoreContext } from './mixer_contexts';
@@ -38,6 +41,15 @@ const AUDIO_TRACK_HEIGHT = 76;
 /** Audio-track display name: filename with its extension stripped. */
 function audioTrackLabel(filename: string): string {
   return filename.replace(/\.[^./\\]+$/, '') || filename;
+}
+
+/** Tooltip for the gutter spinner while a transcription runs: "Transcribing
+ *  (stage X of Y)…", with the live substage appended when present. */
+function transcribeTrackTooltip(status: TranscribeTrackStatus): string {
+  if (!status.stage) return 'Transcribing…';
+  const x = STAGE_ORDER.indexOf(status.stage) + 1;
+  const base = `Transcribing (stage ${x} of ${STAGE_ORDER.length})…`;
+  return status.substage ? `${base} ${status.substage}` : base;
 }
 
 export const AudioTrackView = observer(
@@ -86,6 +98,8 @@ export const AudioTrackView = observer(
     });
     const isDragging = dragFromIdx === idx;
     const mixer = React.useContext(MixerStoreContext);
+    const transcribe = React.useContext(TranscribeStoreContext);
+    const transcribePresenter = React.useContext(TranscribePresenterContext);
     const splitStatus = mixer?.audioTrackSplitStatuses.get(id);
     const splittingTitle =
       splitStatus?.kind === 'mix'
@@ -93,6 +107,14 @@ export const AudioTrackView = observer(
         : splitStatus?.kind === 'pieces'
           ? 'Splitting into per-instrument pieces…'
           : undefined;
+    const transcribeStatus = transcribe?.trackStatuses.get(id);
+    // A transcribe-in-flight wins the spinner over a split (the two won't
+    // realistically overlap, but transcribe is the more recent intent).
+    const busy: TrackBusy | undefined = transcribeStatus
+      ? { tooltip: transcribeTrackTooltip(transcribeStatus), testId: `audio-track-transcribe-spinner-${id}` }
+      : splitStatus
+        ? { tooltip: splittingTitle ?? 'Splitting…', testId: `audio-track-split-spinner-${id}` }
+        : undefined;
     return (
       <div
         className={classNames(
@@ -109,48 +131,47 @@ export const AudioTrackView = observer(
         onDragLeave={drop.onDragLeave}
         onDrop={drop.onDrop}
       >
-        <div className={styles.musicTrackGutter} style={{ height: AUDIO_TRACK_HEIGHT }}>
-          <MixerDragHandle
-            idx={idx}
-            onDragStartIdx={onDragStartIdx}
-            onResetDrag={onResetDrag}
-            ariaLabel={`${label} audio track`}
-          />
-          <GutterResizeHandle onResizeStart={onResizeGutterStart} />
-          <div className={styles.musicTrackContent}>
-            <div className={styles.musicTrackHeader}>
-              <div
-                className={classNames(
-                  styles.musicTrackLabel,
-                  !audible && styles.musicTrackLabelDim
-                )}
-              >
-                <span className={styles.musicTrackName} title={label}>
-                  {label}
-                </span>
-                <span className={styles.musicTrackFileRow}>
-                  <span className={styles.musicTrackFile} title={track.filename}>
-                    {track.filename}
-                  </span>
-                  {splitStatus && (
-                    <span
-                      className={styles.musicTrackSplitSpinner}
-                      title={splittingTitle}
-                      aria-label={splittingTitle}
-                      role="status"
-                      data-testid={`audio-track-split-spinner-${id}`}
-                    />
-                  )}
-                </span>
-              </div>
-              <AudioTrackOverflowMenu
-                track={track}
-                trackLabel={label}
-                onSplitFromMix={controls.onSplitFromMix}
-                onSplitDrumPieces={controls.onSplitDrumPieces}
-                onClear={controls.onClear}
-              />
-            </div>
+        <TrackGutter
+          variant="cream"
+          height={AUDIO_TRACK_HEIGHT}
+          dim={!audible}
+          onResizeGutterStart={onResizeGutterStart}
+          dragHandle={
+            <MixerDragHandle
+              idx={idx}
+              onDragStartIdx={onDragStartIdx}
+              onResetDrag={onResetDrag}
+              ariaLabel={`${label} audio track`}
+            />
+          }
+          primary={
+            <span className={styles.musicTrackName} title={label}>
+              {label}
+            </span>
+          }
+          secondary={
+            <span className={styles.musicTrackFile} title={track.filename}>
+              {track.filename}
+            </span>
+          }
+          busy={busy}
+          overflow={
+            <AudioTrackOverflowMenu
+              track={track}
+              trackLabel={label}
+              transcribing={transcribeStatus !== undefined}
+              onTranscribe={
+                transcribePresenter ? () => transcribePresenter.openAppendDialog(id) : undefined
+              }
+              onCancelTranscribe={
+                transcribePresenter ? () => transcribePresenter.cancelTrackTranscribe(id) : undefined
+              }
+              onSplitFromMix={controls.onSplitFromMix}
+              onSplitDrumPieces={controls.onSplitDrumPieces}
+              onClear={controls.onClear}
+            />
+          }
+          body={
             <div className={styles.musicTrackButtons}>
               <RowVolumeSlider
                 value={controls.volumeFor(id)}
@@ -172,8 +193,8 @@ export const AudioTrackView = observer(
                 testId={`audio-track-solo-${id}`}
               />
             </div>
-          </div>
-        </div>
+          }
+        />
         <div
           className={styles.musicTrackBarsRow}
           data-bars-row

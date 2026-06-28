@@ -95,6 +95,19 @@ export type TranscribeStage =
   | 'quantise'
   | 'transcribe';
 
+/** Pipeline stages in run order. The canonical source for the resume-stage
+ *  picker and for the "stage X of Y" per-track progress readout. Mirrors
+ *  `Stage` in `transcriber/app/pipeline/runner.py`. */
+export const STAGE_ORDER: readonly TranscribeStage[] = [
+  'stems_all',
+  'stems_per',
+  'beats',
+  'onsets',
+  'filter',
+  'quantise',
+  'transcribe',
+];
+
 /** Audio fed into the beat tracker.
  *  See `transcriber/app/pipeline/runner.py::BeatInput`. */
 export type BeatInput = 'full_mix' | 'drum_stem';

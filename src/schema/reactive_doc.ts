@@ -23,9 +23,11 @@ export const ROOT = 'root';
 // change. For bulk edits that fragments one logical gesture into N tiny
 // changes (N sync deltas, N future undo steps). `transact` defers the
 // per-op commits and flushes a single commit at the outermost exit, so a
-// bulk delete/move lands as one change. It is private to this module: the
-// collection facades expose bulk operators (`setAll`, variadic `delete`)
-// that use it, and schema consumers never touch commit batching directly.
+// bulk delete/move lands as one change. The collection facades expose bulk
+// operators (`setAll`, variadic `delete`) that use it; it is also exported
+// for the rare cross-collection gesture that must land as ONE Loro change
+// (= one undo step), e.g. the transcribe-append merge that rewrites bars +
+// tempo events + adds a layer's tracks/notes in a single edit.
 //
 // The depth counter is module-global, which is sound because `transact`'s
 // body is synchronous and JS is single-threaded, so at most one transact
@@ -36,7 +38,7 @@ let deferDepth = 0;
  *  reactions are coalesced too via `runInAction`. Re-entrant: nested calls
  *  flush only when the outermost returns. Commits even if `fn` throws so a
  *  partial edit still persists and the defer flag never sticks. */
-function transact(doc: LoroDoc, fn: () => void): void {
+export function transact(doc: LoroDoc, fn: () => void): void {
   deferDepth++;
   try {
     runInAction(fn);

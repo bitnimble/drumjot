@@ -1,14 +1,15 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
-import type { TranscribeStatus } from 'src/editing/transcribe/transcribe_store';
+import { TranscribeStore, type TranscribeTrackStatus } from 'src/editing/transcribe/transcribe_store';
+import { TranscribeStoreContext } from 'src/editing/transcribe/transcribe_contexts';
 import { LyricsAlignBusyPill, TranscribeBusyPill } from '../toolbar_status';
 import { Gallery, Variant } from 'src/ui/stories/_variants';
 
 /**
  * The toolbar's right-aligned busy pills, shown while a backend job is in
- * flight. Both are pure prop-driven `observer`s, so they render in
- * isolation without any store wiring. (The third indicator,
- * DrumLoadingIndicator, reads the `jotPlayer` singleton's load state
- * directly and isn't prop-driven, so it's not represented here.)
+ * flight. `LyricsAlignBusyPill` is prop-driven; `TranscribeBusyPill` reads the
+ * `TranscribeStore` from context, so each transcribe variant wraps it in a
+ * provider with a stub store. (DrumLoadingIndicator reads the `jotPlayer`
+ * singleton directly and isn't represented here.)
  */
 const meta: Meta = {
   title: 'Toolbar/Status pills',
@@ -17,33 +18,38 @@ export default meta;
 
 type Story = StoryObj;
 
-const uploading = (
-  over: Partial<Extract<TranscribeStatus, { phase: 'uploading' }>>
-): TranscribeStatus => ({
-  phase: 'uploading',
-  filename: 'my-song.flac',
-  ...over,
-});
+/** A store stub whose single in-flight track has the given status. */
+const withTrack = (status: TranscribeTrackStatus) => {
+  const store = new TranscribeStore();
+  store.trackStatuses.set('a', status);
+  return store;
+};
+
+const TranscribePill = ({ status }: { status: TranscribeTrackStatus }) => (
+  <TranscribeStoreContext.Provider value={withTrack(status)}>
+    <TranscribeBusyPill />
+  </TranscribeStoreContext.Provider>
+);
 
 /** Every busy-pill state in one place. */
 export const All: Story = {
   render: () => (
     <Gallery>
-      <Variant label="Lyrics align — queued">
+      <Variant label="Lyrics align, queued">
         <LyricsAlignBusyPill phase="queued" />
       </Variant>
-      <Variant label="Lyrics align — running">
+      <Variant label="Lyrics align, running">
         <LyricsAlignBusyPill phase="aligning" />
       </Variant>
-      <Variant label="Transcribe — starting (filename only)">
-        <TranscribeBusyPill status={uploading({})} />
+      <Variant label="Transcribe, starting (filename only)">
+        <TranscribePill status={{ filename: 'my-song.flac' }} />
       </Variant>
-      <Variant label="Transcribe — on a stage">
-        <TranscribeBusyPill status={uploading({ stage: 'onsets' })} />
+      <Variant label="Transcribe, on a stage">
+        <TranscribePill status={{ filename: 'my-song.flac', stage: 'onsets' }} />
       </Variant>
-      <Variant label="Transcribe — with substage detail">
-        <TranscribeBusyPill
-          status={uploading({ stage: 'stems_per', substage: 'separating 3/5 (latest: snare)' })}
+      <Variant label="Transcribe, with substage detail">
+        <TranscribePill
+          status={{ filename: 'my-song.flac', stage: 'stems_per', substage: 'separating 3/5 (latest: snare)' }}
         />
       </Variant>
     </Gallery>

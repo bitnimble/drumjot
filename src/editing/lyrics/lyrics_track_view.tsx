@@ -7,7 +7,7 @@ import { activeLineIndexAt, activeWordIndexAt } from 'src/lyrics/lrc';
 import { LyricsTrackId, lyricsStore } from 'src/lyrics/store';
 import { jotPlayer } from 'src/editing/playback/player';
 import { LyricsPresenterContext, LyricsAlignStoreContext } from './lyrics_contexts';
-import { GutterResizeHandle } from 'src/ui/gutter_resize_handle/gutter_resize_handle';
+import { TrackGutter, type TrackBusy } from 'src/editing/track_gutter/track_gutter';
 import { MixerRowDragProps, useMixerRowDropTarget } from '../mixer/mixer_drag';
 import {
   LyricLineMeasureInput,
@@ -259,56 +259,50 @@ export const LyricsTrackView = observer(
         onDragLeave={drop.onDragLeave}
         onDrop={drop.onDrop}
       >
-        <div className={styles.lyricsGutter} style={{ height: LYRICS_ROW_HEIGHT }}>
-          <div
-            className={styles.dragHandle}
-            draggable={true}
-            onMouseDown={(e) => e.stopPropagation()}
-            onDragStart={(e) => {
-              e.dataTransfer.setData(
-                'application/x-drumjot-mixer-row',
-                String(idx),
-              );
-              e.dataTransfer.setData('text/plain', String(idx));
-              e.dataTransfer.effectAllowed = 'move';
-              onDragStartIdx(idx);
-            }}
-            onDragEnd={onResetDrag}
-            title="Lyrics row (drag to reorder)"
-            aria-label="Reorder lyrics row"
-            role="button"
-          >
-            ⋮⋮
-          </div>
-          <GutterResizeHandle onResizeStart={onResizeGutterStart} />
-          <div className={styles.lyricsContent}>
-            <div className={styles.lyricsHeader}>
-              <div className={styles.lyricsLabel}>
-                <span className={styles.lyricsTitle}>Lyrics</span>
-                <span className={styles.lyricsSourceRow}>
-                  <span className={styles.lyricsSource} title={sourceLabel}>
-                    {sourceLabel}
-                  </span>
-                  {isAligning && (
-                    <span
-                      className={styles.lyricsAlignSpinner}
-                      title={`${alignLabel}…`}
-                      aria-label={alignLabel}
-                      role="status"
-                      data-testid={`lyrics-align-spinner-${id}`}
-                    />
-                  )}
-                </span>
-              </div>
-              <LyricsOverflowMenu
-                id={id}
-                offsetSec={offsetSec}
-                onSetOffset={(v) => lyricsStore.setOffsetSec(id, v)}
-                onRemove={() => presenter?.removeLyricsTrack(id)}
-              />
+        <TrackGutter
+          variant="cream"
+          height={LYRICS_ROW_HEIGHT}
+          contentAlign="center"
+          onResizeGutterStart={onResizeGutterStart}
+          dragHandle={
+            <div
+              className={styles.dragHandle}
+              draggable={true}
+              onMouseDown={(e) => e.stopPropagation()}
+              onDragStart={(e) => {
+                e.dataTransfer.setData('application/x-drumjot-mixer-row', String(idx));
+                e.dataTransfer.setData('text/plain', String(idx));
+                e.dataTransfer.effectAllowed = 'move';
+                onDragStartIdx(idx);
+              }}
+              onDragEnd={onResetDrag}
+              title="Lyrics row (drag to reorder)"
+              aria-label="Reorder lyrics row"
+              role="button"
+            >
+              ⋮⋮
             </div>
-          </div>
-        </div>
+          }
+          primary={<span className={styles.lyricsTitle}>Lyrics</span>}
+          secondary={
+            <span className={styles.lyricsSource} title={sourceLabel}>
+              {sourceLabel}
+            </span>
+          }
+          busy={
+            isAligning
+              ? ({ tooltip: `${alignLabel}…`, testId: `lyrics-align-spinner-${id}` } satisfies TrackBusy)
+              : undefined
+          }
+          overflow={
+            <LyricsOverflowMenu
+              id={id}
+              offsetSec={offsetSec}
+              onSetOffset={(v) => lyricsStore.setOffsetSec(id, v)}
+              onRemove={() => presenter?.removeLyricsTrack(id)}
+            />
+          }
+        />
         <div
           className={classNames(
             styles.lyricsBarsRow,
