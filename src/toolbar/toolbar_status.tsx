@@ -1,4 +1,3 @@
-import classNames from 'classnames';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { jotPlayer } from 'src/editing/playback/player';
@@ -7,7 +6,7 @@ import { TranscribeStage } from 'src/editing/transcribe/transcriber';
 import { TranscribeStoreContext } from 'src/editing/transcribe/transcribe_contexts';
 import { ProgressBar } from 'src/ui/progress_bar/progress_bar';
 import { Spinner } from 'src/ui/spinner/spinner';
-import sharedStyles from '../editing/jot_editor.module.css';
+import { StatusPill } from 'src/ui/status_pill/status_pill';
 import styles from './toolbar.module.css';
 
 /** Human-readable label for one pipeline stage, used in the status
@@ -106,18 +105,18 @@ export const LyricsAlignBusyPill = observer(
     if (phase === 'idle') return null;
     const queued = phase === 'queued';
     return (
-      <span
-        className={classNames(sharedStyles.statusPill, sharedStyles.statusPillBusy)}
+      <StatusPill
+        tone="busy"
         title={
           queued
             ? 'Waiting for the GPU (another job is running)…'
             : 'Extracting vocals + aligning lyrics…'
         }
-        data-testid="lyrics-align-busy"
+        testId="lyrics-align-busy"
       >
         <Spinner size={10} tone="accent" className={styles.statusPillSpinner} />
         {queued ? 'Queued…' : 'Aligning lyrics…'}
-      </span>
+      </StatusPill>
     );
   }
 );
@@ -149,15 +148,15 @@ export const TranscribeBusyPill = observer(() => {
     ? ` · ${formatStageLabel(active.stage)}${active.substage ? ` (${active.substage})` : ''}`
     : '';
   return (
-    <span
-      className={classNames(sharedStyles.statusPill, sharedStyles.statusPillBusy)}
+    <StatusPill
+      tone="busy"
       title={active.substage ?? active.stage ?? 'starting'}
-      data-testid="transcribe-busy"
+      testId="transcribe-busy"
     >
-      <span className={styles.statusPillSpinner} aria-hidden="true" />
+      <Spinner size={10} tone="accent" className={styles.statusPillSpinner} />
       Transcribing {active.filename}
       {stagePart}
       {extra}…
-    </span>
+    </StatusPill>
   );
 });

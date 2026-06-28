@@ -4,7 +4,7 @@ import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { jotPlayer, PlayerState } from 'src/editing/playback/player';
 import { Slider } from 'src/ui/slider/slider';
-import sharedStyles from '../jot_editor.module.css';
+import { StatusPill } from 'src/ui/status_pill/status_pill';
 import { FollowPlayheadContext } from './playback_contexts';
 import styles from './playback.module.css';
 import { VOLUME_STEP } from '../mixer/mixer_store';
@@ -100,12 +100,9 @@ const PlaybackControls = observer(
         <div className={styles.transportAux}>
           <MasterVolumes />
           {hasError && (
-            <span
-              className={classNames(sharedStyles.statusPill, sharedStyles.statusPillError)}
-              title={playerError}
-            >
+            <StatusPill tone="error" title={playerError}>
               Playback: {truncate(playerError ?? '', 60)}
-            </span>
+            </StatusPill>
           )}
         </div>
       </>

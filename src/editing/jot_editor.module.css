@@ -2,7 +2,7 @@
    - App layout (appContainer / jotContainer / title / subtitle / legend)
    - Full-app modals + overlays (loading, marquee)
    - Form patterns shared by ≥2 component modules (toolbarCheckbox,
-     samplesSelect, statusPill*).
+     samplesSelect).
    Per-component chrome (toolbar buttons/pills, transport, mixer rows,
    note/bar styles) lives in the corresponding *.module.css under
    editing/.  */
@@ -522,39 +522,5 @@
     cursor: pointer;
 }
 
-.statusPill {
-    composes: bodySm from '../typography.module.css';
-    padding: 4px 10px;
-    border-radius: var(--radius-pill);
-    /* stylelint-disable-next-line property-disallowed-list -- tiny tracking on top of bodySm so the pill text reads more deliberately than running body text. */
-    letter-spacing: 0.02em;
-    /* Render the full label by default; only truncate when the toolbar
-       actually runs out of room. `min-width: 0` lets the pill participate
-       in flex shrinking (a flex item's default min-width is its content,
-       which would otherwise force the toolbar to overflow horizontally). */
-    min-width: 0;
-    flex: 0 1 auto;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-}
-
-.statusPillBusy {
-    background: var(--color-busy-bg);
-    color: var(--color-accent-busy);
-    border: 1px solid var(--color-busy-border);
-}
-
-.statusPillError {
-    background: var(--color-error-bg);
-    color: var(--color-error);
-    border: 1px solid var(--color-error-border);
-    cursor: pointer;
-}
-
-.statusPillSuccess {
-    background: var(--color-success-bg);
-    color: var(--color-success);
-    border: 1px solid var(--color-success-border);
-    cursor: pointer;
-}
+/* Status pills moved to the shared <StatusPill> primitive
+   (src/ui/status_pill). */
