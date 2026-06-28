@@ -87,11 +87,12 @@ export class PlaybackStore {
    *  - `fullLeadIn` is the rendered left edge, the first bar's start in the
    *    tempo timeline, which includes the view-only virtual lead-in bar, and
    *    is the leftmost seekable / visible point. It falls back to `songLeadIn`
-   *    before a timeline exists. Read from the `tempo` peer (always available,
-   *    unlike the engine's live timeline which is empty while idle).
+   *    before a timeline exists. Read off the document's derived `tempoTimeline`
+   *    (always available once loaded, unlike the engine's live timeline which is
+   *    empty while idle), so this store needs no reference to the tempo peer.
    */
   get epochs(): Epochs {
-    const fullLeadIn = this.jotEditorStore.tempo?.timeline.bars[0]?.startSec ?? this.songLeadInSec;
+    const fullLeadIn = this.jotEditorStore.jot?.tempoTimeline.bars[0]?.startSec ?? this.songLeadInSec;
     return makeEpochs(this.songLeadInSec, fullLeadIn);
   }
 

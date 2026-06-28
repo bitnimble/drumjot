@@ -14,6 +14,7 @@
  */
 import { z } from 'zod';
 import {
+  derived,
   idMap,
   type Infer,
   type Init,
@@ -25,6 +26,8 @@ import {
   union,
   type UnionDescriptor,
 } from './descriptors';
+import { Derived } from './derived_fields';
+import type { DerivedResolver } from './derived_registry';
 import { createReactiveDoc, type ReactiveDoc } from './reactive_doc';
 
 // ---------- Leaf enums (mirror src/dsl/dsl.ts) ----------
@@ -322,6 +325,12 @@ export const JotSchema = record({
   tempoEvents: idMap(TempoEventSchema),
   /** Pattern definitions by internal id. */
   patterns: idMap(PatternDefSchema),
+  // ---------- Derived fields (not stored; implementations installed by
+  // presenters via the per-document derived registry, see `derived_fields.ts`).
+  /** Audio-time timeline; implemented by `TempoPresenter`. */
+  tempoTimeline: derived(Derived.tempoTimeline),
+  /** Dominant bpm + time signature; implemented by `TempoPresenter`. */
+  dominantBpmAndTime: derived(Derived.dominantBpmAndTime),
 });
 
 // ---------- Consumer types ----------
@@ -398,8 +407,11 @@ export type JotState = Snapshot<typeof JotSchema>;
  * projection; reads/writes are ordinary property access. Call `.snapshot()`
  * on the result to read the current state back out as a plain {@link JotState}.
  */
-export function createMutableJot(initial?: Init<typeof JotSchema>): ReactiveDoc<typeof JotSchema> {
-  return createReactiveDoc(JotSchema, initial);
+export function createMutableJot(
+  initial?: Init<typeof JotSchema>,
+  derived?: DerivedResolver
+): ReactiveDoc<typeof JotSchema> {
+  return createReactiveDoc(JotSchema, initial, derived);
 }
 
 /**
@@ -415,6 +427,9 @@ export function createMutableJot(initial?: Init<typeof JotSchema>): ReactiveDoc<
  * (the same reason `createReactiveDoc`'s body erases `Init<S>` to a plain
  * object). The seeding path (`populateRecord`) reads it as a plain object.
  */
-export function createMutableJotFromState(state: JotState): ReactiveDoc<typeof JotSchema> {
-  return createMutableJot(state as unknown as Init<typeof JotSchema>);
+export function createMutableJotFromState(
+  state: JotState,
+  derived?: DerivedResolver
+): ReactiveDoc<typeof JotSchema> {
+  return createMutableJot(state as unknown as Init<typeof JotSchema>, derived);
 }

@@ -1393,7 +1393,7 @@ const JotEditor = observer((props: JotEditorProps) => {
               >
                 <div className={styles.headerRow}>
                   <h2 className={styles.title}>{formatDisplayTitle(jot) || 'Untitled jot'}</h2>
-                  <p className={styles.subtitle}>{formatSubtitle(jot, tempo)}</p>
+                  <p className={styles.subtitle}>{formatSubtitle(jot)}</p>
                   <Legend palette={palette} />
                 </div>
                 <TimelineHeader onSeek={onSeek} onResizeGutterStart={onResizeGutterStart} />
