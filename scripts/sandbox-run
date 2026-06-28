@@ -2,7 +2,8 @@
 # scripts/sandbox-run <command> [args...]
 #
 # Internal helper: ensure the drumjot sandbox container is running, then
-# exec a command inside it (working dir /sandbox). Used by sandbox-py and
+# exec a command inside it (working dir = the bind-mounted repo, so relative
+# paths like `training/scripts/foo.py` resolve). Used by sandbox-py and
 # sandbox-bun; not usually called directly, but
 # `scripts/sandbox-run nvidia-smi` works too.
 #
@@ -39,6 +40,7 @@ if [ "$running" != "true" ]; then
         echo "      --gpus all --shm-size=2g \\" >&2
         echo "      -v /codebox-workspace:/codebox-workspace \\" >&2
         echo "      -v $REPO:$REPO \\" >&2
+        echo "      -w $REPO \\" >&2
         echo "      drumjot-sandbox" >&2
         echo >&2
         echo "(drop --gpus all to run CPU-only; build the image first with:" >&2
@@ -50,4 +52,4 @@ fi
 # -i forwards stdin so `sandbox-run python3 - <<'EOF'` (and other stdin-fed
 # commands) work; without it docker exec silently feeds the command an empty
 # stdin, which no-ops with no error. No -t: these are non-interactive.
-exec "${DOCKER[@]}" exec -i --workdir /sandbox "$CONTAINER" "$@"
+exec "${DOCKER[@]}" exec -i --workdir "$REPO" "$CONTAINER" "$@"
