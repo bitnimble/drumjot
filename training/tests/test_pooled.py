@@ -71,3 +71,39 @@ def test_pooled_balance_oversamples_small_source(tmp_path, monkeypatch):
     args = argparse.Namespace(pool_sources="enst", pool_cap=5, pool_balance=True)
     tr, _va, _cache = train._pooled_specs(args)
     assert len(tr) == 5
+
+
+def test_leakage_from_probs_counts_wrong_lane_firing():
+    """Cross-instrument leak: a fire in a lane the stem doesn't own (plays in the
+    song via weight_targets, absent in onsets_by_lane) counts as leaked; a fire in
+    an owned lane counts as matched. Full-mix clips (weight_targets=None) -> (0,0)."""
+    import numpy as np
+
+    from drumjot_training import train
+    from drumjot_training.config import Config
+
+    cfg = Config()
+    n_lanes, T = len(cfg.lanes), 100
+    probs = np.zeros((n_lanes, T), dtype=np.float32)
+
+    def _bump(row, center):  # a clean onset the picker will pick at thr 0.5
+        for off, v in ((-2, 0.3), (-1, 0.7), (0, 1.0), (1, 0.7), (2, 0.3)):
+            probs[row, center + off] = v
+
+    s_i, cr_i = cfg.lanes.index("s"), cfg.lanes.index("cr")
+    _bump(s_i, 50)   # model fires snare ...
+    _bump(cr_i, 30)  # ... and crash
+    wt = np.zeros((n_lanes, T), dtype=np.float32)
+    wt[s_i, 50] = 1.0   # snare DOES play in the song (full kit)
+    wt[cr_i, 30] = 1.0  # crash too
+    # a cymbal stem: owns crash (has a cr onset), does NOT own snare
+    clip = train.Clip(features=np.zeros((T, 1), dtype=np.float32),
+                      targets=np.zeros((n_lanes, T), dtype=np.float32),
+                      onsets_by_lane={"cr": [30 / cfg.encoder_fps]}, weight_targets=wt)
+    matched, leaked = train._leakage_from_probs(probs, clip, cfg)
+    assert matched == 1   # crash (owned) fired once
+    assert leaked == 1    # snare (plays in song, not on this stem) -> leaked
+
+    full_mix = train.Clip(features=clip.features, targets=clip.targets,
+                          onsets_by_lane={"cr": [30 / cfg.encoder_fps]}, weight_targets=None)
+    assert train._leakage_from_probs(probs, full_mix, cfg) == (0, 0)

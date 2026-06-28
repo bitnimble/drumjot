@@ -173,6 +173,26 @@ def _f1_from_probs(probs, clip: Clip, cfg: Config, thresholds: dict[str, float] 
     return out
 
 
+def _leakage_from_probs(probs, clip: Clip, cfg: Config,
+                        thresholds: dict[str, float] | None = None) -> tuple[int, int]:
+    """Cross-instrument leakage for one per-stem clip: (matched, leaked) predicted-onset
+    counts. A lane is "leaked" when the model fires there but the stem doesn't own it --
+    the instrument plays elsewhere in the song (`weight_targets` active) yet has no onset
+    on this stem (`onsets_by_lane` empty). Returns (0, 0) for full-mix clips (no
+    `weight_targets`, so there is no 'wrong' lane). Mirrors eval_paradb's leak metric."""
+    if clip.weight_targets is None:
+        return 0, 0
+    matched = leaked = 0
+    for i, lane in enumerate(cfg.lanes):
+        thr = thresholds.get(lane, cfg.peak_threshold) if thresholds else cfg.peak_threshold
+        n = len(metrics.pick_onsets_lane(probs[i], cfg.encoder_fps, lane, thr))
+        if clip.onsets_by_lane.get(lane):
+            matched += n
+        elif clip.weight_targets[i].max() > 0.5:  # plays in the song, not on this stem
+            leaked += n
+    return matched, leaked
+
+
 def evaluate_clip(
     model, clip: Clip, cfg: Config, thresholds: dict[str, float] | None = None
 ) -> dict[str, float]:
@@ -1034,6 +1054,7 @@ def train_loop(
         avg = total / max(1, n_batches)
         history["train_loss"].append(avg)
         epoch_lane_f1: dict[str, float] = {}  # this epoch's per-lane val F1, for the log
+        epoch_leak: float | None = None  # this epoch's cross-instrument leak% (per-stem val)
         if val_clips:
             if keep_best or early_stop:
                 # one eval pass -> per-clip per-lane F1; derive the clip-macro (for
@@ -1052,6 +1073,17 @@ def train_loop(
                 _ep_thr = _tune_thresholds_from_probs(
                     [(_vp[i], c.onsets_by_lane) for i, c in enumerate(val_clips)], cfg)
                 per = [_f1_from_probs(_vp[i], c, cfg, _ep_thr) for i, c in enumerate(val_clips)]
+                # Cross-instrument leak trend: fraction of predicted val onsets firing in a
+                # lane the stem doesn't own. Should fall as the negatives are learned; a flat
+                # curve flags the loss / sib-neg weighting (per-stem val clips only).
+                _lm = _ll = 0
+                for i, c in enumerate(val_clips):
+                    m, lk = _leakage_from_probs(_vp[i], c, cfg, _ep_thr)
+                    _lm += m
+                    _ll += lk
+                if _lm + _ll:
+                    epoch_leak = 100.0 * _ll / (_lm + _ll)
+                    history.setdefault("leak_pct", []).append(epoch_leak)
                 clip_macros = []
                 for c, pl in zip(val_clips, per, strict=True):
                     present = [pl[ln] for ln in cfg.lanes if c.onsets_by_lane.get(ln)]
@@ -1095,6 +1127,8 @@ def train_loop(
         if epoch_lane_f1:  # per-lane val F1 (when keep_best/early_stop computed it)
             msg += "  [" + " ".join(f"{ln} {epoch_lane_f1[ln]:.2f}"
                                     for ln in cfg.lanes if ln in epoch_lane_f1) + "]"
+        if epoch_leak is not None:
+            msg += f"  leak {epoch_leak:.1f}%"
         msg += f"  {dt:.1f}s/ep  eta {_fmt_eta(eta)}"
         if n_skip:
             msg += f"  (skipped {n_skip} non-finite batches)"
