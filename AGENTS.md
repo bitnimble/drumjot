@@ -158,6 +158,19 @@ request, and pull in the linked docs when a task touches that area.
   `--open-files-in-pager`) are **denied** in `.claude/settings.json`, they run
   an arbitrary command, so they're not read-only. Multi-line inline code also
   trips a confirmation; put non-trivial scripts in a `tmp/*` file.
+- **One statement per Bash call, never multi-line / multi-statement
+  scripts, and avoid control flow.** A bash command with multiple lines
+  or chained statements (`;`, `&&`, `|`, a heredoc), **or any control
+  flow structure (`for`/`while` loops, `if`, `case`, command
+  substitution driving logic)**, triggers a permission prompt **even
+  when every individual command inside it is already allowlisted**.
+  Sessions commonly run headless on a server with the user only checking
+  in occasionally, so such a prompt just **hangs for hours** until they
+  return. Run each statement as its **own** Bash tool call instead (e.g.
+  to act on N files, issue N separate calls rather than a `for` loop), each resolves instantly with no interaction. Reach for a loop / control
+  flow only when it's genuinely unavoidable, and when several lines must
+  truly run together, put them in a `tmp/*` script file and run that
+  single file (see the sandbox notes below).
 
 ### Frontend store / presenter / component architecture
 
@@ -214,6 +227,22 @@ When adding or moving frontend state/logic, follow it:
   presenter rather than writing the sibling's store directly, keeping the
   single-writer rule intact. The dependency graph stays acyclic
   (leaf presenters → `DocumentPresenter` → `TranscribePresenter`).
+
+### Linear tickets
+
+If a request references something that looks like a ticket/issue ID,
+e.g. **`DRJ-14`** (especially anything starting with **`DRJ-`**), it's a
+**Linear ticket**. Use the **Linear MCP server** to look it up and read
+its full details before acting:
+
+- **Read everything, not just the description.** Ticket context is
+  commonly in the **comments**, not only the body, so list/read the
+  ticket's comments (`list_comments`) as well as `get_issue`.
+- **"Implement DRJ-78" / "Fix DRJ-12" means the full loop**, not just a
+  code edit: look up the ticket, read **all** of its information
+  (description + comments), think through the problem, explore the
+  codebase to ground it, plan a solution, **propose** that solution
+  (no spec doc unless explicitly asked), then implement.
 
 ### Workflow
 
