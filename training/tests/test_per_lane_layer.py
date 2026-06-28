@@ -153,3 +153,33 @@ def test_checkpoint_single_layer_lane_layers_is_none(tmp_path):
     m2, meta = checkpoint.load(tmp_path)
     assert meta["lane_layers"] is None
     assert m2.lane_layers is None
+
+
+# ---- multi-layer cache fast path (one forward for N layers) ----
+
+def test_encode_layers_to_cache_one_forward_per_window(tmp_path):
+    """N distinct layers cost ONE MERT forward and each lands under embed_clip's key;
+    a re-run with everything cached does no forward."""
+    from drumjot_training import embeddings
+
+    class MockEnc:
+        name, sr, fps, layer, calls = "mock/enc", 24000, 75.0, 10, 0
+
+        def encode_layers(self, y, sr, layers):  # noqa: ARG002
+            MockEnc.calls += 1
+            return {L: np.full((7, embeddings.MERT_DIM), float(L), np.float32) for L in layers}
+
+    enc = MockEnc()
+    y = np.zeros(24000, np.float32)
+    nT = embeddings.encode_layers_to_cache("/x/fake.wav", enc, [1, 4, 10], tmp_path,
+                                           max_seconds=1.0, high_band=False, cache_dtype="float16", y_full=y)
+    assert nT == 7
+    assert MockEnc.calls == 1  # ONE forward for all three layers
+    for L in (1, 4, 10):  # each cached under the exact embed_clip key, with its own content
+        key = embeddings.cache_key("/x/fake.wav", enc.name, L, 1.0,
+                                   embeddings.feat_variant(False), 0.0, "float16")
+        arr = np.load(tmp_path / f"{key}.npy")
+        assert arr.shape == (7, embeddings.MERT_DIM) and np.allclose(arr, float(L))
+    embeddings.encode_layers_to_cache("/x/fake.wav", enc, [1, 4, 10], tmp_path,
+                                      max_seconds=1.0, high_band=False, cache_dtype="float16", y_full=y)
+    assert MockEnc.calls == 1  # all cached -> no new forward

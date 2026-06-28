@@ -792,26 +792,46 @@ def materialize(
                 if not keep:
                     n_dropped += 1
                     continue
-            frames = None
-            for layer in cfg.distinct_layers():  # ensure EACH per-lane layer is cached
-                key = embeddings.cache_key(audio, encoder.name, layer, length, variant, start)
-                fr = index.get(key)
-                if fr is None:
+            layers = cfg.distinct_layers()
+            if len(layers) > 1:
+                # MULTI-LAYER (per-lane-layer): encode ALL missing distinct layers in ONE
+                # forward (N layers cost 1 forward, not N), so the cold-layer encode of a
+                # per-lane-layer run is ~one warm pass, not N. Then read frame counts.
+                keys = {L: embeddings.cache_key(audio, encoder.name, L, length, variant, start)
+                        for L in layers}
+                missing = [L for L in layers
+                           if index.get(keys[L]) is None and not (cache_dir / f"{keys[L]}.npy").exists()]
+                if missing:
+                    embeddings.encode_layers_to_cache(
+                        audio, encoder, missing, cache_dir, max_seconds=length,
+                        cache_dtype=cfg.cache_dtype, high_band=cfg.high_band, start_seconds=start)
+                    n_enc += 1  # one forward encoded every missing layer
+                frames = None
+                for L in layers:
+                    fr = index.get(keys[L])
+                    if fr is None:
+                        fr = int(np.load(cache_dir / f"{keys[L]}.npy", mmap_mode="r").shape[0])
+                        index[keys[L]] = fr
+                        new_frames[keys[L]] = fr
+                    frames = fr  # identical across layers (same audio window -> same T)
+            else:
+                # SINGLE-LAYER (unchanged from before per-lane-layer): embed_clip one layer.
+                key = embeddings.cache_key(audio, encoder.name, encoder.layer, length, variant, start)
+                frames = index.get(key)
+                if frames is None:
                     cf = cache_dir / f"{key}.npy"
                     if cf.exists():
-                        fr = int(np.load(cf, mmap_mode="r").shape[0])  # header only, no data read
+                        frames = int(np.load(cf, mmap_mode="r").shape[0])  # header only, no data read
                     else:
-                        encoder.layer = layer  # which hidden state embed_clip extracts + keys
                         feat = embeddings.embed_clip(
                             audio, encoder, cache_dir=cache_dir, max_seconds=length,
                             cache_dtype=cfg.cache_dtype, high_band=cfg.high_band,
                             start_seconds=start,
                         )
-                        fr = int(feat.shape[0])
+                        frames = int(feat.shape[0])
                         n_enc += 1
-                    index[key] = fr
-                    new_frames[key] = fr
-                frames = fr  # identical across layers (same audio window -> same T)
+                    index[key] = frames
+                    new_frames[key] = frames
             rings = _rings_for_clip(audio, onsets, cfg, cache_dir, length, start)
             ok.append((audio, onsets, weight_onsets, rings, frames, start, length))
         except Exception as e:  # noqa: BLE001
