@@ -2,6 +2,7 @@ import React from 'react';
 import { BarTiming } from 'src/editing/playback/timeline';
 import type { StructuralPresenter } from 'src/editing/structure/structural_presenter';
 import type { TempoPresenter } from 'src/editing/playback/tempo_presenter';
+import type { TempoEditPresenter } from 'src/editing/playback/tempo_edit_presenter';
 import type { PaletteStore } from 'src/editing/palette/palette_store';
 
 /**
@@ -15,10 +16,13 @@ import type { PaletteStore } from 'src/editing/palette/palette_store';
  *   `layerBeats`, `barsForLane`) + the user-applied Beat-offset
  *   (`effectiveDrumOffsetBeats`) the provenance drift visualisation reads.
  * - {@link TempoContext}: per-bar tempos + the audio timeline.
+ * - {@link TempoEditContext}: the write surface for tempo edits (the timeline
+ *   header's BPM pills + "Change BPM here" context menu).
  * - {@link PaletteContext}: per-lane colours + the legend.
  */
 export const StructuralContext = React.createContext<StructuralPresenter | null>(null);
 export const TempoContext = React.createContext<TempoPresenter | null>(null);
+export const TempoEditContext = React.createContext<TempoEditPresenter | null>(null);
 export const PaletteContext = React.createContext<PaletteStore | null>(null);
 
 /**

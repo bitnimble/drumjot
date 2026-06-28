@@ -58,8 +58,7 @@ export function jotToEvents(structural: StructuralPresenter): PlaybackEvent[] {
   // (or shift) drum events.
   const layers = structural.musicalLayers;
   const events: PlaybackEvent[] = [];
-  const instrumentFor = (lane: string): Instrument =>
-    structural.source.globalMetadata.instrumentMapping?.[lane] ?? { kind: 'custom' };
+  const instrumentFor = (lane: string): Instrument => structural.instrumentFor(lane);
 
   // Bar 1 (= first non-lead-in bar) sits at jot time 0 by convention,
   // matching `buildTimeline`'s anchor. Pre-drum bars get a negative
@@ -83,7 +82,7 @@ export function jotToEvents(structural: StructuralPresenter): PlaybackEvent[] {
     // intra-bar tempo curve. Each note's time is `barOffset +
     // beatToSecWithinBar(barTempos, note.beat)` so a note that sits
     // after a mid-bar tempo change picks up the post-change rate.
-    const tempos = buildBarTempos(structural.source, layer.bars);
+    const tempos = buildBarTempos(structural.tempoSource, layer.bars);
     let leadOffsetSec = 0;
     for (let i = 0; i < leadBars; i++) leadOffsetSec += tempos[i].durationSec;
 

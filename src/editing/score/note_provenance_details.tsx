@@ -3,7 +3,7 @@ import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { NotePosition } from 'src/editing/score/note_position';
 import { NoteProvenanceEntry } from 'src/editing/provenance/debug_zip';
-import { DEFAULT_GRID_DIVISION, gridDivisionFor } from 'src/grid/grid';
+import { DEFAULT_GRID_DIVISION } from 'src/grid/grid';
 import type { StructBar, StructNote } from 'src/editing/structure/structure_store';
 import { TICKS_PER_BEAT } from 'src/midi/to_midi';
 import { AudioTrack } from 'src/editing/playback/audio_tracks';
@@ -602,7 +602,7 @@ export const NoteProvenanceDetails = observer(
     // Grid density the jot was produced at; drives every slot readout in
     // this panel. Falls back to the default when no structure is in
     // context (filtered-ghost rendering).
-    const gridDivision = structural ? gridDivisionFor(structural.source) : DEFAULT_GRID_DIVISION;
+    const gridDivision = structural ? structural.gridDivision : DEFAULT_GRID_DIVISION;
     const slotsPerQuarterNote = gridDivision / 4;
 
     // Two coordinate frames are tracked here:

@@ -19,7 +19,6 @@ function sampleFile(): MutableJotFile {
     version: JOT_FILE_VERSION,
     savedAt: '2026-06-20T12:00:00.000Z',
     document,
-    source: rockJot,
     editor: {
       mixer: {
         mutedTracks: ['v0/c'],
@@ -69,7 +68,6 @@ describe('mutable .jot container encode/decode', () => {
     expect(decoded.version).toBe(JOT_FILE_VERSION);
     expect(decoded.savedAt).toBe(file.savedAt);
     expect(decoded.document).toEqual(file.document);
-    expect(decoded.source).toEqual(file.source);
     expect(decoded.editor).toEqual(file.editor);
 
     // The embedded audio entry comes back byte-for-byte under its manifest path.

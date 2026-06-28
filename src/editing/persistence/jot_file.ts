@@ -32,7 +32,6 @@
  * with the shared zip reader (`src/utils/zip.ts`); audio entries are stored
  * (already-compressed), `session.json` is deflated.
  */
-import type { Jot } from 'src/schema/dsl/dsl';
 import type { JotState } from 'src/schema/schema';
 import type { AudioTrackRole } from 'src/editing/playback/audio_tracks';
 import type { TrackMixerState } from 'src/editing/mixer/mixer_presenter';
@@ -128,18 +127,11 @@ export type MutableJotFile = {
   version: number;
   /** ISO-8601 timestamp the file was saved at (the "last save time"). */
   savedAt: string;
-  /** The edited mutable-document snapshot, the lossless heart of the file. */
+  /** The edited mutable-document snapshot, the lossless heart of the file. The
+   *  whole song (incl. `globalMetadata`, now first-class schema fields) lives
+   *  here, so no separate DSL `source` is persisted. Files written by older
+   *  builds carry a legacy `source` AST; it is simply ignored on load. */
   document: JotState;
-  /**
-   * TRANSITIONAL. The originally-loaded DSL `Jot` AST, persisted verbatim
-   * purely so the editor's (frozen) `globalMetadata` readers, bpm, songLeadIn,
-   * instrument mapping, keep working after a reload. Edits flow into
-   * {@link document}, not here, so this is the load-time source, not a live
-   * mirror. The next phase lifts `globalMetadata` into the `JotSchema` itself
-   * and turns text-jot loading into a one-time conversion (the same path as
-   * MIDI / RLRR), after which this field, and the need to store it, disappear.
-   */
-  source: Jot;
   /** Editor state outside the document; see {@link JotEditorMetadata}. */
   editor: JotEditorMetadata;
 };

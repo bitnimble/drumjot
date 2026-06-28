@@ -37,8 +37,7 @@ export function collectJotLanes(structural: StructuralPresenter | undefined): st
   // `structural.lanes` is the `computed.struct` lane set (lanes that carry a
   // note), so this, and the mixer-order reaction wrapping it, is stable across
   // an in-lane note edit; only a lane appearing/disappearing perturbs it.
-  const mapping = structural.source.globalMetadata.instrumentMapping;
-  const instrumentFor = (lane: string): Instrument => mapping?.[lane] ?? { kind: 'custom' };
+  const instrumentFor = (lane: string): Instrument => structural.instrumentFor(lane);
   const out = [...structural.lanes];
   out.sort((a, b) => {
     const ka = defaultMixerSortKey(a, instrumentFor(a));

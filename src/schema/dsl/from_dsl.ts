@@ -11,7 +11,7 @@
  * Rests are dropped (they only consume sibling space); a simultaneity
  * becomes coincident note elements.
  */
-import type { Element as DslElement, Jot as DslJot, TimeSignature } from 'src/schema/dsl/dsl';
+import type { Element as DslElement, Jot as DslJot, Metadata, TimeSignature } from 'src/schema/dsl/dsl';
 import { elementWeight, sumWeights } from 'src/schema/dsl/element_metrics';
 import { initialBpm } from 'src/schema/dsl/tempo';
 import { ACCENT_VELOCITY, GHOST_VELOCITY, VOLUME_TO_VELOCITY } from 'src/dynamics/dynamics';
@@ -37,6 +37,31 @@ function omitUndef(o: Obj): Obj {
   const out: Obj = {};
   for (const k of Object.keys(o)) if (o[k] !== undefined) out[k] = o[k];
   return out;
+}
+
+/** Keys lifted from DSL `globalMetadata` to dedicated reactive fields; kept out
+ *  of the opaque `globalMetadataJson` residual so they can't go stale against
+ *  the authoritative fields. */
+const LIFTED_METADATA_KEYS = new Set([
+  'bpm',
+  'time',
+  'instrumentMapping',
+  'songLeadIn',
+  'leadBars',
+  'gridDivision',
+  'title',
+]);
+
+/** Serialise the loader-supplied `globalMetadata` keys NOT lifted to a
+ *  first-class field (artist, a global `vol`, `comment`, the RLRR sidecar,
+ *  custom keys) as a JSON string for the opaque `globalMetadataJson` register,
+ *  or `undefined` when nothing's left. */
+export function residualMetadataJson(gm: Metadata): string | undefined {
+  const rest: Obj = {};
+  for (const k of Object.keys(gm)) {
+    if (!LIFTED_METADATA_KEYS.has(k) && gm[k] !== undefined) rest[k] = gm[k];
+  }
+  return Object.keys(rest).length > 0 ? JSON.stringify(rest) : undefined;
 }
 
 type Ctx = {
@@ -303,6 +328,7 @@ export function dslToInit(jot: DslJot): Init<typeof JotSchema> {
     songLeadIn: gm.songLeadIn,
     leadBars: gm.leadBars,
     gridDivision: gm.gridDivision,
+    globalMetadataJson: residualMetadataJson(gm),
     layers,
     tracks: trackBuilder.tracks,
     trackGroups: {},

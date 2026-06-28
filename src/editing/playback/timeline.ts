@@ -25,11 +25,12 @@
  * user zooms during playback (the `ViewConfig.barWidth` change reflows the
  * layout reactively and the playhead re-reads the new `pxPerBeat`).
  */
-import { Jot, TimeSignature } from 'src/schema/dsl/dsl';
+import { TimeSignature } from 'src/schema/dsl/dsl';
 import { toTempoBars, type StructLayer } from 'src/editing/structure/structure_store';
 import { Pixels, px, type ViewConfig } from 'src/editing/viewport/view_config';
 import {
   type BarTempos,
+  type TempoJot,
   beatToSecWithinBar,
   buildBarTempos,
   resolveBpm,
@@ -48,7 +49,9 @@ export { resolveBpm };
  * presenter. */
 export interface LaidOutJot {
   layers: readonly StructLayer[];
-  source: Jot;
+  /** The barIndex-anchored tempo events + initial bpm, projected live off the
+   *  reactive document (no frozen DSL snapshot). Drives the tempo walk. */
+  tempoSource: TempoJot;
   pxPerBeat: number;
   config: ViewConfig;
 }
@@ -72,7 +75,7 @@ export function pickDominantBpmAndTime(jot: LaidOutJot): {
   if (!layer || layer.bars.length === 0) {
     return { dominantBpm: undefined, dominantTime: undefined };
   }
-  const tempos = buildBarTempos(jot.source, toTempoBars(layer.bars));
+  const tempos = buildBarTempos(jot.tempoSource, toTempoBars(layer.bars));
   const bpmDur = new Map<number, number>();
   const timeDur = new Map<string, { time: TimeSignature; duration: number }>();
   for (let i = 0; i < layer.bars.length; i++) {
@@ -160,7 +163,7 @@ export function buildTimeline(rendered: LaidOutJot): JotTimeline {
   // Per-bar tempo segments come from `jot.tempoEvents`. Mid-bar tempo
   // changes are honoured natively: each bar's `durationSec` is the sum
   // of its constant-tempo intra-bar segments.
-  const tempos = buildBarTempos(rendered.source, toTempoBars(layer.bars));
+  const tempos = buildBarTempos(rendered.tempoSource, toTempoBars(layer.bars));
   const durations: number[] = new Array(layer.bars.length);
   for (let i = 0; i < layer.bars.length; i++) durations[i] = tempos[i].durationSec;
 

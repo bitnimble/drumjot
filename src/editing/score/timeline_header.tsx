@@ -2,13 +2,19 @@ import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { jotPlayer } from 'src/editing/playback/player';
 import type { TempoRamp } from 'src/editing/playback/tempo_presenter';
+import type { BpmMarker, TempoEditPresenter } from 'src/editing/playback/tempo_edit_presenter';
+import { ActionMenuItem } from 'src/ui/dropdown/dropdown';
+import { ContextMenu } from 'src/ui/context_menu/context_menu';
 import { GutterResizeHandle } from 'src/ui/gutter_resize_handle/gutter_resize_handle';
-import { StructuralContext, TempoContext } from '../jot_editor_contexts';
+import { StructuralContext, TempoContext, TempoEditContext } from '../jot_editor_contexts';
 import { ViewportStoreContext } from '../viewport/viewport_contexts';
 import { Playhead } from '../playback/playhead';
 import styles from './score.module.css';
 import { barsRowWidthSeed, intersectsBeatRange } from '../utils/windowing';
 import { seekFromClick } from './seek';
+import { BpmPill } from './bpm_pill';
+
+const EPS = 1e-6;
 
 /**
  * Sticky-gutter header above the audio tracks / score that labels each
@@ -17,11 +23,11 @@ import { seekFromClick } from './seek';
  * score's barlines below so the header reads as a ruler over the
  * timeline. Click-to-seek mirrors the score and audio-track rows.
  *
- * Per-bar timings come from the live playback timeline whenever it
- * matches the current jot (so tempo overrides and the lead-in offset
- * stay in sync with the playhead); otherwise we build a one-shot
- * timeline so the header still labels everything correctly before the
- * user hits Play.
+ * The BPM pills are editable: each flat tempo change (and the song's initial
+ * tempo) is a {@link BpmPill} that edits in place; right-clicking empty header
+ * space opens a "Change BPM here" menu that drops a new change at the clicked
+ * beat (see {@link TempoEditPresenter}). Gradual `BpmTransition` ramps render
+ * read-only as captioned ramp bars.
  */
 export const TimelineHeader = observer(
   ({
@@ -35,14 +41,22 @@ export const TimelineHeader = observer(
   }) => {
     const structural = React.useContext(StructuralContext);
     const tempo = React.useContext(TempoContext);
+    const tempoEdit = React.useContext(TempoEditContext);
+    // The cursor-anchored "Change BPM here" menu, and the id of a pill freshly
+    // created through it (so that pill mounts straight into edit mode). Both
+    // are transient UI state, so they stay React-local.
+    const [menu, setMenu] = React.useState<{
+      clientX: number;
+      clientY: number;
+      barsRowX: number;
+    } | null>(null);
+    const [autoFocusId, setAutoFocusId] = React.useState<string | null>(null);
+    const clearAutoFocus = React.useCallback(() => setAutoFocusId(null), []);
+
     // Reading the structural layers (not pixels) keeps this header stable
     // across zoom; the per-tick `--bar-start-beat` is set inline, and CSS
     // calc() multiplies by the score-root's `--px-per-beat` to get the
-    // final pixel position. Without this the header re-rendered every wheel
-    // tick, re-creating 100+ tick marks just to reposition each by one
-    // calc-arithmetic step.
-    // `hasContent` is the stable geometry-spine check (doesn't churn on note
-    // edits); the tick layout below reads the tempo timeline, not the layers.
+    // final pixel position.
     if (!structural || !tempo || !structural.hasContent) return null;
 
     const liveTimeline = jotPlayer.timeline;
@@ -51,41 +65,21 @@ export const TimelineHeader = observer(
         ? liveTimeline
         : tempo.timeline;
 
-    // Lead-in is materialised as negative-indexed bars by
-    // `structureForLayer`, so a single sum over `bar.beats` covers
-    // both pre-drum and drum content with no separate chrome offset.
-    // Cached on the jot (`layerBeats`) so all observers share one walk.
     const layerBeats = structural.layerBeats;
-
-    // Effective tempo at each bar's downbeat, derived from the shared
-    // tempo timeline. Mid-bar tempo changes inside a bar aren't shown
-    // separately by the header pill; the displayed value tracks the
-    // tempo in force at the bar's downbeat. Reading the cached
-    // `barTempos` computed avoids rebuilding the layout on every
-    // header render (the tempo timeline is structure-only input, so a
-    // zoom tick doesn't invalidate it).
-    const tempos = tempo.barTempos;
-
     // Gradual tempo changes render as solid ramp bars (handled in
-    // WindowedTicks). The flat bpm pills the segment walk would otherwise
-    // paint across a ramp's span (now that `buildBarTempos` emits varying
-    // ramp segments) are suppressed; the ramp's own captions carry the
-    // start/end values.
+    // WindowedTicks). Flat changes + the initial tempo are editable pills
+    // sourced from the tempo-edit presenter (each carries its event id /
+    // initial-marker tag), bucketed onto the bar they fall in below.
     const ramps = tempo.tempoRamps;
+    const markers: BpmMarker[] = tempoEdit?.bpmMarkers ?? [];
 
-    // Full (non-windowed) walk to build the per-bar tick descriptors.
-    // The time-sig / bpm "changed since the previous bar" flags depend on
-    // running state across every bar, so the walk can't be windowed; but
-    // it only produces plain data (no DOM / React), so it stays cheap on
-    // a long song. The DOM is windowed separately in {@link WindowedTicks}.
+    // Full (non-windowed) walk to build the per-bar tick descriptors. The
+    // time-sig "changed since the previous bar" flags depend on running state
+    // across every bar, so it can't be windowed; it produces only plain data
+    // (no DOM), so it stays cheap. The DOM is windowed in {@link WindowedTicks}.
     let cumBeats = 0;
     let prevTime: { count: number; unit: number } | undefined;
-    // Tempo "carried out" of the previous bar (= its last segment's bpm).
-    // Rounded so float jitter (119.97 vs 120.03) doesn't paint a change.
-    let prevBpm: number | undefined;
     const ticks: TickDescriptor[] = [];
-    // Stable geometry spine (incl. the virtual lead-in bar); the per-bar
-    // timing/tempo come from the tempo timeline alongside.
     const geometry = structural.viewGeometry;
     for (let i = 0; i < geometry.length; i++) {
       const bar = geometry[i];
@@ -96,29 +90,15 @@ export const TimelineHeader = observer(
       const showTimeSig =
         !prevTime || bar.tsCount !== prevTime.count || bar.tsUnit !== prevTime.unit;
       prevTime = { count: bar.tsCount, unit: bar.tsUnit };
-      // Walk the bar's tempo segments and emit a label whenever the
-      // bpm changes (relative to the running bpm). The label at
-      // segment.startBeat=0 sits in the bar tick's top row alongside
-      // the bar number; later labels float at their beat-anchored
-      // position so a mid-bar tempo change renders where it actually
-      // takes effect, not at the next downbeat.
-      const segments = tempos[i]?.segments ?? [];
-      let downbeatBpm: number | undefined;
-      const midBpmChanges: Array<{ beat: number; bpm: number }> = [];
-      for (let s = 0; s < segments.length; s++) {
-        const seg = segments[s];
-        // A segment inside a ramp is drawn as the ramp bar, not a flat pill;
-        // it still advances the running tempo to its local end so the first
-        // flat segment after the ramp doesn't paint a redundant pill.
-        if (inRampSpan(ramps, startBeat + seg.startBeat)) {
-          prevBpm = Math.round(seg.endBpm ?? seg.bpm);
-          continue;
-        }
-        const bpm = Math.round(seg.bpm);
-        if (prevBpm === undefined || bpm !== prevBpm) {
-          if (seg.startBeat === 0) downbeatBpm = bpm;
-          else midBpmChanges.push({ beat: seg.startBeat, bpm });
-          prevBpm = bpm;
+      // Pick the markers anchored in this bar: the one on its downbeat sits in
+      // the tick's top row (alongside the bar number); later ones float at
+      // their beat-anchored position.
+      let downbeatMarker: BpmMarker | undefined;
+      const midMarkers: Array<{ beatInBar: number; marker: BpmMarker }> = [];
+      for (const m of markers) {
+        if (Math.abs(m.globalBeat - startBeat) < EPS) downbeatMarker = m;
+        else if (m.globalBeat > startBeat + EPS && m.globalBeat < startBeat + bar.beats - EPS) {
+          midMarkers.push({ beatInBar: m.globalBeat - startBeat, marker: m });
         }
       }
       ticks.push({
@@ -129,8 +109,8 @@ export const TimelineHeader = observer(
         showTimeSig,
         timeCount: bar.tsCount,
         timeUnit: bar.tsUnit,
-        downbeatBpm,
-        midBpmChanges,
+        downbeatMarker,
+        midMarkers,
       });
     }
     return (
@@ -142,6 +122,7 @@ export const TimelineHeader = observer(
         <div
           className={styles.timelineHeaderBarsRow}
           data-bars-row
+          data-testid="timeline-bars-row"
           style={
             {
               ['--layer-beats' as string]: layerBeats,
@@ -149,25 +130,40 @@ export const TimelineHeader = observer(
             } as React.CSSProperties
           }
           onClick={(e) => seekFromClick(e, onSeek)}
+          onContextMenu={(e) => {
+            // Pills stop propagation, so this only fires on empty header space.
+            if (!tempoEdit) return;
+            e.preventDefault();
+            const rect = e.currentTarget.getBoundingClientRect();
+            setMenu({ clientX: e.clientX, clientY: e.clientY, barsRowX: e.clientX - rect.left });
+          }}
         >
-          <WindowedTicks ticks={ticks} ramps={ramps} />
+          <WindowedTicks
+            ticks={ticks}
+            ramps={ramps}
+            tempoEdit={tempoEdit}
+            autoFocusId={autoFocusId}
+            onAutoFocusConsumed={clearAutoFocus}
+          />
           <Playhead showLabel onSeek={onSeek} />
         </div>
+        {menu && tempoEdit && (
+          <ContextMenu x={menu.clientX} y={menu.clientY} onClose={() => setMenu(null)}>
+            <ActionMenuItem
+              label="Change BPM here"
+              testId="bpm-menu-change"
+              onClick={() => {
+                const id = tempoEdit.createTempoChangeAtX(menu.barsRowX);
+                setMenu(null);
+                if (id) setAutoFocusId(id);
+              }}
+            />
+          </ContextMenu>
+        )}
       </div>
     );
   }
 );
-
-/** Whether a global beat falls inside any tempo ramp's span. The end is
- *  exclusive (with a small epsilon) so the first segment after a ramp reads
- *  as a normal flat region. */
-function inRampSpan(ramps: readonly TempoRamp[], gBeat: number): boolean {
-  const eps = 1e-6;
-  for (const r of ramps) {
-    if (gBeat >= r.startBeat - eps && gBeat < r.endBeat - eps) return true;
-  }
-  return false;
-}
 
 /** Clamp `v` to `[lo, hi]`. */
 function clampRange(v: number, lo: number, hi: number): number {
@@ -186,42 +182,46 @@ type TickDescriptor = {
   showTimeSig: boolean;
   timeCount: number;
   timeUnit: number;
-  downbeatBpm: number | undefined;
-  midBpmChanges: Array<{ beat: number; bpm: number }>;
+  /** The editable bpm pill on this bar's downbeat, if any. */
+  downbeatMarker: BpmMarker | undefined;
+  /** Editable bpm pills inside the bar (mid-bar tempo changes). */
+  midMarkers: Array<{ beatInBar: number; marker: BpmMarker }>;
 };
 
 /**
  * Windowed DOM for the timeline-header ticks. Split out of {@link
  * TimelineHeader} so only this map (not the header gutter or its label)
  * re-renders on a scroll / zoom tick. Renders only ticks whose bar span
- * intersects {@link JotEditorStore.visibleBeatRange}; the descriptor list
- * is precomputed and stable, so the parent doesn't re-render on scroll.
+ * intersects the visible beat range; the descriptor list is precomputed and
+ * stable, so the parent doesn't re-render on scroll.
  */
 const WindowedTicks = observer(function WindowedTicks({
   ticks,
   ramps,
+  tempoEdit,
+  autoFocusId,
+  onAutoFocusConsumed,
 }: {
   ticks: TickDescriptor[];
   ramps: readonly TempoRamp[];
+  tempoEdit: TempoEditPresenter | null;
+  autoFocusId: string | null;
+  onAutoFocusConsumed: () => void;
 }) {
   const viewport = React.useContext(ViewportStoreContext);
   const structural = React.useContext(StructuralContext);
   const range = viewport?.visibleBeatRange ?? null;
-  // The score has no real scroll container (`.jotContainer` is
-  // `overflow: hidden`; scroll is a CSS `transform` on `.scrollViewport`),
-  // so `position: sticky` is inert. To keep both bpm captions visible while
-  // a ramp wider than the viewport runs off either edge, we clamp each label
-  // to the visible window in JS off store observables (scrollX / viewport
-  // width / pxPerBeat, no DOM layout reads). This component already
-  // re-renders on scroll + zoom (its `visibleBeatRange` read depends on
-  // both), and only the handful of windowed ramps pay the cost.
+  // The score has no real scroll container (scroll is a CSS `transform` on
+  // `.scrollViewport`), so a ramp wider than the viewport clamps each caption
+  // to the visible window in JS off store observables (no DOM layout reads).
   const pxPerBeat = structural?.pxPerBeat ?? 0;
   const scrollX = viewport?.scrollX ?? 0;
-  // Bars-row-local x of the visible window: its left edge sits at `scrollX`
-  // (the sticky gutter overlays content-x 0..gutterWidth), and its width is
-  // the viewport minus that gutter.
   const usableWidth = (viewport?._viewportWidth ?? 0) - (viewport?.gutterWidth ?? 0);
   const canPin = pxPerBeat > 0 && usableWidth > 0;
+
+  const markerAutoFocus = (m: BpmMarker): boolean =>
+    autoFocusId !== null && m.source.kind === 'event' && m.source.id === autoFocusId;
+
   return (
     <>
       {ramps.map((r) => {
@@ -229,12 +229,8 @@ const WindowedTicks = observer(function WindowedTicks({
         const widthPx = (r.endBeat - r.startBeat) * pxPerBeat;
         const leftPx = r.startBeat * pxPerBeat;
         const rightPx = r.endBeat * pxPerBeat;
-        // Start caption rides the left visible edge; end caption the right;
-        // each clamped so it can't leave its own ramp box.
         const startShift = canPin ? clampRange(scrollX - leftPx, 0, widthPx) : 0;
-        const endShift = canPin
-          ? -clampRange(rightPx - (scrollX + usableWidth), 0, widthPx)
-          : 0;
+        const endShift = canPin ? -clampRange(rightPx - (scrollX + usableWidth), 0, widthPx) : 0;
         return (
           <div
             key={`ramp-${r.startBeat}`}
@@ -280,22 +276,36 @@ const WindowedTicks = observer(function WindowedTicks({
                     {t.timeCount}/{t.timeUnit}
                   </span>
                 )}
-                {t.downbeatBpm !== undefined && (
-                  <span className={styles.timelineHeaderBpm}>{t.downbeatBpm} bpm</span>
+                {t.downbeatMarker && tempoEdit && (
+                  <BpmPill
+                    marker={t.downbeatMarker}
+                    presenter={tempoEdit}
+                    autoFocus={markerAutoFocus(t.downbeatMarker)}
+                    onAutoFocusConsumed={onAutoFocusConsumed}
+                  />
                 )}
               </div>
               <span className={styles.timelineHeaderTime}>{formatTime(t.timeSec)}</span>
             </div>
-            {t.midBpmChanges.map((c, j) => (
+            {t.midMarkers.map((c) => (
               <div
-                key={`bpm-${t.barIndex}-${j}`}
+                key={`bpm-${t.barIndex}-${
+                  c.marker.source.kind === 'event' ? c.marker.source.id : 'initial'
+                }`}
                 className={styles.timelineHeaderBpmAnchor}
                 style={
-                  { ['--bar-start-beat' as string]: t.startBeat + c.beat } as React.CSSProperties
+                  { ['--bar-start-beat' as string]: t.startBeat + c.beatInBar } as React.CSSProperties
                 }
               >
                 <div className={styles.timelineHeaderTopRow}>
-                  <span className={styles.timelineHeaderBpm}>{c.bpm} bpm</span>
+                  {tempoEdit && (
+                    <BpmPill
+                      marker={c.marker}
+                      presenter={tempoEdit}
+                      autoFocus={markerAutoFocus(c.marker)}
+                      onAutoFocusConsumed={onAutoFocusConsumed}
+                    />
+                  )}
                 </div>
               </div>
             ))}

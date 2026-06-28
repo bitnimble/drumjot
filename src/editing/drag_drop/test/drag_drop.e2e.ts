@@ -32,7 +32,7 @@ async function dropFiles(
 }
 
 async function loadedTitle(page: Page): Promise<string | undefined> {
-  return page.evaluate(() => (window as any).drumjot.jotEditorStore.source?.title);
+  return page.evaluate(() => (window as any).drumjot.jotEditorStore.jot?.title);
 }
 
 /** Build a minimal stored (uncompressed) zip with the given entries, as a

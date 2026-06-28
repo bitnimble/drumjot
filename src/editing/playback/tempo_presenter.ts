@@ -50,7 +50,7 @@ export class TempoPresenter {
     // synthetic bar so tempo-event anchoring stays aligned to the source.
     const bars = this.jot.layers[0]?.bars;
     if (!bars) return [];
-    return buildBarTempos(this.jot.source, toTempoBars(bars));
+    return buildBarTempos(this.jot.tempoSource, toTempoBars(bars));
   }
 
   /**
@@ -62,7 +62,7 @@ export class TempoPresenter {
    */
   get tempoRamps(): readonly TempoRamp[] {
     const bars = this.jot.layers[0]?.bars;
-    const source = this.jot.source;
+    const source = this.jot.tempoSource;
     const events = source.tempoEvents ?? [];
     if (!bars || events.length === 0) return [];
 

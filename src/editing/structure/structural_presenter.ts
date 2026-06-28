@@ -21,9 +21,11 @@
  */
 import { action, comparer, computed, makeObservable, observable } from 'mobx';
 import { computedFn } from 'mobx-utils';
-import { Instrument, Jot } from 'src/schema/dsl/dsl';
+import { Instrument, TempoEvent } from 'src/schema/dsl/dsl';
 import { isDyadic } from 'src/schema/dsl/element_metrics';
-import { resolveBpm } from 'src/schema/dsl/tempo';
+import { DEFAULT_BPM, type TempoJot } from 'src/schema/dsl/tempo';
+import { DEFAULT_GRID_DIVISION } from 'src/grid/grid';
+import type { MutableJot } from 'src/schema/schema';
 import { ViewConfig } from 'src/editing/viewport/view_config';
 import type { LaidOutJot } from 'src/editing/playback/timeline';
 import {
@@ -58,7 +60,7 @@ export class StructuralPresenter implements LaidOutJot {
     private readonly structureStore: StructureStore,
     private readonly paletteStore: PaletteStore,
     private readonly layoutStore: LayoutStore,
-    readonly source: Jot,
+    private readonly getJot: () => MutableJot | undefined,
     private readonly viewConfig: ViewConfig
   ) {
     makeObservable(this, {
@@ -68,6 +70,7 @@ export class StructuralPresenter implements LaidOutJot {
       setDrumOffsetBaseline: action,
       musicalLayers: computed,
       layers: computed,
+      tempoSource: computed.struct,
       pxPerBeat: computed,
       lanes: computed.struct,
       viewLayerId: computed,
@@ -77,6 +80,40 @@ export class StructuralPresenter implements LaidOutJot {
       hasContent: computed,
       primaryLayer: computed,
     });
+  }
+
+  /**
+   * The tempo slice the timeline maths read, projected live off the reactive
+   * document: each reactive `TempoEvent` (anchored by stable `barId`)
+   * re-keyed to the `barIndex` the pure tempo helpers expect (its position
+   * among the non-anacrusis bars, matching DSL `TempoEvent.barIndex`), plus
+   * the reactive initial `bpm`. This is what replaces the old frozen DSL
+   * `source` snapshot in the runtime tempo path, so a tempo edit reflows the
+   * header / playhead immediately. `computed.struct` so an unrelated edit
+   * (notes, etc.) that leaves tempo untouched doesn't invalidate it.
+   */
+  get tempoSource(): TempoJot {
+    const jot = this.getJot();
+    if (!jot) return { tempoEvents: [], globalMetadata: {} };
+    const barIndexById = new Map<string, number>();
+    let idx = 0;
+    for (const bar of jot.bars) {
+      if (bar.anacrusis) continue;
+      barIndexById.set(bar.id, idx++);
+    }
+    const tempoEvents: TempoEvent[] = [];
+    for (const ev of jot.tempoEvents.values()) {
+      const barIndex = barIndexById.get(ev.barId);
+      if (barIndex === undefined) continue;
+      tempoEvents.push({ barIndex, beat: ev.beat, bpm: ev.bpm });
+    }
+    return { tempoEvents, globalMetadata: { bpm: jot.bpm } };
+  }
+
+  /** Producer grid density (1/N-of-a-whole-note), read live off the reactive
+   *  document; falls back to the default when none is set. */
+  get gridDivision(): number {
+    return this.getJot()?.gridDivision ?? DEFAULT_GRID_DIVISION;
   }
 
   setDrumOffset(beats: number) {
@@ -112,8 +149,9 @@ export class StructuralPresenter implements LaidOutJot {
    *  multi-lane form, kept for the timeline / minimap / lyrics consumers; the
    *  per-row render path reads {@link barsForLane}. */
   get layers(): StructLayer[] {
-    const preRollSec = Math.max(0, -(this.source.globalMetadata.songLeadIn ?? 0));
-    const bpm = resolveBpm(this.source.globalMetadata.bpm, 120);
+    const jot = this.getJot();
+    const preRollSec = Math.max(0, -(jot?.songLeadIn ?? 0));
+    const bpm = jot?.bpm ?? DEFAULT_BPM;
     return this.musicalLayers.map((layer) => withVirtualLeadIn(layer, preRollSec, bpm));
   }
 
@@ -159,8 +197,9 @@ export class StructuralPresenter implements LaidOutJot {
     if (base.length === 0) return base;
     // A real lead-in (explicit `leadBars`) already gives the first note room.
     if (base.some((b) => b.index < 0)) return base;
-    const preRollSec = Math.max(0, -(this.source.globalMetadata.songLeadIn ?? 0));
-    const bpm = resolveBpm(this.source.globalMetadata.bpm, 120);
+    const jot = this.getJot();
+    const preRollSec = Math.max(0, -(jot?.songLeadIn ?? 0));
+    const bpm = jot?.bpm ?? DEFAULT_BPM;
     const firstReal = base.find((b) => b.index === 1) ?? base[0];
     const oneBarBeats = (firstReal.tsCount * 4) / firstReal.tsUnit;
     const preRollBeats = (preRollSec * bpm) / 60;
@@ -198,9 +237,20 @@ export class StructuralPresenter implements LaidOutJot {
     return this.layers[0];
   }
 
-  /** Instrument for a lane from the global mapping. */
-  private instrumentFor(lane: string): Instrument {
-    return this.source.globalMetadata.instrumentMapping?.[lane] ?? { kind: 'custom' };
+  /** Instrument for a lane from the global mapping, read live off the reactive
+   *  `instruments` map and adapted back to the DSL `Instrument` shape (the
+   *  reactive entity stores a flat `midiNote`; consumers expect `midi.note`).
+   *  Public so the mixer-order sort, the playback scheduler and the row labels
+   *  share one reactive-backed lookup instead of the old frozen mapping. */
+  instrumentFor(lane: string): Instrument {
+    const inst = this.getJot()?.instruments.get(lane);
+    if (!inst) return { kind: 'custom' };
+    return {
+      kind: inst.kind,
+      name: inst.name,
+      limb: inst.limb,
+      midi: inst.midiNote !== undefined ? { note: inst.midiNote } : undefined,
+    };
   }
 
   /**

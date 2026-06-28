@@ -316,7 +316,7 @@ export class JotEditorPresenter {
     const { file, audio } = decoded;
     runInAction(() => {
       this.resetSession();
-      this.jotEditorStore.loadState(file.document, file.source);
+      this.jotEditorStore.loadState(file.document);
       this.jotEditorStore.currentExampleId = undefined;
       this.applyEditorMetadata(file.editor);
     });
@@ -375,8 +375,7 @@ export class JotEditorPresenter {
     { file: MutableJotFile; audio: AudioEntryInput[] } | undefined
   > {
     const document = this.jotEditorStore.snapshot();
-    const source = this.jotEditorStore.source;
-    if (!document || !source) return undefined;
+    if (!document) return undefined;
     const settings = this.settingsPresenter.settings;
     const mixer = this.mixerPresenter.mixer;
 
@@ -408,7 +407,6 @@ export class JotEditorPresenter {
       version: JOT_FILE_VERSION,
       savedAt: new Date().toISOString(),
       document,
-      source,
       editor: {
         mixer: this.mixerPresenter.trackMixerState(),
         settings: {

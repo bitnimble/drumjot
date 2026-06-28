@@ -2,7 +2,7 @@ import { untracked } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { Box, Point } from 'src/utils/geom';
-import { Jot } from 'src/schema/dsl/dsl';
+import type { MutableJot } from 'src/schema/schema';
 import type { StructuralPresenter } from 'src/editing/structure/structural_presenter';
 import type { StructNote } from 'src/editing/structure/structure_store';
 import { boundingBoxOfNotes, notesById, notesInBox } from 'src/editing/score/note_geometry';
@@ -31,6 +31,7 @@ import {
   BarTimingsContext,
   StructuralContext,
   TempoContext,
+  TempoEditContext,
   PaletteContext,
 } from './jot_editor_contexts';
 import { GridLineSettingsContext } from '../settings/settings_contexts';
@@ -90,6 +91,7 @@ import { SettingsPresenter } from '../settings/settings_presenter';
 import { ViewportPresenter } from './viewport/viewport_presenter';
 import { MixerPresenter } from './mixer/mixer_presenter';
 import { PlaybackPresenter } from './playback/playback_presenter';
+import { TempoEditPresenter } from './playback/tempo_edit_presenter';
 import { ProvenancePresenter } from './provenance/provenance_presenter';
 import { LyricsPresenter } from './lyrics/lyrics_presenter';
 import { JotEditorPresenter } from './jot_editor_presenter';
@@ -185,6 +187,9 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
   const mixerPresenter = new MixerPresenter(mixer, jotEditorStore);
   const provenancePresenter = new ProvenancePresenter(provenance);
   const playbackPresenter = new PlaybackPresenter(playback, jotEditorStore);
+  // Tempo write surface: the timeline header's BPM pills + "Change BPM here"
+  // context menu mutate `tempoEvents` / the initial bpm through this.
+  const tempoEditPresenter = new TempoEditPresenter(jotEditorStore);
   const lyricsPresenter = new LyricsPresenter(lyricsAlign, jotEditorStore);
   const jotEditorPresenter = new JotEditorPresenter(
     jotEditorStore,
@@ -368,7 +373,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     // present implies the rest are). `structural` is the "is a song loaded"
     // signal that gates JotEditor / the playback bar.
     const structural = jotEditorStore.structural;
-    const source = jotEditorStore.source;
+    const jot = jotEditorStore.jot;
     // Modal opens on first mount whenever AudioWorklet is unavailable
     // and closes for the rest of the session once dismissed. A reload
     // re-shows it intentionally; the limitation is real and ongoing,
@@ -409,8 +414,8 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     // Lyrics modal visibility lives on the store so any TS consumer can
     // observe / drive it; the seeded title/artist fields are still local
     // (re-derived from the current jot on open).
-    const lyricsInitialTitle = source?.title.trim() ?? '';
-    const lyricsInitialArtist = source ? (extractArtist(source) ?? '') : '';
+    const lyricsInitialTitle = jot?.title.trim() ?? '';
+    const lyricsInitialArtist = jot ? (extractArtist(jot) ?? '') : '';
 
     const followPlayheadContextValue = React.useMemo(
       () => ({
@@ -583,8 +588,9 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                         playbackPresenter={playbackPresenter}
                         structural={structural}
                         tempo={jotEditorStore.tempo!}
+                        tempoEdit={tempoEditPresenter}
                         palette={jotEditorStore.palette!}
-                        source={jotEditorStore.source!}
+                        jot={jotEditorStore.jot!}
                         highlightedPattern={selection.selectedPattern}
                         onPatternClick={onPatternClick}
                         onMouseDown={onMouseDown}
@@ -738,8 +744,9 @@ type JotEditorProps = {
   /** The loaded song's peer domains (provided to descendants via context). */
   structural: StructuralPresenter;
   tempo: TempoPresenter;
+  tempoEdit: TempoEditPresenter;
   palette: PaletteStore;
-  source: Jot;
+  jot: MutableJot;
   highlightedPattern: string | undefined;
   onPatternClick: (name: string) => void;
   onMouseDown: (e: React.MouseEvent<HTMLDivElement>) => void;
@@ -772,8 +779,9 @@ const JotEditor = observer((props: JotEditorProps) => {
     playbackPresenter,
     structural,
     tempo,
+    tempoEdit,
     palette,
-    source,
+    jot,
     highlightedPattern,
     onPatternClick,
     onMouseDown,
@@ -793,8 +801,8 @@ const JotEditor = observer((props: JotEditorProps) => {
   // Intentionally NOT reading any zoom-dependent (pixel) observable here.
   // Every observable touched in this body triggers a JotEditor re-render on
   // zoom, and the title / subtitle / Legend / mixer subtree all derive from
-  // zoom-invariant data via `structural.layers` / `source.title` /
-  // `source.globalMetadata`. JotEditor itself is then stable across zoom
+  // zoom-invariant data via `structural.layers` / `jot.title` /
+  // `jot.globalMetadataJson`. JotEditor itself is then stable across zoom
   // (ScoreZoomVar updates the one CSS variable that propagates the
   // new scale to every descendant via calc()).
   const config = structural.config;
@@ -1355,6 +1363,7 @@ const JotEditor = observer((props: JotEditorProps) => {
   return (
     <StructuralContext.Provider value={structural}>
       <TempoContext.Provider value={tempo}>
+        <TempoEditContext.Provider value={tempoEdit}>
         <PaletteContext.Provider value={palette}>
           <BarTimingsContext.Provider value={barTimings}>
             <div
@@ -1389,8 +1398,8 @@ const JotEditor = observer((props: JotEditorProps) => {
                 data-jot-scroll-content
               >
                 <div className={styles.headerRow}>
-                  <h2 className={styles.title}>{formatDisplayTitle(source) || 'Untitled jot'}</h2>
-                  <p className={styles.subtitle}>{formatSubtitle(source, tempo)}</p>
+                  <h2 className={styles.title}>{formatDisplayTitle(jot) || 'Untitled jot'}</h2>
+                  <p className={styles.subtitle}>{formatSubtitle(jot, tempo)}</p>
                   <Legend palette={palette} />
                 </div>
                 <TimelineHeader onSeek={onSeek} onResizeGutterStart={onResizeGutterStart} />
@@ -1410,6 +1419,7 @@ const JotEditor = observer((props: JotEditorProps) => {
             </div>
           </BarTimingsContext.Provider>
         </PaletteContext.Provider>
+        </TempoEditContext.Provider>
       </TempoContext.Provider>
     </StructuralContext.Provider>
   );
