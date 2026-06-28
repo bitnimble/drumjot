@@ -63,6 +63,7 @@ import {
 } from './playback/playback_contexts';
 import { AudioTrackControls, MixerView, LayerControls } from './mixer/mixer';
 import { Logo } from 'src/ui/logo/logo';
+import { ModalProvider } from 'src/ui/modal/modal_manager';
 import { Minimap } from './minimap/minimap';
 import { EditingStore } from './editing_store';
 import { EditingPresenter } from './editing_presenter';
@@ -495,6 +496,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     );
 
     return (
+        <ModalProvider>
         <TranscribeStoreContext.Provider value={transcribe}>
         <TranscribePresenterContext.Provider value={transcribePresenter}>
         <LayersStoreContext.Provider value={layers}>
@@ -684,6 +686,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
         </LayersStoreContext.Provider>
         </TranscribePresenterContext.Provider>
         </TranscribeStoreContext.Provider>
+        </ModalProvider>
     );
   });
 

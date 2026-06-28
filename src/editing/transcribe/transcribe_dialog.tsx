@@ -1,8 +1,8 @@
-import { X } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { jotPlayer } from 'src/editing/playback/player';
 import { Checkbox } from 'src/ui/checkbox/checkbox';
+import { Modal, ModalBody, ModalFooter, ModalHeader, modalStyles } from 'src/ui/modal/modal';
 import {
   BeatInput,
   LLM_MODEL_LABELS,
@@ -60,32 +60,21 @@ export const TranscribeDialog = observer(() => {
   const canConfirm = !isReplace || (resumeStage !== undefined && resumableSet.has(resumeStage));
 
   return (
-    <div
-      className={styles.backdrop}
-      role="dialog"
-      aria-modal="true"
-      aria-label={isReplace ? 'Re-run transcription' : 'Transcribe audio track'}
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) presenter.closeDialog();
-      }}
-      data-testid="transcribe-dialog"
+    <Modal
+      open
+      onClose={() => presenter.closeDialog()}
+      ariaLabel={isReplace ? 'Re-run transcription' : 'Transcribe audio track'}
+      width={440}
+      maxHeight
+      testId="transcribe-dialog"
     >
-      <div className={styles.panel}>
-        <header className={styles.header}>
-          <h3 className={styles.title}>
-            {isReplace ? 'Re-run transcription' : 'Transcribe audio track'}
-          </h3>
-          <button
-            type="button"
-            className={styles.close}
-            onClick={() => presenter.closeDialog()}
-            aria-label="Close transcribe dialog"
-            data-testid="transcribe-dialog-close"
-          >
-            <X size={18} aria-hidden="true" />
-          </button>
-        </header>
-        <div className={styles.body}>
+      <ModalHeader
+        title={isReplace ? 'Re-run transcription' : 'Transcribe audio track'}
+        onClose={() => presenter.closeDialog()}
+        closeLabel="Close transcribe dialog"
+        closeTestId="transcribe-dialog-close"
+      />
+      <ModalBody>
           <p className={styles.subtitle}>
             {isReplace ? (
               <>
@@ -177,28 +166,27 @@ export const TranscribeDialog = observer(() => {
               </Select>
             </label>
           )}
-        </div>
-        <footer className={styles.footer}>
-          <span className={styles.footerSpacer} />
-          <button
-            type="button"
-            className={styles.secondaryButton}
-            onClick={() => presenter.closeDialog()}
-            data-testid="transcribe-dialog-cancel"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            className={styles.primaryButton}
-            onClick={() => presenter.confirmDialog()}
-            disabled={!canConfirm}
-            data-testid="transcribe-dialog-confirm"
-          >
-            {isReplace ? 'Re-run & replace' : 'Transcribe'}
-          </button>
-        </footer>
-      </div>
-    </div>
+      </ModalBody>
+      <ModalFooter>
+        <span className={modalStyles.footerSpacer} />
+        <button
+          type="button"
+          className={modalStyles.secondaryButton}
+          onClick={() => presenter.closeDialog()}
+          data-testid="transcribe-dialog-cancel"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          className={modalStyles.primaryButton}
+          onClick={() => presenter.confirmDialog()}
+          disabled={!canConfirm}
+          data-testid="transcribe-dialog-confirm"
+        >
+          {isReplace ? 'Re-run & replace' : 'Transcribe'}
+        </button>
+      </ModalFooter>
+    </Modal>
   );
 });

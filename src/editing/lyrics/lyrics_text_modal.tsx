@@ -1,9 +1,10 @@
 import classNames from 'classnames';
-import { Info, X } from 'lucide-react';
+import { Info } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { jotPlayer } from 'src/editing/playback/player';
 import { Checkbox } from 'src/ui/checkbox/checkbox';
+import { Modal, ModalBody, ModalFooter, ModalHeader, modalStyles } from 'src/ui/modal/modal';
 import styles from './lyrics_text_modal.module.css';
 import { LyricsPresenter } from './lyrics_presenter';
 
@@ -87,31 +88,22 @@ export const LyricsTextLoadModal = observer(
     };
 
     return (
-      <div
-        className={styles.modalBackdrop}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Load lyrics from plain text"
-        onMouseDown={(e) => {
-          if (e.target === e.currentTarget) onClose();
-        }}
-        data-testid="lyrics-text-modal"
+      <Modal
+        open={open}
+        onClose={onClose}
+        ariaLabel="Load lyrics from plain text"
+        width={640}
+        maxHeight
+        testId="lyrics-text-modal"
       >
-        <div className={styles.modalPanel}>
-          <header className={styles.modalHeader}>
-            <h3 className={styles.modalTitle}>Load lyrics from plain text</h3>
-            <button
-              type="button"
-              className={styles.modalClose}
-              onClick={onClose}
-              aria-label="Close plain-text lyrics loader"
-              data-testid="lyrics-text-close"
-            >
-              <X size={18} aria-hidden="true" />
-            </button>
-          </header>
-          <div className={styles.modalBody}>
-            <textarea
+        <ModalHeader
+          title="Load lyrics from plain text"
+          onClose={onClose}
+          closeLabel="Close plain-text lyrics loader"
+          closeTestId="lyrics-text-close"
+        />
+        <ModalBody>
+          <textarea
               className={styles.textarea}
               value={text}
               onChange={(e) => {
@@ -134,17 +126,17 @@ export const LyricsTextLoadModal = observer(
                 {error}
               </div>
             )}
-          </div>
-          <footer className={styles.modalFooter}>
+          </ModalBody>
+          <ModalFooter>
             <button
               type="button"
-              className={styles.secondaryButton}
+              className={modalStyles.secondaryButton}
               onClick={onPickFile}
               data-testid="lyrics-text-load-file"
             >
               Load from file…
             </button>
-            <span className={styles.footerSpacer} />
+            <span className={modalStyles.footerSpacer} />
             <span
               className={styles.infoIcon}
               title={WORD_LEVEL_INFO}
@@ -170,7 +162,7 @@ export const LyricsTextLoadModal = observer(
             </label>
             <button
               type="button"
-              className={styles.primaryButton}
+              className={modalStyles.primaryButton}
               onClick={onLoad}
               disabled={!canLoad}
               data-testid="lyrics-text-submit"
@@ -184,9 +176,8 @@ export const LyricsTextLoadModal = observer(
               className={styles.hiddenInput}
               onChange={onFileChange}
             />
-          </footer>
-        </div>
-      </div>
+          </ModalFooter>
+        </Modal>
     );
   },
 );

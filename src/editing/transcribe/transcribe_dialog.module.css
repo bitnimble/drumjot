@@ -1,32 +1,6 @@
-/* Transcribe options dialog. Shares the modal + button + form primitives so
-   it reads as a sibling of the lyrics loaders. */
-
-.backdrop {
-    composes: backdrop from '../../ui/modal/modal.module.css';
-}
-
-.panel {
-    composes: panel from '../../ui/modal/modal.module.css';
-    width: min(440px, 100%);
-    max-height: calc(100vh - 48px);
-    max-height: calc(100dvh - 48px);
-}
-
-.header {
-    composes: header from '../../ui/modal/modal.module.css';
-}
-
-.title {
-    composes: title from '../../ui/modal/modal.module.css';
-}
-
-.close {
-    composes: close from '../../ui/button/button.module.css';
-}
-
-.body {
-    composes: body from '../../ui/modal/modal.module.css';
-}
+/* Transcribe options dialog. The backdrop / panel / header / footer chrome
+   comes from the shared <Modal> primitive; only the body's option rows and
+   the native <select> styling live here. */
 
 .subtitle {
     composes: bodyMd from '../../typography.module.css';
@@ -59,26 +33,4 @@
     composes: field from '../../ui/form/form.module.css';
     flex: 0 0 auto;
     min-width: 140px;
-}
-
-.footer {
-    composes: footer from '../../ui/modal/modal.module.css';
-}
-
-.footerSpacer {
-    flex: 1 1 auto;
-}
-
-.secondaryButton {
-    composes: secondary from '../../ui/button/button.module.css';
-    border-radius: var(--radius-sm);
-}
-
-.primaryButton {
-    composes: primary from '../../ui/button/button.module.css';
-    border-radius: var(--radius-sm);
-}
-
-.primaryButton:disabled {
-    opacity: 0.6;
 }
