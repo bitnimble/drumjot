@@ -73,6 +73,85 @@ def test_pooled_balance_oversamples_small_source(tmp_path, monkeypatch):
     assert len(tr) == 5
 
 
+def test_parse_pool_caps():
+    from drumjot_training import train
+
+    # per-source spec
+    assert train._parse_pool_caps("paradb:9000,egmd:2500,star:2000") == {
+        "paradb": 9000, "egmd": 2500, "star": 2000,
+    }
+    # bare int -> uniform "*" cap (string and actual int both work)
+    assert train._parse_pool_caps("3000") == {"*": 3000}
+    assert train._parse_pool_caps(3000) == {"*": 3000}
+    # empty / None -> no caps
+    assert train._parse_pool_caps("") == {}
+    assert train._parse_pool_caps(None) == {}
+
+    # _cap_for: explicit hit, then "*" fallback, then 0 (no cap)
+    caps = {"paradb": 9000, "*": 1000}
+    assert train._cap_for(caps, "paradb") == 9000   # explicit
+    assert train._cap_for(caps, "egmd") == 1000     # "*" fallback
+    assert train._cap_for({"paradb": 9000}, "egmd") == 0  # no "*", no entry -> 0
+
+
+def test_per_source_resampler_caps_and_resamples():
+    from drumjot_training import train
+
+    source_indices = {
+        "paradb": list(range(0, 100)),
+        "egmd": list(range(100, 140)),
+        "enst": list(range(140, 150)),
+    }
+    caps = {"paradb": 20, "egmd": 10}  # enst uncapped (no entry, no "*")
+    sampler = train.PerSourceResampler(source_indices, caps, seed=7)
+
+    assert len(sampler) == 40  # 20 + 10 + 10
+
+    e0 = list(iter(sampler))
+    assert len(e0) == len(sampler) == 40
+    pdb0 = [i for i in e0 if 0 <= i < 100]
+    egmd0 = [i for i in e0 if 100 <= i < 140]
+    enst0 = [i for i in e0 if 140 <= i < 150]
+    assert len(pdb0) == 20 and len(set(pdb0)) == 20      # exactly 20 distinct paradb
+    assert len(egmd0) == 10 and len(set(egmd0)) == 10    # exactly 10 distinct egmd
+    assert sorted(enst0) == list(range(140, 150))        # all 10 enst (uncapped)
+    assert set(pdb0) <= set(range(100))                  # valid paradb subset
+
+    # next epoch resamples: a DIFFERENT valid 20-subset of paradb
+    e1 = list(iter(sampler))
+    pdb1 = [i for i in e1 if 0 <= i < 100]
+    assert len(pdb1) == 20 and len(set(pdb1)) == 20
+    assert set(pdb1) <= set(range(100))
+    assert set(pdb0) != set(pdb1)                        # resampled, not the same slice
+
+    # full coverage over enough epochs: union of paradb selections == all 100.
+    # A 20-of-100 sample needs ~20-35 epochs to hit every index (each epoch misses
+    # ~80% of any given index); 40 (fixed seed) is a comfortable, deterministic
+    # margin -- the point is that EVERY window is eventually trained on.
+    fresh = train.PerSourceResampler(source_indices, caps, seed=7)
+    seen: set[int] = set()
+    for _ in range(40):
+        seen |= {i for i in iter(fresh) if 0 <= i < 100}
+    assert seen == set(range(100))
+
+
+def test_pooled_specs_resample_path_uncapped_train(tmp_path, monkeypatch):
+    """--pool-resample materializes train UNCAPPED via _per_source_specs(cap_train=None);
+    the per-source dicts preserve --pool-sources order."""
+    from drumjot_training import train
+
+    root = _enst_sep_tree(tmp_path)
+    monkeypatch.setenv("DRUMJOT_ENST", str(root))
+    args = argparse.Namespace(
+        pool_sources="enst", pool_cap="2", pool_balance=False,
+        pool_cache=str(tmp_path / "mert_cache"), pool_val_cap=0,
+    )
+    # cap_train=None -> no cap applied regardless of pool_cap; all 5 train stems kept.
+    per_train, per_val, _cache = train._per_source_specs(args, cap_train=None, cap_val=None)
+    assert list(per_train) == ["enst"]
+    assert len(per_train["enst"]) == 5 and len(per_val["enst"]) == 5
+
+
 def test_leakage_from_probs_counts_wrong_lane_firing():
     """Cross-instrument leak: a fire in a lane the stem doesn't own (plays in the
     song via weight_targets, absent in onsets_by_lane) counts as leaked; a fire in

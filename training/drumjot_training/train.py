@@ -851,6 +851,7 @@ def train_loop(
     es_min_epochs: int = 20,
     grad_clip: float | None = None,
     resume_path: str | None = None,
+    train_sampler=None,
     log: Callable[[str], None] = print,
 ) -> dict:
     """Train `model` on `clips` in padded mini-batches of `batch_size` (clips
@@ -938,10 +939,13 @@ def train_loop(
     best_lane_state: dict = {}
 
     gen = torch.Generator().manual_seed(0)  # reproducible per-epoch shuffle
+    # `train_sampler` (PerSourceResampler) and `shuffle` are mutually exclusive:
+    # the sampler does its own per-epoch resample + shuffle, so drop `shuffle`.
     loader = DataLoader(
         clips,
         batch_size=batch_size,
-        shuffle=True,
+        sampler=train_sampler,
+        shuffle=(train_sampler is None),
         num_workers=num_workers,
         pin_memory=(device.type == "cuda"),
         collate_fn=collate_clips,
@@ -949,7 +953,11 @@ def train_loop(
         generator=gen,
     )
     t0 = time.perf_counter()
-    expected_batches = (len(clips) + batch_size - 1) // batch_size
+    # With a sampler the DataLoader yields ceil(len(sampler)/batch_size) batches
+    # per epoch (the per-epoch subset), not over the full clip set; the cosine
+    # schedule's total_steps + the progress count must track the actual length.
+    n_per_epoch = len(train_sampler) if train_sampler is not None else len(clips)
+    expected_batches = (n_per_epoch + batch_size - 1) // batch_size
     # warmup -> cosine LR schedule (stepped per optimizer step). Cosine decays to
     # ~0 over the run so the final (saved + threshold-tuned) epoch settles at the
     # LR minimum; warmup_steps>0 ramps in, which matters for large-batch/high-LR
@@ -1435,6 +1443,37 @@ def _cap_by_windows(perstem_clips, n_windows: int, window: float = 30.0):
     return out
 
 
+def _parse_pool_caps(spec: str | int | None) -> dict[str, int]:
+    """Parse a per-source pool-cap spec into ``{source: n_windows}``.
+
+    - ``"paradb:9000,egmd:2500,star:2000"`` -> ``{"paradb":9000,"egmd":2500,"star":2000}``
+    - a bare int ``"3000"`` (or an actual ``int``) -> ``{"*": 3000}`` (uniform cap)
+    - empty / ``None`` -> ``{}`` (no caps)
+    """
+    if spec is None or spec == "":
+        return {}
+    if isinstance(spec, int):  # uniform cap from a hand-built namespace
+        return {"*": spec}
+    spec = spec.strip()
+    if not spec:
+        return {}
+    if ":" not in spec:  # bare int -> uniform cap
+        return {"*": int(spec)}
+    out: dict[str, int] = {}
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        name, _, n = part.partition(":")
+        out[name.strip()] = int(n.strip())
+    return out
+
+
+def _cap_for(caps: dict[str, int], src: str) -> int:
+    """Per-source cap with a ``"*"`` fallback; 0 means no cap / keep all."""
+    return caps.get(src, caps.get("*", 0))
+
+
 def _paradb_perstem_specs(args) -> tuple[list, list, Path]:
     """(train_specs, val_specs, cache_dir) for ParaDB per-instrument stems.
 
@@ -1455,24 +1494,24 @@ def _paradb_perstem_specs(args) -> tuple[list, list, Path]:
     return [spec(c) for c in tr], [spec(c) for c in va], root / "_cache_mert"
 
 
-def _pooled_specs(args) -> tuple[list, list, Path]:
-    """(train_specs, val_specs, cache_dir) pooling several SEPARATION-AWARE
-    per-stem trees into one training set.
+def _per_source_specs(
+    args, cap_train: dict[str, int] | None, cap_val: dict[str, int] | None,
+) -> tuple[dict[str, list], dict[str, list], Path]:
+    """(per_train, per_val, cache_dir): PER-SOURCE spec lists for the pooled trees.
+
+    Source indexing + the onsets/aligned caches + the `_spec`/`_full` closures +
+    the per-source loop, factored out of `_pooled_specs` so the resampling path
+    can keep the sources separate. `per_train`/`per_val` are dicts keyed by source
+    (insertion order = `args.pool_sources` order).
+
+    `cap_train` / `cap_val` are ``{source: n_windows}`` dicts (via `_cap_for`,
+    ``"*"`` fallback, 0 = keep all) or ``None`` to leave that split UNCAPPED. The
+    cap is applied to the CLIPS (`_cap_by_windows`) before `_spec` expansion, so a
+    capped source costs no extra label parsing.
 
     All sources fold to the same 10-lane vocab and the same 5-stem (k/s/h/c/t)
     routing, so each contributes `(audio, restricted_onsets, full_onsets)` tuples
     exactly as its own `*_perstem` mode -- they pool directly.
-
-    Class coverage: absent lanes are treated as valid negatives. That is exact
-    for STAR (ADT) and E-GMD (GM MIDI), whose audio is derived FROM the labels so
-    nothing is unlabelled; ENST is hand-labelled real audio covering every lane
-    (pedal hi-hat folds into closed `hc`, so there's no longer a sparse pedal
-    lane to worry about), so ENST's negatives are a mostly-correct signal.
-
-    `DRUMJOT_STAR/ENST/EGMD` must point at the sep trees (star_balanced_sep,
-    enst-sep, egmd-sep). `--pool-sources` selects which; `--pool-cap` caps each
-    source to ~N WINDOWS (~N*max-seconds of audio, predictable across varying clip
-    lengths); `--pool-balance` oversamples smaller sources so none dominates.
     """
     import json
     import os
@@ -1588,14 +1627,43 @@ def _pooled_specs(args) -> tuple[list, list, Path]:
     per_val: dict[str, list] = {}
     for name in sources:
         tr, va, ann_of, reader, p2l = info[name]
-        per_train[name] = [_spec(c, ann_of, reader, p2l) for c in _cap_by_windows(tr, args.pool_cap)]
-        vc = getattr(args, "pool_val_cap", 0)  # optional, like pool_cache above (hand-built callers)
-        va_cap = _cap_by_windows(va, vc) if vc else va
-        per_val[name] = [_spec(c, ann_of, reader, p2l) for c in va_cap]
+        tr_c = _cap_by_windows(tr, _cap_for(cap_train, name)) if cap_train else tr
+        va_c = _cap_by_windows(va, _cap_for(cap_val, name)) if cap_val else va
+        per_train[name] = [_spec(c, ann_of, reader, p2l) for c in tr_c]
+        per_val[name] = [_spec(c, ann_of, reader, p2l) for c in va_c]
     if dirty:  # atomic so a ctrl-C can't leave a half-written cache
         tmp = ocp.with_name(ocp.name + ".tmp")
         tmp.write_text(json.dumps(onsets_cache))
         os.replace(tmp, ocp)
+    return per_train, per_val, cache
+
+
+def _pooled_specs(args) -> tuple[list, list, Path]:
+    """(train_specs, val_specs, cache_dir) pooling several SEPARATION-AWARE
+    per-stem trees into one training set.
+
+    Thin wrapper over `_per_source_specs`: caps each source uniformly to
+    `--pool-cap` train windows (`--pool-val-cap` val windows; 0 = all), optionally
+    oversamples the smaller sources (`--pool-balance`), then MERGES the per-source
+    spec lists into flat train/val lists. Class coverage: absent lanes are treated
+    as valid negatives -- exact for STAR (ADT) and E-GMD (GM MIDI), whose audio is
+    derived FROM the labels, and a mostly-correct signal for hand-labelled ENST
+    (pedal hi-hat folds into closed `hc`, so there's no sparse pedal lane).
+
+    `DRUMJOT_STAR/ENST/EGMD` must point at the sep trees (star_balanced_sep,
+    enst-sep, egmd-sep). `--pool-sources` selects which; `--pool-cap` caps each
+    source to ~N WINDOWS (~N*max-seconds of audio, predictable across varying clip
+    lengths); `--pool-balance` oversamples smaller sources so none dominates.
+    """
+    sources = [s.strip() for s in args.pool_sources.split(",") if s.strip()]
+    # --pool-cap is a str on the CLI (per-source specs are a --pool-resample-only
+    # feature); the fixed-cap path here is always a uniform bare int, so coerce.
+    # Tests pass an int directly -- int(0) is a no-op.
+    per_train, per_val, cache = _per_source_specs(
+        args,
+        cap_train={"*": int(args.pool_cap)},
+        cap_val={"*": getattr(args, "pool_val_cap", 0)},
+    )
 
     # Oversample (repeat) smaller sources up to the largest so a big synthetic
     # source can't drown the small real-acoustic one (ENST). Capped at 5x.
@@ -1614,6 +1682,50 @@ def _pooled_specs(args) -> tuple[list, list, Path]:
     return train_specs, val_specs, cache
 
 
+class PerSourceResampler:
+    """A DataLoader `sampler` that draws a fresh per-EPOCH random subset of each
+    source's windows (per-source cap) and shuffles them together.
+
+    `source_indices` maps each source to the list of dataset indices (windows)
+    that belong to it; `caps` maps each source to its per-EPOCH window cap (via
+    `_cap_for`: ``"*"`` fallback, 0/missing = the whole source). Each `__iter__`
+    advances an internal epoch counter and reseeds, so a different random slice of
+    each source is drawn every epoch (full coverage over enough epochs),
+    deterministic for a given `seed`. The DataLoader calls `__iter__` once per
+    epoch, so the cap acts as a per-epoch resample rather than a fixed truncation.
+
+    Not a `torch.utils.data.Sampler` subclass (which would force a module-level
+    torch import); DataLoader accepts any iterable-with-`__len__` as `sampler`.
+    Uses stdlib `random` (seeded) for the sampling/shuffle.
+    """
+
+    def __init__(self, source_indices: dict[str, list[int]], caps: dict[str, int], seed: int = 0):
+        self.source_indices = {k: list(v) for k, v in source_indices.items()}
+        self.caps = caps
+        self.seed = seed
+        self._epoch = -1
+
+    def __iter__(self):
+        import random
+
+        self._epoch += 1
+        rng = random.Random(self.seed * 1_000_003 + self._epoch)
+        out: list[int] = []
+        for src, idxs in self.source_indices.items():
+            n = _cap_for(self.caps, src)
+            sel = rng.sample(idxs, n) if (n and n < len(idxs)) else list(idxs)
+            out += sel
+        rng.shuffle(out)
+        return iter(out)
+
+    def __len__(self) -> int:
+        total = 0
+        for src, idxs in self.source_indices.items():
+            n = _cap_for(self.caps, src)
+            total += min(n or len(idxs), len(idxs))
+        return total
+
+
 def main(argv: list[str] | None = None) -> None:
     import argparse
 
@@ -1628,9 +1740,11 @@ def main(argv: list[str] | None = None) -> None:
                     help="pooled mode: comma-list of sep-tree sources to combine "
                     "(star/enst/egmd/paradb/adtof; DRUMJOT_<SRC> must point at each sep tree, "
                     "e.g. star_balanced_sep / enst-sep / egmd-sep / adtof-sep)")
-    ap.add_argument("--pool-cap", type=int, default=0,
+    ap.add_argument("--pool-cap", type=str, default="0",
                     help="pooled mode: target train WINDOWS per dataset source (~N*max-seconds of "
-                    "audio; predictable, unlike a clip count over varying lengths); 0 = all")
+                    "audio; predictable, unlike a clip count over varying lengths); 0 = all. A bare int "
+                    "is a uniform cap; with --pool-resample it also accepts per-source specs like "
+                    "'paradb:9000,egmd:2500,star:2000' (sources not listed = uncapped).")
     ap.add_argument("--pool-val-cap", type=int, default=0,
                     help="pooled mode: cap val WINDOWS per source (0 = all). The per-source val splits "
                     "are otherwise uncapped (1000s of windows -> slow first-run label-gate + per-epoch "
@@ -1638,6 +1752,13 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--pool-balance", action="store_true",
                     help="pooled mode: oversample smaller sources up to the largest (<=5x) so the big "
                     "synthetic sets don't drown the small real-acoustic one (ENST)")
+    ap.add_argument("--pool-resample", action="store_true",
+                    help="pooled mode: draw a fresh random per-source subset of the TRAIN windows every "
+                    "epoch (per-source cap from --pool-cap, which here accepts per-source specs like "
+                    "'paradb:9000,egmd:2500,star:2000' or a bare int for a uniform cap; 0/missing = all "
+                    "of that source). Train is materialized UNCAPPED (the sampler caps per epoch -> full "
+                    "coverage over epochs); val is capped FIXED by --pool-val-cap. Mutually exclusive "
+                    "with the fixed-cap shuffle path.")
     ap.add_argument("--pool-cache", default=None,
                     help="pooled mode: feature-cache dir; point at LOCAL NVMe (not the NFS sep trees) "
                     "to keep training compute-bound. Default: <common parent of sources>/mert_cache")
@@ -1766,47 +1887,92 @@ def main(argv: list[str] | None = None) -> None:
         lanes=tuple(s.strip() for s in args.lanes.split(",")) if args.lanes else LANES,
         aux_lanes=tuple(s.strip() for s in args.aux_lanes.split(",")) if args.aux_lanes else None,
     )
-    train_specs, val_specs, cache = (
-        _star_specs(args) if args.dataset == "star"
-        else _star_perstem_specs(args) if args.dataset == "star_perstem"
-        else _enst_perstem_specs(args) if args.dataset == "enst_perstem"
-        else _enst_specs(args) if args.dataset == "enst"
-        else _egmd_perstem_specs(args) if args.dataset == "egmd_perstem"
-        else _paradb_perstem_specs(args) if args.dataset == "paradb_perstem"
-        else _pooled_specs(args) if args.dataset == "pooled"
-        else _egmd_specs(args)
-    )
-    if args.overfit_one:
-        train_specs = train_specs[:1]
+    if args.pool_resample and args.dataset != "pooled":
+        raise SystemExit("--pool-resample is only valid with --dataset pooled")
 
-    encoder = embeddings.make_encoder(cfg.encoder, cfg.encoder_layer)
-    # Fail fast on an out-of-range layer (MERT exposes 25 hidden states) instead of
-    # an opaque IndexError deep into the encode pass.
-    nhs = encoder.n_hidden_states()
-    if not 0 <= cfg.encoder_layer < nhs:
-        raise SystemExit(f"--layer {cfg.encoder_layer} out of range: valid 0..{nhs - 1}")
-
-    # Expand into per-window specs. Both train and val are sliced into as many
-    # ~max-seconds windows as fit the whole clip (max_windows=0 = unlimited),
-    # recovering ALL the separated audio rather than just the first window. The
-    # split is deterministic (low-energy cuts via --window-search), so runs stay
-    # comparable to each other, and it multiplies val onsets, tightening the noisy
-    # rare-lane F1.
     win = args.max_seconds or 30.0
-    train_wspecs = _window_specs(train_specs, win, args.window_search, 0, plan_cache_dir=cache)
-    val_wspecs = _window_specs(val_specs, win, args.window_search, 0, plan_cache_dir=cache)
-    extra = len(train_wspecs) - len(train_specs)
-    print(
-        f"dataset={args.dataset}  {len(train_specs)} train clips -> {len(train_wspecs)} windows "
-        f"(+{extra} from segmenting, full windowing) / "
-        f"{len(val_specs)} val -> {len(val_wspecs)} windows  (cache {cache}) ...",
-        flush=True,
-    )
-    # Encode-once into the cache, then stream from disk: features are never all
-    # held in RAM, so the train set can exceed available memory.
     log_p = lambda s: print(s, flush=True)  # noqa: E731
-    train_clips = materialize(train_wspecs, encoder, cfg, cache, args.max_seconds, "train", log_p)
-    val_clips = materialize(val_wspecs, encoder, cfg, cache, args.max_seconds, "val", log_p)
+    sampler = None
+
+    if args.pool_resample:
+        # Per-EPOCH resampling: train is materialized UNCAPPED (the sampler draws a
+        # fresh per-source random subset each epoch -> full coverage over epochs);
+        # val is capped FIXED once. --pool-cap carries the per-source caps.
+        caps = _parse_pool_caps(args.pool_cap)
+        per_train, per_val, cache = _per_source_specs(
+            args, cap_train=None, cap_val={"*": getattr(args, "pool_val_cap", 0)},
+        )
+        if args.overfit_one:  # honour the smoke knob: keep one clip of the first source
+            for k in list(per_train):
+                per_train[k] = per_train[k][:1] if k == next(iter(per_train), None) else []
+
+        encoder = embeddings.make_encoder(cfg.encoder, cfg.encoder_layer)
+        nhs = encoder.n_hidden_states()
+        if not 0 <= cfg.encoder_layer < nhs:
+            raise SystemExit(f"--layer {cfg.encoder_layer} out of range: valid 0..{nhs - 1}")
+
+        # Window each source separately, tracking which dataset (window) indices
+        # belong to it so the sampler can cap per source.
+        train_wspecs: list = []
+        src_idx: dict[str, list[int]] = {}
+        for src, specs in per_train.items():
+            w = _window_specs(specs, win, args.window_search, 0, plan_cache_dir=cache)
+            src_idx[src] = list(range(len(train_wspecs), len(train_wspecs) + len(w)))
+            train_wspecs += w
+        val_wspecs = [
+            w for specs in per_val.values()
+            for w in _window_specs(specs, win, args.window_search, 0, plan_cache_dir=cache)
+        ]
+
+        train_clips = materialize(train_wspecs, encoder, cfg, cache, args.max_seconds, "train", log_p)
+        val_clips = materialize(val_wspecs, encoder, cfg, cache, args.max_seconds, "val", log_p)
+
+        sampler = PerSourceResampler(src_idx, caps, seed=args.seed)
+        print(f"pooled resample (per-epoch random subset; cache {cache}):", flush=True)
+        for src, idxs in src_idx.items():
+            cap = _cap_for(caps, src)
+            print(f"  {src:6} windows={len(idxs):6d}  per-epoch cap={cap or 'all':>6}", flush=True)
+        print(f"  -> {len(sampler)} windows/epoch (val {len(val_wspecs)} windows, fixed)", flush=True)
+    else:
+        train_specs, val_specs, cache = (
+            _star_specs(args) if args.dataset == "star"
+            else _star_perstem_specs(args) if args.dataset == "star_perstem"
+            else _enst_perstem_specs(args) if args.dataset == "enst_perstem"
+            else _enst_specs(args) if args.dataset == "enst"
+            else _egmd_perstem_specs(args) if args.dataset == "egmd_perstem"
+            else _paradb_perstem_specs(args) if args.dataset == "paradb_perstem"
+            else _pooled_specs(args) if args.dataset == "pooled"
+            else _egmd_specs(args)
+        )
+        if args.overfit_one:
+            train_specs = train_specs[:1]
+
+        encoder = embeddings.make_encoder(cfg.encoder, cfg.encoder_layer)
+        # Fail fast on an out-of-range layer (MERT exposes 25 hidden states) instead of
+        # an opaque IndexError deep into the encode pass.
+        nhs = encoder.n_hidden_states()
+        if not 0 <= cfg.encoder_layer < nhs:
+            raise SystemExit(f"--layer {cfg.encoder_layer} out of range: valid 0..{nhs - 1}")
+
+        # Expand into per-window specs. Both train and val are sliced into as many
+        # ~max-seconds windows as fit the whole clip (max_windows=0 = unlimited),
+        # recovering ALL the separated audio rather than just the first window. The
+        # split is deterministic (low-energy cuts via --window-search), so runs stay
+        # comparable to each other, and it multiplies val onsets, tightening the noisy
+        # rare-lane F1.
+        train_wspecs = _window_specs(train_specs, win, args.window_search, 0, plan_cache_dir=cache)
+        val_wspecs = _window_specs(val_specs, win, args.window_search, 0, plan_cache_dir=cache)
+        extra = len(train_wspecs) - len(train_specs)
+        print(
+            f"dataset={args.dataset}  {len(train_specs)} train clips -> {len(train_wspecs)} windows "
+            f"(+{extra} from segmenting, full windowing) / "
+            f"{len(val_specs)} val -> {len(val_wspecs)} windows  (cache {cache}) ...",
+            flush=True,
+        )
+        # Encode-once into the cache, then stream from disk: features are never all
+        # held in RAM, so the train set can exceed available memory.
+        train_clips = materialize(train_wspecs, encoder, cfg, cache, args.max_seconds, "train", log_p)
+        val_clips = materialize(val_wspecs, encoder, cfg, cache, args.max_seconds, "val", log_p)
 
     pos_w = pos_weights_from_targets(train_clips.iter_targets(), cap=args.pos_weight_cap)
     print("pos_weights:", {ln: round(float(w), 1) for ln, w in zip(cfg.lanes, pos_w, strict=True)}, flush=True)
@@ -1837,6 +2003,7 @@ def main(argv: list[str] | None = None) -> None:
         keep_best=args.keep_best,
         early_stop=args.early_stop, es_window=args.es_window, es_slope=args.es_slope,
         es_jitter=args.es_jitter, es_min_epochs=args.es_min_epochs,
+        train_sampler=sampler,
         log=lambda s: print(s, flush=True),
     )
     thresholds = tune_thresholds(model, val_clips, cfg)
