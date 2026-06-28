@@ -55,6 +55,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import sys
 import time
@@ -66,6 +67,16 @@ sys.path.insert(0, os.path.join(_HERE, "..", "..", "dsp"))  # dsp/ (high-band bl
 
 from drumjot_training import embeddings, runtime, train  # noqa: E402
 from drumjot_training.config import Config  # noqa: E402
+
+
+def _clip_in_shard(audio, shard: str | None) -> bool:
+    """True if `audio` belongs to shard "i/N" (stable hash of the path); None -> all.
+    Lets two boxes encode DISJOINT clip sets (--shard 0/2 here, 1/2 there) so a
+    multi-box warm never races the same window."""
+    if not shard:
+        return True
+    i, n = (int(x) for x in shard.split("/"))
+    return int(hashlib.sha1(str(audio).encode()).hexdigest(), 16) % n == i
 
 
 def encode_pipelined(specs, encoder, cfg, cache, workers, writers, log):
@@ -153,8 +164,10 @@ def encode_pipelined(specs, encoder, cfg, cache, workers, writers, log):
     def _save(path, feat):
         try:
             # tmp MUST end in .npy, else np.save appends .npy (-> hash.tmp.npy.npy)
-            # and the os.replace below renames a nonexistent file.
-            tmp = path.with_name(path.stem + ".tmp.npy")
+            # and the os.replace below renames a nonexistent file. PID-unique so two
+            # boxes/procs that race the same window (sharded or not) can't clobber one
+            # shared tmp; os.replace is atomic and the feature is deterministic -> last wins.
+            tmp = path.with_name(f"{path.stem}.{os.getpid()}.tmp.npy")
             np.save(tmp, feat)
             os.replace(tmp, path)
         except Exception as e:  # noqa: BLE001
@@ -219,6 +232,10 @@ def main():
     ap.add_argument("--plan-workers", type=int, default=None,
                     help="PLANNING-phase threads (pure NFS I/O, no GPU) -- safe to raise to ~core "
                     "count to saturate the link. Default: = --workers.")
+    ap.add_argument("--shard", default=None, metavar="i/N",
+                    help="encode only clips whose audio path hashes to shard i of N "
+                    "(--shard 0/2 on one box, 1/2 on another) -- disjoint work for multi-box "
+                    "parallel warming, zero overlap. Default: all clips.")
     ap.add_argument("--writers", type=int, default=4, help="background .npy writer threads")
     ap.add_argument("--no-pipeline", action="store_true",
                     help="use the simple serial materialize instead of the load-once/prefetch "
@@ -273,6 +290,11 @@ def main():
     print(f"\nfull windowing: {len(train_specs)} train clips -> {len(tr_w)} windows | "
           f"{len(val_specs)} val clips -> {len(va_w)} windows", flush=True)
     print(f"cache dir: {cache}  (resumable: already-cached windows are skipped)\n", flush=True)
+
+    if args.shard:  # multi-box: keep only this shard's clips (disjoint by audio hash)
+        tr_w = [w for w in tr_w if _clip_in_shard(w[0], args.shard)]
+        va_w = [w for w in va_w if _clip_in_shard(w[0], args.shard)]
+        print(f"shard {args.shard}: {len(tr_w)} train + {len(va_w)} val windows for this box", flush=True)
 
     log = lambda s: print(s, flush=True)  # noqa: E731
     t0 = time.perf_counter()
