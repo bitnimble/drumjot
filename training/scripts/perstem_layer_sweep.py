@@ -16,8 +16,10 @@ lane, to lock per-lane encoder layers (or inform a layer-concat head).
 
 Models load OFFLINE (run training/scripts/fetch_models.py once first).
 DRUMJOT_STAR/ENST/EGMD must point at the sep trees. Usage:
-  perstem_layer_sweep.py --pool-sources star,enst,egmd --pool-cap 150 \
-    --layers 1,4,7,10,13,16,19,22 --seeds 0,1,2 [--pool-cache /nvme/cache]
+  # size-proportional subset (~77%% paradb), real-domain layer ranking:
+  perstem_layer_sweep.py --pool-sources star,enst,egmd,paradb \
+    --pool-cap paradb:770,egmd:155,star:63,enst:12 \
+    --layers 1,4,7,10,13,16 --seeds 0,1,2 [--pool-cache /nvme/cache]
 """
 import argparse
 import os
@@ -35,7 +37,9 @@ from drumjot_training.config import Config  # noqa: E402
 from drumjot_training.model import MultiLaneHeads  # noqa: E402
 from drumjot_training.targets import pos_weights_from_targets  # noqa: E402
 from drumjot_training.train import (  # noqa: E402
-    _pooled_specs,
+    _cap_for,
+    _parse_pool_caps,
+    _per_source_specs,
     _window_specs,
     evaluate_clip,
     materialize,
@@ -83,7 +87,11 @@ def _encode_all_layers(specs, enc, layers, cache: Path, cfg: Config, log) -> Non
 def main():
     ap = argparse.ArgumentParser(description="per-stem pooled MERT layer sweep (full pipeline)")
     ap.add_argument("--pool-sources", default="star,enst,egmd")
-    ap.add_argument("--pool-cap", type=int, default=150, help="clips per source (0 = all)")
+    ap.add_argument("--pool-cap", default="0",
+                    help="per-source clip caps (each clip = 1 sweep window): "
+                    "'paradb:770,egmd:155,star:63,enst:12' for a size-PROPORTIONAL subset "
+                    "(~77%% paradb, mirroring the real data mix), or a bare int = uniform/source, "
+                    "or 0 = all. Random-sampled per source (seeded).")
     ap.add_argument("--pool-balance", action="store_true", help="oversample smaller sources")
     ap.add_argument("--pool-cache", default=None, help="feature-cache dir (point at LOCAL NVMe)")
     ap.add_argument("--layers", default="1,4,7,10,13,16,19,22")
@@ -108,7 +116,24 @@ def main():
     enc_fps = embeddings.MERT_FPS
     cfg0 = Config(encoder=enc_name, encoder_fps=enc_fps, high_band=True)
 
-    train_specs, val_specs, cache = _pooled_specs(args)
+    import random as _rnd
+    # Size-proportional subset: per-source clip caps (random-sampled), so the sweep's
+    # single-window-per-clip mix mirrors the real data proportions (e.g. ~77% paradb)
+    # instead of the uniform-cap distortion (which under-samples long paradb clips).
+    caps = _parse_pool_caps(args.pool_cap)
+    per_train, per_val, cache = _per_source_specs(args, cap_train=None, cap_val=None)
+    _rng = _rnd.Random(0)
+    train_by_src, val_by_src = {}, {}
+    for s in per_train:
+        n = _cap_for(caps, s)
+        train_by_src[s] = _rng.sample(per_train[s], min(n, len(per_train[s]))) if n else list(per_train[s])
+        vs = per_val.get(s, [])
+        val_by_src[s] = _rng.sample(vs, min(n, len(vs))) if n else list(vs)
+    print("sweep subset (clips, 1 window each):", flush=True)
+    for s in train_by_src:
+        print(f"  {s:6} train={len(train_by_src[s]):5d}  val={len(val_by_src[s]):4d}", flush=True)
+    train_specs = [x for s in train_by_src for x in train_by_src[s]]
+    val_specs = [x for s in val_by_src for x in val_by_src[s]]
     # single window per clip (the sweep ranks layers; windowing is orthogonal)
     tr = _window_specs(train_specs, args.max_seconds, 3.0, 1)  # single window per clip
     va = _window_specs(val_specs, args.max_seconds, 3.0, 1)
