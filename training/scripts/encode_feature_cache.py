@@ -251,6 +251,7 @@ def main():
     # encoding (a repeat hits the same cache key).
     ns = argparse.Namespace(
         pool_sources=args.pool_sources, pool_cap=args.pool_cap,
+        pool_val_cap=0,  # encode ALL val windows; the trainer's --pool-val-cap selects a subset
         pool_balance=False, pool_cache=args.pool_cache,
     )
     train_specs, val_specs, cache = train._pooled_specs(ns)
