@@ -16,6 +16,56 @@ Scoring is `mir_eval` onset-F1 at ±50 ms (`metrics.onset_f1`).
 
 ---
 
+## 2026-06-29 · Per-stem MERT layer sweep at the new data scale → SINGLE L10 (per-lane gain < 0.03)
+
+Re-ran the real-head full-pipeline per-lane layer sweep (`perstem_layer_sweep.py`) at the new
+data scale, on a **size-proportional pooled subset** (~77% ParaDB, mirroring the real mix) so
+best-layer-per-lane reflects the deployment domain, not the old uniform-cap distortion. Goal:
+decide whether the (new) per-lane-layer feature is worth using for the best-model run.
+
+**Per-lane onset-F1 by MERT layer (mean over 3 seeds; high-band on, h128/2-layer heads):**
+
+| lane | L1 | L4 | L7 | L10 | L13 | L16 | best |
+|---|---|---|---|---|---|---|---|
+| k  | 0.89 | 0.90 | 0.91 | 0.91 | 0.91 | 0.91 | L7+ |
+| s  | 0.83 | 0.83 | 0.82 | 0.84 | 0.85 | 0.84 | L13 |
+| ss | 0.12 | 0.09 | 0.07 | 0.07 | 0.07 | 0.05 | L1 |
+| t  | 0.34 | 0.50 | 0.50 | 0.50 | 0.51 | 0.49 | L13 |
+| hc | 0.43 | 0.44 | 0.43 | 0.45 | 0.45 | 0.45 | L10+ |
+| ho | 0.27 | 0.22 | 0.18 | 0.16 | 0.16 | 0.14 | **L1** |
+| rd | 0.20 | 0.26 | 0.26 | 0.28 | 0.25 | 0.26 | L10 |
+| cr | 0.50 | 0.50 | 0.51 | 0.51 | 0.50 | 0.51 | L7+ |
+
+**Decision (user's criterion: per-lane vs L10, averaged over the 7 big-run lanes
+`k,s,t,hc,ho,rd,cr`; use per-lane only if Δ > 0.03):**
+- mean @ L10            = **0.521**
+- mean @ best-per-lane  = **0.540**  (k L7=.91, s L13=.85, t L13=.51, hc L10=.45, **ho L1=.27**, rd L10=.28, cr L7=.51)
+- **Δ = +0.019 < 0.03 → SINGLE L10** for the best-model run (no per-lane routing).
+
+The aggregate per-lane gain is almost entirely **open-hat preferring the EARLIEST layer L1**
+(0.27 vs 0.16 @ L10 = +0.11 on that one lane; ho monotonically *decreases* with depth). One lane
+can't move the 7-lane average past 0.03, so per-lane-layer isn't triggered, but the ho→L1 signal
+is real and isolated; FLAG for a future targeted experiment (e.g. ho-only early-layer routing, or
+why open-hat onset lives in early MERT). Side-stick (ss, not a big-run lane) also wants L1.
+Per-lane-layer routing IS now implemented + tested (commits e3078d5, a0973ef), just not warranted here.
+
+Reproduce (the proportional subset is random-seeded, seed 0; ~1000 single-window train clips):
+```
+DS=/codebox-workspace/datasets; REPO=/home/bitnimble/code/drumjot
+scripts/sandbox-run env MODELS_DIR=/codebox-workspace/drumjot/models-cache \
+  DRUMJOT_STAR=$DS/star_balanced_sep DRUMJOT_ENST=$DS/enst-sep DRUMJOT_EGMD=$DS/egmd_sep \
+  DRUMJOT_PARADB=$DS/paradb-sep-train DRUMJOT_ALIGNED_ONSETS=$DS/_onsets_aligned_snaponly.json \
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True OMP_NUM_THREADS=8 PYTHONPATH=$REPO/training:$REPO/dsp \
+  python3 $REPO/training/scripts/perstem_layer_sweep.py --pool-sources star,enst,egmd,paradb \
+  --pool-cap paradb:770,egmd:155,star:63,enst:12 --layers 1,4,7,10,13,16 --seeds 0,1,2 \
+  --pool-cache /codebox-workspace/mert_cache
+```
+Defaults in effect (not on the CLI): `--epochs 40`, `--batch-size 8`, `--max-seconds 30`,
+`--enst-mix sep_drum`, no `--pool-balance`; per-clip single window; encoder MERT-v1-330M @ 75fps,
+high_band on (feat_dim 1040), heads h128/2-layer, auto-calibrate on, sibling weighting
+(neg 8.0/pos 3.0), aux-act 0.5, snap-only onsets (`_onsets_aligned_snaponly.json`),
+`--label-min-support 0` (gate off), box = local/server 3080 (10 GB), bf16/TF32 on.
+
 ## 2026-06-28 · Joint ride/crash cymbal head (#1) A/B: better DEPLOYED cr+rd, lower oracle ceiling
 
 Clean A/B of the **joint cymbal-type head** (`--cymbal-softmax`: rd/cr trained as a 3-way softmax
