@@ -2,7 +2,7 @@
 the MERT feature cache the model was trained against.
 
 train.py windows each stem (`_window_plan.json`, nudged ~30 s cuts) and caches
-per-window MERT+high-band features under `_cache_mert_pooled`. So the IDENTITY
+per-window MERT+high-band features under `mert_cache`. So the IDENTITY
 pass is free: load cached features -> run the tiny GRU heads -> activation curve,
 NO MERT. Augmented variants -- different audio -- are encoded on the GPU and
 persisted to a probs cache (probs_cache) so re-runs / more variants / resumed
@@ -26,7 +26,7 @@ Hat+cymbal: `--pitches h,c`. These are TRAINING datasets; ParaDB stays the test.
       --checkpoint <ckpt> --out <table.npz> \
       --star-root .../star_balanced_sep --enst-root .../enst-sep --egmd-root .../egmd_sep \
       --a2md-root .../a2md_sep \
-      --feature-cache .../_cache_mert_pooled [--variants 4] [--aug-windows 1] [--workers 3]
+      --feature-cache .../mert_cache [--variants 4] [--aug-windows 1] [--workers 3]
 """
 import argparse
 import hashlib
@@ -275,7 +275,7 @@ def main():
     ap.add_argument("--enst-root", default=None)
     ap.add_argument("--egmd-root", default=None)
     ap.add_argument("--a2md-root", default=None, help="A2MD separated root (real-domain; encoded fresh)")
-    ap.add_argument("--feature-cache", default="/codebox-workspace/datasets/_cache_mert_pooled")
+    ap.add_argument("--feature-cache", default="/codebox-workspace/mert_cache")
     ap.add_argument("--probs-cache", default="/codebox-workspace/datasets/_cache_param_probs")
     ap.add_argument("--pitches", default="h,c")
     ap.add_argument("--lanes", default="hc,ho,rd,cr")

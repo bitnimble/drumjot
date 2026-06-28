@@ -45,7 +45,7 @@ cut nudge) stays. `plan_windows` now also **merges a sub-5s final window** into 
 previous one (`MIN_WINDOW`), since MERT's conv extractor errors on a ~1-3s sliver.
 - **Re-encode required.** The cache is keyed per `(start, length)`, and the
   smart-slice nudge changes even window-0's length (old single-window was exactly
-  30s, unnudged), so the existing `_cache_mert_pooled` is **fully stale**, wipe it
+  30s, unnudged), so the existing `mert_cache` is **fully stale**, wipe it
   and rebuild. Run `scripts/encode_feature_cache.py` (reuses the production
   windowing/materialize, so its cache is byte-key-identical to what the trainer
   asks for; resumable). Re-encode is ~4-8× the old cache (proportional to total

@@ -31,7 +31,7 @@ Run on a box with the warm cache (3080):
   DRUMJOT_ENST=/codebox-workspace/datasets/enst-sep \
   DRUMJOT_EGMD=/codebox-workspace/datasets/egmd_sep \
   python training/scripts/cymbal_feature_probe.py \
-      --cache /codebox-workspace/datasets/_cache_mert_pooled \
+      --cache /codebox-workspace/mert_cache \
       --out-json /codebox-workspace/cymbal_feature_probe.json
 
 Validate the code path without the cache/GPU:  python ... --selftest
@@ -312,7 +312,7 @@ def main():
     ap.add_argument("--steps", type=int, default=3000)
     ap.add_argument("--lr", type=float, default=0.05)
     ap.add_argument("--wd", type=float, default=1e-4)
-    ap.add_argument("--cache", default="/codebox-workspace/datasets/_cache_mert_pooled")
+    ap.add_argument("--cache", default="/codebox-workspace/mert_cache")
     ap.add_argument("--out-json", default="/codebox-workspace/cymbal_feature_probe.json")
     ap.add_argument("--selftest", action="store_true", help="synthetic end-to-end check (no cache/GPU)")
     args = ap.parse_args()

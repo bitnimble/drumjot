@@ -16,7 +16,7 @@ enlarged val. That's what this script runs.
 Reuses the production path: pooled per-stem indexing (restricted = full filtered to
 the stem's lanes; full rides along as the sibling-weighting source) -> full
 windowing -> materialize -> CachedClips -> train_loop. Features come from the
-full-windowed _cache_mert_pooled (layer 10, hb16), so it's all cache hits (no
+full-windowed mert_cache (layer 10, hb16), so it's all cache hits (no
 re-encode) as long as --layer / high-band / --window-search match how the cache
 was built.
 
@@ -30,7 +30,7 @@ NFS latency. The only writes during training are occasional checkpoints
 Run with DRUMJOT_STAR/ENST/EGMD pointing at the sep trees, e.g.:
   python training/scripts/head_capacity_sweep.py \
       --hidden 128,512 --pool-cap 0 --epochs 40 --num-workers 8 \
-      --cache /codebox-workspace/datasets/_cache_mert_pooled
+      --cache /codebox-workspace/mert_cache
 """
 from __future__ import annotations
 
@@ -222,7 +222,7 @@ def main():
     ap.add_argument("--val-max-windows", type=int, default=4,
                     help="windows per VAL song (>1 enlarges/diversifies val -> damps lucky-epoch F1; "
                     "0 = all). The first N windows are a subset of the full-windowed cache, so still hits.")
-    ap.add_argument("--cache", default="/codebox-workspace/datasets/_cache_mert_pooled")
+    ap.add_argument("--cache", default="/codebox-workspace/mert_cache")
     ap.add_argument("--aligned-onsets", default=None,
                     help="opt-in: a _onsets_aligned.json (align_dataset_onsets.py) -> train on "
                     "audio-snapped/filtered targets. Default: raw labels. Feature cache is "

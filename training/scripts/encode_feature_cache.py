@@ -49,7 +49,7 @@ Usage:
   export DRUMJOT_STAR=/data/star_balanced_sep DRUMJOT_ENST=/data/enst-sep \
          DRUMJOT_EGMD=/data/egmd_sep
   python3 training/scripts/encode_feature_cache.py \
-      --pool-cache /data/_cache_mert_pooled            # full set, all stems
+      --pool-cache /data/mert_cache            # full set, all stems
   python3 training/scripts/encode_feature_cache.py --pool-cap 50 ...  # quick trial
 """
 from __future__ import annotations
@@ -204,7 +204,7 @@ def main():
                     help="max source-clips per dataset (0 = ALL); each expands to ~5 stems x N windows")
     ap.add_argument("--pool-cache", default=None,
                     help="feature-cache dir the trainer will read (default: <common parent of "
-                    "sources>/_cache_mert_pooled, matching train.py)")
+                    "sources>/mert_cache, matching train.py)")
     ap.add_argument("--layer", type=int, default=10, help="MERT hidden layer (must match training)")
     ap.add_argument("--high-band", default=True, action=argparse.BooleanOptionalAction,
                     help="append the 6-20 kHz high-band block (default on; must match training)")

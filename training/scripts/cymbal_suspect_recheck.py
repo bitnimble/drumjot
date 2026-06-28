@@ -250,7 +250,7 @@ def main():
     ap.add_argument("--pool-sources", default="star,enst,egmd")
     ap.add_argument("--pool-cap", type=int, default=3000, help="match the training pool")
     ap.add_argument("--splits", default="train,val")
-    ap.add_argument("--cache", default="/codebox-workspace/datasets/_cache_mert_pooled")
+    ap.add_argument("--cache", default="/codebox-workspace/mert_cache")
     ap.add_argument("--aligned-onsets", default="/codebox-workspace/datasets/_onsets_aligned.json",
                     help="the snapped+filtered onsets to recheck against the raw labels")
     ap.add_argument("--max-clips", type=int, default=0, help="cap stems (0 = all); for a dry run")

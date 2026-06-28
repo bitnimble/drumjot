@@ -27,7 +27,7 @@ Run on a box with the warm cache (3080):
   DRUMJOT_ENST=/codebox-workspace/datasets/enst-sep \
   DRUMJOT_EGMD=/codebox-workspace/datasets/egmd_sep \
   python training/scripts/cymbal_recall_confusion.py \
-      --cache /codebox-workspace/datasets/_cache_mert_pooled \
+      --cache /codebox-workspace/mert_cache \
       --out-json /codebox-workspace/cymbal_recall_confusion.json
 
 Validate the categorizer without cache/GPU:  python ... --selftest
@@ -167,7 +167,7 @@ def main():
     ap.add_argument("--num-workers", type=int, default=8)
     ap.add_argument("--train-max-windows", type=int, default=0)
     ap.add_argument("--val-max-windows", type=int, default=4)
-    ap.add_argument("--cache", default="/codebox-workspace/datasets/_cache_mert_pooled")
+    ap.add_argument("--cache", default="/codebox-workspace/mert_cache")
     ap.add_argument("--load", default=None, help="load a saved model .pt instead of training")
     ap.add_argument("--save", default=None, help="save the trained model+thresholds here (.pt)")
     ap.add_argument("--out-json", default="/codebox-workspace/cymbal_recall_confusion.json")

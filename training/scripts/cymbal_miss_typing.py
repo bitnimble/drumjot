@@ -38,7 +38,7 @@ training GPU -- pass --device cpu):
   DRUMJOT_EGMD=/codebox-workspace/datasets/egmd_sep \
   python training/scripts/cymbal_miss_typing.py \
       --load /codebox-workspace/checkpoints/h128_cymhat_s1.pt \
-      --cache /codebox-workspace/datasets/_cache_mert_pooled \
+      --cache /codebox-workspace/mert_cache \
       --out-json /codebox-workspace/cymbal_miss_typing.json
 
 Validate the typing + sweep logic without cache/GPU:  python ... --selftest
@@ -299,7 +299,7 @@ def main():
     ap.add_argument("--pool-cap", type=int, default=3000, help="keep =3000 to stay cache-hit")
     ap.add_argument("--layers", type=int, default=2)
     ap.add_argument("--val-max-windows", type=int, default=4)
-    ap.add_argument("--cache", default="/codebox-workspace/datasets/_cache_mert_pooled")
+    ap.add_argument("--cache", default="/codebox-workspace/mert_cache")
     ap.add_argument("--device", default="auto", choices=("auto", "cpu", "cuda"),
                     help="cpu keeps a busy training GPU untouched (the head is tiny)")
     ap.add_argument("--out-json", default="/codebox-workspace/cymbal_miss_typing.json")

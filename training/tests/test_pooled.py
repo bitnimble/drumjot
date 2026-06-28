@@ -46,14 +46,18 @@ def test_pooled_specs_single_source(tmp_path, monkeypatch):
 
     root = _enst_sep_tree(tmp_path)
     monkeypatch.setenv("DRUMJOT_ENST", str(root))
-    args = argparse.Namespace(pool_sources="enst", pool_cap=0, pool_balance=False)
+    # --pool-cache is honored: the returned cache dir is the one we pass in.
+    pool_cache = tmp_path / "mert_cache"
+    args = argparse.Namespace(
+        pool_sources="enst", pool_cap=0, pool_balance=False, pool_cache=str(pool_cache)
+    )
     tr, va, cache = train._pooled_specs(args)
     assert len(tr) == 5 and len(va) == 5            # drummer_1 train, drummer_3 val; 5 stems each
     assert len(tr[0]) == 3                          # (audio, restricted_onsets, full_onsets)
     _audio, restr, full = tr[0]
     # restricted = this stem's lanes; full = all output lanes (for sibling weighting)
     assert set(restr) == set(LANES) and set(full) == set(LANES)
-    assert cache.name == "_cache_mert_pooled"
+    assert cache.name == "mert_cache"
 
 
 def test_pooled_balance_oversamples_small_source(tmp_path, monkeypatch):

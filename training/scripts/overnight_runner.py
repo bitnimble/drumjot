@@ -44,7 +44,7 @@ def main():
                     help="arm:cap:seed:epochs:hidden (repeatable, run in order)")
     ap.add_argument("--ckpt-root", default="/codebox-workspace/checkpoints")
     ap.add_argument("--out-root", default="/codebox-workspace/ovn")
-    ap.add_argument("--cache", default="/codebox-workspace/datasets/_cache_mert_pooled")
+    ap.add_argument("--cache", default="/codebox-workspace/mert_cache")
     ap.add_argument("--aligned-onsets", default="/codebox-workspace/datasets/_onsets_aligned.json")
     ap.add_argument("--focal-lanes", default="hc,rd")
     ap.add_argument("--grad-clip", type=float, default=0.0, help="max grad norm (0=off); ~1.0 for h256+")

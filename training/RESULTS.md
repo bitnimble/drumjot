@@ -99,7 +99,7 @@ Two durable findings:
 **Reproduce (per arm; local RTX 3080):** same env as A/B v3 below, per seed S and M in {crin,crout}:
 ```
 python3 -m drumjot_training.train --dataset pooled --pool-sources star,enst,egmd,paradb \
-  --pool-cap 100 --pool-val-cap 30 --pool-balance --pool-cache …/_cache_mert_pooled \
+  --pool-cap 100 --pool-val-cap 30 --pool-balance --pool-cache …/mert_cache \
   --head-hidden 128 --lanes hc,ho,rd,cr --epochs 30 --no-keep-best --no-early-stop \
   --no-filter-report --label-min-support 0 --no-auto-calibrate \
   [crout: --aux-lanes ho,rd] --seed $S --out …/auxab2_${M}_s$S
@@ -144,7 +144,7 @@ stays ON. Also: per-epoch val now does a per-lane grid sweep (CPU, on already-co
 **Reproduce (per arm; local RTX 3080):** same env as the A/B v3 entry below, then per seed S:
 ```
 python3 -m drumjot_training.train --dataset pooled --pool-sources star,enst,egmd,paradb \
-  --pool-cap 100 --pool-val-cap 30 --pool-balance --pool-cache …/_cache_mert_pooled \
+  --pool-cap 100 --pool-val-cap 30 --pool-balance --pool-cache …/mert_cache \
   --head-hidden 128 --lanes hc,ho,rd,cr --epochs 30 --es-min-epochs 12 --early-stop \
   --no-filter-report --label-min-support 0 --no-auto-calibrate --seed $S --out …/kbval_s$S
 ```
@@ -191,7 +191,7 @@ pivot to discrimination. **cap100 default should be OFF.**
 **Reproduce (per arm; local RTX 3080):** same env as the A/B v3 entry below, then per seed S:
 ```
 python3 -m drumjot_training.train --dataset pooled --pool-sources star,enst,egmd,paradb \
-  --pool-cap 100 --pool-val-cap 30 --pool-balance --pool-cache …/_cache_mert_pooled \
+  --pool-cap 100 --pool-val-cap 30 --pool-balance --pool-cache …/mert_cache \
   --head-hidden 128 --lanes hc,ho,rd,cr --epochs 30 --es-min-epochs 12 --no-keep-best \
   --early-stop --no-filter-report --label-min-support 0 --seed $S \
   [off: --no-auto-calibrate] [detach: edit _calibrate, commit b7606a3] --out …/calibab_<v>_s$S
@@ -235,7 +235,7 @@ DRUMJOT_ALIGNED_ONSETS=/codebox-workspace/datasets/_onsets_aligned.json \
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True OMP_NUM_THREADS=8 PYTHONPATH=training:dsp \
 python3 -m drumjot_training.train --dataset pooled \
   --pool-sources <paradb: star,enst,egmd,paradb | prev: star,enst,egmd> \
-  --pool-cap 400 --pool-val-cap 60 --pool-balance --pool-cache …/_cache_mert_pooled \
+  --pool-cap 400 --pool-val-cap 60 --pool-balance --pool-cache …/mert_cache \
   --head-hidden 256 --lanes k,s,t,hc,ho,rd,cr --batch-size 16 --epochs 70 --keep-best \
   --early-stop --no-filter-report --seed 0 --label-min-support 0 --out …/ab3_<paradb|prev>
 ```
@@ -285,7 +285,7 @@ DRUMJOT_EGMD=/codebox-workspace/datasets/egmd_sep DRUMJOT_PARADB=/codebox-worksp
 DRUMJOT_ALIGNED_ONSETS=<raw:/dev/null | snap:/codebox-workspace/datasets/_onsets_aligned.json> \
 OMP_NUM_THREADS=8 PYTHONPATH=training:dsp python3 -m drumjot_training.train \
   --dataset pooled --pool-sources star,enst,egmd,paradb --pool-cap 100 --pool-val-cap 30 --pool-balance \
-  --pool-cache /codebox-workspace/datasets/_cache_mert_pooled --head-hidden 128 --lanes hc,ho,rd,cr \
+  --pool-cache /codebox-workspace/mert_cache --head-hidden 128 --lanes hc,ho,rd,cr \
   --epochs 30 --es-min-epochs 12 --no-keep-best --early-stop --no-filter-report --seed 0 \
   --label-min-support <raw,snap:0 | snapgate:0.95> --out <dir>
 ```

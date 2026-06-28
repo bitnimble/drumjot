@@ -140,7 +140,7 @@ def main():
     ap.add_argument("--pool-sources", default="star,enst,egmd")
     ap.add_argument("--pool-cap", type=int, default=3000, help="match the training pool")
     ap.add_argument("--splits", default="train,val", help="train, val, or train,val")
-    ap.add_argument("--cache", default="/codebox-workspace/datasets/_cache_mert_pooled",
+    ap.add_argument("--cache", default="/codebox-workspace/mert_cache",
                     help="only for the onset memo (_onsets.json); no features read")
     ap.add_argument("--support-percentile", type=float, default=60.0, help="eval_paradb default")
     ap.add_argument("--window-s", type=float, default=0.03, help="eval_paradb align window (s)")

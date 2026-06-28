@@ -1467,9 +1467,8 @@ def _pooled_specs(args) -> tuple[list, list, Path]:
 
     # Feature cache: defaults to the shared project MERT cache (embeddings.MERT_CACHE_DIR,
     # env DRUMJOT_MERT_CACHE) so training shares one cache with eval/inference and a clip
-    # is encoded once, ever. --pool-cache overrides it (e.g. the gaming box points at LOCAL
-    # NVMe -- the .npy are re-encodable scratch, ~50 GB for --pool-cap 1000, and local reads
-    # keep the GPU compute-bound instead of NFS-throttled).
+    # is encoded once, ever. --pool-cache overrides it (e.g. point at LOCAL NVMe -- the .npy
+    # are re-encodable scratch, ~50 GB for --pool-cap 1000).
     cache = (
         Path(args.pool_cache) if getattr(args, "pool_cache", None)
         else Path(embeddings.MERT_CACHE_DIR)
@@ -1534,7 +1533,8 @@ def _pooled_specs(args) -> tuple[list, list, Path]:
     for name in sources:
         tr, va, ann_of, reader, p2l = info[name]
         per_train[name] = [_spec(c, ann_of, reader, p2l) for c in _cap_by_windows(tr, args.pool_cap)]
-        va_cap = _cap_by_windows(va, args.pool_val_cap) if args.pool_val_cap else va
+        vc = getattr(args, "pool_val_cap", 0)  # optional, like pool_cache above (hand-built callers)
+        va_cap = _cap_by_windows(va, vc) if vc else va
         per_val[name] = [_spec(c, ann_of, reader, p2l) for c in va_cap]
     if dirty:  # atomic so a ctrl-C can't leave a half-written cache
         tmp = ocp.with_name(ocp.name + ".tmp")
@@ -1584,7 +1584,7 @@ def main(argv: list[str] | None = None) -> None:
                     "synthetic sets don't drown the small real-acoustic one (ENST)")
     ap.add_argument("--pool-cache", default=None,
                     help="pooled mode: feature-cache dir; point at LOCAL NVMe (not the NFS sep trees) "
-                    "to keep training compute-bound. Default: <common parent of sources>/_cache_mert_pooled")
+                    "to keep training compute-bound. Default: <common parent of sources>/mert_cache")
     ap.add_argument("--enst-mix", choices=("wet_mix", "dry_mix", "accompaniment", "sep_drum"),
                     default="wet_mix",
                     help="ENST-Drums audio variant (wet_mix = realistic isolated kit; default; "

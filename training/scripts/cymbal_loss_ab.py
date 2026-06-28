@@ -27,7 +27,7 @@ Built for an unattended overnight run on the idle 3080:
   DRUMJOT_ENST=/codebox-workspace/datasets/enst-sep \
   DRUMJOT_EGMD=/codebox-workspace/datasets/egmd_sep \
   python training/scripts/cymbal_loss_ab.py \
-      --cache /codebox-workspace/datasets/_cache_mert_pooled \
+      --cache /codebox-workspace/mert_cache \
       --out-json /codebox-workspace/cymbal_loss_ab.json
 
 Validate the oversample logic without cache/GPU:  python ... --selftest
@@ -264,7 +264,7 @@ def main():
     ap.add_argument("--grad-clip", type=float, default=0.0,
                     help="max grad norm (0=off). Set ~1.0 for h256+ to tame bf16 grad explosion "
                          "(escalating 'skipped non-finite batches'); bounds weight growth.")
-    ap.add_argument("--cache", default="/codebox-workspace/datasets/_cache_mert_pooled")
+    ap.add_argument("--cache", default="/codebox-workspace/mert_cache")
     ap.add_argument("--aligned-onsets", default=None,
                     help="opt-in _onsets_aligned.json -> train+score on audio-snapped/filtered targets")
     ap.add_argument("--ckpt-dir", default="/codebox-workspace/checkpoints")

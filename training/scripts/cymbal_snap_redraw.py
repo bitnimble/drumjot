@@ -178,7 +178,7 @@ def main():
     ap.add_argument("--pool-sources", default="star,enst,egmd")
     ap.add_argument("--pool-cap", type=int, default=3000)
     ap.add_argument("--splits", default="train,val")
-    ap.add_argument("--cache", default="/codebox-workspace/datasets/_cache_mert_pooled")
+    ap.add_argument("--cache", default="/codebox-workspace/mert_cache")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
 

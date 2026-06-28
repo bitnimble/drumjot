@@ -74,7 +74,7 @@ def main():
     ap.add_argument("--pool-cap", type=int, default=1000)
     ap.add_argument("--hidden", type=int, default=128)
     ap.add_argument("--layers", type=int, default=2)
-    ap.add_argument("--cache", default="/codebox-workspace/datasets/_cache_mert_pooled")
+    ap.add_argument("--cache", default="/codebox-workspace/mert_cache")
     ap.add_argument("--aligned-onsets", default="/codebox-workspace/datasets/_onsets_aligned.json")
     ap.add_argument("--margin", type=float, default=0.01, help="min F1 gain for focal to win a lane")
     ap.add_argument("--out-json", default="/codebox-workspace/cymbal_lane_loss_pick.json")

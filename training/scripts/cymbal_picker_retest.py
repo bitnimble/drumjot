@@ -55,7 +55,7 @@ def main():
     ap.add_argument("--pool-cap", type=int, default=1000)
     ap.add_argument("--hidden", type=int, default=128)
     ap.add_argument("--layers", type=int, default=2)
-    ap.add_argument("--cache", default="/codebox-workspace/datasets/_cache_mert_pooled")
+    ap.add_argument("--cache", default="/codebox-workspace/mert_cache")
     ap.add_argument("--aligned-onsets", default="/codebox-workspace/datasets/_onsets_aligned.json")
     ap.add_argument("--thr-scale", type=float, default=0.5, help="multiply each tuned height threshold")
     ap.add_argument("--prominence", type=float, default=0.1, help="cymbal (rd/cr) prominence override")
