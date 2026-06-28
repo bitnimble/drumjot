@@ -572,7 +572,7 @@ def plan_windows(
 
 
 def _window_specs(specs, window: float, search: float, max_windows: int,
-                  plan_cache_dir=None) -> list[tuple]:
+                  plan_cache_dir=None, workers: int = 1) -> list[tuple]:
     """Expand (audio, onsets[, weight_onsets]) specs into per-window specs
     (audio, onsets_rel, weight_rel_or_None, start, length): onsets sliced to each
     window and shifted to window-relative time. `max_windows == 1` keeps the
@@ -595,6 +595,28 @@ def _window_specs(specs, window: float, search: float, max_windows: int,
             plan = json.loads(pcp.read_text()) if pcp.exists() else {}
         except Exception:  # noqa: BLE001  corrupt cache -> rebuild
             plan = {}
+
+    # Pre-compute missing plans in PARALLEL: each plan_windows does a full
+    # librosa.load over NFS (which frees the GIL), so serial planning starves a fast
+    # link. Threads overlap the reads; plans are deterministic + per-clip independent,
+    # so the populated cache (and thus the result) is identical to the serial path.
+    if plan_cache_dir is not None and max_windows != 1 and workers > 1:
+        miss, seen = [], set()
+        for spec in specs:
+            a = spec[0]
+            k = f"{Path(a).expanduser().absolute()}|{window}|{search}"
+            if k not in plan and a not in seen:
+                seen.add(a)
+                miss.append((a, k))
+        if miss:
+            from concurrent.futures import ThreadPoolExecutor
+            def _plan_one(it):
+                a, k = it
+                return k, [list(w) for w in plan_windows(a, window, search, 0)]
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                for k, full in ex.map(_plan_one, miss):
+                    plan[k] = full
+            dirty = True
 
     def _slice(onsets, start, length):
         return {ln: [t - start for t in ts if start <= t < start + length]
