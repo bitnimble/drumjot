@@ -1,6 +1,7 @@
 import classNames from 'classnames';
 import React from 'react';
 import { GutterResizeHandle } from 'src/ui/gutter_resize_handle/gutter_resize_handle';
+import { Spinner } from 'src/ui/spinner/spinner';
 import styles from './track_gutter.module.css';
 
 /** A track's in-flight indicator: drives the shared gutter spinner with a
@@ -12,12 +13,13 @@ export type TrackBusy = { tooltip: string; testId?: string };
 /** The shared spinner shown beside a track's secondary label while work is in
  *  flight. The sole spinner implementation for track gutters. */
 export const TrackBusySpinner = ({ busy }: { busy: TrackBusy }) => (
-  <span
+  <Spinner
+    size={10}
+    tone="muted"
     className={styles.spinner}
     title={busy.tooltip}
-    aria-label={busy.tooltip}
-    role="status"
-    data-testid={busy.testId}
+    label={busy.tooltip}
+    testId={busy.testId}
   />
 );
 

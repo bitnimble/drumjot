@@ -404,15 +404,6 @@
     user-select: none;
 }
 
-.loadingSpinner {
-    composes: spinner from '../ui/spinner/spinner.module.css';
-    width: 44px;
-    height: 44px;
-    border-width: 4px;
-    border-color: var(--color-border-translucent);
-    border-top-color: var(--color-accent);
-}
-
 .loadingLabel {
     composes: bodyMd from '../typography.module.css';
     color: var(--color-text-secondary);

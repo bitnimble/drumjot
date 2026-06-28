@@ -21,3 +21,28 @@
         transform: rotate(360deg);
     }
 }
+
+/* ─── Tones ──────────────────────────────────────────────────────────────
+   Ring colour + the leading "head" colour. The <Spinner> component picks
+   one; `size` / `thickness` come through as inline styles. */
+
+/* Translucent ring with an accent head: the default in-flight indicator on
+   neutral surfaces (status pills, the full-page loading overlay). */
+.toneAccent {
+    border-color: var(--color-border-translucent);
+    border-top-color: var(--color-accent);
+}
+
+/* Muted three-quarter ring (transparent head): a quieter indicator that
+   sits beside a track's secondary label without pulling focus. */
+.toneMuted {
+    border-color: var(--color-text-disabled);
+    border-top-color: transparent;
+}
+
+/* Inherits the surrounding text colour; for spinners on a coloured button
+   where the ring must read against the button's own foreground. */
+.toneCurrent {
+    border-color: color-mix(in srgb, currentColor 35%, transparent);
+    border-top-color: currentColor;
+}

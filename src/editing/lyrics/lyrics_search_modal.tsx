@@ -7,6 +7,7 @@ import { ciTrimEq, LrclibMatch, searchLrclib } from 'src/lyrics/lrclib';
 import { jotPlayer } from 'src/editing/playback/player';
 import { Checkbox } from 'src/ui/checkbox/checkbox';
 import { Modal, ModalHeader } from 'src/ui/modal/modal';
+import { Spinner } from 'src/ui/spinner/spinner';
 import styles from './lyrics_search_modal.module.css';
 import { LyricsPresenter } from './lyrics_presenter';
 
@@ -218,7 +219,7 @@ export const LyricsSearchModal = observer(
               data-testid="lyrics-search-submit"
             >
               {phase.kind === 'searching' ? (
-                <span className={styles.searchButtonSpinner} aria-hidden="true" />
+                <Spinner size={16} tone="current" />
               ) : (
                 <Search size={16} aria-hidden="true" />
               )}

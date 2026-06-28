@@ -30,20 +30,6 @@
     opacity: 0.6;
 }
 
-/* Self-contained spinner for the search button. Composes the shared
-   `spinner` primitive for the keyframes + circle, then adds the
-   button-specific size (16x16, matching the lucide Search icon it
-   replaces) and `currentColor` tints so the spinner picks up the
-   button's foreground. */
-.searchButtonSpinner {
-    composes: spinner from '../../ui/spinner/spinner.module.css';
-    width: 16px;
-    height: 16px;
-    border-width: 1.5px;
-    border-color: color-mix(in srgb, currentColor 35%, transparent);
-    border-top-color: currentColor;
-}
-
 .results {
     border-top: 1px solid var(--color-border);
     /* Reserve a stable area so the modal doesn't jump between the

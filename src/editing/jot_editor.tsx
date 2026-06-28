@@ -64,6 +64,7 @@ import {
 import { AudioTrackControls, MixerView, LayerControls } from './mixer/mixer';
 import { Logo } from 'src/ui/logo/logo';
 import { ModalProvider } from 'src/ui/modal/modal_manager';
+import { Spinner } from 'src/ui/spinner/spinner';
 import { Minimap } from './minimap/minimap';
 import { EditingStore } from './editing_store';
 import { EditingPresenter } from './editing_presenter';
@@ -2095,7 +2096,7 @@ const LoadingOverlay = observer(({ jotEditorStore }: { jotEditorStore: JotEditor
       aria-live="polite"
       onMouseDown={(e) => e.stopPropagation()}
     >
-      <div className={styles.loadingSpinner} aria-hidden="true" />
+      <Spinner size={44} thickness={4} tone="accent" />
       {jotEditorStore.loadingLabel && (
         <div className={styles.loadingLabel}>{jotEditorStore.loadingLabel}</div>
       )}

@@ -5,6 +5,8 @@ import { jotPlayer } from 'src/editing/playback/player';
 import { SampleLoadProgress } from 'src/editing/playback/sample_storage';
 import { TranscribeStage } from 'src/editing/transcribe/transcriber';
 import { TranscribeStoreContext } from 'src/editing/transcribe/transcribe_contexts';
+import { ProgressBar } from 'src/ui/progress_bar/progress_bar';
+import { Spinner } from 'src/ui/spinner/spinner';
 import sharedStyles from '../editing/jot_editor.module.css';
 import styles from './toolbar.module.css';
 
@@ -44,14 +46,14 @@ type SampleLoadPhase = 'connecting' | 'downloading' | 'decoding';
 /** Bar fill width per phase. While decoding the bytes are all in, so we
  * pin the bar at 100%; the indeterminate "connecting" / unknown-total
  * fallbacks use a fixed sliver that reads as "working" rather than empty. */
-export function sampleProgressWidth(
+export function sampleProgressFraction(
   phase: SampleLoadPhase | undefined,
   p: SampleLoadProgress | undefined
-): string {
-  if (phase === 'decoding') return '100%';
-  if (phase === 'connecting' || !p) return '8%';
-  if (p.fromCache) return '100%';
-  return p.total > 0 ? `${samplePct(p)}%` : '40%';
+): number {
+  if (phase === 'decoding') return 1;
+  if (phase === 'connecting' || !p) return 0.08;
+  if (p.fromCache) return 1;
+  return p.total > 0 ? samplePct(p) / 100 : 0.4;
 }
 
 export function sampleProgressLabel(
@@ -79,12 +81,11 @@ export const DrumLoadingIndicator = observer(() => {
       className={styles.sampleProgress}
       title="One-time download of the GeneralUser GS SoundFont (~30 MB). Cached in the browser after the first load — instant next time."
     >
-      <span className={styles.sampleProgressTrack}>
-        <span
-          className={styles.sampleProgressFill}
-          style={{ width: sampleProgressWidth(phase, progress) }}
-        />
-      </span>
+      <ProgressBar
+        className={styles.sampleProgressTrack}
+        value={sampleProgressFraction(phase, progress)}
+        ariaLabel={sampleProgressLabel(phase, progress)}
+      />
       <span>{sampleProgressLabel(phase, progress)}</span>
     </span>
   );
@@ -114,7 +115,7 @@ export const LyricsAlignBusyPill = observer(
         }
         data-testid="lyrics-align-busy"
       >
-        <span className={styles.statusPillSpinner} aria-hidden="true" />
+        <Spinner size={10} tone="accent" className={styles.statusPillSpinner} />
         {queued ? 'Queued…' : 'Aligning lyrics…'}
       </span>
     );
