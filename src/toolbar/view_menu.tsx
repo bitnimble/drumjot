@@ -2,6 +2,7 @@ import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { themeStore, ThemeMode } from 'src/settings/theme';
 import { DropdownSection, ToggleMenuItem } from 'src/ui/dropdown/dropdown';
+import { Slider } from 'src/ui/slider/slider';
 import { ViewportStoreContext } from '../editing/viewport/viewport_contexts';
 import styles from './toolbar.module.css';
 
@@ -25,16 +26,14 @@ export const ZoomControl = observer(({ onSetZoom }: { onSetZoom: (z: number) => 
     >
       <span>Zoom</span>
       <span className={styles.dropdownStepperControl}>
-        <input
-          type="range"
+        <Slider
+          className={styles.zoomSlider}
           min={0.1}
           max={4.0}
           step={0.05}
           value={zoom}
-          onChange={(e) => onSetZoom(Number(e.target.value))}
-          className={styles.zoomSlider}
-          style={{ ['--value' as string]: (zoom - 0.1) / 3.9 } as React.CSSProperties}
-          aria-label="Score zoom"
+          onChange={onSetZoom}
+          ariaLabel="Score zoom"
         />
         <span className={styles.zoomValue}>{Math.round(zoom * 100)}%</span>
       </span>

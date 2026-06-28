@@ -4,6 +4,7 @@ import React from 'react';
 import { jotPlayer } from 'src/editing/playback/player';
 import { GutterResizeHandle } from 'src/ui/gutter_resize_handle/gutter_resize_handle';
 import { MuteButton, SoloButton } from 'src/ui/icon_button/icon_button';
+import { Slider } from 'src/ui/slider/slider';
 import styles from './mixer.module.css';
 import { VOLUME_STEP } from './mixer_store';
 
@@ -46,7 +47,6 @@ export const GutterMasterRow = observer(
     testId?: string;
     onResizeGutterStart: (e: React.PointerEvent<HTMLDivElement>) => void;
   }) => {
-    const stop = (e: React.MouseEvent) => e.stopPropagation();
     const pct = Math.round(value * 100);
     return (
       <div className={styles.gutterMasterRow}>
@@ -57,20 +57,13 @@ export const GutterMasterRow = observer(
             {label}
           </span>
           <div className={styles.gutterMasterControls}>
-            <input
-              type="range"
+            <Slider
               className={styles.gutterMasterSlider}
-              min={0}
-              max={1}
               step={VOLUME_STEP}
               value={value}
-              onChange={(e) => onChange(parseFloat(e.target.value))}
-              onClick={stop}
-              onMouseDown={stop}
-              onMouseUp={stop}
-              aria-label={`${label} volume`}
+              onChange={onChange}
+              ariaLabel={`${label} volume`}
               title={`${label} volume: ${pct}%`}
-              style={{ ['--value' as string]: value } as React.CSSProperties}
             />
             <span className={styles.gutterMasterValue}>{pct}%</span>
             <MuteButton
@@ -110,22 +103,14 @@ export const RowVolumeSlider = ({
   onChange: (v: number) => void;
   label: string;
 }) => {
-  const stop = (e: React.MouseEvent) => e.stopPropagation();
   return (
-    <input
-      type="range"
+    <Slider
       className={styles.rowVolume}
-      min={0}
-      max={1}
       step={VOLUME_STEP}
       value={value}
-      onChange={(e) => onChange(parseFloat(e.target.value))}
-      onClick={stop}
-      onMouseDown={stop}
-      onMouseUp={stop}
+      onChange={onChange}
       title={`${label} volume: ${Math.round(value * 100)}%`}
-      aria-label={`${label} volume`}
-      style={{ ['--value' as string]: value } as React.CSSProperties}
+      ariaLabel={`${label} volume`}
     />
   );
 };
