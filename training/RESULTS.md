@@ -16,6 +16,53 @@ Scoring is `mir_eval` onset-F1 at ±50 ms (`metrics.onset_f1`).
 
 ---
 
+## 2026-06-28 · Joint ride/crash cymbal head (#1) A/B: better DEPLOYED cr+rd, lower oracle ceiling
+
+Clean A/B of the **joint cymbal-type head** (`--cymbal-softmax`: rd/cr trained as a 3-way softmax
+{none=fixed-0 ref, ride, crash} via `masked_cymbal_ce`) vs independent BCE heads. Both arms
+IDENTICAL recipe+seed; only `--cymbal-softmax` differs (architecture/checkpoint identical). Trained
+on **star,enst,egmd only (NO ParaDB → zero leakage)**, evaled on the 102 tier-1 ParaDB songs.
+`cymbase`=baseline, `cymjoint`=softmax.
+
+Per-lane onset-F1, **deployed picker (what ships)** vs **per-song oracle (ceiling)**:
+
+| lane | cymbase deploy | cymjoint deploy | Δ deploy | cymbase oracle | cymjoint oracle | Δ oracle |
+|---|---|---|---|---|---|---|
+| hc | 0.148 | 0.148 | 0.000 | 0.479 | 0.433 | −0.046 |
+| ho | 0.223 | 0.183 | −0.040 | 0.306 | 0.214 | −0.092 |
+| rd | 0.165 | 0.195 | **+0.030** | 0.261 | 0.209 | −0.052 |
+| cr | 0.201 | 0.281 | **+0.080** | 0.383 | 0.342 | −0.041 |
+
+**Verdict:** the joint head **improves the deployed cymbal lanes** (cr +0.080, rd +0.030 on the
+headline picker) by making cr/rd **calibratable**; cymbase's higher oracle ceilings are unreachable
+by ANY deployable threshold (cr: fixed 0.204 / determ 0.190 / predict 0.073, all far below its 0.383
+oracle), while cymjoint deploys near its (lower) ceiling (cr determ 0.290 vs oracle 0.342). So the
+softmax trades intrinsic ceiling for a stable operating point, a net win where it ships, on the
+project's worst lane (crash). Costs: ho −0.040 (15-song, noisy), hc tie, lower oracle everywhere.
+**Caveat: single-seed** (cr seed variance historically ~±0.11), so magnitudes are soft; the direction
+(both cr+rd up deployed) + the mechanism (calibration) are plausible. The c-stem→snare leakage swing
+(81.5%→6.0%) is NOT a clean signal; dominated by cymbase's snare-flood threshold bug, not the head.
+
+Verbatim (both arms via `tmp/run_cym_overnight.sh`; cymjoint adds `--cymbal-softmax`):
+```
+MODELS_DIR=/codebox-workspace/drumjot/models-cache DRUMJOT_MERT_CACHE=/codebox-workspace/mert_cache \
+DRUMJOT_STAR=…/star_balanced_sep DRUMJOT_ENST=…/enst-sep DRUMJOT_EGMD=…/egmd_sep \
+DRUMJOT_ALIGNED_ONSETS=…/_onsets_aligned.json   # snap+FILTER (then-default; default is now snap-only) \
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True OMP_NUM_THREADS=8 PYTHONPATH=training:dsp \
+python3 -m drumjot_training.train --dataset pooled --pool-sources star,enst,egmd \
+  --pool-cap 400 --pool-val-cap 60 --pool-balance --pool-cache /codebox-workspace/mert_cache \
+  --head-hidden 256 --lanes k,s,t,hc,ho,rd,cr --batch-size 16 --epochs 70 --no-filter-report \
+  --seed 0 --label-min-support 0 [--cymbal-softmax]   # cymjoint only
+# eval: training/scripts/eval_paradb_parallel.sh on paradb_tier1_102 (--oracle-report,
+#   --lanes hc,ho,rd,cr, A2MD param predictor); cymbase 6 workers, cymjoint 4 (one worker OOM at 6 under NFS load).
+# Defaults not on the CLI: lr 1e-3, weight_decay 0.01, high_band ON, encoder MERT-v1-330M layer 10,
+#   cache_dtype fp16, sigma_frames 1.5, aux_lanes=ho,rd,cr, auto_calibrate ON, sib_neg 8.0/sib_pos 3.0,
+#   aux_act_weight 0.5, rare_lane_min_onsets 50, rare_thr_floor 0.3, head_layers 2, cymbal_ce_weight 1.0,
+#   peak_threshold 0.5, peak_min_distance_s 0.03, onset_tolerance_s 0.05, bf16 autocast + TF32.
+```
+
+---
+
 ## 2026-06-28 · ParaDB-102 adaptive-param eval (#5): predictor is a WASH on real domain; eval pipeline aligned + ~8x faster
 
 Real-domain confirmation of the adaptive-param-predictor question (#5), on **102 tier-1 ParaDB
