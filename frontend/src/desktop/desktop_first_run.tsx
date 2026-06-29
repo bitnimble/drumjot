@@ -1,38 +1,54 @@
 import { observer } from 'mobx-react-lite';
 import React from 'react';
-import modal from 'src/ui/modal/modal.module.css';
-import { CapabilityList } from './capability_list';
-import { desktopCapabilities } from './desktop_services';
+import { Modal, ModalBody, ModalFooter, ModalHeader, modalStyles } from 'src/ui/modal/modal';
+import { formatBytes } from './capability_manifest';
+import { CapabilityTree, useCapabilityInstall } from './capability_install';
 import styles from './capability_panel.module.css';
 
 /**
  * First-run capability setup, shown once in the desktop shell: the shared
- * {@link CapabilityList} in a one-off modal with a Skip. The same list lives in
- * Settings → Capabilities. Renders nothing in the web build.
+ * capability picker in a one-off modal with a cumulative-size footer + Skip.
+ * The same picker lives in Settings → Capabilities. Renders nothing in the web
+ * build.
  */
 export const DesktopFirstRun = observer(function DesktopFirstRun() {
   const [open, setOpen] = React.useState(true);
-  if (desktopCapabilities() == null || !open) return null;
+  const install = useCapabilityInstall();
+  if (!install.available || !open) return null;
 
   return (
-    <div className={modal.backdrop}>
-      <div className={styles.panel}>
-        <div className={modal.header}>
-          <h2 className={modal.title}>Set up Drumjot</h2>
-        </div>
-        <div className={modal.body}>
-          <p className={styles.intro}>
-            Drumjot is ready for writing and editing right now. Optional features download what
-            they need the first time you use them.
-          </p>
-          <CapabilityList />
-        </div>
-        <div className={modal.footer}>
-          <button className={styles.skip} onClick={() => setOpen(false)}>
-            Skip for now
-          </button>
-        </div>
-      </div>
-    </div>
+    <Modal
+      open
+      onClose={() => setOpen(false)}
+      ariaLabel="Set up Drumjot"
+      width={560}
+      maxHeight
+      testId="desktop-first-run"
+    >
+      <ModalHeader title="Set up Drumjot" onClose={() => setOpen(false)} closeLabel="Skip setup" />
+      <ModalBody>
+        <p className={styles.intro}>
+          Drumjot is ready for writing and editing right now. Optional features download what they
+          need; pick any to install now, or skip and install later from Settings.
+        </p>
+        <CapabilityTree controller={install} />
+      </ModalBody>
+      <ModalFooter>
+        <span className={styles.total}>
+          {install.totalBytes > 0 ? `Total: ${formatBytes(install.totalBytes)}` : 'Nothing selected'}
+        </span>
+        <button type="button" className={modalStyles.secondaryButton} onClick={() => setOpen(false)}>
+          Skip for now
+        </button>
+        <button
+          type="button"
+          className={modalStyles.primaryButton}
+          disabled={install.totalBytes === 0 || install.installing}
+          onClick={install.install}
+        >
+          {install.installing ? 'Installing…' : 'Install'}
+        </button>
+      </ModalFooter>
+    </Modal>
   );
 });

@@ -23,8 +23,15 @@ export type CapabilitySpec = {
   groups: string[];
   /** HF weights pulled lazily on first use (content-addressed). */
   weights: WeightSpec[];
-  /** Prerequisite capabilities (the install DAG). */
+  /** Prerequisite capabilities (the install DAG): drives the install closure +
+   *  the dedup/disable in the picker (selecting a capability auto-checks +
+   *  locks everything in its closure). Distinct from {@link uiParent}. */
   requires: CapabilityId[];
+  /** UI-tree parent in the capability picker (a pure sub-feature nests under
+   *  its feature, e.g. Japanese under Lyrics). Shared bases like separation are
+   *  required-by many but stay top-level, so this is NOT derived from
+   *  `requires`. Undefined = top-level row. */
+  uiParent?: CapabilityId;
   /** Whether installing pulls the shared torch / accelerator tier. */
   accelerator: 'required' | 'none';
   /** This capability's own incremental bytes (weights + its unique non-torch
@@ -101,6 +108,7 @@ export const CAPABILITIES: readonly CapabilitySpec[] = [
     groups: ['lyrics-ja'],
     weights: [],
     requires: ['lyrics'],
+    uiParent: 'lyrics',
     accelerator: 'none',
     ownApproxBytes: 250 * MB,
   },
@@ -127,6 +135,19 @@ export function capabilityById(id: CapabilityId): CapabilitySpec {
     throw new Error(`unknown capability: ${id}`);
   }
   return spec;
+}
+
+/** Transitive prereq closure of `ids` (self + everything `requires` reaches).
+ *  The set that installing `ids` would actually pull in. */
+export function capabilityClosure(ids: readonly CapabilityId[]): Set<CapabilityId> {
+  const out = new Set<CapabilityId>();
+  const visit = (id: CapabilityId): void => {
+    if (out.has(id)) return;
+    out.add(id);
+    for (const req of capabilityById(id).requires) visit(req);
+  };
+  for (const id of ids) visit(id);
+  return out;
 }
 
 /** Human-readable size for install UI (GB above 1 GB, else MB; "free" at 0). */

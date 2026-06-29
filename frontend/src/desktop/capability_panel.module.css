@@ -1,26 +1,36 @@
-.panel {
-    composes: panel from '../ui/modal/modal.module.css';
-    width: 560px;
-    max-width: 100%;
-    max-height: 80vh;
-}
-
 .intro {
     composes: bodySm from '../typography.module.css';
     color: var(--color-text-muted-alt);
-    margin: 0 0 4px;
+    margin: 0 0 8px;
 }
 
-.row {
+.tree {
+    display: flex;
+    flex-direction: column;
+}
+
+.node {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: 16px;
-    padding: 10px 0;
+    gap: 12px;
+    padding: 8px 0;
     border-bottom: 1px solid var(--color-border-soft);
 }
 
-.info {
+.nodeLabel {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    min-width: 0;
+    cursor: pointer;
+}
+
+.nodeLabel input:disabled {
+    cursor: default;
+}
+
+.nodeInfo {
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -37,45 +47,16 @@
     color: var(--color-text-muted-alt);
 }
 
-.action {
+.nodeStatus {
+    composes: bodySm from '../typography.module.css';
+    color: var(--color-text-muted-alt);
     flex: none;
-    display: flex;
-    align-items: center;
-}
-
-.install {
-    composes: primary from '../ui/button/button.module.css';
     white-space: nowrap;
 }
 
-.skip {
-    composes: secondary from '../ui/button/button.module.css';
-}
-
-.ready {
-    composes: bodySm from '../typography.module.css';
-    color: var(--color-accent);
-}
-
-.status {
+/* Cumulative-size label in the dialog footer (left of the Install button). */
+.total {
     composes: bodySm from '../typography.module.css';
     color: var(--color-text-muted-alt);
-}
-
-.subOption {
-    composes: bodySm from '../typography.module.css';
-    color: var(--color-text-muted-alt);
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 6px;
-    cursor: pointer;
-}
-
-.subOption input:disabled {
-    cursor: default;
-}
-
-.delta {
-    color: var(--color-text-muted);
+    margin-inline-end: auto;
 }

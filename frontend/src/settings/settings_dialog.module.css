@@ -1,28 +1,9 @@
+/* Modal owns the backdrop/panel chrome + width; this just gives the tabbed
+   panel a stable height so the rail + content fill it. */
 .panel {
-    composes: panel from '../ui/modal/modal.module.css';
-    width: min(720px, 100%);
     height: min(80vh, 560px);
 }
 
-.close {
-    margin-left: auto;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 4px;
-    border: none;
-    background: none;
-    border-radius: 6px;
-    cursor: pointer;
-    color: var(--color-text-muted-alt);
-}
-
-.close:hover {
-    background: var(--color-accent-overlay-faint);
-    color: var(--color-text-strong);
-}
-
-/* Left tab rail + right content fill the panel below the header. */
 .layout {
     display: flex;
     flex: 1;
@@ -68,10 +49,4 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-}
-
-.intro {
-    composes: bodySm from '../typography.module.css';
-    color: var(--color-text-muted-alt);
-    margin: 0 0 4px;
 }

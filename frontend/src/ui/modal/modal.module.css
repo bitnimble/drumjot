@@ -48,8 +48,25 @@
     composes: heading from '../../typography.module.css';
     color: var(--color-text-strong);
     margin: 0;
+    /* Fill the header row so a leading icon (e.g. the warning glyph) and the
+       trailing close button sit at the two ends with the title between. */
+    flex: 1 1 auto;
     /* stylelint-disable-next-line property-disallowed-list -- modal headers use a 14px override of the 18px `heading` use case so they don't dominate the panel body. */
     font-size: 14px;
+}
+
+/* Leading status icon in a header (warning / info). Tints to the warning
+   palette and never shrinks so the title takes the remaining row. */
+.headerIcon {
+    color: var(--color-warning, var(--color-error));
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+}
+
+/* Close affordance shared by every modal header (the lucide X). */
+.close {
+    composes: close from '../button/button.module.css';
 }
 
 .body {
@@ -60,6 +77,29 @@
     gap: 8px;
     min-height: 0;
     color: var(--color-text-strong);
+    line-height: 1.5;
+}
+
+.body p {
+    margin: 0;
+}
+
+.body code {
+    /* stylelint-disable-next-line declaration-property-value-allowed-list -- inline mirror of `.mono`; composes doesn't work on compound selectors. */
+    font-family: var(--font-family-mono, ui-monospace, monospace);
+    background: var(--color-bg-cream);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 1px 5px;
+    /* stylelint-disable-next-line property-disallowed-list -- inline `<code>` runs slightly smaller than the surrounding body to match the typography stack's expectations. */
+    font-size: 12px;
+}
+
+/* Secondary muted line within a body (the "save first" / "drum playback
+   unaffected" footnotes). */
+.note {
+    composes: body from '../../typography.module.css';
+    color: var(--color-text-muted-alt);
 }
 
 .footer {
@@ -69,4 +109,39 @@
     padding: 12px 16px;
     border-top: 1px solid var(--color-border);
     background: var(--color-bg-cream);
+}
+
+/* Footer variant that right-aligns its actions (the confirm/cancel pair). */
+.footerEnd {
+    composes: footer;
+    justify-content: flex-end;
+}
+
+/* Flex spacer that pushes trailing footer controls to the right. */
+.footerSpacer {
+    flex: 1 1 auto;
+}
+
+/* ─── Footer action buttons ─────────────────────────────────────────────
+   Modal footers use the tighter `--radius-sm` corner so the button cluster
+   reads as part of the panel rather than free-floating CTAs. Each composes
+   the matching base variant from the button primitives. */
+
+.primaryButton {
+    composes: primary from '../button/button.module.css';
+    border-radius: var(--radius-sm);
+}
+
+.primaryButton:disabled {
+    opacity: 0.6;
+}
+
+.secondaryButton {
+    composes: secondary from '../button/button.module.css';
+    border-radius: var(--radius-sm);
+}
+
+.dangerButton {
+    composes: danger from '../button/button.module.css';
+    border-radius: var(--radius-sm);
 }

@@ -8,6 +8,7 @@ import { DesktopFirstRun } from 'src/desktop/desktop_first_run';
 import { isTauri } from 'src/desktop/is_tauri';
 import { desktopCapabilities } from 'src/desktop/desktop_services';
 import { CapabilityGate } from 'src/desktop/capability_gate';
+import { ModalProvider } from 'src/ui/modal/modal_manager';
 import { backendClient } from 'src/net/backend_client';
 import { fromMidi } from 'src/midi/from_midi';
 import { autorun } from 'mobx';
@@ -116,11 +117,11 @@ class Drumjot {
     this.jotEditorPresenter = jotEditorPresenter;
     this.transcribePresenter = transcribePresenter;
     createRoot(root).render(
-      <>
+      <ModalProvider>
         <View />
         <DesktopFirstRun />
         <CapabilityGate />
-      </>,
+      </ModalProvider>,
     );
     this.installWindowTitleSync();
   }
