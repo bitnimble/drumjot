@@ -30,6 +30,9 @@ pub fn run() {
             if paths::portable_data_root().is_none() {
                 paths::redirect_env(&root, false);
             }
+            // Point the pipeline at the bundled model checkpoints + pick the
+            // onset backend by what's bundled (packaged build only).
+            paths::init_checkpoint_env(app.handle());
             // Let the webview read the sidecar's artifacts (MIDI via plugin-fs,
             // stems via the asset protocol / convertFileSrc) out of the outputs
             // dir, wherever data_root put it. Scope is locked to that dir.

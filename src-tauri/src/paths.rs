@@ -10,6 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
+use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager};
 
 /// `<exe_dir>/data` iff a `portable` marker file sits next to the exe (the
@@ -31,8 +32,36 @@ pub fn data_root(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn set_dir(key: &str, path: PathBuf) {
     let _ = std::fs::create_dir_all(&path);
+    set_var(key, path.as_os_str());
+}
+
+fn set_var(key: &str, val: impl AsRef<std::ffi::OsStr>) {
     // SAFETY: called once at startup, before any threads/webview that read env.
-    unsafe { std::env::set_var(key, &path) };
+    unsafe { std::env::set_var(key, val) };
+}
+
+/// Point the pipeline's read-only model checkpoints at the bundled resources, and
+/// pick the onset backend by what's bundled. Only fires in a packaged build (the
+/// bundled transcriber resource is present); dev keeps the Settings/.env defaults.
+/// beat_transformer.pt must be bundled for transcribe; onsets default to ADTOF
+/// (weights ship in the pip package) unless a learned-onset run dir was bundled.
+pub fn init_checkpoint_env(app: &AppHandle) {
+    let resource = |rel: &str| {
+        app.path()
+            .resolve(rel, BaseDirectory::Resource)
+            .ok()
+            .filter(|p| p.exists())
+    };
+    if resource("python/transcriber").is_none() {
+        return; // dev / unbundled: leave Settings defaults in place
+    }
+    if let Some(beat) = resource("python/transcriber/checkpoints/beat_transformer.pt") {
+        set_var("BEAT_TRANSFORMER_CHECKPOINT", beat.as_os_str());
+    }
+    match resource("python/learned_onsets") {
+        Some(dir) => set_var("LEARNED_ONSETS_CHECKPOINT", dir.as_os_str()),
+        None => set_var("USE_LEARNED_ONSETS", "false"),
+    }
 }
 
 /// Point every dependency's cache/download/state dir under `root` via process env

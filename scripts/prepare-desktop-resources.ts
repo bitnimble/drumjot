@@ -74,6 +74,32 @@ await cp(join(repo, 'dsp/drumjot_dsp'), join(pyOut, 'dsp/drumjot_dsp'), {
   filter: skipJunk,
 });
 
+// --- bundle the model checkpoints the pipeline reads at runtime ---------------
+// beat_transformer.pt is a REQUIRED local file for transcribe (no download path);
+// the build machine must have it under transcriber/checkpoints/ (gitignored).
+// Separation needs none of this, so its absence only warns. ADTOF onset weights
+// ship inside the pip package, so the default build needs no onset checkpoint;
+// the learned-onset run dir is opt-in (set DRUMJOT_LEARNED_ONSETS_DIR to it).
+const ckptSrc = join(repo, 'transcriber/checkpoints');
+const ckptFiles = (await readdir(ckptSrc).catch(() => [])).filter((f) => f.endsWith('.pt'));
+if (ckptFiles.length > 0) {
+  await cp(ckptSrc, join(pyOut, 'transcriber/checkpoints'), { recursive: true, filter: skipJunk });
+  console.log(`[desktop-resources] bundled ${ckptFiles.length} checkpoint(s) from ${ckptSrc}`);
+} else {
+  console.warn(
+    `[desktop-resources] no .pt in ${ckptSrc}; transcribe needs beat_transformer.pt there ` +
+      '(stem separation still works). See pipeline/beat_transformer.py for the download.',
+  );
+}
+
+const learnedSrc = process.env.DRUMJOT_LEARNED_ONSETS_DIR;
+if (learnedSrc) {
+  await cp(learnedSrc, join(pyOut, 'learned_onsets'), { recursive: true, filter: skipJunk });
+  console.log(`[desktop-resources] bundled learned-onset checkpoint from ${learnedSrc}`);
+} else {
+  console.log('[desktop-resources] DRUMJOT_LEARNED_ONSETS_DIR unset; desktop defaults to ADTOF onsets');
+}
+
 // --- bundle uv (uv fetches its own managed Python when it syncs) ------------
 const uv = findOnPath('uv');
 if (!uv) {
