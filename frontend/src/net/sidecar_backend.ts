@@ -3,11 +3,16 @@ import {
   PROTOCOL_VERSION,
   type Artifact,
   type ClientMessage,
-  type Op,
   type ResultRef,
 } from './control_protocol';
 import { TauriBridge, type DesktopBridge } from 'src/desktop/desktop_bridge';
-import { type AudioInput, type BackendClient, type RunOptions, type RunResult } from './backend';
+import {
+  type AudioInput,
+  type BackendClient,
+  type RunOptions,
+  type RunRequest,
+  type RunResult,
+} from './backend';
 
 /**
  * Backend over the Tauri sidecar (desktop): a job per op through the Rust
@@ -23,32 +28,32 @@ import { type AudioInput, type BackendClient, type RunOptions, type RunResult } 
 export class SidecarBackendClient implements BackendClient {
   constructor(private readonly bridge: DesktopBridge = new TauriBridge()) {}
 
-  async run(
-    op: Op,
-    audio: AudioInput,
-    params: Record<string, unknown>,
-    opts: RunOptions = {},
-  ): Promise<RunResult> {
-    // Stage blob input to a temp file (left undefined for path input, which we
-    // don't own + must not delete).
-    const staged = audio.kind === 'blob' ? await stageTempInput(audio.blob, audio.filename) : undefined;
-    const path = audio.kind === 'path' ? audio.path : (staged as string);
-    const request: ClientMessage = {
+  async run(request: RunRequest, audio: AudioInput, opts: RunOptions = {}): Promise<RunResult> {
+    // Stage blob input to a temp file we own + delete; a path input we don't.
+    let staged: string | undefined;
+    let path: string;
+    if (audio.kind === 'path') {
+      path = audio.path;
+    } else {
+      staged = await stageTempInput(audio.blob, audio.filename);
+      path = staged;
+    }
+    const message: ClientMessage = {
       v: PROTOCOL_VERSION,
       type: 'request',
       id: crypto.randomUUID(),
-      op,
-      args: { audio: { kind: 'path', path }, params },
+      op: request.op,
+      args: { audio: { kind: 'path', path }, params: request.params },
     };
 
     const artifacts: Artifact[] = [];
     let data: unknown;
     let failure: string | undefined;
 
-    const onAbort = (): void => void this.bridge.cancelJob(request.id);
+    const onAbort = (): void => void this.bridge.cancelJob(message.id);
     opts.signal?.addEventListener('abort', onAbort, { once: true });
     try {
-      await this.bridge.runJob(request, (msg) => {
+      await this.bridge.runJob(message, (msg) => {
         if (msg.type === 'progress') {
           opts.onProgress?.({ stage: msg.stage, frac: msg.frac, message: msg.message });
         } else if (msg.type === 'result') {
@@ -69,7 +74,7 @@ export class SidecarBackendClient implements BackendClient {
       throw new DOMException('Aborted', 'AbortError');
     }
     if (failure != null) {
-      throw new Error(`${op} failed (${failure})`);
+      throw new Error(`${request.op} failed (${failure})`);
     }
     return { artifacts, data };
   }

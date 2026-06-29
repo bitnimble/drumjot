@@ -46,9 +46,11 @@ export const SettingsDialog = observer(function SettingsDialog({
           {TABS.map((t) => (
             <button
               key={t.value}
+              id={`settings-tab-${t.value}`}
               type="button"
               role="tab"
               aria-selected={tab === t.value}
+              aria-controls="settings-tabpanel"
               className={classNames(styles.tab, tab === t.value && styles.tabActive)}
               onClick={() => setTab(t.value)}
               data-testid={`settings-tab-${t.value}`}
@@ -57,7 +59,12 @@ export const SettingsDialog = observer(function SettingsDialog({
             </button>
           ))}
         </nav>
-        <div className={styles.content} role="tabpanel">
+        <div
+          className={styles.content}
+          role="tabpanel"
+          id="settings-tabpanel"
+          aria-labelledby={`settings-tab-${tab}`}
+        >
           {tab === 'capabilities' && (
             <>
               <p className={panelStyles.intro}>

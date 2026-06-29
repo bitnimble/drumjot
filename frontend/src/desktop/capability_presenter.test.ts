@@ -46,8 +46,6 @@ function make(): { presenter: CapabilityPresenter; store: CapabilityStore; bridg
   return { presenter: new CapabilityPresenter({ store, bridge }), store, bridge };
 }
 
-const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
-
 describe('CapabilityPresenter', () => {
   it('refresh loads the accelerator + per-capability status', async () => {
     const { presenter, store, bridge } = make();
@@ -135,30 +133,6 @@ describe('CapabilityPresenter', () => {
     await presenter.install('ai-assist');
     expect(store.statusOf('ai-assist')).toBe('ready');
     expect(bridge.groupCalls).toHaveLength(0);
-  });
-
-  it('ensure runs a ready capability immediately', () => {
-    const { presenter, store } = make();
-    store.statuses.set('transcription', 'ready');
-    let ran = false;
-    const immediate = presenter.ensure('transcription', () => {
-      ran = true;
-    });
-    expect(immediate).toBe(true);
-    expect(ran).toBe(true);
-  });
-
-  it('ensure queues a not-installed capability and replays the intent after install', async () => {
-    const { presenter, store } = make();
-    let ran = false;
-    const immediate = presenter.ensure('transcription', () => {
-      ran = true;
-    });
-    expect(immediate).toBe(false);
-    expect(ran).toBe(false);
-    await flush();
-    expect(store.statusOf('transcription')).toBe('ready');
-    expect(ran).toBe(true);
   });
 
   it('requestCapability resolves true immediately when ready (no prompt)', async () => {

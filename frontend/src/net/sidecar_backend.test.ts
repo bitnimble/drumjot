@@ -45,7 +45,10 @@ describe('SidecarBackendClient', () => {
     bridge.frames = [frame({ type: 'result', artifacts: [midiArtifact], data: { lines: [] } })];
     const client = new SidecarBackendClient(bridge);
 
-    const result = await client.run('transcribe', { kind: 'path', path: '/in.wav' }, { quantise: true });
+    const result = await client.run(
+      { op: 'transcribe', params: { quantise: true } },
+      { kind: 'path', path: '/in.wav' },
+    );
 
     expect(bridge.lastRequest?.type).toBe('request');
     const req = bridge.lastRequest as Extract<ClientMessage, { type: 'request' }>;
@@ -65,7 +68,7 @@ describe('SidecarBackendClient', () => {
     const client = new SidecarBackendClient(bridge);
     const seen: Array<{ stage: string; frac: number }> = [];
 
-    await client.run('separate', { kind: 'path', path: '/in.wav' }, {}, {
+    await client.run({ op: 'separate', params: { stage: 'stems_all' } }, { kind: 'path', path: '/in.wav' }, {
       onProgress: (p) => seen.push({ stage: p.stage, frac: p.frac }),
     });
 
@@ -77,9 +80,9 @@ describe('SidecarBackendClient', () => {
     bridge.frames = [frame({ type: 'error', code: 'EBAD', message: 'boom', recoverable: false })];
     const client = new SidecarBackendClient(bridge);
 
-    await expect(client.run('alignLyrics', { kind: 'path', path: '/in.wav' }, {})).rejects.toThrow(
-      /EBAD: boom/,
-    );
+    await expect(
+      client.run({ op: 'alignLyrics', params: { lines: [] } }, { kind: 'path', path: '/in.wav' }),
+    ).rejects.toThrow(/EBAD: boom/);
   });
 
   it('cancels the sidecar job and rejects with AbortError when the signal aborts', async () => {
@@ -91,7 +94,9 @@ describe('SidecarBackendClient', () => {
     const client = new SidecarBackendClient(bridge);
 
     await expect(
-      client.run('transcribe', { kind: 'path', path: '/in.wav' }, {}, { signal: controller.signal }),
+      client.run({ op: 'transcribe', params: {} }, { kind: 'path', path: '/in.wav' }, {
+        signal: controller.signal,
+      }),
     ).rejects.toThrow(/abort/i);
     expect(bridge.cancelledId).toBe(bridge.lastRequest?.id);
   });

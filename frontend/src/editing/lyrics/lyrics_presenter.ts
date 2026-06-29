@@ -346,9 +346,11 @@ export class LyricsPresenter implements Resettable {
     try {
       // Transport (HTTP vs local sidecar) is the adapter's concern.
       const result = await backendClient().run(
-        'alignLyrics',
+        {
+          op: 'alignLyrics',
+          params: { kind: req.kind, lines: req.realign.lines, language: req.realign.language },
+        },
         { kind: 'blob', blob: req.file, filename: req.file.name },
-        { kind: req.kind, lines: req.realign.lines, language: req.realign.language },
         {
           signal: controller.signal,
           onProgress: (p) => {

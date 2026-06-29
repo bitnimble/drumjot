@@ -17,14 +17,11 @@ export type CapabilityPresenterDeps = {
  * Owns all capability mutation: hardware/state refresh, the point-of-use gate,
  * and install orchestration. Installing drives the Rust `install_capability`
  * command (a `uv sync` of the app venv to the union of desired groups), streams
- * its progress into the store, persists state, and replays any queued
- * point-of-use intent.
+ * its progress into the store, and persists state.
  */
 export class CapabilityPresenter {
   readonly store: CapabilityStore;
   private readonly bridge: DesktopBridge;
-  /** Action queued by a gate, replayed once its capability becomes ready. */
-  private readonly pendingIntents: Map<CapabilityId, () => void> = new Map();
   /** Resolver for the in-flight point-of-use prompt (see requestCapability). */
   private gateResolve: ((ok: boolean) => void) | undefined;
 
@@ -138,18 +135,6 @@ export class CapabilityPresenter {
     return bytes;
   }
 
-  /** Gate a point-of-use action: run it immediately if the capability is ready,
-   *  otherwise queue it and start installing. Returns true when it ran now. */
-  ensure(id: CapabilityId, action: () => void): boolean {
-    if (this.store.isReady(id)) {
-      action();
-      return true;
-    }
-    this.pendingIntents.set(id, action);
-    void this.install(id);
-    return false;
-  }
-
   /** Install a capability and its prereqs. Thin wrapper over {@link installAll}. */
   async install(id: CapabilityId): Promise<void> {
     return this.installAll([id]);
@@ -157,14 +142,12 @@ export class CapabilityPresenter {
 
   /** Install one or more capabilities and their prereqs: one `uv sync` of the app
    *  venv to the union of all desired groups, then persist + mark the whole
-   *  closure ready and replay any queued point-of-use intents. Lets the first-run
-   *  dialog install a multi-capability selection (e.g. separation + lyrics) in a
-   *  single sync. */
+   *  closure ready. Lets the first-run dialog install a multi-capability
+   *  selection (e.g. separation + lyrics) in a single sync. */
   async installAll(ids: CapabilityId[]): Promise<void> {
     const order = [...this.closure(ids)];
     const fresh = order.filter((dep) => !this.store.isReady(dep));
     if (fresh.length === 0) {
-      for (const id of ids) this.replayIntent(id);
       return;
     }
     runInAction(() => {
@@ -192,7 +175,6 @@ export class CapabilityPresenter {
           this.store.installLog.delete(dep);
         }
       });
-      for (const id of ids) this.replayIntent(id);
     } catch (err) {
       runInAction(() => {
         const message = err instanceof Error ? err.message : String(err);
@@ -202,14 +184,6 @@ export class CapabilityPresenter {
           this.store.errors.set(dep, message);
         }
       });
-    }
-  }
-
-  private replayIntent(id: CapabilityId): void {
-    const intent = this.pendingIntents.get(id);
-    if (intent != null) {
-      this.pendingIntents.delete(id);
-      intent();
     }
   }
 

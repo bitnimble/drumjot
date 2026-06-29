@@ -1,4 +1,6 @@
-import { type Artifact, type Op, type ResultRef } from './control_protocol';
+import { type Artifact, type ResultRef } from './control_protocol';
+import { type TranscribeOptions } from 'src/editing/transcribe/transcriber';
+import { type AlignLyricsRealignInput, type AlignLyricsRequest } from 'src/lyrics/forced_align';
 
 /**
  * Audio handed to a backend op. The transport decides how it travels: HTTP
@@ -10,6 +12,26 @@ import { type Artifact, type Op, type ResultRef } from './control_protocol';
 export type AudioInput =
   | { kind: 'blob'; blob: Blob; filename: string }
   | { kind: 'path'; path: string };
+
+/** Tunables for a transcribe run (the streaming `onProgress`/`signal` travel in
+ *  {@link RunOptions}, not here). */
+export type TranscribeParams = Omit<TranscribeOptions, 'onProgress' | 'signal'>;
+
+/** Which separation pass to run: full mix → drums+backing, or drum stem →
+ *  per-instrument stems. */
+export type SeparateParams = { stage: 'stems_all' | 'stems_per' };
+
+/** Lines to force-align (+ optional language hint); `kind` selects whether the
+ *  audio is a full mix needing vocal separation first, or vocals already. */
+export type AlignLyricsParams = AlignLyricsRealignInput & { kind?: AlignLyricsRequest['kind'] };
+
+/** A backend op + its op-specific params, as one discriminated request so a
+ *  caller can't pair an op with the wrong param shape and each client narrows
+ *  `params` by `op` without a cast. */
+export type RunRequest =
+  | { op: 'transcribe'; params: TranscribeParams }
+  | { op: 'separate'; params: SeparateParams }
+  | { op: 'alignLyrics'; params: AlignLyricsParams };
 
 /** Normalised progress for any backend op, regardless of transport. `frac` is a
  *  best-effort 0..1; `message` carries the stage detail for the UI pill. */
@@ -38,12 +60,7 @@ export type RunOptions = {
  * stay on the HTTP client directly, they aren't part of this seam.
  */
 export interface BackendClient {
-  run(
-    op: Op,
-    audio: AudioInput,
-    params: Record<string, unknown>,
-    opts?: RunOptions,
-  ): Promise<RunResult>;
+  run(request: RunRequest, audio: AudioInput, opts?: RunOptions): Promise<RunResult>;
   /** Bytes behind an artifact ref (MIDI download, etc.), per transport. */
   resolveBytes(ref: ResultRef): Promise<Uint8Array>;
   /** A loadable media URL behind an artifact ref (audio stems), per transport. */

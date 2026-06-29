@@ -150,16 +150,18 @@ export class TranscribePresenter {
       // Transport (HTTP vs local sidecar) is the adapter's concern; the desktop
       // capability gate already ran at openAppendDialog.
       const result = await backendClient().run(
-        'transcribe',
-        { kind: 'blob', blob: track.sourceBlob, filename: track.filename },
         {
-          debug: options.debug,
-          beatInput: options.beatInput,
-          onsetBackend: options.onsetBackend,
-          llmModel: options.llmModel,
-          quantise: options.quantise,
-          quantiseUseLlm: options.quantiseUseLlm,
+          op: 'transcribe',
+          params: {
+            debug: options.debug,
+            beatInput: options.beatInput,
+            onsetBackend: options.onsetBackend,
+            llmModel: options.llmModel,
+            quantise: options.quantise,
+            quantiseUseLlm: options.quantiseUseLlm,
+          },
         },
+        { kind: 'blob', blob: track.sourceBlob, filename: track.filename },
         { signal: controller.signal, onProgress: (p) => this.applyTrackProgress(id, track.filename, p) },
       );
       const midiRef = result.artifacts.find((a) => a.role === 'midi')?.ref;

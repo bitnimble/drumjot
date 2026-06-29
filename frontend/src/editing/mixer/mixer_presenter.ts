@@ -182,9 +182,8 @@ export class MixerPresenter implements Resettable {
     this.beginAudioTrackSplit(id, kind);
     try {
       const result = await backendClient().run(
-        'separate',
+        { op: 'separate', params: { stage } },
         { kind: 'blob', blob: track.sourceBlob, filename: track.filename },
-        { stage },
       );
       for (const artifact of result.artifacts) {
         const meta = stemTrackMeta(artifact, track.filename);
