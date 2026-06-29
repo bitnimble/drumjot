@@ -22,10 +22,12 @@ from app.comms.stdio_adapter import StdioAdapter
 
 
 def _request(job_id: str, path: str) -> str:
+    # `separate` is still backed by EchoRunner, so these exercise the protocol /
+    # adapter plumbing without the real transcribe runner's bundle requirement.
     return RequestMessage(
         type="request",
         id=job_id,
-        op="transcribe",
+        op="separate",
         args={"audio": {"kind": "path", "path": path}},
     ).model_dump_json()
 

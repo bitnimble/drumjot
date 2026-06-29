@@ -1,12 +1,9 @@
 """Runner registry.
 
-PARKED: the real per-op runners that drive `app.pipeline.runner.run_pipeline`
-(transcribe) and the separation / lyrics-alignment paths need the multi-GB torch
-stack and real audio to validate, which this autonomous run can't do. Until then
-`build_registry` wires `EchoRunner` under every op so the full request ->
-progress -> result path is exercisable end to end (and integration-tested from
-the Rust broker). Swap in the real runners once the capability install can
-materialise torch on a GPU box.
+`transcribe` is wired to {@link TranscribeRunner}, which replays a debug bundle
+today and is the seam for the live `run_pipeline` path (needs the torch
+capability + GPU). `separate` / `alignLyrics` still use `EchoRunner` until their
+real runners land (same GPU dependency).
 """
 from __future__ import annotations
 
@@ -14,6 +11,7 @@ import asyncio
 
 from .core import CancelToken, EmitProgress, Registry
 from .protocol import Artifact, PathRef, RequestMessage
+from .transcribe_runner import TranscribeRunner
 
 
 class EchoRunner:
@@ -38,5 +36,5 @@ class EchoRunner:
 
 
 def build_registry() -> Registry:
-    runner = EchoRunner()
-    return {"transcribe": runner, "separate": runner, "alignLyrics": runner}
+    echo = EchoRunner()
+    return {"transcribe": TranscribeRunner(), "separate": echo, "alignLyrics": echo}
