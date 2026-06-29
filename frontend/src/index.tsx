@@ -11,6 +11,7 @@ import { CapabilityPresenter } from 'src/desktop/capability_presenter';
 import { TauriBridge } from 'src/desktop/desktop_bridge';
 import type { DesktopTranscriber } from 'src/desktop/desktop_transcribe';
 import { fromMidi } from 'src/midi/from_midi';
+import { autorun } from 'mobx';
 import { TranscribePresenter } from 'src/editing/transcribe/transcribe_presenter';
 import { ViewportPresenter } from 'src/editing/viewport/viewport_presenter';
 import { MixerPresenter } from 'src/editing/mixer/mixer_presenter';
@@ -121,6 +122,26 @@ class Drumjot {
         <DesktopFirstRun />
       </>,
     );
+    this.installWindowTitleSync();
+  }
+
+  /** Desktop only: reflect the loaded song in the window title, e.g.
+   *  "Drumjot - Silhouette - KANA-BOON" (just "Drumjot" with nothing loaded). */
+  private installWindowTitleSync(): void {
+    if (!isTauri()) return;
+    // Lazy imports: the Tauri window API and the score_header module must stay
+    // out of the web bundle's eager boot path.
+    void Promise.all([
+      import('@tauri-apps/api/window'),
+      import('src/editing/score/score_header'),
+    ]).then(([{ getCurrentWindow }, { formatDisplayTitle }]) => {
+      const win = getCurrentWindow();
+      autorun(() => {
+        const jot = this.jotEditorStore.jot;
+        const display = jot ? formatDisplayTitle(jot) : '';
+        void win.setTitle(display ? `Drumjot - ${display}` : 'Drumjot');
+      });
+    });
   }
 
   load(jot: Jot) {
