@@ -40,11 +40,11 @@ fn set_var(key: &str, val: impl AsRef<std::ffi::OsStr>) {
     unsafe { std::env::set_var(key, val) };
 }
 
-/// Point the pipeline's read-only model checkpoints at the bundled resources, and
-/// pick the onset backend by what's bundled. Only fires in a packaged build (the
-/// bundled transcriber resource is present); dev keeps the Settings/.env defaults.
-/// beat_transformer.pt must be bundled for transcribe; onsets default to ADTOF
-/// (weights ship in the pip package) unless a learned-onset run dir was bundled.
+/// Pick the onset backend by what's bundled (packaged build only; dev keeps the
+/// Settings/.env defaults). Onsets default to ADTOF - its weights ship in the pip
+/// package, no external checkpoint - unless a learned-onset run dir was bundled
+/// (opt-in via DRUMJOT_LEARNED_ONSETS_DIR at build). (Beat Transformer is fetched
+/// at runtime, see redirect_env + pipeline/beat_transformer.py.)
 pub fn init_checkpoint_env(app: &AppHandle) {
     let resource = |rel: &str| {
         app.path()
@@ -54,9 +54,6 @@ pub fn init_checkpoint_env(app: &AppHandle) {
     };
     if resource("python/transcriber").is_none() {
         return; // dev / unbundled: leave Settings defaults in place
-    }
-    if let Some(beat) = resource("python/transcriber/checkpoints/beat_transformer.pt") {
-        set_var("BEAT_TRANSFORMER_CHECKPOINT", beat.as_os_str());
     }
     match resource("python/learned_onsets") {
         Some(dir) => set_var("LEARNED_ONSETS_CHECKPOINT", dir.as_os_str()),
@@ -77,6 +74,9 @@ pub fn redirect_env(root: &Path, full: bool) {
     set_dir("MODELS_DIR", root.join("models"));
     set_dir("CACHE_DIR", cache.join("transcriber"));
     set_dir("DRUMJOT_OUTPUTS_DIR", root.join("outputs"));
+    // Beat Transformer (MIT) downloads to this writable path on first transcribe
+    // (see pipeline/beat_transformer.py) rather than being bundled.
+    set_var("BEAT_TRANSFORMER_CHECKPOINT", root.join("models").join("beat_transformer.pt"));
     // torch / HuggingFace model downloads (MERT, etc.) + uv's package cache and
     // its managed-Python install.
     set_dir("HF_HOME", cache.join("huggingface"));
