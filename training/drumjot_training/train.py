@@ -268,20 +268,23 @@ def _tune_thresholds_from_probs(
     grid = grid or (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8)
     best: dict[str, float] = {}
     for i, lane in enumerate(cfg.lanes):
-        n_ref = sum(len(onsets.get(lane, [])) for _, onsets in probs_onsets)
+        # Pre-filter to clips that HAVE a ref onset for this lane and pull each clip's prob
+        # ROW once: this work is invariant across the threshold grid, so doing it once per
+        # lane (not once per lane x threshold) drops ~|grid|x redundant .get()/empty-skip/
+        # row-index over the whole val set. (sum of lens is unchanged: dropped clips were 0.)
+        lane_clips = [(probs[i], ref) for probs, onsets in probs_onsets if (ref := onsets.get(lane))]
+        n_ref = sum(len(ref) for _, ref in lane_clips)
         lane_grid = (
             grid if n_ref >= cfg.rare_lane_min_onsets
             else tuple(t for t in grid if t >= cfg.rare_thr_floor)
         )
         best_thr, best_f1 = max(cfg.peak_threshold, lane_grid[0] if lane_grid else 0.0), -1.0
         for thr in lane_grid:
-            f1s = []
-            for probs, onsets in probs_onsets:
-                ref = onsets.get(lane, [])
-                if not ref:
-                    continue
-                est = metrics.pick_onsets_lane(probs[i], cfg.encoder_fps, lane, thr)
-                f1s.append(metrics.onset_f1(ref, est, cfg.onset_tolerance_s)["f"])
+            f1s = [
+                metrics.onset_f1(ref, metrics.pick_onsets_lane(prow, cfg.encoder_fps, lane, thr),
+                                 cfg.onset_tolerance_s)["f"]
+                for prow, ref in lane_clips
+            ]
             if f1s and (mean := sum(f1s) / len(f1s)) > best_f1:
                 best_f1, best_thr = mean, thr
         best[lane] = best_thr
@@ -705,8 +708,15 @@ def _window_specs(specs, window: float, search: float, max_windows: int,
         # Build window-relative onsets directly as array.array('d') from a generator (no
         # intermediate Python list), so the ~170k window slices never form the multi-GB
         # boxed-float-list peak that the allocator would then retain. float64 = bit-exact.
-        return {ln: array.array("d", (t - start for t in ts if start <= t < start + length))
-                for ln, ts in onsets.items()}
+        # Skip lanes whose window slice is EMPTY: every consumer reads via .get(lane, [])
+        # (build_targets, _cap_onsets, rings, eval), so an absent key == an empty list --
+        # this drops ~6 empty array.array containers (~80 B each) per window x 2 dicts x ~170k.
+        out = {}
+        for ln, ts in onsets.items():
+            a = array.array("d", (t - start for t in ts if start <= t < start + length))
+            if a:
+                out[ln] = a
+        return out
 
     def _wins(audio):
         nonlocal dirty
@@ -992,6 +1002,9 @@ def train_loop(
     # lane's confusable siblings; per batch, sib_act = max sibling target.
     sib_on = cfg.sib_neg_weight != 1.0 or cfg.sib_pos_weight != 1.0
     S = torch.as_tensor(sibling_matrix(cfg.lanes), dtype=torch.bool, device=device)
+    # Which lanes actually HAVE confusable siblings -- loop-invariant (S is constant), so
+    # precompute once instead of an S[li].any() GPU reduce + .item() sync per lane EVERY batch.
+    has_sib = [bool(S[li].any()) for li in range(len(cfg.lanes))]
     # aux ring-activity rows + a unit pos_weight for the activity BCE
     _aux_lanes = cfg.aux_lanes if cfg.aux_lanes is not None else SUSTAINED_LANES
     sus_idx = [i for i, ln in enumerate(cfg.lanes) if ln in _aux_lanes]
@@ -1098,7 +1111,7 @@ def train_loop(
                 parts = []
                 for li in range(len(cfg.lanes)):
                     parts.append(
-                        Yw[:, S[li]].amax(dim=1) if bool(S[li].any()) else torch.zeros_like(Yw[:, 0])
+                        Yw[:, S[li]].amax(dim=1) if has_sib[li] else torch.zeros_like(Yw[:, 0])
                     )
                 sib_act = torch.stack(parts, dim=1)  # (B, n_lanes, T)
                 fw = sibling_weight(Y, sib_act, cfg.sib_pos_weight, cfg.sib_neg_weight)

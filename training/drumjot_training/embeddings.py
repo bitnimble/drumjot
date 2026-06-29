@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from functools import cache
 from pathlib import Path
 
 import numpy as np
@@ -63,6 +64,16 @@ def feat_dim(high_band: bool = True) -> int:
     return MERT_DIM + (HB_BANDS if high_band else 0)
 
 
+@cache
+def _resolved_path(audio_path: str) -> str:
+    """`str(Path(audio_path).expanduser().resolve())`, MEMOIZED. `.resolve()` follows
+    symlinks via a stat syscall (on NFS here), and `cache_key` is called per window per
+    epoch over symlinked sep-tree paths -> millions of identical stats (a real per-epoch
+    NFS-load + stall surface). The result is deterministic (the symlinks are static during
+    a run), so caching per path is functionally identical and removes the repeated syscall."""
+    return str(Path(audio_path).expanduser().resolve())
+
+
 def cache_key(
     audio_path: str | Path,
     encoder: str,
@@ -91,7 +102,7 @@ def cache_key(
     # training perstem stem) shares the cache entry the training run wrote under
     # the real path. Real paths resolve to themselves, so existing keys are
     # unchanged (no cache invalidation).
-    raw = f"{Path(audio_path).expanduser().resolve()}|{encoder}|{layer}|{window}|{variant}"
+    raw = f"{_resolved_path(str(audio_path))}|{encoder}|{layer}|{window}|{variant}"
     if start:
         raw += f"|s{start:g}"
     if cache_dtype != "float16":

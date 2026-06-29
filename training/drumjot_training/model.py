@@ -162,7 +162,9 @@ def activate_onsets(logits, lane_names, cymbal_softmax: bool = False):
         rd, cr = lane_names.index("rd"), lane_names.index("cr")
         rl, cl = logits[..., rd, :], logits[..., cr, :]
         sm = torch.softmax(torch.stack([torch.zeros_like(rl), rl, cl], dim=-2), dim=-2)
-        probs = probs.clone()
+        # write straight into the sigmoid output: torch.sigmoid returns a fresh, unaliased
+        # tensor (callers immediately .cpu().numpy() it) and this only runs under no_grad
+        # (eval/inference), so the in-place write is safe and avoids cloning (..., n_lanes, T).
         probs[..., rd, :] = sm[..., 1, :]
         probs[..., cr, :] = sm[..., 2, :]
     return probs

@@ -35,12 +35,34 @@ def test_window_specs_slices_to_array_at_source(tmp_path):
     """_window_specs builds window onsets straight as array.array (no big-list peak the
     allocator would retain), bit-exact."""
     from drumjot_training.train import _window_specs
-    specs = [("/x/a.flac", {"k": [0.1, 0.5, 35.0], "s": [0.2]})]  # 35.0s past the 30s window
+    # t's only onset (40.0s) is past the 30s window -> the whole lane should be DROPPED
+    specs = [("/x/a.flac", {"k": [0.1, 0.5, 35.0], "s": [0.2], "t": [40.0]})]
     out = _window_specs(specs, 30.0, 3.0, 1)  # legacy single window, no audio read
     assert len(out) == 1
     onsets = out[0][1]
     assert isinstance(onsets["k"], array.array)
     assert list(onsets["k"]) == [0.1, 0.5]  # window-relative, 35.0 sliced out, values exact
+    assert "t" not in onsets and "s" in onsets  # empty-window lane dropped (consumers .get(.,[]))
+
+
+def test_activate_onsets_cymbal_softmax_no_clone():
+    """activate_onsets writes the joint ride/crash softmax straight into the sigmoid output
+    (no .clone()): k stays sigmoid, rd/cr become the {none=0,ride,crash} posteriors, and the
+    input logits are not mutated."""
+    import torch
+
+    from drumjot_training.model import activate_onsets
+    torch.manual_seed(0)
+    lanes = ("k", "rd", "cr")
+    logits = torch.randn(2, 3, 5)
+    logits_ref = logits.clone()
+    out = activate_onsets(logits, lanes, cymbal_softmax=True)
+    z = torch.zeros_like(logits[:, 1])
+    sm = torch.softmax(torch.stack([z, logits[:, 1], logits[:, 2]], dim=-2), dim=-2)
+    assert torch.allclose(out[:, 0], torch.sigmoid(logits[:, 0]))  # k unchanged (sigmoid)
+    assert torch.allclose(out[:, 1], sm[:, 1])  # rd = ride posterior
+    assert torch.allclose(out[:, 2], sm[:, 2])  # cr = crash posterior
+    assert torch.equal(logits, logits_ref)  # logits not mutated (we wrote into sigmoid output)
 
 
 def test_weight_none_untouched(tmp_path):
