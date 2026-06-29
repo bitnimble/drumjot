@@ -246,6 +246,11 @@ pub async fn install_capability(
     let _ = err_task.await;
 
     if status.success() {
+        // Pre-fetch the capability's model assets (separation models, Beat
+        // Transformer) now, so they're ready offline rather than downloading on
+        // first use. Best-effort: a failure here defers to the pipeline's lazy
+        // fallbacks, so the install still completes.
+        provision_models(&venv, &dir, &groups, &on_event).await;
         let _ = on_event.send(InstallEvent::Done);
         Ok(())
     } else {
@@ -253,4 +258,57 @@ pub async fn install_capability(
         let _ = on_event.send(InstallEvent::Error { message: message.clone() });
         Err(message)
     }
+}
+
+/// Run `python -m app.pipeline.provision <groups>` in the freshly-synced venv to
+/// download the capability's models, streaming progress to the webview.
+/// Best-effort: any spawn/exit failure is swallowed (the pipeline lazily fetches
+/// anything still missing on first use).
+async fn provision_models(venv: &Path, dir: &Path, groups: &[String], on_event: &Channel<InstallEvent>) {
+    let python = venv_python(venv);
+    if !python.exists() {
+        return;
+    }
+    let mut cmd = Command::new(&python);
+    cmd.arg("-m").arg("app.pipeline.provision");
+    for group in groups {
+        cmd.arg(group);
+    }
+    let mut child = match cmd
+        .current_dir(dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => {
+            log::warn!("[provision] spawn failed: {e}");
+            return;
+        }
+    };
+    let _ = on_event.send(InstallEvent::Line { line: "Downloading models…".to_string() });
+    let out = child.stdout.take();
+    let err = child.stderr.take();
+    let out_sink = on_event.clone();
+    let out_task = tokio::spawn(async move {
+        if let Some(r) = out {
+            let mut lines = BufReader::new(r).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let _ = out_sink.send(InstallEvent::Line { line });
+            }
+        }
+    });
+    let err_sink = on_event.clone();
+    let err_task = tokio::spawn(async move {
+        if let Some(r) = err {
+            let mut lines = BufReader::new(r).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let _ = err_sink.send(InstallEvent::Line { line });
+            }
+        }
+    });
+    let _ = child.wait().await;
+    let _ = out_task.await;
+    let _ = err_task.await;
 }

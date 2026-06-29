@@ -278,3 +278,28 @@ def provision_custom_models() -> None:
     _provision_lyrics_assets(models_dir)
 
     log.info("provision: custom separation models ready in %s", models_dir)
+
+
+def main(argv: list[str]) -> int:
+    """`python -m app.pipeline.provision <uv-group>...` - pre-fetch the heavy model
+    assets a freshly-installed capability needs (separation models + vocals, and
+    the Beat Transformer checkpoint for transcribe), so they download at install
+    time rather than on first use. Best-effort; the lazy fallbacks still cover a
+    failure here. The desktop installer runs this after `uv sync`."""
+    logging.basicConfig(level=logging.INFO)
+    groups = set(argv)
+    if groups & {"separation", "transcription", "lyrics"}:
+        provision_custom_models()
+    if "transcription" in groups:
+        from app.pipeline.beat_transformer import _download_checkpoint
+
+        ckpt = Path(settings.beat_transformer_checkpoint)
+        if not ckpt.exists():
+            _download_checkpoint(ckpt)
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+
+    raise SystemExit(main(sys.argv[1:]))
