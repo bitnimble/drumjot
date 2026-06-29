@@ -665,6 +665,7 @@ def _window_specs(specs, window: float, search: float, max_windows: int,
     per-clip `librosa.load` + RMS (the GPU-idle "planning" phase) entirely. The
     FULL window list is cached (keyed by audio+window+search) and sliced to
     `max_windows` on read, so train (0) and val (N) share one entry per clip."""
+    import array
     import json
     import os
 
@@ -701,7 +702,10 @@ def _window_specs(specs, window: float, search: float, max_windows: int,
             dirty = True
 
     def _slice(onsets, start, length):
-        return {ln: [t - start for t in ts if start <= t < start + length]
+        # Build window-relative onsets directly as array.array('d') from a generator (no
+        # intermediate Python list), so the ~170k window slices never form the multi-GB
+        # boxed-float-list peak that the allocator would then retain. float64 = bit-exact.
+        return {ln: array.array("d", (t - start for t in ts if start <= t < start + length))
                 for ln, ts in onsets.items()}
 
     def _wins(audio):

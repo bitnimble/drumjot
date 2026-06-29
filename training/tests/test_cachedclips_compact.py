@@ -31,6 +31,18 @@ def test_onsets_compacted_to_array_in_place(tmp_path):
     assert bool(array.array("f", [])) is False
 
 
+def test_window_specs_slices_to_array_at_source(tmp_path):
+    """_window_specs builds window onsets straight as array.array (no big-list peak the
+    allocator would retain), bit-exact."""
+    from drumjot_training.train import _window_specs
+    specs = [("/x/a.flac", {"k": [0.1, 0.5, 35.0], "s": [0.2]})]  # 35.0s past the 30s window
+    out = _window_specs(specs, 30.0, 3.0, 1)  # legacy single window, no audio read
+    assert len(out) == 1
+    onsets = out[0][1]
+    assert isinstance(onsets["k"], array.array)
+    assert list(onsets["k"]) == [0.1, 0.5]  # window-relative, 35.0 sliced out, values exact
+
+
 def test_weight_none_untouched(tmp_path):
     cfg = Config(lanes=("k",), encoder_fps=75.0)
     spec = ("/x/a.flac", {"k": [0.2]}, None, {}, 100, 0.0, 2.0)  # full-mix: weight is None
