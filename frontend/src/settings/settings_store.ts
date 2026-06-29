@@ -88,6 +88,14 @@ export class SettingsStore implements Resettable {
    */
   mergeLayers: boolean = false;
 
+  /**
+   * Whether the Settings dialog (Capabilities + Hardware tabs) is open. App-level
+   * UI state, not a per-song display choice, so it's deliberately NOT touched by
+   * {@link reset} and never serialised. On the store (rather than React-local) so
+   * the File menu can open it and the root-mounted dialog can read it.
+   */
+  settingsDialogOpen: boolean = false;
+
   constructor() {
     makeAutoObservable(this);
   }

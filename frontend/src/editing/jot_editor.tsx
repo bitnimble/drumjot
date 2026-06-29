@@ -25,6 +25,7 @@ import {
 } from './playback/audio_worklet_warning_modal';
 import { LyricsSearchModal } from './lyrics/lyrics_search_modal';
 import { LyricsTextLoadModal } from './lyrics/lyrics_text_modal';
+import { SettingsDialog } from 'src/settings/settings_dialog';
 import { TranscribeDialog } from './transcribe/transcribe_dialog';
 import {
   TranscribeStoreContext,
@@ -543,6 +544,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                       onLoadLyricsFile={(file) => jotEditorPresenter.loadLyricsFile(file)}
                       onOpenLyricsTextLoad={() => lyricsPresenter.setLyricsTextOpen(true)}
                       onOpenLyricsSearch={() => lyricsPresenter.setLyricsSearchOpen(true)}
+                      onOpenSettings={() => settingsPresenter.setSettingsDialogOpen(true)}
                       lyricsAlignBusyPhase={lyricsAlign.lyricsAlignBusyPhase}
                       onSetZoom={setZoomCentered}
                       hasNoteProvenance={provenance.noteProvenance !== undefined}
@@ -632,6 +634,10 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                       open={lyricsAlign.lyricsTextOpen}
                       onClose={() => lyricsPresenter.setLyricsTextOpen(false)}
                       presenter={lyricsPresenter}
+                    />
+                    <SettingsDialog
+                      open={settings.settingsDialogOpen}
+                      onClose={() => settingsPresenter.setSettingsDialogOpen(false)}
                     />
                     <TranscribeDialog />
                     <AudioWorkletWarningModal

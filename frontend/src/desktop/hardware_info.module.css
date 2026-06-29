@@ -1,0 +1,46 @@
+.grid {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.row {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--color-border-soft);
+}
+
+.label {
+    composes: bodySm from '../typography.module.css';
+    color: var(--color-text-muted-alt);
+    flex: none;
+    width: 110px;
+}
+
+.value {
+    composes: bodyEmphasis from '../typography.module.css';
+    color: var(--color-text-strong);
+}
+
+.good {
+    composes: value;
+    color: var(--color-success);
+}
+
+.warn {
+    composes: value;
+    color: var(--color-error);
+}
+
+.muted {
+    composes: value;
+    color: var(--color-text-muted-alt);
+}
+
+.note {
+    composes: bodySm from '../typography.module.css';
+    color: var(--color-text-muted-alt);
+    margin: 8px 0 0;
+}

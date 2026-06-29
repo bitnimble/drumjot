@@ -12,6 +12,7 @@ import {
   ToggleMenuItem,
 } from 'src/ui/dropdown/dropdown';
 import { Logo } from 'src/ui/logo/logo';
+import { isTauri } from 'src/desktop/is_tauri';
 import { RecentTranscriptionsPicker } from '../editing/transcribe/recent_transcriptions';
 import styles from './toolbar.module.css';
 import type { GridLineSettings } from 'src/settings/settings_store';
@@ -48,6 +49,7 @@ export const Toolbar = observer(
     onLoadLyricsFile,
     onOpenLyricsTextLoad,
     onOpenLyricsSearch,
+    onOpenSettings,
     lyricsAlignBusyPhase,
     onSetZoom,
     hasNoteProvenance,
@@ -98,6 +100,9 @@ export const Toolbar = observer(
      *  against the current jot's title/artist; the toolbar's only job
      *  is to surface the entry point. */
     onOpenLyricsSearch: () => void;
+    /** Open the Settings dialog (Capabilities + Hardware). Desktop-only entry;
+     *  the menu item is hidden in the web build. */
+    onOpenSettings: () => void;
     /** Aggregate lyrics-alignment state, for the toolbar busy pill (which
      *  doesn't display *which* row; the per-row spinner does). `queued`
      *  means waiting behind another GPU job; `aligning` means actively
@@ -381,6 +386,25 @@ export const Toolbar = observer(
                 onPick={onOpenRecentTranscription}
                 onAfterPick={close}
               />
+              {/* Desktop only: Settings holds the capability installer + the
+                  hardware/acceleration readout, both Tauri-only concerns. */}
+              {isTauri() && (
+                <>
+                  <span className={dropdownStyles.dropdownDivider} aria-hidden="true" />
+                  <button
+                    type="button"
+                    className={dropdownStyles.dropdownItem}
+                    onClick={() => {
+                      onOpenSettings();
+                      close();
+                    }}
+                    title="Manage downloadable capabilities and view hardware/acceleration info."
+                    data-testid="file-menu-settings"
+                  >
+                    Settings…
+                  </button>
+                </>
+              )}
             </>
           )}
         </DropdownButton>

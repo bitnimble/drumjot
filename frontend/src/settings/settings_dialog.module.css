@@ -1,0 +1,77 @@
+.panel {
+    composes: panel from '../ui/modal/modal.module.css';
+    width: min(720px, 100%);
+    height: min(80vh, 560px);
+}
+
+.close {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px;
+    border: none;
+    background: none;
+    border-radius: 6px;
+    cursor: pointer;
+    color: var(--color-text-muted-alt);
+}
+
+.close:hover {
+    background: var(--color-accent-overlay-faint);
+    color: var(--color-text-strong);
+}
+
+/* Left tab rail + right content fill the panel below the header. */
+.layout {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+
+.rail {
+    flex: none;
+    width: 160px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 12px 8px;
+    border-right: 1px solid var(--color-border-soft);
+    overflow-y: auto;
+}
+
+.tab {
+    composes: bodyEmphasis from '../typography.module.css';
+    text-align: left;
+    padding: 8px 12px;
+    border: none;
+    background: none;
+    border-radius: 6px;
+    cursor: pointer;
+    color: var(--color-text-muted-alt);
+}
+
+.tab:hover {
+    background: var(--color-accent-overlay-faint);
+}
+
+.tabActive {
+    background: var(--color-accent-overlay-light);
+    color: var(--color-text-strong);
+}
+
+.content {
+    flex: 1;
+    min-width: 0;
+    overflow-y: auto;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.intro {
+    composes: bodySm from '../typography.module.css';
+    color: var(--color-text-muted-alt);
+    margin: 0 0 4px;
+}
