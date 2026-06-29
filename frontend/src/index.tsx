@@ -6,8 +6,8 @@ import { EXAMPLE_JOTS, ExampleJot, rockJot, tripletJot } from 'src/fakes/fakes';
 import { createJotEditor } from 'src/editing/jot_editor';
 import { DesktopFirstRun } from 'src/desktop/desktop_first_run';
 import { isTauri } from 'src/desktop/is_tauri';
-import { CapabilityStore } from 'src/desktop/capability_store';
-import { CapabilityPresenter } from 'src/desktop/capability_presenter';
+import { desktopCapabilities } from 'src/desktop/desktop_services';
+import { CapabilityGate } from 'src/desktop/capability_gate';
 import { TauriBridge } from 'src/desktop/desktop_bridge';
 import type { DesktopTranscriber } from 'src/desktop/desktop_transcribe';
 import { fromMidi } from 'src/midi/from_midi';
@@ -120,6 +120,7 @@ class Drumjot {
       <>
         <View />
         <DesktopFirstRun />
+        <CapabilityGate />
       </>,
     );
     this.installWindowTitleSync();
@@ -223,29 +224,27 @@ class Drumjot {
       }
       path = picked;
     }
-    const { transcriber, capabilities } = await this.desktopDeps();
-    await capabilities.refresh();
+    const caps = desktopCapabilities();
+    if (caps != null && !(await caps.presenter.requestCapability('transcription'))) {
+      return; // user dismissed the install prompt
+    }
+    const transcriber = await this.desktopTranscriber();
     const { midi } = await transcriber.transcribe(path);
     this.load(fromMidi(midi));
   }
 
-  private desktop:
-    | { transcriber: DesktopTranscriber; capabilities: CapabilityPresenter }
-    | undefined;
+  private desktop: { transcriber: DesktopTranscriber } | undefined;
 
-  private async desktopDeps(): Promise<{
-    transcriber: DesktopTranscriber;
-    capabilities: CapabilityPresenter;
-  }> {
+  private async desktopTranscriber(): Promise<DesktopTranscriber> {
     if (this.desktop == null) {
+      const caps = desktopCapabilities();
+      if (caps == null) throw new Error('desktopTranscribe is desktop-only');
       // Lazy import: desktop_transcribe pulls @tauri-apps/plugin-fs, which must
       // not load in the web bundle's boot path.
       const { DesktopTranscriber } = await import('src/desktop/desktop_transcribe');
-      const bridge = new TauriBridge();
-      const capabilities = new CapabilityPresenter({ store: new CapabilityStore(), bridge });
-      this.desktop = { transcriber: new DesktopTranscriber(bridge, capabilities), capabilities };
+      this.desktop = { transcriber: new DesktopTranscriber(new TauriBridge(), caps.presenter) };
     }
-    return this.desktop;
+    return this.desktop.transcriber;
   }
 }
 

@@ -1,49 +1,23 @@
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import modal from 'src/ui/modal/modal.module.css';
-import { CAPABILITIES } from './capability_manifest';
-import { CapabilityPresenter } from './capability_presenter';
-import { CapabilityStore } from './capability_store';
-import { TauriBridge } from './desktop_bridge';
-import { isTauri } from './is_tauri';
+import { CAPABILITIES, formatBytes } from './capability_manifest';
+import { desktopCapabilities } from './desktop_services';
 import styles from './capability_panel.module.css';
-
-function formatBytes(bytes: number): string {
-  if (bytes <= 0) return 'free';
-  const gb = bytes / 1_000_000_000;
-  return gb >= 1 ? `${gb.toFixed(1)} GB` : `${Math.round(bytes / 1_000_000)} MB`;
-}
 
 /**
  * First-run capability setup, shown once in the desktop shell. Lists the
  * optional capabilities with what each does + its incremental download, and
  * lets the user install some or skip straight into a fully working editor.
- * Renders nothing in the web build (no Tauri), so it never touches the browser
- * app or the e2e suite.
+ * Shares one capability store with the point-of-use gate (desktopCapabilities),
+ * so an install here or there is reflected everywhere. Renders nothing in the
+ * web build.
  */
 export const DesktopFirstRun = observer(function DesktopFirstRun() {
-  const enabled = isTauri();
-  const depsRef = React.useRef<{
-    store: CapabilityStore;
-    presenter: CapabilityPresenter;
-  } | null>(null);
-  if (enabled && depsRef.current == null) {
-    const store = new CapabilityStore();
-    depsRef.current = {
-      store,
-      presenter: new CapabilityPresenter({ store, bridge: new TauriBridge() }),
-    };
-  }
+  const deps = desktopCapabilities();
   const [open, setOpen] = React.useState(true);
-
-  React.useEffect(() => {
-    if (enabled) {
-      void depsRef.current?.presenter.refresh();
-    }
-  }, [enabled]);
-
-  if (!enabled || !open || depsRef.current == null) return null;
-  const { store, presenter } = depsRef.current;
+  if (deps == null || !open) return null;
+  const { store, presenter } = deps;
 
   return (
     <div className={modal.backdrop}>
@@ -72,10 +46,7 @@ export const DesktopFirstRun = observer(function DesktopFirstRun() {
                   ) : cap.kind === 'credentials' ? (
                     <span className={styles.status}>Needs API key</span>
                   ) : (
-                    <button
-                      className={styles.install}
-                      onClick={() => void presenter.install(cap.id)}
-                    >
+                    <button className={styles.install} onClick={() => void presenter.install(cap.id)}>
                       Install · {formatBytes(presenter.incrementalBytes([cap.id]))}
                     </button>
                   )}

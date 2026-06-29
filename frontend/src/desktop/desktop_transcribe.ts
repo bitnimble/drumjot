@@ -1,12 +1,14 @@
-import { readFile } from '@tauri-apps/plugin-fs';
+import { BaseDirectory, mkdir, readFile, writeFile } from '@tauri-apps/plugin-fs';
 import { convertFileSrc } from '@tauri-apps/api/core';
+import { join, tempDir } from '@tauri-apps/api/path';
 import {
   PROTOCOL_VERSION,
   type ClientMessage,
   type ResultRef,
 } from 'src/net/control_protocol';
 import { type CapabilityPresenter } from './capability_presenter';
-import { type DesktopBridge } from './desktop_bridge';
+import { TauriBridge, type DesktopBridge } from './desktop_bridge';
+import { desktopCapabilities } from './desktop_services';
 
 export type TranscribeResult = {
   /** Predicted-onsets MIDI bytes (feed to `src/midi/from_midi.ts`). */
@@ -111,4 +113,31 @@ export class DesktopTranscriber {
       audioUrls: audioRefs.map((ref) => this.toMediaUrl(ref)),
     };
   }
+}
+
+/**
+ * Transcribe in-memory audio (an audio track's source Blob): stage it to a temp
+ * file the sidecar can read off disk, then run the sidecar transcribe via the
+ * shared capability presenter. Assumes the caller already gated the
+ * transcription capability (see CapabilityPresenter.requestCapability).
+ */
+export async function transcribeViaBlob(
+  blob: Blob,
+  filename: string,
+  opts: {
+    params?: Record<string, unknown>;
+    onProgress?: (stage: string, frac: number) => void;
+  } = {},
+): Promise<TranscribeResult> {
+  const caps = desktopCapabilities();
+  if (caps == null) {
+    throw new Error('desktop transcribe requires the Tauri runtime');
+  }
+  const safe = filename.replace(/[/\\]/g, '_');
+  const rel = `drumjot/input-${crypto.randomUUID()}-${safe}`;
+  await mkdir('drumjot', { baseDir: BaseDirectory.Temp, recursive: true });
+  await writeFile(rel, new Uint8Array(await blob.arrayBuffer()), { baseDir: BaseDirectory.Temp });
+  const path = await join(await tempDir(), rel);
+  const transcriber = new DesktopTranscriber(new TauriBridge(), caps.presenter);
+  return transcriber.transcribe(path, opts);
 }

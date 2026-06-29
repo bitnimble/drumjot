@@ -25,11 +25,65 @@ export class CapabilityPresenter {
   private readonly bridge: DesktopBridge;
   /** Action queued by a gate, replayed once its capability becomes ready. */
   private readonly pendingIntents: Map<CapabilityId, () => void> = new Map();
+  /** Resolver for the in-flight point-of-use prompt (see requestCapability). */
+  private gateResolve: ((ok: boolean) => void) | undefined;
 
   constructor(deps: CapabilityPresenterDeps) {
     this.store = deps.store;
     this.bridge = deps.bridge;
-    makeAutoObservable(this, { store: false });
+    makeAutoObservable<CapabilityPresenter, 'gateResolve'>(this, {
+      store: false,
+      gateResolve: false,
+    });
+  }
+
+  /** Point-of-use gate: resolves true if the capability is already installed,
+   *  otherwise opens the install prompt (sets `store.pendingGate`) and resolves
+   *  once the user confirms+install succeeds (true) or cancels (false). */
+  requestCapability(id: CapabilityId): Promise<boolean> {
+    if (this.store.isReady(id)) {
+      return Promise.resolve(true);
+    }
+    if (capabilityById(id).kind !== 'deps') {
+      // credentials/system capabilities aren't installed via uv; treat as ready.
+      return Promise.resolve(true);
+    }
+    // A prompt is already open (concurrent gate): abandon the prior waiter so it
+    // resolves false rather than hanging when this one supersedes it.
+    this.gateResolve?.(false);
+    return new Promise<boolean>((resolve) => {
+      this.gateResolve = resolve;
+      runInAction(() => {
+        this.store.pendingGate = id;
+      });
+    });
+  }
+
+  /** Confirm the open prompt: install the pending capability (streaming
+   *  progress), then resolve the gate. Leaves the prompt open showing the
+   *  error if the install fails, so the user can retry or cancel. */
+  async confirmGate(): Promise<void> {
+    const id = this.store.pendingGate;
+    if (id == null) {
+      return;
+    }
+    await this.install(id);
+    if (this.store.isReady(id)) {
+      runInAction(() => {
+        this.store.pendingGate = undefined;
+      });
+      this.gateResolve?.(true);
+      this.gateResolve = undefined;
+    }
+  }
+
+  /** Dismiss the open prompt without installing; the gated action is abandoned. */
+  cancelGate(): void {
+    runInAction(() => {
+      this.store.pendingGate = undefined;
+    });
+    this.gateResolve?.(false);
+    this.gateResolve = undefined;
   }
 
   /** Load detected accelerator + persisted install state into the store. */

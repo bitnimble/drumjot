@@ -10,6 +10,14 @@
     {
       "identifier": "fs:allow-read-file",
       "allow": [{ "path": "$APPDATA/outputs/**" }]
+    },
+    {
+      "identifier": "fs:allow-write-file",
+      "allow": [{ "path": "$TEMP/drumjot/**" }]
+    },
+    {
+      "identifier": "fs:allow-mkdir",
+      "allow": [{ "path": "$TEMP/drumjot" }, { "path": "$TEMP/drumjot/**" }]
     }
   ]
 }

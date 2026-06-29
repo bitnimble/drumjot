@@ -107,3 +107,10 @@ export function capabilityById(id: CapabilityId): CapabilitySpec {
   }
   return spec;
 }
+
+/** Human-readable size for install UI (GB above 1 GB, else MB; "free" at 0). */
+export function formatBytes(bytes: number): string {
+  if (bytes <= 0) return 'free';
+  const gb = bytes / 1_000_000_000;
+  return gb >= 1 ? `${gb.toFixed(1)} GB` : `${Math.round(bytes / 1_000_000)} MB`;
+}

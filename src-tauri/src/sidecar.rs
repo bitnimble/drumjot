@@ -59,12 +59,21 @@ pub async fn run_job(
         .to_string();
 
     let python = resolve_python(&app);
-    let mut child = Command::new(&python)
+    let mut command = Command::new(&python);
+    command
         .args(["-u", "-m", "app.sidecar"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
+        .kill_on_drop(true);
+    // Artifacts land in the asset-protocol-scoped appdata dir (see lib.rs setup
+    // + the fs:allow-read-file capability) so the webview can read/convert them.
+    if let Ok(dir) = app.path().app_data_dir() {
+        let outputs = dir.join("outputs");
+        let _ = std::fs::create_dir_all(&outputs);
+        command.env("DRUMJOT_OUTPUTS_DIR", &outputs);
+    }
+    let mut child = command
         .spawn()
         .map_err(|e| format!("failed to spawn sidecar ({python}): {e}"))?;
 

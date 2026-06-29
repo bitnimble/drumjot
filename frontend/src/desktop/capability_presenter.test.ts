@@ -144,4 +144,48 @@ describe('CapabilityPresenter', () => {
     expect(store.statusOf('transcription')).toBe('ready');
     expect(ran).toBe(true);
   });
+
+  it('requestCapability resolves true immediately when ready (no prompt)', async () => {
+    const { presenter, store } = make();
+    store.statuses.set('transcription', 'ready');
+    await expect(presenter.requestCapability('transcription')).resolves.toBe(true);
+    expect(store.pendingGate).toBeUndefined();
+  });
+
+  it('requestCapability opens the prompt for a not-installed capability', async () => {
+    const { presenter, store } = make();
+    const pending = presenter.requestCapability('transcription');
+    expect(store.pendingGate).toBe('transcription');
+    // confirm → install → resolves true, prompt closes
+    await presenter.confirmGate();
+    await expect(pending).resolves.toBe(true);
+    expect(store.statusOf('transcription')).toBe('ready');
+    expect(store.pendingGate).toBeUndefined();
+  });
+
+  it('cancelGate resolves the pending request as false and closes the prompt', async () => {
+    const { presenter, store } = make();
+    const pending = presenter.requestCapability('transcription');
+    expect(store.pendingGate).toBe('transcription');
+    presenter.cancelGate();
+    await expect(pending).resolves.toBe(false);
+    expect(store.pendingGate).toBeUndefined();
+    expect(store.statusOf('transcription')).toBe('not-installed');
+  });
+
+  it('requestCapability skips the prompt for a credentials-only capability', async () => {
+    const { presenter, store } = make();
+    await expect(presenter.requestCapability('ai-assist')).resolves.toBe(true);
+    expect(store.pendingGate).toBeUndefined();
+  });
+
+  it('a second requestCapability supersedes the first (which resolves false)', async () => {
+    const { presenter, store } = make();
+    const first = presenter.requestCapability('transcription');
+    const second = presenter.requestCapability('transcription');
+    await expect(first).resolves.toBe(false);
+    expect(store.pendingGate).toBe('transcription');
+    await presenter.confirmGate();
+    await expect(second).resolves.toBe(true);
+  });
 });

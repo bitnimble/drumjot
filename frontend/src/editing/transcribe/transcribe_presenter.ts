@@ -10,11 +10,14 @@ import {
   TranscribeStage,
 } from 'src/editing/transcribe/transcriber';
 import { fromMidi } from 'src/midi/from_midi';
+import { Jot } from 'src/schema/dsl/dsl';
 import { AudioTrackId } from 'src/editing/playback/audio_tracks';
 import { jotPlayer } from 'src/editing/playback/player';
 import { transcribeSuccessToastMessage } from '../../ui/toasts/toasts_messages';
 import { toastStore } from '../../ui/toasts/toasts';
 import { backendFetch, isBackendUnreachable } from 'src/net/backend_fetch';
+import { isTauri } from 'src/desktop/is_tauri';
+import { desktopCapabilities } from 'src/desktop/desktop_services';
 import { TranscribeStore } from './transcribe_store';
 import { JotEditorPresenter } from '../jot_editor_presenter';
 import { appendTranscription } from './append_transcription';
@@ -124,6 +127,12 @@ export class TranscribePresenter {
       toastStore.showError('Load or create a jot before transcribing into it.');
       return;
     }
+    // Desktop: transcribe through the local sidecar (there's no `/api` backend),
+    // gating on the transcription capability (prompts to install if missing).
+    if (isTauri()) {
+      await this.transcribeAudioTrackViaSidecar(id, track.sourceBlob, track.filename);
+      return;
+    }
     const prev = this.trackControllers.get(id);
     if (prev) prev.abort();
     const controller = new AbortController();
@@ -173,8 +182,13 @@ export class TranscribePresenter {
     const res = await backendFetch(midiUrl, { signal });
     if (!res.ok) throw new Error(`Fetch predicted MIDI failed (${res.status})`);
     const bytes = new Uint8Array(await res.arrayBuffer());
-    const jot = fromMidi(bytes);
+    this.mergeAppendedJot(filename, fromMidi(bytes));
+  }
 
+  /** Merge a transcribed jot into the live document as a new layer, with the
+   *  heads-up toast about any tempo replacement / pre-existing notes. Shared by
+   *  the HTTP and desktop-sidecar append paths. */
+  private mergeAppendedJot(filename: string, jot: Jot): void {
     const store = this.jotEditorPresenter.jotEditorStore;
     const doc = store.loroDoc;
     const model = store.jot;
@@ -197,6 +211,45 @@ export class TranscribePresenter {
       toastStore.showWarning(`Inserted transcription of ${filename}. Heads up: ${parts.join('; ')}.`);
     } else {
       toastStore.showSuccess(`Transcribed ${filename} into the current jot.`);
+    }
+  }
+
+  /** Desktop append flow: gate the transcription capability (prompt to install
+   *  if missing), then transcribe the track's audio through the sidecar and
+   *  merge the result. */
+  private async transcribeAudioTrackViaSidecar(
+    id: AudioTrackId,
+    blob: Blob,
+    filename: string,
+  ): Promise<void> {
+    const caps = desktopCapabilities();
+    if (caps == null) return;
+    runInAction(() => this.transcribe.trackStatuses.set(id, { filename }));
+    try {
+      const ready = await caps.presenter.requestCapability('transcription');
+      if (!ready) return; // user dismissed the install prompt
+      const { transcribeViaBlob } = await import('src/desktop/desktop_transcribe');
+      const options = this.transcribe.transcribeOptions;
+      const { midi } = await transcribeViaBlob(blob, filename, {
+        params: {
+          beatInput: options.beatInput,
+          onsetBackend: options.onsetBackend,
+          llmModel: options.llmModel,
+          quantise: options.quantise,
+          quantiseUseLlm: options.quantiseUseLlm,
+        },
+        onProgress: (stage) =>
+          runInAction(() => {
+            if (this.transcribe.trackStatuses.get(id)) {
+              this.transcribe.trackStatuses.set(id, { filename, substage: stage });
+            }
+          }),
+      });
+      this.mergeAppendedJot(filename, fromMidi(midi));
+    } catch (err) {
+      toastStore.showError(`Transcribe failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      runInAction(() => this.transcribe.trackStatuses.delete(id));
     }
   }
 

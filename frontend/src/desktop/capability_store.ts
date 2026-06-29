@@ -17,6 +17,9 @@ export type CapabilityStatus =
 export class CapabilityStore {
   accelerator: AcceleratorInfo | undefined = undefined;
   statuses: Map<CapabilityId, CapabilityStatus> = new Map();
+  /** Capability awaiting the user's point-of-use install decision (drives the
+   *  install prompt modal); undefined when no prompt is open. */
+  pendingGate: CapabilityId | undefined = undefined;
   /** Latest uv output line while a capability is `installing` (uv gives no
    *  clean 0..1, so we surface its progress text instead of a bar). */
   installLog: Map<CapabilityId, string> = new Map();
