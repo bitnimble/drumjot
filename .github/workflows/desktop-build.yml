@@ -66,6 +66,14 @@ jobs:
           releaseName: ${{ github.ref_type == 'tag' && format('Drumjot {0}', github.ref_name) || '' }}
           releaseDraft: true
 
+      # Windows has no native portable format (the macOS .app + the Linux
+      # AppImage already run in place), so assemble one: the exe + bundled
+      # resources, zipped, runnable without installing.
+      - name: Assemble portable Windows build
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: pwsh scripts/make-portable-windows.ps1
+
       # Manual (non-tag) runs still produce downloadable installers from the run.
       - name: Upload installers as a run artifact
         if: github.ref_type != 'tag'
@@ -76,3 +84,20 @@ jobs:
             src-tauri/target/release/bundle/**
             src-tauri/target/*/release/bundle/**
           if-no-files-found: warn
+
+      - name: Upload portable Windows build as a run artifact
+        if: matrix.platform == 'windows-latest' && github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: drumjot-portable-windows
+          path: src-tauri/target/release/Drumjot-portable-windows.zip
+          if-no-files-found: error
+
+      # On a tag, attach it to the same draft release tauri-action created (where
+      # the installers go), alongside them.
+      - name: Attach portable Windows build to the release
+        if: matrix.platform == 'windows-latest' && github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload ${{ github.ref_name }} src-tauri/target/release/Drumjot-portable-windows.zip --clobber

@@ -90,8 +90,7 @@ fn driver_major(v: &str) -> Option<u32> {
 }
 
 fn state_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    Ok(dir.join("capabilities.json"))
+    Ok(crate::paths::data_root(app)?.join("capabilities.json"))
 }
 
 async fn read_states(app: &AppHandle) -> Result<serde_json::Map<String, serde_json::Value>, String> {
@@ -141,7 +140,7 @@ pub fn venv_python(venv: &Path) -> PathBuf {
 
 /// The app-managed capability venv (separate from the dev `transcriber/.venv`).
 pub fn app_venv(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join("venv"))
+    Ok(crate::paths::data_root(app)?.join("venv"))
 }
 
 /// The `uv` to run: explicit override, else the binary bundled at

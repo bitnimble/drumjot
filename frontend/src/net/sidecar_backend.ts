@@ -91,8 +91,13 @@ export class SidecarBackendClient implements BackendClient {
 
   async resolveBytes(ref: ResultRef): Promise<Uint8Array> {
     if (ref.kind === 'path') {
-      const { readFile } = await import('@tauri-apps/plugin-fs');
-      return readFile(ref.path);
+      // Read through the asset protocol (runtime-scoped to the outputs dir in
+      // lib.rs setup) rather than plugin-fs, so it works wherever data_root puts
+      // outputs (portable <exe>/data, or app-local-data when installed) without
+      // depending on a static fs-capability path.
+      const res = await fetch(convertFileSrc(ref.path));
+      if (!res.ok) throw new Error(`Asset read failed (${res.status})`);
+      return new Uint8Array(await res.arrayBuffer());
     }
     if (ref.kind === 'url') {
       return new Uint8Array(await (await fetch(ref.url)).arrayBuffer());

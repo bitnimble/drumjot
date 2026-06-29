@@ -12,12 +12,12 @@ use std::process::Stdio;
 
 use serde_json::Value;
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{oneshot, Mutex};
 
-use crate::capability::venv_python;
+use crate::capability::{app_venv, venv_python};
 
 /// In-flight jobs keyed by request `id`; the value cancels the read loop.
 #[derive(Default)]
@@ -32,8 +32,8 @@ pub fn resolve_python(app: &AppHandle) -> String {
     if let Ok(p) = std::env::var("DRUMJOT_SIDECAR_PYTHON") {
         return p;
     }
-    if let Ok(dir) = app.path().app_data_dir() {
-        let py = venv_python(&dir.join("venv"));
+    if let Ok(venv) = app_venv(app) {
+        let py = venv_python(&venv);
         if py.exists() {
             return py.to_string_lossy().into_owned();
         }
@@ -66,13 +66,9 @@ pub async fn run_job(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    // Artifacts land in the asset-protocol-scoped appdata dir (see lib.rs setup
-    // + the fs:allow-read-file capability) so the webview can read/convert them.
-    if let Ok(dir) = app.path().app_data_dir() {
-        let outputs = dir.join("outputs");
-        let _ = tokio::fs::create_dir_all(&outputs).await;
-        command.env("DRUMJOT_OUTPUTS_DIR", &outputs);
-    }
+    // The sidecar writes artifacts to DRUMJOT_OUTPUTS_DIR, which the broker sets
+    // in the process env at startup (paths::redirect_env) + scopes for the webview
+    // (lib.rs setup); the child inherits it. No per-job override needed.
     let mut child = command
         .spawn()
         .map_err(|e| format!("failed to spawn sidecar ({python}): {e}"))?;

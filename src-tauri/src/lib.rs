@@ -1,10 +1,18 @@
 mod capability;
+mod paths;
 mod sidecar;
 
 use tauri::Manager;
+use tauri_plugin_fs::FsExt;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Portable mode: redirect every cache/temp/state env var under <exe>/data
+    // BEFORE the builder + webview start, so $TEMP and WEBVIEW2_USER_DATA_FOLDER
+    // are already pointed there. No-op for an installed build.
+    if let Some(root) = paths::portable_data_root() {
+        paths::redirect_env(&root, true);
+    }
     tauri::Builder::default()
         .plugin(
             tauri_plugin_log::Builder::default()
@@ -15,14 +23,20 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .manage(sidecar::SidecarState::default())
         .setup(|app| {
-            // Let the webview load artifacts the sidecar writes under appdata via
-            // the asset protocol (convertFileSrc). Scope is locked to that dir,
-            // not the whole filesystem.
-            if let Ok(dir) = app.path().app_data_dir() {
-                let outputs = dir.join("outputs");
-                let _ = std::fs::create_dir_all(&outputs);
-                let _ = app.asset_protocol_scope().allow_directory(&outputs, true);
+            let root = paths::data_root(app.handle())?;
+            // Installed build: redirect caches/downloads/state under the OS
+            // app-local-data dir (TEMP + the webview folder stay at their
+            // user-writable OS defaults). Portable already redirected in run().
+            if paths::portable_data_root().is_none() {
+                paths::redirect_env(&root, false);
             }
+            // Let the webview read the sidecar's artifacts (MIDI via plugin-fs,
+            // stems via the asset protocol / convertFileSrc) out of the outputs
+            // dir, wherever data_root put it. Scope is locked to that dir.
+            let outputs = root.join("outputs");
+            let _ = std::fs::create_dir_all(&outputs);
+            let _ = app.fs_scope().allow_directory(&outputs, true);
+            let _ = app.asset_protocol_scope().allow_directory(&outputs, true);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
