@@ -180,7 +180,9 @@ export class CapabilityPresenter {
       // already-installed deps-cap in the closure must not trigger a needless
       // re-sync when every fresh capability is credentials/system.
       if (fresh.some((dep) => capabilityById(dep).kind === 'deps')) {
-        await this.bridge.installCapability(fresh[0], this.installGroups(order), (line) => {
+        // `id` is just the install's log label on the Rust side; name the whole
+        // batch rather than an arbitrary first element.
+        await this.bridge.installCapability(fresh.join('+'), this.installGroups(order), (line) => {
           runInAction(() => {
             for (const dep of fresh) {
               this.store.installLog.set(dep, line);
@@ -188,7 +190,12 @@ export class CapabilityPresenter {
           });
         });
       }
-      await Promise.all(fresh.map((dep) => this.bridge.setCapabilityInstalled(dep, true)));
+      // Persist sequentially, NOT Promise.all: each call is a read-modify-write
+      // of the one capabilities.json on the Rust side, so concurrent writes race
+      // (lost update + shared temp-file collision).
+      for (const dep of fresh) {
+        await this.bridge.setCapabilityInstalled(dep, true);
+      }
       runInAction(() => {
         for (const dep of fresh) {
           this.store.statuses.set(dep, 'ready');
