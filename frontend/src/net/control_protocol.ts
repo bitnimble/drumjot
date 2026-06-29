@@ -97,6 +97,9 @@ export const ResultMessageSchema = z.object({
   ...base,
   type: z.literal('result'),
   artifacts: z.array(ArtifactSchema),
+  /** Op-specific structured payload for ops whose result isn't a file, e.g.
+   *  `alignLyrics` → `{ lines }`. Omitted by file-only ops (transcribe/separate). */
+  data: z.unknown().optional(),
 });
 
 export const ErrorMessageSchema = z.object({

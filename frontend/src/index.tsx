@@ -8,8 +8,7 @@ import { DesktopFirstRun } from 'src/desktop/desktop_first_run';
 import { isTauri } from 'src/desktop/is_tauri';
 import { desktopCapabilities } from 'src/desktop/desktop_services';
 import { CapabilityGate } from 'src/desktop/capability_gate';
-import { TauriBridge } from 'src/desktop/desktop_bridge';
-import type { DesktopTranscriber } from 'src/desktop/desktop_transcribe';
+import { backendClient } from 'src/net/backend_client';
 import { fromMidi } from 'src/midi/from_midi';
 import { autorun } from 'mobx';
 import { TranscribePresenter } from 'src/editing/transcribe/transcribe_presenter';
@@ -228,23 +227,10 @@ class Drumjot {
     if (caps != null && !(await caps.presenter.requestCapability('transcription'))) {
       return; // user dismissed the install prompt
     }
-    const transcriber = await this.desktopTranscriber();
-    const { midi } = await transcriber.transcribe(path);
-    this.load(fromMidi(midi));
-  }
-
-  private desktop: { transcriber: DesktopTranscriber } | undefined;
-
-  private async desktopTranscriber(): Promise<DesktopTranscriber> {
-    if (this.desktop == null) {
-      const caps = desktopCapabilities();
-      if (caps == null) throw new Error('desktopTranscribe is desktop-only');
-      // Lazy import: desktop_transcribe pulls @tauri-apps/plugin-fs, which must
-      // not load in the web bundle's boot path.
-      const { DesktopTranscriber } = await import('src/desktop/desktop_transcribe');
-      this.desktop = { transcriber: new DesktopTranscriber(new TauriBridge(), caps.presenter) };
-    }
-    return this.desktop.transcriber;
+    const result = await backendClient().run('transcribe', { kind: 'path', path }, {});
+    const midiRef = result.artifacts.find((a) => a.role === 'midi')?.ref;
+    if (midiRef == null) throw new Error('transcribe produced no MIDI');
+    this.load(fromMidi(await backendClient().resolveBytes(midiRef)));
   }
 }
 

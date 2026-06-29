@@ -161,7 +161,7 @@ export const AudioTrackView = observer(
               trackLabel={label}
               transcribing={transcribeStatus !== undefined}
               onTranscribe={
-                transcribePresenter ? () => transcribePresenter.openAppendDialog(id) : undefined
+                transcribePresenter ? () => void transcribePresenter.openAppendDialog(id) : undefined
               }
               onCancelTranscribe={
                 transcribePresenter ? () => transcribePresenter.cancelTrackTranscribe(id) : undefined

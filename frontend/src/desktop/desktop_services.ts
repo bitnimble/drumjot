@@ -9,8 +9,8 @@ let cached: { store: CapabilityStore; presenter: CapabilityPresenter } | null = 
  * The one shared capability store + presenter for the desktop shell, so the
  * first-run panel, the point-of-use install prompt, and the transcribe gate all
  * see the same install state. Returns null in the web build. Web-safe to import
- * (only touches `@tauri-apps/api/core`); the heavier `desktop_transcribe`
- * (plugin-fs) stays lazy-imported.
+ * (only touches `@tauri-apps/api/core`); the sidecar backend client loads its
+ * plugin-fs deps lazily.
  */
 export function desktopCapabilities(): {
   store: CapabilityStore;

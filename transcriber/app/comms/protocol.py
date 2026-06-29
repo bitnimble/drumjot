@@ -99,6 +99,9 @@ class ResultMessage(BaseModel):
     type: Literal["result"] = "result"
     id: str
     artifacts: list[Artifact]
+    # Op-specific structured payload for ops whose result isn't a file, e.g.
+    # alignLyrics -> {"lines": [...]}. Omitted by file-only ops.
+    data: object | None = None
 
 
 class ErrorMessage(BaseModel):

@@ -15,7 +15,9 @@ import { AudioTrackId } from 'src/editing/playback/audio_tracks';
 import { jotPlayer } from 'src/editing/playback/player';
 import { transcribeSuccessToastMessage } from '../../ui/toasts/toasts_messages';
 import { toastStore } from '../../ui/toasts/toasts';
-import { backendFetch, isBackendUnreachable } from 'src/net/backend_fetch';
+import { isBackendUnreachable } from 'src/net/backend_fetch';
+import { backendClient } from 'src/net/backend_client';
+import { type RunProgress } from 'src/net/backend';
 import { isTauri } from 'src/desktop/is_tauri';
 import { desktopCapabilities } from 'src/desktop/desktop_services';
 import { TranscribeStore } from './transcribe_store';
@@ -75,8 +77,17 @@ export class TranscribePresenter {
 
   // --- dialog ---
 
-  /** Open the append dialog for an audio track (transcribe → insert here). */
-  openAppendDialog(audioTrackId: AudioTrackId): void {
+  /** Open the append dialog for an audio track (transcribe → insert here). On
+   *  desktop, gate the transcription capability first: if it isn't installed,
+   *  prompt to install rather than show a config dialog the user can't act on,
+   *  and only open the dialog once it's ready. */
+  async openAppendDialog(audioTrackId: AudioTrackId): Promise<void> {
+    if (isTauri()) {
+      const caps = desktopCapabilities();
+      if (caps != null && !(await caps.presenter.requestCapability('transcription'))) {
+        return; // not installed and the user dismissed the install prompt
+      }
+    }
     this.transcribe.dialog = { mode: 'append', audioTrackId };
     void this.refreshRecentTranscriptions();
   }
@@ -127,32 +138,37 @@ export class TranscribePresenter {
       toastStore.showError('Load or create a jot before transcribing into it.');
       return;
     }
-    // Desktop: transcribe through the local sidecar (there's no `/api` backend),
-    // gating on the transcription capability (prompts to install if missing).
-    if (isTauri()) {
-      await this.transcribeAudioTrackViaSidecar(id, track.sourceBlob, track.filename);
-      return;
-    }
     const prev = this.trackControllers.get(id);
     if (prev) prev.abort();
     const controller = new AbortController();
     this.trackControllers.set(id, controller);
-    const file = new File([track.sourceBlob], track.filename, { type: track.sourceBlob.type });
     runInAction(() => {
       this.transcribe.trackStatuses.set(id, { filename: track.filename });
     });
+    const options = this.transcribe.transcribeOptions;
     try {
-      const response = await transcriber.transcribe(file, {
-        debug: this.transcribe.transcribeOptions.debug,
-        beatInput: this.transcribe.transcribeOptions.beatInput,
-        onsetBackend: this.transcribe.transcribeOptions.onsetBackend,
-        llmModel: this.transcribe.transcribeOptions.llmModel,
-        quantise: this.transcribe.transcribeOptions.quantise,
-        quantiseUseLlm: this.transcribe.transcribeOptions.quantiseUseLlm,
-        signal: controller.signal,
-        onProgress: (event) => this.applyTrackProgress(id, track.filename, event),
-      });
-      await this.applyAppendResponse(id, track.filename, response, controller.signal);
+      // Transport (HTTP vs local sidecar) is the adapter's concern; the desktop
+      // capability gate already ran at openAppendDialog.
+      const result = await backendClient().run(
+        'transcribe',
+        { kind: 'blob', blob: track.sourceBlob, filename: track.filename },
+        {
+          debug: options.debug,
+          beatInput: options.beatInput,
+          onsetBackend: options.onsetBackend,
+          llmModel: options.llmModel,
+          quantise: options.quantise,
+          quantiseUseLlm: options.quantiseUseLlm,
+        },
+        { signal: controller.signal, onProgress: (p) => this.applyTrackProgress(id, track.filename, p) },
+      );
+      const midiRef = result.artifacts.find((a) => a.role === 'midi')?.ref;
+      if (!midiRef) {
+        toastStore.showError('Transcriber returned no predicted MIDI.');
+        return;
+      }
+      const bytes = await backendClient().resolveBytes(midiRef);
+      this.mergeAppendedJot(track.filename, fromMidi(bytes));
     } catch (err) {
       this.handleTranscribeError(err, controller, 'Transcribe');
     } finally {
@@ -160,29 +176,6 @@ export class TranscribePresenter {
       runInAction(() => this.transcribe.trackStatuses.delete(id));
       void this.refreshRecentTranscriptions();
     }
-  }
-
-  /**
-   * Fetch the predicted MIDI, convert it to a jot, and merge it into the live
-   * document as a new layer. Only the MIDI is pulled (not the whole debug
-   * bundle): the append flow keeps the existing audio tracks, so the bundle's
-   * own stems aren't wanted.
-   */
-  private async applyAppendResponse(
-    id: AudioTrackId,
-    filename: string,
-    response: Awaited<ReturnType<typeof transcriber.transcribe>>,
-    signal: AbortSignal
-  ): Promise<void> {
-    const midiUrl = stemUrl(response.prediction_midi_url ?? null);
-    if (!midiUrl) {
-      toastStore.showError('Transcriber returned no predicted MIDI.');
-      return;
-    }
-    const res = await backendFetch(midiUrl, { signal });
-    if (!res.ok) throw new Error(`Fetch predicted MIDI failed (${res.status})`);
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    this.mergeAppendedJot(filename, fromMidi(bytes));
   }
 
   /** Merge a transcribed jot into the live document as a new layer, with the
@@ -214,59 +207,15 @@ export class TranscribePresenter {
     }
   }
 
-  /** Desktop append flow: gate the transcription capability (prompt to install
-   *  if missing), then transcribe the track's audio through the sidecar and
-   *  merge the result. */
-  private async transcribeAudioTrackViaSidecar(
-    id: AudioTrackId,
-    blob: Blob,
-    filename: string,
-  ): Promise<void> {
-    const caps = desktopCapabilities();
-    if (caps == null) return;
-    runInAction(() => this.transcribe.trackStatuses.set(id, { filename }));
-    try {
-      const ready = await caps.presenter.requestCapability('transcription');
-      if (!ready) return; // user dismissed the install prompt
-      const { transcribeViaBlob } = await import('src/desktop/desktop_transcribe');
-      const options = this.transcribe.transcribeOptions;
-      const { midi } = await transcribeViaBlob(blob, filename, {
-        params: {
-          beatInput: options.beatInput,
-          onsetBackend: options.onsetBackend,
-          llmModel: options.llmModel,
-          quantise: options.quantise,
-          quantiseUseLlm: options.quantiseUseLlm,
-        },
-        onProgress: (stage) =>
-          runInAction(() => {
-            if (this.transcribe.trackStatuses.get(id)) {
-              this.transcribe.trackStatuses.set(id, { filename, substage: stage });
-            }
-          }),
-      });
-      this.mergeAppendedJot(filename, fromMidi(midi));
-    } catch (err) {
-      toastStore.showError(`Transcribe failed: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      runInAction(() => this.transcribe.trackStatuses.delete(id));
-    }
-  }
-
-  private applyTrackProgress(id: AudioTrackId, filename: string, event: TranscribeProgress): void {
+  private applyTrackProgress(id: AudioTrackId, filename: string, progress: RunProgress): void {
     runInAction(() => {
-      const status = this.transcribe.trackStatuses.get(id);
       // Ignore late events once the track's status was cleared (abort / done).
-      if (!status) return;
-      if (event.kind === 'stage' && event.phase === 'start') {
-        this.transcribe.trackStatuses.set(id, { filename, stage: event.stage });
-      } else if (event.kind === 'substage') {
-        this.transcribe.trackStatuses.set(id, {
-          filename,
-          stage: event.stage,
-          substage: event.detail,
-        });
-      }
+      if (!this.transcribe.trackStatuses.get(id)) return;
+      this.transcribe.trackStatuses.set(id, {
+        filename,
+        stage: progress.stage as TranscribeStage,
+        substage: progress.message,
+      });
     });
   }
 
