@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { initialBpm } from 'src/schema/dsl/tempo';
 import { Element, Group, Note, PatternRef, Simultaneity } from 'src/schema/dsl/dsl';
 import { buildStructural } from 'src/editing/jot_editor_store';
 import { ParseError } from 'src/schema/dsl/parser/errors';
@@ -196,8 +197,24 @@ describe('bars and layers', () => {
 describe('metadata', () => {
   it('parses global metadata with time signature and bpm', () => {
     const jot = parse('{{ bpm: 120, time: "4/4" }} | k . s . k . s . |');
-    expect(jot.globalMetadata.bpm).toBe(120);
+    expect(initialBpm(jot)).toBe(120);
     expect(jot.globalMetadata.time).toEqual({ count: 4, unit: 4 });
+  });
+
+  it('keeps bpm off globalMetadata; the initial tempo is the first event', () => {
+    // A non-default opening tempo hoists to a (0,0) tempo event, NOT to
+    // `globalMetadata.bpm` (which no longer carries tempo).
+    const jot = parse('{{ bpm: 140, time: "4/4" }} | k . s . |');
+    expect(jot.globalMetadata.bpm).toBeUndefined();
+    expect(jot.tempoEvents?.[0]).toEqual({ barIndex: 0, beat: 0, bpm: 140 });
+    expect(initialBpm(jot)).toBe(140);
+  });
+
+  it('opening at the 120 default emits no tempo event (initialBpm falls back)', () => {
+    const jot = parse('{{ bpm: 120 }} | k . s . |');
+    expect(jot.globalMetadata.bpm).toBeUndefined();
+    expect(jot.tempoEvents ?? []).toHaveLength(0);
+    expect(initialBpm(jot)).toBe(120);
   });
 
   it('parses nested instrumentMapping objects', () => {
@@ -220,7 +237,7 @@ describe('metadata', () => {
       '{{ songLeadIn: -5.321 }}\n{{ bpm: 120, time: "4/4" }}\n| k . s . k . s . |'
     );
     expect(jot.globalMetadata.songLeadIn).toBe(-5.321);
-    expect(jot.globalMetadata.bpm).toBe(120);
+    expect(initialBpm(jot)).toBe(120);
     expect(jot.globalMetadata.time).toEqual({ count: 4, unit: 4 });
   });
 
@@ -383,7 +400,7 @@ describe('SPEC.md examples', () => {
       '{{ bpm: 120, time: "4/4" }} | k . s . | {{ bpm: 140 }} | k . s . |'
     );
     // Initial tempo lives on globalMetadata.
-    expect(jot.globalMetadata.bpm).toBe(120);
+    expect(initialBpm(jot)).toBe(120);
     // Mid-track change becomes a tempoEvent anchored at the bar 1 downbeat
     // (the {{bpm:140}} sits between bars, so it lands at bar 1 beat 0).
     expect(jot.tempoEvents).toEqual([{ barIndex: 1, beat: 0, bpm: 140 }]);
@@ -402,7 +419,7 @@ describe('SPEC.md examples', () => {
     const jot = parse(
       '{{ bpm: 120, time: "4/4" }} | k . s {{ bpm: 140 }} . k . s . |'
     );
-    expect(jot.globalMetadata.bpm).toBe(120);
+    expect(initialBpm(jot)).toBe(120);
     expect(jot.tempoEvents).toEqual([{ barIndex: 0, beat: 1.5, bpm: 140 }]);
   });
 
@@ -410,7 +427,7 @@ describe('SPEC.md examples', () => {
     const jot = parse(
       '{{ bpm: 120, time: "4/4" }} | k . s{bpm: 140} . k . s . |'
     );
-    expect(jot.globalMetadata.bpm).toBe(120);
+    expect(initialBpm(jot)).toBe(120);
     // The snare sits at slot 2 = beat 1.0 in an 8-slot 4/4 bar.
     expect(jot.tempoEvents).toEqual([{ barIndex: 0, beat: 1, bpm: 140 }]);
   });

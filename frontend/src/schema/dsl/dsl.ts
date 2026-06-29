@@ -57,10 +57,12 @@ export type Instrument = {
 /**
  * Sticky tempo change anchored to a precise (bar, beat) position within
  * layer 0's bar timeline. The single source of truth for tempo at
- * runtime; readers walk `Jot.tempoEvents` forward and the tempo at any
- * (bar, beat) is the most recent event at or before that position,
- * falling back to `globalMetadata.bpm` (else 120) for the pre-first-event
- * span.
+ * runtime, including the **initial** tempo, which is just the event
+ * anchored at the song's start (the drums-enter downbeat, bar `leadBars`).
+ * Readers walk `Jot.tempoEvents` forward and the tempo at any (bar, beat)
+ * is the most recent event at or before that position; the span before
+ * the first event defaults to 120 (see `tempo.initialBpm`). There is no
+ * `globalMetadata.bpm`.
  *
  * Anchored by array index into `layers[0].bars[]` (NOT the renderer's
  * 1-based `index` field) so the position survives lead-in synthesis,
@@ -80,13 +82,14 @@ export type TempoEvent = {
  * Metadata as it appears in `{ ... }` or `{{ ... }}`. Per-note > per-group >
  * global > instrumentMapping precedence is the consumer's responsibility.
  *
- * NOTE: `bpm` on `globalMetadata` is the song's initial tempo (the value
- * in force before any `tempoEvents` fire). `bpm` is NOT honoured on
- * per-bar, per-group, or per-note metadata at runtime; the parser
- * hoists every such occurrence into `Jot.tempoEvents` and strips it from
- * the element/bar metadata. Producers other than the parser (from_midi,
- * the rlrr parser, hand-authored fakes) should populate `Jot.tempoEvents`
- * directly and leave `bpm` off element/bar metadata.
+ * NOTE: `bpm` is a parse-time field only; it carries an authored `{{bpm}}`
+ * / `{bpm}` value out of the DSL text. The parser hoists EVERY occurrence
+ * (global, bar, group, note) into `Jot.tempoEvents` and strips `bpm` from
+ * all metadata, including `globalMetadata`; no runtime path reads
+ * `metadata.bpm`. The song's initial tempo is the first `tempoEvent` (at
+ * the drums-enter downbeat), not a `globalMetadata.bpm`. Producers other
+ * than the parser (from_midi, the rlrr parser, hand-authored fakes) should
+ * populate `Jot.tempoEvents` directly and leave `bpm` off all metadata.
  */
 export type Metadata = {
   bpm?: number | BpmTransition;
@@ -330,12 +333,26 @@ export type Jot = {
   layers: Layer[];
   /**
    * Sticky tempo changes (mid-bar OK) sorted by (barIndex, beat). The
-   * sole runtime source of truth for tempo; consumers walk this list
+   * sole source of truth for tempo, including the song's initial tempo
+   * (the event at the drums-enter downbeat); consumers walk this list
    * forward to compute the active bpm at any position. See
-   * {@link TempoEvent}. The pre-first-event span uses
-   * `globalMetadata.bpm` (else 120).
+   * {@link TempoEvent}. The span before the first event defaults to 120
+   * (see `tempo.initialBpm`).
    */
   tempoEvents?: TempoEvent[];
+  /**
+   * Per-bar performance drift in seconds, indexed by `layers[0].bars`
+   * (lead-in bars = 0). How far each bar's *real* recorded downbeat sits
+   * past where the clean uniform tempo grid puts it, the deviation the
+   * tempo map smoothed away (`transcription.json`'s `barDrift`). The
+   * displayed tempo stays uniform, but the waveform renderer + (eventually)
+   * the playhead use `bar.startSec + drift` as the bar's true audio downbeat
+   * to align bar lines to the recording. Lives at the jot level (not in
+   * `globalMetadata`, which the DSL writer would dump into a `{{...}}` block)
+   * and is dropped on DSL export; it's recording-specific, not authorable.
+   * Undefined / all-zero for a metronomic recording or a hand-authored jot.
+   */
+  barDrift?: number[];
 };
 
 // ---------- Convenience helpers ----------

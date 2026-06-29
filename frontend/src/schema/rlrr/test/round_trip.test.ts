@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { initialBpm } from 'src/schema/dsl/tempo';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -54,7 +55,7 @@ describe('mid-bar tempo round trip through Jot', () => {
       ],
     };
     const jot = parseRlrr(rlrr);
-    expect(jot.globalMetadata.bpm).toBe(120);
+    expect(initialBpm(jot)).toBe(120);
     expect(jot.tempoEvents).toBeDefined();
     expect(jot.tempoEvents!.length).toBeGreaterThanOrEqual(1);
     const ev = jot.tempoEvents![0];

@@ -3,6 +3,7 @@ import type { LoroDoc } from 'loro-crdt';
 import { Jot } from 'src/schema/dsl/dsl';
 import type { MutableJot, JotSchema, JotState } from 'src/schema/schema';
 import { createMutableJotFromState } from 'src/schema/schema';
+import { createJotDerivedRegistry, type JotDerivedRegistry } from 'src/schema/derived_fields';
 import type { ReactiveDoc } from 'src/schema/reactive_doc';
 import { ExampleJot } from 'src/fakes/fakes';
 import { dslToMutable } from 'src/schema/dsl/from_dsl';
@@ -46,6 +47,9 @@ export class JotEditorStore {
   palette: PaletteStore | undefined;
   /** Per-bar tempo segments, dominant bpm/time, and the audio timeline. */
   tempo: TempoPresenter | undefined;
+  /** Viewport layout scale (`pxPerBeat`, density factor, bar pixel geometry)
+   *  for the loaded song; zoom-driven, not document data. */
+  layout: LayoutStore | undefined;
 
   /**
    * Shared layout config threaded into every loaded song's peers, so the
@@ -139,9 +143,11 @@ export class JotEditorStore {
       this.structural = undefined;
       this.palette = undefined;
       this.tempo = undefined;
+      this.layout = undefined;
       return;
     }
-    this.installPeers(dslToMutable(source));
+    const registry = createJotDerivedRegistry();
+    this.installPeers(dslToMutable(source, registry), registry);
   }
 
   /**
@@ -155,18 +161,20 @@ export class JotEditorStore {
    */
   loadState(document: JotState): void {
     this.mutableDoc?.dispose();
-    this.installPeers(createMutableJotFromState(document));
+    const registry = createJotDerivedRegistry();
+    this.installPeers(createMutableJotFromState(document, registry), registry);
   }
 
   /** Set the loaded-song peer fields together (the atomic swap both {@link
    *  loadSource} and {@link loadState} share). Sole writer of `mutableDoc` /
    *  `structural` / `palette` / `tempo`. */
-  private installPeers(doc: ReactiveDoc<typeof JotSchema>): void {
-    const peers = buildJotPeers(doc, this.viewConfig);
+  private installPeers(doc: ReactiveDoc<typeof JotSchema>, registry: JotDerivedRegistry): void {
+    const peers = buildJotPeers(doc, registry, this.viewConfig);
     this.mutableDoc = peers.doc;
     this.structural = peers.structural;
     this.palette = peers.palette;
     this.tempo = peers.tempo;
+    this.layout = peers.layout;
   }
 }
 
@@ -181,7 +189,11 @@ export class JotEditorStore {
  * slider (which mutates `viewConfig.barWidth`) drives this song's `pxPerBeat` /
  * layout.
  */
-function buildJotPeers(doc: ReactiveDoc<typeof JotSchema>, viewConfig: ViewConfig) {
+function buildJotPeers(
+  doc: ReactiveDoc<typeof JotSchema>,
+  registry: JotDerivedRegistry,
+  viewConfig: ViewConfig
+) {
   const mutable = doc.model;
   const structureStore = new StructureStore(() => mutable);
   const palette = new PaletteStore(
@@ -199,10 +211,11 @@ function buildJotPeers(doc: ReactiveDoc<typeof JotSchema>, viewConfig: ViewConfi
     palette,
     layoutStore,
     () => mutable,
-    viewConfig
+    viewConfig,
+    registry
   );
-  const tempo = new TempoPresenter(structural);
-  return { doc, structural, palette, tempo };
+  const tempo = new TempoPresenter(structural, registry);
+  return { doc, structural, palette, tempo, layout: layoutStore };
 }
 
 /**
@@ -215,5 +228,23 @@ export function buildStructural(
   source: Jot,
   viewConfig: ViewConfig = new ViewConfig()
 ): StructuralPresenter {
-  return buildJotPeers(dslToMutable(source), viewConfig).structural;
+  const registry = createJotDerivedRegistry();
+  return buildJotPeers(dslToMutable(source, registry), registry, viewConfig).structural;
+}
+
+/**
+ * Store-free model builder: the reactive {@link MutableJot} for a plain `Jot`,
+ * with the structure-domain derived fields installed (the peers are built so
+ * `jot.musicalLayers` / `tempoSource` etc. resolve). For one-shot consumers
+ * (playback `jotToEvents`, unit tests) that read the model's derived fields.
+ * Returns `{ jot, structural }` so a caller can also drive the structure (e.g.
+ * `structural.setDrumOffset`) and see it reflected in the model's derived reads.
+ */
+export function buildJotModel(
+  source: Jot,
+  viewConfig: ViewConfig = new ViewConfig()
+): { jot: MutableJot; structural: StructuralPresenter } {
+  const registry = createJotDerivedRegistry();
+  const peers = buildJotPeers(dslToMutable(source, registry), registry, viewConfig);
+  return { jot: peers.doc.model, structural: peers.structural };
 }

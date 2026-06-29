@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { autorun, runInAction } from 'mobx';
 import { createMutableJot, type MutableJot } from 'src/schema/schema';
+import { createJotDerivedRegistry } from 'src/schema/derived_fields';
 import { StructureStore, type StructBar } from 'src/editing/structure/structure_store';
 import { StructuralPresenter } from 'src/editing/structure/structural_presenter';
 import { PaletteStore } from 'src/editing/palette/palette_store';
@@ -29,13 +30,19 @@ function peers(model: MutableJot): StructuralPresenter {
     () => viewConfig.barWidth as number,
     () => viewConfig.barNotePaddingBeats
   );
-  return new StructuralPresenter(structureStore, palette, layoutStore, () => model, viewConfig);
+  return new StructuralPresenter(
+    structureStore,
+    palette,
+    layoutStore,
+    () => model,
+    viewConfig,
+    createJotDerivedRegistry()
+  );
 }
 
 function model(): MutableJot {
   return createMutableJot({
     title: '',
-    bpm: 120,
     bars: [
       { id: 'b1', tsCount: 4, tsUnit: 4 },
       { id: 'b2', tsCount: 4, tsUnit: 4 },

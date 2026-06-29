@@ -71,11 +71,17 @@ RESIDUAL_KEY = "residual"
 # to a Jot via `src/midi/from_midi.ts`.
 PREDICTION_MIDI_FILENAME = "prediction.mid"
 
-# Filename of the per-note debug provenance sidecar — lists every
+# Filename of the per-note debug provenance sidecar, lists every
 # detected onset with its filter decision so the UI can show per-note
 # debug details + render rejected onsets as ghosts. Surfaced in the
 # manifest's top-level `note_provenance` field.
 NOTE_PROVENANCE_FILENAME = "note_provenance.json"
+
+# Filename of the Drumjot-native transcription container (versioned;
+# currently carries the tick-based `tempoMap`). The frontend prefers it
+# over the MIDI tempo track when present. Surfaced in the manifest's
+# top-level `transcription` field. See `pipeline/transcription.py`.
+TRANSCRIPTION_FILENAME = "transcription.json"
 
 
 def build_debug_zip(
@@ -86,6 +92,7 @@ def build_debug_zip(
     metadata: dict[str, object] | None,
     predicted_midi: bytes | None,
     note_provenance: dict[str, object] | None,
+    transcription: dict[str, object] | None,
     per_instrument_stem_pitches: list[str],
     run_log: RunLog | None,
 ) -> Path | None:
@@ -166,6 +173,8 @@ def build_debug_zip(
         manifest["prediction_midi"] = PREDICTION_MIDI_FILENAME
     if note_provenance is not None:
         manifest["note_provenance"] = NOTE_PROVENANCE_FILENAME
+    if transcription is not None:
+        manifest["transcription"] = TRANSCRIPTION_FILENAME
     if run_log is not None:
         run_log_payload = run_log.to_dict()
         manifest["started_at"] = run_log_payload["started_at"]
@@ -177,6 +186,7 @@ def build_debug_zip(
         bool(audio_entries)
         or bool(predicted_midi)
         or bool(note_provenance)
+        or bool(transcription)
         or bool(run_log)
     )
     if not has_payload:
@@ -194,6 +204,11 @@ def build_debug_zip(
             zf.writestr(
                 NOTE_PROVENANCE_FILENAME,
                 json.dumps(note_provenance, indent=2, default=str),
+            )
+        if transcription is not None:
+            zf.writestr(
+                TRANSCRIPTION_FILENAME,
+                json.dumps(transcription, indent=2, default=str),
             )
         for zip_name, src in audio_entries:
             try:

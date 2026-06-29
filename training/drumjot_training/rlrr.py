@@ -122,8 +122,9 @@ def song_tracks(rlrr: object) -> list[str]:
 def drum_tracks(rlrr: object) -> list[str]:
     """Default-muted drum tracks, excluding any also listed as a song track
     (per paradb.ts: a file in both arrays counts as a song track)."""
-    afd = load(rlrr).get("audioFileData") or {}
-    song = set(song_tracks(rlrr))
+    data = load(rlrr)  # parse once; pass the dict on so song_tracks doesn't re-parse
+    afd = data.get("audioFileData") or {}
+    song = set(song_tracks(data))
     seen: list[str] = []
     for n in afd.get("drumTracks") or []:
         if n and n not in song and n not in seen:
@@ -133,7 +134,8 @@ def drum_tracks(rlrr: object) -> list[str]:
 
 def audio_tracks(rlrr: object) -> list[str]:
     """Unique audio filenames referenced (song first, then drum tracks)."""
-    return song_tracks(rlrr) + drum_tracks(rlrr)
+    data = load(rlrr)  # parse once -> song_tracks/drum_tracks get the dict (no re-parse)
+    return song_tracks(data) + drum_tracks(data)
 
 
 # Lanes our model splits but a hand chart often won't: hi-hat articulations,

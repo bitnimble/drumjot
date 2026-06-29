@@ -37,6 +37,15 @@ export function writeDsl(jot: Jot): string {
   // Global metadata. The parser lifts `title` out into `jot.title`, so fold
   // it back in here as the leading key for a faithful round-trip.
   const meta: Metadata = { ...jot.globalMetadata };
+  // Tempo no longer lives on `globalMetadata`: the song's initial tempo is
+  // the tempo event at (bar 0, beat 0). Fold it back into the leading
+  // metadata block as `bpm` so the round-trip matches the authored
+  // `{{ bpm: N }}` and the bar-0 downbeat event below sees it as already
+  // in force (no duplicate `{{bpm}}` line).
+  const initialEvent = (jot.tempoEvents ?? []).find(
+    (e) => e.barIndex === 0 && e.beat === 0,
+  );
+  if (initialEvent !== undefined) meta.bpm = initialEvent.bpm;
   if (jot.title) {
     const withTitle: Metadata = { title: jot.title };
     Object.assign(withTitle, meta);
@@ -58,7 +67,7 @@ export function writeDsl(jot: Jot): string {
   // `jot.tempoEvents` (the post-parse SoT) rather than per-bar metadata.
   const active: { time?: unknown; bpm?: unknown } = {
     time: jot.globalMetadata.time,
-    bpm: jot.globalMetadata.bpm,
+    bpm: meta.bpm,
   };
 
   // Tempo events live at the Jot level and feed only into layer 0's

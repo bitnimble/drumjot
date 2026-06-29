@@ -1,0 +1,6 @@
+/* Native <select> with the shared single-line form-field chrome. Call
+   sites add their own geometry (width / min-width / flex) via `className`. */
+.select {
+    composes: field from '../form/form.module.css';
+    cursor: pointer;
+}

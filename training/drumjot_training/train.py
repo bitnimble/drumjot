@@ -50,10 +50,15 @@ class Clip:
     onset times (kept for onset-F1 eval, which scores against true onsets,
     not the smoothed target)."""
 
-    features: np.ndarray  # (T, dim)
+    features: np.ndarray  # (T, dim) -- the anchor layer (single-layer path; also frame count)
     targets: np.ndarray  # (n_lanes, T)
     onsets_by_lane: dict[str, list[float]]
     audio_path: str | None = None  # source clip, for envelope post-filtering
+    # Per-lane-layer features: {MERT layer: (T, dim)} for every distinct layer the
+    # heads need. None on the single-layer path (use `features`); set when
+    # cfg.is_multilayer(), and then it drives the forward (each head reads its
+    # layer's tensor). All layers share T, so `features` still gives the frame count.
+    feat_by_layer: dict[int, np.ndarray] | None = None
     # Targets used ONLY for sibling-aware loss weighting. None -> `targets`.
     # Differs in per-stem mode: `targets` are restricted to the stem's lanes,
     # but the weighting must still see the FULL kit's onsets so e.g. hat bleed
@@ -116,13 +121,33 @@ def build_clip(
     )
 
 
+def _to_device(X, device):
+    """Move a collated feature batch to `device`: a single tensor, or a {layer:
+    tensor} dict (the per-lane-layer path). Mirrors `collate_clips`' single/multi
+    split so `train_loop` doesn't special-case it."""
+    if isinstance(X, dict):
+        return {k: v.to(device, non_blocking=True) for k, v in X.items()}
+    return X.to(device, non_blocking=True)
+
+
+def _clip_input(clip: Clip, device):
+    """Batch-of-one model input for one clip: a (1, T, dim) tensor, or a {layer:
+    (1, T, dim)} dict when the clip carries per-lane-layer features."""
+    import torch
+
+    if clip.feat_by_layer is not None:
+        return {L: torch.as_tensor(f, dtype=torch.float32, device=device).unsqueeze(0)
+                for L, f in clip.feat_by_layer.items()}
+    return torch.as_tensor(clip.features, dtype=torch.float32, device=device).unsqueeze(0)
+
+
 def _clip_probs(model, clip: Clip, cymbal_softmax: bool = False) -> np.ndarray:
     """Sigmoid activations (n_lanes, T) for one clip."""
     import torch
 
     model.eval()
     device = next(model.parameters()).device
-    x = torch.as_tensor(clip.features, dtype=torch.float32, device=device).unsqueeze(0)
+    x = _clip_input(clip, device)
     with torch.no_grad(), runtime.autocast():
         return activate_onsets(model(x), model.lane_names, cymbal_softmax)[0].float().cpu().numpy()
 
@@ -148,13 +173,20 @@ def _clip_probs_batched(model, clips: Sequence[Clip], max_batch: int = 16, cymba
     out: list = [None] * len(clips)
     by_len: dict[int, list[int]] = defaultdict(list)
     for i, c in enumerate(clips):
-        by_len[c.features.shape[0]].append(i)
+        by_len[c.features.shape[0]].append(i)  # all layers share T, so the anchor's is fine
+    multi = clips[0].feat_by_layer is not None  # uniform across one CachedClips (same cfg)
+    layers = sorted(clips[0].feat_by_layer or {}) if multi else []
     with torch.no_grad(), runtime.autocast():
         for idxs in by_len.values():
             for s in range(0, len(idxs), max_batch):
                 chunk = idxs[s:s + max_batch]
-                x = torch.stack([torch.as_tensor(clips[j].features, dtype=torch.float32, device=device)
-                                 for j in chunk])
+                if multi:
+                    x = {L: torch.stack([torch.as_tensor(clips[j].feat_by_layer[L],
+                                                          dtype=torch.float32, device=device)
+                                         for j in chunk]) for L in layers}
+                else:
+                    x = torch.stack([torch.as_tensor(clips[j].features, dtype=torch.float32, device=device)
+                                     for j in chunk])
                 p = activate_onsets(model(x), model.lane_names, cymbal_softmax).float().cpu().numpy()  # (B, n_lanes, T)
                 for k, j in enumerate(chunk):
                     out[j] = p[k]
@@ -236,20 +268,23 @@ def _tune_thresholds_from_probs(
     grid = grid or (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8)
     best: dict[str, float] = {}
     for i, lane in enumerate(cfg.lanes):
-        n_ref = sum(len(onsets.get(lane, [])) for _, onsets in probs_onsets)
+        # Pre-filter to clips that HAVE a ref onset for this lane and pull each clip's prob
+        # ROW once: this work is invariant across the threshold grid, so doing it once per
+        # lane (not once per lane x threshold) drops ~|grid|x redundant .get()/empty-skip/
+        # row-index over the whole val set. (sum of lens is unchanged: dropped clips were 0.)
+        lane_clips = [(probs[i], ref) for probs, onsets in probs_onsets if (ref := onsets.get(lane))]
+        n_ref = sum(len(ref) for _, ref in lane_clips)
         lane_grid = (
             grid if n_ref >= cfg.rare_lane_min_onsets
             else tuple(t for t in grid if t >= cfg.rare_thr_floor)
         )
         best_thr, best_f1 = max(cfg.peak_threshold, lane_grid[0] if lane_grid else 0.0), -1.0
         for thr in lane_grid:
-            f1s = []
-            for probs, onsets in probs_onsets:
-                ref = onsets.get(lane, [])
-                if not ref:
-                    continue
-                est = metrics.pick_onsets_lane(probs[i], cfg.encoder_fps, lane, thr)
-                f1s.append(metrics.onset_f1(ref, est, cfg.onset_tolerance_s)["f"])
+            f1s = [
+                metrics.onset_f1(ref, metrics.pick_onsets_lane(prow, cfg.encoder_fps, lane, thr),
+                                 cfg.onset_tolerance_s)["f"]
+                for prow, ref in lane_clips
+            ]
             if f1s and (mean := sum(f1s) / len(f1s)) > best_f1:
                 best_f1, best_thr = mean, thr
         best[lane] = best_thr
@@ -289,14 +324,22 @@ def collate_clips(clips: Sequence[Clip]):
     lengths = [c.features.shape[0] for c in clips]
     t_max = max(lengths)
     b = len(clips)
-    X = torch.zeros(b, t_max, dim, dtype=torch.float32)
+    multi = clips[0].feat_by_layer is not None
+    layers = sorted(clips[0].feat_by_layer or {}) if multi else []
+    # X: one (B,T,dim) tensor (single-layer), or {layer: (B,T,dim)} (per-lane-layer routing).
+    X = ({L: torch.zeros(b, t_max, dim, dtype=torch.float32) for L in layers}
+         if multi else torch.zeros(b, t_max, dim, dtype=torch.float32))
     Y = torch.zeros(b, n_lanes, t_max, dtype=torch.float32)
     Yw = torch.zeros(b, n_lanes, t_max, dtype=torch.float32)
     A = torch.zeros(b, n_lanes, t_max, dtype=torch.float32)
     mask = torch.zeros(b, t_max, dtype=torch.float32)
     for i, clip in enumerate(clips):
         t = lengths[i]
-        X[i, :t] = torch.as_tensor(clip.features, dtype=torch.float32)
+        if multi:
+            for L in layers:
+                X[L][i, :t] = torch.as_tensor(clip.feat_by_layer[L], dtype=torch.float32)
+        else:
+            X[i, :t] = torch.as_tensor(clip.features, dtype=torch.float32)
         Y[i, :, :t] = torch.as_tensor(clip.targets, dtype=torch.float32)
         wt = clip.weight_targets if clip.weight_targets is not None else clip.targets
         Yw[i, :, :t] = torch.as_tensor(wt, dtype=torch.float32)
@@ -407,15 +450,30 @@ class CachedClips:
         # for sibling loss weighting (per-stem mode), None elsewhere. (start,
         # length) select the clip window; legacy single-window clips are (0,
         # max_seconds). See _window_specs / materialize.
+        import array
         self._specs = list(specs)
+        # Compact per-window onset/weight float lists -> array.array('d') IN PLACE. At the
+        # ~170k-window scale the boxed-float lists dominate resident RAM (Python object
+        # overhead ~32 B/float); array.array is a drop-in (iterable, len, list-like truthiness
+        # -- unlike numpy) at 8 B/float (~4x smaller), and 'd' (float64) keeps onset values
+        # BIT-EXACT (no precision change at all). The dicts are shared with the caller's window
+        # specs, so this frees the lists there too -> less host memory pressure (the NFS page
+        # cache the cache reads depend on). See the codebox-workspace NFS-stall analysis.
+        for spec in self._specs:
+            for d in (spec[1], spec[2]):  # onsets_by_lane, weight_onsets (may be None)
+                if d:
+                    for lane, ts in d.items():
+                        if not isinstance(ts, array.array):
+                            d[lane] = array.array("d", ts)
         self._cfg = cfg
         self._cache_dir = Path(cache_dir)
         self._max_seconds = max_seconds
 
-    def _path(self, audio_path, start: float, length: float | None) -> Path:
+    def _path(self, audio_path, start: float, length: float | None, layer: int | None = None) -> Path:
         variant = embeddings.feat_variant(self._cfg.high_band)
+        layer = self._cfg.encoder_layer if layer is None else layer
         key = embeddings.cache_key(
-            audio_path, self._cfg.encoder, self._cfg.encoder_layer, length, variant, start
+            audio_path, self._cfg.encoder, layer, length, variant, start
         )
         return self._cache_dir / f"{key}.npy"
 
@@ -424,7 +482,13 @@ class CachedClips:
 
     def __getitem__(self, i: int) -> Clip:
         audio_path, onsets, weight_onsets, rings, _n, start, length = self._specs[i]
-        feat = np.load(self._path(audio_path, start, length))
+        layers = self._cfg.distinct_layers()
+        fbl = None
+        if len(layers) > 1:  # per-lane-layer: read every distinct layer's cached .npy
+            fbl = {L: np.load(self._path(audio_path, start, length, L)) for L in layers}
+            feat = fbl[layers[0]]  # anchor: frame count + single-layer consumers
+        else:
+            feat = np.load(self._path(audio_path, start, length))
         onsets = _cap_onsets(onsets, length)  # no-op (onsets pre-windowed); defensive
         targets = build_targets(onsets, feat.shape[0], self._cfg)
         wt = None
@@ -439,6 +503,7 @@ class CachedClips:
         return Clip(
             features=feat, targets=targets, onsets_by_lane=onsets,
             audio_path=str(audio_path), weight_targets=wt, activity_targets=act,
+            feat_by_layer=fbl,
         )
 
     def __iter__(self):
@@ -603,6 +668,7 @@ def _window_specs(specs, window: float, search: float, max_windows: int,
     per-clip `librosa.load` + RMS (the GPU-idle "planning" phase) entirely. The
     FULL window list is cached (keyed by audio+window+search) and sliced to
     `max_windows` on read, so train (0) and val (N) share one entry per clip."""
+    import array
     import json
     import os
 
@@ -639,8 +705,18 @@ def _window_specs(specs, window: float, search: float, max_windows: int,
             dirty = True
 
     def _slice(onsets, start, length):
-        return {ln: [t - start for t in ts if start <= t < start + length]
-                for ln, ts in onsets.items()}
+        # Build window-relative onsets directly as array.array('d') from a generator (no
+        # intermediate Python list), so the ~170k window slices never form the multi-GB
+        # boxed-float-list peak that the allocator would then retain. float64 = bit-exact.
+        # Skip lanes whose window slice is EMPTY: every consumer reads via .get(lane, [])
+        # (build_targets, _cap_onsets, rings, eval), so an absent key == an empty list --
+        # this drops ~6 empty array.array containers (~80 B each) per window x 2 dicts x ~170k.
+        out = {}
+        for ln, ts in onsets.items():
+            a = array.array("d", (t - start for t in ts if start <= t < start + length))
+            if a:
+                out[ln] = a
+        return out
 
     def _wins(audio):
         nonlocal dirty
@@ -744,28 +820,53 @@ def materialize(
                 if not keep:
                     n_dropped += 1
                     continue
-            key = embeddings.cache_key(audio, encoder.name, encoder.layer, length, variant, start)
-            frames = index.get(key)
-            if frames is None:
-                cf = cache_dir / f"{key}.npy"
-                if cf.exists():
-                    frames = int(np.load(cf, mmap_mode="r").shape[0])  # header only, no data read
-                else:
-                    feat = embeddings.embed_clip(
-                        audio, encoder, cache_dir=cache_dir, max_seconds=length,
-                        cache_dtype=cfg.cache_dtype, high_band=cfg.high_band,
-                        start_seconds=start,
-                    )
-                    frames = int(feat.shape[0])
-                    n_enc += 1
-                index[key] = frames
-                new_frames[key] = frames
+            layers = cfg.distinct_layers()
+            if len(layers) > 1:
+                # MULTI-LAYER (per-lane-layer): encode ALL missing distinct layers in ONE
+                # forward (N layers cost 1 forward, not N), so the cold-layer encode of a
+                # per-lane-layer run is ~one warm pass, not N. Then read frame counts.
+                keys = {L: embeddings.cache_key(audio, encoder.name, L, length, variant, start)
+                        for L in layers}
+                missing = [L for L in layers
+                           if index.get(keys[L]) is None and not (cache_dir / f"{keys[L]}.npy").exists()]
+                if missing:
+                    embeddings.encode_layers_to_cache(
+                        audio, encoder, missing, cache_dir, max_seconds=length,
+                        cache_dtype=cfg.cache_dtype, high_band=cfg.high_band, start_seconds=start)
+                    n_enc += 1  # one forward encoded every missing layer
+                frames = None
+                for L in layers:
+                    fr = index.get(keys[L])
+                    if fr is None:
+                        fr = int(np.load(cache_dir / f"{keys[L]}.npy", mmap_mode="r").shape[0])
+                        index[keys[L]] = fr
+                        new_frames[keys[L]] = fr
+                    frames = fr  # identical across layers (same audio window -> same T)
+            else:
+                # SINGLE-LAYER (unchanged from before per-lane-layer): embed_clip one layer.
+                key = embeddings.cache_key(audio, encoder.name, encoder.layer, length, variant, start)
+                frames = index.get(key)
+                if frames is None:
+                    cf = cache_dir / f"{key}.npy"
+                    if cf.exists():
+                        frames = int(np.load(cf, mmap_mode="r").shape[0])  # header only, no data read
+                    else:
+                        feat = embeddings.embed_clip(
+                            audio, encoder, cache_dir=cache_dir, max_seconds=length,
+                            cache_dtype=cfg.cache_dtype, high_band=cfg.high_band,
+                            start_seconds=start,
+                        )
+                        frames = int(feat.shape[0])
+                        n_enc += 1
+                    index[key] = frames
+                    new_frames[key] = frames
             rings = _rings_for_clip(audio, onsets, cfg, cache_dir, length, start)
             ok.append((audio, onsets, weight_onsets, rings, frames, start, length))
         except Exception as e:  # noqa: BLE001
             log(f"  skip {Path(audio).name}@{start:.0f}s: {e!r}")
         if (i + 1) % 500 == 0:
             log(f"  {tag}: {i + 1}/{len(specs)} windows ({n_enc} encoded)")
+    encoder.layer = cfg.encoder_layer  # restore the anchor layer (the per-layer loop mutated it)
     if new_frames:
         _save_feature_index(cache_dir, new_frames)
     drop_note = f", {n_dropped} dropped (label support < {cfg.label_min_support})" if n_dropped else ""
@@ -901,6 +1002,9 @@ def train_loop(
     # lane's confusable siblings; per batch, sib_act = max sibling target.
     sib_on = cfg.sib_neg_weight != 1.0 or cfg.sib_pos_weight != 1.0
     S = torch.as_tensor(sibling_matrix(cfg.lanes), dtype=torch.bool, device=device)
+    # Which lanes actually HAVE confusable siblings -- loop-invariant (S is constant), so
+    # precompute once instead of an S[li].any() GPU reduce + .item() sync per lane EVERY batch.
+    has_sib = [bool(S[li].any()) for li in range(len(cfg.lanes))]
     # aux ring-activity rows + a unit pos_weight for the activity BCE
     _aux_lanes = cfg.aux_lanes if cfg.aux_lanes is not None else SUSTAINED_LANES
     sus_idx = [i for i, ln in enumerate(cfg.lanes) if ln in _aux_lanes]
@@ -996,7 +1100,7 @@ def train_loop(
         model.train()
         total, n_batches, n_skip = 0.0, 0, 0
         for bi, (X, Y, Yw, A, mask) in enumerate(loader):
-            X = X.to(device, non_blocking=True)
+            X = _to_device(X, device)  # tensor, or {layer: tensor} for per-lane-layer
             Y = Y.to(device, non_blocking=True)
             mask = mask.to(device, non_blocking=True)
             fw = None
@@ -1007,7 +1111,7 @@ def train_loop(
                 parts = []
                 for li in range(len(cfg.lanes)):
                     parts.append(
-                        Yw[:, S[li]].amax(dim=1) if bool(S[li].any()) else torch.zeros_like(Yw[:, 0])
+                        Yw[:, S[li]].amax(dim=1) if has_sib[li] else torch.zeros_like(Yw[:, 0])
                     )
                 sib_act = torch.stack(parts, dim=1)  # (B, n_lanes, T)
                 fw = sibling_weight(Y, sib_act, cfg.sib_pos_weight, cfg.sib_neg_weight)
@@ -1726,6 +1830,24 @@ class PerSourceResampler:
         return total
 
 
+def _parse_lane_layers(spec: str | None) -> tuple[tuple[str, int], ...] | None:
+    """'--lane-layers k:1,s:4,rd:10,cr:10' -> (("k",1),("s",4),("rd",10),("cr",10))
+    for Config.lane_layers. None/empty -> None (single-layer path). Lanes omitted
+    fall back to --layer when the map is resolved (Config.lane_layer_map)."""
+    if not spec:
+        return None
+    out: list[tuple[str, int]] = []
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        lane, sep, layer = part.partition(":")
+        if not sep:
+            raise SystemExit(f"--lane-layers: expected lane:layer, got {part!r}")
+        out.append((lane.strip(), int(layer)))
+    return tuple(out) or None
+
+
 def main(argv: list[str] | None = None) -> None:
     import argparse
 
@@ -1780,7 +1902,13 @@ def main(argv: list[str] | None = None) -> None:
         help="DataLoader prefetch workers; >0 needs docker --shm-size=2g (else it hangs). "
         "0 still streams from the SSD cache (RAM stays bounded), just no prefetch overlap.",
     )
-    ap.add_argument("--layer", type=int, default=10, help="MERT hidden layer (0-24)")
+    ap.add_argument("--layer", type=int, default=10, help="MERT hidden layer (0-24); also the "
+                    "per-lane FALLBACK for lanes absent from --lane-layers")
+    ap.add_argument("--lane-layers", default=None,
+                    help="PER-LANE MERT layer routing, e.g. 'k:1,s:4,rd:10,cr:10' -- each listed lane "
+                    "reads its own MERT hidden layer (the per-lane layer sweep finds cymbals peak "
+                    "later than kick); lanes omitted use --layer. Each head reads its layer's cached "
+                    ".npy (no re-encode of shared layers). Omit for the single-layer (--layer) model.")
     ap.add_argument("--head-hidden", type=int, default=Config.head_hidden,
                     help="per-lane BiGRU hidden size (h128 default; h256 was the cym sweet spot)")
     ap.add_argument("--head-layers", type=int, default=Config.head_layers,
@@ -1886,6 +2014,7 @@ def main(argv: list[str] | None = None) -> None:
         cymbal_softmax=args.cymbal_softmax, cymbal_ce_weight=args.cymbal_ce_weight,
         lanes=tuple(s.strip() for s in args.lanes.split(",")) if args.lanes else LANES,
         aux_lanes=tuple(s.strip() for s in args.aux_lanes.split(",")) if args.aux_lanes else None,
+        lane_layers=_parse_lane_layers(args.lane_layers),
     )
     if args.pool_resample and args.dataset != "pooled":
         raise SystemExit("--pool-resample is only valid with --dataset pooled")
@@ -1908,8 +2037,9 @@ def main(argv: list[str] | None = None) -> None:
 
         encoder = embeddings.make_encoder(cfg.encoder, cfg.encoder_layer)
         nhs = encoder.n_hidden_states()
-        if not 0 <= cfg.encoder_layer < nhs:
-            raise SystemExit(f"--layer {cfg.encoder_layer} out of range: valid 0..{nhs - 1}")
+        bad = [L for L in cfg.distinct_layers() if not 0 <= L < nhs]
+        if bad:
+            raise SystemExit(f"--layer/--lane-layers {bad} out of range: valid 0..{nhs - 1}")
 
         # Window each source separately, tracking which dataset (window) indices
         # belong to it so the sampler can cap per source.
@@ -1951,8 +2081,9 @@ def main(argv: list[str] | None = None) -> None:
         # Fail fast on an out-of-range layer (MERT exposes 25 hidden states) instead of
         # an opaque IndexError deep into the encode pass.
         nhs = encoder.n_hidden_states()
-        if not 0 <= cfg.encoder_layer < nhs:
-            raise SystemExit(f"--layer {cfg.encoder_layer} out of range: valid 0..{nhs - 1}")
+        bad = [L for L in cfg.distinct_layers() if not 0 <= L < nhs]
+        if bad:
+            raise SystemExit(f"--layer/--lane-layers {bad} out of range: valid 0..{nhs - 1}")
 
         # Expand into per-window specs. Both train and val are sliced into as many
         # ~max-seconds windows as fit the whole clip (max_windows=0 = unlimited),
@@ -1999,6 +2130,11 @@ def main(argv: list[str] | None = None) -> None:
         model, train_clips, cfg, epochs=args.epochs, pos_weight=pos_w,
         batch_size=args.batch_size, num_workers=args.num_workers, val_clips=val_clips,
         out_dir=args.out, checkpoint_every=10,
+        # Self-resume: write a full-state resume.pt every epoch into out_dir and auto-load it
+        # if present, so a killed/restarted run (e.g. a stall-restart) continues from the next
+        # epoch instead of from scratch -- re-run the SAME command to resume. out_dir is
+        # local-speed here, so the per-epoch optimizer save is cheap. None when no --out.
+        resume_path=(str(Path(args.out) / "resume.pt") if args.out else None),
         lr_schedule=args.lr_schedule, warmup_steps=args.warmup_steps, loss_fn=args.loss,
         keep_best=args.keep_best,
         early_stop=args.early_stop, es_window=args.es_window, es_slope=args.es_slope,

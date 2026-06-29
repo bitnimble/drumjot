@@ -100,7 +100,6 @@ describe('createMutableJot', () => {
   it('deep-initializes a whole Jot from a plain object', () => {
     const { model } = createMutableJot({
       title: 'Breakbeat',
-      bpm: 174,
       bars: [
         { id: 'b1', tsCount: 4, tsUnit: 4 },
         { id: 'b2', tsCount: 4, tsUnit: 4, tempoBpm: 180 },
@@ -113,7 +112,6 @@ describe('createMutableJot', () => {
     });
 
     expect(model.title).toBe('Breakbeat');
-    expect(model.bpm).toBe(174);
     expect(model.bars.length).toBe(2);
     expect(model.bars.at(1)!.tempoBpm).toBe(180);
     expect(model.elements.size).toBe(2);
@@ -130,7 +128,6 @@ describe('createMutableJot', () => {
   it('snapshots to a plain JotState that seeds an identical mutable jot', () => {
     const seed = {
       title: 'Breakbeat',
-      bpm: 174,
       bars: [
         { id: 'b1', tsCount: 4, tsUnit: 4 },
         { id: 'b2', tsCount: 4, tsUnit: 4, tempoBpm: 180 },
@@ -162,7 +159,6 @@ describe('createMutableJot', () => {
   it('edits round-trip (a top-level note element lane is one write)', () => {
     const { model } = createMutableJot({
       title: '',
-      bpm: 120,
       bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
       elements: {
         n1: { kind: 'note', id: 'n1', barId: 'b1', beat: 0, duration: 1, lane: 'cr', modifiers: [] },
@@ -179,7 +175,6 @@ describe('createMutableJot', () => {
   it('deep-initializes layers, tempo events, a pattern def, and a nested group', () => {
     const { model } = createMutableJot({
       title: 'x',
-      bpm: 120,
       layers: { v0: { id: 'v0', name: 'Hands' } },
       bars: [
         { id: 'b0', tsCount: 4, tsUnit: 4, anacrusis: true },

@@ -23,11 +23,12 @@
  *       the DSL has no concept of sustain (besides the `:l` modifier which we
  *       do not attempt to infer from MIDI).
  *
- *  [A4] Every `setTempo` is honoured at its precise (snapped) tick. The
- *       first tempo (latest event at or before tick 0) becomes
- *       `globalMetadata.bpm`. Subsequent setTempo events become
- *       `jot.tempoEvents` entries anchored at `(barIndex, beat-within-bar)`
- *       so mid-bar tempo changes survive round-trip with sub-bar precision.
+ *  [A4] Every `setTempo` is honoured at its precise (snapped) tick. All
+ *       become `jot.tempoEvents` entries anchored at
+ *       `(barIndex, beat-within-bar)`, including the initial tempo, which
+ *       is anchored at the drums-enter downbeat (bar `leadBars`) so
+ *       `tempo.initialBpm` reads it (there is no `globalMetadata.bpm`).
+ *       Mid-bar tempo changes survive round-trip with sub-bar precision.
  *       Ticks are quantized to the same 1/48 grid as note onsets, which
  *       gives ±~10 ms precision at common drum tempos.
  *
@@ -70,6 +71,7 @@ import {
 } from 'src/schema/dsl/dsl';
 import { ACCENT_THRESHOLD, GHOST_THRESHOLD } from 'src/dynamics/dynamics';
 import { defaultKindForLane } from 'src/instruments/instruments';
+import { TranscriptionTempoMap } from './transcription_schema';
 import {
   GENERIC_INSTRUMENT_NAME_BY_PITCH,
   GM_PERCUSSION,
@@ -100,6 +102,10 @@ export type FromMidiOptions = {
   offsetToleranceMs?: number;
 };
 
+// `TranscriptionTempoMap` (the tick-based sidecar tempo map `fromMidi`
+// prefers over the MIDI tempo track) is defined + validated in
+// `./transcription_schema`; imported above.
+
 const DEFAULTS: Required<FromMidiOptions> = {
   drumChannel: 10,
   gridDivision: 48,
@@ -113,10 +119,20 @@ const DEFAULTS: Required<FromMidiOptions> = {
 
 type AbsEvent = { tick: number; ev: MidiEvent };
 
-/** Convert a MIDI byte buffer into a Drumjot `Jot`. */
+/** Convert a MIDI byte buffer into a Drumjot `Jot`.
+ *
+ * When `tempoMap` is supplied (the `transcription.json` sidecar from a
+ * transcribe bundle), its exact tempo events are used and the MIDI tempo
+ * track is ignored for tempo purposes; otherwise tempo is reconstructed
+ * from the MIDI `setTempo` events (with ramp detection). */
 export function fromMidi(
   buffer: Uint8Array | ArrayBuffer | ArrayLike<number>,
-  options: FromMidiOptions = {}
+  options: FromMidiOptions = {},
+  tempoMap?: TranscriptionTempoMap,
+  // Per-(drum-)bar drift seconds from `transcription.json` (indexed by drum
+  // bar). Stored on `globalMetadata.barDrift`, re-indexed to `layers[0].bars`
+  // (lead-in bars → 0), so the waveform/playhead can align to the recording.
+  barDrift?: number[],
 ): Jot {
   const opts = { ...DEFAULTS, ...options };
   const bytes = toByteArray(buffer);
@@ -276,20 +292,44 @@ export function fromMidi(
   // Initial tempo (latest event at or before tick 0) lives on
   // `globalMetadata.bpm`; later changes become `jot.tempoEvents` and are
   // honoured at sub-bar precision by the runtime tempo timeline.
-  const initialBpm = tempoChanges.length > 0 ? tempoChanges[0].bpm : bpm;
+  const anchor = (tick: number) => {
+    const snapped = Math.round(tick / gridTicks) * gridTicks;
+    const barIndex = locateBar(barSpans, snapped);
+    if (barIndex < 0) return null;
+    const beat = (snapped - barSpans[barIndex].startTick) / ticksPerBeat;
+    return { barIndex, beat: Math.max(0, beat), snapped };
+  };
+  let initialBpm = tempoChanges.length > 0 ? tempoChanges[0].bpm : bpm;
   const tempoEvents: TempoEvent[] = [];
-  {
-    // A clearly-linear run of setTempo events (monotonic, ~uniform spacing
-    // and ~uniform delta) is collapsed into one `BpmTransition` ramp; every
-    // other change stays a flat tempo event.
+  if (tempoMap) {
+    // Sidecar path: the tempo map is authoritative and already carries
+    // first-class ramps, so anchor each event's tick and translate ramps
+    // straight to a `BpmTransition` (no `detectRampRuns` guessing). A
+    // constant song has no events => one `globalMetadata.bpm`, no
+    // tempoEvents.
+    if (tempoMap.initial_bpm > 0) initialBpm = tempoMap.initial_bpm;
+    for (const e of tempoMap.events) {
+      const a = anchor(e.tick);
+      if (!a) continue;
+      if (typeof e.bpm === 'object') {
+        const endSnapped = Math.round(e.bpm.end_tick / gridTicks) * gridTicks;
+        const duration = (endSnapped - a.snapped) / ticksPerBeat;
+        if (duration > 0) {
+          tempoEvents.push({
+            barIndex: a.barIndex,
+            beat: a.beat,
+            bpm: { start: e.bpm.start, end: e.bpm.end, duration },
+          });
+        }
+      } else {
+        tempoEvents.push({ barIndex: a.barIndex, beat: a.beat, bpm: e.bpm });
+      }
+    }
+  } else {
+    // MIDI fallback: a clearly-linear run of setTempo events (monotonic,
+    // ~uniform spacing and ~uniform delta) is collapsed into one
+    // `BpmTransition` ramp; every other change stays a flat tempo event.
     const ramps = detectRampRuns(tempoChanges);
-    const anchor = (tick: number) => {
-      const snapped = Math.round(tick / gridTicks) * gridTicks;
-      const barIndex = locateBar(barSpans, snapped);
-      if (barIndex < 0) return null;
-      const beat = (snapped - barSpans[barIndex].startTick) / ticksPerBeat;
-      return { barIndex, beat: Math.max(0, beat), snapped };
-    };
     let currentBpm = initialBpm;
     let ri = 0;
     for (let i = 0; i < tempoChanges.length; ) {
@@ -311,7 +351,7 @@ export function fromMidi(
       }
       const tc = tempoChanges[i];
       if (i === 0) {
-        currentBpm = tc.bpm; // initial tempo lives on globalMetadata.bpm
+        currentBpm = tc.bpm; // first setTempo = the song's initial tempo event
         i++;
         continue;
       }
@@ -430,8 +470,38 @@ export function fromMidi(
   // lanes agree letter-for-letter even when fallback letters were used.
   const instrumentMapping = buildInstrumentMap(laneByMidi);
 
+  // Tempo lives entirely in `tempoEvents`, including the initial value:
+  // ensure there's an event at the drums-enter downbeat (bar `leadBars`)
+  // carrying the song's opening tempo, so `tempo.initialBpm` reads it and
+  // the pre-drum lead-in inherits it. The sidecar's `initial_bpm` is the
+  // accurate value (the MIDI's tick-0 tempo is the back-solved lead-in,
+  // which can be unusual for a short pre-roll); otherwise read the MIDI
+  // tempo in force at that tick. A constant song has no other event, so
+  // without this its tempo would fall back to the 120 default.
+  if (!tempoEvents.some((e) => e.barIndex <= leadBars && e.beat <= 0)) {
+    const drumsEnterTick = barSpans[leadBars]?.startTick ?? 0;
+    const songInitialBpm =
+      tempoMap && tempoMap.initial_bpm > 0
+        ? tempoMap.initial_bpm
+        : bpmAtTick(drumsEnterTick);
+    // Only materialise the initial as an event when it differs from the 120
+    // default (matching the DSL hoist, which drops a no-op default): a
+    // default-tempo song just relies on `tempo.initialBpm`'s 120 fallback.
+    if (Math.abs(songInitialBpm - 120) > 1e-6) {
+      tempoEvents.unshift({ barIndex: leadBars, beat: 0, bpm: songInitialBpm });
+    }
+  }
+
+  // Re-index per-drum-bar drift onto `layers[0].bars` (lead-in bars carry
+  // none), and drop the field entirely when the recording was on-grid (all
+  // ~0) so a metronomic song stays clean.
+  const alignedDrift =
+    barDrift && barDrift.length > 0
+      ? bars.map((_, j) => (j >= leadBars ? (barDrift[j - leadBars] ?? 0) : 0))
+      : [];
+  const hasDrift = alignedDrift.some((d) => Math.abs(d) > 1e-9);
+
   const globalMetadata: Metadata = {
-    bpm,
     time: barSpans[0].time,
     instrumentMapping,
     // Record the grid density this load used so grid-aware consumers
@@ -453,6 +523,7 @@ export function fromMidi(
     layers: [{ bars }],
   };
   if (tempoEvents.length > 0) jot.tempoEvents = tempoEvents;
+  if (hasDrift) jot.barDrift = alignedDrift;
   return jot;
 }
 

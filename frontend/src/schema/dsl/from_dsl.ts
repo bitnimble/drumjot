@@ -13,10 +13,10 @@
  */
 import type { Element as DslElement, Jot as DslJot, Metadata, TimeSignature } from 'src/schema/dsl/dsl';
 import { elementWeight, sumWeights } from 'src/schema/dsl/element_metrics';
-import { initialBpm } from 'src/schema/dsl/tempo';
 import { ACCENT_VELOCITY, GHOST_VELOCITY, VOLUME_TO_VELOCITY } from 'src/dynamics/dynamics';
 import type { Init } from '../descriptors';
 import { createMutableJot, JotSchema } from '../schema';
+import type { DerivedResolver } from '../derived_registry';
 import { TrackBuilder } from '../ordering';
 import { compareLanesByDefaultMixerOrder } from 'src/instruments/mixer_order';
 
@@ -324,11 +324,11 @@ export function dslToInit(jot: DslJot): Init<typeof JotSchema> {
 
   return omitUndef({
     title: jot.title,
-    bpm: initialBpm(jot),
     songLeadIn: gm.songLeadIn,
     leadBars: gm.leadBars,
     gridDivision: gm.gridDivision,
     globalMetadataJson: residualMetadataJson(gm),
+    barDriftJson: jot.barDrift ? JSON.stringify(jot.barDrift) : undefined,
     layers,
     tracks: trackBuilder.tracks,
     trackGroups: {},
@@ -343,7 +343,9 @@ export function dslToInit(jot: DslJot): Init<typeof JotSchema> {
   }) as Init<typeof JotSchema>;
 }
 
-/** Convert a DSL `Jot` into a live mutable Jot document. */
-export function dslToMutable(jot: DslJot) {
-  return createMutableJot(dslToInit(jot));
+/** Convert a DSL `Jot` into a live mutable Jot document. Pass the per-document
+ *  {@link DerivedResolver} so the doc's derived fields (`tempoTimeline`, …)
+ *  resolve; omit it for one-shot conversions that never read them. */
+export function dslToMutable(jot: DslJot, derived?: DerivedResolver) {
+  return createMutableJot(dslToInit(jot), derived);
 }

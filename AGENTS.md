@@ -7,6 +7,13 @@ share. This file is the index, read the critical rules below for every
 request, and pull in the linked docs when a task touches that area.
 
 > `CLAUDE.md` is a symlink to this file. Edit `AGENTS.md`.
+>
+> Cross-project conventions (close-the-loop, naming, run-the-checks,
+> LSP-first, built-in-tools-over-bash, one-statement-per-Bash-call, Linear
+> tickets, the store/presenter/component pattern + the DOM-layout-read ban,
+> …) live in the user-level `~/.claude/CLAUDE.md` and are **not** repeated
+> here; this file is the Drumjot-specific delta. (Note: agent tools that
+> don't load `~/.claude/CLAUDE.md` won't see those rules.)
 
 ## Repo layout
 
@@ -24,25 +31,7 @@ see [docs/superpowers/specs/2026-06-29-desktop-app-design.md](docs/superpowers/s
 
 ## Critical rules (apply to every request)
 
-- **Close the loop; don't stop for a rubber-stamp.** If you would end a
-  turn asking a question whose answer is obviously "yes, continue" /
-  "yes, do it", don't, just do it. You can edit, run the post-change
-  checks (`scripts/check-py` / the `bun run` scripts) plus `build`/`e2e`,
-  and validate yourself, so prefer acting
-  and verifying over asking. If you spot something unconditionally better
-  (cleanup, dead code, an obvious fix) while working, fix it rather than
-  asking whether to, that's the job. Reserve questions for genuine forks
-  (materially different paths, neither clearly better) and
-  irreversible/destructive actions (push, delete, data loss), those still
-  warrant a pause.
 - **Use `bun`, never npm/yarn. Use `bunx`, never npx.**
-- **Name things by what they do, not where they came from or what
-  they belong to.** A symbol's name should describe its behaviour /
-  meaning (`append` / `replace`, `MergeResult`, `transcribeStatuses`),
-  not its call site, owner, or origin (`audioMenuMode`,
-  `fromOverflowMenu`, `dialogTranscribeThing`). Only qualify by
-  origin/owner when it's the only way to disambiguate two
-  same-behaviour names in the same scope.
 - **After any code change, run the post-change checks.** Never invoke
   pytest / ruff / playwright directly, those are **denied** by the
   permission config. **Python** keeps wrapper scripts (venv activation,
@@ -109,30 +98,20 @@ see [docs/superpowers/specs/2026-06-29-desktop-app-design.md](docs/superpowers/s
   `src/ui/dropdown/dropdown.tsx` + `dropdown.module.css`; CSS-only
   primitives like `button`/`modal`/`spinner`/`form` too). See
   [docs/design-system.md](docs/design-system.md).
-- **No DOM layout reads in hot paths**, never read `scrollLeft` /
-  `clientWidth` / `getBoundingClientRect` / `getComputedStyle` (for
-  layout) in any render, effect, MobX reaction, or per-frame/scroll/zoom
-  path; read from `JotEditorStore` observables instead. See
-  [docs/architecture.md](docs/architecture.md#frontend-performance-model).
 - **Frame budget is 120 fps / 8.3 ms**, not 60 fps (165 Hz monitor).
 - **Browsers: evergreen, last 2 years** (`package.json` `browserslist`).
   Use modern web APIs without polyfills or feature-detection.
 - **The transcriber is pure Python**, no bun, no TS in its runtime. It
   emits MIDI; `src/midi/from_midi.ts` converts MIDI→Jot on the frontend.
 - **Python**: `transcriber/.venv` (uv) is the primary dev loop; invoke
-  `python3`. **Don't install/upgrade deps unprompted**, install ordering
-  is fragile; flag dep changes and let the user run them.
-- **Long GPU runs need monitoring set up AT LAUNCH**, proactively, not
-  reactively when asked "how's progress?". Applies to ANY multi-hour GPU
-  job, training sweeps AND data separation / dataset generation. The
-  dangerous failure is a **silent CUDA hang**: the process stays alive
-  (`State R`, `nvidia-smi` ~99% util, GPU mem frozen) while producing
-  nothing, so liveness checks look healthy, only the **log mtime going
-  stale** reveals it. Stand up (1) a self-healing **watchdog** that
-  restarts a runner whose log is stale (idempotent runs make a spurious
-  restart free) and (2) a heartbeat **Monitor** (stall/error alerts +
-  hourly pulse) for boxes the watchdog can't reach. Full pattern + the
-  kill-then-verify-GPU-freed-before-relaunch sequence live in the
+  `python3`.
+- **Long GPU runs need monitoring set up AT LAUNCH** (the general
+  long-running-job rule lives in `~/.claude/CLAUDE.md`). Drumjot
+  specifics: applies to ANY multi-hour GPU job, training sweeps AND data
+  separation / dataset generation; the dangerous failure is a **silent
+  CUDA hang** (process alive, `State R`, `nvidia-smi` ~99% util, GPU mem
+  frozen, only the **log mtime going stale** reveals it). Full pattern +
+  the kill-then-verify-GPU-freed-before-relaunch sequence live in the
   `long-run-monitoring` memory.
 - **Record every GPU run in `training/RESULTS.md`, reproducibly.** After
   any proper GPU run (train/eval/sweep/probe) completes, append a dated
@@ -146,45 +125,12 @@ see [docs/superpowers/specs/2026-06-29-desktop-app-design.md](docs/superpowers/s
   entry that used the old default with its explicit value, so historical
   numbers stay interpretable. See the `persist-gpu-results-in-results-md`
   memory.
-- **Don't read skill files with Read**, use the `Skill` tool.
-- **ALWAYS use the `LSP` tool to find symbols, never grep/text search.**
-  For any symbol-level question, where is this defined, who references
-  it, what's its type/signature, find every call site before a
-  rename/refactor, the `LSP` tool (`goToDefinition`, `findReferences`,
-  `hover`, `documentSymbol`, `workspaceSymbol`, `goToImplementation`,
-  call hierarchy) is the **mandatory** first move. It's dramatically
-  faster, more accurate, and far cheaper in tokens than sweeping the repo
-  with `git grep`/Grep, and it won't miss call sites or trip over
-  substring collisions (`parse` vs `JSON.parse`). Reserve text search for
-  genuinely text-shaped queries only (CSS class names, log strings,
-  cross-language DSL letters, vendored code). If you catch yourself
-  grepping for a function/class/variable/type name, stop and use `LSP`.
-- **Prefer built-in tools over ad-hoc bash.** Reach for `Read` / `Edit` /
-  `Write` for files, the `LSP` tool for symbol-level questions
-  (definition / references / hover), the `Find` / `Grep` tools to locate
-  files / content, and the `Skill` tool for skills before shelling out, the
-  dedicated tools are more token-efficient than parsing raw shell output.
-  `grep` / `rg` / `git grep` **are** allowed, but reach for raw search only
-  where the dedicated tools fall short, a complex glob / regex, or piping
-  matches into another command, not as the default. `cat` / `sed` / `awk` /
-  `find` stay redirected to `Read` / `Edit` / `Find`. Their command-executing
-  flags (`rg --pre` / `--pre-glob` / `--hostname-bin`, `git grep -O` /
-  `--open-files-in-pager`) are **denied** in `.claude/settings.json`, they run
-  an arbitrary command, so they're not read-only. Multi-line inline code also
-  trips a confirmation; put non-trivial scripts in a `tmp/*` file.
-- **One statement per Bash call, never multi-line / multi-statement
-  scripts, and avoid control flow.** A bash command with multiple lines
-  or chained statements (`;`, `&&`, `|`, a heredoc), **or any control
-  flow structure (`for`/`while` loops, `if`, `case`, command
-  substitution driving logic)**, triggers a permission prompt **even
-  when every individual command inside it is already allowlisted**.
-  Sessions commonly run headless on a server with the user only checking
-  in occasionally, so such a prompt just **hangs for hours** until they
-  return. Run each statement as its **own** Bash tool call instead (e.g.
-  to act on N files, issue N separate calls rather than a `for` loop), each resolves instantly with no interaction. Reach for a loop / control
-  flow only when it's genuinely unavoidable, and when several lines must
-  truly run together, put them in a `tmp/*` script file and run that
-  single file (see the sandbox notes below).
+- **Bash tool/search specifics.** `cat` / `sed` / `awk` / `find` stay
+  redirected to `Read` / `Edit` / `Find`; their command-executing flags
+  (`rg --pre` / `--pre-glob` / `--hostname-bin`, `git grep -O` /
+  `--open-files-in-pager`) are **denied** in `.claude/settings.json` (they
+  run an arbitrary command, so they're not read-only). Multi-line inline
+  code trips a confirmation; put non-trivial scripts in a `tmp/*` file.
 
 ### Frontend store / presenter / component architecture
 
@@ -203,68 +149,14 @@ tempo / element-metrics) lives under `src/schema/dsl/` and RLRR under
 `src/schema/rlrr/`; `settings/`, `toolbar/`, `ui/` are top-level peers of
 `editing/`.
 
-- **No barrel files.** Import every symbol straight from the module that
-  defines it; never add or import a re-export barrel (`index.ts` /
-  `store.ts`). Barrels hide the real dependency graph, invite import
-  cycles, and bloat what each consumer pulls in.
-
-When adding or moving frontend state/logic, follow it:
-
-- **Stores = data only.** A store holds MobX `observable`s and
-  `computed`s and nothing else: no actions, no setters/toggles, no
-  clamping, no reactions, no `AbortController`s, no orchestration. Simple
-  read accessors that just reshape store data are fine (a memoised lazy
-  cache like `getInstrumentTrack` is a deliberate exception). Red/green
-  flag: **stores have only observables + computeds; presenters may have
-  reactions, autoruns, computeds, local observables, and actions.**
-- **Presenters mutate stores.** Every mutation lives on a presenter, down to trivial `setX`/`toggleX`/clamp, plus all `reaction`/`autorun`,
-  cross-store orchestration, and non-view bookkeeping (the in-flight
-  `AbortController`s, etc.). Presenters are the only writers.
-- **Components bind presenter methods to UI callbacks and derive store
-  state into JSX.** They read stores (via per-store React contexts or
-  props) and call `presenter.X` for actions.
-- **No single top-level store.** Construct the peer stores where the view
-  is created and pass each down independently (`viewportStore.foo`,
-  `mixerStore.foo`), never through one aggregate `store`.
-- **Acyclic dependencies.** A store may take a one-way reference to a
-  peer it reads (e.g. most stores read `DocumentStore.currentJot`); the
-  presenter depends on all stores; no store depends on a presenter. If two
-  stores would form a cycle, extract the shared state into a third store
-  both depend on.
-- **Why:** this lets business logic be unit-tested against mocked stores,
-  and components be rendered (tests / Storybook) with mocked stores +
-  presenter, each concern swappable in isolation.
-- **Per-domain presenters.** Each presenter owns one store + the
-  cross-cutting orchestration for its domain (`settings`, `viewport`,
-  `mixer`, `playback`, `provenance`, `lyrics`, `document`, `transcribe`).
-  Where an action spans domains, the owning presenter calls a sibling
-  presenter rather than writing the sibling's store directly, keeping the
-  single-writer rule intact. The dependency graph stays acyclic
-  (leaf presenters → `DocumentPresenter` → `TranscribePresenter`).
-
-### Linear tickets
-
-If a request references something that looks like a ticket/issue ID,
-e.g. **`DRJ-14`** (especially anything starting with **`DRJ-`**), it's a
-**Linear ticket**. Use the **Linear MCP server** to look it up and read
-its full details before acting:
-
-- **Read everything, not just the description.** Ticket context is
-  commonly in the **comments**, not only the body, so list/read the
-  ticket's comments (`list_comments`) as well as `get_issue`.
-- **"Implement DRJ-78" / "Fix DRJ-12" means the full loop**, not just a
-  code edit: look up the ticket, read **all** of its information
-  (description + comments), think through the problem, explore the
-  codebase to ground it, plan a solution, **propose** that solution
-  (no spec doc unless explicitly asked), then implement.
-
-### Workflow
-
-The `superpowers:writing-plans` skill is **off by default** for this
-project. Once `superpowers:brainstorming` converges on requirements, go
-straight to implementation, no separate spec/plan doc. Reach for
-`writing-plans` only when work genuinely needs review checkpoints
-(multi-day, multi-agent, or risky cross-cutting); ask the user if unsure.
+The cross-project store / presenter / component rules (three-layer split,
+no-barrel-files, stores-data-only, presenters-mutate, acyclic deps,
+per-domain presenters) live in `~/.claude/CLAUDE.md`; the layout above is
+Drumjot's concrete realisation of them. Drumjot-specific exceptions worth
+remembering: a memoised lazy cache like `getInstrumentTrack` is an allowed
+read accessor on a store; most stores read `DocumentStore.currentJot`; the
+presenter dependency graph is `leaf presenters → DocumentPresenter →
+TranscribePresenter`.
 
 ## Build / test / run
 
@@ -329,11 +221,9 @@ doesn't exist yet. Build context is the repo root (needs
 `transcriber/pyproject.toml`): `docker build -f sandbox/Dockerfile -t
 drumjot-sandbox .`.
 
-**Code intelligence (LSP)**: the `LSP` tool is wired up (`tsgo` +
-`pyright-langserver`). **Prefer it over Grep for symbol-level questions**
-(definition, references, hover, call hierarchy), typed, no false
-positives. Use Grep only for genuinely text-shaped queries (CSS class
-names, log strings, cross-language DSL letters, vendored code).
+**Code intelligence (LSP)**: the `LSP` tool is wired up here with `tsgo` +
+`pyright-langserver` (the global LSP-first rule applies, see
+`~/.claude/CLAUDE.md`).
 
 **e2e (Playwright)**: headless Chromium against the Vite dev server, on a
 headless box. Setup: `bunx playwright install chromium` + (one-time)

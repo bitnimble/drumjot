@@ -107,6 +107,26 @@ def test_structure_path_writes_meta_and_roundtrips_times() -> None:
         assert math.isclose(gt, et, abs_tol=0.005)
 
 
+def test_structure_path_excludes_bar_drift_from_note_tick() -> None:
+    # Bar 0 drifted +0.1s: a hit the detector placed at 1.000s sits 0.1s past
+    # the bar's REAL downbeat, so the note tick must encode only 0.9s of
+    # sub-grid micro-timing. The drift rides separately (transcription.json
+    # barDrift) and the editor re-applies it per bar; baking it into the tick
+    # too would double-count. Same hit on a non-drifted bar still reads 1.0s.
+    bar0 = _bar(0, 0.0)
+    bar0.drift_sec = 0.1
+    structure = SimpleNamespace(
+        bars=[bar0, _bar(1, 2.0)],
+        initial_tempo=120.0,
+        initial_time_signature=(4, 4),
+    )
+    onsets = {"k": [_c(1.000, bar=0)]}
+    midi = onsets_to_midi_bytes(onsets, initial_tempo_bpm=120.0, structure=structure)
+    events = midi_bytes_to_events(midi)
+    assert len(events) == 1
+    assert math.isclose(events[0].time, 0.9, abs_tol=0.005)
+
+
 def test_index_in_range_orders_and_drops_out_of_range() -> None:
     cands = [
         _c(9.9, bar=1, beat=2.0),

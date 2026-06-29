@@ -60,7 +60,13 @@
 
       "Bash(grep *)",
       "Bash(rg *)",
-      "Bash(git grep *)"
+      "Bash(git grep *)",
+
+      "Bash(scripts/check-py *)",
+      "Bash(scripts/test-py *)",
+      "Bash(scripts/sandbox-py *)",
+      "Bash(scripts/sandbox-run *)",
+      "Bash(scripts/sandbox-bun *)"
     ],
     "deny": [
       "Bash(git push *)",

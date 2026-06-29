@@ -41,6 +41,7 @@ import {
   resolveAudioInheritedColor,
   Track,
 } from 'src/editing/tracks/tracks';
+import { DriftMap } from './drift_map';
 import { createStretchNode, preloadStretch, StretchNode } from './stretch_node';
 import { backendFetch } from 'src/net/backend_fetch';
 
@@ -473,7 +474,7 @@ export class AudioTrackPlaybackController {
     audioStartTime: number,
     jotOffsetSec: number,
     speed: number,
-    songLeadInSec: number,
+    driftMap: DriftMap,
     gainFor: (id: AudioTrackId) => number,
   ): void {
     for (const track of tracks) {
@@ -482,7 +483,7 @@ export class AudioTrackPlaybackController {
         audioStartTime,
         jotOffsetSec,
         speed,
-        songLeadInSec,
+        driftMap,
         gainFor(track.id),
       );
     }
@@ -501,7 +502,7 @@ export class AudioTrackPlaybackController {
     speed: number,
     audioStartTime: number,
     _jotOffsetSec: number,
-    _songLeadInSec: number,
+    _driftMap: DriftMap,
     _gainFor: (id: AudioTrackId) => number,
   ): void {
     const when = Math.max(audioStartTime, this.ctx.currentTime + SCHEDULE_PAD_SEC);
@@ -523,20 +524,21 @@ export class AudioTrackPlaybackController {
     audioStartTime: number,
     jotOffsetSec: number,
     speed: number,
-    songLeadInSec: number,
+    driftMap: DriftMap,
     gain: number,
   ): void {
-    // Input time = jot time - songLeadIn, i.e. the buffer position that
-    // lines up with the playhead's jot position. When the start sits BEFORE
-    // the audio's own t=0 (a negative raw input: the playhead is in the
-    // pre-roll / virtual lead-in, ahead of where the recording begins), the
-    // buffer clamps to 0 AND the output is delayed by the matching amount so
-    // the recording enters exactly when the playhead reaches `songLeadIn`.
-    // Without the delay the audio would start immediately at `audioStartTime`
-    // while the jot-anchored drums are still counting in, sliding the two out
-    // of sync by the lead-in remainder. The delay is in real time, so divide
-    // the jot-time gap by `speed` (buffer advances at `rate == speed`).
-    const rawInput = jotOffsetSec - songLeadInSec;
+    // Input time = media (recorded-audio) time for the playhead's jot
+    // position, drift-aware so the buffer lands on the true sample (no drift →
+    // plain `jot - songLeadIn`). When the start sits BEFORE the audio's own
+    // t=0 (a negative raw input: the playhead is in the pre-roll / virtual
+    // lead-in, ahead of where the recording begins), the buffer clamps to 0
+    // AND the output is delayed by the matching amount so the recording enters
+    // exactly when the playhead reaches `songLeadIn`. Without the delay the
+    // audio would start immediately at `audioStartTime` while the jot-anchored
+    // drums are still counting in, sliding the two out of sync by the lead-in
+    // remainder. The delay is in real time, so divide the jot-time gap by
+    // `speed` (buffer advances at `rate == speed`).
+    const rawInput = driftMap.jotToMedia(jotOffsetSec);
     const inputTime = Math.max(0, rawInput);
     const leadInDelaySec = rawInput < 0 ? -rawInput / speed : 0;
     const slot = this.ensureSlot(track);

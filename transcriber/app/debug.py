@@ -334,9 +334,22 @@ def beats_dump(structure: Any) -> dict[str, Any]:
                     "time_signature": list(bar.time_signature),
                     "tempo_bpm": round(bar.tempo_bpm, 2),
                     "feel": bar.feel,
+                    "drift_sec": round(getattr(bar, "drift_sec", 0.0), 4),
                     "beats": [round(b.time, 4) for b in bar.beats],
                 }
                 for bar in getattr(structure, "bars", [])
+            ],
+            # First-class tempo map (constant/ramp segments). Persisted so a
+            # resumed run rebuilds it without re-segmenting, and so
+            # `transcription.json`'s tempoMap stays available across resumes.
+            "tempo_segments": [
+                {
+                    "start_beat": seg.start_beat,
+                    "end_beat": seg.end_beat,
+                    "start_bpm": round(seg.start_bpm, 4),
+                    "end_bpm": round(seg.end_bpm, 4),
+                }
+                for seg in getattr(structure, "tempo_segments", [])
             ],
         }
     except Exception as exc:  # pragma: no cover - defensive

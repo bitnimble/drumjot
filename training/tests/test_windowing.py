@@ -23,13 +23,13 @@ def test_window_specs_legacy_single_window_is_just_a_cap():
     assert len(out) == 1
     audio, onsets, weight, start, length = out[0]
     assert (start, length, weight) == (0.0, 30.0, None)
-    assert onsets["k"] == [0.1] and onsets["s"] == [5.0]  # 35.0s dropped, none shifted
+    assert list(onsets["k"]) == [0.1] and list(onsets["s"]) == [5.0]  # array.array; 35.0s dropped
 
 
 def test_window_specs_carries_weight_onsets():
     specs = [("/x/a.flac", {"k": [1.0]}, {"k": [1.0], "s": [2.0]})]  # 3-tuple = per-stem weight
     out = train._window_specs(specs, window=30.0, search=3.0, max_windows=1)
-    assert out[0][2] == {"k": [1.0], "s": [2.0]}  # weight preserved
+    assert {ln: list(v) for ln, v in out[0][2].items()} == {"k": [1.0], "s": [2.0]}  # weight (array.array)
 
 
 def _write(tmp_path, name, secs, sr=24000, gaps=()):

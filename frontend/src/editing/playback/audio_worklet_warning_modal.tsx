@@ -1,6 +1,6 @@
-import { AlertTriangle, X } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 import React from 'react';
-import styles from './audio_worklet_warning_modal.module.css';
+import { Modal, ModalBody, ModalFooter, ModalHeader, modalStyles } from 'src/ui/modal/modal';
 
 /**
  * The two failure modes worth distinguishing to the user. `insecure-context`
@@ -42,82 +42,58 @@ export const AudioWorkletWarningModal: React.FC<{
   state: AudioWorkletState;
   open: boolean;
   onClose: () => void;
-}> = ({ state, open, onClose }) => {
-  if (!open || state === 'available') return null;
-
-  return (
-    <div
-      className={styles.modalBackdrop}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Audio playback unavailable"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-      data-testid="audio-worklet-warning-modal"
-    >
-      <div className={styles.modalPanel}>
-        <header className={styles.modalHeader}>
-          <span className={styles.warningIcon} aria-hidden="true">
-            <AlertTriangle size={18} />
-          </span>
-          <h3 className={styles.modalTitle}>Audio playback unavailable</h3>
-          <button
-            type="button"
-            className={styles.modalClose}
-            onClick={onClose}
-            aria-label="Close warning"
-            data-testid="audio-worklet-warning-close"
-          >
-            <X size={18} aria-hidden="true" />
-          </button>
-        </header>
-        <div className={styles.modalBody}>
-          {state === 'insecure-context' ? (
-            <>
-              <p>
-                This page isn't running in a <strong>secure context</strong>,
-                so the browser won't expose AudioWorklet. Loaded audio
-                tracks won't play, and pitch-preserved speed change is
-                disabled.
-              </p>
-              <p>
-                Open the app via <code>localhost</code>,{' '}
-                <code>127.0.0.1</code>, or an HTTPS URL instead of a LAN
-                IP / plain HTTP, and AudioWorklet will be available.
-              </p>
-              <p className={styles.note}>
-                Drum (MIDI) playback is unaffected.
-              </p>
-            </>
-          ) : (
-            <>
-              <p>
-                This browser doesn't support <strong>AudioWorklet</strong>,
-                so loaded audio tracks won't play and pitch-preserved
-                speed change is unavailable.
-              </p>
-              <p>
-                Try a recent version of Chrome, Firefox, Edge, or Safari.
-              </p>
-              <p className={styles.note}>
-                Drum (MIDI) playback is unaffected.
-              </p>
-            </>
-          )}
-        </div>
-        <footer className={styles.modalFooter}>
-          <button
-            type="button"
-            className={styles.primaryButton}
-            onClick={onClose}
-            autoFocus
-            data-testid="audio-worklet-warning-dismiss"
-          >
-            Got it
-          </button>
-        </footer>
-      </div>
-    </div>
-  );
-};
+}> = ({ state, open, onClose }) => (
+  <Modal
+    open={open && state !== 'available'}
+    onClose={onClose}
+    ariaLabel="Audio playback unavailable"
+    width={520}
+    testId="audio-worklet-warning-modal"
+  >
+    <ModalHeader
+      title="Audio playback unavailable"
+      icon={<AlertTriangle size={18} />}
+      onClose={onClose}
+      closeLabel="Close warning"
+      closeTestId="audio-worklet-warning-close"
+    />
+    <ModalBody>
+      {state === 'insecure-context' ? (
+        <>
+          <p>
+            This page isn't running in a <strong>secure context</strong>, so the
+            browser won't expose AudioWorklet. Loaded audio tracks won't play,
+            and pitch-preserved speed change is disabled.
+          </p>
+          <p>
+            Open the app via <code>localhost</code>, <code>127.0.0.1</code>, or
+            an HTTPS URL instead of a LAN IP / plain HTTP, and AudioWorklet will
+            be available.
+          </p>
+          <p className={modalStyles.note}>Drum (MIDI) playback is unaffected.</p>
+        </>
+      ) : (
+        <>
+          <p>
+            This browser doesn't support <strong>AudioWorklet</strong>, so loaded
+            audio tracks won't play and pitch-preserved speed change is
+            unavailable.
+          </p>
+          <p>Try a recent version of Chrome, Firefox, Edge, or Safari.</p>
+          <p className={modalStyles.note}>Drum (MIDI) playback is unaffected.</p>
+        </>
+      )}
+    </ModalBody>
+    <ModalFooter align="end">
+      <button
+        type="button"
+        className={modalStyles.primaryButton}
+        onClick={onClose}
+        autoFocus
+        data-testid="audio-worklet-warning-dismiss"
+      >
+        Got it
+      </button>
+    </ModalFooter>
+  </Modal>
+);

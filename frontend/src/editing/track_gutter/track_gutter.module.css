@@ -98,14 +98,8 @@
     display: inline-flex;
 }
 
-/* The per-row busy spinner (stem split / transcribe / lyrics align). Small,
-   muted, and identical across every track type. */
+/* Layout for the per-row busy <Spinner> (size / tone come from the
+   component); just keeps it from shrinking in the flex row. */
 .spinner {
-    composes: spinner from '../../ui/spinner/spinner.module.css';
     flex: 0 0 auto;
-    width: 10px;
-    height: 10px;
-    border-width: 1.5px;
-    border-color: var(--color-text-disabled);
-    border-top-color: transparent;
 }

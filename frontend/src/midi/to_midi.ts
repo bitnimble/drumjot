@@ -30,8 +30,9 @@
  *       emit a tremolo or expand it into multiple strikes; doing so well
  *       depends on tempo/genre and is left for a future pass.
  *
- *  [B7] Initial BPM (`globalMetadata.bpm`) and initial time signature meta
- *       events are emitted at tick 0. Subsequent tempo changes come from
+ *  [B7] Initial BPM (`tempo.initialBpm`, i.e. the song-start tempo event)
+ *       and initial time signature meta events are emitted at tick 0.
+ *       Subsequent tempo changes come from
  *       `jot.tempoEvents` and are emitted as `setTempo` at the precise
  *       tick (bar offset + beat * TICKS_PER_BEAT), so mid-bar tempo
  *       changes survive the export. Per-bar time-signature overrides are
@@ -47,7 +48,7 @@ import { Instrument, Jot, Modifier } from 'src/schema/dsl/dsl';
 import { buildStructural } from 'src/editing/jot_editor_store';
 import type { StructNote } from 'src/editing/structure/structure_store';
 import { DEFAULT_VELOCITY } from 'src/dynamics/dynamics';
-import { resolveBpm } from 'src/schema/dsl/tempo';
+import { initialBpm, resolveBpm } from 'src/schema/dsl/tempo';
 import { defaultMidiNote } from './gm';
 
 export type ToMidiOptions = {
@@ -86,7 +87,10 @@ export function toMidi(jot: Jot, options: ToMidiOptions = {}): Uint8Array {
 
   type TempoChange = { tick: number; bpm: number };
   const tempoChanges: TempoChange[] = [];
-  const globalBpm = resolveBpm(jot.globalMetadata.bpm, 120);
+  // Initial tempo = the song-start tempo event (no `globalMetadata.bpm`).
+  // The matching `tempoEvents` entry at the start is emitted in the walk
+  // below and dedups against this tick-0 baseline.
+  const globalBpm = initialBpm(jot);
 
   // Compute each layer-0 bar's absolute tick offset; we'll resolve
   // `jot.tempoEvents` anchors against this. Bars are uniform in length

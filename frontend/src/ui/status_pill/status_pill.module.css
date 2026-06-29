@@ -1,0 +1,39 @@
+/* Compact status pill: a rounded, single-line label that flags an in-flight
+   / error / success state in the toolbar or transport. The `tone` classes
+   only swap the colour triplet (bg / text / border). */
+.pill {
+    composes: bodySm from '../../typography.module.css';
+    padding: 4px 10px;
+    border-radius: var(--radius-pill);
+    /* stylelint-disable-next-line property-disallowed-list -- tiny tracking on top of bodySm so the pill text reads more deliberately than running body text. */
+    letter-spacing: 0.02em;
+    /* Render the full label by default; only truncate when the surrounding
+       row actually runs out of room. `min-width: 0` lets the pill participate
+       in flex shrinking (a flex item's default min-width is its content,
+       which would otherwise force the row to overflow horizontally). */
+    min-width: 0;
+    flex: 0 1 auto;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.busy {
+    background: var(--color-busy-bg);
+    color: var(--color-accent-busy);
+    border: 1px solid var(--color-busy-border);
+}
+
+.error {
+    background: var(--color-error-bg);
+    color: var(--color-error);
+    border: 1px solid var(--color-error-border);
+    cursor: pointer;
+}
+
+.success {
+    background: var(--color-success-bg);
+    color: var(--color-success);
+    border: 1px solid var(--color-success-border);
+    cursor: pointer;
+}

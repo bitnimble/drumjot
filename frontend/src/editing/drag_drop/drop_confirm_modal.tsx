@@ -1,7 +1,6 @@
-import { X } from 'lucide-react';
 import React from 'react';
 import { describeDocumentLoad, DropPlan } from 'src/editing/drag_drop/file_routing';
-import styles from './drop_confirm_modal.module.css';
+import { ConfirmModal, modalStyles } from 'src/ui/modal/modal';
 
 /**
  * Confirm dialog shown when a dropped file would replace the open score
@@ -19,67 +18,37 @@ export const DropConfirmModal: React.FC<{
   const lyricsCount = plan.additive.filter((a) => a.kind === 'lyrics').length;
 
   return (
-    <div
-      className={styles.backdrop}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Replace current score?"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onCancel();
-      }}
-      data-testid="drop-confirm-modal"
+    <ConfirmModal
+      open
+      onConfirm={onConfirm}
+      onCancel={onCancel}
+      title="Replace current score?"
+      ariaLabel="Replace current score?"
+      confirmLabel="Replace"
+      confirmVariant="danger"
+      autoFocus="confirm"
+      width={440}
+      testId="drop-confirm-modal"
+      closeTestId="drop-confirm-cancel-x"
+      cancelTestId="drop-confirm-cancel"
+      confirmTestId="drop-confirm-replace"
     >
-      <div className={styles.panel}>
-        <header className={styles.header}>
-          <h3 className={styles.title}>Replace current score?</h3>
-          <button
-            type="button"
-            className={styles.close}
-            onClick={onCancel}
-            aria-label="Cancel"
-            data-testid="drop-confirm-cancel-x"
-          >
-            <X size={18} aria-hidden="true" />
-          </button>
-        </header>
-        <div className={styles.body}>
-          <p>
-            {describeDocumentLoad(plan.documentLoad)}. This discards the
-            currently-loaded score and its edits.
-          </p>
-          {(audioCount > 0 || lyricsCount > 0) && (
-            <p className={styles.note}>
-              Also adding{' '}
-              {[
-                audioCount > 0 && `${audioCount} audio track${audioCount === 1 ? '' : 's'}`,
-                lyricsCount > 0 && `${lyricsCount} lyrics track${lyricsCount === 1 ? '' : 's'}`,
-              ]
-                .filter(Boolean)
-                .join(' and ')}
-              .
-            </p>
-          )}
-        </div>
-        <footer className={styles.footer}>
-          <button
-            type="button"
-            className={styles.cancelButton}
-            onClick={onCancel}
-            data-testid="drop-confirm-cancel"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            className={styles.confirmButton}
-            onClick={onConfirm}
-            autoFocus
-            data-testid="drop-confirm-replace"
-          >
-            Replace
-          </button>
-        </footer>
-      </div>
-    </div>
+      <p>
+        {describeDocumentLoad(plan.documentLoad)}. This discards the
+        currently-loaded score and its edits.
+      </p>
+      {(audioCount > 0 || lyricsCount > 0) && (
+        <p className={modalStyles.note}>
+          Also adding{' '}
+          {[
+            audioCount > 0 && `${audioCount} audio track${audioCount === 1 ? '' : 's'}`,
+            lyricsCount > 0 && `${lyricsCount} lyrics track${lyricsCount === 1 ? '' : 's'}`,
+          ]
+            .filter(Boolean)
+            .join(' and ')}
+          .
+        </p>
+      )}
+    </ConfirmModal>
   );
 };

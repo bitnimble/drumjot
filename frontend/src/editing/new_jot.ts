@@ -37,7 +37,6 @@ export function createBlankJot(title = 'New Jot'): Jot {
   return {
     title,
     globalMetadata: {
-      bpm: 120,
       time: { count: 4, unit: 4 },
       instrumentMapping,
     },

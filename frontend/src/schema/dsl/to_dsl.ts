@@ -268,7 +268,9 @@ function buildGlobalMetadata(
   realBars: { tsCount: number; tsUnit: number }[]
 ): Metadata {
   const residual = parseResidual(jot.globalMetadataJson);
-  const meta: Metadata = { ...residual, bpm: jot.bpm };
+  // Tempo (incl. the initial) exports via `tempoEvents`, not a metadata `bpm`;
+  // `barDrift` is recording-specific and intentionally dropped on DSL export.
+  const meta: Metadata = { ...residual };
   const time: TimeSignature | undefined = realBars[0]
     ? { count: realBars[0].tsCount, unit: realBars[0].tsUnit }
     : undefined;

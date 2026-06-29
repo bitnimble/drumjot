@@ -14,6 +14,7 @@
  */
 import { z } from 'zod';
 import {
+  derived,
   idMap,
   type Infer,
   type Init,
@@ -25,6 +26,8 @@ import {
   union,
   type UnionDescriptor,
 } from './descriptors';
+import { Derived } from './derived_fields';
+import type { DerivedResolver } from './derived_registry';
 import { createReactiveDoc, type ReactiveDoc } from './reactive_doc';
 
 // ---------- Leaf enums (mirror src/dsl/dsl.ts) ----------
@@ -284,8 +287,6 @@ export const InstrumentSchema = record({
  */
 export const JotSchema = record({
   title: z.string(),
-  /** Initial/global tempo in force before any per-bar override or event. */
-  bpm: z.number(),
   /** Jot time (seconds, bar-1 = 0) at which the recorded audio begins; the
    *  lead-in alignment (<= 0). `media = jot - songLeadIn`. The derived runtime
    *  anchors live in the `Epochs` record. */
@@ -298,12 +299,18 @@ export const JotSchema = record({
    *  first-class field (artist, a global `vol`, free-text `comment`, the RLRR
    *  provenance sidecar, and any custom keys), stored verbatim as a JSON
    *  string. Seeded once at load from the DSL `globalMetadata` residual (the
-   *  keys left after `bpm`/`time`/`instrumentMapping`/`songLeadIn`/`leadBars`/
+   *  keys left after `time`/`instrumentMapping`/`songLeadIn`/`leadBars`/
    *  `gridDivision`/`title` are lifted to their own fields); read for the
    *  score header's artist/subtitle and re-emitted by the DSL exporter. Kept
    *  opaque because the RLRR sidecar is arbitrarily nested provenance the
    *  editor never structurally edits. */
   globalMetadataJson: z.string().optional(),
+  /** Per-bar performance drift seconds (indexed by `layers[0].bars`, lead-in
+   *  bars = 0), JSON-encoded. Immutable load-time recording-alignment data
+   *  (the deviation the tempo map smooths away); the waveform/playhead re-apply
+   *  it. JSON-stringified like `globalMetadataJson` since it's never
+   *  structurally edited, and dropped on DSL export (recording-specific). */
+  barDriftJson: z.string().optional(),
   /** `||` layers by id; a single-layer jot has one (or none → primary). */
   layers: idMap(LayerSchema),
   /** First-class tracks (instrument / audio / lyrics) by id; a note's home. */
@@ -322,6 +329,28 @@ export const JotSchema = record({
   tempoEvents: idMap(TempoEventSchema),
   /** Pattern definitions by internal id. */
   patterns: idMap(PatternDefSchema),
+  // ---------- Derived fields (not stored; implementations installed by
+  // presenters via the per-document derived registry, see `derived_fields.ts`).
+  /** Audio-time timeline; implemented by `TempoPresenter`. */
+  tempoTimeline: derived(Derived.tempoTimeline),
+  /** Dominant bpm + time signature; implemented by `TempoPresenter`. */
+  dominantBpmAndTime: derived(Derived.dominantBpmAndTime),
+  /** Ordered lane list; implemented by `StructuralPresenter`. */
+  lanes: derived(Derived.lanes),
+  /** Rendered structural layers; implemented by `StructuralPresenter`. */
+  musicalLayers: derived(Derived.musicalLayers),
+  /** Per-lane row data (keyed); implemented by `StructuralPresenter`. */
+  barsForLane: derived(Derived.barsForLane),
+  /** Tempo projection for the tempo maths; implemented by `StructuralPresenter`. */
+  tempoSource: derived(Derived.tempoSource),
+  /** Per-bar performance drift; implemented by `StructuralPresenter`. */
+  barDrift: derived(Derived.barDrift),
+  /** Lane → instrument (keyed); implemented by `StructuralPresenter`. */
+  instrumentFor: derived(Derived.instrumentFor),
+  /** Owning layer id for a lane (keyed); implemented by `StructuralPresenter`. */
+  ownerLayerFor: derived(Derived.ownerLayerFor),
+  /** Rendered structural layers (with virtual lead-in); implemented by `StructuralPresenter`. */
+  renderedLayers: derived(Derived.renderedLayers),
 });
 
 // ---------- Consumer types ----------
@@ -398,8 +427,11 @@ export type JotState = Snapshot<typeof JotSchema>;
  * projection; reads/writes are ordinary property access. Call `.snapshot()`
  * on the result to read the current state back out as a plain {@link JotState}.
  */
-export function createMutableJot(initial?: Init<typeof JotSchema>): ReactiveDoc<typeof JotSchema> {
-  return createReactiveDoc(JotSchema, initial);
+export function createMutableJot(
+  initial?: Init<typeof JotSchema>,
+  derived?: DerivedResolver
+): ReactiveDoc<typeof JotSchema> {
+  return createReactiveDoc(JotSchema, initial, derived);
 }
 
 /**
@@ -415,6 +447,9 @@ export function createMutableJot(initial?: Init<typeof JotSchema>): ReactiveDoc<
  * (the same reason `createReactiveDoc`'s body erases `Init<S>` to a plain
  * object). The seeding path (`populateRecord`) reads it as a plain object.
  */
-export function createMutableJotFromState(state: JotState): ReactiveDoc<typeof JotSchema> {
-  return createMutableJot(state as unknown as Init<typeof JotSchema>);
+export function createMutableJotFromState(
+  state: JotState,
+  derived?: DerivedResolver
+): ReactiveDoc<typeof JotSchema> {
+  return createMutableJot(state as unknown as Init<typeof JotSchema>, derived);
 }

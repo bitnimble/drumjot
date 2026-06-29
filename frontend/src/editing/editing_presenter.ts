@@ -199,7 +199,7 @@ export class EditingPresenter implements Resettable {
    */
   groupSelection(): void {
     const jot = this.jotEditorStore.jot;
-    const layers = this.jotEditorStore.structural?.musicalLayers;
+    const layers = this.jotEditorStore.jot?.musicalLayers;
     if (!jot || !layers || this.selectionStore.selectedNotes.size === 0) return;
     const layout = buildBarLayout(layers);
     if (layout.slots.length === 0) return;
@@ -257,7 +257,7 @@ export class EditingPresenter implements Resettable {
    */
   ungroupSelection(): void {
     const jot = this.jotEditorStore.jot;
-    const layers = this.jotEditorStore.structural?.musicalLayers;
+    const layers = this.jotEditorStore.jot?.musicalLayers;
     if (!jot || !layers) return;
     const layout = buildBarLayout(layers);
     if (layout.slots.length === 0) return;
@@ -318,7 +318,7 @@ export class EditingPresenter implements Resettable {
    */
   moveSelection(anchor: StructNote, deltaBeat: number, laneMap: (lane: string) => string = SAME_LANE): void {
     const jot = this.jotEditorStore.jot;
-    const layers = this.jotEditorStore.structural?.musicalLayers;
+    const layers = this.jotEditorStore.jot?.musicalLayers;
     if (!jot || !layers || this.selectionStore.selectedNotes.size === 0) return;
 
     const layout = buildBarLayout(layers);
@@ -342,7 +342,6 @@ export class EditingPresenter implements Resettable {
       snappedDelta = snapBeat(rawTarget, divisors, layout.total) - anchorAbs;
     }
 
-    const structural = this.jotEditorStore.structural;
     const updates: [string, Record<string, unknown>][] = [];
     for (const note of this.selectionStore.selectedNotes) {
       const el = jot.elements.get(note.id) as Element | undefined;
@@ -360,7 +359,7 @@ export class EditingPresenter implements Resettable {
       let laneUpdate: Record<string, unknown> = {};
       if (newLane !== curLane) {
         const curLayer = el.trackId !== undefined ? layerIdOfTrack(jot, el.trackId) : undefined;
-        const targetLayer = structural?.ownerLayerFor(newLane) ?? curLayer;
+        const targetLayer = jot.ownerLayerFor(newLane) ?? curLayer;
         const newTrackId =
           targetLayer !== undefined
             ? this.layersPresenter.ensureInstrumentTrack(targetLayer, newLane)
@@ -391,7 +390,7 @@ export class EditingPresenter implements Resettable {
   snapDeltaFn(anchor: StructNote): (rawDeltaBeat: number) => number {
     const identity = (d: number): number => d;
     const jot = this.jotEditorStore.jot;
-    const layers = this.jotEditorStore.structural?.musicalLayers;
+    const layers = this.jotEditorStore.jot?.musicalLayers;
     if (!jot || !layers || !this.editingStore.snappingEnabled) return identity;
     const layout = buildBarLayout(layers);
     const el = jot.elements.get(anchor.id) as Element | undefined;
@@ -412,7 +411,7 @@ export class EditingPresenter implements Resettable {
    */
   beginDragMove(anchor: StructNote, startClientX: number, startLane?: string): void {
     const jot = this.jotEditorStore.jot;
-    const layers = this.jotEditorStore.structural?.musicalLayers;
+    const layers = this.jotEditorStore.jot?.musicalLayers;
     if (!jot || !layers) return;
     // A drag supersedes any in-flight paste placement (they share `dragPreview`).
     this.cancelPaste();
@@ -439,10 +438,10 @@ export class EditingPresenter implements Resettable {
       startLane,
       snap: this.snapDeltaFn(anchor),
       total: layout.total,
-      leadInBeats: this.jotEditorStore.structural?.barsForLane(anchor.lane).leadInBarsBeats ?? 0,
+      leadInBeats: this.jotEditorStore.jot?.barsForLane(anchor.lane).leadInBarsBeats ?? 0,
       notes,
       spansMultipleLanes: new Set(notes.map((n) => n.lane)).size > 1,
-      laneOrder: this.jotEditorStore.structural?.lanes ?? [],
+      laneOrder: this.jotEditorStore.jot?.lanes ?? [],
       lastClientX: startClientX,
       lastTargetLane: anchor.lane,
     };
@@ -476,7 +475,7 @@ export class EditingPresenter implements Resettable {
   private applyPreview(): void {
     const ctx = this.dragCtx;
     if (!ctx) return;
-    const px = this.jotEditorStore.structural?.pxPerBeat ?? 0;
+    const px = this.jotEditorStore.layout?.pxPerBeat ?? 0;
     const rawDelta = px > 0 ? (ctx.lastClientX - ctx.startClientX) / px : 0;
     const shift = ctx.snap(rawDelta);
     this.editingStore.dragPreview = placementPreview(
@@ -498,7 +497,7 @@ export class EditingPresenter implements Resettable {
     this.editingStore.dragActive = false;
     this.editingStore.dragPreview = [];
     if (!ctx) return;
-    const px = this.jotEditorStore.structural?.pxPerBeat ?? 0;
+    const px = this.jotEditorStore.layout?.pxPerBeat ?? 0;
     const rawDelta = px > 0 ? (ctx.lastClientX - ctx.startClientX) / px : 0;
     // Span rule (mirrors `applyPreview`): a multi-lane group keeps every lane
     // (identity map); a single-lane group re-homes wholesale onto the cursor's
@@ -536,7 +535,7 @@ export class EditingPresenter implements Resettable {
     // stored on the note.
     const layerId =
       placeholder.layerId ??
-      this.jotEditorStore.structural?.ownerLayerFor(placeholder.lane) ??
+      this.jotEditorStore.jot?.ownerLayerFor(placeholder.lane) ??
       primaryLayerId(jot);
     const trackId =
       layerId !== undefined
@@ -568,7 +567,7 @@ export class EditingPresenter implements Resettable {
    */
   copySelectionPayload(): ClipboardPayload | undefined {
     const jot = this.jotEditorStore.jot;
-    const layers = this.jotEditorStore.structural?.musicalLayers;
+    const layers = this.jotEditorStore.jot?.musicalLayers;
     const selected = this.selectionStore.selectedNotes;
     if (!jot || !layers || selected.size === 0) return undefined;
     const layout = buildBarLayout(layers);
@@ -612,7 +611,7 @@ export class EditingPresenter implements Resettable {
    */
   beginPaste(payload: ClipboardPayload): void {
     const jot = this.jotEditorStore.jot;
-    const layers = this.jotEditorStore.structural?.musicalLayers;
+    const layers = this.jotEditorStore.jot?.musicalLayers;
     if (!jot || !layers || payload.notes.length === 0) return;
     // A paste supersedes any in-flight drag (they share `dragPreview`).
     this.cancelDragMove();
@@ -630,8 +629,8 @@ export class EditingPresenter implements Resettable {
       spansMultipleLanes: lanes.size > 1,
       snap: this.snapAbsFn(layout.total),
       total: layout.total,
-      leadInBeats: this.jotEditorStore.structural?.barsForLane(anchorLane).leadInBarsBeats ?? 0,
-      laneOrder: this.jotEditorStore.structural?.lanes ?? [],
+      leadInBeats: this.jotEditorStore.jot?.barsForLane(anchorLane).leadInBarsBeats ?? 0,
+      laneOrder: this.jotEditorStore.jot?.lanes ?? [],
       lastAnchorAbs: 0,
       lastTargetLane: anchorLane,
       hasCursor: false,
@@ -687,11 +686,10 @@ export class EditingPresenter implements Resettable {
     this.editingStore.dragPreview = [];
     if (!ctx || !ctx.hasCursor) return;
     const jot = this.jotEditorStore.jot;
-    const layers = this.jotEditorStore.structural?.musicalLayers;
+    const layers = this.jotEditorStore.jot?.musicalLayers;
     if (!jot || !layers) return;
     const layout = buildBarLayout(layers);
     if (layout.slots.length === 0) return;
-    const structural = this.jotEditorStore.structural;
     const shift = ctx.snap(ctx.lastAnchorAbs);
     const newIds: string[] = [];
     const entries: [string, Record<string, unknown>][] = [];
@@ -701,7 +699,7 @@ export class EditingPresenter implements Resettable {
       const dest = homeBar(layout.slots, abs);
       // Resolve the note's home like insertNote: the firstmost layer owning the
       // lane, else the primary layer; mint its instrument track if needed.
-      const layerId = structural?.ownerLayerFor(lane) ?? primaryLayerId(jot);
+      const layerId = jot.ownerLayerFor(lane) ?? primaryLayerId(jot);
       const trackId =
         layerId !== undefined ? this.layersPresenter.ensureInstrumentTrack(layerId, lane) : undefined;
       const id = crypto.randomUUID();
@@ -729,7 +727,7 @@ export class EditingPresenter implements Resettable {
     if (entries.length === 0) return;
     jot.elements.setAll(entries);
     // Select the freshly-pasted notes (resolved from the recomputed structure).
-    const byId = notesById(this.jotEditorStore.structural?.musicalLayers ?? []);
+    const byId = notesById(this.jotEditorStore.jot?.musicalLayers ?? []);
     const pasted: StructNote[] = [];
     for (const id of newIds) {
       const n = byId.get(id);

@@ -33,10 +33,9 @@
     color: var(--color-text-faint-strong);
 }
 
+/* Geometry only; the field chrome + cursor come from the shared <Select>. */
 .select {
-    composes: field from '../../ui/form/form.module.css';
     width: 100%;
-    cursor: pointer;
 }
 
 .inline {

@@ -1,11 +1,13 @@
 import classNames from 'classnames';
-import { Info, Search, X } from 'lucide-react';
+import { Info, Search } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { parseLrc } from 'src/lyrics/lrc';
 import { ciTrimEq, LrclibMatch, searchLrclib } from 'src/lyrics/lrclib';
 import { jotPlayer } from 'src/editing/playback/player';
 import { Checkbox } from 'src/ui/checkbox/checkbox';
+import { Modal, ModalHeader } from 'src/ui/modal/modal';
+import { Spinner } from 'src/ui/spinner/spinner';
 import styles from './lyrics_search_modal.module.css';
 import { LyricsPresenter } from './lyrics_presenter';
 
@@ -167,30 +169,20 @@ export const LyricsSearchModal = observer(
     };
 
     return (
-      <div
-        className={styles.modalBackdrop}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Search lyrics on LRCLIB"
-        onMouseDown={(e) => {
-          // Click on the backdrop (outside the panel) closes the modal.
-          if (e.target === e.currentTarget) onClose();
-        }}
-        data-testid="lyrics-search-modal"
+      <Modal
+        open={open}
+        onClose={onClose}
+        ariaLabel="Search lyrics on LRCLIB"
+        width={560}
+        maxHeight
+        testId="lyrics-search-modal"
       >
-        <div className={styles.modalPanel}>
-          <header className={styles.modalHeader}>
-            <h3 className={styles.modalTitle}>Search lyrics on LRCLIB</h3>
-            <button
-              type="button"
-              className={styles.modalClose}
-              onClick={onClose}
-              aria-label="Close lyrics search"
-            >
-              <X size={18} aria-hidden="true" />
-            </button>
-          </header>
-          <form className={styles.modalForm} onSubmit={onSubmit}>
+        <ModalHeader
+          title="Search lyrics on LRCLIB"
+          onClose={onClose}
+          closeLabel="Close lyrics search"
+        />
+        <form className={styles.modalForm} onSubmit={onSubmit}>
             <input
               type="text"
               className={styles.field}
@@ -227,22 +219,21 @@ export const LyricsSearchModal = observer(
               data-testid="lyrics-search-submit"
             >
               {phase.kind === 'searching' ? (
-                <span className={styles.searchButtonSpinner} aria-hidden="true" />
+                <Spinner size={16} tone="current" />
               ) : (
                 <Search size={16} aria-hidden="true" />
               )}
             </button>
           </form>
-          <PhaseView phase={phase} selectedId={selectedId} onPickResult={onPickResult} />
-          <LoadFooter
-            wordLevel={wordLevel}
-            onSetWordLevel={setWordLevel}
-            hasAudioTracks={hasAudioTracks}
-            onLoad={onLoad}
-            disabled={!selectedMatch}
-          />
-        </div>
-      </div>
+        <PhaseView phase={phase} selectedId={selectedId} onPickResult={onPickResult} />
+        <LoadFooter
+          wordLevel={wordLevel}
+          onSetWordLevel={setWordLevel}
+          hasAudioTracks={hasAudioTracks}
+          onLoad={onLoad}
+          disabled={!selectedMatch}
+        />
+      </Modal>
     );
   }
 );

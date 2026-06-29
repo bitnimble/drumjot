@@ -63,8 +63,10 @@ test('File → New jot prompts on unsaved edits: cancel keeps the song, discard 
   await loadSong(page);
 
   // Edit the document so the session is dirty (a committed change marks it).
+  // Use the audio lead-in register (a plain mutation that doesn't change the
+  // displayed title asserted below).
   await page.evaluate(() => {
-    (window as any).drumjot.jotEditorStore.jot.bpm = 132;
+    (window as any).drumjot.jotEditorStore.jot.songLeadIn = -1.5;
   });
   await expect
     .poll(() => page.evaluate(() => (window as any).drumjot.jotEditorStore.dirty))

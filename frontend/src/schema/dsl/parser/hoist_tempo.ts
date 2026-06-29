@@ -5,10 +5,9 @@
  * bar-opening, mid-bar marker, group, note), and emits a single canonical
  * `jot.tempoEvents` list. Every `bpm` field is stripped from per-element
  * and per-bar metadata so the runtime has only one place to look.
- * `globalMetadata.bpm` is preserved as the song's initial tempo (the
- * value in force before any tempoEvent fires); it's set to the bpm
- * effective at (bar 0, beat 0) when the parser stamped a different
- * value on every bar.
+ * The song's initial tempo is just the first event: a bar-0 opening bpm
+ * becomes the event at (0, 0). Nothing is written to `globalMetadata.bpm`
+ * (it no longer exists); the span before the first event defaults to 120.
  *
  * No-op tempo declarations (same value as the currently-effective tempo)
  * are dropped, which keeps the event list compact in the common case
@@ -41,28 +40,16 @@ function sameBpmField(a: BpmField, b: BpmField): boolean {
  */
 export function hoistTempoEvents(jot: Jot): void {
   const events: TempoEvent[] = [];
-  let currentBpm = resolveBpm(jot.globalMetadata.bpm, DEFAULT_BPM);
+  // Tempo lives entirely in `tempoEvents`, including the initial value: the
+  // span before the first event defaults to 120 (see `tempo.initialBpm`),
+  // and bar 0's opening bpm; if any; is emitted as the first event at
+  // (0, 0) by the normal `considerChange` path below. Nothing is written to
+  // `globalMetadata.bpm`.
+  let currentBpm = DEFAULT_BPM;
   // The bpm value currently in force as authored (number or ramp), so a
   // transition propagated identically onto every following bar's snapshot
   // (how the parser carries `bpm` forward) collapses to a single event.
-  let currentBpmField: BpmField = jot.globalMetadata.bpm ?? DEFAULT_BPM;
-  let initialBpmCaptured = false;
-
-  // The initial tempo: the very first bpm value encountered (in layer 0,
-  // bar 0). If no bar carries an opening bpm, the existing
-  // `globalMetadata.bpm` (else default) stands.
-  const setInitial = (bpm: BpmField) => {
-    if (initialBpmCaptured) return;
-    // The initial tempo (`globalMetadata.bpm`, the value in force before
-    // any event) is always a scalar. A song that opens with a ramp seeds
-    // its initial tempo from the ramp's `start` and still emits the ramp
-    // as a tempo event below, so `currentBpmField` stays scalar here.
-    const resolved = resolveBpm(bpm, currentBpm);
-    jot.globalMetadata.bpm = resolved;
-    currentBpm = resolved;
-    currentBpmField = resolved;
-    initialBpmCaptured = true;
-  };
+  let currentBpmField: BpmField = DEFAULT_BPM;
 
   const considerChange = (barIndex: number, beat: number, bpm: BpmField) => {
     if (typeof bpm === 'object') {
@@ -89,14 +76,10 @@ export function hoistTempoEvents(jot: Jot): void {
   if (layer0) {
     const bars = layer0.bars;
 
-    // Pre-pass: lift bar 0's opening bpm into globalMetadata.bpm as the
-    // initial tempo. The parser stamps every bar with its barActive
-    // snapshot, so bar 0's metadata.bpm (if set) is the first bpm in
-    // force on the bar timeline.
-    if (bars.length > 0 && bars[0].metadata?.bpm !== undefined) {
-      setInitial(bars[0].metadata.bpm);
-    }
-
+    // Bar 0's opening bpm (if authored) becomes the first tempo event at
+    // (0, 0) via `considerChange`, the song's explicit initial tempo. A
+    // bar 0 opening equal to the 120 default is a no-op and emits nothing
+    // (the default already covers the pre-first-event span).
     for (let i = 0; i < bars.length; i++) {
       const bar = bars[i];
       processBarTempo(bar, i, considerChange, jot.patterns ?? {});
@@ -116,6 +99,12 @@ export function hoistTempoEvents(jot: Jot): void {
   for (const pat of Object.values(jot.patterns ?? {})) {
     stripBpmFromElements(pat.elements);
   }
+
+  // Tempo no longer lives on global metadata. The parser seeds
+  // `globalMetadata.bpm` from the opening `{{bpm}}` and carries it forward
+  // as the active snapshot, so strip whatever it ended on, the initial
+  // tempo is now the first event (or the 120 default).
+  delete (jot.globalMetadata as { bpm?: unknown }).bpm;
 
   if (events.length > 0) jot.tempoEvents = events;
 }

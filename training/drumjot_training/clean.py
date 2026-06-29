@@ -112,7 +112,7 @@ def recall_score(
     n_conf = int(peaks.size)
     if n_conf == 0:
         return {"fraction": 1.0, "n_confident": 0, "n_covered": 0}
-    chart = np.array(sorted(t for ts in onsets_by_lane.values() for t in ts), dtype=float)
+    chart = np.sort(np.fromiter((t for ts in onsets_by_lane.values() for t in ts), dtype=float))
     covered = 0
     for fr in peaks:
         t = float(fr) / env_fps

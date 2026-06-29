@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from functools import cache
 from pathlib import Path
 
 import numpy as np
@@ -63,6 +64,16 @@ def feat_dim(high_band: bool = True) -> int:
     return MERT_DIM + (HB_BANDS if high_band else 0)
 
 
+@cache
+def _resolved_path(audio_path: str) -> str:
+    """`str(Path(audio_path).expanduser().resolve())`, MEMOIZED. `.resolve()` follows
+    symlinks via a stat syscall (on NFS here), and `cache_key` is called per window per
+    epoch over symlinked sep-tree paths -> millions of identical stats (a real per-epoch
+    NFS-load + stall surface). The result is deterministic (the symlinks are static during
+    a run), so caching per path is functionally identical and removes the repeated syscall."""
+    return str(Path(audio_path).expanduser().resolve())
+
+
 def cache_key(
     audio_path: str | Path,
     encoder: str,
@@ -91,7 +102,7 @@ def cache_key(
     # training perstem stem) shares the cache entry the training run wrote under
     # the real path. Real paths resolve to themselves, so existing keys are
     # unchanged (no cache invalidation).
-    raw = f"{Path(audio_path).expanduser().resolve()}|{encoder}|{layer}|{window}|{variant}"
+    raw = f"{_resolved_path(str(audio_path))}|{encoder}|{layer}|{window}|{variant}"
     if start:
         raw += f"|s{start:g}"
     if cache_dtype != "float16":
@@ -319,6 +330,51 @@ def embed_clip(
     if cache_file is not None:
         np.save(cache_file, feat)
     return feat
+
+
+def encode_layers_to_cache(
+    audio_path: str | Path,
+    encoder: MertEncoder,
+    layers: list[int],
+    cache_dir: str | Path,
+    max_seconds: float | None = None,
+    cache_dtype: str = "float16",
+    high_band: bool = True,
+    start_seconds: float = 0.0,
+    y_full: np.ndarray | None = None,
+    y44_full: np.ndarray | None = None,
+) -> int:
+    """Encode SEVERAL hidden layers for one window in ONE MERT forward and write each
+    layer's `[MERT_layer | high-band]` to `cache_dir` under the SAME key `embed_clip`
+    uses (so a later read is a pure cache hit, and the bytes are identical to having
+    called `embed_clip` per layer -- same forward, same hidden state, same high-band).
+
+    The per-lane-layer fast path: N distinct layers cost ONE forward instead of N.
+    Already-cached layers in `layers` are skipped. Returns the encoder frame count.
+    Mirrors perstem_layer_sweep's `_encode_all_layers` for the package side."""
+    variant = feat_variant(high_band)
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def _file(layer: int) -> Path:
+        key = cache_key(audio_path, encoder.name, layer, max_seconds, variant,
+                        start_seconds, cache_dtype)
+        return cache_dir / f"{key}.npy"
+
+    todo = [layer for layer in layers if not _file(layer).exists()]
+    if not todo:  # all present -> just report the frame count (header read, no data)
+        return int(np.load(_file(layers[0]), mmap_mode="r").shape[0])
+    y = load_audio(audio_path, sr=encoder.sr) if y_full is None else y_full
+    a = int(start_seconds * encoder.sr)
+    b = a + int(max_seconds * encoder.sr) if max_seconds is not None else None
+    feats = encoder.encode_layers(y[a:b], encoder.sr, todo)  # {layer: (T, MERT_DIM)} -- one forward
+    nT = next(iter(feats.values())).shape[0]
+    fps = getattr(encoder, "fps", MERT_FPS)
+    hb = highband_features(audio_path, nT, max_seconds, start_seconds, fps, y44_full) if high_band else None
+    for layer, mert in feats.items():
+        feat = np.concatenate([mert, hb], axis=1) if hb is not None else mert
+        np.save(_file(layer), feat.astype(cache_dtype, copy=False))
+    return nT
 
 
 def clip_cached(

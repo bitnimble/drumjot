@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.models import OnsetCandidate, TranscriptionSummary
-from app.pipeline.beats import BarInfo, BeatStructure, BeatTick
+from app.pipeline.beats import BarInfo, BeatStructure, BeatTick, TempoSegment
 from app.pipeline.runner import STAGE_ORDER, PipelineContext, Stage, stage_index
 from app.pipeline.separate import PITCH_DISPLAY_NAMES
 
@@ -371,6 +371,7 @@ def _load_beats(path: Path) -> BeatStructure:
                 time_signature=tuple(bd["time_signature"]),  # type: ignore[arg-type]
                 tempo_bpm=float(bd["tempo_bpm"]),
                 feel=bd.get("feel", "straight16"),
+                drift_sec=float(bd.get("drift_sec", 0.0)),
             )
         )
     all_beats: list[BeatTick] = [
@@ -393,6 +394,18 @@ def _load_beats(path: Path) -> BeatStructure:
     align_offset_sec = _read_float("align_offset_sec")
     align_coarse_offset_sec = _read_float("align_coarse_offset_sec")
     align_fine_offset_sec = _read_float("align_fine_offset_sec")
+    # Tempo map (constant/ramp segments). Absent in beats.json predating the
+    # tempo-segment work; an empty list there just yields a `transcription.json`
+    # with `initial_bpm` and no events (graceful for old resumes).
+    tempo_segments = [
+        TempoSegment(
+            start_beat=int(sd["start_beat"]),
+            end_beat=int(sd["end_beat"]),
+            start_bpm=float(sd["start_bpm"]),
+            end_bpm=float(sd["end_bpm"]),
+        )
+        for sd in data.get("tempo_segments", [])
+    ]
     return BeatStructure(
         beats=all_beats,
         bars=bars,
@@ -405,6 +418,7 @@ def _load_beats(path: Path) -> BeatStructure:
         align_offset_sec=align_offset_sec,
         align_coarse_offset_sec=align_coarse_offset_sec,
         align_fine_offset_sec=align_fine_offset_sec,
+        tempo_segments=tempo_segments,
     )
 
 

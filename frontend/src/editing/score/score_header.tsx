@@ -1,6 +1,5 @@
 import { observer } from 'mobx-react-lite';
 import type { MutableJot } from 'src/schema/schema';
-import type { TempoPresenter } from 'src/editing/playback/tempo_presenter';
 import type { PaletteStore } from 'src/editing/palette/palette_store';
 import sharedStyles from '../jot_editor.module.css';
 
@@ -53,13 +52,15 @@ export function formatDisplayTitle(jot: MutableJot): string {
   return '';
 }
 
-export function formatSubtitle(jot: MutableJot, tempo: TempoPresenter): string {
+export function formatSubtitle(jot: MutableJot): string {
   const parts: string[] = [];
   const vol = residualMetadata(jot).vol;
-  const { dominantBpm, dominantTime } = tempo.dominantBpmAndTime;
+  const { dominantBpm, dominantTime } = jot.dominantBpmAndTime;
 
+  // The headline tempo is the one the song spends the most of its duration
+  // at (the duration-weighted majority); tempo has no single
+  // `globalMetadata.bpm` to fall back on, an empty jot simply shows no bpm.
   if (dominantBpm !== undefined) parts.push(`${dominantBpm} bpm`);
-  else parts.push(`${jot.bpm} bpm`);
 
   if (dominantTime) parts.push(`${dominantTime.count}/${dominantTime.unit}`);
   if (typeof vol === 'string') parts.push(vol);

@@ -6,7 +6,6 @@ import { PaletteStore } from 'src/editing/palette/palette_store';
 function fixture(palette: readonly string[]) {
   const { model } = createMutableJot({
     title: '',
-    bpm: 120,
     bars: [{ id: 'b1', tsCount: 4, tsUnit: 4 }],
     elements: {
       k: { kind: 'note', id: 'k', barId: 'b1', beat: 0, lane: 'k', duration: 1, modifiers: [] },

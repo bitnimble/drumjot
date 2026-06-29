@@ -4,8 +4,8 @@ import {
   formatMb,
   formatStageLabel,
   samplePct,
+  sampleProgressFraction,
   sampleProgressLabel,
-  sampleProgressWidth,
 } from '../toolbar_status';
 
 const MB = 1024 * 1024;
@@ -35,29 +35,29 @@ describe('formatMb', () => {
   });
 });
 
-describe('sampleProgressWidth', () => {
-  it('pins to 100% while decoding regardless of byte counts', () => {
-    expect(sampleProgressWidth('decoding', undefined)).toBe('100%');
-    expect(sampleProgressWidth('decoding', progress({ loaded: 1, total: 100 }))).toBe('100%');
+describe('sampleProgressFraction', () => {
+  it('pins to full while decoding regardless of byte counts', () => {
+    expect(sampleProgressFraction('decoding', undefined)).toBe(1);
+    expect(sampleProgressFraction('decoding', progress({ loaded: 1, total: 100 }))).toBe(1);
   });
 
   it('shows a working sliver while connecting or with no progress object', () => {
-    expect(sampleProgressWidth('connecting', undefined)).toBe('8%');
-    expect(sampleProgressWidth('downloading', undefined)).toBe('8%');
+    expect(sampleProgressFraction('connecting', undefined)).toBe(0.08);
+    expect(sampleProgressFraction('downloading', undefined)).toBe(0.08);
   });
 
   it('shows full when served from cache', () => {
-    expect(sampleProgressWidth('downloading', progress({ fromCache: true }))).toBe('100%');
+    expect(sampleProgressFraction('downloading', progress({ fromCache: true }))).toBe(1);
   });
 
   it('reflects the download percentage when a total is known', () => {
-    expect(sampleProgressWidth('downloading', progress({ loaded: 15 * MB, total: 30 * MB }))).toBe(
-      '50%',
-    );
+    expect(
+      sampleProgressFraction('downloading', progress({ loaded: 15 * MB, total: 30 * MB })),
+    ).toBe(0.5);
   });
 
   it('falls back to a fixed sliver when the total is unknown', () => {
-    expect(sampleProgressWidth('downloading', progress({ loaded: 5 * MB, total: 0 }))).toBe('40%');
+    expect(sampleProgressFraction('downloading', progress({ loaded: 5 * MB, total: 0 }))).toBe(0.4);
   });
 });
 

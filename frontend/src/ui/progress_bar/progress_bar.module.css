@@ -1,0 +1,17 @@
+/* Determinate progress track + fill. Call sites set the track width via
+   `className`; the fill animates to `value`. */
+.track {
+    height: 6px;
+    border-radius: var(--radius-pill);
+    background: var(--color-border-soft-alt);
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.fill {
+    display: block;
+    height: 100%;
+    background: var(--color-accent-busy);
+    border-radius: var(--radius-pill);
+    transition: width 0.15s linear;
+}

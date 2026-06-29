@@ -35,6 +35,7 @@ import { NewJotConfirmModal } from './new_jot_confirm_modal';
 import { SelectionContext } from 'src/editing/selection/selection';
 import {
   BarTimingsContext,
+  JotContext,
   StructuralContext,
   TempoContext,
   TempoEditContext,
@@ -64,6 +65,8 @@ import {
 } from './playback/playback_contexts';
 import { AudioTrackControls, MixerView, LayerControls } from './mixer/mixer';
 import { Logo } from 'src/ui/logo/logo';
+import { ModalProvider } from 'src/ui/modal/modal_manager';
+import { Spinner } from 'src/ui/spinner/spinner';
 import { Minimap } from './minimap/minimap';
 import { EditingStore } from './editing_store';
 import { EditingPresenter } from './editing_presenter';
@@ -208,7 +211,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
   if (options.examples) jotEditorPresenter.setExamples(options.examples);
   const selection = new SelectionStore();
   const selectionPresenter = new SelectionPresenter(selection, () =>
-    orderedNotes(jotEditorStore.structural?.layers ?? [])
+    orderedNotes(jotEditorStore.jot?.renderedLayers ?? [])
   );
   const sidebar = new SidebarStore();
   const sidebarPresenter = new SidebarPresenter(sidebar);
@@ -269,7 +272,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
   // encloses, resolved to the current StructNotes. Reads the DOM, so it only
   // runs from the pointer handlers below (never a render path).
   const marqueeHitTest = (box: Box): StructNote[] => {
-    const layers = jotEditorStore.structural?.musicalLayers;
+    const layers = jotEditorStore.jot?.musicalLayers;
     if (!layers) return [];
     return notesInBox(box, notesById(layers));
   };
@@ -496,6 +499,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     );
 
     return (
+        <ModalProvider>
         <TranscribeStoreContext.Provider value={transcribe}>
         <TranscribePresenterContext.Provider value={transcribePresenter}>
         <LayersStoreContext.Provider value={layers}>
@@ -690,6 +694,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
         </LayersStoreContext.Provider>
         </TranscribePresenterContext.Provider>
         </TranscribeStoreContext.Provider>
+        </ModalProvider>
     );
   });
 
@@ -1327,14 +1332,14 @@ const JotEditor = observer((props: JotEditorProps) => {
   // it here doesn't bind JotEditor's render to the zoom variable.
   const barTimings = React.useMemo<ReadonlyMap<number, BarTiming>>(() => {
     const timeline = tempo.timeline;
-    const structBars = structural.layers[0]?.bars ?? [];
+    const structBars = jot.renderedLayers[0]?.bars ?? [];
     const map = new Map<number, BarTiming>();
     for (let i = 0; i < structBars.length; i++) {
       const timing = timeline.bars[i];
       if (timing) map.set(structBars[i].index, timing);
     }
     return map;
-  }, [structural, tempo]);
+  }, [jot, tempo]);
   // The starting width is captured at the start of each drag (the
   // pointermove deltas then read against that snapshot) so an in-
   // flight resize stays anchored to where the user grabbed even
@@ -1361,6 +1366,7 @@ const JotEditor = observer((props: JotEditorProps) => {
     target.addEventListener('pointercancel', onUp);
   };
   return (
+    <JotContext.Provider value={jot}>
     <StructuralContext.Provider value={structural}>
       <TempoContext.Provider value={tempo}>
         <TempoEditContext.Provider value={tempoEdit}>
@@ -1399,7 +1405,7 @@ const JotEditor = observer((props: JotEditorProps) => {
               >
                 <div className={styles.headerRow}>
                   <h2 className={styles.title}>{formatDisplayTitle(jot) || 'Untitled jot'}</h2>
-                  <p className={styles.subtitle}>{formatSubtitle(jot, tempo)}</p>
+                  <p className={styles.subtitle}>{formatSubtitle(jot)}</p>
                   <Legend palette={palette} />
                 </div>
                 <TimelineHeader onSeek={onSeek} onResizeGutterStart={onResizeGutterStart} />
@@ -1422,6 +1428,7 @@ const JotEditor = observer((props: JotEditorProps) => {
         </TempoEditContext.Provider>
       </TempoContext.Provider>
     </StructuralContext.Provider>
+    </JotContext.Provider>
   );
 });
 
@@ -2098,7 +2105,7 @@ const LoadingOverlay = observer(({ jotEditorStore }: { jotEditorStore: JotEditor
       aria-live="polite"
       onMouseDown={(e) => e.stopPropagation()}
     >
-      <div className={styles.loadingSpinner} aria-hidden="true" />
+      <Spinner size={44} thickness={4} tone="accent" />
       {jotEditorStore.loadingLabel && (
         <div className={styles.loadingLabel}>{jotEditorStore.loadingLabel}</div>
       )}

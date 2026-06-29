@@ -29,7 +29,12 @@ export function makeEpochs(songLeadIn: number, fullLeadIn: number): Epochs {
   return { drums: 0, songLeadIn, fullLeadIn };
 }
 
-/** Audio (media) time for a jot time: `media = jot - songLeadIn`. */
+/** Audio (media) time for a jot time: `media = jot - songLeadIn`.
+ *
+ * This is the FLAT mapping (uniform grid). The live playback path instead goes
+ * through {@link DriftMap} (`drift_map.ts`): the same formula plus a per-bar
+ * drift correction so the playhead / synth / audio-seek track a human
+ * recording's wander. With no drift the two are identical. */
 export function jotToMedia(epochs: Epochs, jotSec: number): number {
   return jotSec - epochs.songLeadIn;
 }

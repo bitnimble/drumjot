@@ -10,6 +10,7 @@ import { computed, makeObservable } from 'mobx';
 import { TimeSignature } from 'src/schema/dsl/dsl';
 import { LEAD_IN_BAR_ID, toTempoBars } from 'src/editing/structure/structure_store';
 import { BarTempos, buildBarTempos, initialBpm } from 'src/schema/dsl/tempo';
+import type { JotDerivedRegistry } from 'src/schema/derived_fields';
 import {
   buildTimeline,
   type JotTimeline,
@@ -32,13 +33,21 @@ export type TempoRamp = {
 };
 
 export class TempoPresenter {
-  constructor(private readonly jot: LaidOutJot) {
+  constructor(
+    private readonly jot: LaidOutJot,
+    registry: JotDerivedRegistry
+  ) {
     makeObservable(this, {
       timeline: computed,
       barTempos: computed,
       tempoRamps: computed,
       dominantBpmAndTime: computed,
     });
+    // Install this domain's cross-domain derived fields on the document, so
+    // consumers read `jot.tempoTimeline` / `jot.dominantBpmAndTime` without
+    // depending on this presenter. The getters below are the implementations.
+    registry.tempoTimeline.define(() => this.timeline);
+    registry.dominantBpmAndTime.define(() => this.dominantBpmAndTime);
   }
 
   get timeline(): JotTimeline {

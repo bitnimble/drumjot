@@ -5,6 +5,7 @@ import React from 'react';
 import { Checkbox } from 'src/ui/checkbox/checkbox';
 import { DropdownButton } from 'src/ui/dropdown/dropdown';
 import { RadioGroup } from 'src/ui/radio_group/radio_group';
+import { Select } from 'src/ui/select/select';
 import { Stepper } from 'src/ui/stepper/stepper';
 import { BarBeatField } from 'src/ui/bar_beat_field/bar_beat_field';
 import type { Sticking } from 'src/schema/schema';
@@ -45,7 +46,7 @@ export const NotePropertiesView = observer(function NotePropertiesView() {
     <div className={styles.props} data-testid="note-properties">
       <div className={styles.field}>
         <span className={styles.label}>Lane</span>
-        <select
+        <Select
           className={styles.select}
           value={laneValue}
           onChange={(e) => presenter.setLane(e.target.value)}
@@ -61,7 +62,7 @@ export const NotePropertiesView = observer(function NotePropertiesView() {
               {l.name}
             </option>
           ))}
-        </select>
+        </Select>
       </div>
 
       <div className={styles.field}>

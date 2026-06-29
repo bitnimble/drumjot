@@ -80,10 +80,10 @@ type PlainTempoEvent = { id: string; barId: string; beat: number; bpm: number | 
 type PlainPatternDef = { id: string; name: string; body: Record<string, PlainElement> };
 type PlainJot = {
   title: string;
-  bpm: number;
   songLeadIn?: number;
   leadBars?: number;
   gridDivision?: number;
+  barDriftJson?: string;
   layers: Record<string, { id: string; name?: string; color?: string }>;
   tracks: Record<string, PlainTrack>;
   trackGroups: Record<string, { id: string; name: string; color?: string }>;
@@ -140,10 +140,10 @@ type ListW = {
 };
 type ModelW = {
   title: string;
-  bpm: number;
   songLeadIn?: number;
   leadBars?: number;
   gridDivision?: number;
+  barDriftJson?: string;
   layers: IdMapW;
   tracks: IdMapW;
   trackGroups: IdMapW;
@@ -219,10 +219,15 @@ function replaceContent(m: ModelW, tx: PlainJot, layerName: string | undefined):
   m.tempoEvents.setAll(entriesOf(tx.tempoEvents));
   for (const ol of tx.ordering) m.ordering.push(ol as unknown as Record<string, unknown>);
 
-  m.bpm = tx.bpm;
+  // The initial tempo rides in `tx.tempoEvents` (the event at the first source
+  // bar) now, copied above; no separate `bpm` register.
   setOptionalNumber(m, 'songLeadIn', tx.songLeadIn);
   setOptionalNumber(m, 'leadBars', tx.leadBars);
   setOptionalNumber(m, 'gridDivision', tx.gridDivision);
+  // Replacing wholesale: carry the transcription's per-bar drift (its bar grid
+  // becomes the document's). The overlay path doesn't (the merged grid would
+  // misalign the drift index), so it leaves any existing drift untouched.
+  m.barDriftJson = tx.barDriftJson;
 }
 
 /** Non-empty path: keep existing notes, overlay the transcription as a new
@@ -267,7 +272,8 @@ function appendLayer(
   if (tempoEntries.length > 0) m.tempoEvents.setAll(tempoEntries);
 
   // --- global registers from the transcription.
-  m.bpm = tx.bpm;
+  // The initial tempo rides in `tx.tempoEvents` (the event at the first source
+  // bar) now, copied above; no separate `bpm` register.
   setOptionalNumber(m, 'songLeadIn', tx.songLeadIn);
   setOptionalNumber(m, 'leadBars', tx.leadBars);
   setOptionalNumber(m, 'gridDivision', tx.gridDivision);

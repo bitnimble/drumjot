@@ -23,9 +23,10 @@ import { action, comparer, computed, makeObservable, observable } from 'mobx';
 import { computedFn } from 'mobx-utils';
 import { Instrument, TempoEvent } from 'src/schema/dsl/dsl';
 import { isDyadic } from 'src/schema/dsl/element_metrics';
-import { DEFAULT_BPM, type TempoJot } from 'src/schema/dsl/tempo';
+import { initialBpm, type TempoJot } from 'src/schema/dsl/tempo';
 import { DEFAULT_GRID_DIVISION } from 'src/grid/grid';
 import type { MutableJot } from 'src/schema/schema';
+import type { JotDerivedRegistry } from 'src/schema/derived_fields';
 import { ViewConfig } from 'src/editing/viewport/view_config';
 import type { LaidOutJot } from 'src/editing/playback/timeline';
 import {
@@ -61,7 +62,8 @@ export class StructuralPresenter implements LaidOutJot {
     private readonly paletteStore: PaletteStore,
     private readonly layoutStore: LayoutStore,
     private readonly getJot: () => MutableJot | undefined,
-    private readonly viewConfig: ViewConfig
+    private readonly viewConfig: ViewConfig,
+    registry: JotDerivedRegistry
   ) {
     makeObservable(this, {
       drumOffsetBeats: observable,
@@ -80,6 +82,18 @@ export class StructuralPresenter implements LaidOutJot {
       hasContent: computed,
       primaryLayer: computed,
     });
+    // Install this domain's cross-domain derived fields on the document, so
+    // consumers read `jot.lanes` / `jot.tempoSource` etc. without importing
+    // this presenter. The getters below are the implementations. (Viewport
+    // state like `pxPerBeat` stays on the presenter, it's not document data.)
+    registry.lanes.define(() => this.lanes);
+    registry.musicalLayers.define(() => this.musicalLayers);
+    registry.barsForLane.define((lane) => this.barsForLane(lane));
+    registry.tempoSource.define(() => this.tempoSource);
+    registry.barDrift.define(() => this.barDrift);
+    registry.instrumentFor.define((lane) => this.instrumentFor(lane));
+    registry.ownerLayerFor.define((lane) => this.ownerLayerFor(lane));
+    registry.renderedLayers.define(() => this.layers);
   }
 
   /**
@@ -107,7 +121,26 @@ export class StructuralPresenter implements LaidOutJot {
       if (barIndex === undefined) continue;
       tempoEvents.push({ barIndex, beat: ev.beat, bpm: ev.bpm });
     }
-    return { tempoEvents, globalMetadata: { bpm: jot.bpm } };
+    // `barIndexById` counts ALL non-anacrusis bars (lead-in included), so the
+    // drums-enter bar (where the initial-tempo event lives) sits at
+    // barIndex == leadBars. Pass that so `initialBpm` recognises it as the
+    // song-start event rather than reading the 120 default.
+    return { tempoEvents, globalMetadata: { leadBars: jot.leadBars ?? 0 } };
+  }
+
+  /** Per-bar performance drift seconds, indexed by `layers[0].bars` (lead-in
+   *  bars = 0), decoded from the reactive doc's `barDriftJson`. Empty for a
+   *  metronomic recording or a hand-authored jot. Feeds the waveform stretch
+   *  (`buildChunkLayout`) and the playback `DriftMap` (`buildTimeline`). */
+  get barDrift(): readonly number[] {
+    const json = this.getJot()?.barDriftJson;
+    if (!json) return [];
+    try {
+      const parsed: unknown = JSON.parse(json);
+      return Array.isArray(parsed) ? (parsed as number[]) : [];
+    } catch {
+      return [];
+    }
   }
 
   /** Producer grid density (1/N-of-a-whole-note), read live off the reactive
@@ -151,12 +184,16 @@ export class StructuralPresenter implements LaidOutJot {
   get layers(): StructLayer[] {
     const jot = this.getJot();
     const preRollSec = Math.max(0, -(jot?.songLeadIn ?? 0));
-    const bpm = jot?.bpm ?? DEFAULT_BPM;
+    const bpm = initialBpm(this.tempoSource);
     return this.musicalLayers.map((layer) => withVirtualLeadIn(layer, preRollSec, bpm));
   }
 
+  /** Delegates to the viewport {@link LayoutStore} (the owner of zoom-derived
+   *  layout scale); kept on the presenter only to satisfy the `LaidOutJot`
+   *  contract `buildTimeline` reads. Cross-domain consumers read
+   *  `jotEditorStore.layout.pxPerBeat` directly. */
   get pxPerBeat(): number {
-    return ((this.viewConfig.barWidth as number) * this.layoutStore.densityFactor) / 4;
+    return this.layoutStore.pxPerBeat;
   }
 
   /** Ordered lane list across all layers (lanes that carry a note).
@@ -199,7 +236,7 @@ export class StructuralPresenter implements LaidOutJot {
     if (base.some((b) => b.index < 0)) return base;
     const jot = this.getJot();
     const preRollSec = Math.max(0, -(jot?.songLeadIn ?? 0));
-    const bpm = jot?.bpm ?? DEFAULT_BPM;
+    const bpm = initialBpm(this.tempoSource);
     const firstReal = base.find((b) => b.index === 1) ?? base[0];
     const oneBarBeats = (firstReal.tsCount * 4) / firstReal.tsUnit;
     const preRollBeats = (preRollSec * bpm) / 60;

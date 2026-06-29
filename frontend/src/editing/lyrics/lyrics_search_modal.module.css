@@ -1,33 +1,6 @@
-/* LRCLIB search modal. Centered fixed overlay with a dimmed backdrop;
-   clicking the backdrop closes. Panel chrome mirrors the existing
-   debug-panel / dropdown styling so the modal feels native to the rest
-   of the app. */
-
-.modalBackdrop {
-    composes: backdrop from '../../ui/modal/modal.module.css';
-}
-
-.modalPanel {
-    composes: panel from '../../ui/modal/modal.module.css';
-    width: min(560px, 100%);
-    /* `dvh` recomputes against the visible viewport so the modal
-       doesn't extend past a visible mobile address bar; `vh`
-       fallback for engines without `dvh`. */
-    max-height: calc(100vh - 48px);
-    max-height: calc(100dvh - 48px);
-}
-
-.modalHeader {
-    composes: header from '../../ui/modal/modal.module.css';
-}
-
-.modalTitle {
-    composes: title from '../../ui/modal/modal.module.css';
-}
-
-.modalClose {
-    composes: close from '../../ui/button/button.module.css';
-}
+/* LRCLIB search modal. Backdrop / panel / header chrome comes from the
+   shared <Modal> primitive; the search form, results list, and load footer
+   are bespoke and live here. */
 
 .modalForm {
     display: flex;
@@ -55,20 +28,6 @@
 
 .searchButton:disabled {
     opacity: 0.6;
-}
-
-/* Self-contained spinner for the search button. Composes the shared
-   `spinner` primitive for the keyframes + circle, then adds the
-   button-specific size (16x16, matching the lucide Search icon it
-   replaces) and `currentColor` tints so the spinner picks up the
-   button's foreground. */
-.searchButtonSpinner {
-    composes: spinner from '../../ui/spinner/spinner.module.css';
-    width: 16px;
-    height: 16px;
-    border-width: 1.5px;
-    border-color: color-mix(in srgb, currentColor 35%, transparent);
-    border-top-color: currentColor;
 }
 
 .results {

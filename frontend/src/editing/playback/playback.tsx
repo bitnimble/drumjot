@@ -3,7 +3,8 @@ import { AlertTriangle, Loader, Pause, Play, Square } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { jotPlayer, PlayerState } from 'src/editing/playback/player';
-import sharedStyles from '../jot_editor.module.css';
+import { Slider } from 'src/ui/slider/slider';
+import { StatusPill } from 'src/ui/status_pill/status_pill';
 import { FollowPlayheadContext } from './playback_contexts';
 import styles from './playback.module.css';
 import { VOLUME_STEP } from '../mixer/mixer_store';
@@ -99,12 +100,9 @@ const PlaybackControls = observer(
         <div className={styles.transportAux}>
           <MasterVolumes />
           {hasError && (
-            <span
-              className={classNames(sharedStyles.statusPill, sharedStyles.statusPillError)}
-              title={playerError}
-            >
+            <StatusPill tone="error" title={playerError}>
               Playback: {truncate(playerError ?? '', 60)}
-            </span>
+            </StatusPill>
           )}
         </div>
       </>
@@ -200,15 +198,11 @@ const MasterVolumeSlider = ({
 }) => (
   <label className={styles.masterVolume} title={title}>
     <span>{label}</span>
-    <input
-      type="range"
-      min={0}
-      max={1}
+    <Slider
       step={VOLUME_STEP}
       value={value}
-      onChange={(e) => onChange(parseFloat(e.target.value))}
-      aria-label={`${label} master volume`}
-      style={{ ['--value' as string]: value } as React.CSSProperties}
+      onChange={onChange}
+      ariaLabel={`${label} master volume`}
     />
     <span className={styles.masterVolumeValue}>{Math.round(value * 100)}%</span>
   </label>

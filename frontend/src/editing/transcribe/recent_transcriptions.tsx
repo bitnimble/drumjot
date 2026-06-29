@@ -2,6 +2,7 @@ import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
 import React from 'react';
 import { TranscriptionSummary } from 'src/editing/transcribe/transcriber';
 import { useParentSubmenuRegistry } from 'src/ui/dropdown/dropdown';
+import { Spinner } from 'src/ui/spinner/spinner';
 import styles from './recent_transcriptions.module.css';
 
 const LIMIT = 5;
@@ -138,7 +139,7 @@ export const RecentTranscriptionsPicker = ({
               aria-label="Refresh recent transcriptions"
             >
               {loading ? (
-                <span className={styles.spinner} aria-hidden="true" />
+                <Spinner size={10} tone="accent" className={styles.spinner} />
               ) : (
                 <RefreshCw size={12} aria-hidden="true" className={styles.icon} />
               )}
@@ -146,7 +147,7 @@ export const RecentTranscriptionsPicker = ({
           </div>
           {loading && visible.length === 0 ? (
             <div className={styles.loading}>
-              <span className={styles.spinner} aria-hidden="true" />
+              <Spinner size={10} tone="accent" className={styles.spinner} />
               <span>Loading…</span>
             </div>
           ) : visible.length === 0 ? (

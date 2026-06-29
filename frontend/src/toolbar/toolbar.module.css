@@ -149,21 +149,9 @@
     flex-shrink: 0;
 }
 
+/* Just the track width; the <ProgressBar> primitive owns the bar chrome. */
 .sampleProgressTrack {
     width: 144px;
-    height: 6px;
-    border-radius: var(--radius-pill);
-    background: var(--color-border-soft-alt);
-    overflow: hidden;
-    flex-shrink: 0;
-}
-
-.sampleProgressFill {
-    display: block;
-    height: 100%;
-    background: var(--color-accent-busy);
-    border-radius: var(--radius-pill);
-    transition: width 0.15s linear;
 }
 
 /* Dropdown primitives moved to `src/ui/dropdown/dropdown.module.css` so the
@@ -172,15 +160,10 @@
 /* Inline spinner shown next to the "Transcribing …" status pill while a
    /transcribe stream is in flight. Matches the look of the full-screen
    .loadingSpinner but at toolbar-pill size. */
+/* Layout for the in-pill <Spinner> (size / tone come from the component). */
 .statusPillSpinner {
-    composes: spinner from '../ui/spinner/spinner.module.css';
     display: inline-block;
-    width: 10px;
-    height: 10px;
     margin-right: 4px;
-    border-width: 1.5px;
-    border-color: var(--color-border-translucent);
-    border-top-color: var(--color-accent);
     vertical-align: -1px;
 }
 

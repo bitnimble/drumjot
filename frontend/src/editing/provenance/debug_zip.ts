@@ -26,6 +26,10 @@ import {
   ZipEntry,
   zipEntryBasename,
 } from 'src/utils/zip';
+import {
+  TranscriptionSchema,
+  TranscriptionTempoMap,
+} from 'src/midi/transcription_schema';
 
 /**
  * The manifest's `mapping` field. Maps drum lane letter (e.g. `k`,
@@ -65,6 +69,10 @@ export type DebugBundleManifest = {
    *  detected onset (kept or rejected) so the UI can annotate rendered
    *  notes + render rejected onsets as ghost overlays. */
   note_provenance?: string | null;
+  /** Filename of the Drumjot-native `transcription.json` container
+   *  (versioned; currently the tick-based tempo map). When present the UI
+   *  prefers it over the MIDI tempo track. */
+  transcription?: string | null;
   metadata?: Record<string, unknown>;
   stage_timings?: DebugBundleStageTiming[];
   logs?: DebugBundleLogEntry[];
@@ -254,6 +262,21 @@ export type DebugBundle = {
    * provenance (legacy / hand-built bundles).
    */
   noteProvenance: NoteProvenanceFile | null;
+  /**
+   * Tick-based tempo map parsed from `transcription.json` when the bundle
+   * shipped one in a format this build understands. The caller passes it
+   * to `fromMidi` so the score's tempo comes from the exact map (ramps
+   * included) rather than the lossy MIDI tempo track. `null` when absent or
+   * a newer/unknown format, `fromMidi` then falls back to the MIDI tempo.
+   */
+  tempoMap: TranscriptionTempoMap | null;
+  /**
+   * Per-(drum-)bar performance drift in seconds from `transcription.json`,
+   * indexed by drum bar. Passed to `fromMidi` (re-indexed onto
+   * `layers[0].bars`) so the waveform/playhead align bar lines to the
+   * recording. `null` when absent or the song was on-grid.
+   */
+  barDrift: number[] | null;
   audioTracks: DebugBundleAudioTrack[];
   manifest: DebugBundleManifest;
 };
@@ -340,6 +363,38 @@ export async function loadDebugZip(file: File): Promise<DebugBundle> {
     }
   }
 
+  // Transcription container (currently the tick-based tempo map). Same
+  // resolution + swallow-on-error pattern as the provenance sidecar: tempo
+  // is reconstructable from the MIDI track, so a missing/unparseable/newer
+  // container just falls back rather than failing the load.
+  let tempoMap: TranscriptionTempoMap | null = null;
+  let barDrift: number[] | null = null;
+  const transcriptionFilename =
+    (typeof manifest.transcription === 'string' && manifest.transcription) ||
+    'transcription.json';
+  const transcriptionEntry = byBasename.get(transcriptionFilename.toLowerCase());
+  if (transcriptionEntry) {
+    try {
+      const text = new TextDecoder('utf-8').decode(
+        await inflateEntry(bytes, transcriptionEntry),
+      );
+      // Validate against the zod schema (fail closed): a malformed or
+      // newer/unknown-format container yields no tempo map, and the score
+      // falls back to the MIDI tempo track.
+      const result = TranscriptionSchema.safeParse(JSON.parse(text));
+      if (result.success) {
+        tempoMap = result.data.tempoMap;
+        barDrift = result.data.barDrift ?? null;
+      } else {
+        // eslint-disable-next-line no-console
+        console.warn('Ignoring transcription.json (schema mismatch):', result.error.message);
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('Could not parse transcription.json:', err);
+    }
+  }
+
   // Dedupe by filename first: when the manifest maps several lane
   // letters at the same stem file (e.g. crash `c` + ride `d` both at
   // `stem_c.mp3` after the cymbal split), we only want to inflate and
@@ -377,5 +432,5 @@ export async function loadDebugZip(file: File): Promise<DebugBundle> {
   });
   const audioTracks = await Promise.all(pending);
 
-  return { predictionMidi, noteProvenance, audioTracks, manifest };
+  return { predictionMidi, noteProvenance, tempoMap, barDrift, audioTracks, manifest };
 }

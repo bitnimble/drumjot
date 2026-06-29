@@ -11,7 +11,7 @@ import { TrackGutter, type TrackBusy } from 'src/editing/track_gutter/track_gutt
 import { TranscribeStoreContext, TranscribePresenterContext } from 'src/editing/transcribe/transcribe_contexts';
 import { STAGE_ORDER } from 'src/editing/transcribe/transcriber';
 import type { TranscribeTrackStatus } from 'src/editing/transcribe/transcribe_store';
-import { StructuralContext } from '../jot_editor_contexts';
+import { JotContext, StructuralContext } from '../jot_editor_contexts';
 import { UniformWaveformsContext, WaveformGridLinesContext } from './mixer_contexts';
 import { MixerStoreContext } from './mixer_contexts';
 import { ViewportStoreContext } from '../viewport/viewport_contexts';
@@ -325,6 +325,7 @@ const AudioTrackWaveformCanvas = observer(
   }) => {
     const viewport = React.useContext(ViewportStoreContext);
     const uniformWaveforms = React.useContext(UniformWaveformsContext);
+    const jot = React.useContext(JotContext);
     const padBeats = structural?.config.barNotePaddingBeats ?? 0.125;
     // Waveform tint reads straight off the AudioTrack instance; the
     // class's `color` getter resolves the user override -> grouped
@@ -333,11 +334,12 @@ const AudioTrackWaveformCanvas = observer(
     // commits repaint chunks reactively. Always returns a `#rrggbb`
     // string the chunk worker can consume directly.
     const laneColor = track.color;
-    // Beat-stable chunk layout (zoom-invariant). Memoed on `structural` so
-    // scroll / zoom re-renders of this observer don't rebuild it.
+    // Beat-stable chunk layout (zoom-invariant), built off the reactive model's
+    // derived fields (`renderedLayers` / `tempoSource` / `barDrift`). Memoed on
+    // `jot` so scroll / zoom re-renders of this observer don't rebuild it.
     const layout = React.useMemo(
-      () => (structural ? buildChunkLayout(structural) : { bars: [], totalBeats: 0, chunks: [] }),
-      [structural]
+      () => (jot ? buildChunkLayout(jot) : { bars: [], totalBeats: 0, chunks: [] }),
+      [jot]
     );
     const livePxPerBeat = useLiveJotPxPerBeat();
 
@@ -526,11 +528,16 @@ const AudioTrackWaveformChunk = observer(
       // of the chunk get a negative `x`, bars to the right get `x >=
       // widthPx`; the worker's clamp drops both groups without an
       // explicit filter on our side.
-      const barSlices: BarSlice[] = bars.map((b) => ({
+      const barSlices: BarSlice[] = bars.map((b, idx) => ({
         x: (b.startBeat - chunk.startBeat) * renderedScale,
         width: b.beats * renderedScale,
         startSec: b.startSec,
         durationSec: b.durationSec,
+        driftSec: b.driftSec,
+        // The next bar's drift, so the worker can map this bar's pixels onto
+        // its REAL audio span (its width covers `durationSec + (nextDrift -
+        // drift)` of recording). Last bar: no next → same drift (no stretch).
+        nextDriftSec: bars[idx + 1]?.driftSec ?? b.driftSec,
       }));
       const fire = () => {
         waveformWorker.renderChunk(

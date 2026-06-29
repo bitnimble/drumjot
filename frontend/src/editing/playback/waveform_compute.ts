@@ -24,6 +24,15 @@ export type BarSlice = {
   width: number;
   startSec: number;
   durationSec: number;
+  /**
+   * Performance drift (seconds) at this bar's downbeat and the next bar's,
+   * from `globalMetadata.barDrift`. The bar's uniform pixel `width` maps onto
+   * its REAL recorded span, `[startSec + driftSec, nextStartSec +
+   * nextDriftSec)`, so transients render under the bar lines without any
+   * raster resampling. Both 0 (no stretch) for a metronomic recording.
+   */
+  driftSec?: number;
+  nextDriftSec?: number;
 };
 
 /**
@@ -151,15 +160,23 @@ export function computeWaveformPeaksFromChannels(
   for (const bar of bars) {
     const x0 = bar.x;
     const w = bar.width;
+    // The bar's uniform pixel width maps onto its REAL recorded span, not
+    // its uniform jot span: shift the start by this bar's drift and stretch
+    // the duration by the drift delta to the next bar. So a bar the drummer
+    // held renders slightly compressed and the transient lands on the bar
+    // line, a known scale baked into the per-pixel sample range here (no
+    // bitmap resampling). Both drifts 0 ⇒ identical to the plain mapping.
+    const drift = bar.driftSec ?? 0;
+    const nextDrift = bar.nextDriftSec ?? drift;
+    const audioStart = bar.startSec + drift - songLeadInSec;
+    const audioDur = bar.durationSec + (nextDrift - drift);
     const pxStart = Math.max(0, Math.floor(x0));
     const pxEnd = Math.min(totalWidthPx, Math.ceil(x0 + w));
     for (let p = pxStart; p < pxEnd; p++) {
       const frac0 = (p - x0) / w;
       const frac1 = (p + 1 - x0) / w;
-      const tJot0 = bar.startSec + frac0 * bar.durationSec;
-      const tJot1 = bar.startSec + frac1 * bar.durationSec;
-      const tAudio0 = tJot0 - songLeadInSec;
-      const tAudio1 = tJot1 - songLeadInSec;
+      const tAudio0 = audioStart + frac0 * audioDur;
+      const tAudio1 = audioStart + frac1 * audioDur;
       const s0 = Math.max(0, Math.floor(tAudio0 * sampleRate));
       const s1 = Math.min(length, Math.ceil(tAudio1 * sampleRate));
       writePixelPeak(channels, numChannels, channelScale, s0, s1, peaks, p * 2);

@@ -15,7 +15,7 @@
  *     scheduled drums all share one clock.
  */
 import { Instrument, Modifier } from 'src/schema/dsl/dsl';
-import type { StructuralPresenter } from 'src/editing/structure/structural_presenter';
+import type { MutableJot } from 'src/schema/schema';
 import type { StructNote } from 'src/editing/structure/structure_store';
 import { DEFAULT_VELOCITY } from 'src/dynamics/dynamics';
 import { defaultMidiNote } from 'src/midi/gm';
@@ -53,12 +53,12 @@ const FLAM_GRACE_OFFSET_SEC = 0.03;
 // (rather than a fixed value) keeps an accented flam's grace proportional.
 const FLAM_GRACE_VELOCITY_RATIO = 0.9;
 
-export function jotToEvents(structural: StructuralPresenter): PlaybackEvent[] {
+export function jotToEvents(jot: MutableJot): PlaybackEvent[] {
   // Musical structure only: the view-only virtual lead-in must never schedule
   // (or shift) drum events.
-  const layers = structural.musicalLayers;
+  const layers = jot.musicalLayers;
   const events: PlaybackEvent[] = [];
-  const instrumentFor = (lane: string): Instrument => structural.instrumentFor(lane);
+  const instrumentFor = (lane: string): Instrument => jot.instrumentFor(lane);
 
   // Bar 1 (= first non-lead-in bar) sits at jot time 0 by convention,
   // matching `buildTimeline`'s anchor. Pre-drum bars get a negative
@@ -82,7 +82,7 @@ export function jotToEvents(structural: StructuralPresenter): PlaybackEvent[] {
     // intra-bar tempo curve. Each note's time is `barOffset +
     // beatToSecWithinBar(barTempos, note.beat)` so a note that sits
     // after a mid-bar tempo change picks up the post-change rate.
-    const tempos = buildBarTempos(structural.tempoSource, layer.bars);
+    const tempos = buildBarTempos(jot.tempoSource, layer.bars);
     let leadOffsetSec = 0;
     for (let i = 0; i < leadBars; i++) leadOffsetSec += tempos[i].durationSec;
 

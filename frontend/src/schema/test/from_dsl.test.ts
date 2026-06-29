@@ -10,7 +10,6 @@ function structureOf(jot: DslJot) {
 }
 
 const META = {
-  bpm: 120,
   time: { count: 4, unit: 4 },
   instrumentMapping: {
     k: { kind: 'kick' as const, name: 'Kick' },
@@ -22,7 +21,6 @@ describe('dslToMutable', () => {
   it('carries metadata + instruments', () => {
     const { model } = structureOf({ title: 'T', globalMetadata: META, layers: [{ bars: [] }] });
     expect(model.title).toBe('T');
-    expect(model.bpm).toBe(120);
     expect(model.instruments.get('k')!.name).toBe('Kick');
   });
 

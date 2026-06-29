@@ -81,12 +81,12 @@ export class PlaybackPresenter implements Resettable {
     reaction(
       () => {
         if (jotPlayer.state !== 'playing' && jotPlayer.state !== 'paused') return null;
-        const { structural } = this.jotEditorStore;
-        return structural ? jotToEvents(structural) : null;
+        const { jot } = this.jotEditorStore;
+        return jot ? jotToEvents(jot) : null;
       },
       () => {
-        const { structural } = this.jotEditorStore;
-        if (structural) jotPlayer.refreshDrumSchedule(structural);
+        const { jot } = this.jotEditorStore;
+        if (jot) jotPlayer.refreshDrumSchedule(jot);
       },
       { equals: comparer.structural }
     );
@@ -114,12 +114,12 @@ export class PlaybackPresenter implements Resettable {
   }
 
   async playCurrent(): Promise<void> {
-    const { structural, tempo } = this.jotEditorStore;
-    if (!structural || !tempo) return;
-    // Pass the laid-out structural presenter + tempo (not the raw source) so
-    // the player's timeline reads live bar widths, the playhead then tracks
-    // correctly across zoom changes.
-    await jotPlayer.play(structural, tempo);
+    const { jot, tempo } = this.jotEditorStore;
+    if (!jot || !tempo) return;
+    // Drum events come off the reactive model (`jot.musicalLayers` /
+    // `tempoSource`); `tempo` still drives the live timeline so the playhead
+    // tracks bar widths across zoom changes.
+    await jotPlayer.play(jot, tempo);
   }
 
   stopPlayback(): void {
@@ -148,8 +148,8 @@ export class PlaybackPresenter implements Resettable {
    * reschedules in-flight playback so the change is heard immediately.
    */
   setDrumOffset(beats: number): void {
-    const { structural, tempo } = this.jotEditorStore;
-    if (!structural || !tempo) return;
+    const { structural, jot } = this.jotEditorStore;
+    if (!structural || !jot) return;
     // Slider semantics: the user is re-labeling note positions on the
     // notational grid (e.g. "this hit is on 1/48, not 3/48"), not
     // re-timing the drums against the audio recording. So when the
@@ -158,14 +158,14 @@ export class PlaybackPresenter implements Resettable {
     // the audio-track waveform tracks the noteheads instead of sliding
     // out from under them. Uses the dominant bpm (the tempo the song
     // spends the most audio time at, excluding lead-in bars) rather
-    // than globalMetadata.bpm, because transcribed bundles store a
+    // than the initial-tempo event, because transcribed bundles store a
     // back-solved lead-in tempo as the first setTempo event and that
     // value can be very different from the song's actual rate. Per-bar
     // tempo variation still leaves a few-ms-per-note residual; same
     // caveat as the Drum-offset row in the debug panel.
     const deltaBeats = beats - structural.drumOffsetBeats;
     if (Math.abs(deltaBeats) > 1e-12) {
-      const { dominantBpm } = tempo.dominantBpmAndTime;
+      const { dominantBpm } = jot.dominantBpmAndTime;
       const bpm = dominantBpm ?? 120;
       const deltaSec = (deltaBeats * 60) / bpm;
       // Shift songLeadIn the opposite way to the note shift so the audio
@@ -173,7 +173,7 @@ export class PlaybackPresenter implements Resettable {
       this.setSongLeadIn(this.playback.songLeadInSec + deltaSec);
     }
     structural.setDrumOffset(beats);
-    jotPlayer.refreshDrumSchedule(structural);
+    jotPlayer.refreshDrumSchedule(jot);
   }
 
   /**

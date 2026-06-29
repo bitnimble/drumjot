@@ -12,7 +12,6 @@ function jotWith(notes: Record<string, { lane: string; beat: number }>, bars = 1
   }
   const { model } = createMutableJot({
     title: '',
-    bpm: 120,
     bars: Array.from({ length: bars }, (_, i) => ({ id: `b${i + 1}`, tsCount: 4, tsUnit: 4 })),
     elements,
     instruments: {},

@@ -11,7 +11,16 @@ class Config:
     # Frozen SSL encoder. MERT-v1-330M is CC-BY-NC (fine per the data
     # owner); MusicFM (MIT/Apache) is the clean alternative. See spec §4.
     encoder: str = "m-a-p/MERT-v1-330M"
-    encoder_layer: int = 10  # N2N's pick; tunable
+    encoder_layer: int = 10  # N2N's pick; tunable. Also the per-lane FALLBACK layer.
+    # Per-lane MERT-layer routing. None => every lane reads `encoder_layer` (the
+    # single-layer path, byte-identical to before). A tuple of (lane, layer) pairs
+    # routes those lanes to their OWN MERT hidden layer -- the per-lane layer sweep
+    # finds e.g. cymbals peak at a later layer than kick, and a single shared layer
+    # leaves that on the table. Lanes absent from the tuple fall back to
+    # `encoder_layer`. Stored as a tuple (not a dict) so the frozen Config stays
+    # hashable. Needs no extra encode: the on-disk cache is already keyed per layer
+    # (embeddings.cache_key), so each head just reads its layer's existing .npy.
+    lane_layers: tuple[tuple[str, int], ...] | None = None
     encoder_fps: float = 75.0  # MERT feature rate (~13 ms); verify per encoder
     # On-disk feature cache precision. float16 halves cache size + per-epoch
     # read bandwidth (so it fits the OS page cache) at no real cost; fp32 path
@@ -97,3 +106,19 @@ class Config:
     # via --batch-size. Safe in either precision.
     batch_size: int = 16
     max_epochs: int = 50
+
+    def lane_layer_map(self) -> dict[str, int]:
+        """{lane: MERT layer} for every lane in `self.lanes`. A lane listed in
+        `lane_layers` uses that layer; the rest fall back to `encoder_layer`. The
+        single source of truth for which layer each head reads."""
+        overrides = dict(self.lane_layers or ())
+        return {lane: overrides.get(lane, self.encoder_layer) for lane in self.lanes}
+
+    def distinct_layers(self) -> list[int]:
+        """Sorted unique MERT layers the heads need. One element => the single-layer
+        path (no per-lane routing); >1 => per-lane-layer routing is engaged."""
+        return sorted(set(self.lane_layer_map().values()))
+
+    def is_multilayer(self) -> bool:
+        """True when the heads span more than one MERT layer."""
+        return len(self.distinct_layers()) > 1
