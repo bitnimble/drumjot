@@ -61,3 +61,21 @@
     composes: bodySm from '../typography.module.css';
     color: var(--color-text-muted-alt);
 }
+
+.subOption {
+    composes: bodySm from '../typography.module.css';
+    color: var(--color-text-muted-alt);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    cursor: pointer;
+}
+
+.subOption input:disabled {
+    cursor: default;
+}
+
+.delta {
+    color: var(--color-text-muted);
+}

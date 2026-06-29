@@ -6,6 +6,7 @@ import { AudioTrackId } from 'src/editing/playback/audio_tracks';
 import { jotPlayer } from 'src/editing/playback/player';
 import { toastStore } from '../../ui/toasts/toasts';
 import { isBackendUnreachable } from 'src/net/backend_fetch';
+import { isTauri } from 'src/desktop/is_tauri';
 import { JotEditorStore } from '../jot_editor_store';
 import { LyricsAlignStore } from './lyrics_align_store';
 import type { Resettable } from '../session_reset';
@@ -321,6 +322,13 @@ export class LyricsPresenter implements Resettable {
     label: string,
     opts: { source: LyricsSource; sourceLabel: string }
   ): Promise<void> {
+    if (isTauri()) {
+      // No lyrics backend in the desktop app yet (the sidecar's alignLyrics op
+      // is still a stub, and there's no local routing); the plain lines have
+      // already loaded, so surface that rather than failing on a dead /api call.
+      toastStore.showError('Word-level lyric alignment isn’t available in the desktop app yet.');
+      return;
+    }
     const existing = this.lyricsAlignControllers.get(targetTrackId);
     if (existing) {
       existing.abort();
