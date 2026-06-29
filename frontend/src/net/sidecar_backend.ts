@@ -29,7 +29,10 @@ export class SidecarBackendClient implements BackendClient {
     params: Record<string, unknown>,
     opts: RunOptions = {},
   ): Promise<RunResult> {
-    const path = audio.kind === 'path' ? audio.path : await stageTempInput(audio.blob, audio.filename);
+    // Stage blob input to a temp file (left undefined for path input, which we
+    // don't own + must not delete).
+    const staged = audio.kind === 'blob' ? await stageTempInput(audio.blob, audio.filename) : undefined;
+    const path = audio.kind === 'path' ? audio.path : (staged as string);
     const request: ClientMessage = {
       v: PROTOCOL_VERSION,
       type: 'request',
@@ -57,6 +60,9 @@ export class SidecarBackendClient implements BackendClient {
       });
     } finally {
       opts.signal?.removeEventListener('abort', onAbort);
+      // The sidecar has finished reading the input by the time runJob resolves;
+      // drop the staged temp file (best-effort) so they don't accumulate.
+      if (staged != null) void removeTempInput(staged);
     }
 
     if (opts.signal?.aborted) {
@@ -103,6 +109,18 @@ async function stageTempInput(blob: Blob, filename: string): Promise<string> {
   await mkdir('drumjot', { baseDir: BaseDirectory.Temp, recursive: true });
   await writeFile(rel, new Uint8Array(await blob.arrayBuffer()), { baseDir: BaseDirectory.Temp });
   return join(await tempDir(), rel);
+}
+
+/** Best-effort delete of a staged temp input (needs `fs:allow-remove` for
+ *  `$TEMP/drumjot`); failures are swallowed so a denied scope just leaks the
+ *  file rather than breaking the job. */
+async function removeTempInput(absPath: string): Promise<void> {
+  try {
+    const { remove } = await import('@tauri-apps/plugin-fs');
+    await remove(absPath);
+  } catch {
+    // ignore, temp cleanup is non-critical; the OS reaps $TEMP eventually.
+  }
 }
 
 function base64ToBytes(b64: string): Uint8Array {

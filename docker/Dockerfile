@@ -36,12 +36,11 @@ COPY scripts/ ./scripts/
 RUN bun install --frozen-lockfile
 
 # Build inputs. `bun run build` runs stylelint + tsc --noEmit + vite
-# build, so we need the stylelint config alongside the source. Public
-# assets (favicon, etc.) are copied so vite's `public/` pass-through
-# works at build time.
-COPY tsconfig.json vite.config.ts index.html .stylelintrc.json ./
-COPY src/ ./src/
-COPY public/ ./public/
+# build, so we need the stylelint config alongside the source. The web app
+# lives under `frontend/` (Vite's `root`); the build configs stay at the repo
+# root. `frontend/` carries src + public + index.html + postcss.config.js.
+COPY tsconfig.json vite.config.ts .stylelintrc.json ./
+COPY frontend/ ./frontend/
 RUN bun run build
 
 # -----------------------------------------------------------------------------
@@ -188,7 +187,7 @@ RUN chmod +x /app/entrypoint.sh
 
 # Built frontend bundle from stage 1. Served as static files by Caddy
 # on :5173 with SPA fallback to index.html (see Caddyfile).
-COPY --from=frontend-builder /build/dist /app/web
+COPY --from=frontend-builder /build/frontend/dist /app/web
 
 # Beat Transformer checkpoint (optional). If the directory is empty the image
 # still builds; BT just fails-loud at first use when BEAT_TRACKER=beat_transformer

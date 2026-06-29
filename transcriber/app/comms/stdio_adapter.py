@@ -45,10 +45,7 @@ class StdioAdapter:
             self._stdout.write(line + "\n")
             self._stdout.flush()
 
-    async def _handle_request(self, req: RequestMessage) -> None:
-        token = CancelToken()
-        self._tokens[req.id] = token
-
+    async def _handle_request(self, req: RequestMessage, token: CancelToken) -> None:
         async def emit(stage: str, frac: float, message: str | None = None) -> None:
             await self._send(
                 ProgressMessage(id=req.id, stage=stage, frac=frac, message=message)
@@ -106,7 +103,12 @@ class StdioAdapter:
             except (json.JSONDecodeError, ValidationError):
                 continue  # tolerate a malformed client line rather than die
             if isinstance(msg, RequestMessage):
-                task = asyncio.create_task(self._handle_request(msg))
+                # Register the cancel token synchronously, before scheduling the
+                # task, so a cancel frame read on the very next iteration can't
+                # race ahead of the token's registration and be dropped.
+                token = CancelToken()
+                self._tokens[msg.id] = token
+                task = asyncio.create_task(self._handle_request(msg, token))
                 tasks.add(task)
                 task.add_done_callback(tasks.discard)
             elif isinstance(msg, CancelMessage):

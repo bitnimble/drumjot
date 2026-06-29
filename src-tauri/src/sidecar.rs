@@ -115,7 +115,11 @@ pub async fn run_job(
                                 frame.get("type").and_then(|t| t.as_str()),
                                 Some("result") | Some("error")
                             );
-                            on_event.send(frame).map_err(|e| e.to_string())?;
+                            // Break (don't `?`-return) on a send failure so the
+                            // jobs-map removal + child reap below still run.
+                            if let Err(e) = on_event.send(frame) {
+                                break Err(e.to_string());
+                            }
                             if terminal {
                                 break Ok(());
                             }
@@ -127,8 +131,8 @@ pub async fn run_job(
                 Err(e) => break Err(format!("sidecar read error: {e}")),
             },
             _ = &mut cancel_rx => {
-                let cancel = format!("{{\"v\":1,\"type\":\"cancel\",\"id\":\"{id}\"}}\n");
-                let _ = stdin.write_all(cancel.as_bytes()).await;
+                let cancel = serde_json::json!({"v": 1, "type": "cancel", "id": id}).to_string();
+                let _ = stdin.write_all(format!("{cancel}\n").as_bytes()).await;
                 let _ = stdin.flush().await;
                 let _ = child.start_kill();
                 break Ok(());

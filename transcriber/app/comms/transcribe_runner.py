@@ -153,30 +153,44 @@ class TranscribeRunner:
             result = await asyncio.to_thread(
                 _run_live_pipeline, audio_path, params, on_progress, cancel_event
             )
+        except Exception:
+            # The pipeline raises PipelineCancelled (a plain Exception) when it
+            # observes the cancel event; surface that as a clean Cancelled rather
+            # than a generic "internal" error so the client treats it as an abort.
+            if cancel.cancelled:
+                raise Cancelled from None
+            raise
         finally:
             loop.call_soon_threadsafe(events.put_nowait, None)
             await pump_task
             cancel_task.cancel()
+            await asyncio.gather(cancel_task, return_exceptions=True)
 
         if cancel.cancelled:
             raise Cancelled
 
-        out = _outputs_dir() / _input_id(audio_path)
-        out.mkdir(parents=True, exist_ok=True)
-        artifacts: list[Artifact] = []
-        if result.midi is not None:
-            await emit("midi", 0.95, None)
-            midi_path = out / MIDI_NAME
-            midi_path.write_bytes(result.midi)
-            artifacts.append(Artifact(role="midi", ref=PathRef(kind="path", path=str(midi_path))))
-        for role, src in result.stems:
-            if not Path(src).exists():
-                continue
-            dest = out / Path(src).name
-            shutil.copyfile(src, dest)
-            artifacts.append(Artifact(role=role, ref=PathRef(kind="path", path=str(dest))))
-        await emit("done", 1.0, None)
-        return artifacts
+        try:
+            out = _outputs_dir() / _input_id(audio_path)
+            out.mkdir(parents=True, exist_ok=True)
+            artifacts: list[Artifact] = []
+            if result.midi is not None:
+                await emit("midi", 0.95, None)
+                midi_path = out / MIDI_NAME
+                midi_path.write_bytes(result.midi)
+                artifacts.append(Artifact(role="midi", ref=PathRef(kind="path", path=str(midi_path))))
+            for role, src in result.stems:
+                if not Path(src).exists():
+                    continue
+                dest = out / Path(src).name
+                shutil.copyfile(src, dest)
+                artifacts.append(Artifact(role=role, ref=PathRef(kind="path", path=str(dest))))
+            await emit("done", 1.0, None)
+            return artifacts
+        finally:
+            # The pipeline's scratch work dir (stems live here until copied above)
+            # is no longer needed; drop it so it doesn't accumulate.
+            if result.work_dir is not None:
+                shutil.rmtree(result.work_dir, ignore_errors=True)
 
 
 def _stage_frac(stage: str) -> float:
@@ -191,6 +205,9 @@ class LiveResult:
     midi: bytes | None
     stems: list[tuple[str, Path]] = field(default_factory=list)
     duration: float = 0.0
+    # Scratch dir holding the stems until the caller copies them out; the caller
+    # deletes it. None when the runner is monkeypatched in tests.
+    work_dir: Path | None = None
 
 
 def _run_live_pipeline(
@@ -213,36 +230,44 @@ def _run_live_pipeline(
 
     settings = Settings()
     work_dir = Path(tempfile.mkdtemp(prefix="drumjot_sidecar_"))
-    ctx = PipelineContext(audio_path=audio_path, work_dir=work_dir)
-    ctx.cancel_event = cancel_event
-    backend = params.get("onsetBackend")
-    beat_input = (
-        "drum_stem"
-        if (params.get("beatInput") or settings.beat_input_default) == "drum_stem"
-        else "full_mix"
-    )
-    options = PipelineOptions(
-        beat_input=beat_input,
-        quantise=bool(params.get("quantise", True)),
-        quantise_use_llm=bool(params.get("quantiseUseLlm", True)),
-        llm_model=str(params.get("llmModel") or settings.llm_model),
-        use_learned_onsets=(str(backend).lower() == "learned")
-        if backend is not None
-        else settings.use_learned_onsets,
-        learned_onsets_checkpoint=str(settings.learned_onsets_checkpoint),
-    )
-    run_pipeline(
-        ctx=ctx,
-        start_stage=Stage.STEMS_ALL,
-        separator=Separator(),
-        options=options,
-        sink=None,
-        output_sink=None,
-        progress=progress,
-    )
+    try:
+        ctx = PipelineContext(audio_path=audio_path, work_dir=work_dir)
+        ctx.cancel_event = cancel_event
+        backend = params.get("onsetBackend")
+        beat_input = (
+            "drum_stem"
+            if (params.get("beatInput") or settings.beat_input_default) == "drum_stem"
+            else "full_mix"
+        )
+        options = PipelineOptions(
+            beat_input=beat_input,
+            quantise=bool(params.get("quantise", True)),
+            quantise_use_llm=bool(params.get("quantiseUseLlm", True)),
+            llm_model=str(params.get("llmModel") or settings.llm_model),
+            use_learned_onsets=(str(backend).lower() == "learned")
+            if backend is not None
+            else settings.use_learned_onsets,
+            learned_onsets_checkpoint=str(settings.learned_onsets_checkpoint),
+        )
+        run_pipeline(
+            ctx=ctx,
+            start_stage=Stage.STEMS_ALL,
+            separator=Separator(),
+            options=options,
+            sink=None,
+            output_sink=None,
+            progress=progress,
+        )
+    except BaseException:
+        # On any failure/cancel the caller never gets `work_dir` back to clean, so
+        # drop the scratch dir here.
+        shutil.rmtree(work_dir, ignore_errors=True)
+        raise
     stems: list[tuple[str, Path]] = []
     if ctx.drum_stem is not None:
         stems.append(("stem", ctx.drum_stem))
     for stem_path in ctx.per_instrument_stems.values():
         stems.append(("stem", stem_path))
-    return LiveResult(midi=ctx.predicted_midi, stems=stems, duration=ctx.duration)
+    return LiveResult(
+        midi=ctx.predicted_midi, stems=stems, duration=ctx.duration, work_dir=work_dir
+    )

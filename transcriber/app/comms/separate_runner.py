@@ -18,7 +18,8 @@ from .core import CancelToken, EmitProgress
 from .protocol import Artifact, PathRef, RequestMessage
 from .transcribe_runner import _input_id, _outputs_dir
 
-# Stage -> the artifacts it produces, as (name, role).
+# Valid `separate` stages: the two Separator passes (mix→drums+backing, drum
+# stem→per-instrument).
 _STAGES = ("stems_all", "stems_per")
 
 
@@ -60,17 +61,21 @@ def _run_separation(audio_path: Path, stage: str, out_dir: Path) -> list[tuple[s
     work = Path(tempfile.mkdtemp(prefix="drumjot_sep_"))
     sep = Separator()
     produced: list[tuple[str, str, Path]] = []
-    if stage == "stems_all":
-        sep.load(stems_all=True, stems_per=False)
-        res = sep.run_stems_all(audio_path, work, build_no_drums=True)
-        produced.append(("drums", "stem", _publish(res.drum_stem, out_dir)))
-        if res.no_drums is not None:
-            produced.append(("no_drums", "audio", _publish(res.no_drums, out_dir)))
-    else:
-        sep.load(stems_all=False, stems_per=True)
-        res = sep.run_stems_per(audio_path, work, build_residual=False)
-        for pitch, stem_path in res.per_instrument.items():
-            produced.append((pitch, "stem", _publish(stem_path, out_dir)))
+    try:
+        if stage == "stems_all":
+            sep.load(stems_all=True, stems_per=False)
+            res = sep.run_stems_all(audio_path, work, build_no_drums=True)
+            produced.append(("drums", "stem", _publish(res.drum_stem, out_dir)))
+            if res.no_drums is not None:
+                produced.append(("no_drums", "audio", _publish(res.no_drums, out_dir)))
+        else:
+            sep.load(stems_all=False, stems_per=True)
+            res = sep.run_stems_per(audio_path, work, build_residual=False)
+            for pitch, stem_path in res.per_instrument.items():
+                produced.append((pitch, "stem", _publish(stem_path, out_dir)))
+    finally:
+        # Stems are published to out_dir above; the scratch dir can go.
+        shutil.rmtree(work, ignore_errors=True)
     return produced
 
 

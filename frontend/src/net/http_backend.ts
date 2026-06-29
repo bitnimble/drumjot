@@ -45,11 +45,14 @@ export class HttpBackendClient implements BackendClient {
       debug: params.debug as boolean | undefined,
       signal: opts.signal,
       onProgress: (event) => {
+        // Stage `end` bookends are noise for the pill (they'd flash "end"
+        // between stages); only forward stage starts + substage detail.
+        if (event.kind === 'stage' && event.phase === 'end') return;
         const frac = STAGE_ORDER.indexOf(event.stage) / STAGE_ORDER.length;
         opts.onProgress?.({
           stage: event.stage,
           frac: frac >= 0 ? frac : 0.5,
-          message: event.kind === 'substage' ? event.detail : event.phase,
+          message: event.kind === 'substage' ? event.detail : undefined,
         });
       },
     });

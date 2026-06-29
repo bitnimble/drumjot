@@ -298,11 +298,15 @@ export type TrackMixerState = {
   drumMasterSoloed: boolean;
 };
 
+// Keep in lockstep with the transcriber's STEM_NAME_TO_PITCH (separate.py): a
+// model that splits ride out emits `d`, so map it too rather than dropping it
+// into the `unknown` role.
 const STEM_LANE_LABELS: Record<string, string> = {
   k: 'kick',
   s: 'snare',
   h: 'hi-hat',
   c: 'cymbals',
+  d: 'ride',
   t: 'toms',
 };
 

@@ -42,7 +42,7 @@ export const HardwareInfo = observer(function HardwareInfo() {
     <div className={styles.grid}>
       <Row label="Acceleration" value={status.label} tone={status.tone} />
       <Row label="Type" value={KIND_LABELS[accel.kind] ?? accel.kind} />
-      <Row label="Device" value={accel.gpuName ?? ', '} />
+      <Row label="Device" value={accel.gpuName ?? 'Unknown'} />
       {accel.driverVersion != null && <Row label="Driver" value={accel.driverVersion} />}
       {status.detail != null && <p className={styles.note}>{status.detail}</p>}
     </div>

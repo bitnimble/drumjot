@@ -64,26 +64,38 @@ export class CapabilityPresenter {
    *  error if the install fails, so the user can retry or cancel. */
   async confirmGate(): Promise<void> {
     const id = this.store.pendingGate;
-    if (id == null) {
+    const resolve = this.gateResolve;
+    if (id == null || resolve == null) {
       return;
     }
+    // Detach this waiter before the await: a concurrent requestCapability that
+    // supersedes the prompt mid-install must not clobber it or resolve the wrong
+    // promise.
+    this.gateResolve = undefined;
     await this.install(id);
     if (this.store.isReady(id)) {
       runInAction(() => {
-        this.store.pendingGate = undefined;
+        if (this.store.pendingGate === id) this.store.pendingGate = undefined;
       });
-      this.gateResolve?.(true);
-      this.gateResolve = undefined;
+      resolve(true);
+    } else if (this.store.pendingGate === id) {
+      // Install failed and nothing superseded us: re-arm so the prompt's Retry
+      // resolves this same waiter.
+      this.gateResolve = resolve;
+    } else {
+      // Superseded during a failed install: abandon this waiter.
+      resolve(false);
     }
   }
 
   /** Dismiss the open prompt without installing; the gated action is abandoned. */
   cancelGate(): void {
+    const resolve = this.gateResolve;
+    this.gateResolve = undefined;
     runInAction(() => {
       this.store.pendingGate = undefined;
     });
-    this.gateResolve?.(false);
-    this.gateResolve = undefined;
+    resolve?.(false);
   }
 
   /** Load detected accelerator + persisted install state into the store. */

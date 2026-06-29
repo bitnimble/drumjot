@@ -123,15 +123,39 @@ if (gitSpecs.length === 0) {
 
   // Rewrite the bundled pyproject: pin Python to the wheel ABI, swap each git
   // spec for the pinned wheel version, and add the wheelhouse as a find-links.
-  pyproject = pyproject.replace('requires-python = ">=3.11"', `requires-python = "==${PY}.*"`);
+  // Each rewrite asserts its marker was present: a silent no-op (e.g. pyproject
+  // reformatted) would otherwise ship a bundle that still pins >=3.11 or lacks
+  // find-links and falls back to git/compiler at install time.
+  const mustReplace = (text: string, find: string, repl: string, what: string): string => {
+    if (!text.includes(find)) {
+      throw new Error(`bundled pyproject rewrite failed: ${what} marker not found (reformatted?)`);
+    }
+    return text.replace(find, repl);
+  };
+  pyproject = mustReplace(
+    pyproject,
+    'requires-python = ">=3.11"',
+    `requires-python = "==${PY}.*"`,
+    'requires-python',
+  );
   for (const spec of gitSpecs) {
     const wheel = wheelFor(spec, wheels);
     if (!wheel) {
       throw new Error(`no wheel built for ${depName(spec)}`);
     }
-    pyproject = pyproject.replace(`"${spec}"`, `"${depName(spec)}==${wheel.split('-')[1]}"`);
+    pyproject = mustReplace(
+      pyproject,
+      `"${spec}"`,
+      `"${depName(spec)}==${wheel.split('-')[1]}"`,
+      depName(spec),
+    );
   }
-  pyproject = pyproject.replace('[tool.uv]\n', '[tool.uv]\nfind-links = ["wheels"]\n');
+  pyproject = mustReplace(
+    pyproject,
+    '[tool.uv]\n',
+    '[tool.uv]\nfind-links = ["wheels"]\n',
+    'find-links',
+  );
   await writeFile(pyprojectPath, pyproject);
 
   // Re-lock so the runtime install pulls the 3 deps from the wheelhouse (no git).

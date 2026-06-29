@@ -9,6 +9,7 @@ the event loop.
 from __future__ import annotations
 
 import asyncio
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,7 @@ class AlignLyricsRunner:
             if isinstance(e, dict) and "startSec" in e and "text" in e
         ]
         vocals_path = audio_path
+        work: Path | None = None
         if kind == "mix":
             from app.pipeline.separate import Separator
 
@@ -73,7 +75,12 @@ class AlignLyricsRunner:
             work = Path(tempfile.mkdtemp(prefix="drumjot_lyrics_"))
             vocals = self._separator.run_vocals(audio_path, work)
             if vocals is None:
+                shutil.rmtree(work, ignore_errors=True)
                 raise RuntimeError("vocals separator produced no vocals stem")
             vocals_path = vocals
-        lines = get_aligner().realign_text(vocals_path, input_lines, language)
-        return lines_to_json(lines)
+        try:
+            lines = get_aligner().realign_text(vocals_path, input_lines, language)
+            return lines_to_json(lines)
+        finally:
+            if work is not None:
+                shutil.rmtree(work, ignore_errors=True)

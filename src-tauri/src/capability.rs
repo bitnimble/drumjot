@@ -109,7 +109,11 @@ pub fn set_capability_installed(app: AppHandle, id: String, installed: bool) -> 
     states.insert(id, serde_json::json!({ "installed": installed }));
     let path = state_path(&app)?;
     let text = serde_json::to_string_pretty(&states).map_err(|e| e.to_string())?;
-    std::fs::write(&path, text).map_err(|e| e.to_string())
+    // Write to a temp sibling then rename, so a crash mid-write can't leave a
+    // truncated/corrupt capabilities.json.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
 }
 
 /// Path to the python interpreter inside a venv (platform-specific layout).

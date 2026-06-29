@@ -12,6 +12,8 @@ class MockBridge implements DesktopBridge {
   frames: ServerMessage[] = [];
   lastRequest: ClientMessage | undefined;
   cancelledId: string | undefined;
+  /** Hook fired at the top of runJob (e.g. to abort mid-job in a test). */
+  onRun: (() => void) | undefined;
 
   async detectAccelerator() {
     return { kind: 'cpu' as const, meetsCudaMin: false };
@@ -26,6 +28,7 @@ class MockBridge implements DesktopBridge {
   }
   async runJob(request: ClientMessage, onEvent: (msg: ServerMessage) => void) {
     this.lastRequest = request;
+    this.onRun?.();
     for (const frame of this.frames) onEvent(frame);
   }
 }
@@ -77,6 +80,20 @@ describe('SidecarBackendClient', () => {
     await expect(client.run('alignLyrics', { kind: 'path', path: '/in.wav' }, {})).rejects.toThrow(
       /EBAD: boom/,
     );
+  });
+
+  it('cancels the sidecar job and rejects with AbortError when the signal aborts', async () => {
+    const controller = new AbortController();
+    const bridge = new MockBridge();
+    // Abort mid-job (while the abort listener is attached), then let runJob end.
+    bridge.onRun = () => controller.abort();
+    bridge.frames = [frame({ type: 'result', artifacts: [] })];
+    const client = new SidecarBackendClient(bridge);
+
+    await expect(
+      client.run('transcribe', { kind: 'path', path: '/in.wav' }, {}, { signal: controller.signal }),
+    ).rejects.toThrow(/abort/i);
+    expect(bridge.cancelledId).toBe(bridge.lastRequest?.id);
   });
 
   it('resolves inline + url refs to bytes; inline/url media URLs', async () => {

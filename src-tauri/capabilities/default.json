@@ -18,6 +18,10 @@
     {
       "identifier": "fs:allow-mkdir",
       "allow": [{ "path": "$TEMP/drumjot" }, { "path": "$TEMP/drumjot/**" }]
+    },
+    {
+      "identifier": "fs:allow-remove",
+      "allow": [{ "path": "$TEMP/drumjot/**" }]
     }
   ]
 }
