@@ -92,7 +92,7 @@ def test_live_transcribe_collects_outputs(
 
     def fake_pipeline(audio_path, params, progress, cancel_event):  # noqa: ANN001
         progress({"stage": "onsets", "phase": "start"})
-        return tr.LiveResult(midi=b"MThd-fake", stems=[("stem", stem_src)], duration=2.0)
+        return tr.LiveResult(midi=b"MThd-fake", stems=[("stem", "k", stem_src)], duration=2.0)
 
     monkeypatch.setattr(tr, "_run_live_pipeline", fake_pipeline)
     stages: list[str] = []

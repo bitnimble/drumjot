@@ -29,6 +29,11 @@ export function formatStageLabel(stage: TranscribeStage): string {
       return 'quantising onsets';
     case 'transcribe':
       return 'rendering MIDI';
+    default:
+      // Replay/other backends can emit stages outside the live-pipeline set
+      // (e.g. the debug-bundle "opening"/"midi"/"audio"); show the raw name
+      // rather than rendering "undefined".
+      return stage;
   }
 }
 

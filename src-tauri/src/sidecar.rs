@@ -70,7 +70,7 @@ pub async fn run_job(
     // + the fs:allow-read-file capability) so the webview can read/convert them.
     if let Ok(dir) = app.path().app_data_dir() {
         let outputs = dir.join("outputs");
-        let _ = std::fs::create_dir_all(&outputs);
+        let _ = tokio::fs::create_dir_all(&outputs).await;
         command.env("DRUMJOT_OUTPUTS_DIR", &outputs);
     }
     let mut child = command
@@ -93,7 +93,7 @@ pub async fn run_job(
     state.jobs.lock().await.insert(id.clone(), cancel_tx);
 
     // stderr is diagnostics only (the protocol owns stdout); drain it to the log.
-    tokio::spawn(async move {
+    let stderr_task = tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
         while let Ok(Some(l)) = lines.next_line().await {
             log::info!("[sidecar] {l}");
@@ -147,6 +147,9 @@ pub async fn run_job(
     // cancel path already start_kill()ed it; the stdout-EOF path already exited.)
     drop(stdin);
     let _ = child.wait().await;
+    // Drain remaining stderr before returning (the pipe closed when the child
+    // exited, so this completes promptly) rather than detaching the task.
+    let _ = stderr_task.await;
     outcome
 }
 

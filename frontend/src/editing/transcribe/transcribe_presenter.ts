@@ -130,7 +130,10 @@ export class TranscribePresenter {
    * {@link appendTranscription}; a warning toast fires when pre-existing
    * content was changed.
    */
-  async transcribeAudioTrack(id: AudioTrackId): Promise<void> {
+  // Private: the capability gate runs earlier at openAppendDialog (gate-as-early
+  // -as-possible), so this must only be reached via confirmDialog, never called
+  // directly (which would skip the gate).
+  private async transcribeAudioTrack(id: AudioTrackId): Promise<void> {
     const track = jotPlayer.audioTracks.get(id);
     if (!track) return;
     const store = this.jotEditorPresenter.jotEditorStore;
@@ -170,6 +173,10 @@ export class TranscribePresenter {
         return;
       }
       const bytes = await backendClient().resolveBytes(midiRef);
+      // The job can complete in the window where a cancel is racing the result
+      // frame (cancelJob may not reach the sidecar in time); don't merge a
+      // transcription the user aborted.
+      if (controller.signal.aborted) return;
       this.mergeAppendedJot(track.filename, fromMidi(bytes));
     } catch (err) {
       this.handleTranscribeError(err, controller, 'Transcribe');

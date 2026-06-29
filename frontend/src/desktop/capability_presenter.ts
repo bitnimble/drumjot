@@ -24,13 +24,17 @@ export class CapabilityPresenter {
   private readonly bridge: DesktopBridge;
   /** Resolver for the in-flight point-of-use prompt (see requestCapability). */
   private gateResolve: ((ok: boolean) => void) | undefined;
+  /** Tail of the install queue; installs chain off this so only one runs at a
+   *  time (see installAll). */
+  private installChain: Promise<void> = Promise.resolve();
 
   constructor(deps: CapabilityPresenterDeps) {
     this.store = deps.store;
     this.bridge = deps.bridge;
-    makeAutoObservable<CapabilityPresenter, 'gateResolve'>(this, {
+    makeAutoObservable<CapabilityPresenter, 'gateResolve' | 'installChain'>(this, {
       store: false,
       gateResolve: false,
+      installChain: false,
     });
   }
 
@@ -143,8 +147,22 @@ export class CapabilityPresenter {
   /** Install one or more capabilities and their prereqs: one `uv sync` of the app
    *  venv to the union of all desired groups, then persist + mark the whole
    *  closure ready. Lets the first-run dialog install a multi-capability
-   *  selection (e.g. separation + lyrics) in a single sync. */
-  async installAll(ids: CapabilityId[]): Promise<void> {
+   *  selection (e.g. separation + lyrics) in a single sync.
+   *
+   *  Serialised through {@link installChain}: two concurrent `uv sync`s on the
+   *  same venv would race/corrupt it, and a later install's group set depends on
+   *  what earlier ones added, so overlapping installs queue rather than run
+   *  together. `fresh` is recomputed when each run actually starts, so a queued
+   *  install skips anything an earlier one already brought in. */
+  installAll(ids: CapabilityId[]): Promise<void> {
+    const next = this.installChain.then(() => this.runInstall(ids));
+    // runInstall catches its own errors, so the chain never rejects; the catch
+    // is belt-and-suspenders so one failure can't wedge the queue.
+    this.installChain = next.catch(() => {});
+    return next;
+  }
+
+  private async runInstall(ids: CapabilityId[]): Promise<void> {
     const order = [...this.closure(ids)];
     const fresh = order.filter((dep) => !this.store.isReady(dep));
     if (fresh.length === 0) {

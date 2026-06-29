@@ -15,7 +15,14 @@ from app.comms.stdio_adapter import StdioAdapter
 
 def main() -> None:
     logging.basicConfig(stream=sys.stderr, level=logging.INFO)
-    adapter = StdioAdapter(build_registry(), stdin=sys.stdin, stdout=sys.stdout)
+    # The control protocol owns the real stdout. Hand the adapter that stream,
+    # then repoint sys.stdout at stderr so a stray print() in any dependency
+    # (e.g. adtof_pytorch's weight-load message) can't inject a non-JSON line
+    # into the frame stream. The adapter keeps its own reference, so its writes
+    # still go to the real stdout.
+    protocol_out = sys.stdout
+    sys.stdout = sys.stderr
+    adapter = StdioAdapter(build_registry(), stdin=sys.stdin, stdout=protocol_out)
     asyncio.run(adapter.run())
 
 

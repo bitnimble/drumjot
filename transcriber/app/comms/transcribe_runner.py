@@ -1,19 +1,17 @@
 """The `transcribe` runner.
 
-For now it **replays a debug bundle** -- the `.zip` a prior pipeline run
-produced -- by extracting its predicted MIDI + per-stem audio into the outputs
-dir and returning them as artifact path-refs. This exercises the full
-sidecar -> protocol -> artifact-delivery path with *real* pipeline output,
-without needing the GPU/torch stack.
-
-Live transcription from raw audio (driving `app.pipeline.runner.run_pipeline`)
-needs the installed torch capability + a GPU; that's the next step. The seam is
-here: `run()` dispatches a debug-bundle input to `_replay_bundle`, and a raw
-audio input would dispatch to a (not-yet-wired) live path.
+`run()` dispatches on the input: a `.zip` debug bundle (a prior pipeline run's
+output) goes to `_replay_bundle`, which extracts its predicted MIDI + per-stem
+audio into the outputs dir and returns them as artifact path-refs -- exercising
+the full sidecar -> protocol -> artifact-delivery path without the GPU/torch
+stack. Raw audio goes to `_transcribe_live`, which drives the real
+`app.pipeline.runner.run_pipeline` (needs the installed torch capability + a
+GPU) on a worker thread, bridging its per-stage progress back to `emit`.
 """
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -162,7 +160,11 @@ class TranscribeRunner:
             raise
         finally:
             loop.call_soon_threadsafe(events.put_nowait, None)
-            await pump_task
+            # A pump failure (e.g. a broken stdout write) is already terminal for
+            # the stream; don't let it mask the pipeline's real exception
+            # propagating out of this finally.
+            with contextlib.suppress(Exception):
+                await pump_task
             cancel_task.cancel()
             await asyncio.gather(cancel_task, return_exceptions=True)
 
@@ -178,12 +180,14 @@ class TranscribeRunner:
                 midi_path = out / MIDI_NAME
                 midi_path.write_bytes(result.midi)
                 artifacts.append(Artifact(role="midi", ref=PathRef(kind="path", path=str(midi_path))))
-            for role, src in result.stems:
+            for role, label, src in result.stems:
                 if not Path(src).exists():
                     continue
                 dest = out / Path(src).name
                 shutil.copyfile(src, dest)
-                artifacts.append(Artifact(role=role, ref=PathRef(kind="path", path=str(dest))))
+                artifacts.append(
+                    Artifact(role=role, name=label, ref=PathRef(kind="path", path=str(dest)))
+                )
             await emit("done", 1.0, None)
             return artifacts
         finally:
@@ -203,7 +207,9 @@ def _stage_frac(stage: str) -> float:
 @dataclass
 class LiveResult:
     midi: bytes | None
-    stems: list[tuple[str, Path]] = field(default_factory=list)
+    # (artifact role, semantic name, source path) per stem, `name` lets the
+    # frontend route a stem to a lane, matching SeparateRunner's labelling.
+    stems: list[tuple[str, str, Path]] = field(default_factory=list)
     duration: float = 0.0
     # Scratch dir holding the stems until the caller copies them out; the caller
     # deletes it. None when the runner is monkeypatched in tests.
@@ -263,11 +269,11 @@ def _run_live_pipeline(
         # drop the scratch dir here.
         shutil.rmtree(work_dir, ignore_errors=True)
         raise
-    stems: list[tuple[str, Path]] = []
+    stems: list[tuple[str, str, Path]] = []
     if ctx.drum_stem is not None:
-        stems.append(("stem", ctx.drum_stem))
-    for stem_path in ctx.per_instrument_stems.values():
-        stems.append(("stem", stem_path))
+        stems.append(("stem", "drums", ctx.drum_stem))
+    for pitch, stem_path in ctx.per_instrument_stems.items():
+        stems.append(("stem", pitch, stem_path))
     return LiveResult(
         midi=ctx.predicted_midi, stems=stems, duration=ctx.duration, work_dir=work_dir
     )

@@ -29,6 +29,10 @@ export class SidecarBackendClient implements BackendClient {
   constructor(private readonly bridge: DesktopBridge = new TauriBridge()) {}
 
   async run(request: RunRequest, audio: AudioInput, opts: RunOptions = {}): Promise<RunResult> {
+    // Already aborted before we started: skip staging + dispatching entirely.
+    if (opts.signal?.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
+    }
     // Stage blob input to a temp file we own + delete; a path input we don't.
     let staged: string | undefined;
     let path: string;
@@ -53,6 +57,12 @@ export class SidecarBackendClient implements BackendClient {
     const onAbort = (): void => void this.bridge.cancelJob(message.id);
     opts.signal?.addEventListener('abort', onAbort, { once: true });
     try {
+      // An abort that fired during staging won't trigger the listener (the event
+      // already passed), so the sidecar would never get cancelled, bail before
+      // dispatching. The finally still removes the listener + cleans the temp.
+      if (opts.signal?.aborted) {
+        throw new DOMException('Aborted', 'AbortError');
+      }
       await this.bridge.runJob(message, (msg) => {
         if (msg.type === 'progress') {
           opts.onProgress?.({ stage: msg.stage, frac: msg.frac, message: msg.message });

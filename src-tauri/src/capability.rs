@@ -91,35 +91,43 @@ fn driver_major(v: &str) -> Option<u32> {
 
 fn state_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir.join("capabilities.json"))
 }
 
-fn read_states(app: &AppHandle) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+async fn read_states(app: &AppHandle) -> Result<serde_json::Map<String, serde_json::Value>, String> {
     let path = state_path(app)?;
-    if !path.exists() {
-        return Ok(serde_json::Map::new());
+    match tokio::fs::read_to_string(&path).await {
+        Ok(text) => serde_json::from_str(&text).map_err(|e| e.to_string()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::Map::new()),
+        Err(e) => Err(e.to_string()),
     }
-    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&text).map_err(|e| e.to_string())
+}
+
+// async (not a plain sync command) so the filesystem read/write runs off the
+// webview's main thread.
+#[tauri::command]
+pub async fn capability_states(app: AppHandle) -> Result<serde_json::Value, String> {
+    Ok(serde_json::Value::Object(read_states(&app).await?))
 }
 
 #[tauri::command]
-pub fn capability_states(app: AppHandle) -> Result<serde_json::Value, String> {
-    Ok(serde_json::Value::Object(read_states(&app)?))
-}
-
-#[tauri::command]
-pub fn set_capability_installed(app: AppHandle, id: String, installed: bool) -> Result<(), String> {
-    let mut states = read_states(&app)?;
+pub async fn set_capability_installed(
+    app: AppHandle,
+    id: String,
+    installed: bool,
+) -> Result<(), String> {
+    let mut states = read_states(&app).await?;
     states.insert(id, serde_json::json!({ "installed": installed }));
     let path = state_path(&app)?;
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+    }
     let text = serde_json::to_string_pretty(&states).map_err(|e| e.to_string())?;
     // Write to a temp sibling then rename, so a crash mid-write can't leave a
     // truncated/corrupt capabilities.json.
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+    tokio::fs::write(&tmp, text).await.map_err(|e| e.to_string())?;
+    tokio::fs::rename(&tmp, &path).await.map_err(|e| e.to_string())
 }
 
 /// Path to the python interpreter inside a venv (platform-specific layout).
