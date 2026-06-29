@@ -1598,6 +1598,23 @@ def _paradb_perstem_specs(args) -> tuple[list, list, Path]:
     return [spec(c) for c in tr], [spec(c) for c in va], root / "_cache_mert"
 
 
+def _fold_aligned_lanes(al: dict) -> dict[str, list[float]]:
+    """Restrict one aligned-onset entry to the current `LANES`, folding the legacy
+    `hp` (pedal hi-hat) lane into `hc`.
+
+    The aligned-onset store (`_onsets_aligned_snaponly.json`) predates the hp->hc
+    vocab merge, so it still keys pedal-hat onsets under a separate `hp`. `LANES`
+    has no `hp`, so a plain `{ln: al[ln]}` restriction DROPS those onsets entirely
+    -- and since they live in the same hi-hat stem audio as the closed-hat hits and
+    sound near-identical, the unlabelled pedal-hat hits become hard negatives that
+    train the `hc` head to stay silent (the dead-hc regression). Folding `hp` into
+    `hc` here matches `lanes.py` (GM 44 -> hc) without regenerating the store."""
+    out = {ln: list(al.get(ln, [])) for ln in LANES}
+    if al.get("hp"):
+        out["hc"] = sorted(out["hc"] + [float(t) for t in al["hp"]])
+    return out
+
+
 def _per_source_specs(
     args, cap_train: dict[str, int] | None, cap_val: dict[str, int] | None,
 ) -> tuple[dict[str, list], dict[str, list], Path]:
@@ -1722,7 +1739,7 @@ def _per_source_specs(
         keep = set(p2l.get(c.pitch, ()))
         al = aligned.get(str(c.audio_path))
         if al is not None:  # snapped targets (this stem's own lanes), default when present
-            restricted = {ln: list(al.get(ln, [])) for ln in LANES}
+            restricted = _fold_aligned_lanes(al)  # folds legacy hp -> hc (see helper)
         else:
             restricted = {ln: (full[ln] if ln in keep else []) for ln in LANES}
         return (c.audio_path, restricted, full)

@@ -58,6 +58,21 @@ def test_sustained_lanes_subset_of_vocab():
     assert set(targets.SUSTAINED_LANES) <= set(LANES)
 
 
+def test_fold_aligned_lanes_merges_hp_into_hc():
+    # The aligned-onset store predates the hp->hc vocab merge, so it still keys
+    # pedal-hat under a separate `hp`. That must fold into closed-hat (`hc`); else
+    # those onsets drop out of the targets and poison the hc head (dead-hc regression).
+    from drumjot_training.train import _fold_aligned_lanes
+
+    out = _fold_aligned_lanes({"hc": [2.0, 1.0], "hp": [1.5, 0.5], "ho": [3.0], "k": [0.1]})
+    assert out["hc"] == [0.5, 1.0, 1.5, 2.0]  # hp folded in, sorted
+    assert "hp" not in out  # hp is not a model lane
+    assert out["ho"] == [3.0] and out["k"] == [0.1]  # other lanes untouched
+    # no hp present -> hc is just the restricted copy
+    out2 = _fold_aligned_lanes({"hc": [1.0], "s": [2.0]})
+    assert out2["hc"] == [1.0] and out2["s"] == [2.0]
+
+
 def test_tune_thresholds_floors_rare_lanes():
     import torch
 
