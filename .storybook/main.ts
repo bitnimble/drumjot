@@ -16,12 +16,12 @@ import path from 'node:path';
  * see the note in vite.config.ts about the signalsmith-stretch worklet).
  */
 const config: StorybookConfig = {
-  stories: ['../src/**/stories/*.stories.@(ts|tsx)'],
+  stories: ['../frontend/src/**/stories/*.stories.@(ts|tsx)'],
   framework: { name: '@storybook/react-vite', options: {} },
   // Serve the app's `public/` at the iframe root so absolute asset URLs
   // resolve the same as in the app, the Logo `<img src="/favicon.svg">`
   // would otherwise fall through to Storybook's own default favicon.
-  staticDirs: ['../public'],
+  staticDirs: ['../frontend/public'],
   viteFinal: async (cfg) => {
     cfg.plugins = cfg.plugins ?? [];
     // `unshift` so the CSS-modules patch wraps Vite's handling before the
@@ -32,7 +32,7 @@ const config: StorybookConfig = {
       ...(cfg.resolve.alias as Record<string, string> | undefined),
       // Storybook compiles this config to CJS, so `__dirname` is the
       // reliable way to anchor the alias (import.meta is empty under cjs).
-      src: path.resolve(__dirname, '../src'),
+      src: path.resolve(__dirname, '../frontend/src'),
     };
     cfg.esbuild = { ...(cfg.esbuild || {}), target: 'es2022' };
     return cfg;

@@ -37,14 +37,14 @@
   },
   "overrides": [
     {
-      "files": ["src/design_tokens.css"],
+      "files": ["frontend/src/design_tokens.css"],
       "rules": {
         "color-no-hex": null,
         "function-disallowed-list": null
       }
     },
     {
-      "files": ["src/typography.module.css"],
+      "files": ["frontend/src/typography.module.css"],
       "rules": {
         "property-disallowed-list": null,
         "declaration-property-value-allowed-list": null

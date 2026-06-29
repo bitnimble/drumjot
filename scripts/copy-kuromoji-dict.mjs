@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const src = join(root, 'node_modules', '@sglkc', 'kuromoji', 'dict');
-const dest = join(root, 'public', 'kuromoji-dict');
+const dest = join(root, 'frontend', 'public', 'kuromoji-dict');
 
 try {
   await access(src);

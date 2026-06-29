@@ -80,7 +80,13 @@ export default defineConfig({
   // (e.g. the Playwright e2e server on :5273) can't rewrite it. Honour
   // `VITE_CACHE_DIR` so the e2e runner can point at a writable host path
   // without colliding with the container's cache. Unset → Vite default.
-  cacheDir: process.env.VITE_CACHE_DIR || undefined,
+  // Frontend source lives in `frontend/`; the build configs stay at the repo
+  // root (bun/playwright/package.json cwd assumptions). Point Vite at the
+  // frontend root, but keep the dep cache + `.env` at the repo root where
+  // `node_modules` and the env file live.
+  root: path.resolve(__dirname, 'frontend'),
+  envDir: __dirname,
+  cacheDir: process.env.VITE_CACHE_DIR || path.resolve(__dirname, 'node_modules/.vite'),
   // `patchCssModules()` replaces Vite's built-in PostCSS-based CSS-modules
   // handling with one that routes `composes: … from` through Vite's own
   // module resolver. Without it, a file consumed ONLY via `composes`
@@ -106,7 +112,7 @@ export default defineConfig({
   plugins: [patchCssModules(), wasm(), react(), noHmrPushPlugin],
   resolve: {
     alias: {
-      src: path.resolve(__dirname, 'src'),
+      src: path.resolve(__dirname, 'frontend/src'),
     },
   },
   esbuild: {

@@ -11,7 +11,7 @@
     "build": "bun run lint:design && bunx tsc --noEmit && bunx vite build",
     "preview": "bunx vite preview",
     "typecheck": "bunx tsc --noEmit",
-    "lint:design": "stylelint --fix 'src/**/*.css'",
+    "lint:design": "stylelint --fix 'frontend/src/**/*.css'",
     "test": "bun test",
     "e2e": "bun --env-file=.env run e2e:run",
     "e2e:run": "playwright test",

@@ -32,7 +32,7 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '..');
-const OUT_DIR = resolve(REPO, 'public/jmdict-furigana');
+const OUT_DIR = resolve(REPO, 'frontend/public/jmdict-furigana');
 
 /** Same Han ranges as `src/lyrics/furigana.ts::isKanjiCp`. */
 function isKanjiCp(cp) {

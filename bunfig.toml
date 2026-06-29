@@ -13,4 +13,4 @@
 # only matches `*.e2e.ts`, so the two runners never overlap even though they
 # now share the `test/` folder.
 [test]
-root = "src"
+root = "frontend/src"

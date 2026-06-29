@@ -82,7 +82,7 @@ export default defineConfig({
   // keeps them out of `bun test`'s auto-discovery, which matches
   // `.test.ts` / `.spec.ts` and has no ignore config, while `testMatch`
   // here keeps Playwright off the `.test.ts` unit tests living alongside.
-  testDir: './src',
+  testDir: './frontend/src',
   testMatch: '**/*.e2e.ts',
   // One worker == one Chromium. Default locally; pinned low in CI since
   // the container's memory budget is shared with the transcriber image.

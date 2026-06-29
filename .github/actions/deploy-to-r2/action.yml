@@ -69,7 +69,7 @@ runs:
         : "${R2_BUCKET:?bucket input is required}"
         : "${R2_ACCOUNT_ID:?account-id input is required}"
         : "${R2_PREFIX:?prefix input is required (must be non-empty)}"
-        aws s3 sync dist/ "s3://${R2_BUCKET}/${R2_PREFIX}" \
+        aws s3 sync frontend/dist/ "s3://${R2_BUCKET}/${R2_PREFIX}" \
           --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
           --delete \
           --no-progress

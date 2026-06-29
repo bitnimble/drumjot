@@ -185,5 +185,5 @@ test('captures the debug-details timing visualization', async ({ page }) => {
     .count();
   expect(invertedCount).toBe(diffRowCount);
 
-  await popover.screenshot({ path: 'tests/debug-details-popover.png' });
+  await popover.screenshot({ path: 'frontend/tests/debug-details-popover.png' });
 });
