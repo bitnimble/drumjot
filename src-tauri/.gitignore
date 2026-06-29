@@ -2,3 +2,7 @@
 # will have compiled files and executables
 /target/
 /gen/schemas
+
+# Staged by scripts/prepare-desktop-resources.mjs at build time (Python backend
+# + the uv binary bundled into the app).
+/resources/

@@ -11,6 +11,7 @@ use std::process::Stdio;
 
 use serde::Serialize;
 use tauri::ipc::Channel;
+use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
@@ -125,17 +126,40 @@ pub fn app_venv(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join("venv"))
 }
 
-fn resolve_uv() -> String {
-    std::env::var("DRUMJOT_UV").unwrap_or_else(|_| "uv".to_string())
+/// The `uv` to run: explicit override, else the binary bundled at
+/// `$RESOURCE/bin/uv` (packaged builds), else `uv` on PATH (dev). The bundled
+/// copy is marked executable on unix (resources don't preserve the mode).
+fn resolve_uv(app: &AppHandle) -> String {
+    if let Ok(p) = std::env::var("DRUMJOT_UV") {
+        return p;
+    }
+    let rel = if cfg!(windows) { "bin/uv.exe" } else { "bin/uv" };
+    if let Ok(bundled) = app.path().resolve(rel, BaseDirectory::Resource) {
+        if bundled.exists() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&bundled, std::fs::Permissions::from_mode(0o755));
+            }
+            return bundled.to_string_lossy().into_owned();
+        }
+    }
+    "uv".to_string()
 }
 
-/// Directory holding the transcriber pyproject + uv.lock that the capability
-/// groups are defined in. Dev fallback is the in-repo `../transcriber`; a
-/// packaged build overrides via `DRUMJOT_TRANSCRIBER_DIR` (a bundled resource).
-fn resolve_transcriber_dir() -> PathBuf {
-    std::env::var("DRUMJOT_TRANSCRIBER_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("../transcriber"))
+/// Directory holding the transcriber pyproject + uv.lock the capability groups
+/// are defined in: explicit override, else the bundled `$RESOURCE/python/
+/// transcriber` (packaged), else the in-repo `../transcriber` (dev).
+fn resolve_transcriber_dir(app: &AppHandle) -> PathBuf {
+    if let Ok(d) = std::env::var("DRUMJOT_TRANSCRIBER_DIR") {
+        return PathBuf::from(d);
+    }
+    if let Ok(bundled) = app.path().resolve("python/transcriber", BaseDirectory::Resource) {
+        if bundled.exists() {
+            return bundled;
+        }
+    }
+    PathBuf::from("../transcriber")
 }
 
 /// Progress for a capability install, streamed to the webview.
@@ -160,10 +184,11 @@ pub async fn install_capability(
     on_event: Channel<InstallEvent>,
 ) -> Result<(), String> {
     let venv = app_venv(&app)?;
-    let dir = resolve_transcriber_dir();
+    let dir = resolve_transcriber_dir(&app);
     log::info!("[install:{id}] uv sync groups={groups:?} -> {}", venv.display());
 
-    let mut cmd = Command::new(resolve_uv());
+    let uv = resolve_uv(&app);
+    let mut cmd = Command::new(&uv);
     cmd.arg("sync").arg("--no-default-groups");
     for group in &groups {
         cmd.arg("--group").arg(group);
@@ -175,7 +200,7 @@ pub async fn install_capability(
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!("failed to spawn uv ({}): {e}", resolve_uv()))?;
+        .map_err(|e| format!("failed to spawn uv ({uv}): {e}"))?;
 
     let stdout = child.stdout.take().ok_or("uv has no stdout")?;
     let stderr = child.stderr.take().ok_or("uv has no stderr")?;

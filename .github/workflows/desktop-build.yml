@@ -42,6 +42,11 @@ jobs:
         with:
           bun-version: latest
 
+      # uv is bundled into the app at build time (desktop:resources copies it
+      # from PATH), so it must be present on the runner.
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+
       - name: Install JS deps
         run: bun install --frozen-lockfile
 

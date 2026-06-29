@@ -18,6 +18,7 @@
     "e2e:perf": "bun --env-file=.env run playwright test --project=perf --no-deps",
     "e2e:report": "playwright show-report --host 0.0.0.0",
     "tauri": "tauri",
+    "desktop:resources": "bun run scripts/prepare-desktop-resources.mjs",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
     "postinstall": "bun run scripts/copy-kuromoji-dict.mjs"
