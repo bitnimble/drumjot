@@ -50,3 +50,16 @@
     flex-direction: column;
     gap: 8px;
 }
+
+/* About-tab acknowledgements list (name + license/credit per entry). */
+.about {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.aboutEntry {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}

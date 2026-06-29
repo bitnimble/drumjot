@@ -12,7 +12,6 @@ import {
   ToggleMenuItem,
 } from 'src/ui/dropdown/dropdown';
 import { Logo } from 'src/ui/logo/logo';
-import { isTauri } from 'src/desktop/is_tauri';
 import { RecentTranscriptionsPicker } from '../editing/transcribe/recent_transcriptions';
 import styles from './toolbar.module.css';
 import type { GridLineSettings } from 'src/settings/settings_store';
@@ -100,8 +99,8 @@ export const Toolbar = observer(
      *  against the current jot's title/artist; the toolbar's only job
      *  is to surface the entry point. */
     onOpenLyricsSearch: () => void;
-    /** Open the Settings dialog (Capabilities + Hardware). Desktop-only entry;
-     *  the menu item is hidden in the web build. */
+    /** Open the Settings dialog (About/licenses everywhere; the Capabilities +
+     *  Hardware tabs are desktop-only). */
     onOpenSettings: () => void;
     /** Aggregate lyrics-alignment state, for the toolbar busy pill (which
      *  doesn't display *which* row; the per-row spinner does). `queued`
@@ -386,25 +385,21 @@ export const Toolbar = observer(
                 onPick={onOpenRecentTranscription}
                 onAfterPick={close}
               />
-              {/* Desktop only: Settings holds the capability installer + the
-                  hardware/acceleration readout, both Tauri-only concerns. */}
-              {isTauri() && (
-                <>
-                  <span className={dropdownStyles.dropdownDivider} aria-hidden="true" />
-                  <button
-                    type="button"
-                    className={dropdownStyles.dropdownItem}
-                    onClick={() => {
-                      onOpenSettings();
-                      close();
-                    }}
-                    title="Manage downloadable capabilities and view hardware/acceleration info."
-                    data-testid="file-menu-settings"
-                  >
-                    Settings…
-                  </button>
-                </>
-              )}
+              {/* Universal: the About / licenses tab shows everywhere; the
+                  Capabilities + Hardware tabs are Tauri-only (hidden in web). */}
+              <span className={dropdownStyles.dropdownDivider} aria-hidden="true" />
+              <button
+                type="button"
+                className={dropdownStyles.dropdownItem}
+                onClick={() => {
+                  onOpenSettings();
+                  close();
+                }}
+                title="Settings, downloadable capabilities, hardware info, and licenses."
+                data-testid="file-menu-settings"
+              >
+                Settings…
+              </button>
             </>
           )}
         </DropdownButton>
