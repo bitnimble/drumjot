@@ -447,7 +447,21 @@ class CachedClips:
         # for sibling loss weighting (per-stem mode), None elsewhere. (start,
         # length) select the clip window; legacy single-window clips are (0,
         # max_seconds). See _window_specs / materialize.
+        import array
         self._specs = list(specs)
+        # Compact per-window onset/weight float lists -> array.array('d') IN PLACE. At the
+        # ~170k-window scale the boxed-float lists dominate resident RAM (Python object
+        # overhead ~32 B/float); array.array is a drop-in (iterable, len, list-like truthiness
+        # -- unlike numpy) at 8 B/float (~4x smaller), and 'd' (float64) keeps onset values
+        # BIT-EXACT (no precision change at all). The dicts are shared with the caller's window
+        # specs, so this frees the lists there too -> less host memory pressure (the NFS page
+        # cache the cache reads depend on). See the codebox-workspace NFS-stall analysis.
+        for spec in self._specs:
+            for d in (spec[1], spec[2]):  # onsets_by_lane, weight_onsets (may be None)
+                if d:
+                    for lane, ts in d.items():
+                        if not isinstance(ts, array.array):
+                            d[lane] = array.array("d", ts)
         self._cfg = cfg
         self._cache_dir = Path(cache_dir)
         self._max_seconds = max_seconds
