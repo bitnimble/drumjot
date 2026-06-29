@@ -140,8 +140,13 @@ RUN python3.11 -m pip install --no-cache-dir --no-deps -e ./dsp
 # by this same step, it's torch-only and bundles its own weights, so
 # the default image carries it with no extra build arg.
 COPY transcriber/pyproject.toml ./
+# The heavy deps now live in PEP 735 dependency-groups (lean base = sidecar +
+# API only), so the service install pulls every capability group for full
+# parity. `pip install --group` needs pip >= 25.1 (the upgrade above provides
+# it). torch/dsp pre-installed in the layers above satisfy the group pins.
 RUN python3.11 -m pip install --no-cache-dir \
         --extra-index-url https://download.pytorch.org/whl/cu128 \
+        --group transcription --group lyrics --group lyrics-ja --group dev \
         -e .
 
 # Layer 3.5: the in-repo training package (../training -> drumjot_training).
