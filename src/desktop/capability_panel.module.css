@@ -1,0 +1,63 @@
+.panel {
+    composes: panel from '../ui/modal/modal.module.css';
+    width: 560px;
+    max-width: 100%;
+    max-height: 80vh;
+}
+
+.intro {
+    composes: bodySm from '../typography.module.css';
+    color: var(--color-text-muted-alt);
+    margin: 0 0 4px;
+}
+
+.row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--color-border-soft);
+}
+
+.info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.name {
+    composes: bodyEmphasis from '../typography.module.css';
+    color: var(--color-text-strong);
+}
+
+.desc {
+    composes: bodySm from '../typography.module.css';
+    color: var(--color-text-muted-alt);
+}
+
+.action {
+    flex: none;
+    display: flex;
+    align-items: center;
+}
+
+.install {
+    composes: primary from '../ui/button/button.module.css';
+    white-space: nowrap;
+}
+
+.skip {
+    composes: secondary from '../ui/button/button.module.css';
+}
+
+.ready {
+    composes: bodySm from '../typography.module.css';
+    color: var(--color-accent);
+}
+
+.status {
+    composes: bodySm from '../typography.module.css';
+    color: var(--color-text-muted-alt);
+}

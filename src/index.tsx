@@ -4,6 +4,7 @@ import 'src/design_tokens.css';
 import { Jot } from 'src/schema/dsl/dsl';
 import { EXAMPLE_JOTS, ExampleJot, rockJot, tripletJot } from 'src/fakes/fakes';
 import { createJotEditor } from 'src/editing/jot_editor';
+import { DesktopFirstRun } from 'src/desktop/desktop_first_run';
 import { TranscribePresenter } from 'src/editing/transcribe/transcribe_presenter';
 import { ViewportPresenter } from 'src/editing/viewport/viewport_presenter';
 import { MixerPresenter } from 'src/editing/mixer/mixer_presenter';
@@ -108,7 +109,12 @@ class Drumjot {
     this.lyricsPresenter = lyricsPresenter;
     this.jotEditorPresenter = jotEditorPresenter;
     this.transcribePresenter = transcribePresenter;
-    createRoot(root).render(<View />);
+    createRoot(root).render(
+      <>
+        <View />
+        <DesktopFirstRun />
+      </>,
+    );
   }
 
   load(jot: Jot) {
