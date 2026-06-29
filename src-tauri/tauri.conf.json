@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Drumjot",
   "version": "0.1.0",
-  "identifier": "dev.drumjot.app",
+  "identifier": "dev.drumjot.studio",
   "build": {
     "frontendDist": "../frontend/dist",
     "devUrl": "http://localhost:5174",
