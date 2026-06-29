@@ -78,7 +78,10 @@ test('drum-bus and per-lane volume reduce the drum level', async ({ page }) => {
   await setDrumMasterVolume(page, 1.0);
   await setLaneVolume(page, 'h', 1.0);
   const full = await measure(page, 1200);
-  expect(full.mean).toBeGreaterThan(0.002);
+  // Non-silence sanity floor only (the load-independent `reduced` ratio below is
+  // the real assertion). Kept low so a CPU-starved box, which depresses the
+  // measured mean, doesn't flake it, silence still reads ~0.
+  expect(full.mean).toBeGreaterThan(0.001);
 
   await setDrumMasterVolume(page, 0.5);
   reduced((await measure(page, 1200)).mean / full.mean); // drum bus

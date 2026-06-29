@@ -324,13 +324,15 @@ export class LyricsPresenter implements Resettable {
     label: string,
     opts: { source: LyricsSource; sourceLabel: string }
   ): Promise<void> {
-    // Desktop: gate the lyrics capability up front (Japanese lyrics also need
-    // the lyrics-ja romanization). The plain lines already loaded, so a declined
-    // install just skips the word-level upgrade.
+    // Desktop: gate the base lyrics capability up front. Japanese support
+    // (lyrics.japanese) is an optional enhancement, the backend uses it
+    // automatically when installed and otherwise degrades to standard
+    // romanization (Japanese still aligns, just less accurately), so we don't
+    // force it here. Users add it from Settings → Capabilities. The plain lines
+    // already loaded, so a declined install just skips the word-level upgrade.
     if (isTauri()) {
       const caps = desktopCapabilities();
-      const capId = linesLookJapanese(req.realign.lines) ? 'lyrics.japanese' : 'lyrics';
-      if (caps != null && !(await caps.presenter.requestCapability(capId))) return;
+      if (caps != null && !(await caps.presenter.requestCapability('lyrics'))) return;
     }
     const existing = this.lyricsAlignControllers.get(targetTrackId);
     if (existing) {
@@ -421,11 +423,4 @@ export class LyricsPresenter implements Resettable {
       this.lyricsAlign.lyricsAlignStatuses.clear();
     });
   }
-}
-
-/** Whether the lyric text contains Japanese (hiragana / katakana / kanji), so
- *  the desktop gate can require the `lyrics.japanese` romanization capability. */
-function linesLookJapanese(lines: readonly { text: string }[]): boolean {
-  // Hiragana, katakana, CJK unified ideographs.
-  return lines.some((l) => /[぀-ヿ一-龯]/.test(l.text));
 }
