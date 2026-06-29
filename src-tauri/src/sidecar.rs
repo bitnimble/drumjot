@@ -141,6 +141,11 @@ pub async fn run_job(
     };
 
     state.jobs.lock().await.remove(&id);
+    // Close the sidecar's stdin so its blocking readline loop sees EOF and the
+    // process exits. Without this, on the normal terminal-frame path the sidecar
+    // is still waiting for more input and child.wait() below deadlocks. (The
+    // cancel path already start_kill()ed it; the stdout-EOF path already exited.)
+    drop(stdin);
     let _ = child.wait().await;
     outcome
 }

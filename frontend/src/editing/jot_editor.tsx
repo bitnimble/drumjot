@@ -394,6 +394,11 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     // empty) session starts the new jot straight away. The confirm's open state
     // is transient UI, so it lives in React, not a store.
     const [confirmNewJotOpen, setConfirmNewJotOpen] = React.useState(false);
+    // File → Settings (desktop): Capabilities + Hardware tabs. Transient UI
+    // state, so React-local (the File menu + the dialog are both in this View).
+    // Mounted only while open so the capability picker's selection resets each
+    // time it's reopened.
+    const [settingsOpen, setSettingsOpen] = React.useState(false);
     const onNewJot = React.useCallback(() => {
       if (jotEditorStore.dirty) setConfirmNewJotOpen(true);
       else jotEditorPresenter.createNewJot();
@@ -546,7 +551,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                       onLoadLyricsFile={(file) => jotEditorPresenter.loadLyricsFile(file)}
                       onOpenLyricsTextLoad={() => lyricsPresenter.setLyricsTextOpen(true)}
                       onOpenLyricsSearch={() => lyricsPresenter.setLyricsSearchOpen(true)}
-                      onOpenSettings={() => settingsPresenter.setSettingsDialogOpen(true)}
+                      onOpenSettings={() => setSettingsOpen(true)}
                       lyricsAlignBusyPhase={lyricsAlign.lyricsAlignBusyPhase}
                       onSetZoom={setZoomCentered}
                       hasNoteProvenance={provenance.noteProvenance !== undefined}
@@ -637,10 +642,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                       onClose={() => lyricsPresenter.setLyricsTextOpen(false)}
                       presenter={lyricsPresenter}
                     />
-                    <SettingsDialog
-                      open={settings.settingsDialogOpen}
-                      onClose={() => settingsPresenter.setSettingsDialogOpen(false)}
-                    />
+                    {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
                     <TranscribeDialog />
                     <AudioWorkletWarningModal
                       state={audioWorkletState}

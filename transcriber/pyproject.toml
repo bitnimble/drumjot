@@ -11,7 +11,8 @@ requires-python = ">=3.11"
 # debug-bundle replay path. Everything heavy (torch / separation / lyrics) lives
 # in the capability dependency-groups below, so the desktop installer can pull
 # one capability at a time. `uv sync` installs the default-groups (full parity
-# for dev / Docker); the installer uses `uv sync --only-group <capability>`.
+# for dev / Docker); the desktop installer uses
+# `uv sync --no-default-groups --group <capability>` (base deps + that group).
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
@@ -93,7 +94,8 @@ dev = ["ruff>=0.6", "pytest>=8", "matplotlib>=3.8"]
 # packages come from this index only when listed in [tool.uv.sources].
 [tool.uv]
 # `uv sync` installs all groups so dev / Docker keep full parity; the desktop
-# installer pulls one capability at a time via `uv sync --only-group <cap>`.
+# installer pulls capabilities via `uv sync --no-default-groups --group <cap>`
+# (base deps plus the selected group(s)).
 default-groups = ["dev", "transcription", "lyrics", "lyrics-ja"]
 # Drop torchvision: an UNUSED transitive (onnx2torch <- audio-separator[gpu]).
 # On cu128/WSL its compiled ops fail to load and break transformers model

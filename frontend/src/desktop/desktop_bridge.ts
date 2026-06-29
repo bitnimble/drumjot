@@ -79,6 +79,10 @@ export class TauriBridge implements DesktopBridge {
       const decoded = safeDecodeServerValue(frame);
       if (decoded.ok) {
         onEvent(decoded.message);
+      } else {
+        // A schema-invalid frame would otherwise vanish silently (job looks like
+        // it stalled with no result); leave a breadcrumb for the dev tools.
+        console.warn('[sidecar] dropped invalid frame:', decoded.error, frame);
       }
     };
     await invoke('run_job', { request, onEvent: channel });

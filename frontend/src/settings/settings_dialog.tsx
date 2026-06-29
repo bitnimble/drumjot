@@ -22,10 +22,8 @@ const TABS: ReadonlyArray<{ value: SettingsTab; label: string }> = [
  * accelerator info). The menu entry is desktop-gated, so it never opens in web.
  */
 export const SettingsDialog = observer(function SettingsDialog({
-  open,
   onClose,
 }: {
-  open: boolean;
   onClose: () => void;
 }) {
   const [tab, setTab] = React.useState<SettingsTab>('capabilities');
@@ -33,7 +31,7 @@ export const SettingsDialog = observer(function SettingsDialog({
 
   return (
     <Modal
-      open={open}
+      open
       onClose={onClose}
       ariaLabel="Settings"
       width={720}

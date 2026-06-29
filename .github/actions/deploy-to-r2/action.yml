@@ -46,7 +46,8 @@ runs:
     - name: Build
       shell: bash
       # `bun run build` = lint:design + tsc --noEmit + `vite build`, which
-      # writes the static site to dist/. This is a static bundle: it talks to
+      # writes the static site to frontend/dist/ (Vite root is frontend/). This
+      # is a static bundle: it talks to
       # the transcriber backend only at runtime via /api, and degrades
       # gracefully (a "Server is down" toast) when that backend is absent, so
       # the deployed preview is fine for loading/editing local files.

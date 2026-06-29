@@ -76,12 +76,18 @@ await cp(join(repo, 'dsp/drumjot_dsp'), join(pyOut, 'dsp/drumjot_dsp'), {
 
 // --- bundle uv (uv fetches its own managed Python when it syncs) ------------
 const uv = findOnPath('uv');
-if (uv) {
-  await copyFile(uv, join(binOut, process.platform === 'win32' ? 'uv.exe' : 'uv'));
-  console.log(`[desktop-resources] bundled uv from ${uv}`);
-} else {
-  console.warn('[desktop-resources] uv not found on PATH; not bundled (runtime falls back to PATH uv)');
+if (!uv) {
+  // The shipped app can't function without uv: every capability install is a
+  // `uv sync`, and the git deps are vendored to wheels here (which needs uv).
+  // A `console.warn` here once let a uv-less bundle ship silently broken, so
+  // fail the build instead.
+  throw new Error(
+    '[desktop-resources] uv not found on PATH; cannot stage the desktop bundle. ' +
+      'Install uv (https://docs.astral.sh/uv/) before building.',
+  );
 }
+await copyFile(uv, join(binOut, process.platform === 'win32' ? 'uv.exe' : 'uv'));
+console.log(`[desktop-resources] bundled uv from ${uv}`);
 
 // --- vendor the git/source deps as prebuilt wheels --------------------------
 const pyprojectPath = join(pyOut, 'transcriber', 'pyproject.toml');
@@ -90,8 +96,6 @@ const gitSpecs = [...pyproject.matchAll(/"([^"]+ @ git\+[^"]+)"/g)].map((m) => m
 
 if (gitSpecs.length === 0) {
   console.log('[desktop-resources] no git deps to vendor');
-} else if (!uv) {
-  console.warn('[desktop-resources] uv missing; skipping wheel vendoring (runtime would need git + a compiler)');
 } else {
   await mkdir(wheelCache, { recursive: true });
   const cached = (await readdir(wheelCache)).filter((f) => f.endsWith('.whl'));

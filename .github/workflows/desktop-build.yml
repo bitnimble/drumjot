@@ -50,9 +50,12 @@ jobs:
       - name: Install JS deps
         run: bun install --frozen-lockfile
 
-      # Builds the frontend (beforeBuildCommand = `bun run build`), compiles the
-      # Rust shell, and bundles the native installer. On an `app-v*` tag it also
-      # creates a draft release with the artifacts attached.
+      # Runs the configured beforeBuildCommand (`bun run build && bun run
+      # desktop:resources`, builds the frontend + stages the Python backend +
+      # bundled uv into resources/), compiles the Rust shell, and bundles the
+      # native installer. desktop:resources hard-fails if uv is missing (Setup uv
+      # above provides it), so a broken bundle can't ship silently. On an `app-v*`
+      # tag it also creates a draft release with the artifacts attached.
       - name: Build the app
         uses: tauri-apps/tauri-action@v0
         env:

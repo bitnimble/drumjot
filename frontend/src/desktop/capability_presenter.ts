@@ -158,8 +158,10 @@ export class CapabilityPresenter {
     });
     try {
       // `deps` capabilities need the uv sync; `credentials` (the LLM key) and
-      // `system` ones pull no packages.
-      if (order.some((dep) => capabilityById(dep).kind === 'deps')) {
+      // `system` ones pull no packages. Guard on `fresh` (not `order`): an
+      // already-installed deps-cap in the closure must not trigger a needless
+      // re-sync when every fresh capability is credentials/system.
+      if (fresh.some((dep) => capabilityById(dep).kind === 'deps')) {
         await this.bridge.installCapability(fresh[0], this.installGroups(order), (line) => {
           runInAction(() => {
             for (const dep of fresh) {

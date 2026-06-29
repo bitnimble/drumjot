@@ -34,10 +34,6 @@ export class SettingsPresenter {
     this.settings.mergeLayers = on;
   }
 
-  setSettingsDialogOpen(open: boolean) {
-    this.settings.settingsDialogOpen = open;
-  }
-
   /**
    * Re-apply the display settings carried in a loaded `.jot` save file's
    * editor metadata. Called after {@link SettingsStore.reset} + the new

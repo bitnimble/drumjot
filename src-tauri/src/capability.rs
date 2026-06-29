@@ -53,11 +53,17 @@ pub async fn detect_accelerator() -> AcceleratorInfo {
 }
 
 async fn detect_nvidia() -> Option<AcceleratorInfo> {
-    let out = Command::new("nvidia-smi")
-        .args(["--query-gpu=name,driver_version", "--format=csv,noheader"])
-        .output()
-        .await
-        .ok()?;
+    // Bound the probe: a wedged driver (post-CUDA-crash, during a GPU reset) can
+    // make nvidia-smi hang, which would otherwise park the command forever.
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        Command::new("nvidia-smi")
+            .args(["--query-gpu=name,driver_version", "--format=csv,noheader"])
+            .output(),
+    )
+    .await
+    .ok()? // timed out -> treat as no NVIDIA
+    .ok()?; // spawn/io error -> ditto
     if !out.status.success() {
         return None;
     }
