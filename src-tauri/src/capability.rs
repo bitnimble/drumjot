@@ -189,7 +189,8 @@ pub async fn install_capability(
 
     let uv = resolve_uv(&app);
     let mut cmd = Command::new(&uv);
-    cmd.arg("sync").arg("--no-default-groups");
+    // Pin 3.11 to match the bundled cp311 wheels (see prepare-desktop-resources).
+    cmd.arg("sync").arg("--no-default-groups").arg("--python").arg("3.11");
     for group in &groups {
         cmd.arg("--group").arg(group);
     }
