@@ -1,0 +1,116 @@
+import { describe, expect, it } from 'bun:test';
+import {
+  ACCELERATOR_TIER_BYTES,
+  capabilityById,
+} from './capability_manifest';
+import { CapabilityPresenter } from './capability_presenter';
+import { CapabilityStore } from './capability_store';
+import {
+  type AcceleratorInfo,
+  type CapabilityStateEntry,
+  type DesktopBridge,
+} from './desktop_bridge';
+
+class MockBridge implements DesktopBridge {
+  accelerator: AcceleratorInfo = { kind: 'cuda', meetsCudaMin: true };
+  states: Record<string, CapabilityStateEntry> = {};
+  installCalls: string[] = [];
+
+  async detectAccelerator(): Promise<AcceleratorInfo> {
+    return this.accelerator;
+  }
+  async capabilityStates(): Promise<Record<string, CapabilityStateEntry>> {
+    return this.states;
+  }
+  async setCapabilityInstalled(id: string, installed: boolean): Promise<void> {
+    this.installCalls.push(id);
+    this.states[id] = { installed };
+  }
+  async runJob(): Promise<void> {}
+  async cancelJob(): Promise<void> {}
+}
+
+function make(): { presenter: CapabilityPresenter; store: CapabilityStore; bridge: MockBridge } {
+  const store = new CapabilityStore();
+  const bridge = new MockBridge();
+  return { presenter: new CapabilityPresenter({ store, bridge }), store, bridge };
+}
+
+const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+
+describe('CapabilityPresenter', () => {
+  it('refresh loads the accelerator + per-capability status', async () => {
+    const { presenter, store, bridge } = make();
+    bridge.states = { transcription: { installed: true } };
+    await presenter.refresh();
+    expect(store.accelerator?.kind).toBe('cuda');
+    expect(store.statusOf('transcription')).toBe('ready');
+    expect(store.statusOf('lyrics')).toBe('not-installed');
+  });
+
+  it('counts the accelerator tier once, then dedups it', async () => {
+    const { presenter, store } = make();
+    store.accelerator = { kind: 'cuda', meetsCudaMin: true };
+
+    const first = presenter.incrementalBytes(['transcription']);
+    expect(first).toBe(
+      capabilityById('transcription').ownApproxBytes + ACCELERATOR_TIER_BYTES.cuda,
+    );
+
+    await presenter.install('transcription');
+    // Accelerator already present → lyrics shows only its own weights.
+    expect(presenter.incrementalBytes(['lyrics'])).toBe(capabilityById('lyrics').ownApproxBytes);
+  });
+
+  it('pulls prerequisites into the incremental size', () => {
+    const { presenter, store } = make();
+    store.accelerator = { kind: 'cuda', meetsCudaMin: true };
+    // japanese requires lyrics (which needs the accelerator tier).
+    expect(presenter.incrementalBytes(['lyrics.japanese'])).toBe(
+      capabilityById('lyrics.japanese').ownApproxBytes +
+        capabilityById('lyrics').ownApproxBytes +
+        ACCELERATOR_TIER_BYTES.cuda,
+    );
+  });
+
+  it('install transitions to ready and persists', async () => {
+    const { presenter, store, bridge } = make();
+    await presenter.install('transcription');
+    expect(store.statusOf('transcription')).toBe('ready');
+    expect(bridge.installCalls).toContain('transcription');
+  });
+
+  it('install walks prerequisites in order', async () => {
+    const { presenter, store, bridge } = make();
+    await presenter.install('lyrics.japanese');
+    expect(store.statusOf('lyrics')).toBe('ready');
+    expect(store.statusOf('lyrics.japanese')).toBe('ready');
+    expect(bridge.installCalls.indexOf('lyrics')).toBeLessThan(
+      bridge.installCalls.indexOf('lyrics.japanese'),
+    );
+  });
+
+  it('ensure runs a ready capability immediately', () => {
+    const { presenter, store } = make();
+    store.statuses.set('transcription', 'ready');
+    let ran = false;
+    const immediate = presenter.ensure('transcription', () => {
+      ran = true;
+    });
+    expect(immediate).toBe(true);
+    expect(ran).toBe(true);
+  });
+
+  it('ensure queues a not-installed capability and replays the intent after install', async () => {
+    const { presenter, store } = make();
+    let ran = false;
+    const immediate = presenter.ensure('transcription', () => {
+      ran = true;
+    });
+    expect(immediate).toBe(false);
+    expect(ran).toBe(false);
+    await flush();
+    expect(store.statusOf('transcription')).toBe('ready');
+    expect(ran).toBe(true);
+  });
+});

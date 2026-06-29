@@ -154,7 +154,14 @@ export function safeDecodeServerMessage(line: string): DecodeResult {
   } catch (err) {
     return { ok: false, error: `invalid JSON: ${String(err)}` };
   }
-  const parsed = ServerMessageSchema.safeParse(json);
+  return safeDecodeServerValue(json);
+}
+
+/** Same as {@link safeDecodeServerMessage} but for an already-parsed value, e.g.
+ *  a frame delivered through a Tauri `Channel` (the Rust broker forwards each
+ *  frame as a JSON object, not a string). */
+export function safeDecodeServerValue(value: unknown): DecodeResult {
+  const parsed = ServerMessageSchema.safeParse(value);
   return parsed.success
     ? { ok: true, message: parsed.data }
     : { ok: false, error: parsed.error.message };
