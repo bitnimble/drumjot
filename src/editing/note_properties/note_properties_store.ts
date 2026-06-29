@@ -32,7 +32,7 @@ export type ModifierRow = {
  * Reactive read-model for the Note properties editor: the current selection's
  * editable fields, aggregated across one OR many notes. A field whose members
  * disagree reports {@link MIXED} so the view can show `--`/an indeterminate
- * control. Reads the selection + jot/structural; writes nothing (every
+ * control. Reads the selection + jot; writes nothing (every
  * mutation is on {@link NotePropertiesPresenter}).
  */
 export class NotePropertiesStore {
@@ -182,7 +182,7 @@ export class NotePropertiesStore {
 
   /** barId -> { 1-based index, length in beats }, from the shared bar grid. */
   private get barInfo(): Map<string, { index: number; beats: number }> {
-    const bars = this.jotEditorStore.structural?.layers[0]?.bars ?? [];
+    const bars = this.jotEditorStore.jot?.renderedLayers[0]?.bars ?? [];
     const map = new Map<string, { index: number; beats: number }>();
     for (const b of bars) map.set(b.id, { index: b.index, beats: b.beats });
     return map;

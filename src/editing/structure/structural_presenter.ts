@@ -26,6 +26,7 @@ import { isDyadic } from 'src/schema/dsl/element_metrics';
 import { initialBpm, type TempoJot } from 'src/schema/dsl/tempo';
 import { DEFAULT_GRID_DIVISION } from 'src/grid/grid';
 import type { MutableJot } from 'src/schema/schema';
+import type { JotDerivedRegistry } from 'src/schema/derived_fields';
 import { ViewConfig } from 'src/editing/viewport/view_config';
 import type { LaidOutJot } from 'src/editing/playback/timeline';
 import {
@@ -61,7 +62,8 @@ export class StructuralPresenter implements LaidOutJot {
     private readonly paletteStore: PaletteStore,
     private readonly layoutStore: LayoutStore,
     private readonly getJot: () => MutableJot | undefined,
-    private readonly viewConfig: ViewConfig
+    private readonly viewConfig: ViewConfig,
+    registry: JotDerivedRegistry
   ) {
     makeObservable(this, {
       drumOffsetBeats: observable,
@@ -80,6 +82,18 @@ export class StructuralPresenter implements LaidOutJot {
       hasContent: computed,
       primaryLayer: computed,
     });
+    // Install this domain's cross-domain derived fields on the document, so
+    // consumers read `jot.lanes` / `jot.tempoSource` etc. without importing
+    // this presenter. The getters below are the implementations. (Viewport
+    // state like `pxPerBeat` stays on the presenter, it's not document data.)
+    registry.lanes.define(() => this.lanes);
+    registry.musicalLayers.define(() => this.musicalLayers);
+    registry.barsForLane.define((lane) => this.barsForLane(lane));
+    registry.tempoSource.define(() => this.tempoSource);
+    registry.barDrift.define(() => this.barDrift);
+    registry.instrumentFor.define((lane) => this.instrumentFor(lane));
+    registry.ownerLayerFor.define((lane) => this.ownerLayerFor(lane));
+    registry.renderedLayers.define(() => this.layers);
   }
 
   /**
@@ -174,8 +188,12 @@ export class StructuralPresenter implements LaidOutJot {
     return this.musicalLayers.map((layer) => withVirtualLeadIn(layer, preRollSec, bpm));
   }
 
+  /** Delegates to the viewport {@link LayoutStore} (the owner of zoom-derived
+   *  layout scale); kept on the presenter only to satisfy the `LaidOutJot`
+   *  contract `buildTimeline` reads. Cross-domain consumers read
+   *  `jotEditorStore.layout.pxPerBeat` directly. */
   get pxPerBeat(): number {
-    return ((this.viewConfig.barWidth as number) * this.layoutStore.densityFactor) / 4;
+    return this.layoutStore.pxPerBeat;
   }
 
   /** Ordered lane list across all layers (lanes that carry a note).

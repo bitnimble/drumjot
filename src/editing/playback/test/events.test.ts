@@ -9,17 +9,17 @@
 import { describe, expect, it } from 'bun:test';
 import { parse } from 'src/schema/dsl/parser/parser';
 import { Jot } from 'src/schema/dsl/dsl';
-import { buildStructural } from 'src/editing/jot_editor_store';
+import { buildJotModel, buildStructural } from 'src/editing/jot_editor_store';
 import { buildTimeline } from '../timeline';
 import { jotToEvents } from '../events';
 
 function events(src: string) {
   const jot = parse(src);
-  return jotToEvents(buildStructural(jot));
+  return jotToEvents(buildJotModel(jot).jot);
 }
 
 function eventsFor(jot: Jot) {
-  return jotToEvents(buildStructural(jot));
+  return jotToEvents(buildJotModel(jot).jot);
 }
 
 /** A 4/4 @ 120 BPM jot whose only note is a kick on beat 1 with `offset` ms. */
@@ -176,8 +176,8 @@ describe('jotToEvents timing', () => {
     const jot = parse(
       '{{ bpm: 120, time: "4/4", leadBars: 2, instrumentMapping: { k:{name:"Kick"} } }} | . . . . | . . . . | k . . . |',
     );
-    const structural = buildStructural(jot);
-    const evs = jotToEvents(structural);
+    const { jot: model, structural } = buildJotModel(jot);
+    const evs = jotToEvents(model);
     expect(evs).toHaveLength(1);
     expect(evs[0].time).toBeCloseTo(0, 6);
     // The timeline mirrors that anchor: pre-drum bars sit at negative

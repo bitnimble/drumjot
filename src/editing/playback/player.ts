@@ -32,7 +32,7 @@
  * a visible indicator and the operator can inspect details.
  */
 import { makeAutoObservable, runInAction } from 'mobx';
-import type { StructuralPresenter } from 'src/editing/structure/structural_presenter';
+import type { MutableJot } from 'src/schema/schema';
 import type { TempoPresenter } from 'src/editing/playback/tempo_presenter';
 import { MixerContext } from 'src/editing/tracks/tracks';
 import type { PlaybackStore } from './playback_store';
@@ -1139,9 +1139,9 @@ export class JotPlayer {
    * is frozen, so the rescheduled notes line up against it and come alive
    * on resume (which re-arms the tail timer from `tailAudioTime`).
    */
-  refreshDrumSchedule(structural: StructuralPresenter): void {
+  refreshDrumSchedule(jot: MutableJot): void {
     if ((this.state !== 'playing' && this.state !== 'paused') || !this.ctx) return;
-    this.events = jotToEvents(structural);
+    this.events = jotToEvents(jot);
     const now = this.ctx.currentTime;
     const jotOffset = this.currentJotTime(now);
     this.cancelScheduledStops();
@@ -1252,7 +1252,7 @@ export class JotPlayer {
     });
   }
 
-  async play(structural: StructuralPresenter, tempo: TempoPresenter): Promise<void> {
+  async play(jot: MutableJot, tempo: TempoPresenter): Promise<void> {
     // Capture the click-to-seek cue before stop() clears it.
     const cueSec = this.pendingStartSec;
     this.stop();
@@ -1283,7 +1283,7 @@ export class JotPlayer {
         void this.estimateInternalLatency();
       }
 
-      this.events = jotToEvents(structural);
+      this.events = jotToEvents(jot);
       if (this.events.length === 0) {
         throw new Error('No playable notes in this jot.');
       }

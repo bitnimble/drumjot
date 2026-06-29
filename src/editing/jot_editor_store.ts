@@ -47,6 +47,9 @@ export class JotEditorStore {
   palette: PaletteStore | undefined;
   /** Per-bar tempo segments, dominant bpm/time, and the audio timeline. */
   tempo: TempoPresenter | undefined;
+  /** Viewport layout scale (`pxPerBeat`, density factor, bar pixel geometry)
+   *  for the loaded song; zoom-driven, not document data. */
+  layout: LayoutStore | undefined;
 
   /**
    * Shared layout config threaded into every loaded song's peers, so the
@@ -140,6 +143,7 @@ export class JotEditorStore {
       this.structural = undefined;
       this.palette = undefined;
       this.tempo = undefined;
+      this.layout = undefined;
       return;
     }
     const registry = createJotDerivedRegistry();
@@ -170,6 +174,7 @@ export class JotEditorStore {
     this.structural = peers.structural;
     this.palette = peers.palette;
     this.tempo = peers.tempo;
+    this.layout = peers.layout;
   }
 }
 
@@ -206,10 +211,11 @@ function buildJotPeers(
     palette,
     layoutStore,
     () => mutable,
-    viewConfig
+    viewConfig,
+    registry
   );
   const tempo = new TempoPresenter(structural, registry);
-  return { doc, structural, palette, tempo };
+  return { doc, structural, palette, tempo, layout: layoutStore };
 }
 
 /**
@@ -224,4 +230,21 @@ export function buildStructural(
 ): StructuralPresenter {
   const registry = createJotDerivedRegistry();
   return buildJotPeers(dslToMutable(source, registry), registry, viewConfig).structural;
+}
+
+/**
+ * Store-free model builder: the reactive {@link MutableJot} for a plain `Jot`,
+ * with the structure-domain derived fields installed (the peers are built so
+ * `jot.musicalLayers` / `tempoSource` etc. resolve). For one-shot consumers
+ * (playback `jotToEvents`, unit tests) that read the model's derived fields.
+ * Returns `{ jot, structural }` so a caller can also drive the structure (e.g.
+ * `structural.setDrumOffset`) and see it reflected in the model's derived reads.
+ */
+export function buildJotModel(
+  source: Jot,
+  viewConfig: ViewConfig = new ViewConfig()
+): { jot: MutableJot; structural: StructuralPresenter } {
+  const registry = createJotDerivedRegistry();
+  const peers = buildJotPeers(dslToMutable(source, registry), registry, viewConfig);
+  return { jot: peers.doc.model, structural: peers.structural };
 }

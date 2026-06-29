@@ -1,4 +1,5 @@
 import React from 'react';
+import type { MutableJot } from 'src/schema/schema';
 import { BarTiming } from 'src/editing/playback/timeline';
 import type { StructuralPresenter } from 'src/editing/structure/structural_presenter';
 import type { TempoPresenter } from 'src/editing/playback/tempo_presenter';
@@ -19,11 +20,15 @@ import type { PaletteStore } from 'src/editing/palette/palette_store';
  * - {@link TempoEditContext}: the write surface for tempo edits (the timeline
  *   header's BPM pills + "Change BPM here" context menu).
  * - {@link PaletteContext}: per-lane colours + the legend.
+ * - {@link JotContext}: the reactive document itself, for consumers that read
+ *   its schema-declared derived fields (`jot.renderedLayers` / `tempoSource` /
+ *   `barDrift` etc.) without depending on a producing presenter.
  */
 export const StructuralContext = React.createContext<StructuralPresenter | null>(null);
 export const TempoContext = React.createContext<TempoPresenter | null>(null);
 export const TempoEditContext = React.createContext<TempoEditPresenter | null>(null);
 export const PaletteContext = React.createContext<PaletteStore | null>(null);
+export const JotContext = React.createContext<MutableJot | null>(null);
 
 /**
  * Per-bar audio-time timings (start + duration, in seconds) for the

@@ -54,10 +54,9 @@ export class TempoEditPresenter {
    * skipped. Mirrors `TempoPresenter.tempoRamps`'s bar->global-beat anchoring.
    */
   get bpmMarkers(): BpmMarker[] {
-    const structural = this.jotEditorStore.structural;
     const jot = this.jotEditorStore.jot;
-    const bars = structural?.layers[0]?.bars;
-    if (!structural || !jot || !bars) return [];
+    const bars = jot?.renderedLayers[0]?.bars;
+    if (!jot || !bars) return [];
 
     const { sourceBarStart, barIndexById } = this.barIndex(bars);
     // The drums-enter bar's source index (lead-in bars sit before it); the
@@ -84,7 +83,7 @@ export class TempoEditPresenter {
       // upserts the leading event on the drums-enter bar.
       markers.push({
         globalBeat: 0,
-        bpm: Math.round(initialBpm(structural.tempoSource)),
+        bpm: Math.round(initialBpm(jot.tempoSource)),
         source: { kind: 'initial' },
       });
     }
@@ -105,10 +104,9 @@ export class TempoEditPresenter {
    * loaded or the click can't be placed.
    */
   createTempoChangeAtX(x: number): string | undefined {
-    const structural = this.jotEditorStore.structural;
     const jot = this.jotEditorStore.jot;
-    if (!structural || !jot) return undefined;
-    const pxPerBeat = structural.pxPerBeat;
+    if (!jot) return undefined;
+    const pxPerBeat = this.jotEditorStore.layout?.pxPerBeat ?? 0;
     if (!(pxPerBeat > 0)) return undefined;
     const anchor = this.resolveAnchor(x / pxPerBeat);
     if (!anchor) return undefined;
@@ -116,7 +114,7 @@ export class TempoEditPresenter {
     const existing = this.flatEventAt(anchor.barId, anchor.beat);
     if (existing) return existing;
 
-    const bpm = Math.round(tempoAt(structural.tempoSource, anchor.barIndex, anchor.beat));
+    const bpm = Math.round(tempoAt(jot.tempoSource, anchor.barIndex, anchor.beat));
     const id = `t_${crypto.randomUUID()}`;
     runInAction(() => {
       jot.tempoEvents.set(id, { id, barId: anchor.barId, beat: anchor.beat, bpm });
@@ -156,7 +154,7 @@ export class TempoEditPresenter {
    *  index), where the event would be invisible to `initialBpm`. One CRDT op. */
   setInitialBpm(bpm: number): void {
     const jot = this.jotEditorStore.jot;
-    const bars = this.jotEditorStore.structural?.layers[0]?.bars;
+    const bars = this.jotEditorStore.jot?.renderedLayers[0]?.bars;
     if (!jot || !bars) return;
     const first = bars.find((b) => b.index >= 1);
     if (!first) return;
@@ -197,7 +195,7 @@ export class TempoEditPresenter {
   /** Map a global beat to a real source bar + snapped whole beat. Clicks in the
    *  view-only lead-in or an anacrusis snap to the first real bar's downbeat. */
   private resolveAnchor(globalBeat: number): Anchor | undefined {
-    const bars = this.jotEditorStore.structural?.layers[0]?.bars;
+    const bars = this.jotEditorStore.jot?.renderedLayers[0]?.bars;
     if (!bars || bars.length === 0) return undefined;
     const { barIndexById } = this.barIndex(bars);
 
