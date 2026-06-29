@@ -17,18 +17,20 @@ from app.comms.protocol import (
     SERVER_MESSAGE_ADAPTER,
     RequestMessage,
 )
-from app.comms.runners import build_registry
+from app.comms.runners import EchoRunner
 from app.comms.stdio_adapter import StdioAdapter
 
+# All real ops now drive real (torch + model-download) runners, so the in-process
+# plumbing tests wire an explicit EchoRunner under the `separate` op key.
+ECHO_REGISTRY: Registry = {"separate": EchoRunner()}
 
-def _request(job_id: str, path: str) -> str:
-    # `separate` is still backed by EchoRunner, so these exercise the protocol /
-    # adapter plumbing without the real transcribe runner's bundle requirement.
+
+def _request(job_id: str, path: str, op: str = "separate", params: dict | None = None) -> str:
     return RequestMessage(
         type="request",
         id=job_id,
-        op="separate",
-        args={"audio": {"kind": "path", "path": path}},
+        op=op,
+        args={"audio": {"kind": "path", "path": path}, "params": params or {}},
     ).model_dump_json()
 
 
@@ -52,7 +54,7 @@ def test_client_message_round_trip() -> None:
 
 
 def test_echo_runner_emits_progress_then_result() -> None:
-    out = _run_adapter(build_registry(), [_request("j1", "/song.mp3")])
+    out = _run_adapter(ECHO_REGISTRY, [_request("j1", "/song.mp3")])
     types = [m["type"] for m in out]
     assert types.count("progress") == 3
     assert types[-1] == "result"
@@ -68,7 +70,7 @@ def test_unknown_op_errors() -> None:
 
 
 def test_malformed_line_is_skipped() -> None:
-    out = _run_adapter(build_registry(), ["not json{", _request("j3", "/y.mp3")])
+    out = _run_adapter(ECHO_REGISTRY, ["not json{", _request("j3", "/y.mp3")])
     assert out[-1]["type"] == "result"
 
 
@@ -83,11 +85,14 @@ def test_cancel_token() -> None:
 
 def test_sidecar_subprocess_round_trip() -> None:
     """Spawn the sidecar exactly as the Rust broker does (`python -m
-    app.sidecar`), pipe a request over stdin, read frames off stdout."""
+    app.sidecar`), pipe a request over stdin, read frames off stdout. Uses an
+    invalid `separate` stage so the runner errors out *before* importing torch or
+    downloading any model, this exercises the real registry's dispatch + error
+    path over the subprocess without the GPU stack."""
     transcriber_root = Path(__file__).resolve().parents[1]
     proc = subprocess.run(
         [sys.executable, "-m", "app.sidecar"],
-        input=_request("sub1", "/song.mp3") + "\n",
+        input=_request("sub1", "/song.mp3", params={"stage": "__invalid__"}) + "\n",
         capture_output=True,
         text=True,
         cwd=transcriber_root,
@@ -96,5 +101,5 @@ def test_sidecar_subprocess_round_trip() -> None:
     )
     frames = [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
     assert frames, f"no frames on stdout; stderr={proc.stderr}"
-    assert frames[-1]["type"] == "result"
-    assert frames[-1]["artifacts"][0]["ref"]["path"] == "/song.mp3"
+    assert frames[-1]["type"] == "error"
+    assert frames[-1]["id"] == "sub1"

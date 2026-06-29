@@ -5,13 +5,31 @@ import { CAPABILITIES, type CapabilityId, capabilityById, formatBytes } from './
 import { desktopCapabilities } from './desktop_services';
 import styles from './capability_panel.module.css';
 
+const requiresChildren = (id: CapabilityId): CapabilityId[] =>
+  CAPABILITIES.filter((c) => c.kind === 'deps' && c.requires.includes(id)).map((c) => c.id);
+
+function collect(seed: CapabilityId, next: (id: CapabilityId) => CapabilityId[]): Set<CapabilityId> {
+  const out = new Set<CapabilityId>();
+  const visit = (id: CapabilityId): void => {
+    for (const n of next(id)) {
+      if (!out.has(n)) {
+        out.add(n);
+        visit(n);
+      }
+    }
+  };
+  visit(seed);
+  return out;
+}
+
 /**
- * First-run capability setup, shown once in the desktop shell. Top-level
- * capabilities are rows; a capability that requires another (e.g. Japanese
- * lyrics → lyrics) renders as a checkbox under its parent, showing only its
- * incremental download so the size doesn't read as the full closure on top of
- * the parent. Shares one capability store with the point-of-use gate
- * (desktopCapabilities). Renders nothing in the web build.
+ * First-run capability setup, shown once in the desktop shell. Capabilities
+ * render as a requires-tree: a root (Stem separation) with its dependents
+ * (transcription, lyrics, Japanese) as nested checkboxes, each showing only its
+ * incremental download (+delta) rather than the full closure stacked on top.
+ * The root's Install button installs the root + every checked dependent in one
+ * uv sync. Shares one capability store with the point-of-use gate. Renders
+ * nothing in the web build.
  */
 export const DesktopFirstRun = observer(function DesktopFirstRun() {
   const deps = desktopCapabilities();
@@ -20,16 +38,57 @@ export const DesktopFirstRun = observer(function DesktopFirstRun() {
   if (deps == null || !open) return null;
   const { store, presenter } = deps;
 
-  const topLevel = CAPABILITIES.filter((c) => c.requires.length === 0);
-  const depsChildren = (id: CapabilityId): CapabilityId[] =>
-    CAPABILITIES.filter((c) => c.kind === 'deps' && c.requires.includes(id)).map((c) => c.id);
   const toggle = (id: CapabilityId): void =>
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+        // A dependent can't stay selected without the thing it requires.
+        for (const dep of collect(id, requiresChildren)) next.delete(dep);
+      } else {
+        next.add(id);
+        // Selecting a dependent implies its prerequisites.
+        for (const req of collect(id, (x) => capabilityById(x).requires)) next.add(req);
+      }
       return next;
     });
+
+  // Root + every dependent the user picked (or that's already installed); the
+  // size sums the lot, deduped, via incrementalBytes.
+  const installSet = (rootId: CapabilityId): CapabilityId[] => {
+    const set = [rootId];
+    for (const dep of collect(rootId, requiresChildren)) {
+      if (selected.has(dep) || store.isReady(dep)) set.push(dep);
+    }
+    return set;
+  };
+
+  const renderChild = (id: CapabilityId, depth: number): React.ReactNode => {
+    const ready = store.isReady(id);
+    const installing = store.statusOf(id) === 'installing';
+    const parent = capabilityById(id).requires[0];
+    const delta =
+      parent != null
+        ? presenter.incrementalBytes([id]) - presenter.incrementalBytes([parent])
+        : presenter.incrementalBytes([id]);
+    return (
+      <React.Fragment key={id}>
+        <label className={styles.subOption} style={{ marginLeft: depth * 16 }}>
+          <input
+            type="checkbox"
+            checked={ready || selected.has(id)}
+            disabled={ready || installing}
+            onChange={() => toggle(id)}
+          />
+          {capabilityById(id).name}
+          <span className={styles.delta}>{ready ? 'installed' : `+${formatBytes(delta)}`}</span>
+        </label>
+        {requiresChildren(id).map((c) => renderChild(c, depth + 1))}
+      </React.Fragment>
+    );
+  };
+
+  const roots = CAPABILITIES.filter((c) => c.requires.length === 0);
 
   return (
     <div className={modal.backdrop}>
@@ -42,41 +101,16 @@ export const DesktopFirstRun = observer(function DesktopFirstRun() {
             Drumjot is ready for writing and editing right now. Optional features download what
             they need the first time you use them.
           </p>
-          {topLevel.map((cap) => {
-            const children = depsChildren(cap.id);
-            // Install the deepest wanted child (its closure pulls the parent in
-            // one uv sync); else just the parent.
-            const wantedChild = children.find((id) => selected.has(id) || store.isReady(id));
-            const target = wantedChild ?? cap.id;
-            const installing =
-              store.statusOf(cap.id) === 'installing' ||
-              children.some((id) => store.statusOf(id) === 'installing');
-            const size = presenter.incrementalBytes([target]);
+          {roots.map((cap) => {
+            const set = installSet(cap.id);
+            const size = presenter.incrementalBytes(set);
+            const installing = set.some((id) => store.statusOf(id) === 'installing');
             return (
               <div key={cap.id} className={styles.row}>
                 <div className={styles.info}>
                   <span className={styles.name}>{cap.name}</span>
                   <span className={styles.desc}>{cap.description}</span>
-                  {children.map((id) => {
-                    const childReady = store.isReady(id);
-                    const childInstalling = store.statusOf(id) === 'installing';
-                    const delta =
-                      presenter.incrementalBytes([id]) - presenter.incrementalBytes([cap.id]);
-                    return (
-                      <label key={id} className={styles.subOption}>
-                        <input
-                          type="checkbox"
-                          checked={childReady || selected.has(id)}
-                          disabled={childReady || childInstalling}
-                          onChange={() => toggle(id)}
-                        />
-                        {capabilityById(id).name}
-                        <span className={styles.delta}>
-                          {childReady ? 'installed' : `+${formatBytes(delta)}`}
-                        </span>
-                      </label>
-                    );
-                  })}
+                  {requiresChildren(cap.id).map((c) => renderChild(c, 0))}
                 </div>
                 <div className={styles.action}>
                   {installing ? (
@@ -86,7 +120,7 @@ export const DesktopFirstRun = observer(function DesktopFirstRun() {
                   ) : size === 0 ? (
                     <span className={styles.ready}>Installed</span>
                   ) : (
-                    <button className={styles.install} onClick={() => void presenter.install(target)}>
+                    <button className={styles.install} onClick={() => void presenter.installAll(set)}>
                       Install · {formatBytes(size)}
                     </button>
                   )}

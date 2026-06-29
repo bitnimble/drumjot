@@ -43,6 +43,9 @@ ResultRef = Annotated[PathRef | UrlRef | InlineRef, Field(discriminator="kind")]
 class Artifact(BaseModel):
     role: Literal["midi", "stem", "audio"]
     ref: ResultRef
+    # Semantic label for multi-stem results (e.g. "drums", "no_drums", or a DSL
+    # pitch letter "k"/"s"/"h"/"c"/"t"); lets the frontend map a stem to a lane.
+    name: str | None = None
 
 
 Op = Literal["transcribe", "separate", "alignLyrics"]

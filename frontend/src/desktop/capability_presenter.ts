@@ -138,14 +138,21 @@ export class CapabilityPresenter {
     return false;
   }
 
-  /** Install a capability and its prereqs: one `uv sync` of the app venv to the
-   *  union of all desired groups, then persist + mark the closure ready and
-   *  replay any queued point-of-use intent. */
+  /** Install a capability and its prereqs. Thin wrapper over {@link installAll}. */
   async install(id: CapabilityId): Promise<void> {
-    const order = [...this.closure([id])];
+    return this.installAll([id]);
+  }
+
+  /** Install one or more capabilities and their prereqs: one `uv sync` of the app
+   *  venv to the union of all desired groups, then persist + mark the whole
+   *  closure ready and replay any queued point-of-use intents. Lets the first-run
+   *  dialog install a multi-capability selection (e.g. separation + lyrics) in a
+   *  single sync. */
+  async installAll(ids: CapabilityId[]): Promise<void> {
+    const order = [...this.closure(ids)];
     const fresh = order.filter((dep) => !this.store.isReady(dep));
     if (fresh.length === 0) {
-      this.replayIntent(id);
+      for (const id of ids) this.replayIntent(id);
       return;
     }
     runInAction(() => {
@@ -158,7 +165,7 @@ export class CapabilityPresenter {
       // `deps` capabilities need the uv sync; `credentials` (the LLM key) and
       // `system` ones pull no packages.
       if (order.some((dep) => capabilityById(dep).kind === 'deps')) {
-        await this.bridge.installCapability(id, this.installGroups(order), (line) => {
+        await this.bridge.installCapability(fresh[0], this.installGroups(order), (line) => {
           runInAction(() => {
             for (const dep of fresh) {
               this.store.installLog.set(dep, line);
@@ -173,14 +180,15 @@ export class CapabilityPresenter {
           this.store.installLog.delete(dep);
         }
       });
-      this.replayIntent(id);
+      for (const id of ids) this.replayIntent(id);
     } catch (err) {
       runInAction(() => {
+        const message = err instanceof Error ? err.message : String(err);
         for (const dep of fresh) {
           this.store.statuses.set(dep, 'error');
           this.store.installLog.delete(dep);
+          this.store.errors.set(dep, message);
         }
-        this.store.errors.set(id, err instanceof Error ? err.message : String(err));
       });
     }
   }

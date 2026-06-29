@@ -36,8 +36,10 @@ ml = [
     "numpy>=1.26",
 ]
 
-# Local drum transcription: separation + beats + learned/ADTOF onsets + MIDI.
-transcription = [
+# Stem separation models: BS-Roformer (drum stem), MDX23C (drum pieces), and
+# the UVR vocals model used by the lyrics mix flow. Its own capability so a user
+# can stem-split audio without pulling the transcription / lyrics stacks.
+separation = [
     { include-group = "ml" },
     # audio-separator >=0.31 needs numpy 2; the MDX23C drum-piece model used by
     # pipeline/separate.py is only registered in 0.31+. madmom@main builds on
@@ -47,6 +49,11 @@ transcription = [
     # (libcudart.so.13); the image is CUDA 12 + torch cu128, so the CUDA-12
     # build (<=1.25.x) is the match. Bump only alongside a CUDA-13 base.
     "onnxruntime-gpu>=1.19,<1.26",
+]
+
+# Local drum transcription: separation + beats + learned/ADTOF onsets + MIDI.
+transcription = [
+    { include-group = "separation" },
     # PyTorch ADTOF port (torch-only; ships pretrained Frame_RNN weights).
     "adtof_pytorch @ git+https://github.com/xavriley/ADTOF-pytorch.git@85c192e78f716ea0b111cc8a5ee4a8f6a3a4f8a9",
     # Beat / downbeat tracking (the rhythmic backbone).
@@ -60,9 +67,10 @@ transcription = [
 
 # Lyrics alignment: MahmoudAshraf97's pure-PyTorch long-form CTC forced aligner
 # (MMS-300m under the hood). Pinned by commit SHA. NOT the deskpai PyPI port,
-# which hard-pins the CPU onnxruntime wheel and shadows onnxruntime-gpu.
+# which hard-pins the CPU onnxruntime wheel and shadows onnxruntime-gpu. Includes
+# separation: the mix flow runs the UVR vocals separator before aligning.
 lyrics = [
-    { include-group = "ml" },
+    { include-group = "separation" },
     "ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git@264e7a1f81bff9ff5e787a5537020c2ad0b0df02",
 ]
 

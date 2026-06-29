@@ -1,6 +1,11 @@
 import { type AcceleratorKind } from './desktop_bridge';
 
-export type CapabilityId = 'transcription' | 'lyrics' | 'lyrics.japanese' | 'ai-assist';
+export type CapabilityId =
+  | 'separation'
+  | 'transcription'
+  | 'lyrics'
+  | 'lyrics.japanese'
+  | 'ai-assist';
 
 /** How a capability is satisfied: by downloading deps, by configuring
  *  credentials (no download), or by a non-installable system prereq. */
@@ -46,30 +51,46 @@ export const ACCELERATOR_TIER_BYTES: Record<AcceleratorKind, number> = {
 
 export const CAPABILITIES: readonly CapabilitySpec[] = [
   {
+    id: 'separation',
+    name: 'Stem separation',
+    description:
+      'Split a song into stems on this machine (drums, drum pieces, vocals, backing). The shared runtime for transcription and lyrics.',
+    kind: 'deps',
+    groups: ['separation'],
+    weights: [
+      { repoId: 'jarredou/BS-ROFO-SW-Fixed', revision: 'main', approxBytes: 1.2 * GB },
+      { repoId: 'jarredou/models · drumsep_5stems_mdx23c', revision: 'DrumSep', approxBytes: 0.9 * GB },
+      { repoId: 'TRvlvr/model_repo · UVR-MDX-NET-Voc_FT', revision: 'all_public_uvr_models', approxBytes: 0.45 * GB },
+    ],
+    requires: [],
+    accelerator: 'required',
+    ownApproxBytes: 2.6 * GB,
+  },
+  {
     id: 'transcription',
     name: 'Local transcription',
     description:
-      'Transcribe drums from audio on this machine: stem separation, beat tracking, and the learned onset model.',
+      'Transcribe drums from audio on this machine: beat tracking and the learned onset model (on top of stem separation).',
     kind: 'deps',
     groups: ['transcription'],
     weights: [
       { repoId: 'm-a-p/MERT-v1-330M', revision: 'main', approxBytes: 1.3 * GB },
     ],
-    requires: [],
-    accelerator: 'required',
+    requires: ['separation'],
+    accelerator: 'none',
     ownApproxBytes: 1.9 * GB,
   },
   {
     id: 'lyrics',
     name: 'Lyrics alignment',
-    description: 'Align lyrics to the audio timeline using a forced aligner.',
+    description: 'Align lyrics to the audio timeline using a forced aligner (on top of stem separation).',
     kind: 'deps',
     groups: ['lyrics'],
     weights: [
       { repoId: 'MahmoudAshraf/mms-300m-1130-forced-aligner', revision: 'main', approxBytes: 1.2 * GB },
     ],
-    requires: [],
-    accelerator: 'required',
+    requires: ['separation'],
+    accelerator: 'none',
     ownApproxBytes: 1.2 * GB,
   },
   {

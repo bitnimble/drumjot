@@ -42,6 +42,9 @@ export const ResultRefSchema = z.discriminatedUnion('kind', [
 export const ArtifactSchema = z.object({
   role: z.enum(['midi', 'stem', 'audio']),
   ref: ResultRefSchema,
+  /** Semantic label for multi-stem results ("drums", "no_drums", or a DSL pitch
+   *  letter "k"/"s"/"h"/"c"/"t"); lets the frontend map a stem to a lane. */
+  name: z.string().optional(),
 });
 
 /** Backend operations a `request` can invoke. */

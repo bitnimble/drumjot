@@ -1,9 +1,8 @@
 """Runner registry.
 
-`transcribe` is wired to {@link TranscribeRunner}, which replays a debug bundle
-today and is the seam for the live `run_pipeline` path (needs the torch
-capability + GPU). `separate` / `alignLyrics` still use `EchoRunner` until their
-real runners land (same GPU dependency).
+`transcribe` is wired to {@link TranscribeRunner}, `separate` to
+{@link SeparateRunner} (real stem separation). `alignLyrics` still uses
+`EchoRunner` until its real runner lands.
 """
 from __future__ import annotations
 
@@ -11,6 +10,7 @@ import asyncio
 
 from .core import CancelToken, EmitProgress, Registry
 from .protocol import Artifact, PathRef, RequestMessage
+from .separate_runner import SeparateRunner
 from .transcribe_runner import TranscribeRunner
 
 
@@ -37,4 +37,8 @@ class EchoRunner:
 
 def build_registry() -> Registry:
     echo = EchoRunner()
-    return {"transcribe": TranscribeRunner(), "separate": echo, "alignLyrics": echo}
+    return {
+        "transcribe": TranscribeRunner(),
+        "separate": SeparateRunner(),
+        "alignLyrics": echo,
+    }

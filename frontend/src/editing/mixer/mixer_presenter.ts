@@ -1,6 +1,9 @@
 import { comparer, makeAutoObservable, reaction } from 'mobx';
-import { AudioTrackId } from 'src/editing/playback/audio_tracks';
+import { AudioTrackId, AudioTrackRole } from 'src/editing/playback/audio_tracks';
 import { jotPlayer } from 'src/editing/playback/player';
+import { backendClient } from 'src/net/backend_client';
+import { type Artifact } from 'src/net/control_protocol';
+import { desktopCapabilities } from 'src/desktop/desktop_services';
 import { JotEditorStore } from '../jot_editor_store';
 import { MixerStore, clampVolume } from './mixer_store';
 import type { Resettable } from '../session_reset';
@@ -148,21 +151,57 @@ export class MixerPresenter implements Resettable {
     this.mixer.audioTrackSplitStatuses.delete(id);
   }
 
-  /** Stub: "Split into drums + backing" from the audio-track overflow
-   * menu. The transcriber-side wiring is deferred; surface a status pill
-   * so the click visibly does something in the meantime. */
+  /** "Split into drums + backing": isolate the drum stem + drumless mix
+   * (BS-Roformer) and load each as a new audio track. */
   splitAudioTrackFromMix(id: AudioTrackId): void {
-    const track = jotPlayer.audioTracks.get(id);
-    const name = track ? track.filename : id;
-    toastStore.showError(`Split into drums + backing on "${name}" isn't wired up yet.`);
+    void this.splitAudioTrack(id, 'stems_all', 'mix');
   }
 
-  /** Stub: "Split into kick / snare / hi-hat / cymbals". See
-   * {@link splitAudioTrackFromMix}. */
+  /** "Split into kick / snare / hi-hat / cymbals": split a drum stem into its
+   * per-instrument stems (MDX23C) and load each as a new lane-tagged track. */
   splitAudioTrackDrumPieces(id: AudioTrackId): void {
+    void this.splitAudioTrack(id, 'stems_per', 'pieces');
+  }
+
+  /** Run stem separation through the backend adapter, gated on the `separation`
+   * capability, and load each produced stem as a new audio track. Desktop only
+   * (there is no HTTP separation endpoint). */
+  private async splitAudioTrack(
+    id: AudioTrackId,
+    stage: 'stems_all' | 'stems_per',
+    kind: 'mix' | 'pieces',
+  ): Promise<void> {
     const track = jotPlayer.audioTracks.get(id);
-    const name = track ? track.filename : id;
-    toastStore.showError(`Split into drum pieces on "${name}" isn't wired up yet.`);
+    if (!track) return;
+    const caps = desktopCapabilities();
+    if (caps == null) {
+      toastStore.showError('Stem separation is only available in the desktop app.');
+      return;
+    }
+    if (!(await caps.presenter.requestCapability('separation'))) return; // install declined
+    this.beginAudioTrackSplit(id, kind);
+    try {
+      const result = await backendClient().run(
+        'separate',
+        { kind: 'blob', blob: track.sourceBlob, filename: track.filename },
+        { stage },
+      );
+      for (const artifact of result.artifacts) {
+        const meta = stemTrackMeta(artifact, track.filename);
+        await jotPlayer.loadAudioTrackFromUrl(
+          backendClient().resolveMediaUrl(artifact.ref),
+          meta.filename,
+          meta.lane,
+          meta.role,
+        );
+      }
+      const n = result.artifacts.length;
+      toastStore.showSuccess(`Split "${track.filename}" into ${n} stem${n === 1 ? '' : 's'}.`);
+    } catch (err) {
+      toastStore.showError(`Stem split failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      this.endAudioTrackSplit(id);
+    }
   }
 
   /** Drop every loaded audio track. Used when a new source replaces the
@@ -258,3 +297,28 @@ export type TrackMixerState = {
   drumMasterMuted: boolean;
   drumMasterSoloed: boolean;
 };
+
+const STEM_LANE_LABELS: Record<string, string> = {
+  k: 'kick',
+  s: 'snare',
+  h: 'hi-hat',
+  c: 'cymbals',
+  t: 'toms',
+};
+
+/** Map a separation artifact (by its `name`) to an audio-track role + lane +
+ *  display filename. `drums`/`no_drums` come from the stems_all stage; the DSL
+ *  pitch letters (k/s/h/c/t) come from stems_per. */
+function stemTrackMeta(
+  artifact: Artifact,
+  sourceFilename: string,
+): { role: AudioTrackRole; lane?: string; filename: string } {
+  const base = sourceFilename.replace(/\.[^./\\]+$/, '');
+  const name = artifact.name;
+  if (name === 'drums') return { role: 'drums', filename: `${base} (drums)` };
+  if (name === 'no_drums') return { role: 'no-drums', filename: `${base} (backing)` };
+  if (name != null && name in STEM_LANE_LABELS) {
+    return { role: 'drum-piece', lane: name, filename: `${base} (${STEM_LANE_LABELS[name]})` };
+  }
+  return { role: 'unknown', filename: `${base} (${name ?? 'stem'})` };
+}

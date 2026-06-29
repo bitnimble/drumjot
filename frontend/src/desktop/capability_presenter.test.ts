@@ -62,23 +62,28 @@ describe('CapabilityPresenter', () => {
     const { presenter, store } = make();
     store.accelerator = { kind: 'cuda', meetsCudaMin: true };
 
+    // transcription requires separation, which carries the accelerator tier.
     const first = presenter.incrementalBytes(['transcription']);
     expect(first).toBe(
-      capabilityById('transcription').ownApproxBytes + ACCELERATOR_TIER_BYTES.cuda,
+      capabilityById('separation').ownApproxBytes +
+        capabilityById('transcription').ownApproxBytes +
+        ACCELERATOR_TIER_BYTES.cuda,
     );
 
     await presenter.install('transcription');
-    // Accelerator already present → lyrics shows only its own weights.
+    // separation (accelerator tier + its models) now present → lyrics shows only
+    // its own weights.
     expect(presenter.incrementalBytes(['lyrics'])).toBe(capabilityById('lyrics').ownApproxBytes);
   });
 
   it('pulls prerequisites into the incremental size', () => {
     const { presenter, store } = make();
     store.accelerator = { kind: 'cuda', meetsCudaMin: true };
-    // japanese requires lyrics (which needs the accelerator tier).
+    // japanese → lyrics → separation (which carries the accelerator tier).
     expect(presenter.incrementalBytes(['lyrics.japanese'])).toBe(
       capabilityById('lyrics.japanese').ownApproxBytes +
         capabilityById('lyrics').ownApproxBytes +
+        capabilityById('separation').ownApproxBytes +
         ACCELERATOR_TIER_BYTES.cuda,
     );
   });
@@ -100,18 +105,29 @@ describe('CapabilityPresenter', () => {
     );
   });
 
-  it('uv-installs with the capability group set', async () => {
+  it('uv-installs with the capability group set (incl. required separation)', async () => {
     const { presenter, bridge } = make();
     await presenter.install('transcription');
-    expect(bridge.groupCalls.at(-1)).toEqual(['transcription']);
+    expect(new Set(bridge.groupCalls.at(-1))).toEqual(new Set(['separation', 'transcription']));
   });
 
   it('re-syncs the union of prior + new groups', async () => {
     const { presenter, bridge } = make();
     await presenter.install('transcription');
     await presenter.install('lyrics');
-    // Installing lyrics must keep transcription's group (uv sync replaces env).
-    expect(new Set(bridge.groupCalls.at(-1))).toEqual(new Set(['transcription', 'lyrics']));
+    // Installing lyrics must keep transcription's groups (uv sync replaces env).
+    expect(new Set(bridge.groupCalls.at(-1))).toEqual(
+      new Set(['separation', 'transcription', 'lyrics']),
+    );
+  });
+
+  it('installAll installs a multi-capability selection in one sync', async () => {
+    const { presenter, store, bridge } = make();
+    await presenter.installAll(['separation', 'lyrics']);
+    expect(store.statusOf('separation')).toBe('ready');
+    expect(store.statusOf('lyrics')).toBe('ready');
+    expect(bridge.groupCalls).toHaveLength(1);
+    expect(new Set(bridge.groupCalls.at(-1))).toEqual(new Set(['separation', 'lyrics']));
   });
 
   it('skips uv for a credentials-only capability', async () => {
