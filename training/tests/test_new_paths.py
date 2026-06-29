@@ -72,6 +72,7 @@ def test_tune_thresholds_floors_rare_lanes():
         def __init__(self):
             super().__init__()
             self.dummy = torch.nn.Parameter(torch.zeros(1))  # _clip_probs reads device
+            self.lane_names = cfg.lanes  # activate_onsets (via _clip_probs_batched) needs it
 
         def forward(self, x):
             out = torch.full((x.shape[0], nl, x.shape[1]), -8.0)

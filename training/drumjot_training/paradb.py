@@ -91,14 +91,21 @@ def _sum_tracks(root: Path, names: list[str], sr: int):
     """Load + sum referenced audio tracks (mono, resampled). None if none found."""
     import librosa
 
+    # Index the extracted tree ONCE by filename instead of a full recursive rglob walk per
+    # referenced track (was N walks for N tracks). setdefault keeps the FIRST occurrence,
+    # matching the previous per-track `rglob(base)` + `hits[0]` (same single tree-traversal
+    # order, same audio-suffix filter), so the chosen file is identical.
+    by_name: dict[str, Path] = {}
+    for p in root.rglob("*"):
+        if p.suffix.lower() in _AUDIO_EXTS:
+            by_name.setdefault(p.name, p)
     ys = []
     for name in names:
-        base = Path(name).name
-        hits = [p for p in root.rglob(base) if p.suffix.lower() in _AUDIO_EXTS]
-        if not hits:
+        hit = by_name.get(Path(name).name)
+        if hit is None:
             print(f"    WARN track not found in zip: {name}", flush=True)
             continue
-        y, _ = librosa.load(str(hits[0]), sr=sr, mono=True)
+        y, _ = librosa.load(str(hit), sr=sr, mono=True)
         ys.append(y.astype(np.float32))
     if not ys:
         return None
