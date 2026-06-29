@@ -2099,6 +2099,11 @@ def main(argv: list[str] | None = None) -> None:
         model, train_clips, cfg, epochs=args.epochs, pos_weight=pos_w,
         batch_size=args.batch_size, num_workers=args.num_workers, val_clips=val_clips,
         out_dir=args.out, checkpoint_every=10,
+        # Self-resume: write a full-state resume.pt every epoch into out_dir and auto-load it
+        # if present, so a killed/restarted run (e.g. a stall-restart) continues from the next
+        # epoch instead of from scratch -- re-run the SAME command to resume. out_dir is
+        # local-speed here, so the per-epoch optimizer save is cheap. None when no --out.
+        resume_path=(str(Path(args.out) / "resume.pt") if args.out else None),
         lr_schedule=args.lr_schedule, warmup_steps=args.warmup_steps, loss_fn=args.loss,
         keep_best=args.keep_best,
         early_stop=args.early_stop, es_window=args.es_window, es_slope=args.es_slope,
