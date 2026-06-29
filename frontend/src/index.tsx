@@ -5,6 +5,12 @@ import { Jot } from 'src/schema/dsl/dsl';
 import { EXAMPLE_JOTS, ExampleJot, rockJot, tripletJot } from 'src/fakes/fakes';
 import { createJotEditor } from 'src/editing/jot_editor';
 import { DesktopFirstRun } from 'src/desktop/desktop_first_run';
+import { isTauri } from 'src/desktop/is_tauri';
+import { CapabilityStore } from 'src/desktop/capability_store';
+import { CapabilityPresenter } from 'src/desktop/capability_presenter';
+import { TauriBridge } from 'src/desktop/desktop_bridge';
+import type { DesktopTranscriber } from 'src/desktop/desktop_transcribe';
+import { fromMidi } from 'src/midi/from_midi';
 import { TranscribePresenter } from 'src/editing/transcribe/transcribe_presenter';
 import { ViewportPresenter } from 'src/editing/viewport/viewport_presenter';
 import { MixerPresenter } from 'src/editing/mixer/mixer_presenter';
@@ -173,6 +179,52 @@ class Drumjot {
 
   loadTripletJot() {
     this.load(tripletJot);
+  }
+
+  /** Desktop only: transcribe a local audio file through the Tauri sidecar
+   *  (installing the transcription capability on demand) and load the result.
+   *  Omit `audioPath` to pick a file via the native dialog. Exposed on
+   *  `window.drumjot` for the desktop UI / scripting; throws in the web build. */
+  async desktopTranscribe(audioPath?: string): Promise<void> {
+    if (!isTauri()) {
+      throw new Error('desktopTranscribe is desktop-only (no Tauri runtime)');
+    }
+    let path = audioPath;
+    if (path == null) {
+      // Lazy import: the Tauri plugins must stay out of the web boot path.
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const picked = await open({
+        multiple: false,
+        filters: [{ name: 'Audio', extensions: ['wav', 'mp3', 'flac', 'm4a', 'ogg', 'opus'] }],
+      });
+      if (typeof picked !== 'string') {
+        return; // cancelled
+      }
+      path = picked;
+    }
+    const { transcriber, capabilities } = await this.desktopDeps();
+    await capabilities.refresh();
+    const { midi } = await transcriber.transcribe(path);
+    this.load(fromMidi(midi));
+  }
+
+  private desktop:
+    | { transcriber: DesktopTranscriber; capabilities: CapabilityPresenter }
+    | undefined;
+
+  private async desktopDeps(): Promise<{
+    transcriber: DesktopTranscriber;
+    capabilities: CapabilityPresenter;
+  }> {
+    if (this.desktop == null) {
+      // Lazy import: desktop_transcribe pulls @tauri-apps/plugin-fs, which must
+      // not load in the web bundle's boot path.
+      const { DesktopTranscriber } = await import('src/desktop/desktop_transcribe');
+      const bridge = new TauriBridge();
+      const capabilities = new CapabilityPresenter({ store: new CapabilityStore(), bridge });
+      this.desktop = { transcriber: new DesktopTranscriber(bridge, capabilities), capabilities };
+    }
+    return this.desktop;
   }
 }
 
