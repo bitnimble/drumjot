@@ -7,7 +7,7 @@
  * split a *compound kanji reading* across the individual kanji, for the
  * case where the lyrics forced-aligner cut a compound across chips and
  * kuromoji's token-level reading can't be divided (盲目的 → 盲/もう 目/もく
- * 的/てき). See `src/lyrics/furigana.ts`.
+ * 的/てき). See `frontend/src/lyrics/furigana.ts`.
  *
  * Filtering keeps only entries that are (a) entirely kanji in the surface
  * (okurigana words are already handled by the kana-anchored fitter) and
@@ -17,25 +17,27 @@
  * surface, so the runtime loader never has to reason about code-point vs
  * UTF-16 indices.
  *
- * Output: `public/jmdict-furigana/furigana.txt.gz`, committed (JmdictFurigana
- * isn't an npm dep, so unlike the kuromoji dict it can't be regenerated
- * from node_modules at install time). Regenerate with:
- *   bun scripts/build-furigana-dict.mjs path/to/JmdictFurigana.txt
+ * Output: `frontend/public/jmdict-furigana/furigana.txt.gz`, committed
+ * (JmdictFurigana isn't an npm dep, so unlike the kuromoji dict it can't be
+ * regenerated from node_modules at install time). Regenerate with:
+ *   bun scripts/build-furigana-dict.ts path/to/JmdictFurigana.txt
  *
  * Licence: JmdictFurigana is CC BY-SA (same as JMdict/EDRDG); see the
  * emitted NOTICE. Attribution is mandatory.
  */
-import { gzipSync } from 'node:zlib';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '..');
 const OUT_DIR = resolve(REPO, 'frontend/public/jmdict-furigana');
 
-/** Same Han ranges as `src/lyrics/furigana.ts::isKanjiCp`. */
-function isKanjiCp(cp) {
+type Span = { start: number; end: number; reading: string };
+
+/** Same Han ranges as `frontend/src/lyrics/furigana.ts::isKanjiCp`. */
+function isKanjiCp(cp: number): boolean {
   return (
     (cp >= 0x4e00 && cp <= 0x9fff) ||
     (cp >= 0x3400 && cp <= 0x4dbf) ||
@@ -44,7 +46,7 @@ function isKanjiCp(cp) {
   );
 }
 
-function allKanji(s) {
+function allKanji(s: string): boolean {
   for (const ch of s) {
     const cp = ch.codePointAt(0);
     if (cp === undefined || !isKanjiCp(cp)) return false;
@@ -52,9 +54,9 @@ function allKanji(s) {
   return s.length > 0;
 }
 
-/** Parse one `start[-end]:reading` span; returns {start, end, reading}
- *  with inclusive code-point indices, or null if malformed. */
-function parseSpan(span) {
+/** Parse one `start[-end]:reading` span; returns inclusive code-point indices,
+ *  or null if malformed. */
+function parseSpan(span: string): Span | null {
   const colon = span.indexOf(':');
   if (colon < 0) return null;
   const idx = span.slice(0, colon);
@@ -72,14 +74,14 @@ function parseSpan(span) {
   return { start: a, end: b, reading };
 }
 
-function main() {
+function main(): void {
   const src = process.argv[2];
   if (!src) {
-    console.error('usage: bun scripts/build-furigana-dict.mjs <JmdictFurigana.txt>');
+    console.error('usage: bun scripts/build-furigana-dict.ts <JmdictFurigana.txt>');
     process.exit(2);
   }
   const text = readFileSync(src, 'utf8');
-  const outLines = [];
+  const outLines: string[] = [];
   let kept = 0;
   let scanned = 0;
   for (const raw of text.split('\n')) {
@@ -92,18 +94,19 @@ function main() {
 
     const spans = furi.split(';').map(parseSpan);
     if (spans.some((s) => s === null) || spans.length < 2) continue;
+    const valid = spans as Span[];
 
-    // Code-point view of the surface so span indices (which are
-    // code-point positions) extract the right glyphs even for astral
-    // kanji; the emitted lengths are UTF-16 units, matching runtime.
+    // Code-point view of the surface so span indices (which are code-point
+    // positions) extract the right glyphs even for astral kanji; the emitted
+    // lengths are UTF-16 units, matching runtime.
     const cps = Array.from(surface);
-    spans.sort((a, b) => a.start - b.start);
+    valid.sort((a, b) => a.start - b.start);
     // Spans must tile [0, cps.length) with no gaps/overlaps; otherwise we
     // can't unambiguously re-derive the bases, so skip the entry.
     let cursor = 0;
     let ok = true;
-    const pairs = [];
-    for (const s of spans) {
+    const pairs: string[] = [];
+    for (const s of valid) {
       if (s.start !== cursor || s.end >= cps.length) {
         ok = false;
         break;
@@ -138,15 +141,15 @@ function main() {
       '',
       'Only all-kanji headwords with a per-kanji ruby split are kept, re-',
       'expressed as `surface|<utf16len>,<reading>;...`. Regenerate with',
-      'scripts/build-furigana-dict.mjs.',
+      'scripts/build-furigana-dict.ts.',
       '',
     ].join('\n'),
   );
 
-  const raw = body.length;
+  const rawBytes = body.length;
   console.log(
     `scanned ${scanned} lines → kept ${kept} entries\n` +
-      `runtime text: ${(raw / 1e6).toFixed(2)} MB raw, ` +
+      `runtime text: ${(rawBytes / 1e6).toFixed(2)} MB raw, ` +
       `${(gz.length / 1e6).toFixed(2)} MB gzipped`,
   );
 }

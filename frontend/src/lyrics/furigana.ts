@@ -25,7 +25,7 @@
  * compound across chips (盲目 · 的) but kuromoji kept it as one token, the
  * single fitted reading can't be cut; a second lazy asset, a trimmed
  * JmdictFurigana per-kanji split table (see `jmdict_furigana_loader.ts` +
- * `scripts/build-furigana-dict.mjs`), supplies the per-kanji division
+ * `scripts/build-furigana-dict.ts`), supplies the per-kanji division
  * (盲/もう · 目/もく · 的/てき). Words it can't divide fall back to a
  * standalone (chip-local) tokenize.
  *
@@ -321,7 +321,7 @@ function annotateText(
 /** Build the browser tokenizer. The loader module is dynamic-imported so
  *  kuromoji + its dict code are code-split out of the main bundle and only
  *  fetched when a song actually has kanji. `dicPath` is served from
- *  `public/` (see `scripts/copy-kuromoji-dict.mjs`) and honours Vite's base
+ *  `public/` (see `scripts/copy-kuromoji-dict.ts`) and honours Vite's base
  *  URL. We use our own loader rather than kuromoji's `builder()` because the
  *  dev server serves the dict with `Content-Encoding: gzip` and kuromoji's
  *  loader double-decodes it; see `kuromoji_loader.ts`. */

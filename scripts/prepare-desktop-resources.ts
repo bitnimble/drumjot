@@ -10,7 +10,7 @@
 //   resources/bin/uv[.exe]                                (host uv, if found)
 import { cp, mkdir, rm, copyFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { dirname, join, delimiter } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -18,12 +18,12 @@ const out = join(repo, 'src-tauri', 'resources');
 const pyOut = join(out, 'python');
 const binOut = join(out, 'bin');
 
-const skipJunk = (src) =>
+const skipJunk = (src: string): boolean =>
   !src.includes('__pycache__') && !src.endsWith('.pyc') && !src.includes('.egg-info');
 
-function findOnPath(name) {
+function findOnPath(name: string): string | null {
   const exts = process.platform === 'win32' ? ['.exe', '.cmd', ''] : [''];
-  for (const dir of (process.env.PATH || '').split(delimiter)) {
+  for (const dir of (process.env.PATH ?? '').split(delimiter)) {
     for (const ext of exts) {
       const candidate = join(dir, name + ext);
       if (existsSync(candidate)) return candidate;

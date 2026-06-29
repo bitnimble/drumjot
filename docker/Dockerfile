@@ -30,7 +30,7 @@ WORKDIR /build
 
 # Dep manifest first so the install layer caches across source edits.
 # scripts/ comes along because package.json's postinstall hook runs
-# scripts/copy-kuromoji-dict.mjs; it has to exist before `bun install`.
+# scripts/copy-kuromoji-dict.ts; it has to exist before `bun install`.
 COPY package.json bun.lock bunfig.toml ./
 COPY scripts/ ./scripts/
 RUN bun install --frozen-lockfile

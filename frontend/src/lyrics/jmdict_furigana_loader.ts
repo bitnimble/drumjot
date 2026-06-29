@@ -1,6 +1,6 @@
 /**
  * Loader for the per-kanji furigana split table (a trimmed JmdictFurigana
- * derivative; see `scripts/build-furigana-dict.mjs`).
+ * derivative; see `scripts/build-furigana-dict.ts`).
  *
  * The table answers one question for {@link FuriganaAnnotator}: given an
  * all-kanji compound and its reading, how does that reading divide across
