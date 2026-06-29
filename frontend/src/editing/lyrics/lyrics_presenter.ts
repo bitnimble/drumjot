@@ -1,12 +1,14 @@
 import { makeAutoObservable, runInAction } from 'mobx';
-import { AlignLyricsRequest, alignLyricsForced, nameLooksLikeVocals } from 'src/lyrics/forced_align';
+import { AlignLyricsRequest, nameLooksLikeVocals } from 'src/lyrics/forced_align';
 import { LyricLine, stripLyricNoise } from 'src/lyrics/lrc';
 import { LyricsSource, LyricsTrackId, lyricsStore } from 'src/lyrics/store';
 import { AudioTrackId } from 'src/editing/playback/audio_tracks';
 import { jotPlayer } from 'src/editing/playback/player';
 import { toastStore } from '../../ui/toasts/toasts';
 import { isBackendUnreachable } from 'src/net/backend_fetch';
+import { backendClient } from 'src/net/backend_client';
 import { isTauri } from 'src/desktop/is_tauri';
+import { desktopCapabilities } from 'src/desktop/desktop_services';
 import { JotEditorStore } from '../jot_editor_store';
 import { LyricsAlignStore } from './lyrics_align_store';
 import type { Resettable } from '../session_reset';
@@ -322,12 +324,13 @@ export class LyricsPresenter implements Resettable {
     label: string,
     opts: { source: LyricsSource; sourceLabel: string }
   ): Promise<void> {
+    // Desktop: gate the lyrics capability up front (Japanese lyrics also need
+    // the lyrics-ja romanization). The plain lines already loaded, so a declined
+    // install just skips the word-level upgrade.
     if (isTauri()) {
-      // No lyrics backend in the desktop app yet (the sidecar's alignLyrics op
-      // is still a stub, and there's no local routing); the plain lines have
-      // already loaded, so surface that rather than failing on a dead /api call.
-      toastStore.showError('Word-level lyric alignment isn’t available in the desktop app yet.');
-      return;
+      const caps = desktopCapabilities();
+      const capId = linesLookJapanese(req.realign.lines) ? 'lyrics.japanese' : 'lyrics';
+      if (caps != null && !(await caps.presenter.requestCapability(capId))) return;
     }
     const existing = this.lyricsAlignControllers.get(targetTrackId);
     if (existing) {
@@ -341,25 +344,32 @@ export class LyricsPresenter implements Resettable {
     });
     let lines: LyricLine[];
     try {
-      lines = await alignLyricsForced(req, {
-        signal: controller.signal,
-        onProgress: (event) => {
-          // The stream emits `queued` while waiting behind another GPU
-          // job, then `running` once alignment starts. Flip the per-row
-          // status so the spinner/pill read "Queued…" vs "Aligning…".
-          // Guard against a newer align (or a clear) that raced in while
-          // we were waiting: only this controller may touch the status.
-          if (this.lyricsAlignControllers.get(targetTrackId) !== controller) {
-            return;
-          }
-          runInAction(() => {
-            this.lyricsAlign.lyricsAlignStatuses.set(targetTrackId, {
-              phase: event.kind === 'queued' ? 'queued' : 'aligning',
-              detail: label,
+      // Transport (HTTP vs local sidecar) is the adapter's concern.
+      const result = await backendClient().run(
+        'alignLyrics',
+        { kind: 'blob', blob: req.file, filename: req.file.name },
+        { kind: req.kind, lines: req.realign.lines, language: req.realign.language },
+        {
+          signal: controller.signal,
+          onProgress: (p) => {
+            // HTTP emits `queued` while waiting behind another GPU job, then
+            // `running`; the sidecar emits `aligning`. Flip the per-row status
+            // so the pill reads "Queued…" vs "Aligning…". Guard against a newer
+            // align (or a clear) that raced in: only this controller may touch
+            // the status.
+            if (this.lyricsAlignControllers.get(targetTrackId) !== controller) {
+              return;
+            }
+            runInAction(() => {
+              this.lyricsAlign.lyricsAlignStatuses.set(targetTrackId, {
+                phase: p.stage === 'queued' ? 'queued' : 'aligning',
+                detail: label,
+              });
             });
-          });
+          },
         },
-      });
+      );
+      lines = (result.data as { lines?: LyricLine[] } | undefined)?.lines ?? [];
     } catch (err) {
       if (controller.signal.aborted) {
         // A newer align on the same track (or a wholesale jot replace)
@@ -411,4 +421,11 @@ export class LyricsPresenter implements Resettable {
       this.lyricsAlign.lyricsAlignStatuses.clear();
     });
   }
+}
+
+/** Whether the lyric text contains Japanese (hiragana / katakana / kanji), so
+ *  the desktop gate can require the `lyrics.japanese` romanization capability. */
+function linesLookJapanese(lines: readonly { text: string }[]): boolean {
+  // Hiragana, katakana, CJK unified ideographs.
+  return lines.some((l) => /[぀-ヿ一-龯]/.test(l.text));
 }

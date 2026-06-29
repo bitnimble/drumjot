@@ -8,12 +8,23 @@ local stdio sidecar and a remote HTTP/WS deployment.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from .protocol import Artifact, RequestMessage
 
 # (stage, frac in 0..1, optional message) -> awaitable
 EmitProgress = Callable[[str, float, "str | None"], Awaitable[None]]
+
+
+@dataclass
+class RunnerResult:
+    """A runner's output when it carries a structured payload alongside (or
+    instead of) file artifacts, e.g. alignLyrics -> data={"lines": [...]}.
+    Runners that only emit files may return a bare `list[Artifact]` instead."""
+
+    artifacts: list[Artifact] = field(default_factory=list)
+    data: object | None = None
 
 
 class Cancelled(Exception):
@@ -45,7 +56,7 @@ class Runner(Protocol):
         request: RequestMessage,
         emit: EmitProgress,
         cancel: CancelToken,
-    ) -> list[Artifact]: ...
+    ) -> list[Artifact] | RunnerResult: ...
 
 
 # op name -> the runner that handles it

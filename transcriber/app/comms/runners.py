@@ -1,13 +1,14 @@
 """Runner registry.
 
-`transcribe` is wired to {@link TranscribeRunner}, `separate` to
-{@link SeparateRunner} (real stem separation). `alignLyrics` still uses
-`EchoRunner` until its real runner lands.
+`transcribe` -> {@link TranscribeRunner}, `separate` -> {@link SeparateRunner},
+`alignLyrics` -> {@link AlignLyricsRunner}. `EchoRunner` remains as a plumbing
+stub for tests.
 """
 from __future__ import annotations
 
 import asyncio
 
+from .align_lyrics_runner import AlignLyricsRunner
 from .core import CancelToken, EmitProgress, Registry
 from .protocol import Artifact, PathRef, RequestMessage
 from .separate_runner import SeparateRunner
@@ -36,9 +37,8 @@ class EchoRunner:
 
 
 def build_registry() -> Registry:
-    echo = EchoRunner()
     return {
         "transcribe": TranscribeRunner(),
         "separate": SeparateRunner(),
-        "alignLyrics": echo,
+        "alignLyrics": AlignLyricsRunner(),
     }

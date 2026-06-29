@@ -63,6 +63,22 @@ def test_echo_runner_emits_progress_then_result() -> None:
         SERVER_MESSAGE_ADAPTER.validate_python(m)
 
 
+def test_runner_result_carries_data() -> None:
+    """A runner returning RunnerResult surfaces its `data` on the result frame
+    (the alignLyrics mechanism)."""
+    from app.comms.core import RunnerResult
+
+    class DataRunner:
+        async def run(self, request, emit, cancel) -> RunnerResult:  # type: ignore[no-untyped-def]
+            await emit("working", 0.5, None)
+            return RunnerResult(artifacts=[], data={"lines": [{"startSec": 0.0, "text": "hi"}]})
+
+    out = _run_adapter({"alignLyrics": DataRunner()}, [_request("d1", "/x.wav", op="alignLyrics")])
+    assert out[-1]["type"] == "result"
+    assert out[-1]["data"] == {"lines": [{"startSec": 0.0, "text": "hi"}]}
+    SERVER_MESSAGE_ADAPTER.validate_python(out[-1])
+
+
 def test_unknown_op_errors() -> None:
     out = _run_adapter({}, [_request("j2", "/x.mp3")])  # empty registry
     assert out[-1]["type"] == "error"

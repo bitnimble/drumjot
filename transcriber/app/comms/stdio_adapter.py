@@ -14,7 +14,7 @@ from typing import TextIO
 
 from pydantic import BaseModel, ValidationError
 
-from .core import Cancelled, CancelToken, Registry
+from .core import Cancelled, CancelToken, Registry, RunnerResult
 from .protocol import (
     CLIENT_MESSAGE_ADAPTER,
     CancelMessage,
@@ -66,8 +66,13 @@ class StdioAdapter:
                     )
                 )
                 return
-            artifacts = await runner.run(req, emit, token)
-            await self._send(ResultMessage(id=req.id, artifacts=list(artifacts)))
+            result = await runner.run(req, emit, token)
+            if isinstance(result, RunnerResult):
+                await self._send(
+                    ResultMessage(id=req.id, artifacts=list(result.artifacts), data=result.data)
+                )
+            else:
+                await self._send(ResultMessage(id=req.id, artifacts=list(result)))
         except Cancelled:
             await self._send(
                 ErrorMessage(id=req.id, code="cancelled", message="job cancelled", recoverable=True)
