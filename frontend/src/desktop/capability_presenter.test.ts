@@ -15,6 +15,8 @@ class MockBridge implements DesktopBridge {
   accelerator: AcceleratorInfo = { kind: 'cuda', meetsCudaMin: true };
   states: Record<string, CapabilityStateEntry> = {};
   installCalls: string[] = [];
+  /** Group sets passed to each installCapability (uv sync) call. */
+  groupCalls: string[][] = [];
 
   async detectAccelerator(): Promise<AcceleratorInfo> {
     return this.accelerator;
@@ -25,6 +27,14 @@ class MockBridge implements DesktopBridge {
   async setCapabilityInstalled(id: string, installed: boolean): Promise<void> {
     this.installCalls.push(id);
     this.states[id] = { installed };
+  }
+  async installCapability(
+    _id: string,
+    groups: string[],
+    onProgress: (line: string) => void,
+  ): Promise<void> {
+    this.groupCalls.push(groups);
+    onProgress('Resolved 1 package');
   }
   async runJob(): Promise<void> {}
   async cancelJob(): Promise<void> {}
@@ -88,6 +98,27 @@ describe('CapabilityPresenter', () => {
     expect(bridge.installCalls.indexOf('lyrics')).toBeLessThan(
       bridge.installCalls.indexOf('lyrics.japanese'),
     );
+  });
+
+  it('uv-installs with the capability group set', async () => {
+    const { presenter, bridge } = make();
+    await presenter.install('transcription');
+    expect(bridge.groupCalls.at(-1)).toEqual(['transcription']);
+  });
+
+  it('re-syncs the union of prior + new groups', async () => {
+    const { presenter, bridge } = make();
+    await presenter.install('transcription');
+    await presenter.install('lyrics');
+    // Installing lyrics must keep transcription's group (uv sync replaces env).
+    expect(new Set(bridge.groupCalls.at(-1))).toEqual(new Set(['transcription', 'lyrics']));
+  });
+
+  it('skips uv for a credentials-only capability', async () => {
+    const { presenter, store, bridge } = make();
+    await presenter.install('ai-assist');
+    expect(store.statusOf('ai-assist')).toBe('ready');
+    expect(bridge.groupCalls).toHaveLength(0);
   });
 
   it('ensure runs a ready capability immediately', () => {

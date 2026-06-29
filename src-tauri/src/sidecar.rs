@@ -12,10 +12,12 @@ use std::process::Stdio;
 
 use serde_json::Value;
 use tauri::ipc::Channel;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{oneshot, Mutex};
+
+use crate::capability::venv_python;
 
 /// In-flight jobs keyed by request `id`; the value cancels the read loop.
 #[derive(Default)]
@@ -23,12 +25,20 @@ pub struct SidecarState {
     jobs: Mutex<HashMap<String, oneshot::Sender<()>>>,
 }
 
-/// Resolve the Python interpreter that runs the sidecar. In a packaged app this
-/// is the capability-managed venv; the dev fallback is the transcriber venv so
-/// the broker is exercisable end-to-end. Override with `DRUMJOT_SIDECAR_PYTHON`.
-pub fn resolve_python() -> String {
-    std::env::var("DRUMJOT_SIDECAR_PYTHON")
-        .unwrap_or_else(|_| "../transcriber/.venv/bin/python".to_string())
+/// Resolve the Python interpreter that runs the sidecar: the capability-managed
+/// app venv when present, else the dev `transcriber/.venv` so the broker is
+/// exercisable end-to-end. Override with `DRUMJOT_SIDECAR_PYTHON`.
+pub fn resolve_python(app: &AppHandle) -> String {
+    if let Ok(p) = std::env::var("DRUMJOT_SIDECAR_PYTHON") {
+        return p;
+    }
+    if let Ok(dir) = app.path().app_data_dir() {
+        let py = venv_python(&dir.join("venv"));
+        if py.exists() {
+            return py.to_string_lossy().into_owned();
+        }
+    }
+    "../transcriber/.venv/bin/python".to_string()
 }
 
 /// Run one backend job. `request` is a validated client control-protocol frame
@@ -37,6 +47,7 @@ pub fn resolve_python() -> String {
 /// terminal `result`/`error`, the stream closes, or the job is cancelled.
 #[tauri::command]
 pub async fn run_job(
+    app: AppHandle,
     state: State<'_, SidecarState>,
     request: Value,
     on_event: Channel<Value>,
@@ -47,7 +58,7 @@ pub async fn run_job(
         .ok_or("request missing id")?
         .to_string();
 
-    let python = resolve_python();
+    let python = resolve_python(&app);
     let mut child = Command::new(&python)
         .args(["-u", "-m", "app.sidecar"])
         .stdin(Stdio::piped())

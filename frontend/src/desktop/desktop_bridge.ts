@@ -17,6 +17,12 @@ export type AcceleratorInfo = {
 
 export type CapabilityStateEntry = { installed: boolean };
 
+/** Progress frames streamed from the Rust `install_capability` command. */
+export type InstallEvent =
+  | { type: 'line'; line: string }
+  | { type: 'done' }
+  | { type: 'error'; message: string };
+
 /**
  * The Rust commands the desktop frontend drives. An interface (not a direct
  * `invoke` call site) so `CapabilityPresenter` is unit-testable against a mock
@@ -26,6 +32,13 @@ export interface DesktopBridge {
   detectAccelerator(): Promise<AcceleratorInfo>;
   capabilityStates(): Promise<Record<string, CapabilityStateEntry>>;
   setCapabilityInstalled(id: string, installed: boolean): Promise<void>;
+  /** Resolve the app capability venv to exactly `groups` (uv sync); rejects on
+   *  failure. `onProgress` receives uv's output lines. */
+  installCapability(
+    id: string,
+    groups: string[],
+    onProgress: (line: string) => void,
+  ): Promise<void>;
   runJob(request: ClientMessage, onEvent: (msg: ServerMessage) => void): Promise<void>;
   cancelJob(id: string): Promise<void>;
 }
@@ -43,6 +56,21 @@ export class TauriBridge implements DesktopBridge {
 
   async setCapabilityInstalled(id: string, installed: boolean): Promise<void> {
     await invoke('set_capability_installed', { id, installed });
+  }
+
+  async installCapability(
+    id: string,
+    groups: string[],
+    onProgress: (line: string) => void,
+  ): Promise<void> {
+    const channel = new Channel<InstallEvent>();
+    channel.onmessage = (ev) => {
+      if (ev.type === 'line') {
+        onProgress(ev.line);
+      }
+    };
+    // Resolves when uv exits 0, rejects (with the Rust Err string) otherwise.
+    await invoke('install_capability', { id, groups, onEvent: channel });
   }
 
   async runJob(request: ClientMessage, onEvent: (msg: ServerMessage) => void): Promise<void> {

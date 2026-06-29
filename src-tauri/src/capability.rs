@@ -6,10 +6,13 @@
 //! dependency installation (uv sync of the multi-GB stack) is intentionally not
 //! performed here, see the spec's capability-mechanism section.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
 
 use serde::Serialize;
+use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 /// Lowest NVIDIA driver major version the cu128 wheels run on (see the
@@ -106,4 +109,105 @@ pub fn set_capability_installed(app: AppHandle, id: String, installed: bool) -> 
     let path = state_path(&app)?;
     let text = serde_json::to_string_pretty(&states).map_err(|e| e.to_string())?;
     std::fs::write(&path, text).map_err(|e| e.to_string())
+}
+
+/// Path to the python interpreter inside a venv (platform-specific layout).
+pub fn venv_python(venv: &Path) -> PathBuf {
+    if cfg!(windows) {
+        venv.join("Scripts").join("python.exe")
+    } else {
+        venv.join("bin").join("python")
+    }
+}
+
+/// The app-managed capability venv (separate from the dev `transcriber/.venv`).
+pub fn app_venv(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join("venv"))
+}
+
+fn resolve_uv() -> String {
+    std::env::var("DRUMJOT_UV").unwrap_or_else(|_| "uv".to_string())
+}
+
+/// Directory holding the transcriber pyproject + uv.lock that the capability
+/// groups are defined in. Dev fallback is the in-repo `../transcriber`; a
+/// packaged build overrides via `DRUMJOT_TRANSCRIBER_DIR` (a bundled resource).
+fn resolve_transcriber_dir() -> PathBuf {
+    std::env::var("DRUMJOT_TRANSCRIBER_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("../transcriber"))
+}
+
+/// Progress for a capability install, streamed to the webview.
+#[derive(Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum InstallEvent {
+    Line { line: String },
+    Done,
+    Error { message: String },
+}
+
+/// Install (or re-resolve) the app capability venv to exactly `groups` via
+/// `uv sync --no-default-groups --group <g>…`. `groups` is the union of every
+/// capability that should be present afterwards (uv sync replaces the env), so
+/// the frontend passes the full desired set, not just the new capability's.
+/// uv's progress lines (stderr) stream through `on_event`.
+#[tauri::command]
+pub async fn install_capability(
+    app: AppHandle,
+    id: String,
+    groups: Vec<String>,
+    on_event: Channel<InstallEvent>,
+) -> Result<(), String> {
+    let venv = app_venv(&app)?;
+    let dir = resolve_transcriber_dir();
+    log::info!("[install:{id}] uv sync groups={groups:?} -> {}", venv.display());
+
+    let mut cmd = Command::new(resolve_uv());
+    cmd.arg("sync").arg("--no-default-groups");
+    for group in &groups {
+        cmd.arg("--group").arg(group);
+    }
+    let mut child = cmd
+        .current_dir(&dir)
+        .env("UV_PROJECT_ENVIRONMENT", &venv)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("failed to spawn uv ({}): {e}", resolve_uv()))?;
+
+    let stdout = child.stdout.take().ok_or("uv has no stdout")?;
+    let stderr = child.stderr.take().ok_or("uv has no stderr")?;
+    // uv reports progress on stderr; forward both streams as lines.
+    let forward = |reader: tokio::process::ChildStdout| {
+        let sink = on_event.clone();
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(reader).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let _ = sink.send(InstallEvent::Line { line });
+            }
+        })
+    };
+    let out_task = forward(stdout);
+    let err_sink = on_event.clone();
+    let err_task = tokio::spawn(async move {
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let _ = err_sink.send(InstallEvent::Line { line });
+        }
+    });
+
+    let status = child.wait().await.map_err(|e| e.to_string())?;
+    let _ = out_task.await;
+    let _ = err_task.await;
+
+    if status.success() {
+        let _ = on_event.send(InstallEvent::Done);
+        Ok(())
+    } else {
+        let message = format!("uv sync failed ({status})");
+        let _ = on_event.send(InstallEvent::Error { message: message.clone() });
+        Err(message)
+    }
 }

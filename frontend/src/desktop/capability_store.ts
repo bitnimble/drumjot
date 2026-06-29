@@ -17,15 +17,16 @@ export type CapabilityStatus =
 export class CapabilityStore {
   accelerator: AcceleratorInfo | undefined = undefined;
   statuses: Map<CapabilityId, CapabilityStatus> = new Map();
-  /** 0..1 install progress while a capability is `installing`. */
-  installProgress: Map<CapabilityId, number> = new Map();
+  /** Latest uv output line while a capability is `installing` (uv gives no
+   *  clean 0..1, so we surface its progress text instead of a bar). */
+  installLog: Map<CapabilityId, string> = new Map();
   /** Last error message per capability, when its status is `error`. */
   errors: Map<CapabilityId, string> = new Map();
 
   constructor() {
     makeAutoObservable(this, {
       statuses: observable.shallow,
-      installProgress: observable.shallow,
+      installLog: observable.shallow,
       errors: observable.shallow,
     });
   }

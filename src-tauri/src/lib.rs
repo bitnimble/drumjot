@@ -31,6 +31,7 @@ pub fn run() {
             capability::detect_accelerator,
             capability::capability_states,
             capability::set_capability_installed,
+            capability::install_capability,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

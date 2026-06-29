@@ -15,9 +15,10 @@ export type CapabilityPresenterDeps = {
 
 /**
  * Owns all capability mutation: hardware/state refresh, the point-of-use gate,
- * and install orchestration. The actual uv sync of the multi-GB stack is
- * performed by the (parked) installer behind `bridge.setCapabilityInstalled`;
- * this drives status + persists state + replays any queued point-of-use intent.
+ * and install orchestration. Installing drives the Rust `install_capability`
+ * command (a `uv sync` of the app venv to the union of desired groups), streams
+ * its progress into the store, persists state, and replays any queued
+ * point-of-use intent.
  */
 export class CapabilityPresenter {
   readonly store: CapabilityStore;
@@ -83,36 +84,78 @@ export class CapabilityPresenter {
     return false;
   }
 
-  /** Install a capability and its prereqs in dependency order. */
+  /** Install a capability and its prereqs: one `uv sync` of the app venv to the
+   *  union of all desired groups, then persist + mark the closure ready and
+   *  replay any queued point-of-use intent. */
   async install(id: CapabilityId): Promise<void> {
     const order = [...this.closure([id])];
+    const fresh = order.filter((dep) => !this.store.isReady(dep));
+    if (fresh.length === 0) {
+      this.replayIntent(id);
+      return;
+    }
+    runInAction(() => {
+      for (const dep of fresh) {
+        this.store.statuses.set(dep, 'installing');
+        this.store.errors.delete(dep);
+      }
+    });
     try {
-      for (const dep of order) {
-        if (this.store.isReady(dep)) {
-          continue;
-        }
-        runInAction(() => {
-          this.store.statuses.set(dep, 'installing');
-          this.store.installProgress.set(dep, 0);
-          this.store.errors.delete(dep);
+      // `deps` capabilities need the uv sync; `credentials` (the LLM key) and
+      // `system` ones pull no packages.
+      if (order.some((dep) => capabilityById(dep).kind === 'deps')) {
+        await this.bridge.installCapability(id, this.installGroups(order), (line) => {
+          runInAction(() => {
+            for (const dep of fresh) {
+              this.store.installLog.set(dep, line);
+            }
+          });
         });
-        await this.bridge.setCapabilityInstalled(dep, true);
-        runInAction(() => {
+      }
+      await Promise.all(fresh.map((dep) => this.bridge.setCapabilityInstalled(dep, true)));
+      runInAction(() => {
+        for (const dep of fresh) {
           this.store.statuses.set(dep, 'ready');
-          this.store.installProgress.delete(dep);
-        });
-      }
-      const intent = this.pendingIntents.get(id);
-      if (intent != null) {
-        this.pendingIntents.delete(id);
-        intent();
-      }
+          this.store.installLog.delete(dep);
+        }
+      });
+      this.replayIntent(id);
     } catch (err) {
       runInAction(() => {
-        this.store.statuses.set(id, 'error');
+        for (const dep of fresh) {
+          this.store.statuses.set(dep, 'error');
+          this.store.installLog.delete(dep);
+        }
         this.store.errors.set(id, err instanceof Error ? err.message : String(err));
       });
     }
+  }
+
+  private replayIntent(id: CapabilityId): void {
+    const intent = this.pendingIntents.get(id);
+    if (intent != null) {
+      this.pendingIntents.delete(id);
+      intent();
+    }
+  }
+
+  /** The uv group set the venv should hold after installing `closureIds`: the
+   *  union of those capabilities' groups plus every already-ready capability's,
+   *  since `uv sync` replaces the env and must keep prior capabilities present. */
+  private installGroups(closureIds: CapabilityId[]): string[] {
+    const ids = new Set<CapabilityId>(closureIds);
+    for (const cap of CAPABILITIES) {
+      if (this.store.isReady(cap.id)) {
+        ids.add(cap.id);
+      }
+    }
+    const groups = new Set<string>();
+    for (const id of ids) {
+      for (const group of capabilityById(id).groups) {
+        groups.add(group);
+      }
+    }
+    return [...groups];
   }
 
   /** Transitive prereq closure of `ids`, in install order: a capability's
