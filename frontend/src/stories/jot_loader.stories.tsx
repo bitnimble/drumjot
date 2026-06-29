@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import React from 'react';
 import { createJotEditor } from 'src/editing/jot_editor';
+import { ModalProvider } from 'src/ui/modal/modal_manager';
 import { fromMidi } from 'src/midi/from_midi';
 import { parse } from 'src/schema/dsl/parser/parser';
 import { rockJot, tripletJot } from 'src/fakes/fakes';
@@ -82,7 +83,9 @@ const JotLoaderSandbox = () => {
           {jotText || '// Load a .jot / .mid file or an example to see the parsed Jot here.'}
         </pre>
         <div style={{ flex: '1 1 auto', minWidth: 0, border: '1px solid var(--color-border, #ddd)' }}>
-          <View />
+          <ModalProvider>
+            <View />
+          </ModalProvider>
         </div>
       </div>
     </div>
