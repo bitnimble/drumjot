@@ -22,17 +22,23 @@ def main(wheel: str) -> int:
     src = Path(wheel)
     tmp = src.with_name(src.name + ".stripped")
     removed = 0
-    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+    with zipfile.ZipFile(src) as zin:
         record = next((n for n in zin.namelist() if n.endswith(".dist-info/RECORD")), None)
-        for info in zin.infolist():
-            if _is_weight(info.filename):
-                removed += 1
-                continue
-            data = zin.read(info.filename)
-            if info.filename == record:
-                kept = [ln for ln in data.decode().splitlines() if not _is_weight(ln.split(",")[0])]
-                data = ("\n".join(kept) + "\n").encode()
-            zout.writestr(info, data)
+        if record is None:
+            # Removing files without fixing RECORD would leave dangling hash
+            # entries (an invalid wheel); fail loud instead.
+            print(f"strip-madmom-models: no RECORD in {src.name}; refusing to strip", file=sys.stderr)
+            return 1
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+            for info in zin.infolist():
+                if _is_weight(info.filename):
+                    removed += 1
+                    continue
+                data = zin.read(info.filename)
+                if info.filename == record:
+                    kept = [ln for ln in data.decode().splitlines() if not _is_weight(ln.split(",")[0])]
+                    data = ("\n".join(kept) + "\n").encode()
+                zout.writestr(info, data)
     tmp.replace(src)
     print(f"strip-madmom-models: removed {removed} weight file(s) from {src.name}")
     return 0

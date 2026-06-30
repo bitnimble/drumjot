@@ -94,10 +94,13 @@ jobs:
           if-no-files-found: error
 
       # On a tag, attach it to the same draft release tauri-action created (where
-      # the installers go), alongside them.
+      # the installers go), alongside them. `gh release upload` can't see draft
+      # releases when authed with GITHUB_TOKEN (cli/cli#5252), so use the action
+      # that appends assets to the existing draft by tag.
       - name: Attach portable Windows build to the release
         if: matrix.platform == 'windows-latest' && github.ref_type == 'tag'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload ${{ github.ref_name }} src-tauri/target/release/Drumjot-portable-windows.zip --clobber
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: true
+          files: src-tauri/target/release/Drumjot-portable-windows.zip

@@ -100,7 +100,9 @@ export class SidecarBackendClient implements BackendClient {
       return new Uint8Array(await res.arrayBuffer());
     }
     if (ref.kind === 'url') {
-      return new Uint8Array(await (await fetch(ref.url)).arrayBuffer());
+      const res = await fetch(ref.url);
+      if (!res.ok) throw new Error(`URL read failed (${res.status})`);
+      return new Uint8Array(await res.arrayBuffer());
     }
     return base64ToBytes(ref.bytesB64);
   }
