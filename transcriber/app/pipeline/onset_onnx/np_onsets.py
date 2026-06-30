@@ -110,6 +110,11 @@ def load_onnx_onset(checkpoint_dir, *, providers=None):
     `(model, meta)`."""
     checkpoint_dir = Path(checkpoint_dir)
     meta = json.loads((checkpoint_dir / "meta.json").read_text())
+    if meta.get("lane_layers"):
+        # Per-lane-layer checkpoints route each head to its own MERT layer; this
+        # path exports a single layer and would feed every head the wrong
+        # features (silently wrong, not a crash). Callers route these to torch.
+        raise NotImplementedError("ONNX onset path supports single-layer checkpoints only")
     mert_onnx, heads_onnx = _onnx_paths(checkpoint_dir, meta)
     if not mert_onnx.exists():
         from app.pipeline.onset_onnx.export import export_mert

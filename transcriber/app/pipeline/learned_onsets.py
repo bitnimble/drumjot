@@ -40,10 +40,14 @@ until validated F1-neutral against the eval harness.
 """
 from __future__ import annotations
 
+import json
+import logging
 from pathlib import Path
 
 from app.config import settings
 from app.models import OnsetCandidate
+
+log = logging.getLogger(__name__)
 
 
 def _resolve_device() -> str:
@@ -111,18 +115,23 @@ def detect_all_pitches_learned(
     from drumjot_training import embeddings, enst, inference, metrics
 
     dev = device or _resolve_device()
+    meta = json.loads((Path(checkpoint_dir) / "meta.json").read_text())
     # Default: the torch-free ONNX path (MERT + heads on onnxruntime); opt out
     # with DRUMJOT_ONSET_ONNX=0 for the torch path. Both expose `stitched(audio)
     # -> (probs, fps)`; everything downstream (per-lane picking, tom split) is
     # shared. The ONNX path exports the two `.onnx` once (cached, torch needed
-    # only then); the `encoder` arg applies to the torch path only.
-    if _onset_onnx_enabled():
+    # only then); the `encoder` arg applies to the torch path only. Per-lane-layer
+    # checkpoints fall back to torch (the ONNX path is single-layer only).
+    use_onnx = _onset_onnx_enabled() and not meta.get("lane_layers")
+    if _onset_onnx_enabled() and meta.get("lane_layers"):
+        log.info("learned onsets: per-lane-layer checkpoint; ONNX path unsupported, using torch")
+    if use_onnx:
         from app.pipeline.onset_onnx.np_onsets import load_onnx_onset
 
-        onnx_model, meta = load_onnx_onset(checkpoint_dir, providers=_onnx_providers(dev))
+        onnx_model, _ = load_onnx_onset(checkpoint_dir, providers=_onnx_providers(dev))
         stitched = onnx_model.stitched_probs
     else:
-        model, meta = inference.load_model(checkpoint_dir, dev)
+        model, _ = inference.load_model(checkpoint_dir, dev)
         # One MERT encoder, reused across stems (else each stem reloads the 330M
         # weights), co-located on `dev` so a forced settings.device=cpu is honoured.
         enc = encoder or embeddings.MertEncoder(
