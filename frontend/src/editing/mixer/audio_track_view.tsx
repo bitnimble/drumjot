@@ -489,14 +489,15 @@ const AudioTrackWaveformChunk = observer(
       };
     }, [chunkKey, track.id]);
 
-    // First render after mount paints immediately so a newly-visible
-    // chunk shows up on the same frame as the parent's visibility
-    // decision; subsequent paints (zoom tick, songLeadInSec change, etc.)
-    // rAF-coalesce so a sustained wheel-zoom gesture triggers at most
-    // one worker call per displayed frame. The paint itself is
-    // fire-and-forget: the worker computes peaks and paints into the
-    // chunk's `OffscreenCanvas` directly, no bytes cross back to the
-    // main thread.
+    // The first paint after mount fires synchronously, so a tile is never blank
+    // for a visible frame regardless of the prefetch margin; subsequent paints
+    // (zoom tick, songLeadInSec change, …) rAF-coalesce so a sustained gesture
+    // triggers at most one worker call per tile per frame. The burst of first
+    // paints when many tiles scroll in at once is cheap now -- each render reads
+    // the precomputed pyramid (O(pixels)) and dispatches only this chunk's
+    // overlapping bars -- so it doesn't need deferring. Fire-and-forget: the
+    // worker paints into the `OffscreenCanvas` directly, no bytes cross back to
+    // the main thread.
     const isFirstDrawRef = React.useRef(true);
 
     React.useEffect(() => {
@@ -528,7 +529,21 @@ const AudioTrackWaveformChunk = observer(
       // of the chunk get a negative `x`, bars to the right get `x >=
       // widthPx`; the worker's clamp drops both groups without an
       // explicit filter on our side.
-      const barSlices: BarSlice[] = bars.map((b, idx) => ({
+      // Only the bars overlapping this chunk contribute pixels (the worker
+      // clamps the rest out anyway), so slice to them: keeps the per-tile
+      // dispatch + postMessage payload O(bars-in-chunk ≈ 1-2) instead of
+      // O(all-song-bars). Keep one bar past the chunk's end so the last
+      // overlapping bar can still read its successor's drift.
+      const cStart = chunk.startBeat;
+      const cEnd = chunk.startBeat + chunk.totalBeats;
+      let firstIdx = 0;
+      while (firstIdx < bars.length && bars[firstIdx].startBeat + bars[firstIdx].beats <= cStart) {
+        firstIdx++;
+      }
+      let lastIdx = firstIdx;
+      while (lastIdx < bars.length && bars[lastIdx].startBeat < cEnd) lastIdx++;
+      const chunkBars = bars.slice(firstIdx, Math.min(bars.length, lastIdx + 1));
+      const barSlices: BarSlice[] = chunkBars.map((b, idx) => ({
         x: (b.startBeat - chunk.startBeat) * renderedScale,
         width: b.beats * renderedScale,
         startSec: b.startSec,
@@ -537,7 +552,7 @@ const AudioTrackWaveformChunk = observer(
         // The next bar's drift, so the worker can map this bar's pixels onto
         // its REAL audio span (its width covers `durationSec + (nextDrift -
         // drift)` of recording). Last bar: no next → same drift (no stretch).
-        nextDriftSec: bars[idx + 1]?.driftSec ?? b.driftSec,
+        nextDriftSec: chunkBars[idx + 1]?.driftSec ?? b.driftSec,
       }));
       const fire = () => {
         waveformWorker.renderChunk(

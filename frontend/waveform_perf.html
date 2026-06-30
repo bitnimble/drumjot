@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Drumjot waveform render perf harness</title>
+  </head>
+  <body>
+    <!-- Dev/test-only: an isolated main-thread harness for the waveform render
+         path (build pyramid + compute peaks + paint) with NO app and NO worker,
+         so the cost is directly measurable. Driven by
+         src/editing/playback/test/waveform_render.perf.e2e.ts via
+         window.__waveformPerf.run(). Not a Vite build input, so it's served
+         only by the dev server (which the e2e runs against). -->
+    <canvas id="wf"></canvas>
+    <script type="module" src="/src/editing/playback/test/waveform_perf_harness.ts"></script>
+  </body>
+</html>

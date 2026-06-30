@@ -102,7 +102,7 @@ export default defineConfig({
     // decode-heavy real-song specs, run fully in parallel across the pool.
     {
       name: 'functional',
-      testIgnore: ['**/perf.e2e.ts', '**/*.heavy.e2e.ts'],
+      testIgnore: ['**/perf.e2e.ts', '**/*.perf.e2e.ts', '**/*.heavy.e2e.ts'],
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: chromiumLaunch(GPU_OTHER),
@@ -118,7 +118,7 @@ export default defineConfig({
     // functional first, or run `bun run e2e:perf` to measure in isolation.)
     {
       name: 'perf',
-      testMatch: '**/perf.e2e.ts',
+      testMatch: ['**/perf.e2e.ts', '**/*.perf.e2e.ts'],
       fullyParallel: false,
       dependencies: ['functional'],
       use: {

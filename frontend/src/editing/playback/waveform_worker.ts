@@ -40,10 +40,12 @@
  */
 import {
   BarSlice,
-  ChannelData,
-  computeWaveformPeaksFromChannels,
-  computeWindowPeaksFromChannels,
+  buildTrackPeaks,
+  computeWaveformPeaks,
+  computeWindowPeaks,
+  TrackPeaks,
 } from './waveform_compute';
+import { paintWaveform } from './waveform_paint';
 
 export type WaveformWorkerRequest =
   | {
@@ -94,7 +96,15 @@ export type WaveformWorkerResponse =
   | { kind: 'result'; reqId: number; peaks: Float32Array }
   | { kind: 'error'; reqId: number; message: string };
 
-const buffers = new Map<string, ChannelData>();
+const buffers = new Map<string, TrackPeaks>();
+
+/**
+ * Per-tile peak cache: the last computed peaks plus a signature of the inputs
+ * that drive them (tile width, drum/audio offset, bar geometry). A repaint that
+ * only changes colour / amplitude scale reuses these instead of re-querying the
+ * pyramid. Pruned on `releaseChunk`.
+ */
+const peakCache = new Map<string, { sig: string; peaks: Float32Array }>();
 
 /**
  * Per-tile slot: the `OffscreenCanvas` transferred from main thread
@@ -109,18 +119,30 @@ ctx.onmessage = (e: MessageEvent<WaveformWorkerRequest>) => {
   const msg = e.data;
   switch (msg.kind) {
     case 'register': {
-      // The channel arrays arrive as transferables (the client copies
-      // off the live `AudioBuffer` before postMessaging), so the
-      // worker takes sole ownership of these buffers.
-      buffers.set(msg.id, {
-        channels: msg.channels,
-        sampleRate: msg.sampleRate,
-        length: msg.length,
-      });
+      // The channel arrays arrive as transferables (the client copies off the
+      // live `AudioBuffer` before postMessaging). Build the min/max pyramid
+      // from them once, then let the raw PCM go: the pyramid is all the render
+      // path needs and a fraction of the size. The channels are unreferenced
+      // after this call and get GC'd.
+      buffers.set(
+        msg.id,
+        buildTrackPeaks({
+          channels: msg.channels,
+          sampleRate: msg.sampleRate,
+          length: msg.length,
+        }),
+      );
+      // Rebuilding a track's pyramid (e.g. replacing the backing audio in
+      // place) invalidates any peaks cached against the old audio. The cache
+      // key (`chunkKey`) is per-track and survives a same-id re-register, so
+      // clear it here rather than relying on the client tearing the worker
+      // down first.
+      peakCache.clear();
       return;
     }
     case 'drop': {
       buffers.delete(msg.id);
+      peakCache.clear();
       return;
     }
     case 'peaks': {
@@ -129,7 +151,7 @@ ctx.onmessage = (e: MessageEvent<WaveformWorkerRequest>) => {
         reply({ kind: 'error', reqId: msg.reqId, message: `unregistered track ${msg.id}` });
         return;
       }
-      const peaks = computeWaveformPeaksFromChannels(
+      const peaks = computeWaveformPeaks(
         data,
         msg.bars,
         msg.totalWidthPx,
@@ -144,7 +166,7 @@ ctx.onmessage = (e: MessageEvent<WaveformWorkerRequest>) => {
         reply({ kind: 'error', reqId: msg.reqId, message: `unregistered track ${msg.id}` });
         return;
       }
-      const peaks = computeWindowPeaksFromChannels(
+      const peaks = computeWindowPeaks(
         data,
         msg.startSec,
         msg.durationSec,
@@ -167,6 +189,7 @@ ctx.onmessage = (e: MessageEvent<WaveformWorkerRequest>) => {
     }
     case 'releaseChunk': {
       attachedChunks.delete(msg.chunkKey);
+      peakCache.delete(msg.chunkKey);
       return;
     }
   }
@@ -186,33 +209,34 @@ ctx.onmessage = (e: MessageEvent<WaveformWorkerRequest>) => {
  */
 function renderChunkInto(
   canvas: OffscreenCanvas,
-  data: ChannelData,
+  data: TrackPeaks,
   msg: Extract<WaveformWorkerRequest, { kind: 'renderChunk' }>,
 ): void {
-  const { bars, widthPx, height, backingW, backingH, songLeadInSec, laneColor, ampScale } = msg;
+  const { chunkKey, bars, widthPx, height, backingW, backingH, songLeadInSec, laneColor, ampScale } =
+    msg;
   if (widthPx <= 0 || height <= 0) return;
+  // Reuse the last peaks for this tile when only paint params (colour /
+  // amplitude scale) changed; recompute only when width / offset / bar geometry
+  // change (see {@link peakCache}). Hash EVERY bar's fields, not just the
+  // endpoints: a tempo/drift edit to a bar in the middle of the chunk must
+  // invalidate too (chunks usually hold 1-2 bars, so this stays cheap).
+  let sig = `${widthPx}|${songLeadInSec}`;
+  for (const b of bars) {
+    sig += `|${b.x},${b.width},${b.startSec},${b.durationSec},${b.driftSec ?? 0},${b.nextDriftSec ?? 0}`;
+  }
+  let peaks: Float32Array;
+  const cached = peakCache.get(chunkKey);
+  if (cached && cached.sig === sig) {
+    peaks = cached.peaks;
+  } else {
+    peaks = computeWaveformPeaks(data, bars, widthPx, songLeadInSec);
+    peakCache.set(chunkKey, { sig, peaks });
+  }
   canvas.width = backingW;
   canvas.height = backingH;
   const ctx2d = canvas.getContext('2d');
   if (!ctx2d) return;
-  const peaks = computeWaveformPeaksFromChannels(data, bars, widthPx, songLeadInSec);
-  ctx2d.imageSmoothingEnabled = false;
-  ctx2d.setTransform(backingW / widthPx, 0, 0, backingH / height, 0, 0);
-  ctx2d.clearRect(0, 0, widthPx, height);
-  ctx2d.fillStyle = laneColor;
-  const mid = height / 2;
-  const yScale = mid * 0.95 * ampScale;
-  // No skip-zero shortcut: silent columns still paint a 1 px
-  // centerline (mn=mx=0 collapses to fillRect(p, mid, 1, 1)) so the
-  // baseline reads as a continuous line across the chunk instead of
-  // breaking into dashes wherever the audio is quiet.
-  for (let p = 0; p < widthPx; p++) {
-    const mn = peaks[p * 2];
-    const mx = peaks[p * 2 + 1];
-    const y0 = Math.max(0, mid - mx * yScale);
-    const y1 = Math.min(height, mid - mn * yScale);
-    ctx2d.fillRect(p, y0, 1, Math.max(1, y1 - y0));
-  }
+  paintWaveform(ctx2d, peaks, widthPx, height, backingW, backingH, laneColor, ampScale);
 }
 
 function reply(msg: WaveformWorkerResponse, transfer: Transferable[] = []): void {

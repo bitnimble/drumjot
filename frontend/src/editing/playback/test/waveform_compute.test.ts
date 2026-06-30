@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 import {
   BarSlice,
-  computeWaveformPeaksFromChannels,
+  buildTrackPeaks,
+  computeWaveformPeaks,
 } from 'src/editing/playback/waveform_compute';
 
 /** Mono audio of `length` samples with a single unit impulse at `at`. */
@@ -25,7 +26,7 @@ function peakPixel(peaks: Float32Array): number {
   return best;
 }
 
-describe('computeWaveformPeaksFromChannels, render-time drift stretch', () => {
+describe('computeWaveformPeaks, render-time drift stretch', () => {
   const SR = 1000;
   const W = 100; // bar pixel width
   const D = 2.0; // bar jot duration (s)
@@ -45,30 +46,35 @@ describe('computeWaveformPeaksFromChannels, render-time drift stretch', () => {
     };
     // The impulse sits at the bar's REAL downbeat, so with drift applied it
     // renders right at the bar line (pixel ~0).
-    expect(peakPixel(computeWaveformPeaksFromChannels(audio, [slice], W, 0))).toBeLessThanOrEqual(2);
+    expect(peakPixel(computeWaveformPeaks(buildTrackPeaks(audio), [slice], W, 0))).toBeLessThanOrEqual(
+      2,
+    );
   });
 
   it('without drift the same transient is misaligned (right of the bar line)', () => {
     const slice: BarSlice = { x: 0, width: W, startSec: 0, durationSec: D };
     // 0.2 s / 2.0 s * 100 px = 10 px to the right.
-    expect(peakPixel(computeWaveformPeaksFromChannels(audio, [slice], W, 0))).toBeGreaterThan(6);
+    expect(peakPixel(computeWaveformPeaks(buildTrackPeaks(audio), [slice], W, 0))).toBeGreaterThan(6);
   });
 
   it('is identical to the plain mapping when drift is zero', () => {
-    const at = impulse(SR, 3000, 1000); // audio 1.0 s
-    const plain = computeWaveformPeaksFromChannels(
+    const at = buildTrackPeaks(impulse(SR, 3000, 1000)); // audio 1.0 s
+    const plain = computeWaveformPeaks(
       at,
       [{ x: 0, width: W, startSec: 0, durationSec: D }],
       W,
       0,
     );
-    const zeroDrift = computeWaveformPeaksFromChannels(
+    const zeroDrift = computeWaveformPeaks(
       at,
       [{ x: 0, width: W, startSec: 0, durationSec: D, driftSec: 0, nextDriftSec: 0 }],
       W,
       0,
     );
     expect(peakPixel(zeroDrift)).toBe(peakPixel(plain));
-    expect(peakPixel(plain)).toBeCloseTo(50, 0); // 1.0 s / 2.0 s * 100 px
+    // 1.0 s / 2.0 s * 100 px = 50, ±1 px: the pyramid reads block-aligned
+    // min/max, so a single-sample impulse can land in either of two adjacent
+    // pixels' blocks.
+    expect(Math.abs(peakPixel(plain) - 50)).toBeLessThanOrEqual(1);
   });
 });

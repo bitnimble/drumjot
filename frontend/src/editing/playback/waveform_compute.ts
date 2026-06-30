@@ -48,6 +48,165 @@ export type ChannelData = {
 };
 
 /**
+ * Multi-resolution min/max summary of a track's mono-folded PCM. `levels[0]`
+ * holds the [min, max] of every {@link PYRAMID_BASE}-sample block; each higher
+ * level halves the resolution (pairwise-reduced from the one below). A pixel
+ * covering S samples reads ~1-2 blocks from the level whose `blockSize <= S`,
+ * so a render is O(pixels) regardless of zoom instead of O(samples) -- the raw
+ * PCM is scanned exactly ONCE (here, to build this) rather than on every paint.
+ *
+ * Mono-folded because the waveform displays the channel-averaged envelope, so
+ * one pyramid serves any channel count and is a fraction of the raw PCM size
+ * (the worker keeps only this and frees the channels after building it).
+ */
+type PyramidLevel = { min: Float32Array; max: Float32Array; blockSize: number };
+
+export type WaveformPyramid = {
+  levels: PyramidLevel[];
+  length: number;
+};
+
+/** A track's render-ready peaks: the {@link WaveformPyramid} + the rate/length
+ *  the per-pixel sample mapping needs. Replaces holding the raw channels. */
+export type TrackPeaks = {
+  pyramid: WaveformPyramid;
+  sampleRate: number;
+  length: number;
+};
+
+/**
+ * Level-0 block size (samples). 16 keeps the summary accurate well past the
+ * app's max zoom (which never shows fewer than ~tens of samples per pixel) and
+ * the pyramid at ~1/8 the size of the mono PCM. Powers of two above it form
+ * the higher levels.
+ */
+const PYRAMID_BASE = 16;
+
+/** Build a track's {@link TrackPeaks} from decoded channels. One O(samples)
+ *  pass (folds to mono + the level-0 blocks), then cheap pairwise reductions. */
+export function buildTrackPeaks(data: ChannelData): TrackPeaks {
+  return { pyramid: buildPyramid(data), sampleRate: data.sampleRate, length: data.length };
+}
+
+function buildPyramid(data: ChannelData): WaveformPyramid {
+  const { channels, length } = data;
+  const numChannels = channels.length;
+  const n0 = Math.max(1, Math.ceil(length / PYRAMID_BASE));
+  const min0 = new Float32Array(n0);
+  const max0 = new Float32Array(n0);
+  for (let b = 0; b < n0; b++) {
+    const s0 = b * PYRAMID_BASE;
+    const s1 = Math.min(length, s0 + PYRAMID_BASE);
+    let mn = Infinity;
+    let mx = -Infinity;
+    if (numChannels === 1) {
+      const d = channels[0];
+      for (let s = s0; s < s1; s++) {
+        const v = d[s];
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+      }
+    } else if (numChannels === 2) {
+      const c0 = channels[0];
+      const c1 = channels[1];
+      for (let s = s0; s < s1; s++) {
+        const v = (c0[s] + c1[s]) * 0.5;
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+      }
+    } else if (numChannels > 2) {
+      const inv = 1 / numChannels;
+      for (let s = s0; s < s1; s++) {
+        let v = 0;
+        for (let ch = 0; ch < numChannels; ch++) v += channels[ch][s];
+        v *= inv;
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+      }
+    }
+    min0[b] = mn === Infinity ? 0 : mn;
+    max0[b] = mx === -Infinity ? 0 : mx;
+  }
+  const levels = [{ min: min0, max: max0, blockSize: PYRAMID_BASE }];
+  let cur = levels[0];
+  while (cur.min.length > 1) {
+    const pn = cur.min.length;
+    const nn = Math.ceil(pn / 2);
+    const min = new Float32Array(nn);
+    const max = new Float32Array(nn);
+    for (let i = 0; i < nn; i++) {
+      const a = 2 * i;
+      let lo = cur.min[a];
+      let hi = cur.max[a];
+      if (a + 1 < pn) {
+        if (cur.min[a + 1] < lo) lo = cur.min[a + 1];
+        if (cur.max[a + 1] > hi) hi = cur.max[a + 1];
+      }
+      min[i] = lo;
+      max[i] = hi;
+    }
+    cur = { min, max, blockSize: cur.blockSize * 2 };
+    levels.push(cur);
+  }
+  return { levels, length };
+}
+
+/**
+ * Pick the pyramid level whose blocks are no larger than `spp` samples, so a
+ * pixel spanning `spp` samples reads ~1-2 blocks. Hoisted out of the per-pixel
+ * loop -- the samples-per-pixel rate is ~uniform within a bar / window -- so the
+ * `log2` runs once per bar, not once per pixel.
+ */
+function chooseLevel(pyramid: WaveformPyramid, spp: number): PyramidLevel {
+  let level = 0;
+  if (spp > PYRAMID_BASE) {
+    level = Math.floor(Math.log2(spp / PYRAMID_BASE));
+    if (level >= pyramid.levels.length) level = pyramid.levels.length - 1;
+  }
+  return pyramid.levels[level];
+}
+
+/**
+ * Min/max of the mono envelope over `[s0, s1)`, written into `out[outIdx]` /
+ * `out[outIdx + 1]`, reading whole blocks from `lvl` (chosen by
+ * {@link chooseLevel}). ~1-2 reads per pixel; the block alignment over-reads by
+ * at most one block (sub-pixel at these zooms, an exact-vs-approximate tradeoff
+ * that's invisible on real audio).
+ */
+function queryLevel(
+  lvl: PyramidLevel,
+  lastBlock: number,
+  s0: number,
+  s1: number,
+  out: Float32Array,
+  outIdx: number
+): void {
+  if (s1 <= s0) {
+    out[outIdx] = 0;
+    out[outIdx + 1] = 0;
+    return;
+  }
+  const { min, max, blockSize } = lvl;
+  let b0 = Math.floor(s0 / blockSize);
+  let b1 = Math.floor((s1 - 1) / blockSize);
+  if (b0 < 0) b0 = 0;
+  if (b1 > lastBlock) b1 = lastBlock;
+  let mn = Infinity;
+  let mx = -Infinity;
+  for (let b = b0; b <= b1; b++) {
+    if (min[b] < mn) mn = min[b];
+    if (max[b] > mx) mx = max[b];
+  }
+  if (mn === Infinity) {
+    out[outIdx] = 0;
+    out[outIdx + 1] = 0;
+  } else {
+    out[outIdx] = mn;
+    out[outIdx + 1] = mx;
+  }
+}
+
+/**
  * Magnitude below which a sample / pixel column is treated as silence
  * for the uniform-waveform median. Background noise on a clean mix
  * typically sits around -60 to -40 dBFS (~0.001–0.01); excluding it
@@ -146,17 +305,15 @@ export function extractChannels(buffer: AudioBuffer): ChannelData {
  * to mono goes into `peaks[2*p, 2*p+1]`. Pixels outside any bar stay
  * at 0/0 (the array is zero-initialised by `Float32Array`).
  */
-export function computeWaveformPeaksFromChannels(
-  data: ChannelData,
+export function computeWaveformPeaks(
+  data: TrackPeaks,
   bars: BarSlice[],
   totalWidthPx: number,
   songLeadInSec: number
 ): Float32Array {
   const peaks = new Float32Array(totalWidthPx * 2);
   if (totalWidthPx <= 0 || bars.length === 0) return peaks;
-  const { channels, sampleRate, length } = data;
-  const numChannels = channels.length;
-  const channelScale = numChannels > 0 ? 1 / numChannels : 1;
+  const { pyramid, sampleRate, length } = data;
   for (const bar of bars) {
     const x0 = bar.x;
     const w = bar.width;
@@ -170,6 +327,10 @@ export function computeWaveformPeaksFromChannels(
     const nextDrift = bar.nextDriftSec ?? drift;
     const audioStart = bar.startSec + drift - songLeadInSec;
     const audioDur = bar.durationSec + (nextDrift - drift);
+    // Samples per pixel are ~uniform across the bar, so pick the pyramid level
+    // once here rather than per pixel.
+    const lvl = chooseLevel(pyramid, w > 0 ? Math.max(1, (audioDur * sampleRate) / w) : 1);
+    const lastBlock = lvl.min.length - 1;
     const pxStart = Math.max(0, Math.floor(x0));
     const pxEnd = Math.min(totalWidthPx, Math.ceil(x0 + w));
     for (let p = pxStart; p < pxEnd; p++) {
@@ -179,7 +340,7 @@ export function computeWaveformPeaksFromChannels(
       const tAudio1 = audioStart + frac1 * audioDur;
       const s0 = Math.max(0, Math.floor(tAudio0 * sampleRate));
       const s1 = Math.min(length, Math.ceil(tAudio1 * sampleRate));
-      writePixelPeak(channels, numChannels, channelScale, s0, s1, peaks, p * 2);
+      queryLevel(lvl, lastBlock, s0, s1, peaks, p * 2);
     }
   }
   return peaks;
@@ -192,81 +353,25 @@ export function computeWaveformPeaksFromChannels(
  * t=0). Out-of-buffer pixels write 0/0 so silent edges render flat
  * instead of throwing.
  */
-export function computeWindowPeaksFromChannels(
-  data: ChannelData,
+export function computeWindowPeaks(
+  data: TrackPeaks,
   startSec: number,
   durationSec: number,
   widthPx: number
 ): Float32Array {
   const peaks = new Float32Array(widthPx * 2);
   if (widthPx <= 0 || durationSec <= 0) return peaks;
-  const { channels, sampleRate, length } = data;
-  const numChannels = channels.length;
-  const channelScale = numChannels > 0 ? 1 / numChannels : 1;
+  const { pyramid, sampleRate, length } = data;
   const secPerPx = durationSec / widthPx;
+  // Uniform samples per pixel across the window: pick the level once.
+  const lvl = chooseLevel(pyramid, Math.max(1, secPerPx * sampleRate));
+  const lastBlock = lvl.min.length - 1;
   for (let p = 0; p < widthPx; p++) {
     const t0 = startSec + p * secPerPx;
     const t1 = startSec + (p + 1) * secPerPx;
     const s0 = Math.max(0, Math.floor(t0 * sampleRate));
     const s1 = Math.min(length, Math.ceil(t1 * sampleRate));
-    writePixelPeak(channels, numChannels, channelScale, s0, s1, peaks, p * 2);
+    queryLevel(lvl, lastBlock, s0, s1, peaks, p * 2);
   }
   return peaks;
-}
-
-/**
- * Scan one pixel column's worth of samples across every channel, fold
- * them to mono on the fly, and write the [min, max] envelope into
- * `peaks[pIdx]` / `peaks[pIdx + 1]`. Mono / stereo get specialised
- * inner loops (the common cases, saves a tight inner-loop branch and
- * a multiplication per sample); >2 channels fall through to a generic
- * sum. Empty ranges write zeros so silent regions render flat.
- */
-function writePixelPeak(
-  channels: Float32Array[],
-  numChannels: number,
-  channelScale: number,
-  s0: number,
-  s1: number,
-  peaks: Float32Array,
-  pIdx: number
-): void {
-  if (s1 <= s0) {
-    peaks[pIdx] = 0;
-    peaks[pIdx + 1] = 0;
-    return;
-  }
-  let mn = Infinity;
-  let mx = -Infinity;
-  if (numChannels === 1) {
-    const data = channels[0];
-    for (let s = s0; s < s1; s++) {
-      const v = data[s];
-      if (v < mn) mn = v;
-      if (v > mx) mx = v;
-    }
-  } else if (numChannels === 2) {
-    const c0 = channels[0];
-    const c1 = channels[1];
-    for (let s = s0; s < s1; s++) {
-      const v = (c0[s] + c1[s]) * 0.5;
-      if (v < mn) mn = v;
-      if (v > mx) mx = v;
-    }
-  } else {
-    for (let s = s0; s < s1; s++) {
-      let v = 0;
-      for (let ch = 0; ch < numChannels; ch++) v += channels[ch][s];
-      v *= channelScale;
-      if (v < mn) mn = v;
-      if (v > mx) mx = v;
-    }
-  }
-  if (mn === Infinity) {
-    peaks[pIdx] = 0;
-    peaks[pIdx + 1] = 0;
-  } else {
-    peaks[pIdx] = mn;
-    peaks[pIdx + 1] = mx;
-  }
 }
