@@ -16,6 +16,78 @@ Scoring is `mir_eval` onset-F1 at ±50 ms (`metrics.onset_f1`).
 
 ---
 
+## 2026-07-01 · Best-model 7-lane run: first STABLE full-kit model (hp→hc fold + grad-clip + workers)
+
+The full-kit best-model run. THREE fixes (all committed) were needed to train it at all + correctly:
+- **hp→hc fold** (`9742964`): the aligned-onset store (`_onsets_aligned_snaponly.json`) predates the
+  hp→hc vocab merge, so `hc` was fed ONLY closed-hat (252k) while 343k pedal-hat onsets sat UNLABELLED
+  in the same hi-hat audio → hard negatives → the hc head trained to **0.00 (dead)**. Fold hp→hc at
+  aligned-onset load → hc alive.
+- **`--grad-clip 1.0`** (`04dda76`): from-scratch training collapsed (val→0.06, all lanes→0) because
+  gradient clipping was never wired (`grad_clip` defaulted to None=inf; the guard skipped NaN, not
+  FINITE spikes). A finite grad spike → one giant step → weights blow out. Lowering LR only DELAYED
+  it (1e-3 collapsed ep2, 5e-4 ep6). `--grad-clip 1.0` fixed it: ran the full 70 epochs, val plateaued
+  ~0.725, loss monotonic down.
+- **`--num-workers 4`**: run is data-bound (cached `.npy` reads over NFS-HDD, num_workers=0 serial).
+  Prefetch took GPU util 38%→91% (idle gaps gone) → ~1.7x faster (1730→~1000 s/ep).
+
+### Command (local RTX 3080, sandbox container; train.py @ `04dda76`)
+```
+MODELS_DIR=/codebox-workspace/drumjot/models-cache \
+DRUMJOT_MERT_CACHE=/codebox-workspace/datasets/mert_cache \
+DRUMJOT_STAR=/codebox-workspace/datasets/star_balanced_sep \
+DRUMJOT_ENST=/codebox-workspace/datasets/enst-sep DRUMJOT_EGMD=/codebox-workspace/datasets/egmd_sep \
+DRUMJOT_PARADB=/codebox-workspace/datasets/paradb-sep-train \
+DRUMJOT_ALIGNED_ONSETS=/codebox-workspace/datasets/_onsets_aligned_snaponly.json \
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True OMP_NUM_THREADS=8 PYTHONPATH=training:dsp \
+python3 -m drumjot_training.train --dataset pooled --pool-sources star,enst,egmd,paradb \
+  --pool-resample --pool-cap paradb:9000,egmd:2500,star:2000 --pool-val-cap 60 \
+  --pool-cache /codebox-workspace/mert_cache --head-hidden 256 --lanes k,s,t,hc,ho,rd,cr \
+  --batch-size 16 --epochs 70 --warmup-steps 3000 --lr 5e-4 --num-workers 4 --grad-clip 1.0 \
+  --no-filter-report --seed 0 --label-min-support 0 --out /codebox-workspace/datasets/bestmodel
+```
+Defaults not on the CLI (config.py @ `04dda76`): encoder MERT-v1-330M, **layer 10 (single-layer,
+lane_layers=None)**, fps 75, high-band ON (feat_dim 1040), cache float16, head-layers 2, loss bce,
+lr-schedule cosine, weight-decay 0.01, pos-weight-cap 50, sib_neg 8.0 / sib_pos 3.0, aux_act_weight
+0.5, aux_lanes default (ho,rd,cr), cymbal_softmax OFF, auto_calibrate ON, sigma_frames 1.5,
+peak_threshold 0.5, onset_tol ±50 ms, rare_lane_min_onsets 50 / rare_thr_floor 0.3, keep-best ON,
+early-stop ON (es-window 8, es-slope 0.002, es-jitter 0.015, es-min-epochs 20 -- did NOT fire, ran
+full 70). bf16. ~1000 s/ep, ~19 h wall + ~13 min eval (ParaDB-102 ~12 min, MDB ~1 min).
+
+### Results
+**STAR-pool per-stem val (epoch 69, tuned per-lane thr):** macro **0.725**
+`[k .93  s .83  t .82  hc .39  ho .47  rd .63  cr .31]`
+
+**ParaDB-102 deployed onset-F1 (F_pick = deployed picker, the headline):**
+| k | s | t | hc | ho | rd | cr |
+|---|---|---|---|---|---|---|
+| 0.959 | 0.945 | 0.670 | 0.298 | 0.349 | 0.345 | 0.435 |
+
+(h-folded 0.402, cym-folded 0.582; hc/ho strict on the 15 split maps. Oracle/cheating ceilings:
+cr 0.678, hc 0.693, rd 0.505, ho 0.430.)
+
+**MDB cross-domain (hat/cym, fixed-threshold):** hc **0.777**, ho **0.140**, rd **0.542**, cr **0.563**
+(oracle: hc 0.820, ho 0.625, rd 0.645, cr 0.826).
+
+### Findings
+- **Kick/snare excellent** (ParaDB 0.96 / 0.95); toms 0.67.
+- **Closed-hat ALIVE** (was 0.00 pre-fold): ParaDB hc 0.30 strict / MDB hc 0.78.
+- **Crash** (the prior worry): deployed ParaDB 0.44 / MDB 0.56 -- BEST yet (historical 0.20-0.43), but
+  PRECISION-limited (cr P 0.19→0.36 via picker, R 0.85→0.70 = over-fires). Leakage: hi-hat stem fires
+  the crash head (h→cr 684 onsets) + ride↔crash (cym detect 0.58 splits poorly to rd 0.35 / cr 0.44).
+  High oracle (0.68 / 0.83) ⇒ the model is good; the deployed gap is THRESHOLD-TRANSFER, recoverable
+  with a learned per-song picker (cr predict 0.546 vs fixed 0.452).
+- **Open-hat threshold-transfer is the worst gap**: MDB ho deployed **0.14** vs oracle **0.63** -- the
+  model can detect it, the global threshold can't.
+- Cross-instrument leak (ParaDB): cymbal stem 8.8% leak, mostly to open-hat (cym→ho 3989).
+
+### Next levers
+1. **Per-song / learned thresholds** for ho/rd/cr -- captures most of the deployed-vs-oracle gap (esp. open-hat).
+2. **ride↔crash discrimination** (sib/aux levers) to raise the cymbal ceiling itself.
+3. Queued for next run: bigger per-stem val (`--pool-val-cap 200`) + periodic real-song eval (`eval_periodic.sh`).
+
+---
+
 ## 2026-06-29 · Per-stem MERT layer sweep at the new data scale → SINGLE L10 (per-lane gain < 0.03)
 
 Re-ran the real-head full-pipeline per-lane layer sweep (`perstem_layer_sweep.py`) at the new
