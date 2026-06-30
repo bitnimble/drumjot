@@ -1981,6 +1981,10 @@ def main(argv: list[str] | None = None) -> None:
                     help="warmup->cosine LR decay (default) or constant LR")
     ap.add_argument("--warmup-steps", type=int, default=0,
                     help="linear LR warmup steps before cosine (helps large-batch / high-LR runs)")
+    ap.add_argument("--grad-clip", type=float, default=None,
+                    help="clip gradient L2 norm to this value; caps finite grad spikes that blow "
+                         "out from-scratch training (the NaN-skip guard misses finite spikes). "
+                         "Off (None) measures the norm only.")
     ap.add_argument("--loss", choices=("bce", "focal"), default="bce",
                     help="pos-weighted BCE (default) or CenterNet penalty-reduced focal "
                     "(focal ignores pos_weight; A/B it before committing)")
@@ -2152,7 +2156,8 @@ def main(argv: list[str] | None = None) -> None:
         # epoch instead of from scratch -- re-run the SAME command to resume. out_dir is
         # local-speed here, so the per-epoch optimizer save is cheap. None when no --out.
         resume_path=(str(Path(args.out) / "resume.pt") if args.out else None),
-        lr_schedule=args.lr_schedule, warmup_steps=args.warmup_steps, loss_fn=args.loss,
+        lr_schedule=args.lr_schedule, warmup_steps=args.warmup_steps, grad_clip=args.grad_clip,
+        loss_fn=args.loss,
         keep_best=args.keep_best,
         early_stop=args.early_stop, es_window=args.es_window, es_slope=args.es_slope,
         es_jitter=args.es_jitter, es_min_epochs=args.es_min_epochs,
