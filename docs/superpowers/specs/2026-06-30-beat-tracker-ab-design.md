@@ -90,16 +90,25 @@ trackers in a single run get the **same** list per clip.
   audio, pooled across all 5 lanes (exactly `_do_beats`). GPU-bound.
   **Implemented but not run now** (GPU saturated by an ongoing training run).
 - **`synthetic`**, **CPU-only, runnable now.** Build align-onsets from the
-  clip's pooled MIDI note onsets (union of all lanes = what ADTOF pooling
-  approximates), then degrade *deterministically* (per-clip seed = stable hash
-  of `track_id`) to emulate an imperfect detector:
-  - **drop 15%** of true onsets → recall ≈ 0.85
-  - **add spurious ≈ 15%** of kept count at uniform-random times (≥ 30 ms from
-    any real onset), velocities sampled from the clip's own velocity
-    distribution → precision ≈ 0.87
-  - net ≈ 0.86 F1, the ADTOF-on-drums ballpark.
-  - Degradation ratios are named constants at the top of the module, easily
-    retuned.
+  clip's per-lane MIDI note onsets, degrade *deterministically* (per-clip seed
+  = stable hash of `track_id`) to emulate an imperfect detector, then pool
+  across lanes (= what ADTOF pooling approximates):
+  - **Recall, drop 15%** of true onsets → recall ≈ 0.85.
+  - **Precision (uncorrelated FP), add ≈ 10%** of kept count at uniform-random
+    times (≥ 30 ms from any real onset), velocities sampled from the clip's own
+    velocity distribution.
+  - **Precision (stem bleed, correlated FP), for ≈ 12%** of onsets inject a
+    "bleed" copy sourced from a *spectrally-similar* lane, at the source hit's
+    time ± a small jitter (~15 ms) with attenuated velocity (× 0.3–0.6).
+    Similarity groups follow the GM-class map: cymbals/metals
+    {hi-hat, ride, crash} and membranes {kick, snare, toms} (fall back to the
+    3-class KD/SD/HH grouping if finer lanes aren't exposed). This is the
+    confounder that directly stresses the median-offset aligner: a ghost near a
+    real beat can become the "strongest nearby onset" and bias the global
+    offset, where uniform FPs mostly cannot.
+  - Net ≈ recall 0.85 / precision 0.82 / F1 ≈ 0.83, the ADTOF-on-drums
+    ballpark. All three ratios are named constants at the top of the module,
+    easily retuned.
 - **`gt`**, zero degradation; a "perfect aligner" ceiling for context.
 
 In `synthetic`/`gt` (CPU) mode, Beat Transformer inference also runs **on CPU**
