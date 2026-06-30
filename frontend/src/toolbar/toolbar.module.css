@@ -8,6 +8,10 @@
     align-items: center;
     gap: 10px;
     padding: 10px 24px;
+    /* Clear the status bar / display cutout on the Tauri Android edge-to-edge
+       webview; the toolbar background fills the inset area so it reads as one
+       bar. `env()` is 0 off-device, so the desktop padding is unchanged. */
+    padding-top: calc(10px + env(safe-area-inset-top));
     border-bottom: 1px solid var(--color-border-soft);
     background: var(--color-bg-overlay);
     backdrop-filter: blur(4px);

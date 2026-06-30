@@ -108,7 +108,7 @@ import { TranscribePresenter } from './transcribe/transcribe_presenter';
 import { RecentTranscriptionsPicker } from './transcribe/recent_transcriptions';
 import { ToastContainer } from '../ui/toasts/toast_container';
 import { Toolbar } from '../toolbar/toolbar';
-import { Sidebar, SidebarFloatingPanel } from '../sidebar/sidebar';
+import { Sidebar } from '../sidebar/sidebar';
 import { SidebarStore } from '../sidebar/sidebar_store';
 import { SidebarPresenter } from '../sidebar/sidebar_presenter';
 import { SidebarStoreContext, SidebarPresenterContext } from '../sidebar/sidebar_contexts';
@@ -574,13 +574,18 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                       onOpenRecentTranscription={(folder) => transcribePresenter.openReplaceDialog(folder)}
                     />
                     {/* Score region: the score (or empty state) plus the
-                        floating sidebar panel overlaid on its right edge. The
-                        panel is a SIBLING of the score container (not inside
-                        it) so its pointer events don't bubble into the score's
-                        marquee / pan / wheel handlers; `position: relative`
-                        here bounds the panel to the score area so it never
-                        covers the minimap / transport below. */}
-                    <div className={styles.scoreRegion}>
+                        right-edge sidebar (rail + panel). The sidebar is a
+                        SIBLING of the score container (not inside it) so its
+                        pointer events don't bubble into the score's marquee /
+                        pan / wheel handlers; `position: relative` here bounds it
+                        to the score area, between the toolbar and the minimap /
+                        transport below, and the region reserves matching right
+                        padding so the rail (and a pinned panel) never overlap
+                        the score. */}
+                    <div
+                      className={styles.scoreRegion}
+                      data-sidebar-pinned={(sidebar.expanded && sidebar.pinned) || undefined}
+                    >
                     {structural ? (
                       <JotEditor
                         viewport={viewport}
@@ -612,7 +617,7 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                         onOpenZip={(file) => fileDrop.openFiles([file])}
                       />
                     )}
-                    <SidebarFloatingPanel />
+                    <Sidebar />
                     </div>
                     <Minimap
                       jotEditorStore={jotEditorStore}
@@ -629,7 +634,6 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                     )}
                     {structural && <EditingToolbar />}
                     </div>
-                    <Sidebar />
                     <LyricsSearchModal
                       open={lyricsAlign.lyricsSearchOpen}
                       initialTitle={lyricsInitialTitle}

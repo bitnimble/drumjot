@@ -2,12 +2,13 @@ import { expect, test, type Page } from '@playwright/test';
 
 /**
  * Black-box coverage of the collapsible right sidebar: the rail is always
- * visible and full-height; clicking a rail item opens its panel **floating**
- * over the score (the score keeps its full width); the rail's topmost button
- * **pins** the panel, docking it so the score narrows and its scroll
- * virtualization stops rendering the bars under it; and a floating panel is
- * dismissed by an outside click / Escape but survives the score interactions
- * that feed it (note clicks, marquee drags) and its own popups.
+ * visible, bounded to the score region (below the toolbar, above the minimap);
+ * clicking a rail item opens its panel **floating** over the score (the score
+ * keeps its full width); the rail's topmost button **pins** the panel in place
+ * (same position + size) while the score narrows and its scroll virtualization
+ * stops rendering the bars under it; and a floating panel is dismissed by an
+ * outside click / Escape but survives the score interactions that feed it (note
+ * clicks, marquee drags) and its own popups.
  */
 
 /** A long single-lane song so the score is wide enough that virtualization
@@ -33,14 +34,18 @@ test.beforeEach(async ({ page }) => {
   await loadLongSong(page);
 });
 
-test('the rail is visible and full-height, the panel starts collapsed', async ({ page }) => {
+test('the rail is visible, bounded to the score region, panel starts collapsed', async ({ page }) => {
   const sidebar = page.getByTestId('sidebar');
   await expect(sidebar).toBeVisible();
   await expect(page.getByTestId('sidebar-panel')).toHaveCount(0);
 
   const box = (await sidebar.boundingBox())!;
+  const score = (await page.locator('[data-jot-scroller]').boundingBox())!;
   const viewportH = page.viewportSize()!.height;
-  expect(box.height).toBeGreaterThan(viewportH - 2); // spans the full height
+  // Sits inside the score region (below the toolbar, above the minimap /
+  // transport), not spanning the whole window.
+  expect(box.height).toBeLessThan(viewportH - 1);
+  expect(Math.abs(box.y - score.y)).toBeLessThan(2); // top-aligned with the score
   expect(box.width).toBeLessThan(80); // just the rail when collapsed
 });
 
@@ -131,6 +136,23 @@ test('the topmost button opens the panel pinned when the sidebar is closed', asy
   await expect(page.getByTestId('sidebar-panel')).toHaveCount(0);
   await page.getByTestId('sidebar-pin-toggle').click();
   await expect(page.getByTestId('sidebar-panel')).toHaveAttribute('data-sidebar-mode', 'pinned');
+});
+
+test('pinning a floating panel leaves it in the same place at the same size', async ({ page }) => {
+  await page.getByTestId('sidebar-item-layers').click();
+  const panel = page.getByTestId('sidebar-panel');
+  await expect(panel).toHaveAttribute('data-sidebar-mode', 'floating');
+  const floatingBox = (await panel.boundingBox())!;
+
+  await page.getByTestId('sidebar-pin-toggle').click();
+  await expect(panel).toHaveAttribute('data-sidebar-mode', 'pinned');
+  const pinnedBox = (await panel.boundingBox())!;
+
+  // Only the score underneath reflows; the panel itself doesn't move or resize.
+  expect(Math.abs(pinnedBox.x - floatingBox.x)).toBeLessThan(2);
+  expect(Math.abs(pinnedBox.y - floatingBox.y)).toBeLessThan(2);
+  expect(Math.abs(pinnedBox.width - floatingBox.width)).toBeLessThan(2);
+  expect(Math.abs(pinnedBox.height - floatingBox.height)).toBeLessThan(2);
 });
 
 test('floating leaves the score full-width; pinning narrows it and the virtualization follows', async ({

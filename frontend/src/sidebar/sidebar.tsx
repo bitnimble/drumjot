@@ -8,26 +8,27 @@ import type { SidebarPresenter } from './sidebar_presenter';
 import styles from './sidebar.module.css';
 
 /**
- * Collapsible right-hand sidebar. A persistent vertical rail of icon buttons
- * sits at the right edge; selecting an item opens the panel area. The rail's
- * top holds the float/pin button, then a divider, then one button per
- * registered panel (see {@link SIDEBAR_PANELS}).
+ * Collapsible right-hand sidebar, an absolute overlay anchored to the right
+ * edge of the score region (so it sits below the toolbar and above the minimap
+ * / transport, never spanning the window chrome). A persistent vertical rail of
+ * icon buttons sits at the far right; selecting an item opens the panel to its
+ * left. The rail's top holds the float/pin button, then a divider, then one
+ * button per registered panel (see {@link SIDEBAR_PANELS}).
  *
- * A panel opens **floating** by default: it overlays the score (which keeps
- * its full width) and is rendered into the score region by {@link
- * SidebarFloatingPanel} (so it's bounded to the score area, not the minimap /
- * transport below). The rail's topmost button **pins** it instead, docking the
- * panel here as a flex sibling so opening it narrows the score's measured width
- * and the score's scroll virtualization stops rendering anything that falls
- * under it. A floating panel is dismissed by an outside click or Escape; a
- * pinned one stays until re-toggled.
+ * The panel renders in the same place at the same width whether **floating** or
+ * **pinned**, so toggling pin never moves or resizes it. The only difference is
+ * what the score does underneath: floating overlays it (the score keeps full
+ * width, virtualization still renders the bars beneath the panel); pinning
+ * reserves the panel's width in the score region's right padding (see
+ * `.scoreRegion` in jot_editor.module.css, keyed off the panel's
+ * `data-sidebar-mode="pinned"`), so the score narrows and its scroll
+ * virtualization stops rendering the bars under the dock. A floating panel is
+ * dismissed by an outside click or Escape; a pinned one stays until re-toggled.
  */
 export const Sidebar = observer(function Sidebar() {
   const store = React.useContext(SidebarStoreContext);
   const presenter = React.useContext(SidebarPresenterContext);
-  // Outside-click / Escape dismissal for a floating panel. Mounted here (the
-  // rail is always rendered) so it tracks float-open state regardless of where
-  // the floating panel body itself renders.
+  // Outside-click / Escape dismissal, active only while a panel is floating.
   useFloatingDismiss(!!store?.expanded && !store?.pinned, presenter ?? null);
   if (!store || !presenter) return null;
   const { expanded, activePanel, pinned } = store;
@@ -35,11 +36,12 @@ export const Sidebar = observer(function Sidebar() {
 
   return (
     <aside className={styles.sidebar} data-testid="sidebar" data-expanded={expanded || undefined}>
-      {expanded && pinned && active && (
+      {expanded && active && (
         <div
           className={styles.panel}
           data-testid="sidebar-panel"
-          data-sidebar-mode="pinned"
+          data-sidebar-mode={pinned ? 'pinned' : 'floating'}
+          data-sidebar-float
         >
           {active.render()}
         </div>
@@ -81,33 +83,6 @@ export const Sidebar = observer(function Sidebar() {
         })}
       </div>
     </aside>
-  );
-});
-
-/**
- * The floating panel body, rendered into the score region (`.jotContainer`) by
- * the editor so it's clipped to the score area and overlays the bars without
- * reflowing them. Shows only when a panel is open and not pinned; the pinned
- * panel renders inside {@link Sidebar} as a docked flex sibling instead.
- *
- * Sits just left of the always-docked rail (the score's right edge), so the
- * two read as one surface. `data-sidebar-float` marks it as "inside" for the
- * dismissal hook, so clicks within it never close it.
- */
-export const SidebarFloatingPanel = observer(function SidebarFloatingPanel() {
-  const store = React.useContext(SidebarStoreContext);
-  if (!store || !store.expanded || store.pinned) return null;
-  const active = SIDEBAR_PANELS.find((p) => p.id === store.activePanel);
-  if (!active) return null;
-  return (
-    <div
-      className={styles.floatingPanel}
-      data-testid="sidebar-panel"
-      data-sidebar-mode="floating"
-      data-sidebar-float
-    >
-      {active.render()}
-    </div>
   );
 });
 

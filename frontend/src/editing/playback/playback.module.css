@@ -19,6 +19,9 @@
     align-items: center;
     gap: 10px;
     padding: 5px 24px;
+    /* Clear the home-gesture bar on the Tauri Android edge-to-edge webview; the
+       bar background fills the inset. `env()` is 0 off-device (no-op there). */
+    padding-bottom: calc(5px + env(safe-area-inset-bottom));
     border-top: 1px solid var(--color-border-soft);
     background: var(--color-bg-overlay);
     backdrop-filter: blur(4px);
@@ -35,26 +38,25 @@
     /* Occupies the left grid track; no content. */
 }
 
-/* Narrow viewports (mobile portrait, split-screen tablets). The
-   three-track grid can outgrow the screen once the master fader sits
-   beside the transport group, so collapse to a single column and let
-   the aux row wrap. The empty spacer drops out so the transport group
-   sits on its own line above the master volume control. */
+/* Narrow viewports (mobile portrait, split-screen tablets). Drop the centring
+   spacer and lay the bar out as two tracks -- transport buttons left, master
+   volume right-anchored -- rather than stacking them. `auto` sizes the buttons
+   to their content; `minmax(0, 1fr)` lets the volume track fill the rest and
+   shrink (instead of wrapping) when space is tight, the slider staying right. */
 @media (max-width: 640px) {
     .playbackBar {
-        grid-template-columns: 1fr;
-        justify-items: center;
+        grid-template-columns: auto minmax(0, 1fr);
         gap: 8px;
         padding: 4px 12px;
+        padding-bottom: calc(4px + env(safe-area-inset-bottom));
     }
 
     .transportSpacer {
         display: none;
     }
 
-    .transportAux {
-        flex-wrap: wrap;
-        justify-content: center;
+    .transportCenter {
+        justify-content: flex-start;
     }
 }
 

@@ -1,10 +1,11 @@
 /* Vertical floating mode toolbar, pinned to the right edge of the main content
-   column with a small gap. Positioned within `.mainColumn` (not the viewport)
-   so it sits just left of the sidebar instead of colliding with it. Sits above
-   the score chrome (toolbar 20, dropdown panel 40) but below modals (100). */
+   column with a small gap, offset left to clear the sidebar rail it sits beside
+   (the rail overlays the score region's right edge). Positioned within
+   `.mainColumn` (not the viewport). Sits above the score chrome (toolbar 20,
+   dropdown panel 40) but below modals (100). */
 .toolbar {
     position: absolute;
-    right: 12px;
+    right: calc(var(--sidebar-rail-width) + 12px);
     top: 50%;
     transform: translateY(-50%);
     z-index: 50;

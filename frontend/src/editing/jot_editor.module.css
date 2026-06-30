@@ -14,6 +14,12 @@
     display: flex;
     flex-direction: row;
     box-sizing: border-box;
+    /* Keep the app clear of a side display cutout in landscape (the Tauri
+       Android webview is edge-to-edge). Top/bottom insets are handled by the
+       toolbar/playback bar so their backgrounds still reach the screen edge;
+       all `env()` values are 0 off-device, so this is a desktop no-op. */
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
 }
 
 /* The main content column (toolbar, score, minimap, transport): everything
@@ -167,13 +173,16 @@
     display: none;
 }
 
-/* Wraps the score (`.jotContainer`) / empty state and the floating sidebar
-   panel. A flex item that takes the score's space between the toolbar and the
-   minimap; `position: relative` makes it the containing block for the floating
-   panel's absolute positioning, so the panel is bounded to the score area
-   (never covering the minimap / transport). The child score container still
-   gets `min-width: 0` to shrink, so its ResizeObserver-driven virtualization
-   keeps following when a pinned panel narrows the column. */
+/* Wraps the score (`.jotContainer`) / empty state and the right-edge sidebar
+   (rail + panel). A flex item taking the score's space between the toolbar and
+   the minimap; `position: relative` makes it the containing block for the
+   sidebar's absolute positioning, bounding it to the score area (never covering
+   the minimap / transport). Reserves right padding for the always-present rail
+   (`--sidebar-rail-width`), extended to rail + panel when a panel is pinned so
+   the score's content box shrinks and its ResizeObserver-driven virtualization
+   stops rendering bars under the dock; a floating panel claims no padding and
+   just overlays the score. The child score container keeps `min-width: 0` so it
+   follows the narrowing. */
 .scoreRegion {
     position: relative;
     flex: 1 1 auto;
@@ -181,6 +190,15 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
+    padding-right: var(--sidebar-rail-width);
+}
+
+/* Driven by a React-set attribute (not `:has()`): a `:has()` scanning the
+   score subtree forces a `:has`-invalidation style recalc on every score
+   mutation, which tanked zoom / note-insert frame budgets. The attribute flips
+   only on the (rare) pin toggle. */
+.scoreRegion[data-sidebar-pinned] {
+    padding-right: calc(var(--sidebar-rail-width) + var(--sidebar-panel-width));
 }
 
 .jotContainer {

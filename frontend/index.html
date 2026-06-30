@@ -3,7 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+    <!-- `viewport-fit=cover` lets the page draw edge-to-edge AND exposes the
+         `env(safe-area-inset-*)` values (the status bar / display cutout / home
+         gesture insets) that the toolbar + playback bar pad against. Required
+         on the Tauri Android shell, which renders the webview full-screen under
+         the system bars; a no-op in a normal browser where the chrome is
+         outside the webview. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, shrink-to-fit=no"
+    />
     <meta property="og:title" content="Drumjot" />
     <title>Drumjot</title>
     <!-- Bricolage Grotesque variable font (opsz / wdth / wght axes).

@@ -1,48 +1,36 @@
 /* Collapsible right sidebar: a persistent icon rail on the far right with an
-   optional panel to its left. A flex sibling of the main content column, so
-   its width genuinely occludes the score (the virtualization measures the
-   narrowed content width and skips off-screen bars). */
+   optional panel to its left, rendered as an absolute overlay inside the score
+   region (its positioned ancestor) so it stays between the toolbar and the
+   minimap rather than spanning the window. The score reserves matching right
+   padding (`.scoreRegion` in jot_editor.module.css) so the rail (always) and a
+   pinned panel never sit under the score; a floating panel overlays it. */
 .sidebar {
-    flex: 0 0 auto;
-    height: 100%;
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
     display: flex;
     flex-direction: row;
     box-sizing: border-box;
     background: var(--color-bg-base);
     border-left: 1px solid var(--color-border);
     user-select: none;
-    z-index: 21; /* above the toolbar (20) so its left border reads cleanly */
+    /* Clears the score's own playhead / vertical scrollbar (both z:5). */
+    z-index: 10;
+}
+
+/* Lift the panel off the score it overlays only while open; the collapsed rail
+   stays flat against the score's right edge. */
+.sidebar[data-expanded] {
+    box-shadow: var(--shadow-lg);
 }
 
 .panel {
-    width: 360px;
+    width: var(--sidebar-panel-width);
     height: 100%;
     box-sizing: border-box;
     border-right: 1px solid var(--color-border-soft);
     overflow: auto;
-}
-
-/* Floating placement: an overlay pinned to the right edge of the score region
-   (`.scoreRegion` in jot_editor, which renders it as a sibling of the score
-   container so panel events don't bubble into the score's marquee / pan
-   handlers). `top`/`bottom: 0` keep it to the score area's height only, so it
-   never covers the minimap / transport below. Elevated above the score with a
-   left border + shadow so it reads as a separate surface; `z-index` clears the
-   score container it overlays. */
-.floatingPanel {
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 360px;
-    box-sizing: border-box;
-    overflow: auto;
-    background: var(--color-bg-base);
-    border-left: 1px solid var(--color-border);
-    box-shadow: var(--shadow-lg);
-    /* Above the score container it overlays, including the vertical scrollbar
-       (z:5) that lives at the score's right edge under the panel. */
-    z-index: 10;
 }
 
 .panelBody {
@@ -56,7 +44,7 @@
 }
 
 .rail {
-    width: 48px;
+    width: var(--sidebar-rail-width);
     height: 100%;
     box-sizing: border-box;
     display: flex;

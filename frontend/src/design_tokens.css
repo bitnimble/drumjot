@@ -152,6 +152,14 @@
        up when placed side by side. */
     --control-height: 28px;
 
+    /* ─── Sidebar ──────────────────────────────────────────────────────
+       The right-hand sidebar's always-reserved icon rail and its panel
+       width. Shared so the score region (jot_editor) reserves matching
+       right padding: the rail alone when floating/closed, rail + panel
+       when a panel is pinned (so the score never renders under the dock). */
+    --sidebar-rail-width: 48px;
+    --sidebar-panel-width: 360px;
+
     /* ─── Shadows ─────────────────────────────────────────────────── */
     --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
     --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.12);
