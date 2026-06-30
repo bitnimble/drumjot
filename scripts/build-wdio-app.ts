@@ -5,6 +5,7 @@
 //      embedded WebDriver server) and `withGlobalTauri` enabled, which the wdio
 //      plugin requires. Both are test-only and never touch a shipped build.
 import { spawnSync } from 'node:child_process';
+import { buildOutputEnv } from './build_env';
 
 function run(cmd: string, args: string[], env: Record<string, string>): void {
   const r = spawnSync(cmd, args, { stdio: 'inherit', env: { ...process.env, ...env } });
@@ -22,5 +23,6 @@ run(
   // `withGlobalTauri` exposes `window.__TAURI__`, which @wdio/tauri-plugin reads
   // to wire its execute/mock API. Test-only (passed via env to this e2e build,
   // never in tauri.conf.json), so a shipped build doesn't expose the global.
-  { TAURI_CONFIG: JSON.stringify({ app: { withGlobalTauri: true } }) },
+  // `buildOutputEnv()` redirects the cargo target dir per `DRUMJOT_BUILD_DIR`.
+  { TAURI_CONFIG: JSON.stringify({ app: { withGlobalTauri: true } }), ...buildOutputEnv() },
 );

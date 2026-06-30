@@ -195,6 +195,19 @@ platform-config deep-merge can't clear them; only `--config`'s replace-merge
 can). The Android lib compiles under `#[cfg(mobile)]` with the sidecar /
 capability / portable-path code gated out.
 
+**Build-output location (`DRUMJOT_BUILD_DIR`).** Set this env var (in `.env`)
+to move the heavy Rust/Tauri artifacts off the repo/local disk -- it maps to
+`CARGO_TARGET_DIR`, which covers the whole `target/` tree (~17 GB across the
+desktop + both Android NDK targets), desktop bundles, every `.so`, and the wdio
+build. Every Tauri build routes through `scripts/tauri-build.ts` (the `tauri` /
+`android:*` scripts) and `build-wdio-app.ts`, which apply it via
+`scripts/build_env.ts`; unset → the in-repo default `src-tauri/target`.
+`android:build` additionally moves the finished **APK/AAB** into
+`$DRUMJOT_BUILD_DIR/{apk,aab}` (gradle still stages intermediates in the
+gitignored `gen/android/app/build`, but the shipped artifact lands in the build
+dir). Caveat: the first build into a fresh dir recompiles all deps (slower still
+on a spinning-disk NFS mount like `/codebox-workspace`).
+
 **Tests.** Three layers, by where the code lives:
 - **Webview logic** (the bulk): `bun run test` (unit) + `bun run e2e` (Playwright,
   Chromium). The IPC seam is mocked, presenters against the `DesktopBridge`
