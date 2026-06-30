@@ -290,12 +290,3 @@ class TFC_TDF_net(nn.Module):
         x = self.stft.inverse(x)
 
         return x
-
-    def forward_onnx(self, x, session):
-        """ONNX-backed forward: STFT (torch, fp32) -> conv body (onnxruntime) ->
-        iSTFT (torch). `session` wraps `forward_spec` (see separation.export)."""
-        spec = self.stft(x)
-        name = session.get_inputs()[0].name
-        out = session.run(None, {name: spec.detach().cpu().numpy()})[0]
-        out = torch.from_numpy(out).to(x.device)
-        return self.stft.inverse(out)

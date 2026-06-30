@@ -8,8 +8,9 @@ and sidesteps the rotary-embedding cache's trace-time specialisation that a
 dynamic axis would risk.
 
   * MDX23C: exports `forward_spec` (spectrogram -> spectrogram, all-real conv).
-  * BS-Roformer: exports `forward_mask` (spectrogram -> real mask); the runner
-    applies the mask + iSTFT around it (BSRoformer.forward_onnx).
+  * BS-Roformer: exports `forward_mask` (spectrogram -> real mask); the numpy
+    inference path applies the complex mask + iSTFT around it
+    (np_inference.bs_apply_mask / bs_unpack).
 """
 
 from __future__ import annotations
@@ -58,9 +59,9 @@ def _bs_example(loaded: LoadedModel) -> torch.Tensor:
 
 def _to_fp16(out_path: Path) -> None:
     """Convert an fp32 ONNX graph in place to fp16, keeping the graph inputs and
-    outputs fp32 (Cast nodes at the boundary) so the runner's forward_onnx feeds
+    outputs fp32 (Cast nodes at the boundary) so the numpy inference path feeds
     fp32 and reads fp32 unchanged. Halves the file and unlocks the GPU tensor /
-    NPU fp16 path; the STFT/iSTFT stay fp32 in torch outside this graph."""
+    NPU fp16 path; the STFT/iSTFT stay fp32 in numpy outside this graph."""
     import onnx
     from onnxruntime.transformers.float16 import convert_float_to_float16
 

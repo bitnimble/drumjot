@@ -103,15 +103,6 @@ class SeparationRunner:
             )
         return out
 
-    def _run_model(self, x):
-        """Run the model body on a chunk. Routes through onnxruntime when an ONNX
-        session is attached (loader.attach_onnx_session), else torch. Both return
-        the same (b, n, s, t) recon tensor, so call sites are agnostic."""
-        session = self.loaded.onnx_session
-        if session is not None:
-            return self.model.forward_onnx(x, session)
-        return self.model(x)
-
     # ---- BS-Roformer demix (mdxc_separator.py:272-343) -----------------
 
     def _demix_roformer(
@@ -163,7 +154,7 @@ class SeparationRunner:
                     part = mix_t[:, -chunk_size:]
                     length = chunk_size
                 part = part.to(self.device)
-                x = self._run_model(part.unsqueeze(0))[0]
+                x = self.model(part.unsqueeze(0))[0]
                 x = x.cpu()
                 if i + chunk_size > mix_t.shape[1]:
                     start_idx = result.shape[-1] - chunk_size
@@ -239,7 +230,7 @@ class SeparationRunner:
         with torch.no_grad():
             count = 0
             for done, batch in enumerate(batches):
-                single_batch_result = self._run_model(batch.to(self.device))
+                single_batch_result = self.model(batch.to(self.device))
                 for individual_output in single_batch_result:
                     individual_output_cpu = individual_output.cpu()
                     accumulated[..., count * hop_size : count * hop_size + chunk_size] += (

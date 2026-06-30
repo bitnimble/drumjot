@@ -480,8 +480,9 @@ class BSRoformer(Module):
     def _apply_mask(self, stft_repr: Tensor, mask: Tensor) -> Tensor:
         """Complex-multiply the real-view `stft_repr` (b (f s) t c) by the
         real-view `mask` (b n f t c) -> complex masked spectrogram (b n (f s) t).
-        Shared by forward_spec (torch) and forward_onnx (ONNX mask) so both apply
-        the mask identically; the view_as_complex op stays off the ONNX graph."""
+        Used by forward_spec (torch path); the numpy ONNX path reimplements the
+        same multiply (np_inference.bs_apply_mask) so the view_as_complex op
+        stays off the ONNX graph."""
         stft_repr = rearrange(stft_repr, "b f t c -> b 1 f t c")
         stft_repr = torch.view_as_complex(stft_repr.contiguous())
         mask = torch.view_as_complex(mask.contiguous())
@@ -522,14 +523,4 @@ class BSRoformer(Module):
         t time, s audio channel, n stems, c complex(2), d feature."""
         stft_repr, stft_window = self._stft_prep(raw_audio)
         masked = self.forward_spec(stft_repr)
-        return self._istft_post(masked, stft_window)
-
-    def forward_onnx(self, raw_audio, session):
-        """ONNX-backed forward: STFT prep (torch) -> mask (onnxruntime, the
-        forward_mask body) -> complex mask multiply + iSTFT (torch). `session`
-        wraps `forward_mask` (see separation.export)."""
-        stft_repr, stft_window = self._stft_prep(raw_audio)
-        name = session.get_inputs()[0].name
-        mask = session.run(None, {name: stft_repr.detach().cpu().numpy()})[0]
-        masked = self._apply_mask(stft_repr, torch.from_numpy(mask).to(stft_repr.device))
         return self._istft_post(masked, stft_window)
