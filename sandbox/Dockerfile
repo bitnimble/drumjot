@@ -146,9 +146,11 @@ RUN uv pip install --index-url https://download.pytorch.org/whl/cu128 \
 # copied - this stays an empty sandbox; bring your own scripts.
 WORKDIR /opt/deps
 COPY transcriber/pyproject.toml ./
-# `.[dev]` adds ruff + pytest so the agent can lint/test in-sandbox (e.g.
-# the repo-root `training/` package, which reuses this same dep stack).
-RUN uv pip install --extra-index-url https://download.pytorch.org/whl/cu128 -e '.[dev]'
+# The heavy deps now live in PEP 735 dependency-groups (lean base); install
+# every group for full parity (dev adds ruff + pytest so the agent can
+# lint/test in-sandbox, e.g. the repo-root `training/` package).
+RUN uv pip install --extra-index-url https://download.pytorch.org/whl/cu128 \
+        --group dev --group transcription --group lyrics --group lyrics-ja -e .
 
 # Models / weights caches. Pointed at /models (and HF/torch subdirs) so
 # audio-separator, HF transformers, and torch.hub reuse the same cache

@@ -1,0 +1,27 @@
+# Build context excludes for docker/Dockerfile. None of these are COPYd by the
+# Dockerfile, JS deps (`bun install`) and Python deps (`uv sync`) are installed
+# inside the image, and the frontend is built in-image; so shipping them in the
+# context just bloats + slows the build (the venv alone is multi-GB of torch).
+
+# Dependencies + build outputs (regenerated in-image)
+node_modules
+**/node_modules
+frontend/dist
+dist
+src-tauri/target
+transcriber/.venv
+**/.venv
+
+# Python caches
+**/__pycache__
+**/*.pyc
+**/*.pyo
+
+# VCS, scratch, local env, test artifacts
+.git
+tmp
+*.log
+.env
+.env.*
+test-results
+playwright-report

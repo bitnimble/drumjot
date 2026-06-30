@@ -7,150 +7,99 @@ name = "drumjot-transcriber"
 version = "0.1.0"
 description = "Off-the-shelf + LLM drum transcription service for Drumjot."
 requires-python = ">=3.11"
+# Lean base: the API shell + the stdio sidecar (control protocol) + the
+# debug-bundle replay path. Everything heavy (torch / separation / lyrics) lives
+# in the capability dependency-groups below, so the desktop installer can pull
+# one capability at a time. `uv sync` installs the default-groups (full parity
+# for dev / Docker); the desktop installer uses
+# `uv sync --no-default-groups --group <capability>` (base deps + that group).
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "python-multipart>=0.0.9",
     "pydantic>=2.7",
     "pydantic-settings>=2.4",
-    # Audio separation + analysis.
-    # audio-separator >=0.31 requires numpy 2. The MDX23C drum-piece
-    # model used by `pipeline/separate.py` is only registered in 0.31+,
-    # so we can't downgrade to dodge the numpy bump — we lift `numpy<2`
-    # and rely on madmom@main building cleanly on numpy 2. madmom's
-    # declared dep (`numpy>=1.13.4`) permits this; its Cython extensions
-    # are the real risk. If the madmom install step fails on a fresh
-    # build, pin a specific madmom commit known to work on numpy 2.
-    "audio-separator[gpu]>=0.44",
-    # Pin onnxruntime-gpu to its CUDA-12 line. audio-separator[gpu] pulls
-    # onnxruntime-gpu, whose default PyPI wheel moved to a CUDA-13 build at 1.26
-    # (links libcudart.so.13). The image is CUDA 12.4 + torch cu128, so the
-    # CUDA-12 build (<=1.25.x, links libcudart.so.12) is the one that matches --
-    # and it still runs on newer CUDA-13 drivers (CUDA is backward compatible).
-    # Without this the container dies at `import onnxruntime`: "libcudart.so.13:
-    # cannot open shared object file". Bump the cap only alongside a CUDA-13 base.
-    "onnxruntime-gpu>=1.19,<1.26",
-    # PyTorch + torchaudio. Capped at <2.12 because torch 2.12 dropped
-    # CUDA 12.x wheel builds entirely (the cu128 index only goes up to
-    # 2.11.0), without the cap, `uv lock --upgrade` would land on
-    # 2.12 (default PyPI, CUDA 13 build) while the Docker install
-    # (`--index-url …/whl/cu128`) would fail to find matching wheels.
-    # cu128 is the highest CUDA version most consumer drivers (570+)
-    # support; cu13 needs driver 580+.
+    "httpx>=0.27",
+]
+
+# Capability dependency-groups (PEP 735). Mirrors src/desktop/capability_manifest.ts.
+[dependency-groups]
+# Shared frozen-MERT + torch base for every ML capability.
+ml = [
     "torch>=2.8,<2.12",
     "torchaudio>=2.8,<2.12",
-    # ADTOF onset backend (the sole per-stem onset detector). This is
-    # the PyTorch port (xavriley/ADTOF-pytorch), NOT the original
-    # TensorFlow ADTOF — it's torch-only (deps:
-    # torch/librosa/pretty_midi) and ships its pretrained Frame_RNN
-    # weights inside the wheel, so it can live in the core deps and be
-    # baked into the default image with no extra TF/Keras stack and no
-    # separate Zenodo weights download. Pinned to a commit SHA for a
-    # reproducible graph + weights map. Bump deliberately.
-    "adtof_pytorch @ git+https://github.com/xavriley/ADTOF-pytorch.git@85c192e78f716ea0b111cc8a5ee4a8f6a3a4f8a9",
+    # MERT-v1-330M (the default learned-onset encoder) + the forced aligner both
+    # ride transformers.
+    "transformers>=4.40",
     "librosa>=0.10.2",
     "soundfile>=0.12",
     "scipy>=1.11",
     "numpy>=1.26",
-    "drumjot-dsp",  # shared peak-picker etc. (../dsp; see [tool.uv.sources])
-    # Frozen MERT encoder for the learned-onset backend -- the DEFAULT onset
-    # detector now (training/ + pipeline/learned_onsets.py runs MERT-v1-330M
-    # per stem). transformers was already present transitively (via
-    # ctc-forced-aligner below), but the learned stage is first-class, so we
-    # declare it. No upper cap: the dev box + trainer run transformers 5.x
-    # fine (the `<5` once carried in training/pyproject was stale). MERT
-    # weights download from the HF hub on first use into HF_HOME
-    # (=/models/huggingface in Docker, a persisted volume).
-    "transformers>=4.40",
-    # Beat tracking + downbeat detection (the rhythmic structure backbone)
+]
+
+# Stem separation models: BS-Roformer (drum stem), MDX23C (drum pieces), and
+# the UVR vocals model used by the lyrics mix flow. Its own capability so a user
+# can stem-split audio without pulling the transcription / lyrics stacks.
+separation = [
+    { include-group = "ml" },
+    # audio-separator >=0.31 needs numpy 2; the MDX23C drum-piece model used by
+    # pipeline/separate.py is only registered in 0.31+. madmom@main builds on
+    # numpy 2 (its Cython extensions are the real risk).
+    "audio-separator[gpu]>=0.44",
+    # Pin onnxruntime-gpu to its CUDA-12 line: 1.26 moved to a CUDA-13 build
+    # (libcudart.so.13); the image is CUDA 12 + torch cu128, so the CUDA-12
+    # build (<=1.25.x) is the match. Bump only alongside a CUDA-13 base.
+    "onnxruntime-gpu>=1.19,<1.26",
+]
+
+# Local drum transcription: separation + beats + learned/ADTOF onsets + MIDI.
+transcription = [
+    { include-group = "separation" },
+    # PyTorch ADTOF port (torch-only; ships pretrained Frame_RNN weights).
+    "adtof_pytorch @ git+https://github.com/xavriley/ADTOF-pytorch.git@85c192e78f716ea0b111cc8a5ee4a8f6a3a4f8a9",
+    # Beat / downbeat tracking (the rhythmic backbone).
     "madmom @ git+https://github.com/CPJKU/madmom.git@main",
     "cython>=3.0",
-    # Transcription evaluation + MIDI
     "mir_eval>=0.7",
     "mido>=1.3",
-    # LLM
     "anthropic>=0.40",
-    # Lyrics alignment.
-    # whisperx was removed: forced alignment runs through
-    # `ctc-forced-aligner` below, and language is now resolved from the
-    # caller's lyric text (`_detect_language_from_text`) instead of a
-    # faster-whisper audio pass, so the whole CTranslate2 / pyannote
-    # stack whisperx dragged in is no longer needed.
-    # Long-form CTC forced aligner. MahmoudAshraf97's pure-PyTorch
-    # package (the original; not the deskpai PyPI port that currently
-    # owns the `ctc-forced-aligner` PyPI name). Pinned by commit SHA so
-    # the build is reproducible. Bump deliberately.
-    #
-    # Why this package over the PyPI `ctc-forced-aligner`: the deskpai
-    # port unconditionally declares `onnxruntime` (the CPU wheel) as a
-    # hard install_requires AND imports it at module load, which
-    # silently shadows the `onnxruntime-gpu` brought in by
-    # `audio-separator[gpu]` above (both wheels install into the same
-    # `onnxruntime/` directory and share `onnxruntime_pybind11_state.so`).
-    # The result was every ONNX model; vocal separator AND the CTC
-    # aligner; running on CPU at 100% utilisation with multi-GB RSS
-    # growth. There is no import-time switch to prefer one wheel over
-    # the other (microsoft/onnxruntime#7313, qdrant/fastembed#608) and
-    # the deskpai `[torch]` extra doesn't help: it adds torch on top
-    # but still drags in `onnxruntime` and still exposes the function-
-    # level API only for the ONNX path. MahmoudAshraf's package runs
-    # natively through PyTorch + HF transformers, with the same
-    # function-level API (`load_alignment_model`, `generate_emissions`,
-    # `get_alignments`, `get_spans`, `postprocess_results`,
-    # `preprocess_text`), so the only call-site change is using a torch
-    # model object in place of an ONNX `InferenceSession`. Device
-    # control flows through `torch.cuda.is_available()`; the same
-    # path the separator/whisperx already follow.
-    #
-    # Other things worth knowing (carried over from the previous note):
-    #   - MMS-300m forced aligner under the hood; internal chunking +
-    #     posterior stitching so a full song aligns in one call with no
-    #     per-line `[start, end]` windows.
-    #   - For `jpn` / `chi` `preprocess_text` switches to char-level
-    #     tokenization; word-count partition still works because we
-    #     preprocess each line independently and count tokens before
-    #     concatenating (see `realign_text`).
+    "drumjot-dsp",  # shared peak-picker etc. (../dsp; see [tool.uv.sources])
+]
+
+# Lyrics alignment: MahmoudAshraf97's pure-PyTorch long-form CTC forced aligner
+# (MMS-300m under the hood). Pinned by commit SHA. NOT the deskpai PyPI port,
+# which hard-pins the CPU onnxruntime wheel and shadows onnxruntime-gpu. Includes
+# separation: the mix flow runs the UVR vocals separator before aligning.
+lyrics = [
+    { include-group = "separation" },
     "ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git@264e7a1f81bff9ff5e787a5537020c2ad0b0df02",
-    # Japanese-aware romanization for lyrics alignment. uroman (invoked
-    # inside ctc-forced-aligner's `preprocess_text`) reads kanji as
-    # Chinese; cutlet (on the fugashi/MeCab binding + the bundled
-    # unidic-lite dictionary) produces contextual Japanese readings.
-    # We pre-romanize Japanese spans before they reach `preprocess_text`
-    # so the aligner sees romaji that matches the sung audio, while the
-    # original kana/kanji are kept for display. unidic-lite is the
-    # ~50 MB bundled dictionary (no build-time download); fugashi is a
-    # native extension (needs a C toolchain at build time).
+]
+
+# Japanese-aware romanization for lyrics: cutlet (fugashi/MeCab + unidic-lite)
+# produces contextual readings before they reach the aligner's preprocess_text.
+lyrics-ja = [
+    { include-group = "lyrics" },
     "cutlet>=0.4",
     "fugashi>=1.3",
     "unidic-lite>=1.0.8",
-    # Misc
-    "httpx>=0.27",
 ]
 
-[project.optional-dependencies]
-# matplotlib is dev-only (activation-curve / eval debug plots); kept out of the
-# runtime [project.dependencies] so the deploy image stays lean. The sandbox
-# installs `.[dev]`, so it gets it on rebuild.
+# Dev-only: linters, tests, eval/debug plots. Not shipped in the desktop install.
 dev = ["ruff>=0.6", "pytest>=8", "matplotlib>=3.8"]
 
-# PyTorch lives on a dedicated wheel index because the default PyPI
-# wheels now target CUDA 13 (driver 580+); cu128 = CUDA 12.8 = highest
-# CUDA most consumer drivers (570+) handle. The Docker build path uses
-# the same `--index-url https://download.pytorch.org/whl/cu128` install
-# (see docker/Dockerfile), so this keeps `uv sync` on the dev box
-# resolving the SAME wheel set Docker ships. `explicit = true` means
-# packages are only pulled from this index when listed in
-# `[tool.uv.sources]` below; everything else stays on default PyPI.
+# PyTorch lives on a dedicated wheel index because the default PyPI wheels now
+# target CUDA 13 (driver 580+); cu128 = CUDA 12.8 = highest CUDA most consumer
+# drivers (570+) handle. The Docker build uses the same index so `uv sync` on
+# the dev box resolves the SAME wheel set Docker ships. `explicit = true` means
+# packages come from this index only when listed in [tool.uv.sources].
 [tool.uv]
-# Drop torchvision: it's an UNUSED transitive dep (onnx2torch-py313 <-
-# audio-separator[gpu]). The training path never imports audio-separator, and on
-# cu128/WSL torchvision's compiled ops fail to load ("operator torchvision::nms
-# does not exist"), which then breaks `transformers` model loading (it imports
-# torchvision whenever it's present). The impossible marker removes it from the
-# resolved graph so `uv sync` never reinstalls it.
-# CAVEAT: this also drops it from the Docker transcriber image. audio-separator's
-# audio models (BS-Roformer / MDX23C) shouldn't need torchvision (onnx2torch only
-# uses it for vision ops), but verify a separation run after `uv lock` before relying on it.
+# `uv sync` installs all groups so dev / Docker keep full parity; the desktop
+# installer pulls capabilities via `uv sync --no-default-groups --group <cap>`
+# (base deps plus the selected group(s)).
+default-groups = ["dev", "transcription", "lyrics", "lyrics-ja"]
+# Drop torchvision: an UNUSED transitive (onnx2torch <- audio-separator[gpu]).
+# On cu128/WSL its compiled ops fail to load and break transformers model
+# loading. The impossible marker removes it from the resolved graph.
 override-dependencies = ["torchvision; sys_platform == 'never'"]
 
 [[tool.uv.index]]

@@ -1,0 +1,158 @@
+import { type AcceleratorKind } from './desktop_bridge';
+
+export type CapabilityId =
+  | 'separation'
+  | 'transcription'
+  | 'lyrics'
+  | 'lyrics.japanese'
+  | 'ai-assist';
+
+/** How a capability is satisfied: by downloading deps, by configuring
+ *  credentials (no download), or by a non-installable system prereq. */
+export type CapabilityKind = 'deps' | 'credentials' | 'system';
+
+export type WeightSpec = { repoId: string; revision: string; approxBytes: number };
+
+export type CapabilitySpec = {
+  id: CapabilityId;
+  name: string;
+  /** First-run UI copy: what this capability does. */
+  description: string;
+  kind: CapabilityKind;
+  /** uv dependency-group names this capability adds. */
+  groups: string[];
+  /** HF weights pulled lazily on first use (content-addressed). */
+  weights: WeightSpec[];
+  /** Prerequisite capabilities (the install DAG): drives the install closure +
+   *  the dedup/disable in the picker (selecting a capability auto-checks +
+   *  locks everything in its closure). Distinct from {@link uiParent}. */
+  requires: CapabilityId[];
+  /** UI-tree parent in the capability picker (a pure sub-feature nests under
+   *  its feature, e.g. Japanese under Lyrics). Shared bases like separation are
+   *  required-by many but stay top-level, so this is NOT derived from
+   *  `requires`. Undefined = top-level row. */
+  uiParent?: CapabilityId;
+  /** Whether installing pulls the shared torch / accelerator tier. */
+  accelerator: 'required' | 'none';
+  /** This capability's own incremental bytes (weights + its unique non-torch
+   *  deps), excluding the shared accelerator tier counted separately. */
+  ownApproxBytes: number;
+};
+
+const GB = 1_000_000_000;
+const MB = 1_000_000;
+
+/**
+ * Approximate *download* (compressed) size of the shared torch / accelerator
+ * tier per hardware variant. Counted once across all accelerator-needing
+ * capabilities. Estimates for pre-detection UI copy; the real shown number is
+ * the resolver's diff vs the current venv.
+ */
+export const ACCELERATOR_TIER_BYTES: Record<AcceleratorKind, number> = {
+  cuda: 4.5 * GB,
+  rocm: 4 * GB,
+  directml: 350 * MB,
+  mps: 250 * MB,
+  cpu: 600 * MB,
+};
+
+export const CAPABILITIES: readonly CapabilitySpec[] = [
+  {
+    id: 'separation',
+    name: 'Stem separation',
+    description:
+      'Split a song into stems on this machine (drums, drum pieces, vocals, backing). The shared runtime for transcription and lyrics.',
+    kind: 'deps',
+    groups: ['separation'],
+    weights: [
+      { repoId: 'jarredou/BS-ROFO-SW-Fixed', revision: 'main', approxBytes: 1.2 * GB },
+      { repoId: 'jarredou/models · drumsep_5stems_mdx23c', revision: 'DrumSep', approxBytes: 0.9 * GB },
+      { repoId: 'TRvlvr/model_repo · UVR-MDX-NET-Voc_FT', revision: 'all_public_uvr_models', approxBytes: 0.45 * GB },
+    ],
+    requires: [],
+    accelerator: 'required',
+    ownApproxBytes: 2.6 * GB,
+  },
+  {
+    id: 'transcription',
+    name: 'Local transcription',
+    description:
+      'Transcribe drums from audio on this machine: beat tracking and the learned onset model (on top of stem separation).',
+    kind: 'deps',
+    groups: ['transcription'],
+    weights: [
+      { repoId: 'm-a-p/MERT-v1-330M', revision: 'main', approxBytes: 1.3 * GB },
+    ],
+    requires: ['separation'],
+    accelerator: 'none',
+    ownApproxBytes: 1.9 * GB,
+  },
+  {
+    id: 'lyrics',
+    name: 'Lyrics alignment',
+    description: 'Align lyrics to the audio timeline using a forced aligner (on top of stem separation).',
+    kind: 'deps',
+    groups: ['lyrics'],
+    weights: [
+      { repoId: 'MahmoudAshraf/mms-300m-1130-forced-aligner', revision: 'main', approxBytes: 1.2 * GB },
+    ],
+    requires: ['separation'],
+    accelerator: 'none',
+    ownApproxBytes: 1.2 * GB,
+  },
+  {
+    id: 'lyrics.japanese',
+    name: 'Japanese lyrics',
+    description: 'Contextual Japanese romanization for lyric alignment (adds a bundled dictionary).',
+    kind: 'deps',
+    groups: ['lyrics-ja'],
+    weights: [],
+    requires: ['lyrics'],
+    uiParent: 'lyrics',
+    accelerator: 'none',
+    ownApproxBytes: 250 * MB,
+  },
+  {
+    id: 'ai-assist',
+    name: 'AI assist',
+    description: 'LLM cleanup of transcriptions. Needs an Anthropic API key and a network connection.',
+    kind: 'credentials',
+    groups: [],
+    weights: [],
+    requires: [],
+    accelerator: 'none',
+    ownApproxBytes: 0,
+  },
+];
+
+const BY_ID: ReadonlyMap<CapabilityId, CapabilitySpec> = new Map(
+  CAPABILITIES.map((c) => [c.id, c]),
+);
+
+export function capabilityById(id: CapabilityId): CapabilitySpec {
+  const spec = BY_ID.get(id);
+  if (spec == null) {
+    throw new Error(`unknown capability: ${id}`);
+  }
+  return spec;
+}
+
+/** Transitive prereq closure of `ids` (self + everything `requires` reaches).
+ *  The set that installing `ids` would actually pull in. */
+export function capabilityClosure(ids: readonly CapabilityId[]): Set<CapabilityId> {
+  const out = new Set<CapabilityId>();
+  const visit = (id: CapabilityId): void => {
+    if (out.has(id)) return;
+    out.add(id);
+    for (const req of capabilityById(id).requires) visit(req);
+  };
+  for (const id of ids) visit(id);
+  return out;
+}
+
+/** Human-readable size for install UI (GB above 1 GB, else MB; "free" at 0). */
+export function formatBytes(bytes: number): string {
+  if (bytes <= 0) return 'free';
+  const gb = bytes / 1_000_000_000;
+  return gb >= 1 ? `${gb.toFixed(1)} GB` : `${Math.round(bytes / 1_000_000)} MB`;
+}

@@ -137,6 +137,40 @@ def _resolve_device() -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+# Beat Transformer is MIT (zhaojw1998/Beat-Transformer); the 8 CV-fold checkpoints
+# are ~37 MB each and any one is a valid beat tracker. Fetched on first use rather
+# than bundled (no gitignored build asset; smaller installer). Fold + source are
+# overridable via BEAT_TRANSFORMER_CHECKPOINT_URL.
+_DEFAULT_CHECKPOINT_URL = (
+    "https://github.com/zhaojw1998/Beat-Transformer/raw/main/checkpoint/fold_4_trf_param.pt"
+)
+
+
+def _download_checkpoint(dest: Path) -> None:
+    """Fetch the Beat Transformer checkpoint to `dest`, atomically. Docker ships it
+    locally (no download); the desktop app points BEAT_TRANSFORMER_CHECKPOINT at a
+    writable cache dir, where this lands it on first transcribe."""
+    import os
+
+    import httpx
+
+    url = os.environ.get("BEAT_TRANSFORMER_CHECKPOINT_URL", _DEFAULT_CHECKPOINT_URL)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(f"{dest.suffix}.{os.getpid()}.part")
+    log.info("Beat Transformer checkpoint absent; downloading from %s -> %s", url, dest)
+    try:
+        with httpx.stream(
+            "GET", url, follow_redirects=True, timeout=httpx.Timeout(30.0, read=None)
+        ) as r:
+            r.raise_for_status()
+            with open(tmp, "wb") as f:
+                for chunk in r.iter_bytes():
+                    f.write(chunk)
+        os.replace(tmp, dest)  # atomic; a racing sibling process just re-wins harmlessly
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 @lru_cache(maxsize=1)
 def _load_model() -> tuple[Demixed_DilatedTransformerModel, torch.device]:
     """Load Beat Transformer once per process and cache.
@@ -148,13 +182,7 @@ def _load_model() -> tuple[Demixed_DilatedTransformerModel, torch.device]:
     """
     ckpt_path = Path(settings.beat_transformer_checkpoint)
     if not ckpt_path.exists():
-        raise FileNotFoundError(
-            f"Beat Transformer checkpoint missing at {ckpt_path}. "
-            "Download a `fold_N_trf_param.pt` from "
-            "https://github.com/zhaojw1998/Beat-Transformer/tree/main/checkpoint "
-            "and place it at transcriber/checkpoints/beat_transformer.pt "
-            "before building the Docker image."
-        )
+        _download_checkpoint(ckpt_path)
 
     device = _resolve_device()
     log.info(

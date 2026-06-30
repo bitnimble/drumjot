@@ -1,0 +1,62 @@
+.intro {
+    composes: bodySm from '../typography.module.css';
+    color: var(--color-text-muted-alt);
+    margin: 0 0 8px;
+}
+
+.tree {
+    display: flex;
+    flex-direction: column;
+}
+
+.node {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--color-border-soft);
+}
+
+.nodeLabel {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    min-width: 0;
+    cursor: pointer;
+}
+
+.nodeLabel input:disabled {
+    cursor: default;
+}
+
+.nodeInfo {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.name {
+    composes: bodyEmphasis from '../typography.module.css';
+    color: var(--color-text-strong);
+}
+
+.desc {
+    composes: bodySm from '../typography.module.css';
+    color: var(--color-text-muted-alt);
+}
+
+.nodeStatus {
+    composes: bodySm from '../typography.module.css';
+    color: var(--color-text-muted-alt);
+    flex: none;
+    white-space: nowrap;
+}
+
+/* Cumulative-size label in the dialog footer (left of the Install button). */
+.total {
+    composes: bodySm from '../typography.module.css';
+    color: var(--color-text-muted-alt);
+    margin-inline-end: auto;
+}

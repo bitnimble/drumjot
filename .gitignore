@@ -134,7 +134,7 @@ venv/
 # kuromoji dictionary, copied from node_modules into public/ by
 # scripts/copy-kuromoji-dict.mjs (postinstall). Lazy-fetched at runtime
 # for Japanese lyrics; a few MB of generated assets, not source.
-public/kuromoji-dict/
+frontend/public/kuromoji-dict/
 
 # Storybook static build output (`bun run build-storybook`).
 storybook-static/
@@ -166,7 +166,7 @@ blob-report/
 # Ad-hoc screenshots written by Playwright specs into `tests/` (e.g.
 # `popover.screenshot({ path: 'tests/foo.png' })`). Kept local for
 # eyeballing; not a snapshot baseline.
-tests/*.png
+frontend/tests/*.png
 
 # Scratch / experiment artifacts (training sweeps, ad-hoc scripts, JSONs).
 # Kept local, never committed. `/tmp/` is the holding folder; `/tmp_*` is a

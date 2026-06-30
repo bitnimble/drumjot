@@ -21,9 +21,9 @@
     "useUnknownInCatchVariables": false,
     "baseUrl": ".",
     "paths": {
-      "src/*": ["src/*"]
+      "src/*": ["frontend/src/*"]
     },
     "types": ["vite/client", "node", "bun"]
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["frontend/src", "vite.config.ts"]
 }

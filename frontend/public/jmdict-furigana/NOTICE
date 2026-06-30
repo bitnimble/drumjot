@@ -1,0 +1,11 @@
+This directory contains a trimmed, reformatted derivative of
+JmdictFurigana (https://github.com/Doublevil/JmdictFurigana),
+itself derived from JMdict/EDICT (https://www.edrdg.org/).
+
+Licensed under Creative Commons Attribution-ShareAlike (CC BY-SA),
+the same licence as JMdict. © James William Breen and the
+Electronic Dictionary Research and Development Group.
+
+Only all-kanji headwords with a per-kanji ruby split are kept, re-
+expressed as `surface|<utf16len>,<reading>;...`. Regenerate with
+scripts/build-furigana-dict.ts.

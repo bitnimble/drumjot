@@ -30,18 +30,17 @@ WORKDIR /build
 
 # Dep manifest first so the install layer caches across source edits.
 # scripts/ comes along because package.json's postinstall hook runs
-# scripts/copy-kuromoji-dict.mjs; it has to exist before `bun install`.
+# scripts/copy-kuromoji-dict.ts; it has to exist before `bun install`.
 COPY package.json bun.lock bunfig.toml ./
 COPY scripts/ ./scripts/
 RUN bun install --frozen-lockfile
 
 # Build inputs. `bun run build` runs stylelint + tsc --noEmit + vite
-# build, so we need the stylelint config alongside the source. Public
-# assets (favicon, etc.) are copied so vite's `public/` pass-through
-# works at build time.
-COPY tsconfig.json vite.config.ts index.html .stylelintrc.json ./
-COPY src/ ./src/
-COPY public/ ./public/
+# build, so we need the stylelint config alongside the source. The web app
+# lives under `frontend/` (Vite's `root`); the build configs stay at the repo
+# root. `frontend/` carries src + public + index.html + postcss.config.js.
+COPY tsconfig.json vite.config.ts .stylelintrc.json ./
+COPY frontend/ ./frontend/
 RUN bun run build
 
 # -----------------------------------------------------------------------------
@@ -140,8 +139,13 @@ RUN python3.11 -m pip install --no-cache-dir --no-deps -e ./dsp
 # by this same step, it's torch-only and bundles its own weights, so
 # the default image carries it with no extra build arg.
 COPY transcriber/pyproject.toml ./
+# The heavy deps now live in PEP 735 dependency-groups (lean base = sidecar +
+# API only), so the service install pulls every capability group for full
+# parity. `pip install --group` needs pip >= 25.1 (the upgrade above provides
+# it). torch/dsp pre-installed in the layers above satisfy the group pins.
 RUN python3.11 -m pip install --no-cache-dir \
         --extra-index-url https://download.pytorch.org/whl/cu128 \
+        --group transcription --group lyrics --group lyrics-ja --group dev \
         -e .
 
 # Layer 3.5: the in-repo training package (../training -> drumjot_training).
@@ -183,7 +187,7 @@ RUN chmod +x /app/entrypoint.sh
 
 # Built frontend bundle from stage 1. Served as static files by Caddy
 # on :5173 with SPA fallback to index.html (see Caddyfile).
-COPY --from=frontend-builder /build/dist /app/web
+COPY --from=frontend-builder /build/frontend/dist /app/web
 
 # Beat Transformer checkpoint (optional). If the directory is empty the image
 # still builds; BT just fails-loud at first use when BEAT_TRACKER=beat_transformer

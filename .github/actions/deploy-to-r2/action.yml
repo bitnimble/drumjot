@@ -46,7 +46,8 @@ runs:
     - name: Build
       shell: bash
       # `bun run build` = lint:design + tsc --noEmit + `vite build`, which
-      # writes the static site to dist/. This is a static bundle: it talks to
+      # writes the static site to frontend/dist/ (Vite root is frontend/). This
+      # is a static bundle: it talks to
       # the transcriber backend only at runtime via /api, and degrades
       # gracefully (a "Server is down" toast) when that backend is absent, so
       # the deployed preview is fine for loading/editing local files.
@@ -69,7 +70,7 @@ runs:
         : "${R2_BUCKET:?bucket input is required}"
         : "${R2_ACCOUNT_ID:?account-id input is required}"
         : "${R2_PREFIX:?prefix input is required (must be non-empty)}"
-        aws s3 sync dist/ "s3://${R2_BUCKET}/${R2_PREFIX}" \
+        aws s3 sync frontend/dist/ "s3://${R2_BUCKET}/${R2_PREFIX}" \
           --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
           --delete \
           --no-progress

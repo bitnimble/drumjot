@@ -15,6 +15,20 @@ request, and pull in the linked docs when a task touches that area.
 > here; this file is the Drumjot-specific delta. (Note: agent tools that
 > don't load `~/.claude/CLAUDE.md` won't see those rules.)
 
+## Repo layout
+
+Three components at the repo root: **`frontend/`** (the web UI, all web
+*code*: `frontend/src/`, `frontend/public/`, `frontend/tests/`,
+`frontend/index.html`), **`src-tauri/`** (the Rust desktop shell), and
+**`transcriber/`** + `training/` + `dsp/` (the Python backend/ML). The web
+**build configs stay at the repo root** (`vite.config.ts`, `tsconfig.json`,
+`bunfig.toml`, `playwright.config.ts`, `.stylelintrc.json`, `.storybook/`), Vite's `root` points at `frontend/`. So **all `bun run …` commands run from
+the repo root and are unchanged**, and the **`src/…` import alias still maps to
+`frontend/src/…`** (so a path written `src/foo` below is imported as `src/foo`
+and lives on disk at `frontend/src/foo`). The desktop app (Tauri + sidecar
+broker) is in `src-tauri/` + `frontend/src/desktop/` + `transcriber/app/comms/`;
+see [docs/superpowers/specs/2026-06-29-desktop-app-design.md](docs/superpowers/specs/2026-06-29-desktop-app-design.md).
+
 ## Critical rules (apply to every request)
 
 - **Use `bun`, never npm/yarn. Use `bunx`, never npx.**

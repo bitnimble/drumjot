@@ -1,0 +1,106 @@
+name: Build desktop app
+
+# Builds the Tauri desktop app natively on each OS (cross-compiling a Tauri app
+# from one OS to another isn't reliably supported, so each platform's artifact
+# is produced on its own runner). Manual by default; pushing an `app-v*` tag
+# additionally drafts a GitHub Release with the installers.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['app-v*']
+
+jobs:
+  build:
+    permissions:
+      contents: write # tauri-action needs this to create the release on a tag
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos-latest, ubuntu-22.04, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # webkit2gtk-4.1 (Tauri 2) + the bundling deps. ubuntu-22.04 keeps the
+      # AppImage's glibc floor low enough for older distros.
+      - name: Install Linux system deps
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev pkg-config
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # uv is bundled into the app at build time (desktop:resources copies it
+      # from PATH), so it must be present on the runner.
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install JS deps
+        run: bun install --frozen-lockfile
+
+      # Runs the configured beforeBuildCommand (`bun run build && bun run
+      # desktop:resources`, builds the frontend + stages the Python backend +
+      # bundled uv into resources/), compiles the Rust shell, and bundles the
+      # native installer. desktop:resources hard-fails if uv is missing (Setup uv
+      # above provides it), so a broken bundle can't ship silently. On an `app-v*`
+      # tag it also creates a draft release with the artifacts attached.
+      - name: Build the app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tauriScript: bun run tauri
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: ${{ github.ref_type == 'tag' && format('Drumjot {0}', github.ref_name) || '' }}
+          releaseDraft: true
+
+      # Windows has no native portable format (the macOS .app + the Linux
+      # AppImage already run in place), so assemble one: the exe + bundled
+      # resources, zipped, runnable without installing.
+      - name: Assemble portable Windows build
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: pwsh scripts/make-portable-windows.ps1
+
+      # Manual (non-tag) runs still produce downloadable installers from the run.
+      - name: Upload installers as a run artifact
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: drumjot-${{ matrix.platform }}
+          path: |
+            src-tauri/target/release/bundle/**
+            src-tauri/target/*/release/bundle/**
+          if-no-files-found: warn
+
+      - name: Upload portable Windows build as a run artifact
+        if: matrix.platform == 'windows-latest' && github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: drumjot-portable-windows
+          path: src-tauri/target/release/Drumjot-portable-windows.zip
+          if-no-files-found: error
+
+      # On a tag, attach it to the same draft release tauri-action created (where
+      # the installers go), alongside them. `gh release upload` can't see draft
+      # releases when authed with GITHUB_TOKEN (cli/cli#5252), so use the action
+      # that appends assets to the existing draft by tag.
+      - name: Attach portable Windows build to the release
+        if: matrix.platform == 'windows-latest' && github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: true
+          files: src-tauri/target/release/Drumjot-portable-windows.zip
