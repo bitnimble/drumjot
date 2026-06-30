@@ -214,9 +214,16 @@ is preserved so re-resuming is idempotent.
   pinned/smoothed tempo) and **before** `has_tempo_changes` is consumed
   (it overwrites the naive flag). Don't re-run `_rebuild_bar_fields`
   after it, that reintroduces raw wobble.
-- **Anacrusis**: `_summarize` excludes bar 0 when ≥2 bars present, so a
-  3-beat pickup doesn't mislabel the whole song as 3/4. Bar 0's own
-  `time_signature` is left as-is.
+- **Robust global summary**: `_summarize` derives the song-level
+  `initial_time_signature` from the **modal** per-bar meter and
+  `initial_tempo` from the **median** of the first bars (skipping bar 0 as a
+  likely anacrusis), NOT from any single bar. Beat This!'s per-bar downbeat
+  placement is jittery; a clean 4/4 song can show scattered 2/4/8-beat bars; so reading one bar (even bar 1) routinely mislabelled the whole song's
+  meter/tempo (e.g. 321 BPM / 5-4 off a glitchy bar). `has_time_sig_changes`
+  flags only a meter that holds for **≥2 consecutive bars** (a lone off-meter
+  bar is detection noise). Per-bar `time_signature`/`tempo_bpm` are left as
+  detected (they drive onset→bar mapping locally). `_finalize_bar_tempos` and
+  `_rebuild_bar_fields` set `initial_tempo` the same robust way.
 
 **Onset detector windows are tuned tight** (`pre_max`=`post_max`=3,
 `wait`=3, `pre_avg`=`post_avg`=50) on the assumption of **per-instrument

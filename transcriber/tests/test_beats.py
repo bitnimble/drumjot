@@ -846,10 +846,12 @@ def test_smooth_preserves_sustained_odd_meter():
 
 
 def test_smooth_preserves_genuine_six_eight():
-    # A lone 6-beat bar is NOT a multiple of the 4/4 base -> kept as 6/8 (fast).
+    # A lone 6-beat bar is NOT a multiple of the 4/4 base -> the bar is kept as
+    # 6/8 (fast), but a single off-meter bar is not a *sustained* change, so the
+    # song-level flag stays False (robust-summary semantics).
     s = _structure_from_bars([4, 4, 6, 4, 4])
     assert (6, 8) in _sigs(s)
-    assert s.has_time_sig_changes is True
+    assert s.has_time_sig_changes is False
 
 
 def test_smooth_noop_without_majority_meter():
@@ -900,3 +902,34 @@ def test_smooth_decimates_doubled_tempo_bar_in_four_four():
     )
     assert _sigs(s) == [(4, 4)] * 5
     assert s.has_time_sig_changes is False
+
+
+# ---------- robust global summary (modal meter, median tempo) ----------
+
+def _ts_bars(counts: list[int], beat_gap: float = 0.5) -> list[BarInfo]:
+    bars: list[BarInfo] = []
+    t = 0.0
+    for i, c in enumerate(counts):
+        bars.append(_make_bar(i, t, beat_gap, count=c))
+        t += c * beat_gap
+    return bars
+
+
+def test_summary_meter_is_modal_not_a_single_bar():
+    # bar 1 (past the anacrusis) is a lone 2-beat glitch; song is 4/4.
+    s = _summarize([], _ts_bars([4, 2, 4, 4, 4, 4]))
+    assert s.initial_time_signature == (4, 4)
+    assert s.has_time_sig_changes is False  # one off-meter bar is noise
+
+
+def test_summary_flags_only_sustained_meter_change():
+    s = _summarize([], _ts_bars([4, 4, 4, 3, 3, 3, 4, 4]))  # real 3/4 run
+    assert s.initial_time_signature == (4, 4)
+    assert s.has_time_sig_changes is True
+
+
+def test_summary_initial_tempo_robust_to_glitch_bar():
+    bars = _ts_bars([4, 4, 4, 4, 4])  # all 120 BPM (beat_gap 0.5)
+    bars[1].tempo_bpm = 600.0          # a fragmented bar's wild BPM
+    s = _summarize([], bars)
+    assert 100.0 < s.initial_tempo < 140.0  # median ignores the outlier

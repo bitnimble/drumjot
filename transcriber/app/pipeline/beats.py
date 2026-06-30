@@ -364,13 +364,21 @@ def _smooth_downbeats(
     db = [int(i) for i in np.flatnonzero(is_downbeat)]
     if len(db) < 3:
         return beats, is_downbeat
-    counts = [db[k + 1] - db[k] for k in range(len(db) - 1)]  # interior bar lengths
-    p, freq = Counter(counts).most_common(1)[0]
-    if p < 2 or freq * 2 <= len(counts):  # no clear majority meter -> don't touch
+    # Prevailing meter P from the MEDIAN bar duration in beat-periods, NOT the
+    # mode of per-bar counts: Beat This!'s downbeat jitter can make a half-bar
+    # (e.g. 2 beats in a 4/4 song) the count plurality even when the typical
+    # bar spans 4 beats. The median duration is robust to that.
+    beat_period = float(np.median(np.diff(beats)))
+    bar_durs = [float(beats[db[k + 1]] - beats[db[k]]) for k in range(len(db) - 1)]
+    if beat_period <= 0 or not bar_durs:
         return beats, is_downbeat
-    p_durs = [float(beats[db[k + 1]] - beats[db[k]])
-              for k in range(len(db) - 1) if counts[k] == p]
-    bar_dur = float(np.median(p_durs)) if p_durs else 0.0
+    med_bar = float(np.median(bar_durs))
+    p = int(round(med_bar / beat_period))
+    # Skip unless there's a clean dominant bar length (median ≈ an integer
+    # number of beats); a chaotically-varied grid is left as detected.
+    if p < 2 or abs(med_bar - p * beat_period) > 0.15 * p * beat_period:
+        return beats, is_downbeat
+    bar_dur = p * beat_period
 
     out_t: list[float] = list(beats[:db[0]])          # leading anacrusis beats
     out_db: list[bool] = [False] * db[0]
@@ -514,39 +522,70 @@ def _choose_time_signature(count: int, tempo_bpm: float) -> tuple[int, int]:
     return (count, 4)
 
 
+def _reference_bars(bars: list[BarInfo]) -> list[BarInfo]:
+    """Bars used for global summary: skip bar 0 (likely anacrusis/pickup)."""
+    return bars[1:] if len(bars) >= 2 else bars
+
+
+def _modal_time_signature(bars: list[BarInfo]) -> tuple[int, int]:
+    """The song's dominant meter (most common per-bar time signature).
+
+    Beat This!'s per-bar downbeat placement is jittery on some songs (a 4/4
+    track can show scattered 2/4/8-beat bars even when the median is a clean
+    4), so the song-level meter must be the modal bar, not any single bar; reading one bar (even bar 1, past the anacrusis) routinely mislabels the
+    whole song."""
+    return Counter(b.time_signature for b in bars).most_common(1)[0][0]
+
+
+def _robust_initial_tempo(bars: list[BarInfo]) -> float:
+    """Median tempo of the first few bars: start-representative but robust to
+    a glitchy bar whose mis-sized duration yields a wild per-bar BPM."""
+    head = bars[: min(8, len(bars))]
+    return float(np.median([b.tempo_bpm for b in head])) if head else 120.0
+
+
+def _has_sustained_meter_change(bars: list[BarInfo], modal: tuple[int, int],
+                                min_run: int = 2) -> bool:
+    """True iff some meter ≠ `modal` holds for ≥`min_run` consecutive bars.
+    A single off-meter bar is per-bar detection noise, not a real change."""
+    run = 0
+    for b in bars:
+        run = run + 1 if b.time_signature != modal else 0
+        if run >= min_run:
+            return True
+    return False
+
+
 def _summarize(beats: list[BeatTick], bars: list[BarInfo]) -> BeatStructure:
     """Fill end_time of each bar from the next bar's start, and compute
-    global summary fields (initial tempo, change flags).
+    global summary fields (initial tempo, meter, change flags).
 
-    Bar 0 is excluded from the global summary when ≥2 bars are present:
-    the tracker often starts counting partway through the first bar (anacrusis
-    / pickup), producing a leading bar with fewer beats than the rest.
-    Reading `initial_time_signature` off such a bar mislabels the whole
-    song (e.g. 3/4 for a 4/4 song with a 3-beat pickup) AND falsely flips
-    `has_time_sig_changes` to true because bar 0's `(3,4)` differs from
-    every subsequent `(4,4)`. The per-bar `time_signature` on `bars[0]`
-    is left alone — it accurately describes the 3 beats that bar holds —
-    so anacrusis-aware DSL emission can still distinguish it downstream.
+    The summary is **modal/median over bars**, not read off a single bar:
+    Beat This! places downbeats with enough per-bar jitter that any one bar
+    (bar 0 anacrusis OR bar 1) routinely mislabels the song's meter/tempo.
+    The per-bar `time_signature`/`tempo_bpm` are left as detected (they drive
+    onset→bar mapping locally); only the song-level fields are robustified.
     """
     for i in range(len(bars) - 1):
         bars[i].end_time = bars[i + 1].start_time
-    reference_bars = bars[1:] if len(bars) >= 2 else bars
+    reference_bars = _reference_bars(bars)
     if reference_bars:
-        initial_tempo = reference_bars[0].tempo_bpm
-        initial_ts = reference_bars[0].time_signature
+        initial_ts = _modal_time_signature(reference_bars)
+        initial_tempo = _robust_initial_tempo(reference_bars)
+        has_time_sig_changes = _has_sustained_meter_change(reference_bars, initial_ts)
     else:
         initial_tempo = 120.0
         initial_ts = (4, 4)
+        has_time_sig_changes = False
 
     tempo_set = {round(b.tempo_bpm, 1) for b in reference_bars}
-    sig_set = {b.time_signature for b in reference_bars}
     return BeatStructure(
         beats=beats,
         bars=bars,
         initial_tempo=float(initial_tempo),
         initial_time_signature=initial_ts,
         has_tempo_changes=len(tempo_set) > 1,
-        has_time_sig_changes=len(sig_set) > 1,
+        has_time_sig_changes=has_time_sig_changes,
     )
 
 
@@ -707,7 +746,12 @@ def _finalize_bar_tempos(structure: BeatStructure) -> None:
         bar.drift_sec = float(d)
 
     structure.tempo_segments = segments
-    structure.initial_tempo = segments[0].start_bpm if segments else 120.0
+    # initial_tempo from the robust first-bars median, not segments[0], a
+    # glitchy early bar's wild BPM otherwise poisons the start tempo.
+    structure.initial_tempo = (
+        _robust_initial_tempo(_reference_bars(structure.bars))
+        if structure.bars else (segments[0].start_bpm if segments else 120.0)
+    )
     structure.has_tempo_changes = len(segments) > 1 or any(
         s.is_ramp() for s in segments
     )
@@ -1271,11 +1315,9 @@ def _rebuild_bar_fields(structure: BeatStructure) -> None:
             gaps = np.diff([b.time for b in bar.beats])
             bar.tempo_bpm = float(60.0 / np.mean(gaps))
 
-    reference_bars = (
-        structure.bars[1:] if len(structure.bars) >= 2 else structure.bars
-    )
+    reference_bars = _reference_bars(structure.bars)
     if reference_bars:
-        structure.initial_tempo = float(reference_bars[0].tempo_bpm)
+        structure.initial_tempo = _robust_initial_tempo(reference_bars)
         tempo_set = {round(b.tempo_bpm, 1) for b in reference_bars}
         structure.has_tempo_changes = len(tempo_set) > 1
 
