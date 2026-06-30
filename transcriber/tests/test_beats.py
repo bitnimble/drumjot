@@ -933,3 +933,24 @@ def test_summary_initial_tempo_robust_to_glitch_bar():
     bars[1].tempo_bpm = 600.0          # a fragmented bar's wild BPM
     s = _summarize([], bars)
     assert 100.0 < s.initial_tempo < 140.0  # median ignores the outlier
+
+
+def test_beats_downbeats_raw_handles_leading_pickup():
+    # Beats start before the first downbeat (db[0] > 0): a 2-beat pickup, then
+    # 4/4 bars. Must not crash; pickup beats land in bar 0.
+    beats = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5]
+    downbeats = [1.0, 3.0, 5.0]  # first two beats are an upbeat pickup
+    s = _raw_to_structure(_beats_downbeats_to_raw(beats, downbeats))
+    assert len(s.beats) == len(beats)            # no beats lost
+    assert s.bars[0].beats[0].time == 0.0        # pickup kept in bar 0
+    downbeat_times = [b.time for b in s.beats if b.beat_in_bar == 1]
+    assert 1.0 in downbeat_times and 3.0 in downbeat_times
+
+
+def test_beats_downbeats_raw_drops_far_downbeat():
+    # A downbeat 60 ms from the nearest beat (> tol 0.05) is ignored, not
+    # snapped onto an unrelated beat.
+    beats = [0.0, 0.5, 1.0, 1.5]
+    downbeats = [0.0, 1.06]
+    raw = _beats_downbeats_to_raw(beats, downbeats)
+    assert [int(r[1]) for r in raw] == [1, 2, 3, 4]  # one bar; far downbeat dropped
