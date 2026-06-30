@@ -88,7 +88,8 @@ const ACKNOWLEDGEMENTS: ReadonlyArray<{ name: string; detail: string }> = [
     name: 'audio-separator / UVR models, MMS aligner',
     detail: 'Stem separation + lyric alignment. Community / CC-BY-NC models (non-commercial).',
   },
-  { name: 'madmom, ctc-forced-aligner', detail: 'DSP + forced alignment. BSD.' },
+  { name: 'Beat This!', detail: 'Beat / downbeat tracking. MIT, © 2024 Foscarin et al.' },
+  { name: 'ctc-forced-aligner', detail: 'Lyric forced alignment. BSD.' },
   { name: 'signalsmith-stretch', detail: 'Audio time-stretch. MIT, © Signalsmith Audio Ltd.' },
   {
     name: 'kuromoji + IPADIC dictionary',

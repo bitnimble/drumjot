@@ -2,7 +2,7 @@
 
 The pipeline worker holds several model singletons across the process
 lifetime: the two drum separators (eagerly loaded at startup), the
-vocals separator (lazy, /lyrics/align only), Beat Transformer + ADTOF
+vocals separator (lazy, /lyrics/align only), Beat This! + ADTOF
 (lazy, /transcribe only), and the lyrics aligner's CTC checkpoints
 (lazy). On a 6 GB consumer GPU all of these resident simultaneously
 exceeds the budget once CTC forced alignment tries to allocate its
@@ -114,7 +114,7 @@ def unpark_module(module: Any, label: str) -> None:
 def park_for_lyrics(separator: Any, aligner: Any) -> None:
     """Free VRAM held by drum-pipeline models so /lyrics/align can
     safely load its CTC aligner. Drum separators (_stems_all,
-    _stems_per) and the lazy lru_caches for Beat Transformer and ADTOF
+    _stems_per) and the lazy caches for Beat This! and ADTOF
     get parked to CPU; the lyrics side (vocals separator + any
     previously-loaded CTC aligners) gets unparked so the request runs
     on a clean GPU.
@@ -124,10 +124,10 @@ def park_for_lyrics(separator: Any, aligner: Any) -> None:
     tensor whose source module is about to move host-side."""
     before = _mem_allocated_mb()
     separator.park_drum_models()
-    # Lazy caches; no-op if their lru_cache hasn't been hit yet
-    from app.pipeline import adtof_onsets, beat_transformer
+    # Lazy caches; no-op if they haven't been loaded yet
+    from app.pipeline import adtof_onsets, beats
 
-    beat_transformer.park_model()
+    beats.park_model()
     adtof_onsets.park_model()
     # Lyrics side: vocals separator and CTC aligner(s) need to be on
     # GPU for the upcoming separate() / generate_emissions() calls.
@@ -145,7 +145,7 @@ def park_for_lyrics(separator: Any, aligner: Any) -> None:
 def park_for_transcribe(separator: Any, aligner: Any) -> None:
     """Free VRAM held by lyrics-side models so /transcribe and
     /transcribe/resume can run on a freshly cleared GPU. Drum
-    separators come back to CUDA; BT and ADTOF lazy caches are
+    separators come back to CUDA; Beat This! and ADTOF lazy caches are
     unparked too (no-op if they've never loaded).
 
     Called at the top of /transcribe / /transcribe/resume under the
@@ -154,9 +154,9 @@ def park_for_transcribe(separator: Any, aligner: Any) -> None:
     separator.park_vocals()
     aligner.park()
     separator.unpark_drum_models()
-    from app.pipeline import adtof_onsets, beat_transformer
+    from app.pipeline import adtof_onsets, beats
 
-    beat_transformer.unpark_model()
+    beats.unpark_model()
     adtof_onsets.unpark_model()
     _empty_cache()
     after = _mem_allocated_mb()

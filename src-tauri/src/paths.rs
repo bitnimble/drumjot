@@ -43,8 +43,8 @@ fn set_var(key: &str, val: impl AsRef<std::ffi::OsStr>) {
 /// Pick the onset backend by what's bundled (packaged build only; dev keeps the
 /// Settings/.env defaults). Onsets default to ADTOF - its weights ship in the pip
 /// package, no external checkpoint - unless a learned-onset run dir was bundled
-/// (opt-in via DRUMJOT_LEARNED_ONSETS_DIR at build). (Beat Transformer is fetched
-/// at runtime, see redirect_env + pipeline/beat_transformer.py.)
+/// (opt-in via DRUMJOT_LEARNED_ONSETS_DIR at build). (Beat This! weights are
+/// fetched at runtime via torch.hub under TORCH_HOME, see redirect_env.)
 pub fn init_checkpoint_env(app: &AppHandle) {
     let resource = |rel: &str| {
         app.path()
@@ -74,9 +74,8 @@ pub fn redirect_env(root: &Path, full: bool) {
     set_dir("MODELS_DIR", root.join("models"));
     set_dir("CACHE_DIR", cache.join("transcriber"));
     set_dir("DRUMJOT_OUTPUTS_DIR", root.join("outputs"));
-    // Beat Transformer (MIT) downloads to this writable path on first transcribe
-    // (see pipeline/beat_transformer.py) rather than being bundled.
-    set_var("BEAT_TRANSFORMER_CHECKPOINT", root.join("models").join("beat_transformer.pt"));
+    // Beat This! (MIT) downloads its weights via torch.hub on first transcribe;
+    // they land under TORCH_HOME (set below), so no dedicated path is needed.
     // torch / HuggingFace model downloads (MERT, etc.) + uv's package cache and
     // its managed-Python install.
     set_dir("HF_HOME", cache.join("huggingface"));

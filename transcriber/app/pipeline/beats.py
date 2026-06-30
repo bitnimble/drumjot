@@ -2,8 +2,9 @@
 
 This module replaces the older `tempo.py` + `quantize.py` pair. Rather
 than assuming a constant tempo + fixed grid (1/16 by default), we use
-madmom's RNN+DBN downbeat tracker to extract per-beat anchors from the
-audio. Everything downstream then works in **beat-relative** time -
+Beat This! (ISMIR 2024; DBN-free, meter-agnostic) to extract per-beat
+anchors + downbeats from the audio. Everything downstream then works in
+**beat-relative** time -
 that is, "1/3 of the way through beat 2 of bar 3" rather than
 "slot 47 of a 1/16 grid".
 
@@ -25,13 +26,12 @@ Why it matters:
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
 import numpy as np
-
-from app.config import settings
 
 log = logging.getLogger(__name__)
 
@@ -208,9 +208,9 @@ def analyze_beats(
 ) -> BeatStructure:
     """Run beat + downbeat detection on the audio at `audio_path`.
 
-    Uses madmom (RNN + DBN) for the actual ML; falls back to a
-    librosa-based heuristic if madmom isn't importable, so the rest of
-    the pipeline degrades gracefully rather than failing outright.
+    Uses Beat This! (DBN-free, meter-agnostic) for the actual ML; falls
+    back to a librosa-based heuristic if it isn't importable, so the rest
+    of the pipeline degrades gracefully rather than failing outright.
 
     When `duration_seconds` is supplied, the returned structure is padded
     with synthetic bars after the last detected beat so that every
@@ -227,16 +227,11 @@ def analyze_beats(
     systematic lag without changing bar phase or beat count.
     """
     try:
-        tracker = settings.beat_tracker
-        if tracker == "beat_transformer":
-            structure = _beat_transformer_beats(audio_path)
-        else:
-            structure = _madmom_beats(audio_path)
+        structure = _beat_this_beats(audio_path)
     except Exception as exc:
         log.warning(
-            "%s beat tracking failed (%s); falling back to librosa "
+            "Beat This! beat tracking failed (%s); falling back to librosa "
             "(no downbeat classification - assuming 4/4 throughout)",
-            settings.beat_tracker,
             exc,
         )
         structure = _librosa_fallback(audio_path)
@@ -252,89 +247,191 @@ def analyze_beats(
     return structure
 
 
-# When BT's tempo head supplies a prediction, we narrow the DBN's
-# tempo search to a window around it rather than letting it pick any
-# tempo in [55, 215]. ±15% leaves headroom for the head's own error
-# (it's classification with int-bin quantization so off-by-a-few BPM
-# is normal) while still killing the half-time / double-time
-# alternatives that share the same beat positions.
-BT_TEMPO_WINDOW = 0.15
+_BEAT_THIS_MODEL = None
 
 
-def _madmom_beats(audio_path: Path) -> BeatStructure:
-    # Imports kept local so a madmom install issue doesn't block the
-    # rest of the service from starting up.
-    from madmom.features.downbeats import RNNDownBeatProcessor
+def _beat_this_model():
+    """Lazily build the cached Beat This! inference wrapper.
 
-    log.info("madmom: extracting downbeat activations from %s", audio_path.name)
-    activations = RNNDownBeatProcessor()(str(audio_path))
-    return _decode_activations(activations, fps=100)
-
-
-def _beat_transformer_beats(audio_path: Path) -> BeatStructure:
-    """Beat Transformer activations -> shared DBN postprocessor.
-
-    The DBN is reused from madmom; only the source of per-frame
-    activations + an optional BPM constraint changes. See
-    `pipeline/beat_transformer.py` for the preprocessing / model /
-    activation details. When BT's tempo head returns a trusted BPM
-    estimate, we narrow the DBN's tempo search around it to break
-    half/double-time ambiguities that the activations alone can't
-    resolve (the DBN can't distinguish 80 BPM 2/4 from 160 BPM 4/4
-    from the peak positions — they're identical).
+    Beat This! (Foscarin et al., ISMIR 2024) is DBN-free, so it tracks
+    beats + downbeats jointly with no fixed beats-per-bar prior, which is
+    why it handles odd/compound meters where the old madmom-DBN path
+    (madmom RNN and Beat Transformer both fed it) collapsed. Weights
+    auto-download to the torch hub cache on first use. Lazy so an import/
+    download hiccup doesn't block service startup.
     """
-    from app.pipeline.beat_transformer import FPS, extract_activations
+    global _BEAT_THIS_MODEL
+    if _BEAT_THIS_MODEL is None:
+        import torch
+        from beat_this.inference import File2Beats
 
-    activations, predicted_bpm = extract_activations(audio_path)
-    if predicted_bpm is not None:
-        min_bpm = predicted_bpm * (1 - BT_TEMPO_WINDOW)
-        max_bpm = predicted_bpm * (1 + BT_TEMPO_WINDOW)
-        log.info(
-            "DBN tempo search narrowed to [%.1f, %.1f] BPM by BT tempo head (predicted=%.1f)",
-            min_bpm, max_bpm, predicted_bpm,
-        )
-    else:
-        min_bpm = None
-        max_bpm = None
-    return _decode_activations(activations, fps=FPS, min_bpm=min_bpm, max_bpm=max_bpm)
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        log.info("Loading Beat This! (final0) onto %s", device)
+        _BEAT_THIS_MODEL = File2Beats(device=device, dbn=False)
+    return _BEAT_THIS_MODEL
 
 
-def _decode_activations(
-    activations: np.ndarray,
-    fps: float,
-    min_bpm: float | None = None,
-    max_bpm: float | None = None,
-) -> BeatStructure:
-    """Decode an Nx2 (beat, downbeat) activation array into a BeatStructure.
+def park_model() -> None:
+    """Drop the cached Beat This! model so /lyrics/align gets a clean GPU.
 
-    The DBN's job is to pick the most-likely beat positions + bar phase
-    given the per-frame activations. It doesn't care which network
-    produced them, so swapping in BT activations here is a drop-in.
-    `fps` must match the frame rate at which the activations were
-    sampled (madmom RNN = 100, BT = ~43.07). `min_bpm` / `max_bpm` are
-    optional tempo constraints; when omitted, madmom's defaults
-    (~55 / ~215) apply.
+    Reloaded lazily on the next transcribe; the model is tiny (~78 MB) and
+    its weights are disk-cached, so the reload cost is negligible. Mirrors
+    the `park_model`/`unpark_model` pair on `adtof_onsets`."""
+    global _BEAT_THIS_MODEL
+    _BEAT_THIS_MODEL = None
+
+
+def unpark_model() -> None:
+    """No-op: `_beat_this_model` reloads lazily on next use."""
+
+
+def _beat_this_beats(audio_path: Path) -> BeatStructure:
+    """Beat This! beats + downbeats -> typed BeatStructure.
+
+    Runs on the full mix (Beat This!'s training distribution; the
+    `beat_input=full_mix` default). The downstream grid (alignment,
+    tempo finalisation, padding) is unchanged: we convert the native
+    (beats, downbeats) into the same Nx2 `(time, beat_pos_in_bar)` shape
+    the old DBN emitted and reuse `_raw_to_structure`.
     """
-    from madmom.features.downbeats import DBNDownBeatTrackingProcessor
-
-    dbn_kwargs: dict = dict(
-        beats_per_bar=BEATS_PER_BAR_CANDIDATES,
-        fps=fps,
-    )
-    if min_bpm is not None:
-        dbn_kwargs["min_bpm"] = min_bpm
-    if max_bpm is not None:
-        dbn_kwargs["max_bpm"] = max_bpm
-    tracker = DBNDownBeatTrackingProcessor(**dbn_kwargs)
-    raw = tracker(activations)  # Nx2 array: (time, beat_pos_in_bar)
+    log.info("Beat This!: tracking beats/downbeats in %s", audio_path.name)
+    beats, downbeats = _beat_this_model()(str(audio_path))
+    raw = _beats_downbeats_to_raw(beats, downbeats)
     if raw.size == 0:
-        log.warning("beat tracker returned no beats (fps=%s)", fps)
+        log.warning("Beat This! returned no beats for %s", audio_path.name)
         return BeatStructure()
-    return _from_madmom_raw(raw)
+    return _raw_to_structure(raw)
 
 
-def _from_madmom_raw(raw: np.ndarray) -> BeatStructure:
-    """Convert madmom's Nx2 output into our typed BeatStructure."""
+def _beats_downbeats_to_raw(beats, downbeats, tol: float = 0.05) -> np.ndarray:
+    """(beat times, downbeat times) -> Nx2 `(time, beat_pos_in_bar)`.
+
+    `beat_pos_in_bar` is 1 at each downbeat and increments for the beats
+    in between, matching the convention `_raw_to_structure` expects.
+    Downbeats are a subset of the beat times, matched within `tol`.
+    """
+    beats = np.asarray(sorted(float(b) for b in beats), dtype=np.float64)
+    if beats.size == 0:
+        return np.zeros((0, 2), dtype=np.float64)
+    db = np.asarray(sorted(float(d) for d in downbeats), dtype=np.float64)
+    is_downbeat = np.zeros(beats.size, dtype=bool)
+    for d in db:
+        j = int(np.searchsorted(beats, d))
+        nearest = min((k for k in (j - 1, j) if 0 <= k < beats.size),
+                      key=lambda k: abs(beats[k] - d), default=None)
+        if nearest is not None and abs(beats[nearest] - d) <= tol:
+            is_downbeat[nearest] = True
+
+    beats, is_downbeat = _smooth_downbeats(beats, is_downbeat)
+
+    rows = np.empty((beats.size, 2), dtype=np.float64)
+    pos = 0
+    for k in range(beats.size):
+        pos = 1 if (bool(is_downbeat[k]) or pos == 0) else pos + 1
+        rows[k] = (beats[k], pos)
+    return rows
+
+
+def _smooth_downbeats(
+    beats: np.ndarray, is_downbeat: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Repair beat/downbeat mis-detections that would fake a meter change.
+
+    Beat This! is DBN-free (no fixed-meter prior), so a stray downbeat or a
+    local tempo flip shows up as a one-off odd bar. Against the *prevailing*
+    meter P (majority interior bar length) and its typical duration D, a bar
+    with an anomalous beat count `c` is repaired using its **duration** to
+    tell the two failure modes apart:
+
+    1. **Merged bars** (missed downbeat): `c == k·P` AND duration ≈ k·D, i.e.
+       k real bars ran together. Split back into k bars of P (no 4/4→8/4, no
+       3/4→6/4). Keeps every beat.
+    2. **Local tempo/subdivision multiply** (a busy bar read at k× tempo, e.g.
+       a 3/4 bar tracked as 6 fast beats → "6/8"): `c == k·P` AND duration ≈ D
+       (same span as its neighbours). The bar boundary is correct, only the
+       beat density is wrong, so **decimate** to P beats (keep every k-th) at
+       the bar's true tempo, it stays one P bar, not split.
+    3. **Fragmented bar** (extra downbeat): a run of consecutive sub-P bars
+       whose lengths sum to exactly one P bar is merged (2+2 / 1+3 → 4).
+
+    A *sustained* odd meter (≥2 bars that aren't a P-multiple and don't sum to
+    one P bar, a real 3/4 or 6/8 section) is left untouched, so genuine
+    mid-song changes survive. No-ops unless one meter holds a clear majority of
+    the interior bars. A truly dropped/added *beat* in a lone bar that matches
+    none of the above is preserved (can't fix without inventing beats).
+    """
+    n = int(beats.shape[0])
+    db = [int(i) for i in np.flatnonzero(is_downbeat)]
+    if len(db) < 3:
+        return beats, is_downbeat
+    # Prevailing meter P from the MEDIAN bar duration in beat-periods, NOT the
+    # mode of per-bar counts: Beat This!'s downbeat jitter can make a half-bar
+    # (e.g. 2 beats in a 4/4 song) the count plurality even when the typical
+    # bar spans 4 beats. The median duration is robust to that.
+    beat_period = float(np.median(np.diff(beats)))
+    bar_durs = [float(beats[db[k + 1]] - beats[db[k]]) for k in range(len(db) - 1)]
+    if beat_period <= 0 or not bar_durs:
+        return beats, is_downbeat
+    med_bar = float(np.median(bar_durs))
+    p = int(round(med_bar / beat_period))
+    # Skip unless there's a clean dominant bar length (median ≈ an integer
+    # number of beats); a chaotically-varied grid is left as detected.
+    if p < 2 or abs(med_bar - p * beat_period) > 0.15 * p * beat_period:
+        return beats, is_downbeat
+    bar_dur = p * beat_period
+
+    out_t: list[float] = list(beats[:db[0]])          # leading anacrusis beats
+    out_db: list[bool] = [False] * db[0]
+
+    def emit(idxs: list[int], downbeat_every: int) -> None:
+        for off, bi in enumerate(idxs):
+            out_t.append(float(beats[bi]))
+            out_db.append(off % downbeat_every == 0)
+
+    for k in range(len(db) - 1):
+        s, e = db[k], db[k + 1]
+        c = e - s
+        idxs = list(range(s, e))
+        nbars = max(1, round((beats[e] - beats[s]) / bar_dur)) if bar_dur > 0 else 1
+        if c >= 2 * p and c % p == 0 and c // p == nbars and nbars >= 2:
+            emit(idxs, p)                              # merged k bars -> split
+        elif c >= 2 * p and c % p == 0 and nbars == 1:
+            emit(idxs[:: c // p][:p], p)               # tempo x k in one bar -> decimate
+        else:
+            emit(idxs, c if c > 0 else 1)              # keep as-is (one bar)
+    out_t.extend(float(x) for x in beats[db[-1]:])     # trailing beats
+    out_db.append(True)
+    out_db.extend([False] * (n - db[-1] - 1))
+
+    out_db = _merge_fragment_bars(out_db, p)
+    return np.asarray(out_t, dtype=np.float64), np.asarray(out_db, dtype=bool)
+
+
+def _merge_fragment_bars(db_flags: list[bool], p: int) -> list[bool]:
+    """Drop interior downbeats of any run of consecutive sub-P bars whose
+    lengths sum to exactly one P bar (an extra downbeat that fragmented a
+    single bar, e.g. 2+2 or 1+3 -> 4). Flag-only; beats are untouched."""
+    db = [i for i, f in enumerate(db_flags) if f]
+    remove: set[int] = set()
+    k = 0
+    while k < len(db) - 1:
+        if db[k + 1] - db[k] < p:
+            run_sum, j = 0, k
+            while j < len(db) - 1 and (db[j + 1] - db[j]) < p and run_sum < p:
+                run_sum += db[j + 1] - db[j]
+                j += 1
+            if run_sum == p and j - k >= 2:
+                remove.update(db[k + 1:j])
+                k = j
+                continue
+        k += 1
+    if not remove:
+        return db_flags
+    return [f and i not in remove for i, f in enumerate(db_flags)]
+
+
+def _raw_to_structure(raw: np.ndarray) -> BeatStructure:
+    """Convert an Nx2 `(time, beat_pos_in_bar)` array into a BeatStructure."""
     beats: list[BeatTick] = []
     bars: list[BarInfo] = []
     current_bar_beats: list[BeatTick] = []
@@ -402,7 +499,7 @@ def _finalize_bar(index: int, beats: list[BeatTick]) -> BarInfo:
 def _choose_time_signature(count: int, tempo_bpm: float) -> tuple[int, int]:
     """Pick a `(numerator, denominator)` for a bar with `count` beats.
 
-    Madmom only reports a count of beats per bar; it doesn't tell us
+    The tracker only reports a count of beats per bar; it doesn't tell us
     whether they're quarter notes (simple meter) or dotted quarters
     (compound meter). For 4-, 5- and 7-beat bars 'quarter notes' is
     nearly always right in popular music. For 6 beats it's genuinely
@@ -425,39 +522,70 @@ def _choose_time_signature(count: int, tempo_bpm: float) -> tuple[int, int]:
     return (count, 4)
 
 
+def _reference_bars(bars: list[BarInfo]) -> list[BarInfo]:
+    """Bars used for global summary: skip bar 0 (likely anacrusis/pickup)."""
+    return bars[1:] if len(bars) >= 2 else bars
+
+
+def _modal_time_signature(bars: list[BarInfo]) -> tuple[int, int]:
+    """The song's dominant meter (most common per-bar time signature).
+
+    Beat This!'s per-bar downbeat placement is jittery on some songs (a 4/4
+    track can show scattered 2/4/8-beat bars even when the median is a clean
+    4), so the song-level meter must be the modal bar, not any single bar; reading one bar (even bar 1, past the anacrusis) routinely mislabels the
+    whole song."""
+    return Counter(b.time_signature for b in bars).most_common(1)[0][0]
+
+
+def _robust_initial_tempo(bars: list[BarInfo]) -> float:
+    """Median tempo of the first few bars: start-representative but robust to
+    a glitchy bar whose mis-sized duration yields a wild per-bar BPM."""
+    head = bars[: min(8, len(bars))]
+    return float(np.median([b.tempo_bpm for b in head])) if head else 120.0
+
+
+def _has_sustained_meter_change(bars: list[BarInfo], modal: tuple[int, int],
+                                min_run: int = 2) -> bool:
+    """True iff some meter ≠ `modal` holds for ≥`min_run` consecutive bars.
+    A single off-meter bar is per-bar detection noise, not a real change."""
+    run = 0
+    for b in bars:
+        run = run + 1 if b.time_signature != modal else 0
+        if run >= min_run:
+            return True
+    return False
+
+
 def _summarize(beats: list[BeatTick], bars: list[BarInfo]) -> BeatStructure:
     """Fill end_time of each bar from the next bar's start, and compute
-    global summary fields (initial tempo, change flags).
+    global summary fields (initial tempo, meter, change flags).
 
-    Bar 0 is excluded from the global summary when ≥2 bars are present:
-    madmom often starts counting partway through the first bar (anacrusis
-    / pickup), producing a leading bar with fewer beats than the rest.
-    Reading `initial_time_signature` off such a bar mislabels the whole
-    song (e.g. 3/4 for a 4/4 song with a 3-beat pickup) AND falsely flips
-    `has_time_sig_changes` to true because bar 0's `(3,4)` differs from
-    every subsequent `(4,4)`. The per-bar `time_signature` on `bars[0]`
-    is left alone — it accurately describes the 3 beats that bar holds —
-    so anacrusis-aware DSL emission can still distinguish it downstream.
+    The summary is **modal/median over bars**, not read off a single bar:
+    Beat This! places downbeats with enough per-bar jitter that any one bar
+    (bar 0 anacrusis OR bar 1) routinely mislabels the song's meter/tempo.
+    The per-bar `time_signature`/`tempo_bpm` are left as detected (they drive
+    onset→bar mapping locally); only the song-level fields are robustified.
     """
     for i in range(len(bars) - 1):
         bars[i].end_time = bars[i + 1].start_time
-    reference_bars = bars[1:] if len(bars) >= 2 else bars
+    reference_bars = _reference_bars(bars)
     if reference_bars:
-        initial_tempo = reference_bars[0].tempo_bpm
-        initial_ts = reference_bars[0].time_signature
+        initial_ts = _modal_time_signature(reference_bars)
+        initial_tempo = _robust_initial_tempo(reference_bars)
+        has_time_sig_changes = _has_sustained_meter_change(reference_bars, initial_ts)
     else:
         initial_tempo = 120.0
         initial_ts = (4, 4)
+        has_time_sig_changes = False
 
     tempo_set = {round(b.tempo_bpm, 1) for b in reference_bars}
-    sig_set = {b.time_signature for b in reference_bars}
     return BeatStructure(
         beats=beats,
         bars=bars,
         initial_tempo=float(initial_tempo),
         initial_time_signature=initial_ts,
         has_tempo_changes=len(tempo_set) > 1,
-        has_time_sig_changes=len(sig_set) > 1,
+        has_time_sig_changes=has_time_sig_changes,
     )
 
 
@@ -618,7 +746,12 @@ def _finalize_bar_tempos(structure: BeatStructure) -> None:
         bar.drift_sec = float(d)
 
     structure.tempo_segments = segments
-    structure.initial_tempo = segments[0].start_bpm if segments else 120.0
+    # initial_tempo from the robust first-bars median, not segments[0], a
+    # glitchy early bar's wild BPM otherwise poisons the start tempo.
+    structure.initial_tempo = (
+        _robust_initial_tempo(_reference_bars(structure.bars))
+        if structure.bars else (segments[0].start_bpm if segments else 120.0)
+    )
     structure.has_tempo_changes = len(segments) > 1 or any(
         s.is_ramp() for s in segments
     )
@@ -858,7 +991,7 @@ def _enforce_monotonic_times(beats: list[BeatTick]) -> None:
 def _pad_trailing_bars(structure: BeatStructure, duration_seconds: float) -> None:
     """Extend the bar timeline forward to cover `duration_seconds`.
 
-    Madmom's downbeat tracker tends to cut off well before the audio's
+    The beat tracker tends to cut off well before the audio's
     actual end (it stops emitting confident beats in silence / fadeouts).
     Without padding, onsets after the last detected beat get attributed
     to the last real bar with arbitrarily large `beat_in_bar` values
@@ -947,6 +1080,30 @@ COARSE_CENTER_PENALTY = 0.15
 # search range by this factor, else there's no clear pulse and we shift
 # nothing (envelope too flat / not enough drum energy).
 COARSE_PROMINENCE = 1.10
+
+
+def detect_envelope_onsets_for_alignment(audio_path: Path) -> list[tuple[float, float]]:
+    """Audio-only `(time, strength)` onset list for grid alignment, no model.
+
+    Peaks of the librosa onset-strength envelope. Beat This! reports beats
+    essentially on the transient (measured median lag ~2.5 ms on real drum
+    stems, 100 % envelope coverage), so the heavy ADTOF onset pass the old
+    neural trackers needed for their ~30-50 ms activation-peak lag is
+    unnecessary; these envelope peaks feed the same `align_beats_to_onsets`
+    median snap on CPU. Returns `[]` on empty/failed audio so the caller
+    degrades to "no fine alignment".
+    """
+    import librosa
+
+    y, sr = librosa.load(str(audio_path), sr=22050, mono=True)
+    if y.size == 0:
+        return []
+    env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=256)
+    times = librosa.times_like(env, sr=sr, hop_length=256)
+    peaks = librosa.util.peak_pick(
+        env, pre_max=3, post_max=3, pre_avg=5, post_avg=5, delta=0.0, wait=2
+    )
+    return [(float(times[i]), float(env[i])) for i in peaks]
 
 
 def align_beats_to_envelope(
@@ -1058,7 +1215,7 @@ def align_beats_to_onsets(
 ) -> None:
     """Shift the whole beat grid by the tracker's *systematic* lag.
 
-    Neural beat trackers (Beat Transformer especially) report each beat
+    Neural beat trackers report each beat
     ~30-50 ms after the transient, because the activation peak lags the
     strike. We still want to correct that.
 
@@ -1158,11 +1315,9 @@ def _rebuild_bar_fields(structure: BeatStructure) -> None:
             gaps = np.diff([b.time for b in bar.beats])
             bar.tempo_bpm = float(60.0 / np.mean(gaps))
 
-    reference_bars = (
-        structure.bars[1:] if len(structure.bars) >= 2 else structure.bars
-    )
+    reference_bars = _reference_bars(structure.bars)
     if reference_bars:
-        structure.initial_tempo = float(reference_bars[0].tempo_bpm)
+        structure.initial_tempo = _robust_initial_tempo(reference_bars)
         tempo_set = {round(b.tempo_bpm, 1) for b in reference_bars}
         structure.has_tempo_changes = len(tempo_set) > 1
 
@@ -1170,7 +1325,7 @@ def _rebuild_bar_fields(structure: BeatStructure) -> None:
 def _librosa_fallback(audio_path: Path) -> BeatStructure:
     """Plain librosa beat tracking, no downbeat classification.
 
-    Used only when madmom is unavailable. Produces a 4/4 structure with
+    Used only when Beat This! is unavailable. Produces a 4/4 structure with
     constant time signature; tempo follows whatever librosa returned.
     """
     import librosa

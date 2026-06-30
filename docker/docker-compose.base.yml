@@ -32,8 +32,7 @@ services:
     user: '1000:1000'
     env_file:
       # Loads ANTHROPIC_API_KEY, LLM_MODEL, INSTRUMENT_CONCURRENCY,
-      # CORS_ORIGINS, DEVICE, BEAT_TRACKER, BEAT_TRANSFORMER_CHECKPOINT,
-      # BEAT_INPUT_DEFAULT, DEBUG_DIR. Values map straight into the
+      # CORS_ORIGINS, DEVICE, BEAT_INPUT_DEFAULT, DEBUG_DIR. Values map straight into the
       # container env; no compose-side `${VAR}` indirection needed.
       # DISABLE_FRONTEND is intentionally NOT loaded from here - each
       # variant sets it explicitly via `environment:` so the mode

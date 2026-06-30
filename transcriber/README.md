@@ -13,10 +13,9 @@ Accepts audio and runs a five-stage pipeline:
 2. **`stems_per` — jarredou 5-stem MDX23C DrumSep** splits the drum stem
    into kick / snare / toms / hi-hat / **cymbals**. Note: this model
    merges ride + crash into a single `cymbals` stem.
-3. **`beats` — madmom RNN + DBN downbeat tracker** (or the vendored Beat
-   Transformer; the DBN postprocessor is shared, only the activation
-   network changes). Each detected beat is snapped to the strongest drum
-   onset within ±50 ms to undo the tracker's ~50 ms activation-peak lag.
+3. **`beats`, Beat This! beat/downbeat tracker** (Foscarin et al., ISMIR
+   2024; DBN-free + meter-agnostic). Each detected beat is snapped to the
+   strongest drum onset within ±50 ms to undo any activation-peak lag.
    Per-bar tempos are finalized — pinned to one global value for
    constant-tempo material, or kept as a smoothed contour when a
    sustained change is present — and we recover the tempo, the per-bar
@@ -84,8 +83,8 @@ pytest                  # pure-Python tests under tests/
 activates the venv, autofixes lint, then runs pytest, exiting on the
 first failure. `ruff check .` should always exit clean before pushing;
 CI will treat any violation as a failure. The `pytest` suite
-intentionally only covers the modules that don't need madmom /
-audio-separator / a GPU — it's a sanity net for the parts of the
+intentionally only covers the modules that don't need Beat This! /
+audio-separator / a GPU, it's a sanity net for the parts of the
 pipeline that change most often.
 
 Wait for `INFO: Uvicorn running on http://0.0.0.0:8001` then:
@@ -267,7 +266,6 @@ transcriber/
 ├── pyproject.toml          # Python package + deps
 ├── uv.lock                 # pinned dependency lockfile (uv)
 ├── .env.example            # ANTHROPIC_API_KEY etc.
-├── checkpoints/            # Beat Transformer weights (baked into the image)
 ├── docs/                   # design notes (e.g. ai-midi-to-jot-notes.md)
 ├── prompts/                # LLM prompt templates
 │   ├── filter_onsets.md         # filter-stage artifact rejection
@@ -288,8 +286,7 @@ transcriber/
         ├── adtof_onsets.py  # ADTOF Frame_RNN onset detector (per stem)
         ├── cymbal_split.py  # split cymbals lane -> ride / crash
         ├── hihat_split.py   # split hi-hat lane -> closed / open
-        ├── beats.py         # beat/downbeat/feel tracking
-        ├── beat_transformer.py # vendored Beat Transformer activation net
+        ├── beats.py         # beat/downbeat/feel tracking (Beat This!)
         ├── filter_llm.py    # filter-stage onset rejection (the only LLM call)
         ├── onsets_midi.py   # onsets -> MIDI rendering
         ├── note_provenance.py # per-note debug provenance sidecar
@@ -307,8 +304,8 @@ This service is intentionally stateless and 12-factor-friendly:
   debug-artifact persistence. The `/outputs` FLAC + MIDI deliverables are
   always written, but to a volume the operator can prune freely.)
 - Model weights live on a Docker volume so they persist across restarts.
-  The Beat Transformer checkpoint is baked into the image at build time
-  from `transcriber/checkpoints/`.
+  Beat This! weights auto-download to the torch hub cache on first use
+  (or pre-fetched by `app/pipeline/provision.py` at install time).
 - **Both separation models are loaded eagerly at container startup**
   (FastAPI lifespan). Neither ships in `audio-separator`'s registry, so
   `pipeline/provision.py` injects them and downloads their weights first.

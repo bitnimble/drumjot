@@ -1,7 +1,7 @@
 """Thin HTTP client over POST /transcribe.
 
 The benchmark harness is deliberately decoupled from the service's
-heavyweight ML deps (audio-separator, librosa, madmom, torch) — we just
+heavyweight ML deps (audio-separator, librosa, beat-this, torch), we just
 POST the audio file to a running service and read back the predicted
 MIDI. That also matches how the web UI exercises the service, so the
 benchmark numbers reflect the same path users hit in production.

@@ -247,7 +247,7 @@ Transcriber (Docker or the local venv): see
 
 **Sandbox** (`sandbox/Dockerfile`): a throwaway CUDA + Python container
 carrying the *same* dep stack as the transcriber (uv-managed venv, torch
-cu128, audio-separator, madmom, …) plus `bun`, but running nothing of
+cu128, audio-separator, beat-this, …) plus `bun`, but running nothing of
 Drumjot. Use it to run experimental scripts against the real stack and
 GPU, and to inspect prior transcribe output under the mounted
 `/codebox-workspace`. Deps stay in lockstep automatically: the image

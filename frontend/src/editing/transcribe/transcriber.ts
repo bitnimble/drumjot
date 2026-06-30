@@ -207,7 +207,7 @@ export type TranscribeOptions = {
   includeCandidates?: boolean;
   /**
    * Which audio is fed into the beat tracker. `full_mix` (default) is
-   * madmom's training distribution; `drum_stem` can help on tracks with
+   * Beat This!'s training distribution; `drum_stem` can help on tracks with
    * heavy non-drum syncopation. Server-side default lives in
    * `Settings.beat_input_default`.
    */

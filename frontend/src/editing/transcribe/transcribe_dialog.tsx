@@ -76,7 +76,7 @@ export const TranscribeDialog = observer(() => {
             )}
           </p>
 
-          <label className={styles.field} title="Which audio feeds the beat tracker. `full mix` is madmom's training distribution; `drum stem` can help on tracks with heavy non-drum syncopation.">
+          <label className={styles.field} title="Which audio feeds the beat tracker. `full mix` is Beat This!'s training distribution; `drum stem` can help on tracks with heavy non-drum syncopation.">
             <span>Beat input</span>
             <Select
               className={styles.select}

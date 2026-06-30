@@ -4,8 +4,8 @@
 // beforeBuildCommand; a no-op for `tauri dev`, which uses the in-repo
 // ../transcriber directly.
 //
-// The transcriber pins a few deps to git (madmom is Cython, so it also builds
-// from source). To avoid requiring git + a toolchain on the user's machine, we
+// The transcriber pins a few deps to git. To avoid requiring git + a toolchain
+// on the user's machine, we
 // prebuild those as wheels here (build host has git + a compiler), bundle the
 // wheelhouse, rewrite the bundled pyproject to install them from there
 // (find-links + pinned versions), pin Python to match the wheel ABI, and
@@ -75,8 +75,8 @@ await cp(join(repo, 'dsp/drumjot_dsp'), join(pyOut, 'dsp/drumjot_dsp'), {
 });
 
 // --- bundle the model checkpoints the pipeline reads at runtime ---------------
-// Beat Transformer (beat_transformer.pt, MIT) is fetched on first transcribe, not
-// bundled (see pipeline/beat_transformer.py). ADTOF onset weights ship inside the
+// Beat This! (MIT) weights are fetched via torch.hub on first transcribe, not
+// bundled (see pipeline/beats.py). ADTOF onset weights ship inside the
 // pip package, so the default build needs no onset checkpoint. The learned-onset
 // run dir is opt-in: set DRUMJOT_LEARNED_ONSETS_DIR to it to bundle + use it.
 const learnedSrc = process.env.DRUMJOT_LEARNED_ONSETS_DIR;
@@ -104,7 +104,9 @@ console.log(`[desktop-resources] bundled uv from ${uv}`);
 
 // --- vendor the git/source deps as prebuilt wheels --------------------------
 const pyprojectPath = join(pyOut, 'transcriber', 'pyproject.toml');
-let pyproject = await readFile(pyprojectPath, 'utf8');
+// Normalize to LF: on Windows (autocrlf) the file checks out with CRLF, which
+// breaks the newline-spanning marker matches below ([tool.uv]\n).
+let pyproject = (await readFile(pyprojectPath, 'utf8')).replaceAll('\r\n', '\n');
 const gitSpecs = [...pyproject.matchAll(/"([^"]+ @ git\+[^"]+)"/g)].map((m) => m[1]);
 
 if (gitSpecs.length === 0) {
@@ -119,7 +121,7 @@ if (gitSpecs.length === 0) {
 
   if (!gitSpecs.every((s) => wheelFor(s, cached))) {
     // Build the wheels in a throwaway py-pinned venv (needs git + a compiler,
-    // which the build host has). Cached so madmom's Cython compile is one-time.
+    // which the build host has). Cached so any source build is one-time.
     const buildenv = join(out, 'wheel-buildenv');
     await rm(buildenv, { recursive: true, force: true });
     run(uv, ['venv', '--python', PY, buildenv]);
@@ -136,18 +138,6 @@ if (gitSpecs.length === 0) {
   const wheels = (await readdir(wheelCache)).filter((f) => f.endsWith('.whl'));
   for (const w of wheels) {
     await copyFile(join(wheelCache, w), join(wheelhouse, w));
-  }
-
-  // Strip madmom's CC-BY-NC-SA model weights (~25 MB) from the bundled wheel: we
-  // track beats with Beat-Transformer and never load them, so they're dead weight
-  // and would block a commercial build. A throwaway uv venv runs the stdlib script.
-  const madmomWheel = wheels.find((w) => w.startsWith('madmom-'));
-  if (madmomWheel) {
-    const stripEnv = join(out, 'strip-env');
-    await rm(stripEnv, { recursive: true, force: true });
-    run(uv, ['venv', '--python', PY, stripEnv]);
-    run(venvPython(stripEnv), [join(repo, 'scripts', 'strip-madmom-models.py'), join(wheelhouse, madmomWheel)]);
-    await rm(stripEnv, { recursive: true, force: true });
   }
 
   // Rewrite the bundled pyproject: pin Python to the wheel ABI, swap each git
