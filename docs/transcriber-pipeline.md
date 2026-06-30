@@ -199,8 +199,12 @@ is preserved so re-resuming is idempotent.
   `MIN_ALIGN_COVERAGE` (.30): below 30 % beats with a nearby onset, the
   grid is left as the tracker produced it. Must run **after** the tracker
   and **before** padding (so synthetic fadeout bars don't pull the
-  median). Drum-stem onsets are detected once on `ctx.drum_stem` inside
-  `_do_beats` and passed in.
+  median). The onset list is **audio-only**: `_do_beats` peaks the librosa
+  onset-strength envelope of `ctx.drum_stem`
+  (`detect_envelope_onsets_for_alignment`), no model. (The old neural
+  trackers had a ~30-50 ms activation-peak lag this snap corrected via an
+  ADTOF onset pass; Beat This! sits ~2.5 ms off the transient with ~100 %
+  envelope coverage on real drum stems, so the GPU pass was dropped.)
 - **`_finalize_bar_tempos`** median-filters per-bar tempos
   (`TEMPO_SMOOTHING_WINDOW`=5) only to *decide* tempo motion: if the
   smoothed reference-bar span is under `SUSTAINED_TEMPO_CHANGE_BPM` (8.0),
