@@ -43,8 +43,7 @@ ml = [
 separation = [
     { include-group = "ml" },
     # audio-separator >=0.31 needs numpy 2; the MDX23C drum-piece model used by
-    # pipeline/separate.py is only registered in 0.31+. madmom@main builds on
-    # numpy 2 (its Cython extensions are the real risk).
+    # pipeline/separate.py is only registered in 0.31+.
     "audio-separator[gpu]>=0.44",
     # Pin onnxruntime-gpu to its CUDA-12 line: 1.26 moved to a CUDA-13 build
     # (libcudart.so.13); the image is CUDA 12 + torch cu128, so the CUDA-12
@@ -57,9 +56,9 @@ transcription = [
     { include-group = "separation" },
     # PyTorch ADTOF port (torch-only; ships pretrained Frame_RNN weights).
     "adtof_pytorch @ git+https://github.com/xavriley/ADTOF-pytorch.git@85c192e78f716ea0b111cc8a5ee4a8f6a3a4f8a9",
-    # Beat / downbeat tracking (the rhythmic backbone).
-    "madmom @ git+https://github.com/CPJKU/madmom.git@main",
-    "cython>=3.0",
+    # Beat / downbeat tracking (the rhythmic backbone): Beat This! (ISMIR
+    # 2024), DBN-free + meter-agnostic; pure-PyTorch, weights auto-download.
+    "beat-this>=1.1",
     "mir_eval>=0.7",
     "mido>=1.3",
     "anthropic>=0.40",

@@ -250,13 +250,11 @@ def test_write_summary_smoke(tmp_path: Path):
         rows.append({
             "track_id": f"t{i}", "band": "90-120", "time_sig": "4/4" if i % 2 else "3/4",
             "is_4_4": bool(i % 2), "sanity_cov": 1.0,
-            "madmom": _fake_result(0.8, True),
-            "beat_transformer": _fake_result(0.7, False),
-            "beat_this": _fake_result(0.9, True),
+            "production": _fake_result(0.9, True),
         })
     _write_summary(tmp_path, "synthetic", rows)
     text = (tmp_path / "summary.md").read_text()
     assert "Beat-tracker A/B" in text
     assert "downbeat_f" in text and "bar_len_ok" in text
-    assert "beat_this" in text
+    assert "production" in text
     assert "Per time signature" in text

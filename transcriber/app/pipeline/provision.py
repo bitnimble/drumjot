@@ -283,19 +283,19 @@ def provision_custom_models() -> None:
 def main(argv: list[str]) -> int:
     """`python -m app.pipeline.provision <uv-group>...` - pre-fetch the heavy model
     assets a freshly-installed capability needs (separation models + vocals, and
-    the Beat Transformer checkpoint for transcribe), so they download at install
-    time rather than on first use. Best-effort; the lazy fallbacks still cover a
+    the Beat This! weights for transcribe), so they download at install time
+    rather than on first use. Best-effort; the lazy fallbacks still cover a
     failure here. The desktop installer runs this after `uv sync`."""
     logging.basicConfig(level=logging.INFO)
     groups = set(argv)
     if groups & {"separation", "transcription", "lyrics"}:
         provision_custom_models()
     if "transcription" in groups:
-        from app.pipeline.beat_transformer import _download_checkpoint
+        # Instantiate once to trigger the Beat This! weight download into the
+        # torch hub cache (no-op if already cached).
+        from app.pipeline.beats import _beat_this_model
 
-        ckpt = Path(settings.beat_transformer_checkpoint)
-        if not ckpt.exists():
-            _download_checkpoint(ckpt)
+        _beat_this_model()
     return 0
 
 

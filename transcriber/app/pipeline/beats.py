@@ -2,8 +2,9 @@
 
 This module replaces the older `tempo.py` + `quantize.py` pair. Rather
 than assuming a constant tempo + fixed grid (1/16 by default), we use
-madmom's RNN+DBN downbeat tracker to extract per-beat anchors from the
-audio. Everything downstream then works in **beat-relative** time -
+Beat This! (ISMIR 2024; DBN-free, meter-agnostic) to extract per-beat
+anchors + downbeats from the audio. Everything downstream then works in
+**beat-relative** time -
 that is, "1/3 of the way through beat 2 of bar 3" rather than
 "slot 47 of a 1/16 grid".
 
@@ -30,8 +31,6 @@ from pathlib import Path
 from typing import Literal
 
 import numpy as np
-
-from app.config import settings
 
 log = logging.getLogger(__name__)
 
@@ -208,9 +207,9 @@ def analyze_beats(
 ) -> BeatStructure:
     """Run beat + downbeat detection on the audio at `audio_path`.
 
-    Uses madmom (RNN + DBN) for the actual ML; falls back to a
-    librosa-based heuristic if madmom isn't importable, so the rest of
-    the pipeline degrades gracefully rather than failing outright.
+    Uses Beat This! (DBN-free, meter-agnostic) for the actual ML; falls
+    back to a librosa-based heuristic if it isn't importable, so the rest
+    of the pipeline degrades gracefully rather than failing outright.
 
     When `duration_seconds` is supplied, the returned structure is padded
     with synthetic bars after the last detected beat so that every
@@ -227,16 +226,11 @@ def analyze_beats(
     systematic lag without changing bar phase or beat count.
     """
     try:
-        tracker = settings.beat_tracker
-        if tracker == "beat_transformer":
-            structure = _beat_transformer_beats(audio_path)
-        else:
-            structure = _madmom_beats(audio_path)
+        structure = _beat_this_beats(audio_path)
     except Exception as exc:
         log.warning(
-            "%s beat tracking failed (%s); falling back to librosa "
+            "Beat This! beat tracking failed (%s); falling back to librosa "
             "(no downbeat classification - assuming 4/4 throughout)",
-            settings.beat_tracker,
             exc,
         )
         structure = _librosa_fallback(audio_path)
@@ -252,85 +246,87 @@ def analyze_beats(
     return structure
 
 
-# When BT's tempo head supplies a prediction, we narrow the DBN's
-# tempo search to a window around it rather than letting it pick any
-# tempo in [55, 215]. ±15% leaves headroom for the head's own error
-# (it's classification with int-bin quantization so off-by-a-few BPM
-# is normal) while still killing the half-time / double-time
-# alternatives that share the same beat positions.
-BT_TEMPO_WINDOW = 0.15
+_BEAT_THIS_MODEL = None
 
 
-def _madmom_beats(audio_path: Path) -> BeatStructure:
-    # Imports kept local so a madmom install issue doesn't block the
-    # rest of the service from starting up.
-    from madmom.features.downbeats import RNNDownBeatProcessor
+def _beat_this_model():
+    """Lazily build the cached Beat This! inference wrapper.
 
-    log.info("madmom: extracting downbeat activations from %s", audio_path.name)
-    activations = RNNDownBeatProcessor()(str(audio_path))
-    return _decode_activations(activations, fps=100)
-
-
-def _beat_transformer_beats(audio_path: Path) -> BeatStructure:
-    """Beat Transformer activations -> shared DBN postprocessor.
-
-    The DBN is reused from madmom; only the source of per-frame
-    activations + an optional BPM constraint changes. See
-    `pipeline/beat_transformer.py` for the preprocessing / model /
-    activation details. When BT's tempo head returns a trusted BPM
-    estimate, we narrow the DBN's tempo search around it to break
-    half/double-time ambiguities that the activations alone can't
-    resolve (the DBN can't distinguish 80 BPM 2/4 from 160 BPM 4/4
-    from the peak positions — they're identical).
+    Beat This! (Foscarin et al., ISMIR 2024) is DBN-free, so it tracks
+    beats + downbeats jointly with no fixed beats-per-bar prior, which is
+    why it handles odd/compound meters where the old madmom-DBN path
+    (madmom RNN and Beat Transformer both fed it) collapsed. Weights
+    auto-download to the torch hub cache on first use. Lazy so an import/
+    download hiccup doesn't block service startup.
     """
-    from app.pipeline.beat_transformer import FPS, extract_activations
+    global _BEAT_THIS_MODEL
+    if _BEAT_THIS_MODEL is None:
+        import torch
+        from beat_this.inference import File2Beats
 
-    activations, predicted_bpm = extract_activations(audio_path)
-    if predicted_bpm is not None:
-        min_bpm = predicted_bpm * (1 - BT_TEMPO_WINDOW)
-        max_bpm = predicted_bpm * (1 + BT_TEMPO_WINDOW)
-        log.info(
-            "DBN tempo search narrowed to [%.1f, %.1f] BPM by BT tempo head (predicted=%.1f)",
-            min_bpm, max_bpm, predicted_bpm,
-        )
-    else:
-        min_bpm = None
-        max_bpm = None
-    return _decode_activations(activations, fps=FPS, min_bpm=min_bpm, max_bpm=max_bpm)
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        log.info("Loading Beat This! (final0) onto %s", device)
+        _BEAT_THIS_MODEL = File2Beats(device=device, dbn=False)
+    return _BEAT_THIS_MODEL
 
 
-def _decode_activations(
-    activations: np.ndarray,
-    fps: float,
-    min_bpm: float | None = None,
-    max_bpm: float | None = None,
-) -> BeatStructure:
-    """Decode an Nx2 (beat, downbeat) activation array into a BeatStructure.
+def park_model() -> None:
+    """Drop the cached Beat This! model so /lyrics/align gets a clean GPU.
 
-    The DBN's job is to pick the most-likely beat positions + bar phase
-    given the per-frame activations. It doesn't care which network
-    produced them, so swapping in BT activations here is a drop-in.
-    `fps` must match the frame rate at which the activations were
-    sampled (madmom RNN = 100, BT = ~43.07). `min_bpm` / `max_bpm` are
-    optional tempo constraints; when omitted, madmom's defaults
-    (~55 / ~215) apply.
+    Reloaded lazily on the next transcribe; the model is tiny (~78 MB) and
+    its weights are disk-cached, so the reload cost is negligible. Mirrors
+    the `park_model`/`unpark_model` pair on `adtof_onsets`."""
+    global _BEAT_THIS_MODEL
+    _BEAT_THIS_MODEL = None
+
+
+def unpark_model() -> None:
+    """No-op: `_beat_this_model` reloads lazily on next use."""
+
+
+def _beat_this_beats(audio_path: Path) -> BeatStructure:
+    """Beat This! beats + downbeats -> typed BeatStructure.
+
+    Runs on the full mix (Beat This!'s training distribution; the
+    `beat_input=full_mix` default). The downstream grid (alignment,
+    tempo finalisation, padding) is unchanged: we convert the native
+    (beats, downbeats) into the same Nx2 `(time, beat_pos_in_bar)` shape
+    the old DBN emitted and reuse `_from_madmom_raw`.
     """
-    from madmom.features.downbeats import DBNDownBeatTrackingProcessor
-
-    dbn_kwargs: dict = dict(
-        beats_per_bar=BEATS_PER_BAR_CANDIDATES,
-        fps=fps,
-    )
-    if min_bpm is not None:
-        dbn_kwargs["min_bpm"] = min_bpm
-    if max_bpm is not None:
-        dbn_kwargs["max_bpm"] = max_bpm
-    tracker = DBNDownBeatTrackingProcessor(**dbn_kwargs)
-    raw = tracker(activations)  # Nx2 array: (time, beat_pos_in_bar)
+    log.info("Beat This!: tracking beats/downbeats in %s", audio_path.name)
+    beats, downbeats = _beat_this_model()(str(audio_path))
+    raw = _beats_downbeats_to_raw(beats, downbeats)
     if raw.size == 0:
-        log.warning("beat tracker returned no beats (fps=%s)", fps)
+        log.warning("Beat This! returned no beats for %s", audio_path.name)
         return BeatStructure()
     return _from_madmom_raw(raw)
+
+
+def _beats_downbeats_to_raw(beats, downbeats, tol: float = 0.05) -> np.ndarray:
+    """(beat times, downbeat times) -> Nx2 `(time, beat_pos_in_bar)`.
+
+    `beat_pos_in_bar` is 1 at each downbeat and increments for the beats
+    in between, matching the convention `_from_madmom_raw` expects.
+    Downbeats are a subset of the beat times, matched within `tol`.
+    """
+    beats = np.asarray(sorted(float(b) for b in beats), dtype=np.float64)
+    if beats.size == 0:
+        return np.zeros((0, 2), dtype=np.float64)
+    db = np.asarray(sorted(float(d) for d in downbeats), dtype=np.float64)
+    is_downbeat = np.zeros(beats.size, dtype=bool)
+    for d in db:
+        j = int(np.searchsorted(beats, d))
+        nearest = min((k for k in (j - 1, j) if 0 <= k < beats.size),
+                      key=lambda k: abs(beats[k] - d), default=None)
+        if nearest is not None and abs(beats[nearest] - d) <= tol:
+            is_downbeat[nearest] = True
+
+    rows = np.empty((beats.size, 2), dtype=np.float64)
+    pos = 0
+    for k in range(beats.size):
+        pos = 1 if (is_downbeat[k] or pos == 0) else pos + 1
+        rows[k] = (beats[k], pos)
+    return rows
 
 
 def _from_madmom_raw(raw: np.ndarray) -> BeatStructure:
@@ -1170,7 +1166,7 @@ def _rebuild_bar_fields(structure: BeatStructure) -> None:
 def _librosa_fallback(audio_path: Path) -> BeatStructure:
     """Plain librosa beat tracking, no downbeat classification.
 
-    Used only when madmom is unavailable. Produces a 4/4 structure with
+    Used only when Beat This! is unavailable. Produces a 4/4 structure with
     constant time signature; tempo follows whatever librosa returned.
     """
     import librosa

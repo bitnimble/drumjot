@@ -171,7 +171,7 @@ def _resolve_device() -> str:
 def _load_model():
     """Load the ADTOF model once per process and cache (lazy singleton).
 
-    Mirrors `beat_transformer._load_model`: multi-second load, so we pay
+    Like `beats._beat_this_model`: multi-second load, so we pay
     it once. All adtof_pytorch/torch imports happen HERE, never at
     module top, so the librosa-default path never imports them and a
     broken install degrades to librosa instead of failing this import.

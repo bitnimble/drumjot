@@ -239,24 +239,12 @@ class Settings(BaseSettings):
     double_trigger_refractory_kick_s: float = 0.055
 
     # --- Beat tracker ---
-    # `madmom`         = the legacy RNN+DBN downbeat tracker (default).
-    # `beat_transformer` = vendored Beat Transformer (Zhao et al. 2022)
-    #                      activations -> shared DBN postprocessor.
-    # The DBN stage is shared between both — the toggle only changes
-    # which network produces the per-frame (beat, downbeat) activations.
-    beat_tracker: Literal["madmom", "beat_transformer"] = "madmom"
-    # Path to a pretrained Beat Transformer checkpoint (`fold_N_trf_param.pt`
-    # from upstream). Baked into the image at build time from
-    # `transcriber/checkpoints/`. The released checkpoints all share the
-    # same dmodel=256 / nhead=8 / d_hid=1024 / nlayers=9 architecture
-    # (`Demixed_DilatedTransformerModel` with `instr=5`).
-    beat_transformer_checkpoint: Path = Path("/app/checkpoints/beat_transformer.pt")
-    # Which audio to feed into the beat tracker:
-    # - `full_mix`  = the original upload (madmom's training distribution;
-    #                 also BT's "non-demixed" baseline).
-    # - `drum_stem` = the Demucs Stage 1 drum stem (no melody/bass cues,
-    #                 but cleaner transients — sometimes helps BT on tracks
-    #                 with heavy syncopation in non-drum stems).
+    # Beat This! (Foscarin et al., ISMIR 2024) is the sole beat/downbeat
+    # tracker: DBN-free and meter-agnostic, weights auto-download to the
+    # torch hub cache. Which audio to feed it:
+    # - `full_mix`  = the original upload (Beat This!'s training distribution).
+    # - `drum_stem` = the Stage-1 drum stem (cleaner transients; Beat This!
+    #                 is robust to either; stem ≈ mix in testing).
     # Overridable per-request via the `beat_input` form parameter.
     beat_input_default: Literal["full_mix", "drum_stem"] = "full_mix"
 

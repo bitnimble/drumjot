@@ -1,26 +1,22 @@
-"""Deterministic A/B between beat-tracking front-ends.
+"""Beat-stage eval harness: score the production beat tracker on E-GMD.
 
-Compares **madmom** (`RNNDownBeatProcessor`) and **Beat Transformer** (both
-through the shared production grid: madmom DBN -> gated
-`align_beats_to_onsets` -> `_finalize_bar_tempos`) against **Beat This!**
-(ISMIR 2024, DBN-free / meter-agnostic, scored on its native output with
-the same onset-offset alignment), versus E-GMD MIDI ground truth.
+Originally an A/B between madmom / Beat Transformer / Beat This!; that
+decision is settled (Beat This! won, see the spec below + the
+`beat-tracker-ab-harness` memory), so this now scores the single
+production path (`analyze_beats` -> Beat This!) against E-GMD MIDI ground
+truth, for regression checks and the pending `adtof` confirmation.
 
-Drumjot-relevant verdict metrics: **downbeat_f** (bar alignment) +
-**bar_len_ok** (right beats-per-bar so bars don't drift) + octave-safe
-tempo. beat_f / amlt are diagnostics only, denominator and 3/4-vs-6/8
-feel don't affect note placement (see the `beat-tracker-eval-priority`
-memory).
+Drumjot-relevant metrics: **downbeat_f** (bar alignment) + **bar_len_ok**
+(right beats-per-bar so bars don't drift) + octave-safe tempo. beat_f /
+amlt are diagnostics only, denominator and 3/4-vs-6/8 feel don't affect
+note placement (see the `beat-tracker-eval-priority` memory).
 
 See `docs/superpowers/specs/2026-06-30-beat-tracker-ab-design.md`.
 
-Run (CPU, synthetic onsets, while the GPU is busy), from `transcriber/`:
+Run (from `transcriber/`):
 
-    .venv/bin/python -m benchmarks.beat_ab --onsets synthetic
-
-`--onsets adtof` is the truthful production path but needs the GPU. The
-Beat This! arm needs `beat-this` installed in the venv (eval-only dep;
-not in pyproject, `uv pip install beat_this`).
+    .venv/bin/python -m benchmarks.beat_ab --onsets synthetic   # CPU
+    .venv/bin/python -m benchmarks.beat_ab --onsets adtof       # GPU (truthful)
 """
 from __future__ import annotations
 
@@ -41,7 +37,7 @@ from .onset_synth import gt_align_onsets, stable_seed, synthesize_align_onsets
 log = logging.getLogger(__name__)
 
 CSV_NAME = "e-gmd-v1.0.0.csv"
-TRACKERS = ("madmom", "beat_transformer", "beat_this")
+TRACKERS = ("production",)  # the live beat stage (analyze_beats -> Beat This!)
 TEMPO_BANDS: tuple[tuple[float, float], ...] = ((0, 90), (90, 120), (120, 150), (150, 1e9))
 SANITY_MIN_COVERAGE = 0.50  # GT downbeats needing a nearby onset to keep a clip
 
@@ -272,56 +268,12 @@ def _build_align_onsets(
     raise ValueError(f"unknown onsets mode {mode!r}")
 
 
-_BEAT_THIS = None
-
-
-def _beat_this_model():
-    global _BEAT_THIS
-    if _BEAT_THIS is None:
-        from beat_this.inference import File2Beats
-        _BEAT_THIS = File2Beats(device="cpu", dbn=False)
-    return _BEAT_THIS
-
-
-def _uniform_offset(beats: list[float], align_onsets: list[tuple[float, float]],
-                    max_distance: float = 0.05, min_cov: float = 0.30) -> float:
-    """Median beat→strongest-nearby-onset offset (same as the production
-    fine aligner), so Beat This!'s grid gets the same lag correction the
-    DBN trackers get. Returns 0 below the coverage gate."""
-    import numpy as np
-    if not align_onsets or not beats:
-        return 0.0
-    arr = sorted(align_onsets)
-    times = np.array([t for t, _ in arr])
-    strengths = np.array([s for _, s in arr])
-    deltas = []
-    for bt in beats:
-        lo = int(np.searchsorted(times, bt - max_distance, "left"))
-        hi = int(np.searchsorted(times, bt + max_distance, "right"))
-        if lo < hi:
-            deltas.append(float(times[lo + int(np.argmax(strengths[lo:hi]))] - bt))
-    if not deltas or len(deltas) / len(beats) < min_cov:
-        return 0.0
-    return float(np.median(deltas))
-
-
-def _run_tracker(clip: Clip, tracker: str, align_onsets: list[tuple[float, float]]) -> dict:
-    if tracker == "beat_this":
-        beats_arr, db_arr = _beat_this_model()(str(clip.audio_path))
-        beats = [float(x) for x in beats_arr]
-        downbeats = [float(x) for x in db_arr]
-        off = _uniform_offset(beats, align_onsets)
-        return {"beats": [b + off for b in beats], "downbeats": [d + off for d in downbeats]}
-
-    from app.config import settings
+def _run_tracker(clip: Clip, align_onsets: list[tuple[float, float]]) -> dict:
+    """Run the production beat stage (`analyze_beats`, now Beat This!) and
+    return its beats + downbeats."""
     from app.pipeline.beats import analyze_beats
 
-    prev = settings.beat_tracker
-    settings.beat_tracker = tracker  # type: ignore[assignment]
-    try:
-        structure = analyze_beats(clip.audio_path, clip.duration, align_onsets)
-    finally:
-        settings.beat_tracker = prev  # type: ignore[assignment]
+    structure = analyze_beats(clip.audio_path, clip.duration, align_onsets)
     beats = [b.time for b in structure.beats]
     downbeats = [b.time for b in structure.beats if b.beat_in_bar == 1]
     return {"beats": beats, "downbeats": downbeats}
@@ -372,17 +324,15 @@ def run(
                          "time_sig": f"{clip.time_sig[0]}/{clip.time_sig[1]}",
                          "is_4_4": clip.is_four_four, "sanity_cov": cov}
             for tracker in TRACKERS:
-                pred = _run_tracker(clip, tracker, align)
+                pred = _run_tracker(clip, align)
                 row[tracker] = _score(grid, pred["beats"], pred["downbeats"])
             jf.write(json.dumps(row) + "\n")
             jf.flush()
             per_clip.append(row)
-            log.info("[%d/%d] %s  downbeat_f mad=%.2f bt=%.2f bthis=%.2f | bar_ok %d/%d/%d",
+            p = row["production"]
+            log.info("[%d/%d] %s  downbeat_f=%.2f bar_ok=%s tempo_oct_ok=%s",
                      i, len(selected), clip.track_id,
-                     row["madmom"]["downbeat_f"], row["beat_transformer"]["downbeat_f"],
-                     row["beat_this"]["downbeat_f"],
-                     row["madmom"]["bar_len_ok"], row["beat_transformer"]["bar_len_ok"],
-                     row["beat_this"]["bar_len_ok"])
+                     p["downbeat_f"], p["bar_len_ok"], p["tempo_oct_within4"])
 
     _write_summary(out_dir, mode, per_clip)
     log.info("wrote report to %s", out_dir / "summary.md")
