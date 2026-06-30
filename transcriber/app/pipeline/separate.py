@@ -293,7 +293,10 @@ class Separator:
         ckpt = models_dir / ckpt_filename
         yaml = models_dir / yaml_for_ckpt(ckpt_filename)
         loaded = load_model(ckpt, yaml, device=device)
-        _maybe_compile_model(loaded)
+        if _onnx_separation_enabled():
+            _attach_onnx_body(loaded, ckpt, models_dir)
+        else:
+            _maybe_compile_model(loaded)
         return SeparationRunner(loaded, device=device)
 
     @staticmethod
@@ -698,6 +701,33 @@ def _maybe_compile_model(loaded: object) -> None:
         loaded.model = torch.compile(model, dynamic=False)
     except Exception as exc:
         log.warning("torch.compile failed (%s); continuing in eager mode.", exc)
+
+
+def _onnx_separation_enabled() -> bool:
+    """Route the drum-separator BODIES through onnxruntime instead of torch (the
+    STFT/iSTFT stay torch/fp32). Off by default; opt in with DRUMJOT_SEP_ONNX=1.
+
+    This is the cross-platform path: onnxruntime dispatches the body to whatever
+    execution provider the installed build supports (CUDA / DirectML / CoreML /
+    ROCm, else CPU). On NVIDIA the torch+bf16 path is usually faster, so the
+    default stays torch; flip this on for AMD / Apple / Intel backends."""
+    return os.environ.get("DRUMJOT_SEP_ONNX", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _attach_onnx_body(loaded: object, ckpt_path: Path, models_dir: Path) -> None:
+    """Export (once, cached next to the ckpt) and attach the model's ONNX body so
+    the runner routes body compute through onnxruntime. The first export is heavy
+    (full-size graph, minutes); later loads reuse the cached `.onnx`."""
+    from app.pipeline.separation.export import export_body
+    from app.pipeline.separation.loader import attach_onnx_session
+
+    onnx_path = models_dir / (ckpt_path.stem + ".onnx")
+    if not onnx_path.exists():
+        log.info("Exporting %s body to ONNX (one-time, cached) ...", ckpt_path.name)
+        export_body(loaded, onnx_path)  # type: ignore[arg-type]
+    attach_onnx_session(loaded, onnx_path)  # type: ignore[arg-type]
+    providers = loaded.onnx_session.get_providers()  # type: ignore[attr-defined]
+    log.info("ONNX separation ENABLED for %s (providers=%s)", ckpt_path.name, providers)
 
 
 def _resolve_outputs(raw_paths: list[str], out_dir: Path) -> list[Path]:

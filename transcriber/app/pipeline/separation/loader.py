@@ -85,7 +85,16 @@ def attach_onnx_session(
 
     if providers is None:
         providers = ort.get_available_providers()
-    loaded.onnx_session = ort.InferenceSession(str(onnx_path), providers=providers)
+    try:
+        loaded.onnx_session = ort.InferenceSession(str(onnx_path), providers=providers)
+    except Exception:
+        # get_available_providers() lists GPU EPs that may be unusable at runtime
+        # (onnxruntime-gpu on a CPU-only host, missing TensorRT libs, no CUDA
+        # device), and InferenceSession hard-fails instead of degrading. Retry
+        # CPU-only so a misdetected EP never breaks separation.
+        loaded.onnx_session = ort.InferenceSession(
+            str(onnx_path), providers=["CPUExecutionProvider"]
+        )
     return loaded
 
 
