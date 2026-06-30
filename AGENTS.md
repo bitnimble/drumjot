@@ -285,6 +285,31 @@ doesn't exist yet. Build context is the repo root (needs
 `transcriber/pyproject.toml`): `docker build -f sandbox/Dockerfile -t
 drumjot-sandbox .`.
 
+**Data & models on disk (`/codebox-workspace`).** All datasets and model
+weights are present locally on the NFS-mounted `/codebox-workspace` (an
+HDD NAS over a VM bridge; random reads can stall, see the
+`codebox-workspace` memory). Agents repeatedly assume these are absent,
+they are not, look here first:
+- **Separation weights**: `/codebox-workspace/drumjot/models-cache/`,
+  `model_bs_roformer_sw.ckpt` (+ `config_bs_roformer_sw.yaml`) and
+  `drumsep_5stems_mdx23c_jarredou.ckpt` (+
+  `config_drumsep_5stems_mdx23c.yaml`). `settings.models_dir`
+  (`transcriber/app/config.py`) defaults to `/models` (a Docker volume);
+  the real copies live here on dev boxes. Upstream is gone (jarredou's
+  GitHub was deleted), so these on-disk copies + HF mirrors are the only
+  source, vendor them.
+- **Datasets**: `/codebox-workspace/datasets/`, raw (`e-gmd-v1.0.0`,
+  `ENST-drums-public`, `star_full`/`star_balanced`/`star_mix`, `MDBDrums`,
+  `a2md`, `paradb`) plus per-stem `*_sep` variants
+  (`perstem/{k,s,t,h,c}` + `sep_drum`). **The `*_sep` stems are the
+  CURRENT separators' OUTPUTS** (BS-Roformer→MDX23C run over the mixes),
+  not ground-truth isolated stems, fine for onset training, NOT usable to
+  train a better separator (circular). MERT embeddings cache under
+  `_cache_mert/` and `/codebox-workspace/mert_cache/`.
+- **Onset checkpoints**: `/codebox-workspace/checkpoints/`.
+- Catalog + pull-priority for datasets we do NOT have (ADTOF, StemGMD,
+  MUSDB18HQ, Slakh, …): [research/DATASETS.md](research/DATASETS.md).
+
 **Code intelligence (LSP)**: the `LSP` tool is wired up here with `tsgo` +
 `pyright-langserver` (the global LSP-first rule applies, see
 `~/.claude/CLAUDE.md`).
