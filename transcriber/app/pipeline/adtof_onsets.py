@@ -171,7 +171,7 @@ def _resolve_device() -> str:
 def _load_model():
     """Load the ADTOF model once per process and cache (lazy singleton).
 
-    Mirrors `beat_transformer._load_model`: multi-second load, so we pay
+    Like `beats._beat_this_model`: multi-second load, so we pay
     it once. All adtof_pytorch/torch imports happen HERE, never at
     module top, so the librosa-default path never imports them and a
     broken install degrades to librosa instead of failing this import.
@@ -944,126 +944,6 @@ def detect_onsets_adtof(
         else 0.0,
     )
     return candidates
-
-
-# Lane index → pitch letter for the alignment pool. Includes one entry
-# per ADTOF lane (the merged cymbal lane is keyed by `d` so it's picked
-# up once; pulling both `d` and `c` would double-count the same peaks).
-_ALIGNMENT_LANES: tuple[tuple[str, int], ...] = (
-    ("k", 0),
-    ("s", 1),
-    ("t", 2),
-    ("h", 3),
-    ("d", 4),
-)
-
-
-def detect_drum_onsets_for_alignment(
-    audio_path: Path,
-) -> list[tuple[float, float]]:
-    """Pool ADTOF onsets across all 5 drum lanes for beat-grid alignment.
-
-    Runs a single ADTOF inference pass on `audio_path` (intended to be
-    the full drum stem) and peak-picks each lane with its standard
-    `detect_onsets_adtof` parameters. Returns a flat `(time, strength)`
-    list sorted by time, suitable for `align_beats_to_onsets`.
-
-    Pooling all five lanes — kick / snare / toms / hi-hat / cymbal —
-    multiplies the alignment coverage on songs where the kick alone
-    leaves too few beats with a nearby onset (the median-offset
-    coverage gate rejects the offset otherwise). Quiet or off-the-beat
-    hi-hat hits don't bias the result: `align_beats_to_onsets` picks
-    the strongest onset within ±50 ms of each beat, so a louder kick
-    or snare nearby still wins.
-
-    No drum-stem-substitution for the noisy lanes (we only want the
-    union of strong drum transients, not high-fidelity per-lane
-    identity), but the same median-of-non-silent amplitude
-    normalization as `detect_onsets_adtof` is applied so the activation
-    distribution lines up between the two entry points. Inference
-    failures are caught and surfaced as an empty list so the caller can
-    degrade to "no alignment" cleanly.
-    """
-    try:
-        audio = _load_mono_audio(audio_path)
-        if settings.adtof_median_normalize and audio.size:
-            scale = _median_scale_factor(audio)
-            if scale != 1.0:
-                audio = np.clip(audio * scale, -1.0, 1.0).astype(np.float32, copy=False)
-        model, device = _load_model()
-        acts, fps = _adtof_activations(model, device, audio)
-    except Exception as exc:
-        log.warning(
-            "ADTOF alignment inference failed (%s); pool empty.", exc,
-        )
-        return []
-
-    pool: list[tuple[float, float]] = []
-    for pitch, lane in _ALIGNMENT_LANES:
-        if lane >= acts.shape[1]:
-            continue
-        activation = acts[:, lane]
-        if activation.size == 0:
-            continue
-        is_noisy = pitch in _NOISY_LANE_PITCHES
-        threshold = _resolve_threshold(pitch, activation)
-        min_dist_s = (
-            settings.adtof_noisy_peak_min_distance_s
-            if is_noisy
-            else settings.adtof_peak_min_distance_s
-        )
-        min_distance_frames = max(1, round(min_dist_s * fps))
-        prominence_val = (
-            settings.adtof_noisy_peak_prominence
-            if is_noisy
-            else settings.adtof_peak_prominence
-        )
-        prominence = prominence_val if prominence_val > 0.0 else None
-        peaks, _props = find_peaks(
-            activation,
-            height=threshold,
-            distance=min_distance_frames,
-            prominence=prominence,
-        )
-        reset_frac = settings.adtof_noisy_decay_reset_frac
-        if is_noisy and reset_frac > 0.0:
-            peaks = _decay_reset_filter(
-                activation,
-                peaks,
-                reset_frac,
-                settings.adtof_noisy_decay_reset_floor,
-            )
-        if peaks.size == 0:
-            continue
-        for peak_idx in peaks:
-            pool.append((
-                float(peak_idx) / fps,
-                float(activation[int(peak_idx)]),
-            ))
-
-    # Refine every pool entry against the drum stem audio in one pass.
-    # All lanes pooled here came from this same `audio_path`, so a single
-    # onset_strength envelope covers them. Run AFTER pooling rather than
-    # per-lane so we pay the librosa.load / onset_strength cost exactly
-    # once instead of five times.
-    if pool:
-        raw_times = [t for t, _ in pool]
-        refined = _refine_peak_times_audio(
-            audio_path,
-            raw_times,
-            window_sec=settings.adtof_audio_refine_window_s,
-        )
-        pool = [
-            (refined_t, strength)
-            for refined_t, (_, strength) in zip(refined, pool, strict=False)
-        ]
-
-    pool.sort(key=lambda x: x[0])
-    log.info(
-        "ADTOF alignment pool: %d onsets across %d lanes (%s)",
-        len(pool), len(_ALIGNMENT_LANES), audio_path.name,
-    )
-    return pool
 
 
 # ADTOF lane index -> (scoring lane name, pitch key for peak-pick params).

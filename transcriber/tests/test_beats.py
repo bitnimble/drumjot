@@ -1,6 +1,6 @@
 """Tests for the time-signature heuristic and trailing-bar padding in beats.py.
 
-These exercise pure-Python branches that don't require madmom or audio
+These exercise pure-Python branches that don't require Beat This! or audio
 I/O - we construct a BeatStructure by hand or call the small helpers
 directly.
 """
@@ -14,11 +14,13 @@ from app.pipeline.beats import (
     BarInfo,
     BeatStructure,
     BeatTick,
+    _beats_downbeats_to_raw,
     _choose_time_signature,
     _coarse_offset_from_envelope,
     _finalize_bar,
     _finalize_bar_tempos,
     _pad_trailing_bars,
+    _raw_to_structure,
     _summarize,
     align_beats_to_onsets,
 )
@@ -786,3 +788,169 @@ def test_align_preserves_per_bar_tempo_under_humanized_onsets() -> None:
     assert abs(structure.bars[0].tempo_bpm - 160.0) < 0.05
     assert abs(structure.bars[1].tempo_bpm - 160.0) < 0.05
     assert structure.bars[0].tempo_bpm == pytest.approx(structure.bars[1].tempo_bpm, abs=1e-9)
+
+
+# ---------- downbeat smoothing guards (Beat This! mis-detections) ----------
+
+def _structure_from_bars(bar_lengths: list[int], spb: float = 0.5) -> BeatStructure:
+    """Build beats + downbeats from an as-detected list of bar lengths (beats
+    per bar at `spb` s/beat, downbeat at each bar start), run them through the
+    production conversion (smoothing included), return the structure."""
+    beats: list[float] = []
+    downbeats: list[float] = []
+    t = 0.0
+    for n in bar_lengths:
+        downbeats.append(round(t, 3))
+        for _ in range(n):
+            beats.append(round(t, 3))
+            t += spb
+    return _raw_to_structure(_beats_downbeats_to_raw(beats, downbeats))
+
+
+def _sigs(s: BeatStructure) -> list[tuple[int, int]]:
+    return [b.time_signature for b in s.bars]
+
+
+def test_smooth_splits_merged_bar_no_multiples():
+    # A missed downbeat merges two 4/4 bars into an 8-beat bar -> split back.
+    s = _structure_from_bars([4, 4, 8, 4, 4])
+    assert _sigs(s) == [(4, 4)] * 6
+    assert s.has_time_sig_changes is False
+
+
+def test_smooth_splits_multiple_of_three_base():
+    # 6 beats against a 3/4 majority is a merged pair, not 6/8.
+    s = _structure_from_bars([3, 3, 6, 3, 3])
+    assert _sigs(s) == [(3, 4)] * 6
+    assert s.has_time_sig_changes is False
+
+
+def test_smooth_merges_fragmented_bar_two_plus_two():
+    # An extra downbeat fragments one 4/4 bar into 2+2 -> merge back.
+    s = _structure_from_bars([4, 4, 2, 2, 4, 4])
+    assert _sigs(s) == [(4, 4)] * 5
+    assert s.has_time_sig_changes is False
+
+
+def test_smooth_merges_fragmented_bar_one_plus_three():
+    s = _structure_from_bars([4, 4, 1, 3, 4, 4])
+    assert _sigs(s) == [(4, 4)] * 5
+    assert s.has_time_sig_changes is False
+
+
+def test_smooth_preserves_sustained_odd_meter():
+    # A real, sustained 3/4 section in a 4/4 song must survive untouched.
+    s = _structure_from_bars([4, 4, 3, 3, 3, 4, 4])
+    assert _sigs(s) == [(4, 4), (4, 4), (3, 4), (3, 4), (3, 4), (4, 4), (4, 4)]
+    assert s.has_time_sig_changes is True
+
+
+def test_smooth_preserves_genuine_six_eight():
+    # A lone 6-beat bar is NOT a multiple of the 4/4 base -> the bar is kept as
+    # 6/8 (fast), but a single off-meter bar is not a *sustained* change, so the
+    # song-level flag stays False (robust-summary semantics).
+    s = _structure_from_bars([4, 4, 6, 4, 4])
+    assert (6, 8) in _sigs(s)
+    assert s.has_time_sig_changes is False
+
+
+def test_smooth_noop_without_majority_meter():
+    # No meter holds a majority -> leave the grid exactly as detected.
+    s = _structure_from_bars([4, 3, 5, 4, 3])
+    assert _sigs(s) == [(4, 4), (3, 4), (5, 4), (4, 4), (3, 4)]
+
+
+def _structure_from_bars_dur(bars: list[tuple[int, float]]) -> BeatStructure:
+    """Like _structure_from_bars but each bar is (n_beats, duration_seconds),
+    so a bar can be densely subdivided (local tempo flip) without changing its
+    span. Beats are evenly spaced within each bar."""
+    beats: list[float] = []
+    downbeats: list[float] = []
+    t = 0.0
+    for n, dur in bars:
+        downbeats.append(round(t, 4))
+        step = dur / n
+        for _ in range(n):
+            beats.append(round(t, 4))
+            t += step
+    return _raw_to_structure(_beats_downbeats_to_raw(beats, downbeats))
+
+
+def test_smooth_decimates_doubled_tempo_bar_to_three():
+    # 3/4 song; one busy bar tracked at 2x tempo (6 beats in the SAME 1.5 s
+    # span) -> must become a single 3/4 bar (decimate), NOT split, NOT 6/8.
+    s = _structure_from_bars_dur(
+        [(3, 1.5), (3, 1.5), (6, 1.5), (3, 1.5), (3, 1.5)]
+    )
+    assert _sigs(s) == [(3, 4)] * 5     # 5 bars, not 6 -> not split
+    assert s.has_time_sig_changes is False
+
+
+def test_smooth_splits_merged_bar_when_duration_is_doubled():
+    # Same beat count (6) but TWICE the span -> genuinely two merged bars,
+    # so split into 3+3 (six bars), the opposite of the decimate case.
+    s = _structure_from_bars_dur(
+        [(3, 1.5), (3, 1.5), (6, 3.0), (3, 1.5), (3, 1.5)]
+    )
+    assert _sigs(s) == [(3, 4)] * 6     # 6 bars -> split
+    assert s.has_time_sig_changes is False
+
+
+def test_smooth_decimates_doubled_tempo_bar_in_four_four():
+    s = _structure_from_bars_dur(
+        [(4, 2.0), (4, 2.0), (8, 2.0), (4, 2.0), (4, 2.0)]
+    )
+    assert _sigs(s) == [(4, 4)] * 5
+    assert s.has_time_sig_changes is False
+
+
+# ---------- robust global summary (modal meter, median tempo) ----------
+
+def _ts_bars(counts: list[int], beat_gap: float = 0.5) -> list[BarInfo]:
+    bars: list[BarInfo] = []
+    t = 0.0
+    for i, c in enumerate(counts):
+        bars.append(_make_bar(i, t, beat_gap, count=c))
+        t += c * beat_gap
+    return bars
+
+
+def test_summary_meter_is_modal_not_a_single_bar():
+    # bar 1 (past the anacrusis) is a lone 2-beat glitch; song is 4/4.
+    s = _summarize([], _ts_bars([4, 2, 4, 4, 4, 4]))
+    assert s.initial_time_signature == (4, 4)
+    assert s.has_time_sig_changes is False  # one off-meter bar is noise
+
+
+def test_summary_flags_only_sustained_meter_change():
+    s = _summarize([], _ts_bars([4, 4, 4, 3, 3, 3, 4, 4]))  # real 3/4 run
+    assert s.initial_time_signature == (4, 4)
+    assert s.has_time_sig_changes is True
+
+
+def test_summary_initial_tempo_robust_to_glitch_bar():
+    bars = _ts_bars([4, 4, 4, 4, 4])  # all 120 BPM (beat_gap 0.5)
+    bars[1].tempo_bpm = 600.0          # a fragmented bar's wild BPM
+    s = _summarize([], bars)
+    assert 100.0 < s.initial_tempo < 140.0  # median ignores the outlier
+
+
+def test_beats_downbeats_raw_handles_leading_pickup():
+    # Beats start before the first downbeat (db[0] > 0): a 2-beat pickup, then
+    # 4/4 bars. Must not crash; pickup beats land in bar 0.
+    beats = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5]
+    downbeats = [1.0, 3.0, 5.0]  # first two beats are an upbeat pickup
+    s = _raw_to_structure(_beats_downbeats_to_raw(beats, downbeats))
+    assert len(s.beats) == len(beats)            # no beats lost
+    assert s.bars[0].beats[0].time == 0.0        # pickup kept in bar 0
+    downbeat_times = [b.time for b in s.beats if b.beat_in_bar == 1]
+    assert 1.0 in downbeat_times and 3.0 in downbeat_times
+
+
+def test_beats_downbeats_raw_drops_far_downbeat():
+    # A downbeat 60 ms from the nearest beat (> tol 0.05) is ignored, not
+    # snapped onto an unrelated beat.
+    beats = [0.0, 0.5, 1.0, 1.5]
+    downbeats = [0.0, 1.06]
+    raw = _beats_downbeats_to_raw(beats, downbeats)
+    assert [int(r[1]) for r in raw] == [1, 2, 3, 4]  # one bar; far downbeat dropped

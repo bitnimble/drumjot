@@ -83,7 +83,7 @@ def parse_args(argv: list[str] | None = None) -> CliArgs:
         default="full_mix",
         help=(
             "Which audio feeds the beat tracker. `full_mix` (default) is "
-            "madmom's training distribution; `drum_stem` can help on tracks "
+            "Beat This!'s training distribution; `drum_stem` can help on tracks "
             "with heavy non-drum syncopation."
         ),
     )

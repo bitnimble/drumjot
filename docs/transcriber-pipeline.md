@@ -5,7 +5,7 @@ file. Pure Python, no bun, no TypeScript. See
 [architecture.md](architecture.md) for why.
 
 Audio → MIDI flow: BS-Roformer SW separation → MDX23C DrumSep →
-madmom beat tracking → ADTOF Frame_RNN per-stem onset detection →
+Beat This! beat tracking → ADTOF Frame_RNN per-stem onset detection →
 Claude filter LLM (rejects artifact onsets per instrument) → kept onsets
 render straight to MIDI with original un-quantized times.
 `src/midi/from_midi.ts` on the frontend converts that MIDI to a Jot.
@@ -16,7 +16,7 @@ render straight to MIDI with original un-quantized times.
 transcriber/
 ├── README.md                   Service-level docs (formats, API, perf).
 ├── pyproject.toml              fastapi, audio-separator[gpu], adtof_pytorch,
-│                               madmom (git), mir_eval, anthropic.
+│                               beat-this, mir_eval, anthropic.
 ├── .env.example                ANTHROPIC_API_KEY, LLM_MODEL,
 │                               INSTRUMENT_CONCURRENCY, DEBUG_DIR.
 ├── docs/ai-midi-to-jot-notes.md   Captured techniques from the deleted DSL
@@ -36,8 +36,8 @@ transcriber/
         ├── resume.py           hydrate_context_from_resume(folder, start_stage).
         ├── separate.py         Two-stage separator (run_stems_all / run_stems_per).
         │                       BS-Roformer SW + Jarredou MDX23C 5-stem DrumSep.
-        ├── beats.py            madmom RNN+DBN downbeat tracker (default) OR Beat
-        │                       Transformer activations into the shared DBN.
+        ├── beats.py            Beat This! beat/downbeat tracker (DBN-free,
+        │                       meter-agnostic) + per-bar tempo/feel analysis.
         ├── adtof_onsets.py     ADTOF Frame_RNN per-stem onsets; hi-hat lane
         │                       adds audio-domain supplement + energy floor.
         ├── cymbal_split.py     Splits merged cymbals -> ride (d) / crash (c).
@@ -47,7 +47,7 @@ transcriber/
         ├── filter_llm.py       Per-instrument Claude artifact-rejection filter.
         ├── onsets_midi.py      Render kept onsets to prediction.mid.
         ├── note_provenance.py  Per-note debug sidecar (kept + rejected onsets).
-        ├── quantise.py / lyrics_align.py / beat_transformer.py / provision.py
+        ├── quantise.py / lyrics_align.py / provision.py
         └── llm_util.py         Refusal/content-filter retry + code-fence strip.
 ```
 
@@ -166,6 +166,27 @@ is preserved so re-resuming is idempotent.
 `analyze_beats` order is **load-bearing**:
 `tracker → align_beats_to_onsets → _finalize_bar_tempos → _pad_trailing_bars`.
 
+- **`_smooth_downbeats`** (inside `_beats_downbeats_to_raw`, before bars are
+  built) repairs beat/downbeat mis-detections that would fake a meter change.
+  Beat This! is DBN-free (no fixed-meter prior), so a stray downbeat or a local
+  tempo flip surfaces as a one-off odd bar. Against the prevailing meter P
+  (majority bar length) AND its typical duration D, a bar with anomalous count
+  `c` is repaired by its **duration**, that's what tells the failure modes
+  apart:
+  - `c == k·P`, duration ≈ **k·D** → *k merged bars* (missed downbeat): **split**
+    into k bars of P (no 4/4→8/4, no 3/4→6/4).
+  - `c == k·P`, duration ≈ **D** → *one bar read at k× tempo* (e.g. a busy 3/4
+    bar tracked as 6 fast beats → "6/8"): **decimate** to P beats at the bar's
+    true tempo, stays one P bar, NOT split.
+  - a run of sub-P bars summing to exactly one P bar → *extra downbeat*: **merge**
+    (2+2 / 1+3 → 4).
+
+  Only acts when one meter holds a clear majority; a **sustained** odd meter
+  (≥2 bars that are neither a P-multiple nor sum to one P bar, e.g. a real 3/4
+  or 6/8 section) is left untouched so genuine mid-song changes survive. A lone
+  truly dropped/added *beat* matching none of these is preserved (can't fix
+  without inventing beats).
+
 - **`align_beats_to_onsets`** shifts the **whole grid** by one median
   offset (not per-beat snap). Neural trackers report each beat at its
   activation peak, ~30–50 ms after the transient; for each beat it
@@ -178,8 +199,12 @@ is preserved so re-resuming is idempotent.
   `MIN_ALIGN_COVERAGE` (.30): below 30 % beats with a nearby onset, the
   grid is left as the tracker produced it. Must run **after** the tracker
   and **before** padding (so synthetic fadeout bars don't pull the
-  median). Drum-stem onsets are detected once on `ctx.drum_stem` inside
-  `_do_beats` and passed in.
+  median). The onset list is **audio-only**: `_do_beats` peaks the librosa
+  onset-strength envelope of `ctx.drum_stem`
+  (`detect_envelope_onsets_for_alignment`), no model. (The old neural
+  trackers had a ~30-50 ms activation-peak lag this snap corrected via an
+  ADTOF onset pass; Beat This! sits ~2.5 ms off the transient with ~100 %
+  envelope coverage on real drum stems, so the GPU pass was dropped.)
 - **`_finalize_bar_tempos`** median-filters per-bar tempos
   (`TEMPO_SMOOTHING_WINDOW`=5) only to *decide* tempo motion: if the
   smoothed reference-bar span is under `SUSTAINED_TEMPO_CHANGE_BPM` (8.0),
@@ -189,9 +214,16 @@ is preserved so re-resuming is idempotent.
   pinned/smoothed tempo) and **before** `has_tempo_changes` is consumed
   (it overwrites the naive flag). Don't re-run `_rebuild_bar_fields`
   after it, that reintroduces raw wobble.
-- **Anacrusis**: `_summarize` excludes bar 0 when ≥2 bars present, so a
-  3-beat pickup doesn't mislabel the whole song as 3/4. Bar 0's own
-  `time_signature` is left as-is.
+- **Robust global summary**: `_summarize` derives the song-level
+  `initial_time_signature` from the **modal** per-bar meter and
+  `initial_tempo` from the **median** of the first bars (skipping bar 0 as a
+  likely anacrusis), NOT from any single bar. Beat This!'s per-bar downbeat
+  placement is jittery; a clean 4/4 song can show scattered 2/4/8-beat bars; so reading one bar (even bar 1) routinely mislabelled the whole song's
+  meter/tempo (e.g. 321 BPM / 5-4 off a glitchy bar). `has_time_sig_changes`
+  flags only a meter that holds for **≥2 consecutive bars** (a lone off-meter
+  bar is detection noise). Per-bar `time_signature`/`tempo_bpm` are left as
+  detected (they drive onset→bar mapping locally). `_finalize_bar_tempos` and
+  `_rebuild_bar_fields` set `initial_tempo` the same robust way.
 
 **Onset detector windows are tuned tight** (`pre_max`=`post_max`=3,
 `wait`=3, `pre_avg`=`post_avg`=50) on the assumption of **per-instrument
@@ -264,13 +296,12 @@ curl http://localhost:8001/health        # 200 only after eager-load completes
 ```
 
 Dev box has a local uv-managed venv at `transcriber/.venv` (torch cu128,
-madmom, audio-separator[gpu], adtof_pytorch), this is the **primary dev
+beat-this, audio-separator[gpu], adtof_pytorch), this is the **primary dev
 loop**; Docker is only for clean/reproducible builds. `scripts/check-py`
 activates it. Invoke Python as `python3` on the bare system (plain
 `python` only inside an activated venv). **Do NOT install/upgrade deps
-unprompted**, the install graph is ordering-sensitive (numpy/cython
-before madmom; torch from cu128 index first); flag dep changes and let
-the user run `uv pip install`.
+unprompted**, the install graph is ordering-sensitive (torch from the
+cu128 index first); flag dep changes and let the user run `uv pip install`.
 
 ## Accuracy: the two paths
 
@@ -317,7 +348,7 @@ F1 eval harness early and run ADTOF locally as a proxy baseline.
 - 2509.21739, N2N paper (Path B target).
 - ADTOF: github.com/MZehren/ADTOF, runnable proxy baseline.
 - E-GMD: magenta.tensorflow.org/datasets/e-gmd.
-- madmom: github.com/CPJKU/madmom, beat/downbeat tracking.
+- Beat This!: github.com/CPJKU/beat_this, beat/downbeat tracking (ISMIR 2024).
 - audio-separator: pypi.org/project/audio-separator/.
 - Jarredou MDX23C DrumSep: github.com/jarredou/models/releases.
 - Drumgizmo + free kits: drumgizmo.org/wiki (Path B rendering).

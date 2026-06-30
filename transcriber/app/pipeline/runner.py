@@ -57,12 +57,12 @@ from app.debug import DebugSink, beats_dump, onsets_dump
 from app.models import OnsetCandidate
 from app.outputs import OutputSink, encode_batch_parallel
 from app.pipeline.adtof_onsets import (
-    detect_drum_onsets_for_alignment,
     detect_onsets_adtof,
 )
 from app.pipeline.beats import (
     BeatStructure,
     analyze_beats,
+    detect_envelope_onsets_for_alignment,
     detect_feel_for_bars,
 )
 from app.pipeline.cymbal_split import split_cymbal_onsets
@@ -426,32 +426,26 @@ def _do_beats(
     log.info("Beat tracking using audio: %s (mode=%s)", beat_audio.name, options.beat_input)
     duration = ctx.duration if ctx.duration > 0 else None
 
-    # Snap the whole beat grid to the strongest drum transients within
-    # ±50 ms. Neural trackers report beat times at the activation peak,
-    # which lags the transient by ~50 ms; without this, downbeat kicks
-    # register at beat_in_bar=1.18 instead of 1.00 and the LLM either
-    # drops them or quantizes them to the wrong slot. We deliberately
-    # reuse the ADTOF backend on the full drum stem — its CRNN gives the
-    # most stable transient peaks for the grid-alignment median, and
-    # keeping the alignment detector independent of the per-stem onsets
-    # the next stage runs avoids any circular dependency between them.
-    #
-    # Pool onsets across all five drum lanes (kick / snare / toms /
-    # hi-hat / cymbal) rather than just kick. The alignment median's
-    # coverage gate rejected songs whose kicks weren't on every beat;
-    # adding snare/hat/cymbal multiplies the per-beat hit rate without
-    # biasing the offset — `align_beats_to_onsets` picks the strongest
-    # nearby onset, so a louder kick still wins when one is around.
-    align_onsets: list[tuple[float, float]] | None = None
-    if ctx.drum_stem is not None and ctx.drum_stem.exists():
-        try:
-            align_onsets = detect_drum_onsets_for_alignment(ctx.drum_stem)
-        except Exception as exc:
-            log.warning(
-                "beats: ADTOF onset detection on drum stem failed (%s); "
-                "skipping grid alignment.", exc,
-            )
-            align_onsets = []
+    # Snap the beat grid to the audio onset-strength envelope (CPU, no model).
+    # Beat This! reports beats essentially on the transient (~2.5 ms median
+    # lag on real drum stems, 100% envelope coverage), so the old ~50 ms
+    # activation-peak lag the ADTOF onset pass corrected is gone; envelope
+    # peaks feed the same `align_beats_to_onsets` median snap. Use the drum
+    # stem when present (cleanest transients), else the beat audio.
+    align_audio = (
+        ctx.drum_stem if ctx.drum_stem is not None and ctx.drum_stem.exists()
+        else beat_audio
+    )
+    try:
+        align_onsets: list[tuple[float, float]] = detect_envelope_onsets_for_alignment(
+            align_audio
+        )
+    except Exception as exc:
+        log.warning(
+            "beats: envelope onset detection failed (%s); skipping grid alignment.",
+            exc,
+        )
+        align_onsets = []
 
     ctx.structure = analyze_beats(
         beat_audio,

@@ -5,7 +5,7 @@ Pipeline (beat-aware, no fixed grid):
         -> BS-Roformer SW                       (full mix -> drum stem)
         -> Jarredou MDX23C 6-stem DrumSep       (drum stem -> per-instrument stems)
         -> ADTOF Frame_RNN per stem             (per-stem onset candidates)
-        -> madmom RNN+DBN downbeat tracker      (per-beat anchors, downbeats,
+        -> Beat This! beat/downbeat tracker     (per-beat anchors, downbeats,
                                                  per-bar time signature + feel)
         -> attach (bar, beat_in_bar) positions to each onset
         -> Claude filter (per instrument) → rejects artifact onsets

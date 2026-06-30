@@ -54,8 +54,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1
 
 # System dependencies. libsndfile + ffmpeg for librosa/soundfile;
-# build-essential is required by madmom's C extensions; curl/ca-certificates
-# for the in-image downloads below.
+# build-essential for any git/sdist deps that compile C extensions;
+# curl/ca-certificates for the in-image downloads below.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         software-properties-common \
         build-essential \
@@ -100,11 +100,11 @@ WORKDIR /app
 # edit only re-runs the editable install at the bottom, not the ~3 GB
 # torch/torchaudio fetch above it.
 
-# Layer 1: pip/setuptools + numpy/cython. Invalidated only when this
+# Layer 1: pip/setuptools + numpy. Invalidated only when this
 # RUN string itself changes, which is essentially never; serves as the
 # bedrock for both the torch layer and the editable install below.
 RUN python3.11 -m pip install --upgrade pip setuptools wheel \
-    && python3.11 -m pip install --no-cache-dir 'numpy>=1.26' cython
+    && python3.11 -m pip install --no-cache-dir 'numpy>=1.26'
 
 # Layer 2: torch + torchaudio from the cu128 wheel index. Installed
 # BEFORE the editable install so audio-separator's `torch` dep is
@@ -189,11 +189,10 @@ RUN chmod +x /app/entrypoint.sh
 # on :5173 with SPA fallback to index.html (see Caddyfile).
 COPY --from=frontend-builder /build/frontend/dist /app/web
 
-# Beat Transformer checkpoint (optional). If the directory is empty the image
-# still builds; BT just fails-loud at first use when BEAT_TRACKER=beat_transformer
-# is set. See transcriber/checkpoints/README.md. (The learned-onset model is NOT
-# baked -- it lives in the mounted models cache; see the /models block below.)
-COPY transcriber/checkpoints/ ./checkpoints/
+# No model weights are baked into the image: Beat This! auto-downloads to
+# the torch hub cache on first use (or via app.pipeline.provision at install
+# time), and the learned-onset model lives in the mounted models cache
+# (see the /models block below).
 
 # Benchmark harness code (datasets/ and results/ are intentionally NOT
 # copied; they're host-mounted at runtime via docker-compose volumes

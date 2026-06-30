@@ -127,7 +127,7 @@ drumjot.loadDsl(`
 
 A separate Python backend (`transcriber/`) that converts audio into
 Drumjot DSL via Demucs + Jarredou (separation) + librosa (per-stem
-onset detection) + madmom (beat / downbeat / feel tracking) + Claude
+onset detection) + Beat This! (beat / downbeat / feel tracking) + Claude
 Opus 4.7 (LLM emission + multi-level refinement). Runs in Docker with
 optional NVIDIA GPU passthrough; the Vite dev server proxies `/api/*`
 to it.
