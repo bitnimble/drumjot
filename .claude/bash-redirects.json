@@ -24,8 +24,6 @@
         "Bash(sed *)",
         "Bash(find *)",
         "Bash(awk *)",
-        "Bash(head *)",
-        "Bash(tail *)",
         "Bash(curl *)"
       ],
       "reason": "Use the WebFetch(), Read(), Write(), Edit() and Find() tools instead of invoking curl, cat, sed, find or awk directly. (grep / rg / git grep ARE allowed now for text search -- but prefer Read / Find / LSP where they suffice; their command-executing flags like `rg --pre` / `git grep -O` are denied in settings.json. See AGENTS.md.)"
