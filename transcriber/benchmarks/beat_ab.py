@@ -276,10 +276,16 @@ def run(
 ) -> None:
     rows = _read_rows(root, split)
     clips = [c for c in (_to_clip(root, r) for r in rows) if c is not None]
-    clips = [c for c in clips if c.audio_path.exists() and c.midi_path.exists()]
+    # Select from CSV metadata first, then stat only the chosen clips. Stat'ing
+    # all ~45k clips up front hammers the HDD-backed NFS for no reason.
     selected = select_clips(clips, n_total, nonfourfour_quota, min_bars, min_per_meter)
+    missing = [c for c in selected if not (c.audio_path.exists() and c.midi_path.exists())]
+    if missing:
+        log.warning("%d selected clips missing on disk, dropping: %s",
+                    len(missing), [c.track_id for c in missing])
+        selected = [c for c in selected if c not in missing]
     meters = collections.Counter(f"{c.time_sig[0]}/{c.time_sig[1]}" for c in selected)
-    log.info("selected %d clips from %d eligible; meters: %s",
+    log.info("selected %d clips from %d candidates; meters: %s",
              len(selected), len(clips), dict(sorted(meters.items())))
 
     out_dir.mkdir(parents=True, exist_ok=True)
