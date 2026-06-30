@@ -56,12 +56,27 @@ def _bs_example(loaded: LoadedModel) -> torch.Tensor:
     return stft_repr
 
 
-def export_body(loaded: LoadedModel, out_path: str | Path, *, opset: int = 17) -> Path:
+def _to_fp16(out_path: Path) -> None:
+    """Convert an fp32 ONNX graph in place to fp16, keeping the graph inputs and
+    outputs fp32 (Cast nodes at the boundary) so the runner's forward_onnx feeds
+    fp32 and reads fp32 unchanged. Halves the file and unlocks the GPU tensor /
+    NPU fp16 path; the STFT/iSTFT stay fp32 in torch outside this graph."""
+    import onnx
+    from onnxruntime.transformers.float16 import convert_float_to_float16
+
+    model = onnx.load(str(out_path))
+    onnx.save(convert_float_to_float16(model, keep_io_types=True), str(out_path))
+
+
+def export_body(
+    loaded: LoadedModel, out_path: str | Path, *, opset: int = 17, fp16: bool = False
+) -> Path:
     """Export `loaded`'s body to `out_path` (.onnx). Returns the path.
 
     Exports on CPU (the example tensors are built on CPU and the exported graph
     is device-agnostic), restoring the model's original device afterwards, so it
-    works whether the model was loaded on CPU or CUDA."""
+    works whether the model was loaded on CPU or CUDA. `fp16=True` converts the
+    graph to fp16 weights (fp32 I/O preserved)."""
     out_path = Path(out_path)
     model = loaded.model
     orig_device = next(model.parameters()).device
@@ -88,4 +103,6 @@ def export_body(loaded: LoadedModel, out_path: str | Path, *, opset: int = 17) -
         # train mode, which would re-enable BS-Roformer's attn/ff dropout on any
         # later torch forward (the separators are always eval / inference).
         model.to(orig_device).eval()
+    if fp16:
+        _to_fp16(out_path)
     return out_path

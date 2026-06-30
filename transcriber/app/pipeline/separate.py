@@ -711,7 +711,16 @@ def _onnx_separation_enabled() -> bool:
     execution provider the installed build supports (CUDA / DirectML / CoreML /
     ROCm, else CPU). On NVIDIA the torch+bf16 path is usually faster, so the
     default stays torch; flip this on for AMD / Apple / Intel backends."""
-    return os.environ.get("DRUMJOT_SEP_ONNX", "").strip().lower() in ("1", "true", "yes", "on")
+    return os.environ.get("DRUMJOT_SEP_ONNX", "").strip().lower() in (
+        "1", "true", "yes", "on", "fp16", "16", "half"
+    )
+
+
+def _onnx_separation_fp16() -> bool:
+    """DRUMJOT_SEP_ONNX=fp16 -> export an fp16 body (~half the file, GPU tensor /
+    NPU fp16 path). ~10% magnitude error vs fp32 but shape preserved (corr ~1.0);
+    the STFT/iSTFT stay fp32 in torch regardless."""
+    return os.environ.get("DRUMJOT_SEP_ONNX", "").strip().lower() in ("fp16", "16", "half")
 
 
 def _attach_onnx_body(loaded: object, ckpt_path: Path, models_dir: Path) -> None:
@@ -721,13 +730,23 @@ def _attach_onnx_body(loaded: object, ckpt_path: Path, models_dir: Path) -> None
     from app.pipeline.separation.export import export_body
     from app.pipeline.separation.loader import attach_onnx_session
 
-    onnx_path = models_dir / (ckpt_path.stem + ".onnx")
+    fp16 = _onnx_separation_fp16()
+    onnx_path = models_dir / (ckpt_path.stem + (".fp16.onnx" if fp16 else ".onnx"))
     if not onnx_path.exists():
-        log.info("Exporting %s body to ONNX (one-time, cached) ...", ckpt_path.name)
-        export_body(loaded, onnx_path)  # type: ignore[arg-type]
+        log.info(
+            "Exporting %s body to ONNX%s (one-time, cached) ...",
+            ckpt_path.name,
+            " fp16" if fp16 else "",
+        )
+        export_body(loaded, onnx_path, fp16=fp16)  # type: ignore[arg-type]
     attach_onnx_session(loaded, onnx_path)  # type: ignore[arg-type]
     providers = loaded.onnx_session.get_providers()  # type: ignore[attr-defined]
-    log.info("ONNX separation ENABLED for %s (providers=%s)", ckpt_path.name, providers)
+    log.info(
+        "ONNX separation ENABLED for %s (%s, providers=%s)",
+        ckpt_path.name,
+        "fp16" if fp16 else "fp32",
+        providers,
+    )
 
 
 def _resolve_outputs(raw_paths: list[str], out_dir: Path) -> list[Path]:
