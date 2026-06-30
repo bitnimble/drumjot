@@ -231,3 +231,17 @@ the DBN). Tempo (octave-corrected) is a wash across all three.
 - Beat This! barely uses `align_onsets` (uniform offset only), so the
   synthetic-vs-adtof onset mode matters far less for it than for the DBN
   path — the bar-alignment wins are intrinsic.
+
+---
+
+## Outcome (2026-07-01)
+
+Beat This! adopted as the sole tracker; `app/pipeline/beats.py` now runs it
+end-to-end (madmom + Beat Transformer + the shared DBN deleted). Real-stem
+checks confirmed it: ~2.5 ms median beat-to-transient lag with ~100 % audio
+onset-strength-envelope coverage, so `_do_beats` aligns the grid off the
+audio envelope (CPU) and the ADTOF onset pass was dropped. **This A/B
+harness (`benchmarks/beat_ab.py`, `beat_gt.py`, `onset_synth.py`) was then
+removed** — it was one-shot decision scaffolding and the decision is made.
+This doc + the numbers above are the record; reconstruct from git history if
+a future tracker needs re-evaluating.
