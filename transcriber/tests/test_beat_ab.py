@@ -6,6 +6,7 @@ clip selection (stratified + deterministic), synthetic onset degradation
 """
 from __future__ import annotations
 
+import collections
 from pathlib import Path
 
 import mido
@@ -44,9 +45,27 @@ def _fake_clips() -> list[Clip]:
 
 
 def test_selection_honours_count_and_nonfourfour_quota():
-    sel = select_clips(_fake_clips(), n_total=48, nonfourfour_quota=12, min_bars=8)
+    sel = select_clips(_fake_clips(), n_total=48, nonfourfour_quota=12, min_bars=8,
+                       min_per_meter=2)
     assert len(sel) == 48
     assert sum(not c.is_four_four for c in sel) == 12
+
+
+def test_selection_guarantees_each_meter():
+    sel = select_clips(_fake_clips(), n_total=48, nonfourfour_quota=16, min_per_meter=3)
+    meters = collections.Counter(c.time_sig for c in sel if not c.is_four_four)
+    for meter in [(3, 4), (6, 8), (5, 4), (7, 8)]:
+        assert meters[meter] >= 3, (meter, meters)
+
+
+def test_selection_includes_rare_meter_below_quota():
+    # Only 2 clips of a rare meter exist; both must still be selected.
+    clips = _fake_clips() + [_clip("rare0", 120, (7, 8)), _clip("rare1", 95, (7, 8))]
+    # Drop the synthetic 7/8s from _fake_clips so (7,8) availability is exactly 2.
+    clips = [c for c in clips if c.time_sig != (7, 8) or c.track_id.startswith("rare")]
+    sel = select_clips(clips, n_total=48, nonfourfour_quota=16, min_per_meter=5)
+    picked = {c.track_id for c in sel if c.time_sig == (7, 8)}
+    assert picked == {"rare0", "rare1"}
 
 
 def test_selection_is_deterministic():

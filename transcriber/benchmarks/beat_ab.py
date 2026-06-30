@@ -20,6 +20,7 @@ Run (CPU, synthetic onsets, while the GPU is busy), from `transcriber/`:
 from __future__ import annotations
 
 import argparse
+import collections
 import csv
 import json
 import logging
@@ -161,16 +162,43 @@ def _stratified(clips: list[Clip], k: int) -> list[Clip]:
     return chosen
 
 
+def _select_nonfourfour(nff: list[Clip], quota: int, min_per_meter: int) -> list[Clip]:
+    """Non-4/4 selection that guarantees every meter is represented.
+
+    First reserve `min_per_meter` clips of each meter present (capped by
+    availability), so rare meters (E-GMD has only 43 each of 5/4 & 5/8)
+    can't be crowded out by 3/4 & 6/8; then fill the rest of the quota
+    tempo-stratified across whatever's left. The per-meter guarantee wins
+    if it would exceed the quota.
+    """
+    by_meter: dict[tuple[int, int], list[Clip]] = {}
+    for c in nff:
+        by_meter.setdefault(c.time_sig, []).append(c)
+    chosen: list[Clip] = []
+    chosen_ids: set[str] = set()
+    for meter in sorted(by_meter):
+        for c in _stratified(by_meter[meter], min(min_per_meter, len(by_meter[meter]))):
+            if c.track_id not in chosen_ids:
+                chosen.append(c)
+                chosen_ids.add(c.track_id)
+    remaining = [c for c in nff if c.track_id not in chosen_ids]
+    for c in _stratified(remaining, max(0, quota - len(chosen))):
+        chosen.append(c)
+        chosen_ids.add(c.track_id)
+    return chosen
+
+
 def select_clips(
     clips: Iterable[Clip],
     n_total: int = 96,
     nonfourfour_quota: int = 24,
     min_bars: int = 8,
+    min_per_meter: int = 4,
 ) -> list[Clip]:
     eligible = [c for c in clips if _n_bars(c) >= min_bars]
     ff = [c for c in eligible if c.is_four_four]
     nff = [c for c in eligible if not c.is_four_four]
-    nff_sel = _stratified(nff, min(nonfourfour_quota, len(nff)))
+    nff_sel = _select_nonfourfour(nff, nonfourfour_quota, min_per_meter)
     ff_sel = _stratified(ff, n_total - len(nff_sel))
     return sorted(nff_sel + ff_sel, key=lambda c: c.track_id)
 
@@ -244,13 +272,15 @@ def run(
     nonfourfour_quota: int,
     min_bars: int,
     split: str,
+    min_per_meter: int,
 ) -> None:
     rows = _read_rows(root, split)
     clips = [c for c in (_to_clip(root, r) for r in rows) if c is not None]
     clips = [c for c in clips if c.audio_path.exists() and c.midi_path.exists()]
-    selected = select_clips(clips, n_total, nonfourfour_quota, min_bars)
-    log.info("selected %d clips (%d non-4/4) from %d eligible",
-             len(selected), sum(not c.is_four_four for c in selected), len(clips))
+    selected = select_clips(clips, n_total, nonfourfour_quota, min_bars, min_per_meter)
+    meters = collections.Counter(f"{c.time_sig[0]}/{c.time_sig[1]}" for c in selected)
+    log.info("selected %d clips from %d eligible; meters: %s",
+             len(selected), len(clips), dict(sorted(meters.items())))
 
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "selected_clips.txt").write_text(
@@ -365,6 +395,8 @@ def main(argv: list[str] | None = None) -> None:
                    default=Path(__file__).resolve().parent / "out" / "beat_ab")
     p.add_argument("--n", type=int, default=96)
     p.add_argument("--nonfourfour", type=int, default=24)
+    p.add_argument("--min-per-meter", type=int, default=4,
+                   help="guaranteed min clips per non-4/4 meter (3/4, 6/8, 5/4, 5/8)")
     p.add_argument("--min-bars", type=int, default=8)
     p.add_argument("--split", default="all",
                    help="E-GMD split filter, or 'all' (default; needed for non-4/4 coverage)")
@@ -387,7 +419,7 @@ def main(argv: list[str] | None = None) -> None:
     _seed_determinism()
     run(resolve_root(args.root), args.onsets,
         args.output_dir.with_name(args.output_dir.name + f"_{args.onsets}"),
-        args.n, args.nonfourfour, args.min_bars, args.split)
+        args.n, args.nonfourfour, args.min_bars, args.split, args.min_per_meter)
 
 
 def _seed_determinism() -> None:
