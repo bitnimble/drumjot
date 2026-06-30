@@ -32,12 +32,12 @@ if [ ! -d "$VENV" ]; then
     exit 1
 fi
 
-# ruff + pytest live in the `dev` OPTIONAL-EXTRA. A plain `uv sync` drops
-# optional extras, so the dev tooling silently disappears; sync WITH the extra.
+# ruff + pytest live in the `dev` dependency-group (in default-groups), so a
+# plain `uv sync` installs them; a stale `--no-default-groups` venv won't have them.
 if [ ! -x "$VENV/bin/ruff" ] || [ ! -x "$VENV/bin/pytest" ]; then
-    echo "error: transcriber/.venv is missing the dev extra (ruff/pytest)." >&2
-    echo "       plain 'uv sync' drops optional extras; re-sync WITH it:" >&2
-    echo "           cd transcriber && uv sync --extra dev" >&2
+    echo "error: transcriber/.venv is missing the dev tooling (ruff/pytest)." >&2
+    echo "       re-sync to install the default dependency-groups:" >&2
+    echo "           cd transcriber && uv sync" >&2
     exit 1
 fi
 
