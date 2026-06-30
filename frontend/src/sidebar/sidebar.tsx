@@ -19,11 +19,13 @@ import styles from './sidebar.module.css';
  * **pinned**, so toggling pin never moves or resizes it. The only difference is
  * what the score does underneath: floating overlays it (the score keeps full
  * width, virtualization still renders the bars beneath the panel); pinning
- * reserves the panel's width in the score region's right padding (see
- * `.scoreRegion` in jot_editor.module.css, keyed off the panel's
- * `data-sidebar-mode="pinned"`), so the score narrows and its scroll
- * virtualization stops rendering the bars under the dock. A floating panel is
- * dismissed by an outside click or Escape; a pinned one stays until re-toggled.
+ * reserves the panel's width in the score region's right padding (jot_editor.tsx
+ * sets `data-sidebar-pinned` on `.scoreRegion`, which the CSS keys the padding
+ * off; an attribute rather than a `:has()` on the panel, since `:has()` over the
+ * score subtree forced a style recalc on every note mutation), so the score
+ * narrows and its scroll virtualization stops rendering the bars under the dock.
+ * A floating panel is dismissed by an outside click or Escape; a pinned one
+ * stays until re-toggled.
  */
 export const Sidebar = observer(function Sidebar() {
   const store = React.useContext(SidebarStoreContext);

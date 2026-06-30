@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { buildOutputEnv } from './scripts/build_env';
 
 // Drives the REAL desktop binary (WebKitGTK webview + real Tauri IPC), the one
 // thing the Chromium Playwright suite can't cover. The embedded driver provider
@@ -9,7 +10,13 @@ import { join } from 'node:path';
 // Build the binary first with `bun run e2e:tauri:build` (or `bun run e2e:tauri`,
 // which chains both). Specs live in `e2e-tauri/*.wdio.ts` (a suffix neither the
 // Playwright `**/*.e2e.ts` nor the bun `*.test.ts` runners pick up).
-const APP_BINARY = join(import.meta.dirname, 'src-tauri', 'target', 'debug', 'app');
+//
+// Resolve the binary from the SAME cargo target dir `build-wdio-app.ts` builds
+// into, so the two agree when `DRUMJOT_BUILD_DIR` relocates `CARGO_TARGET_DIR`
+// (else the build lands in `$DRUMJOT_BUILD_DIR/cargo-target` and this lookup
+// misses it); falls back to the in-repo `src-tauri/target` when it's unset.
+const TARGET_DIR = buildOutputEnv().CARGO_TARGET_DIR ?? join(import.meta.dirname, 'src-tauri', 'target');
+const APP_BINARY = join(TARGET_DIR, 'debug', 'app');
 
 export const config: WebdriverIO.Config = {
   runner: 'local',
