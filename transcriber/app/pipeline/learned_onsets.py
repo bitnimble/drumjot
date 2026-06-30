@@ -59,6 +59,24 @@ def _resolve_device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
+def _onset_onnx_enabled() -> bool:
+    """Default ON: run MERT + heads through onnxruntime (cross-platform, torch-free
+    inference). Opt out with DRUMJOT_ONSET_ONNX in {0,false,no,off,torch} for the
+    torch path (mirrors DRUMJOT_SEP_ONNX for separation)."""
+    import os
+
+    return os.environ.get("DRUMJOT_ONSET_ONNX", "1").strip().lower() not in (
+        "0", "false", "no", "off", "torch",
+    )
+
+
+def _onnx_providers(device: str) -> list[str] | None:
+    """onnxruntime providers for `device`: CPU-pinned when CPU is forced, else
+    `None` (np_onsets uses onnxruntime's available set -- CUDA/DirectML/CoreML
+    then CPU -- with a CPU fallback) so a GPU EP is used when present."""
+    return ["CPUExecutionProvider"] if device == "cpu" else None
+
+
 def detect_all_pitches_learned(
     per_instrument_stems: dict[str, Path],
     checkpoint_dir: Path,
@@ -93,14 +111,27 @@ def detect_all_pitches_learned(
     from drumjot_training import embeddings, enst, inference, metrics
 
     dev = device or _resolve_device()
-    model, meta = inference.load_model(checkpoint_dir, dev)
-    # Build the encoder once and reuse across stems (else each stem reloads the
-    # 330M MERT weights), co-located with the model on `dev` so a forced
-    # `settings.device=cpu` is honoured rather than MERT auto-grabbing the GPU.
-    # `stitched_probs` accepts an injected encoder.
-    enc = encoder or embeddings.MertEncoder(
-        name=meta["encoder"], layer=meta["encoder_layer"], device=dev
-    )
+    # Default: the torch-free ONNX path (MERT + heads on onnxruntime); opt out
+    # with DRUMJOT_ONSET_ONNX=0 for the torch path. Both expose `stitched(audio)
+    # -> (probs, fps)`; everything downstream (per-lane picking, tom split) is
+    # shared. The ONNX path exports the two `.onnx` once (cached, torch needed
+    # only then); the `encoder` arg applies to the torch path only.
+    if _onset_onnx_enabled():
+        from app.pipeline.onset_onnx.np_onsets import load_onnx_onset
+
+        onnx_model, meta = load_onnx_onset(checkpoint_dir, providers=_onnx_providers(dev))
+        stitched = onnx_model.stitched_probs
+    else:
+        model, meta = inference.load_model(checkpoint_dir, dev)
+        # One MERT encoder, reused across stems (else each stem reloads the 330M
+        # weights), co-located on `dev` so a forced settings.device=cpu is honoured.
+        enc = encoder or embeddings.MertEncoder(
+            name=meta["encoder"], layer=meta["encoder_layer"], device=dev
+        )
+
+        def stitched(audio_path):
+            return inference.stitched_probs(audio_path, model, meta, encoder=enc)
+
     thresholds = meta["thresholds"]
     lane_index = {lane: i for i, lane in enumerate(meta["lanes"])}
 
@@ -109,7 +140,7 @@ def detect_all_pitches_learned(
         owned = enst.PERSTEM_TO_LANES.get(stem_pitch, ())
         if not owned:
             continue  # stem the model has no lane for (e.g. residual)
-        probs, fps = inference.stitched_probs(audio_path, model, meta, encoder=enc)
+        probs, fps = stitched(audio_path)
         n_frames = probs.shape[1]
         for lane in owned:
             i = lane_index.get(lane)
