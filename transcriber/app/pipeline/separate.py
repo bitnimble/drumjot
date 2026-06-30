@@ -602,14 +602,14 @@ def _maybe_compile_model(loaded: object) -> None:
 
 def _onnx_separation_enabled() -> bool:
     """Route the drum-separator BODIES through onnxruntime instead of torch (the
-    STFT/iSTFT stay torch/fp32). Off by default; opt in with DRUMJOT_SEP_ONNX=1.
+    STFT/iSTFT stay fp32). DEFAULT ON (the cross-platform path); opt OUT with
+    DRUMJOT_SEP_ONNX=0 to use the torch path, kept as a fallback / A-B reference
+    (e.g. on NVIDIA where torch+bf16 may still be faster).
 
-    This is the cross-platform path: onnxruntime dispatches the body to whatever
-    execution provider the installed build supports (CUDA / DirectML / CoreML /
-    ROCm, else CPU). On NVIDIA the torch+bf16 path is usually faster, so the
-    default stays torch; flip this on for AMD / Apple / Intel backends."""
-    return os.environ.get("DRUMJOT_SEP_ONNX", "").strip().lower() in (
-        "1", "true", "yes", "on", "fp16", "16", "half"
+    onnxruntime dispatches the body to whatever execution provider the installed
+    build supports (CUDA / TensorRT / DirectML / CoreML / ROCm, else CPU)."""
+    return os.environ.get("DRUMJOT_SEP_ONNX", "1").strip().lower() not in (
+        "0", "false", "no", "off", "torch",
     )
 
 
