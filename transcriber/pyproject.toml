@@ -37,18 +37,22 @@ ml = [
     "numpy>=1.26",
 ]
 
-# Stem separation models: BS-Roformer (drum stem), MDX23C (drum pieces), and
-# the UVR vocals model used by the lyrics mix flow. Its own capability so a user
-# can stem-split audio without pulling the transcription / lyrics stacks.
+# Stem separation: BS-Roformer (drum stem + the /lyrics vocals stem) and MDX23C
+# (drum pieces), run through our vendored torch wrapper (pipeline/separation/).
+# Its own capability so a user can stem-split without the transcription / lyrics
+# stacks.
 separation = [
     { include-group = "ml" },
-    # audio-separator >=0.31 needs numpy 2; the MDX23C drum-piece model used by
-    # pipeline/separate.py is only registered in 0.31+.
-    "audio-separator[gpu]>=0.44",
-    # Pin onnxruntime-gpu to its CUDA-12 line: 1.26 moved to a CUDA-13 build
-    # (libcudart.so.13); the image is CUDA 12 + torch cu128, so the CUDA-12
-    # build (<=1.25.x) is the match. Bump only alongside a CUDA-13 base.
+    # Cross-platform ONNX inference path (DRUMJOT_SEP_ONNX). Pin onnxruntime-gpu
+    # to its CUDA-12 line: 1.26 moved to a CUDA-13 build (libcudart.so.13); the
+    # image is CUDA 12 + torch cu128, so the CUDA-12 build (<=1.25.x) matches.
+    # Bump only alongside a CUDA-13 base.
     "onnxruntime-gpu>=1.19,<1.26",
+    # Runtime deps of the vendored BS-Roformer / MDX23C model classes (formerly
+    # pulled in transitively via audio-separator, which we've now dropped).
+    "einops>=0.8",
+    "rotary-embedding-torch>=0.6",
+    "ml-collections>=1.1",
 ]
 
 # Local drum transcription: separation + beats + learned/ADTOF onsets + MIDI.
@@ -68,7 +72,7 @@ transcription = [
 # Lyrics alignment: MahmoudAshraf97's pure-PyTorch long-form CTC forced aligner
 # (MMS-300m under the hood). Pinned by commit SHA. NOT the deskpai PyPI port,
 # which hard-pins the CPU onnxruntime wheel and shadows onnxruntime-gpu. Includes
-# separation: the mix flow runs the UVR vocals separator before aligning.
+# separation: the mix flow runs BS-Roformer SW to extract a vocals stem before aligning.
 lyrics = [
     { include-group = "separation" },
     "ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git@264e7a1f81bff9ff5e787a5537020c2ad0b0df02",
@@ -96,9 +100,9 @@ dev = ["ruff>=0.6", "pytest>=8", "matplotlib>=3.8"]
 # installer pulls capabilities via `uv sync --no-default-groups --group <cap>`
 # (base deps plus the selected group(s)).
 default-groups = ["dev", "transcription", "lyrics", "lyrics-ja"]
-# Drop torchvision: an UNUSED transitive (onnx2torch <- audio-separator[gpu]).
-# On cu128/WSL its compiled ops fail to load and break transformers model
-# loading. The impossible marker removes it from the resolved graph.
+# Drop torchvision: unused, and on cu128/WSL its compiled ops fail to load and
+# break transformers model loading. The impossible marker removes it from the
+# resolved graph.
 override-dependencies = ["torchvision; sys_platform == 'never'"]
 
 [[tool.uv.index]]
