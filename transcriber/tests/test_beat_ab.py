@@ -208,26 +208,38 @@ def _grid_8() -> GtGrid:
 
 def test_score_perfect_match():
     g = _grid_8()
-    s = _score(g, g.beats, g.downbeats, g.bpm)
+    s = _score(g, g.beats, g.downbeats)
     assert s["downbeat_f"] == 1.0
     assert s["beat_f"] == 1.0
     assert s["amlt"] == 1.0
     assert s["tempo_err"] == 0.0
-    assert s["tempo_within4"] is True
+    assert s["bar_len_ok"] is True
+    assert s["tempo_oct_within4"] is True
 
 
 def test_score_empty_estimate_is_zero_not_crash():
     g = _grid_8()
-    s = _score(g, [], [], 0.0)
+    s = _score(g, [], [])
     assert s["downbeat_f"] == 0.0
     assert s["beat_f"] == 0.0
-    assert s["amlt"] == 0.0
+    assert s["bar_len_ok"] is False
 
 
-def _fake_result(downbeat_f: float, amlt: float, tempo_err: float) -> dict:
+def test_score_wrong_beats_per_bar_flags_bar_len():
+    # 5/4 GT read as 4/4: detected bar spans 4 of the 5 beats -> ratio 0.8.
+    g = GtGrid(beats=[i * 0.5 for i in range(20)], downbeats=[0.0, 2.5, 5.0, 7.5],
+               bpm=120.0, time_sig=(5, 4))
+    est_db = [0.0, 2.0, 4.0, 6.0, 8.0]  # every 4 beats
+    s = _score(g, g.beats, est_db)
+    assert s["bar_len_ok"] is False
+    assert abs(s["bar_len_ratio"] - 0.8) < 0.01
+
+
+def _fake_result(downbeat_f: float, bar_ok: bool) -> dict:
     return {
-        "downbeat_f": downbeat_f, "amlt": amlt, "beat_f": downbeat_f, "cmlt": amlt,
-        "tempo_err": tempo_err, "tempo_within4": tempo_err < 4, "tempo_within8": tempo_err < 8,
+        "downbeat_f": downbeat_f, "bar_len_ok": bar_ok, "bar_len_ratio": 1.0 if bar_ok else 0.8,
+        "tempo_oct_within4": True, "tempo_err": 1.0, "tempo_oct": 1.0,
+        "amlt": downbeat_f, "beat_f": downbeat_f, "cmlt": downbeat_f,
         "est_bpm": 120.0, "gt_bpm": 120.0,
     }
 
@@ -238,11 +250,13 @@ def test_write_summary_smoke(tmp_path: Path):
         rows.append({
             "track_id": f"t{i}", "band": "90-120", "time_sig": "4/4" if i % 2 else "3/4",
             "is_4_4": bool(i % 2), "sanity_cov": 1.0,
-            "madmom": _fake_result(0.8, 0.7, 1.0),
-            "beat_transformer": _fake_result(0.7, 0.6, 2.0),
+            "madmom": _fake_result(0.8, True),
+            "beat_transformer": _fake_result(0.7, False),
+            "beat_this": _fake_result(0.9, True),
         })
     _write_summary(tmp_path, "synthetic", rows)
     text = (tmp_path / "summary.md").read_text()
     assert "Beat-tracker A/B" in text
-    assert "downbeat_f" in text
-    assert "4/4 vs non-4/4" in text
+    assert "downbeat_f" in text and "bar_len_ok" in text
+    assert "beat_this" in text
+    assert "Per time signature" in text

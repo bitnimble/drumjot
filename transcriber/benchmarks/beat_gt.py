@@ -109,9 +109,15 @@ def gt_grid(midi_path, time_sig: tuple[int, int], bpm: float | None = None) -> G
 
     `time_sig` is taken from the E-GMD CSV (authoritative; E-GMD clips are
     constant-meter). Beats step at the time-signature's beat unit
-    (`4/denominator` quarter notes); downbeats land every `numerator`
-    beats. The grid is anchored at tick 0 = 0 s, which is the click the
-    performance was recorded against.
+    (`4/denominator` quarter notes); downbeats land every `numerator` beats,
+    anchored at tick 0 (= MIDI bar 1, the click the take was recorded to).
+
+    Known limitation: a minority of E-GMD clips start mid-bar, so tick-0
+    anchoring mis-phases their GT downbeats and deflates downbeat_f for
+    *all* trackers equally on those clips. Anchoring to kick onsets instead
+    backfires (soul/funk kick on beats 1 AND 3, so it picks the wrong
+    phase), so we keep tick-0: the relative tracker comparison is robust
+    since every tracker is scored against the same GT.
     """
     mid = mido.MidiFile(str(midi_path))
     tpb = mid.ticks_per_beat
@@ -120,21 +126,17 @@ def gt_grid(midi_path, time_sig: tuple[int, int], bpm: float | None = None) -> G
     beat_len_ticks = tpb * 4.0 / den
 
     beats: list[float] = []
-    downbeats: list[float] = []
     i = 0
     while True:
         tick = round(i * beat_len_ticks)
         if tick > last_tick:
             break
-        sec = _tick_to_sec(changes, tpb, tick)
-        beats.append(sec)
-        if i % num == 0:
-            downbeats.append(sec)
+        beats.append(_tick_to_sec(changes, tpb, tick))
         i += 1
 
     if bpm is None:
         bpm = 60_000_000.0 / changes[0][1]
-    return GtGrid(beats=beats, downbeats=downbeats, bpm=float(bpm), time_sig=time_sig)
+    return GtGrid(beats=beats, downbeats=beats[::num], bpm=float(bpm), time_sig=time_sig)
 
 
 def sanity_coverage(
