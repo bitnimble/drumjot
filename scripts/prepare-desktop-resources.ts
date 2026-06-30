@@ -104,7 +104,9 @@ console.log(`[desktop-resources] bundled uv from ${uv}`);
 
 // --- vendor the git/source deps as prebuilt wheels --------------------------
 const pyprojectPath = join(pyOut, 'transcriber', 'pyproject.toml');
-let pyproject = await readFile(pyprojectPath, 'utf8');
+// Normalize to LF: on Windows (autocrlf) the file checks out with CRLF, which
+// breaks the newline-spanning marker matches below ([tool.uv]\n).
+let pyproject = (await readFile(pyprojectPath, 'utf8')).replaceAll('\r\n', '\n');
 const gitSpecs = [...pyproject.matchAll(/"([^"]+ @ git\+[^"]+)"/g)].map((m) => m[1]);
 
 if (gitSpecs.length === 0) {
