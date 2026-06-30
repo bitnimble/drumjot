@@ -46,21 +46,6 @@ class Settings(BaseSettings):
     # DrumSep (kick/snare/toms/hh/cymbals; ride+crash merged).
     demucs_model: str = "model_bs_roformer_sw.ckpt"
     drum_pieces_model: str = "drumsep_5stems_mdx23c_jarredou.ckpt"
-    # Used ONLY by /lyrics/align when given a full mix. A fast 2-stem
-    # (vocals / instrumental) MDX-Net, ~8× faster than running the drum
-    # pipeline's BS-Roformer SW just to throw away five of its six stems.
-    # Vocal SDR doesn't need to be pristine for forced alignment, which
-    # is robust to bleed; the downstream wav2vec2 forced aligner cares more
-    # about *lead vocal preservation* than separation purity, so we pick
-    # the throughput-leaning MDX-Net variant rather than Kim_Vocal_2: in
-    # practice ~2× faster on GPU with no observable hit to word-level
-    # alignment quality on our inputs.
-    #
-    # Loaded lazily on first /lyrics/align mix call. The vocals cache
-    # key includes the model name (see `app/main.py::_vocals_model_id`),
-    # so swapping models via env auto-invalidates previously cached
-    # stems.
-    vocals_model: str = "UVR-MDX-NET-Voc_FT.onnx"
 
     # --- Onset backend ---
     # The trained frozen-MERT + per-lane-heads model (training/, run PER STEM via

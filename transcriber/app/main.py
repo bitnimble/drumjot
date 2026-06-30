@@ -1222,10 +1222,11 @@ def _sanitize_id(s: str) -> str:
 
 
 def _vocals_model_id() -> str:
-    """Identifier for the vocals separator output. Burnt into the cache
-    key so a model swap (e.g. switching `vocals_model`) auto-invalidates
-    every cached vocals stem."""
-    return _sanitize_id(settings.vocals_model)
+    """Identifier for the vocals separator output. Burnt into the cache key so
+    a model swap auto-invalidates every cached vocals stem. Vocals now comes
+    from the Stage-1 BS-Roformer SW model, so it tracks that ckpt (this also
+    invalidated the old UVR-MDX-NET-Voc_FT-keyed entries on the cutover)."""
+    return _sanitize_id(settings.demucs_model)
 
 
 def _vocals_cache_key(audio_hash: str) -> str:

@@ -43,9 +43,9 @@ def test_hash_bytes_matches_known_sha256() -> None:
 
 def test_vocals_cache_key_changes_with_separator_model(monkeypatch) -> None:
     h = "2" * 64
-    monkeypatch.setattr(settings, "vocals_model", "Kim_Vocal_2.onnx")
+    monkeypatch.setattr(settings, "demucs_model", "model_bs_roformer_sw.ckpt")
     a = main._vocals_cache_key(h)
-    monkeypatch.setattr(settings, "vocals_model", "Other_Model.onnx")
+    monkeypatch.setattr(settings, "demucs_model", "some_other_model.ckpt")
     b = main._vocals_cache_key(h)
     assert a != b
 

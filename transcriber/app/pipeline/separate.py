@@ -13,10 +13,11 @@ ride + crash into a single `cymbals` stem (see `STEM_NAME_TO_PITCH`).
 Both stages run through a vendored, torch-only separation wrapper
 (`pipeline/separation/`), reimplemented from `audio-separator`'s chunked
 overlap-add (validated bit-exact against it) so we can drop the dependency,
-surface per-chunk progress, keep stems in memory, and (next) export the model
-bodies to ONNX for cross-platform GPU backends. `pipeline/provision.py`
-fetches the weights on startup. The /lyrics vocals separator still uses
-`audio-separator` for now (a different MDX-ONNX model).
+surface per-chunk progress, keep stems in memory, and export the model bodies
+to ONNX for cross-platform GPU backends (opt in with `DRUMJOT_SEP_ONNX`).
+`pipeline/provision.py` fetches the weights on startup. The /lyrics vocals
+stem also comes from Stage-1 BS-Roformer SW (its `vocals` output, cleaner than
+the retired UVR-MDX-NET-Voc_FT), so `audio-separator` is no longer used at all.
 
 Failure modes intentionally surface up to the caller - if the drum-piece
 separator can't find a kick, we just won't emit candidates for the kick lane
@@ -221,7 +222,6 @@ class Separator:
     def __init__(self) -> None:
         self._stems_all = None
         self._stems_per = None
-        self._vocals = None
 
     def load(self, *, stems_all: bool = True, stems_per: bool = True) -> None:
         """Idempotently load the requested separator models.
@@ -298,40 +298,6 @@ class Separator:
         else:
             _maybe_compile_model(loaded)
         return SeparationRunner(loaded, device=device)
-
-    @staticmethod
-    def _point_at(separator: object, out_dir: Path) -> None:
-        """Make `audio-separator` write this call's stems into `out_dir`.
-
-        `Separator.__init__` resolves `output_dir=None` to `os.getcwd()`
-        (here `/app`, the container WORKDIR) and `load_model()` *bakes*
-        that value into the loaded `model_instance` via its
-        `common_params` — at startup, long before we know the per-request
-        tmp dir. In `audio-separator>=0.44` the per-call
-        `separator.output_dir` setter is **not** re-propagated to
-        `model_instance` at `separate()` time (that re-sync line only
-        exists on newer `main`), so the model keeps writing to the
-        startup cwd.
-
-        The model's output-path construction reads
-        `model_instance.output_dir`, so we set it directly (plus the
-        wrapper attribute, which newer versions *do* re-read). This is
-        the same attribute `audio-separator` assigns internally, so it's
-        stable across the contract drift.
-        """
-        out = str(out_dir)
-        separator.output_dir = out  # type: ignore[attr-defined]
-        model = getattr(separator, "model_instance", None)
-        if model is not None:
-            model.output_dir = out
-        else:
-            # Lazy-loaded by some versions on first separate(); the
-            # wrapper setter above is then the only lever.
-            log.warning(
-                "audio-separator has no model_instance yet; relying on "
-                "wrapper output_dir alone for %s",
-                out,
-            )
 
     def run_stems_all(
         self, audio_path: Path, work_dir: Path, *, build_no_drums: bool = True
@@ -516,123 +482,54 @@ class Separator:
             unpark_module(self._inner_module(sep), name)
 
     def park_vocals(self) -> None:
-        """Free the vocals separator's GPU memory before the CTC aligner
-        loads.
+        """Park the vocals-extraction model's VRAM before the CTC aligner loads.
 
-        The vocals model (`UVR-MDX-NET-Voc_FT.onnx`) is MDX/ONNX: its
-        `model_instance.model_run` is an ONNX Runtime inference-session
-        lambda, and ORT holds its CUDA arena (~2 GB) outside torch's
-        allocator. A host memcpy (`park_module` -> `.to("cpu")`) can't
-        reach that memory (and the lambda has no `.parameters()` to begin
-        with), so for the ORT path we release the whole separator; the
-        next `run_vocals` reloads it lazily (`_load_vocals`). A torch-
-        backed inner module (the onnx2torch fallback path) still parks to
-        CPU, which is cheaper than a reload.
+        Vocals now comes from the Stage-1 BS-Roformer SW model (its `vocals`
+        stem, SDR ~11.3, beats the retired UVR-MDX-NET-Voc_FT ~10), so this
+        just parks the SW runner. Idempotent / no-op when SW was never loaded
+        (e.g. a vocals cache hit fed the aligner directly)."""
+        from app.pipeline.gpu_park import park_module
 
-        Idempotent: a no-op when the vocals separator was never loaded
-        (e.g. a disk cache hit fed the aligner directly)."""
-        if self._vocals is None:
+        if self._stems_all is None:
             return
-        inner = self._inner_module(self._vocals)
-        if inner is not None and callable(getattr(inner, "parameters", None)):
-            from app.pipeline.gpu_park import park_module
-
-            park_module(inner, "vocals")
-            return
-        self._release_vocals()
-
-    def _release_vocals(self) -> None:
-        """Drop the vocals separator so its ONNX Runtime CUDA arena is
-        returned to the driver. Idempotent. Runs under the process-wide
-        GPU lock (its only caller is `park_vocals`)."""
-        if self._vocals is None:
-            return
-        import gc
-
-        self._vocals = None
-        gc.collect()
-        try:
-            import torch
-
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception:
-            pass
-        log.info("gpu_park: released vocals separator (ONNX Runtime session)")
+        park_module(self._inner_module(self._stems_all), "vocals")
 
     def unpark_vocals(self) -> None:
         from app.pipeline.gpu_park import unpark_module
 
-        if self._vocals is None:
+        if self._stems_all is None:
             return
-        unpark_module(self._inner_module(self._vocals), "vocals")
-
-    def _load_vocals(self) -> None:
-        """Lazily load the vocals-only separator used by /lyrics/align.
-
-        Kept out of eager `load()` because the drum pipeline never touches
-        this model; only callers hitting /lyrics/align with `mode=mix` pay
-        the load cost, on first use. Idempotent.
-        """
-        if self._vocals is not None:
-            return
-        from audio_separator.separator import Separator as AS
-
-        common = dict(
-            output_dir=None,
-            model_file_dir=str(settings.models_dir),
-            use_autocast=False,
-        )
-        t0 = time.perf_counter()
-        log.info("Loading vocals separator (%s) ...", settings.vocals_model)
-        self._vocals = AS(**common)
-        self._vocals.load_model(model_filename=settings.vocals_model)
-        log.info(
-            "vocals separator ready in %.2fs (%s)",
-            time.perf_counter() - t0,
-            settings.vocals_model,
-        )
+        unpark_module(self._inner_module(self._stems_all), "vocals")
 
     def run_vocals(self, audio_path: Path, work_dir: Path) -> Path | None:
         """Extract a vocals stem from a full mix for CTC forced alignment.
 
-        Uses the dedicated 2-stem `vocals_model` (not the drum pipeline's
-        6-stem BS-Roformer SW) so latency is dominated by what the
-        aligner actually needs. Returns the absolute path to the vocals output,
-        or None when the model ran but no vocals-named output landed
-        (would indicate a model swap that no longer emits a `(Vocals)`
-        filename token).
+        Reuses the Stage-1 BS-Roformer SW separator and keeps its `vocals`
+        stem (SDR ~11.3, cleaner than the old dedicated MDX-Net model ~10),
+        so /lyrics needs no separate vocals model. Returns the absolute path
+        to the vocals WAV, or None if SW emitted no vocals stem.
         """
-        self._load_vocals()
-        assert self._vocals is not None
+        self.load(stems_per=False)
+        assert self._stems_all is not None
 
         out_dir = work_dir / "vocals"
         out_dir.mkdir(parents=True, exist_ok=True)
-        self._point_at(self._vocals, out_dir)
 
         log.info("vocals: extracting vocals stem from %s", audio_path.name)
         t0 = time.perf_counter()
-        raw = self._vocals.separate(str(audio_path))
-        stems_paths = _resolve_outputs(raw, out_dir)
-        vocals_candidates = [p for p in stems_paths if "vocals" in p.stem.lower()]
-        if not vocals_candidates:
+        sources = self._stems_all.separate(
+            str(audio_path), progress_callback=_log_progress("vocals")
+        )
+        if "vocals" not in sources:
             log.info(
-                "vocals: separation finished in %.2fs but no vocals stem in output (%s)",
+                "vocals: SW finished in %.2fs but produced no vocals stem (got %s)",
                 time.perf_counter() - t0,
-                settings.vocals_model,
+                sorted(sources),
             )
             return None
-        vocals_stem = vocals_candidates[0]
-        if not vocals_stem.exists():
-            raise RuntimeError(
-                f"vocals: separator reported {vocals_stem} but it is not on "
-                f"disk (separate() returned {list(raw)!r})."
-            )
-        log.info(
-            "vocals: extracted in %.2fs (%s)",
-            time.perf_counter() - t0,
-            settings.vocals_model,
-        )
+        vocals_stem = out_dir / "vocals.wav"
+        _write_stem(vocals_stem, sources["vocals"])
+        log.info("vocals: extracted in %.2fs (BS-Roformer SW)", time.perf_counter() - t0)
         return vocals_stem
 
 
@@ -747,22 +644,6 @@ def _attach_onnx_body(loaded: object, ckpt_path: Path, models_dir: Path) -> None
         "fp16" if fp16 else "fp32",
         providers,
     )
-
-
-def _resolve_outputs(raw_paths: list[str], out_dir: Path) -> list[Path]:
-    """Anchor `audio-separator`'s `separate()` return to absolute paths.
-
-    With `Separator._point_at` the library writes into `out_dir`; it
-    returns bare basenames relative to it (some versions return absolute
-    paths). Anchor any non-absolute entry to `out_dir`; absolute paths
-    pass through unchanged. The caller's `drum_stem.exists()` check
-    catches the case where the library still wrote elsewhere.
-    """
-    resolved: list[Path] = []
-    for raw in raw_paths:
-        p = Path(raw)
-        resolved.append(p if p.is_absolute() else out_dir / p.name)
-    return resolved
 
 
 def _residual_audio(
