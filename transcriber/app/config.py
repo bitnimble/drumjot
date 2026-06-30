@@ -299,9 +299,16 @@ class Settings(BaseSettings):
     debug_dir: Path | None = None
 
     # --- HTTP ---
+    # The hosted web app is same-origin (no CORS needed); these cover the local
+    # dev frontend and the Tauri mobile/desktop shells, whose webview origin is
+    # `http://tauri.localhost` (Android/Linux/Windows) or `tauri://localhost`
+    # (iOS/macOS) and is therefore cross-origin to a remote transcriber.
     cors_origins: list[str] = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+        "tauri://localhost",
     ]
 
     # Which role this process is playing inside the multi-process Docker

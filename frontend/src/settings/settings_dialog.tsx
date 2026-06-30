@@ -5,16 +5,77 @@ import { Modal, ModalFooter, ModalHeader, modalStyles } from 'src/ui/modal/modal
 import { formatBytes } from 'src/desktop/capability_manifest';
 import { CapabilityTree, useCapabilityInstall } from 'src/desktop/capability_install';
 import { HardwareInfo } from 'src/desktop/hardware_info';
+import { isDesktopShell } from 'src/desktop/platform';
+import { RadioGroup, type RadioOption } from 'src/ui/radio_group/radio_group';
+import { appSettingsPresenter, appSettingsStore } from './app_settings_presenter';
+import { type BackendMode } from './app_settings_store';
 import panelStyles from 'src/desktop/capability_panel.module.css';
+import formStyles from 'src/ui/form/form.module.css';
 import styles from './settings_dialog.module.css';
 
-type SettingsTab = 'capabilities' | 'hardware' | 'about';
+type SettingsTab = 'capabilities' | 'hardware' | 'advanced' | 'about';
 
 const ALL_TABS: ReadonlyArray<{ value: SettingsTab; label: string; desktopOnly: boolean }> = [
   { value: 'capabilities', label: 'Capabilities', desktopOnly: true },
   { value: 'hardware', label: 'Hardware', desktopOnly: true },
+  { value: 'advanced', label: 'Advanced', desktopOnly: false },
   { value: 'about', label: 'About', desktopOnly: false },
 ];
+
+const BACKEND_OPTIONS: ReadonlyArray<RadioOption<BackendMode>> = [
+  { value: 'local', label: 'Local', testId: 'backend-mode-local' },
+  { value: 'hosted', label: 'Hosted', testId: 'backend-mode-hosted' },
+];
+
+/**
+ * Backend + remote-transcriber settings. On desktop the user picks Local (the
+ * bundled sidecar) or Hosted (a remote server, e.g. when this machine has no
+ * GPU); the URL field shows for Hosted. Web + mobile have no local backend, so
+ * they always show the URL field. Persisted device-wide (not per song).
+ */
+const AdvancedTab = observer(function AdvancedTab() {
+  const showBackendChoice = isDesktopShell();
+  const mode = appSettingsStore.backendMode;
+  const showUrl = !showBackendChoice || mode === 'hosted';
+  return (
+    <>
+      <p className={panelStyles.intro}>
+        Where transcription, stem separation, and lyric alignment run.
+      </p>
+      {showBackendChoice && (
+        <div className={styles.advancedField}>
+          <span className={panelStyles.name}>Transcription backend</span>
+          <RadioGroup
+            ariaLabel="Transcription backend"
+            options={BACKEND_OPTIONS}
+            selected={new Set([mode])}
+            onSelect={(m) => appSettingsPresenter.setBackendMode(m)}
+          />
+          <span className={panelStyles.desc}>
+            Local runs on this machine; Hosted uses a remote server (useful without a GPU).
+          </span>
+        </div>
+      )}
+      {showUrl && (
+        <label className={styles.advancedField}>
+          <span className={panelStyles.name}>Transcriber server URL</span>
+          <input
+            type="url"
+            className={formStyles.field}
+            value={appSettingsStore.transcriberUrl}
+            placeholder="https://drumjot.kumo.dev"
+            onChange={(e) => appSettingsPresenter.setTranscriberUrl(e.target.value)}
+            data-testid="transcriber-url-input"
+            spellCheck={false}
+            autoCapitalize="none"
+            autoCorrect="off"
+          />
+          <span className={panelStyles.desc}>Base URL of the transcriber service.</span>
+        </label>
+      )}
+    </>
+  );
+});
 
 /** Third-party projects + models Drumjot is built on. Surfacing them here is the
  *  visible-acknowledgement obligation for the attribution-required ones (JMdict's
@@ -62,9 +123,10 @@ function AboutTab(): React.ReactElement {
 
 /**
  * The File → Settings dialog: a left tab rail + right content, on the shared
- * Modal primitive. Always shows the About tab (licenses + acknowledgements);
- * Capabilities (the install picker + cumulative-size footer) and Hardware
- * (accelerator info) are desktop-only and hidden in the web build.
+ * Modal primitive. Always shows Advanced (backend / server URL) + About
+ * (licenses + acknowledgements); Capabilities (the install picker + cumulative-
+ * size footer) and Hardware (accelerator info) are desktop-only and hidden in
+ * the web + mobile builds.
  */
 export const SettingsDialog = observer(function SettingsDialog({
   onClose,
@@ -73,7 +135,9 @@ export const SettingsDialog = observer(function SettingsDialog({
 }) {
   const install = useCapabilityInstall();
   const tabs = ALL_TABS.filter((t) => install.available || !t.desktopOnly);
-  const [tab, setTab] = React.useState<SettingsTab>(install.available ? 'capabilities' : 'about');
+  // Desktop opens on Capabilities; web + mobile open on Advanced (the first
+  // tab they show, and where the backend/server settings live).
+  const [tab, setTab] = React.useState<SettingsTab>(tabs[0]?.value ?? 'about');
 
   return (
     <Modal
@@ -118,6 +182,7 @@ export const SettingsDialog = observer(function SettingsDialog({
             </>
           )}
           {tab === 'hardware' && <HardwareInfo />}
+          {tab === 'advanced' && <AdvancedTab />}
           {tab === 'about' && <AboutTab />}
         </div>
       </div>

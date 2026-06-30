@@ -397,10 +397,43 @@ types are the single source for both wire validation and call-site typing.
 
 Committed: **Tauri mobile**, the same web frontend across desktop + iOS /
 Android, one codebase. React Native + Expo is rejected (would not reuse the
-DOM/Canvas/Web Audio frontend; full rewrite). Validate when mobile is actually
-on the roadmap: mobile-webview Web Audio latency + 120 fps canvas perf. Mobile
-is **remote-backend-only** regardless (never bundle PyTorch on a phone), so the
-per-capability remote-fulfillment path is a prerequisite for mobile.
+DOM/Canvas/Web Audio frontend; full rewrite). Mobile is **remote-backend-only**
+regardless (never bundle PyTorch on a phone).
+
+## Android (implemented)
+
+Android v1 ships the Tauri shell + the existing web frontend, transcribing over
+the existing `HttpBackendClient` (the same transport the web build uses), with
+**no sidecar and no capability install** on device. Offline `.jot`
+load/edit/playback + MIDI import need no server; transcription / separation /
+lyrics work when a server is reachable. iOS is deferred.
+
+- **Backend selection.** `backendClient()` picks: web + mobile -> HTTP, desktop
+  -> sidecar unless the user chose Hosted (Settings -> Advanced). The platform
+  is a compile-time `__IS_MOBILE__` (Vite `define` from Tauri's
+  `TAURI_ENV_PLATFORM`); `isDesktopShell()` = `isTauri() && !isMobile` gates the
+  sidecar/capability UI off on mobile.
+- **Transcriber URL.** Device-global `AppSettings` store (persisted to
+  localStorage, separate from the per-song `SettingsStore`): `backendMode` +
+  `transcriberUrl` (default `https://drumjot.kumo.dev`, only the default is
+  compiled in; `VITE_TRANSCRIBER_URL` overrides it for dev/docker/e2e, empty =
+  origin-relative `/api`). The base every request composes against is
+  `<url>/api`. Surfaced in the new Settings -> Advanced tab.
+- **Rust.** The sidecar, capability installer, and portable-path / env-redirect
+  code are `#[cfg(desktop)]`-gated; the Android `cdylib` builds with just the
+  webview + the fs/dialog plugins. The webview origin (`http://tauri.localhost`)
+  is added to the transcriber's `cors_origins`; the backend is HTTPS-only so no
+  Android cleartext config is needed (debug builds allow cleartext for a LAN box).
+- **Build.** `bun run android:{init,dev,build}`. Targets `aarch64` + `armv7`
+  only, producing a universal APK. The desktop `bundle.resources` (Python sidecar
+  + uv) would otherwise fail the Android build's resource-existence check (the
+  host's platform-config + base config leak into the Android merge, and a
+  deep-merge override can't clear them); the build/dev scripts pass `--config
+  '{"bundle":{"resources":[]}}'`, whose replace-merge does. `gen/android` is
+  regenerated + gitignored.
+- **Still to validate on a real device:** mobile-webview Web Audio latency, 120
+  fps canvas perf, touch interactions (the headless box can build/assemble the
+  APK but can't run it).
 
 ## Decisions resolved & remaining
 

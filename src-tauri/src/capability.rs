@@ -12,7 +12,7 @@ use std::process::Stdio;
 use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::path::BaseDirectory;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
@@ -21,6 +21,9 @@ use tokio::process::Command;
 const CUDA_MIN_DRIVER_MAJOR: u32 = 570;
 
 #[derive(Serialize)]
+// The webview reads camelCase (`gpuName`/`driverVersion`/`meetsCudaMin`, see
+// hardware_info.tsx); without this the snake_case fields arrive as undefined.
+#[serde(rename_all = "camelCase")]
 pub struct AcceleratorInfo {
     /// `cuda` | `mps` | `cpu` (rocm/directml detection is future work).
     pub kind: String,
@@ -89,11 +92,13 @@ fn driver_major(v: &str) -> Option<u32> {
     v.split('.').next()?.parse().ok()
 }
 
-fn state_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn state_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     Ok(crate::paths::data_root(app)?.join("capabilities.json"))
 }
 
-async fn read_states(app: &AppHandle) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+async fn read_states<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
     let path = state_path(app)?;
     match tokio::fs::read_to_string(&path).await {
         Ok(text) => serde_json::from_str(&text).map_err(|e| e.to_string()),
@@ -105,13 +110,13 @@ async fn read_states(app: &AppHandle) -> Result<serde_json::Map<String, serde_js
 // async (not a plain sync command) so the filesystem read/write runs off the
 // webview's main thread.
 #[tauri::command]
-pub async fn capability_states(app: AppHandle) -> Result<serde_json::Value, String> {
+pub async fn capability_states<R: Runtime>(app: AppHandle<R>) -> Result<serde_json::Value, String> {
     Ok(serde_json::Value::Object(read_states(&app).await?))
 }
 
 #[tauri::command]
-pub async fn set_capability_installed(
-    app: AppHandle,
+pub async fn set_capability_installed<R: Runtime>(
+    app: AppHandle<R>,
     id: String,
     installed: bool,
 ) -> Result<(), String> {
@@ -139,7 +144,7 @@ pub fn venv_python(venv: &Path) -> PathBuf {
 }
 
 /// The app-managed capability venv (separate from the dev `transcriber/.venv`).
-pub fn app_venv(app: &AppHandle) -> Result<PathBuf, String> {
+pub fn app_venv<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     Ok(crate::paths::data_root(app)?.join("venv"))
 }
 
@@ -311,4 +316,110 @@ async fn provision_models(venv: &Path, dir: &Path, groups: &[String], on_event: 
     let _ = child.wait().await;
     let _ = out_task.await;
     let _ = err_task.await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tauri::test::{mock_builder, mock_context, noop_assets};
+
+    // Serialises the env-mutating tests in this file (only `XDG_DATA_HOME`).
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn mock_app() -> tauri::App<tauri::test::MockRuntime> {
+        mock_builder()
+            .build(mock_context(noop_assets()))
+            .expect("failed to build mock app")
+    }
+
+    /// Sets an env var and restores its prior value on drop, so a panicking
+    /// assertion can't leak it to other tests in the process.
+    struct EnvVarGuard {
+        key: &'static str,
+        prev: Option<std::ffi::OsString>,
+    }
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &std::ffi::OsStr) -> Self {
+            let prev = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, prev }
+        }
+    }
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    #[test]
+    fn driver_major_parses_leading_int() {
+        assert_eq!(driver_major("570.86.15"), Some(570));
+        assert_eq!(driver_major("525"), Some(525));
+        assert_eq!(driver_major("abc"), None);
+        assert_eq!(driver_major(""), None);
+    }
+
+    #[test]
+    fn venv_python_matches_platform_layout() {
+        let venv = std::path::Path::new("/opt/app/venv");
+        #[cfg(unix)]
+        assert_eq!(venv_python(venv), venv.join("bin").join("python"));
+        #[cfg(windows)]
+        assert_eq!(venv_python(venv), venv.join("Scripts").join("python.exe"));
+    }
+
+    #[test]
+    fn meets_cuda_min_thresholds_on_driver_version() {
+        assert!(!AcceleratorInfo::plain("cpu").meets_cuda_min);
+        // The accelerator probe maps driver major >= 570 to meets_cuda_min.
+        assert!(driver_major("570.1").map(|m| m >= CUDA_MIN_DRIVER_MAJOR).unwrap());
+        assert!(!driver_major("525.0").map(|m| m >= CUDA_MIN_DRIVER_MAJOR).unwrap());
+    }
+
+    #[test]
+    fn detect_accelerator_returns_a_known_kind() {
+        // No assumptions about the CI box's GPU: just assert the probe resolves
+        // to one of the known kinds and never panics (it shells out to
+        // nvidia-smi behind a 10s timeout).
+        let info = tauri::async_runtime::block_on(detect_accelerator());
+        assert!(matches!(info.kind.as_str(), "cuda" | "mps" | "cpu"));
+    }
+
+    // Round-trips the capability-state file through the two commands. Linux-only
+    // because it redirects the writable dir via XDG_DATA_HOME (mac/Windows use
+    // OS dirs XDG doesn't steer, and we won't write into a real user dir).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn capability_state_file_round_trips() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("drumjot-cap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _env = EnvVarGuard::set("XDG_DATA_HOME", tmp.as_os_str());
+
+        let app = mock_app();
+        let handle = app.handle().clone();
+        tauri::async_runtime::block_on(async {
+            // Nothing written yet -> empty object.
+            let initial = capability_states(handle.clone()).await.unwrap();
+            assert!(initial.as_object().unwrap().is_empty());
+
+            set_capability_installed(handle.clone(), "transcription".into(), true)
+                .await
+                .unwrap();
+            let after = capability_states(handle.clone()).await.unwrap();
+            assert_eq!(after["transcription"]["installed"], serde_json::json!(true));
+
+            // A second write replaces the entry (atomic temp+rename).
+            set_capability_installed(handle.clone(), "transcription".into(), false)
+                .await
+                .unwrap();
+            let toggled = capability_states(handle.clone()).await.unwrap();
+            assert_eq!(toggled["transcription"]["installed"], serde_json::json!(false));
+        });
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }

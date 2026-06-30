@@ -1,16 +1,15 @@
 /**
  * Client for the local / IaaS transcriber service.
  *
- * Requests always go to `/api` on the frontend's own origin. The Vite
- * dev / preview server (see vite.config.ts) proxies that prefix onward
- * to the actual transcriber URL configured via `TRANSCRIBER_URL` in the
- * server-side env. Keeping the browser bundle origin-relative avoids
- * cross-origin CORS when the frontend and the transcriber sit on
- * different hosts (e.g. drumjot.kumo.dev vs. a LAN GPU box).
+ * Every request composes against {@link appSettingsStore.apiBase}, i.e.
+ * `<transcriber origin>/api`. In the web build / dev / docker the origin is
+ * empty, so the base is origin-relative `/api` (proxied onward to the real
+ * transcriber by the edge proxy); native builds (mobile, or a desktop on the
+ * hosted backend) point it at an absolute, CORS-enabled URL the user sets in
+ * Settings → Advanced.
  */
 import { backendFetch } from 'src/net/backend_fetch';
-
-const TRANSCRIBER_BASE = '/api';
+import { appSettingsStore } from 'src/settings/app_settings_presenter';
 
 export type BarSummary = {
   bar: number;
@@ -54,10 +53,8 @@ export type TranscribeResponse = {
   debug_dir?: string | null;
   /**
    * URL path (with leading `/`) to the isolated drum mix as FLAC, or
-   * null if the stem couldn't be produced. Compose against the
-   * configured `TRANSCRIBER_BASE` to get a fetchable URL (e.g.
-   * `${TRANSCRIBER_BASE}${drum_stem_url}` -> `/api/outputs/<id>/drum_stem.flac`
-   * in dev). See `stemUrl()` below for the canonical helper.
+   * null if the stem couldn't be produced. Pass through `stemUrl()` (below)
+   * to get a fetchable URL (e.g. `/api/outputs/<id>/drum_stem.flac` in dev).
    */
   drum_stem_url?: string | null;
   /**
@@ -203,7 +200,7 @@ export function stemUrl(path: string | null | undefined): string | null {
   if (!path) return null;
   // Leading-slash paths join cleanly against any base (relative or absolute).
   const prefix = path.startsWith('/') ? '' : '/';
-  return `${TRANSCRIBER_BASE}${prefix}${path}`;
+  return `${appSettingsStore.apiBase}${prefix}${path}`;
 }
 
 export type TranscribeOptions = {
@@ -325,7 +322,14 @@ export type ScoreOptions = {
 };
 
 export class TranscriberClient {
-  constructor(private readonly baseUrl: string = TRANSCRIBER_BASE) {}
+  /** Pass an explicit base only in tests; production resolves it live from
+   *  {@link appSettingsStore.apiBase} so a Settings URL change takes effect at
+   *  once, without reconstructing the singleton. */
+  constructor(private readonly baseUrlOverride?: string) {}
+
+  private get baseUrl(): string {
+    return this.baseUrlOverride ?? appSettingsStore.apiBase;
+  }
 
   /** Quick liveness probe; returns true if the backend is reachable. */
   async health(): Promise<{ ok: boolean; gpu: boolean; gpuName?: string }> {

@@ -154,7 +154,14 @@ export default defineConfig({
     // host-spawned Vite can't rewrite it (EACCES on startup). Point the
     // e2e server at a writable host-owned cache dir instead; vite.config
     // reads VITE_CACHE_DIR. Spread process.env so PATH etc. survive.
-    env: { ...process.env, VITE_CACHE_DIR: process.env.VITE_CACHE_DIR ?? '/tmp/drumjot-vite-e2e' },
+    // VITE_TRANSCRIBER_URL='' keeps the transcriber base origin-relative
+    // (`/api`) so the per-spec `**/api/**` route stubs intercept it, rather
+    // than the prod default (https://drumjot.kumo.dev) reaching the network.
+    env: {
+      ...process.env,
+      VITE_CACHE_DIR: process.env.VITE_CACHE_DIR ?? '/tmp/drumjot-vite-e2e',
+      VITE_TRANSCRIBER_URL: '',
+    },
     url: E2E_URL,
     reuseExistingServer: !process.env.CI,
     // Cold Vite start is ~250ms, but a fresh container may need to warm

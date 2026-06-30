@@ -2059,6 +2059,7 @@ const EmptyState = observer(
                   type="button"
                   className={styles.emptyStateExampleButton}
                   onClick={() => jotEditorPresenter.loadExample(ex.id)}
+                  data-testid={`empty-state-example-${ex.id}`}
                 >
                   {ex.label}
                 </button>

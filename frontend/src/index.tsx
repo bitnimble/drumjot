@@ -1,11 +1,12 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
+import 'src/desktop/wdio_plugin';
 import 'src/design_tokens.css';
 import { Jot } from 'src/schema/dsl/dsl';
 import { EXAMPLE_JOTS, ExampleJot, rockJot, tripletJot } from 'src/fakes/fakes';
 import { createJotEditor } from 'src/editing/jot_editor';
 import { DesktopFirstRun } from 'src/desktop/desktop_first_run';
-import { isTauri } from 'src/desktop/is_tauri';
+import { isDesktopShell } from 'src/desktop/platform';
 import { desktopCapabilities } from 'src/desktop/desktop_services';
 import { CapabilityGate } from 'src/desktop/capability_gate';
 import { ModalProvider } from 'src/ui/modal/modal_manager';
@@ -129,7 +130,7 @@ class Drumjot {
   /** Desktop only: reflect the loaded song in the window title, e.g.
    *  "Drumjot - Silhouette - KANA-BOON" (just "Drumjot" with nothing loaded). */
   private installWindowTitleSync(): void {
-    if (!isTauri()) return;
+    if (!isDesktopShell()) return;
     // Lazy imports: the Tauri window API and the score_header module must stay
     // out of the web bundle's eager boot path.
     void Promise.all([
@@ -208,7 +209,7 @@ class Drumjot {
    *  Omit `audioPath` to pick a file via the native dialog. Exposed on
    *  `window.drumjot` for the desktop UI / scripting; throws in the web build. */
   async desktopTranscribe(audioPath?: string): Promise<void> {
-    if (!isTauri()) {
+    if (!isDesktopShell()) {
       throw new Error('desktopTranscribe is desktop-only (no Tauri runtime)');
     }
     let path = audioPath;

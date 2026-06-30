@@ -18,7 +18,6 @@ import { toastStore } from '../../ui/toasts/toasts';
 import { isBackendUnreachable } from 'src/net/backend_fetch';
 import { backendClient } from 'src/net/backend_client';
 import { type RunProgress } from 'src/net/backend';
-import { isTauri } from 'src/desktop/is_tauri';
 import { desktopCapabilities } from 'src/desktop/desktop_services';
 import { TranscribeStore } from './transcribe_store';
 import { JotEditorPresenter } from '../jot_editor_presenter';
@@ -82,11 +81,11 @@ export class TranscribePresenter {
    *  prompt to install rather than show a config dialog the user can't act on,
    *  and only open the dialog once it's ready. */
   async openAppendDialog(audioTrackId: AudioTrackId): Promise<void> {
-    if (isTauri()) {
-      const caps = desktopCapabilities();
-      if (caps != null && !(await caps.presenter.requestCapability('transcription'))) {
-        return; // not installed and the user dismissed the install prompt
-      }
+    // Desktop-only: `desktopCapabilities()` is null on web + mobile (HTTP
+    // backend, nothing to install), so the gate is skipped there.
+    const caps = desktopCapabilities();
+    if (caps != null && !(await caps.presenter.requestCapability('transcription'))) {
+      return; // not installed and the user dismissed the install prompt
     }
     this.transcribe.dialog = { mode: 'append', audioTrackId };
     void this.refreshRecentTranscriptions();

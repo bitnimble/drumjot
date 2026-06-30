@@ -1,0 +1,6 @@
+{
+  "identifier": "wdio",
+  "description": "WebdriverIO e2e access. Added at runtime ONLY under the `wdio` cargo feature (see lib.rs); never present in a shipped build.",
+  "windows": ["main"],
+  "permissions": ["wdio:default", "wdio-webdriver:default"]
+}

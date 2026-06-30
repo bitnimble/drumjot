@@ -63,3 +63,11 @@
     flex-direction: column;
     gap: 1px;
 }
+
+/* Advanced tab: a stacked labeled control (backend choice, server URL). */
+.advancedField {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-width: 420px;
+}

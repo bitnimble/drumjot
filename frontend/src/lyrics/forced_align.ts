@@ -6,15 +6,13 @@
  * `ctc-forced-aligner`) to recompute per-word timings against an
  * uploaded audio source.
  *
- * The endpoint base mirrors `src/transcriber.ts::TRANSCRIBER_BASE`:
- * always `/api` on the frontend's own origin, proxied onward by Vite to
- * the configured `TRANSCRIBER_URL`.
+ * The endpoint base is the shared {@link appSettingsStore.apiBase}
+ * (`<transcriber origin>/api`), same as the transcribe client.
  */
 
 import { backendFetch } from 'src/net/backend_fetch';
+import { appSettingsStore } from 'src/settings/app_settings_presenter';
 import type { LyricLine } from './lrc';
-
-const TRANSCRIBER_BASE = '/api';
 
 /**
  * Caller-provided lyric text + initial timings. The backend treats the
@@ -83,7 +81,7 @@ export async function alignLyricsForced(
   if (req.realign.language !== undefined && req.realign.language.length > 0) {
     form.set('language', req.realign.language);
   }
-  const res = await backendFetch(`${TRANSCRIBER_BASE}/lyrics/align`, {
+  const res = await backendFetch(`${appSettingsStore.apiBase}/lyrics/align`, {
     method: 'POST',
     body: form,
     signal: opts.signal,

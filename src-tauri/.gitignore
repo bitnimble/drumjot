@@ -3,6 +3,13 @@
 /target/
 /gen/schemas
 
+# Tauri mobile scaffolding (Gradle / Xcode projects). Regenerated from
+# tauri.conf.json + tauri.android.conf.json by `bun run android:init`; no manual
+# edits live here (the manifest ships INTERNET + the right cleartext defaults),
+# so it's regenerated rather than committed, same as /gen/schemas.
+/gen/android
+/gen/apple
+
 # Staged by scripts/prepare-desktop-resources.mjs at build time (Python backend
 # + the uv binary bundled into the app).
 /resources/

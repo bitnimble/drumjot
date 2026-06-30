@@ -17,7 +17,12 @@
     "e2e:run": "playwright test",
     "e2e:perf": "bun --env-file=.env run playwright test --project=perf --no-deps",
     "e2e:report": "playwright show-report --host 0.0.0.0",
+    "e2e:tauri:build": "bun run scripts/build-wdio-app.ts",
+    "e2e:tauri": "bun run e2e:tauri:build && wdio run wdio.conf.ts",
     "tauri": "tauri",
+    "android:init": "tauri android init",
+    "android:dev": "tauri android dev --config '{\"bundle\":{\"resources\":[]}}'",
+    "android:build": "tauri android build --target aarch64 --target armv7 --apk --config '{\"bundle\":{\"resources\":[]}}'",
     "desktop:resources": "bun run scripts/prepare-desktop-resources.ts",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
@@ -53,6 +58,12 @@
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
+    "@wdio/cli": "^9.29.1",
+    "@wdio/local-runner": "^9.29.1",
+    "@wdio/mocha-framework": "^9.29.1",
+    "@wdio/spec-reporter": "^9.29.1",
+    "@wdio/tauri-plugin": "1.2.0",
+    "@wdio/tauri-service": "1.2.0",
     "autoprefixer": "^10.5.2",
     "postcss": "^8.5.16",
     "storybook": "^9",
@@ -66,5 +77,8 @@
     "last 2 years",
     "not dead",
     "not op_mini all"
-  ]
+  ],
+  "patchedDependencies": {
+    "@wdio/native-utils@2.4.0": "patches/@wdio%2Fnative-utils@2.4.0.patch"
+  }
 }

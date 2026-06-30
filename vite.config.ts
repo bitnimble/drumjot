@@ -73,6 +73,13 @@ const noHmrPushPlugin: Plugin = {
 // self-contained.
 const ESBUILD_TARGET = 'es2022';
 
+// Tauri sets `TAURI_ENV_PLATFORM` in the env of its before-dev/build command
+// (`android`/`ios`/`linux`/`windows`/`darwin`); it's unset for a plain web
+// build. Surface it to the bundle as a compile-time `__IS_MOBILE__` constant so
+// the frontend can pick the HTTP backend + hide desktop-only capability UI on
+// mobile, with no runtime platform-detection dependency.
+const IS_MOBILE = ['android', 'ios'].includes(process.env.TAURI_ENV_PLATFORM ?? '');
+
 export default defineConfig({
   // Dev dep-prebundle cache location. Defaults to `node_modules/.vite`,
   // but the docker/docker-compose.dev.yml frontend runs Vite as root over a
@@ -110,6 +117,12 @@ export default defineConfig({
   // clean `bun install` build (Docker) until then. See vite-plugin-wasm's
   // README ("unless you target esnext") and oven-sh/bun#9860.
   plugins: [patchCssModules(), wasm(), react(), noHmrPushPlugin],
+  define: {
+    __IS_MOBILE__: JSON.stringify(IS_MOBILE),
+    // Set for the WebdriverIO e2e build only (see scripts/build-wdio-app.ts), so
+    // the @wdio/tauri-plugin frontend import is dead-code-eliminated otherwise.
+    __WDIO__: JSON.stringify(!!process.env.VITE_WDIO),
+  },
   resolve: {
     alias: {
       src: path.resolve(__dirname, 'frontend/src'),

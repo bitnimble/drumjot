@@ -26,3 +26,17 @@ tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time", "fs"] }
+# WebdriverIO desktop e2e plugins (the in-app Execute API + the embedded
+# WebDriver server). Optional + behind the `wdio` feature so they NEVER ride a
+# shipped build; only `cargo build --features wdio` (the e2e build) pulls them.
+tauri-plugin-wdio = { version = "1", optional = true }
+tauri-plugin-wdio-webdriver = { version = "1", optional = true }
+
+[features]
+wdio = ["dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdriver"]
+
+[dev-dependencies]
+# The mock runtime (tauri::test::mock_builder) for unit-testing commands without
+# a real webview. A dev-dep so the `test` feature never rides the shipped build
+# (resolver v2 keeps dev-dep features out of normal builds).
+tauri = { version = "2.11.3", features = ["test"] }

@@ -7,7 +7,6 @@ import { jotPlayer } from 'src/editing/playback/player';
 import { toastStore } from '../../ui/toasts/toasts';
 import { isBackendUnreachable } from 'src/net/backend_fetch';
 import { backendClient } from 'src/net/backend_client';
-import { isTauri } from 'src/desktop/is_tauri';
 import { desktopCapabilities } from 'src/desktop/desktop_services';
 import { JotEditorStore } from '../jot_editor_store';
 import { LyricsAlignStore } from './lyrics_align_store';
@@ -328,10 +327,9 @@ export class LyricsPresenter implements Resettable {
     // romanization (Japanese still aligns, just less accurately), so we don't
     // force it here. Users add it from Settings → Capabilities. The plain lines
     // already loaded, so a declined install just skips the word-level upgrade.
-    if (isTauri()) {
-      const caps = desktopCapabilities();
-      if (caps != null && !(await caps.presenter.requestCapability('lyrics'))) return;
-    }
+    // `desktopCapabilities()` is null on web + mobile, so the gate no-ops there.
+    const caps = desktopCapabilities();
+    if (caps != null && !(await caps.presenter.requestCapability('lyrics'))) return;
     const existing = this.lyricsAlignControllers.get(targetTrackId);
     if (existing) {
       existing.abort();

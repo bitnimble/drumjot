@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 
 use tauri::path::BaseDirectory;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 
 /// `<exe_dir>/data` iff a `portable` marker file sits next to the exe (the
 /// portable zip ships it; installers don't).
@@ -23,7 +23,7 @@ pub fn portable_data_root() -> Option<PathBuf> {
 
 /// Root for all writable state: the portable data dir, else the OS user
 /// app-local-data dir.
-pub fn data_root(app: &AppHandle) -> Result<PathBuf, String> {
+pub fn data_root<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     if let Some(root) = portable_data_root() {
         return Ok(root);
     }
