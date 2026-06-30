@@ -138,6 +138,18 @@ if (gitSpecs.length === 0) {
     await copyFile(join(wheelCache, w), join(wheelhouse, w));
   }
 
+  // Strip madmom's CC-BY-NC-SA model weights (~25 MB) from the bundled wheel: we
+  // track beats with Beat-Transformer and never load them, so they're dead weight
+  // and would block a commercial build. A throwaway uv venv runs the stdlib script.
+  const madmomWheel = wheels.find((w) => w.startsWith('madmom-'));
+  if (madmomWheel) {
+    const stripEnv = join(out, 'strip-env');
+    await rm(stripEnv, { recursive: true, force: true });
+    run(uv, ['venv', '--python', PY, stripEnv]);
+    run(venvPython(stripEnv), [join(repo, 'scripts', 'strip-madmom-models.py'), join(wheelhouse, madmomWheel)]);
+    await rm(stripEnv, { recursive: true, force: true });
+  }
+
   // Rewrite the bundled pyproject: pin Python to the wheel ABI, swap each git
   // spec for the pinned wheel version, and add the wheelhouse as a find-links.
   // Each rewrite asserts its marker was present: a silent no-op (e.g. pyproject

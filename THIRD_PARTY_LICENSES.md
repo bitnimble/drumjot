@@ -33,10 +33,11 @@ How each component reaches the user:
 ### madmom, audio signal processing (vendored wheel)
 - **Code**: BSD 2-Clause. Copyright (c) Institute of Computational Perception,
   Johannes Kepler University Linz.
-- ⚠️ **madmom's bundled model files are CC-BY-NC-SA 4.0 (non-commercial).** Drumjot
-  uses Beat-Transformer for beat tracking (only madmom's *code*, the DBN
-  post-processor + DSP utils), not madmom's pretrained models. Verify the
-  vendored wheel does not ship `madmom/models/*` if distributing.
+- madmom's pretrained model files (`madmom/models/*.pkl`) are CC-BY-NC-SA 4.0
+  (non-commercial). Drumjot tracks beats with Beat-Transformer and never loads
+  them, so the build **strips them from the vendored wheel**
+  (scripts/strip-madmom-models.py), they are NOT redistributed. Only madmom's
+  BSD code (the DBN post-processor + DSP utils) ships.
 - Source: https://github.com/CPJKU/madmom
 
 ### ctc-forced-aligner, lyric forced alignment (vendored wheel)
