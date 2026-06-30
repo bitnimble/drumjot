@@ -14,11 +14,13 @@ from app.pipeline.beats import (
     BarInfo,
     BeatStructure,
     BeatTick,
+    _beats_downbeats_to_raw,
     _choose_time_signature,
     _coarse_offset_from_envelope,
     _finalize_bar,
     _finalize_bar_tempos,
     _pad_trailing_bars,
+    _raw_to_structure,
     _summarize,
     align_beats_to_onsets,
 )
@@ -786,3 +788,71 @@ def test_align_preserves_per_bar_tempo_under_humanized_onsets() -> None:
     assert abs(structure.bars[0].tempo_bpm - 160.0) < 0.05
     assert abs(structure.bars[1].tempo_bpm - 160.0) < 0.05
     assert structure.bars[0].tempo_bpm == pytest.approx(structure.bars[1].tempo_bpm, abs=1e-9)
+
+
+# ---------- downbeat smoothing guards (Beat This! mis-detections) ----------
+
+def _structure_from_bars(bar_lengths: list[int], spb: float = 0.5) -> BeatStructure:
+    """Build beats + downbeats from an as-detected list of bar lengths (beats
+    per bar at `spb` s/beat, downbeat at each bar start), run them through the
+    production conversion (smoothing included), return the structure."""
+    beats: list[float] = []
+    downbeats: list[float] = []
+    t = 0.0
+    for n in bar_lengths:
+        downbeats.append(round(t, 3))
+        for _ in range(n):
+            beats.append(round(t, 3))
+            t += spb
+    return _raw_to_structure(_beats_downbeats_to_raw(beats, downbeats))
+
+
+def _sigs(s: BeatStructure) -> list[tuple[int, int]]:
+    return [b.time_signature for b in s.bars]
+
+
+def test_smooth_splits_merged_bar_no_multiples():
+    # A missed downbeat merges two 4/4 bars into an 8-beat bar -> split back.
+    s = _structure_from_bars([4, 4, 8, 4, 4])
+    assert _sigs(s) == [(4, 4)] * 6
+    assert s.has_time_sig_changes is False
+
+
+def test_smooth_splits_multiple_of_three_base():
+    # 6 beats against a 3/4 majority is a merged pair, not 6/8.
+    s = _structure_from_bars([3, 3, 6, 3, 3])
+    assert _sigs(s) == [(3, 4)] * 6
+    assert s.has_time_sig_changes is False
+
+
+def test_smooth_merges_fragmented_bar_two_plus_two():
+    # An extra downbeat fragments one 4/4 bar into 2+2 -> merge back.
+    s = _structure_from_bars([4, 4, 2, 2, 4, 4])
+    assert _sigs(s) == [(4, 4)] * 5
+    assert s.has_time_sig_changes is False
+
+
+def test_smooth_merges_fragmented_bar_one_plus_three():
+    s = _structure_from_bars([4, 4, 1, 3, 4, 4])
+    assert _sigs(s) == [(4, 4)] * 5
+    assert s.has_time_sig_changes is False
+
+
+def test_smooth_preserves_sustained_odd_meter():
+    # A real, sustained 3/4 section in a 4/4 song must survive untouched.
+    s = _structure_from_bars([4, 4, 3, 3, 3, 4, 4])
+    assert _sigs(s) == [(4, 4), (4, 4), (3, 4), (3, 4), (3, 4), (4, 4), (4, 4)]
+    assert s.has_time_sig_changes is True
+
+
+def test_smooth_preserves_genuine_six_eight():
+    # A lone 6-beat bar is NOT a multiple of the 4/4 base -> kept as 6/8 (fast).
+    s = _structure_from_bars([4, 4, 6, 4, 4])
+    assert (6, 8) in _sigs(s)
+    assert s.has_time_sig_changes is True
+
+
+def test_smooth_noop_without_majority_meter():
+    # No meter holds a majority -> leave the grid exactly as detected.
+    s = _structure_from_bars([4, 3, 5, 4, 3])
+    assert _sigs(s) == [(4, 4), (3, 4), (5, 4), (4, 4), (3, 4)]

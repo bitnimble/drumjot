@@ -26,6 +26,7 @@ Why it matters:
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -321,12 +322,74 @@ def _beats_downbeats_to_raw(beats, downbeats, tol: float = 0.05) -> np.ndarray:
         if nearest is not None and abs(beats[nearest] - d) <= tol:
             is_downbeat[nearest] = True
 
+    is_downbeat = _smooth_downbeats(is_downbeat)
+
     rows = np.empty((beats.size, 2), dtype=np.float64)
     pos = 0
     for k in range(beats.size):
-        pos = 1 if (is_downbeat[k] or pos == 0) else pos + 1
+        pos = 1 if (bool(is_downbeat[k]) or pos == 0) else pos + 1
         rows[k] = (beats[k], pos)
     return rows
+
+
+def _smooth_downbeats(is_downbeat: np.ndarray) -> np.ndarray:
+    """Repair downbeat mis-detections that would fake a time-signature change.
+
+    Beat This! is DBN-free (no fixed-meter prior), so a single mis-placed
+    downbeat shows up as a one-off odd bar. Against the *prevailing* meter P
+    (the majority bar length) two corrections are applied, both purely by
+    inserting/removing downbeats (never inventing or dropping beats):
+
+    1. **No multiples** (missed downbeat merged two bars): a bar whose length
+       is an exact multiple ``k·P`` (k≥2) is split back into k bars of P, so
+       4/4 never reads as 8/4 and 3/4 never as 6/4.
+    2. **2-bar persistence** (extra downbeat fragmented one bar): a run of
+       consecutive sub-P bars whose lengths sum to exactly one P bar is merged
+       back into a single bar (e.g. 2+2 or 1+3 → 4). A *sustained* odd meter
+       (≥2 bars that don't sum to one P bar, e.g. a real 3/4 or 6/8 section) is
+       left untouched, so genuine mid-song changes survive.
+
+    No-ops unless one meter holds a clear majority of the interior bars (so a
+    genuinely meter-varied song isn't forced onto a single grid). A truly
+    dropped/added *beat* (not downbeat) still yields a lone odd bar; we can't
+    fix that without inventing beats, so it's preserved.
+    """
+    db = [int(i) for i in np.flatnonzero(is_downbeat)]
+    if len(db) < 3:
+        return is_downbeat
+    counts = [db[k + 1] - db[k] for k in range(len(db) - 1)]  # interior bar lengths
+    p, freq = Counter(counts).most_common(1)[0]
+    if p < 2 or freq * 2 <= len(counts):  # no clear majority meter -> don't touch
+        return is_downbeat
+
+    # 1. split exact multiples of P
+    split: list[int] = [db[0]]
+    for k in range(len(db) - 1):
+        c = db[k + 1] - db[k]
+        if c >= 2 * p and c % p == 0:
+            split.extend(db[k] + m * p for m in range(1, c // p))
+        split.append(db[k + 1])
+    split = sorted(set(split))
+
+    # 2. merge runs of consecutive sub-P bars that sum to exactly one P bar
+    kept = [split[0]]
+    k = 0
+    while k < len(split) - 1:
+        if split[k + 1] - split[k] < p:
+            run_sum, j = 0, k
+            while j < len(split) - 1 and (split[j + 1] - split[j]) < p and run_sum < p:
+                run_sum += split[j + 1] - split[j]
+                j += 1
+            if run_sum == p and j - k >= 2:  # fragments of one bar -> collapse
+                kept.append(split[j])
+                k = j
+                continue
+        kept.append(split[k + 1])
+        k += 1
+
+    out = np.zeros(is_downbeat.shape[0], dtype=bool)
+    out[kept] = True
+    return out
 
 
 def _raw_to_structure(raw: np.ndarray) -> BeatStructure:
