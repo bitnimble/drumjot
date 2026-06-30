@@ -188,3 +188,46 @@ Reported as:
 - Not retraining or fine-tuning Beat Transformer.
 - Not building a general beat-tracking leaderboard; this is a one-shot
   decision harness (though it stays in-tree and re-runnable).
+
+---
+
+## Results (2026-06-30, synthetic onsets, N=96 → 77 scored, 19 dropped)
+
+Three-way, scored on the Drumjot-relevant metrics (medians; data is bimodal).
+Beat This! (ISMIR 2024, MIT, DBN-free) added as a third arm.
+
+| metric | madmom | beat_transformer | **beat_this** |
+|---|---|---|---|
+| **downbeat_f** (overall) | 0.41 | 0.97 | **1.00** |
+| **bar_len_ok** (overall) | 0.00 | 1.00 | **1.00** |
+| downbeat_f · 4/4 (53) | 0.23 | 0.97 | **1.00** |
+| downbeat_f · 3/4 (8) | 0.42 | 0.46 | **0.99** |
+| downbeat_f · 6/8 (6) | 0.97 | 0.00 | **0.98** |
+| downbeat_f · 5/8 (4) | 0.00 | 0.66 | **0.94** |
+| downbeat_f · 5/4 (6) | 0.82 | 0.98* | 0.61 |
+| downbeat_f · 120-150 band | 0.22 | 0.00 | **1.00** |
+
+**Verdict: Beat This! wins decisively** on bar alignment + bar grouping —
+overall, on 4/4 (the ~99% case), and on 3/4 / 5/8 / 6/8. It's the only
+tracker that survives BT's catastrophic bands (120-150 BPM) and meters
+(6/8) *and* madmom's (5/8, fast tempo). madmom's 4/4 numbers are partly
+GT-phase-deflated but it's clearly the weakest on bar phase regardless.
+
+**One caveat:** 5/4 (6 clips) is Beat This!'s weak spot (bar_len_ok 0.00 —
+it mis-groups the 5). BT's 5/4 "0.98" is a small-sample fluke (its beat_f
+0.22 / amlt 0.00 there contradict it). 5/4 is the rarest meter (43 in all
+of E-GMD) and hand-fixable in the UI.
+
+**Implication:** Beat This! can replace **both** madmom and Beat Transformer
+— delete `_madmom_beats`, the whole `beat_transformer.py` + vendored model
++ checkpoint + GPU-park + tempo-narrowing, and the shared madmom DBN — and
+derive tempo from its beats. madmom drops out entirely (it only stayed for
+the DBN). Tempo (octave-corrected) is a wash across all three.
+
+**Still to confirm before adopting in production:**
+- Validate on a real full-song **separated drum stem** (E-GMD is clean solo
+  drums; Beat This! trained on full mixes). The harness's `adtof` mode (GPU)
+  is the closest proxy; run it when the GPU frees up.
+- Beat This! barely uses `align_onsets` (uniform offset only), so the
+  synthetic-vs-adtof onset mode matters far less for it than for the DBN
+  path — the bar-alignment wins are intrinsic.
