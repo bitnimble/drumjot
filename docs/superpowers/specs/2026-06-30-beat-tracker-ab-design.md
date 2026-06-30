@@ -55,28 +55,42 @@ per clip, so the paired delta is fair regardless of onset mode.
 
 ## Ground truth
 
-From each clip's E-GMD MIDI (synced to the audio):
+From each clip's E-GMD MIDI (synced to the audio), built on `mido` (already a
+dep; no `pretty_midi`):
 
-- beat & downbeat times from the MIDI tempo-map + time-signature meta
-  (`pretty_midi.get_beats()`/`get_downbeats()`, or an equivalent built on the
-  existing `core/midi_events.py` MIDI reader if `pretty_midi` isn't in the
-  venv, confirm at implementation time, don't add a dep unprompted).
-- tempo reference from the same.
+- beat & downbeat times from the MIDI tempo-map + the CSV's `time_signature`
+  (authoritative meter). Beats step at the meter's beat unit (`4/denominator`
+  quarter notes); downbeats land every `numerator` beats; anchored at tick 0.
+- **tempo reference from the MIDI tempo map** (60e6/`set_tempo` = quarter-note
+  BPM, the same unit the trackers report), *not* the CSV `bpm` (which may be
+  eighth-relative for x/8 meters). Verified: E-GMD MIDI carries the real
+  `set_tempo` (e.g. 138.0, matching the CSV).
 
-**Load-time sanity gate:** GT downbeats must land near strong audio onsets;
-clips whose MIDI↔audio phase is grossly mismatched are dropped as bad data
-(logged with the clip id, never silently).
+**Load-time sanity gate:** scored on GT **downbeats** (bar starts), not every
+beat: a drum onset must land within 80 ms of ≥ 50 % of downbeats, else the clip
+is dropped (logged, never silently). Downbeat-based because a compound 6/8 grid
+has a beat on every eighth, which a drummer rarely all strikes, that tanked
+beat-level coverage and wrongly dropped non-4/4 clips; bar starts almost always
+carry a hit, so the gate is meter-robust.
 
 ## Sample selection (deterministic, stratified)
 
-Driven by `e-gmd-v1.0.0.csv` (`bpm`, `time_signature`, `duration` columns), no
-RNG. Reuse / extend `loaders/egmd.py`.
+Driven by `e-gmd-v1.0.0.csv` (`bpm`, `time_signature`, `duration`, `split`
+columns), no RNG.
 
+- **Root resolution** mirrors training: `--root` → `$DRUMJOT_EGMD` →
+  `training/data_paths.toml` (`egmd`) → the documented codebox default
+  (`/codebox-workspace/datasets/e-gmd-v1.0.0`) → in-tree benchmarks dir.
+- **Split = `all` (default).** E-GMD's `test` split is **100 % 4/4** (5289
+  clips); the only non-4/4 meters (3/4, 6/8, 5/4, 5/8, ~516 clips) live in
+  train/validation. madmom and Beat Transformer are **pretrained** (never
+  trained on E-GMD), so sampling across splits has no leakage and is the only
+  way to fill the non-4/4 quota.
 - **Filter:** clips ≥ 8 bars (from `duration` × `bpm` × time-sig).
-- **Tempo bands:** `<90 / 90–120 / 120–150 / >150` BPM; even quota per band,
-  deterministic ordering within a band (sort by `track_id`).
-- **Time-sig quota:** explicitly reserve a slice for non-4/4 (3/4, 6/8, 5/4,
-  7/8, …), spread across tempo bands where the data allows.
+- **Tempo bands:** `<90 / 90–120 / 120–150 / >150` BPM; round-robin quota per
+  band, deterministic ordering within a band (sort by `track_id`).
+- **Time-sig quota:** reserve a slice for non-4/4, stratified across tempo
+  bands where the data allows.
 - **Target N = 96 ≈ 72× 4/4 + 24× non-4/4.**
 - The exact selected clip-id list is saved to the output dir so a re-run is
   bit-identical.
@@ -122,6 +136,12 @@ but fine for 96 short clips, and CPU makes BT trivially deterministic.
   the pipeline has for tempo, so tempo + AMLt are decisive.
 - **Secondary diagnostic:** beat F-measure (70 ms), CMLt. Beat F is secondary
   because the onset model carries fine phase downstream.
+- **Compound-meter caveat:** downbeat F is meter-fair (it only matches bar
+  starts, regardless of beat subdivision), so it's a sound primary even on
+  6/8 & 5/8. AMLt is **not** fair there: the GT grid is at the eighth pulse,
+  so a tracker reporting the dotted-quarter pulse is a ×3 metrical level, which
+  AMLt rejects. Read AMLt on x/8 with caution; 3/4 & 5/4 are quarter-based and
+  unaffected. (First-run sighting: a 6/8 clip scored madmom dbF 0.97 / BT 0.00; a real BT bar-finding failure, not the subdivision artifact.)
 
 Reported as:
 

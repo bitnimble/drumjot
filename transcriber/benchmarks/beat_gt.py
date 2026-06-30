@@ -138,26 +138,28 @@ def gt_grid(midi_path, time_sig: tuple[int, int], bpm: float | None = None) -> G
 
 
 def sanity_coverage(
-    grid: GtGrid, onsets: list[LaneOnset], window: float = 0.06
+    grid: GtGrid, onsets: list[LaneOnset], window: float = 0.08
 ) -> float:
-    """Fraction of GT beats with a drum onset within `window` seconds.
+    """Fraction of GT *downbeats* with a drum onset within `window` seconds.
 
     A low value means the performance drifts off its own click (rubato /
     loose timing) or the MIDI<->grid phase is broken, so downbeats can't
-    be scored fairly. Used as a load-time drop gate.
+    be scored fairly. Used as a load-time drop gate. Scored on downbeats
+    (bar starts) rather than every beat so it's robust across meters:
+    a compound 6/8 grid has beats on every eighth, which the drummer
+    rarely all strikes, but bar starts almost always carry a hit.
     """
-    if not grid.beats or not onsets:
+    if not grid.downbeats or not onsets:
         return 0.0
     times = sorted(o.time for o in onsets)
     import bisect
 
     hit = 0
-    for b in grid.beats:
+    for b in grid.downbeats:
         j = bisect.bisect_left(times, b)
-        near = False
-        for k in (j - 1, j):
-            if 0 <= k < len(times) and abs(times[k] - b) <= window:
-                near = True
-                break
+        near = any(
+            0 <= k < len(times) and abs(times[k] - b) <= window
+            for k in (j - 1, j)
+        )
         hit += near
-    return hit / len(grid.beats)
+    return hit / len(grid.downbeats)

@@ -24,6 +24,7 @@ import csv
 import json
 import logging
 import os
+import tomllib
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,15 +66,50 @@ class Clip:
 
 # ---------- selection ----------
 
+# Documented project default (`training/data_paths.toml.example`,
+# `fetch_egmd.sh` downloads here). Used when neither --root, $DRUMJOT_EGMD,
+# nor training/data_paths.toml resolves.
+_CODEBOX_DEFAULT = Path("/codebox-workspace/datasets/e-gmd-v1.0.0")
+
+
+def resolve_root(cli_root: Path | None) -> Path:
+    """Resolve the E-GMD root the way the training pipeline does.
+
+    Order: explicit --root, $DRUMJOT_EGMD, `training/data_paths.toml`
+    (`egmd` key), the documented codebox default, then the in-tree
+    benchmarks dataset dir.
+    """
+    if cli_root is not None:
+        return cli_root
+    env = os.environ.get("DRUMJOT_EGMD")
+    if env:
+        return Path(env)
+    toml_path = Path(__file__).resolve().parents[2] / "training" / "data_paths.toml"
+    if toml_path.exists():
+        egmd = tomllib.loads(toml_path.read_text()).get("egmd")
+        if egmd:
+            return Path(egmd)
+    if (_CODEBOX_DEFAULT / CSV_NAME).exists():
+        return _CODEBOX_DEFAULT
+    return Path(__file__).resolve().parent / "datasets" / "e-gmd"
+
+
 def _read_rows(root: Path, split: str) -> list[dict]:
     csv_path = root / CSV_NAME
     if not csv_path.exists():
         raise FileNotFoundError(
-            f"E-GMD CSV missing at {csv_path}. Paste the extracted "
-            f"e-gmd-v1.0.0.zip contents (or a subset) into {root}."
+            f"E-GMD CSV missing at {csv_path}. Set $DRUMJOT_EGMD / "
+            f"training/data_paths.toml, or pass --root."
         )
+    # E-GMD's `test` split is 100% 4/4; non-4/4 meters live only in
+    # train/validation. madmom + Beat Transformer are pretrained (never
+    # trained on E-GMD), so there's no leakage in sampling across splits,
+    # and `all` is the default so the non-4/4 quota can be filled.
     with csv_path.open(newline="") as fh:
-        return [r for r in csv.DictReader(fh) if r.get("split") == split]
+        rows = list(csv.DictReader(fh))
+    if split != "all":
+        rows = [r for r in rows if r.get("split") == split]
+    return rows
 
 
 def _to_clip(root: Path, row: dict) -> Clip | None:
@@ -225,7 +261,10 @@ def run(
     per_clip: list[dict] = []
     with (out_dir / "per_clip.jsonl").open("w") as jf:
         for i, clip in enumerate(selected, 1):
-            grid = gt_grid(clip.midi_path, clip.time_sig, clip.bpm)
+            # Tempo reference from the MIDI tempo map (quarter-note BPM, the
+            # same unit the trackers report) rather than the CSV's possibly
+            # eighth-relative label.
+            grid = gt_grid(clip.midi_path, clip.time_sig)
             onsets = lane_onsets(clip.midi_path)
             cov = sanity_coverage(grid, onsets)
             if cov < SANITY_MIN_COVERAGE:
@@ -320,14 +359,15 @@ def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description="madmom vs Beat Transformer beat-tracker A/B")
     p.add_argument("--onsets", choices=["synthetic", "gt", "adtof"], default="synthetic",
                    help="align-onset source (synthetic & gt are CPU-only; adtof needs the GPU)")
-    default_root = Path(__file__).resolve().parent / "datasets" / "e-gmd"
-    p.add_argument("--root", type=Path, default=default_root)
+    p.add_argument("--root", type=Path, default=None,
+                   help="E-GMD root; defaults to $DRUMJOT_EGMD / data_paths.toml / codebox")
     p.add_argument("--output-dir", type=Path,
                    default=Path(__file__).resolve().parent / "out" / "beat_ab")
     p.add_argument("--n", type=int, default=96)
     p.add_argument("--nonfourfour", type=int, default=24)
     p.add_argument("--min-bars", type=int, default=8)
-    p.add_argument("--split", default="test")
+    p.add_argument("--split", default="all",
+                   help="E-GMD split filter, or 'all' (default; needed for non-4/4 coverage)")
     args = p.parse_args(argv)
 
     if args.onsets != "adtof":
@@ -336,10 +376,17 @@ def main(argv: list[str] | None = None) -> None:
         # import, which analyze_beats does lazily.
         os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
         os.environ.setdefault("OMP_NUM_THREADS", "8")
+    # BT's default checkpoint path is the docker `/app/checkpoints`; point it
+    # at the writable in-tree dir so the local run can download/load there.
+    os.environ.setdefault(
+        "BEAT_TRANSFORMER_CHECKPOINT",
+        str(Path(__file__).resolve().parents[1] / "checkpoints" / "beat_transformer.pt"),
+    )
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     _seed_determinism()
-    run(args.root, args.onsets, args.output_dir.with_name(args.output_dir.name + f"_{args.onsets}"),
+    run(resolve_root(args.root), args.onsets,
+        args.output_dir.with_name(args.output_dir.name + f"_{args.onsets}"),
         args.n, args.nonfourfour, args.min_bars, args.split)
 
 
