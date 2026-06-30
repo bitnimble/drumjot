@@ -286,17 +286,19 @@ class Separator:
             )
         log.info("Separator ready (total %.2fs).", time.perf_counter() - t0)
 
-    def _load_runner(self, ckpt_filename: str, models_dir: Path, device: str) -> SeparationRunner:
-        """Build a `SeparationRunner` for one custom model from its on-disk
-        (ckpt, yaml) pair. `yaml_for_ckpt` resolves the paired config (the
-        bare state_dict can't be instantiated without it)."""
+    def _load_runner(self, ckpt_filename: str, models_dir: Path, device: str):
+        """Build the separator for one model from its on-disk (ckpt, yaml) pair.
+
+        ONNX path (default): a torch-free `NumpySeparator` (numpy STFT/chunking +
+        onnxruntime body). Opt-out path (`DRUMJOT_SEP_ONNX=0`): the torch
+        `SeparationRunner`. Both expose the same `.separate(...)`.
+        """
         ckpt = models_dir / ckpt_filename
         yaml = models_dir / yaml_for_ckpt(ckpt_filename)
-        loaded = load_model(ckpt, yaml, device=device)
         if _onnx_separation_enabled():
-            _attach_onnx_body(loaded, ckpt, models_dir)
-        else:
-            _maybe_compile_model(loaded)
+            return _load_numpy_separator(ckpt, yaml, models_dir)
+        loaded = load_model(ckpt, yaml, device=device)
+        _maybe_compile_model(loaded)
         return SeparationRunner(loaded, device=device)
 
     def run_stems_all(
@@ -446,16 +448,14 @@ class Separator:
 
     @staticmethod
     def _inner_module(separator: object) -> object | None:
+        # The torch SeparationRunner exposes an nn.Module to park CPU-side; the
+        # ONNX NumpySeparator keeps its weights in the onnxruntime session (GPU
+        # memory torch can't move), so there is nothing to park for it. NOTE:
+        # this means the ONNX session's VRAM is NOT freed by the /lyrics GPU
+        # swap -- releasing the ORT session is a follow-up if that OOMs.
         if isinstance(separator, SeparationRunner):
-            return separator.model  # vendored nn.Module (the two drum stages)
-        # audio-separator wrapper (still used by the vocals / lyrics path).
-        model_instance = getattr(separator, "model_instance", None)
-        if model_instance is None:
-            return None
-        inner = getattr(model_instance, "model_run", None)
-        if inner is None:
-            inner = getattr(model_instance, "model", None)
-        return inner
+            return separator.model
+        return None
 
     def park_drum_models(self) -> None:
         """Park the audio-separator drum models (BS-Roformer Stage 1 +
@@ -620,30 +620,35 @@ def _onnx_separation_fp16() -> bool:
     return os.environ.get("DRUMJOT_SEP_ONNX", "").strip().lower() in ("fp16", "16", "half")
 
 
-def _attach_onnx_body(loaded: object, ckpt_path: Path, models_dir: Path) -> None:
-    """Export (once, cached next to the ckpt) and attach the model's ONNX body so
-    the runner routes body compute through onnxruntime. The first export is heavy
-    (full-size graph, minutes); later loads reuse the cached `.onnx`."""
-    from app.pipeline.separation.export import export_body
-    from app.pipeline.separation.loader import attach_onnx_session
+def _load_numpy_separator(ckpt_path: Path, yaml_path: Path, models_dir: Path):
+    """Build the torch-free numpy + onnxruntime separator (NumpySeparator).
+
+    The body is exported to ONNX once (cached next to the ckpt; that one step
+    loads the torch model), after which inference runs with no torch at all.
+    First export is heavy (full-size graph, minutes); later loads reuse the
+    cached `.onnx`. Shipping a pre-exported `.onnx` via provision would make even
+    the first load torch-free."""
+    from app.pipeline.separation.np_inference import NumpySeparator
 
     fp16 = _onnx_separation_fp16()
     onnx_path = models_dir / (ckpt_path.stem + (".fp16.onnx" if fp16 else ".onnx"))
     if not onnx_path.exists():
+        from app.pipeline.separation.export import export_body
+
         log.info(
             "Exporting %s body to ONNX%s (one-time, cached) ...",
             ckpt_path.name,
             " fp16" if fp16 else "",
         )
-        export_body(loaded, onnx_path, fp16=fp16)  # type: ignore[arg-type]
-    attach_onnx_session(loaded, onnx_path)  # type: ignore[arg-type]
-    providers = loaded.onnx_session.get_providers()  # type: ignore[attr-defined]
+        export_body(load_model(ckpt_path, yaml_path, device="cpu"), onnx_path, fp16=fp16)
+    sep = NumpySeparator(onnx_path, yaml_path)
     log.info(
         "ONNX separation ENABLED for %s (%s, providers=%s)",
         ckpt_path.name,
         "fp16" if fp16 else "fp32",
-        providers,
+        sep.session.get_providers(),
     )
+    return sep
 
 
 def _residual_audio(
