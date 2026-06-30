@@ -47,6 +47,9 @@ class LoadedModel:
     config: ConfigDict
     instruments: list[str]
     target_instrument: str | None
+    # Optional onnxruntime InferenceSession wrapping the model body. When set,
+    # the runner routes body compute through ONNX (STFT/iSTFT stay in torch).
+    onnx_session: object | None = None
 
 
 def load_yaml(yaml_path: str | Path) -> dict:
@@ -65,6 +68,25 @@ def load_model(
     if kind == "bs_roformer":
         return _load_bs_roformer(ckpt_path, model_data, device)
     return _load_mdx23c(ckpt_path, model_data, device)
+
+
+def attach_onnx_session(
+    loaded: LoadedModel,
+    onnx_path: str | Path,
+    *,
+    providers: list[str] | None = None,
+) -> LoadedModel:
+    """Attach an onnxruntime session for the model body so the runner routes the
+    heavy body compute through ONNX (the torch STFT/iSTFT stay around it). The
+    torch model is retained for the STFT prep/post. `providers` defaults to
+    onnxruntime's available set (e.g. CUDA/DirectML/CoreML then CPU); pass an
+    explicit list to pin an execution provider. Mutates and returns `loaded`."""
+    import onnxruntime as ort
+
+    if providers is None:
+        providers = ort.get_available_providers()
+    loaded.onnx_session = ort.InferenceSession(str(onnx_path), providers=providers)
+    return loaded
 
 
 def _detect_kind(yaml_path: str, ckpt_path: str, model_data: dict) -> str:

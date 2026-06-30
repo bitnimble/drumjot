@@ -474,32 +474,22 @@ class BSRoformer(Module):
 
     def forward_spec(self, stft_repr: Tensor) -> Tensor:
         """Full torch body: `forward_mask` plus the complex mask multiply,
-        returning the complex masked spectrogram ready for the iSTFT. The
-        view_as_complex multiply is kept here (out of the ONNX path); the ONNX
-        runner reproduces it as real arithmetic around `forward_mask`."""
-        mask = self.forward_mask(stft_repr)
+        returning the complex masked spectrogram ready for the iSTFT."""
+        return self._apply_mask(stft_repr, self.forward_mask(stft_repr))
 
+    def _apply_mask(self, stft_repr: Tensor, mask: Tensor) -> Tensor:
+        """Complex-multiply the real-view `stft_repr` (b (f s) t c) by the
+        real-view `mask` (b n f t c) -> complex masked spectrogram (b n (f s) t).
+        Shared by forward_spec (torch) and forward_onnx (ONNX mask) so both apply
+        the mask identically; the view_as_complex op stays off the ONNX graph."""
         stft_repr = rearrange(stft_repr, "b f t c -> b 1 f t c")
-        stft_repr = torch.view_as_complex(stft_repr)
-        mask = torch.view_as_complex(mask)
-
+        stft_repr = torch.view_as_complex(stft_repr.contiguous())
+        mask = torch.view_as_complex(mask.contiguous())
         return stft_repr * mask
 
-    def forward(self, raw_audio):
-        """
-        einops
-
-        b - batch
-        f - freq
-        t - time
-        s - audio channel (1 for mono, 2 for stereo)
-        n - number of 'stems'
-        c - complex (2)
-        d - feature dimension
-        """
-
-        device = raw_audio.device
-
+    def _stft_prep(self, raw_audio):
+        """raw audio -> (real-view stft_repr `b (f s) t c`, stft_window). The
+        STFT stays in torch / fp32, outside any ONNX graph."""
         if raw_audio.ndim == 2:
             raw_audio = rearrange(raw_audio, "b t -> b 1 t")
 
@@ -508,31 +498,38 @@ class BSRoformer(Module):
             self.stereo and channels == 2
         ), "stereo needs to be set to True if passing in audio signal that is stereo (channel dimension of 2). also need to be False if mono (channel dimension of 1)"
 
-        # to stft
-
-        raw_audio, batch_audio_channel_packed_shape = pack_one(raw_audio, "* t")
-
+        device = raw_audio.device
+        raw_audio, packed_shape = pack_one(raw_audio, "* t")
         stft_window = self.stft_window_fn().to(device)
-
         stft_repr = torch.stft(raw_audio, **self.stft_kwargs, window=stft_window, return_complex=True)
         stft_repr = torch.view_as_real(stft_repr)
+        stft_repr = unpack_one(stft_repr, packed_shape, "* f t c")
+        # merge stereo/mono into the frequency dim (frequency-leading) for band splitting
+        stft_repr = rearrange(stft_repr, "b s f t c -> b (f s) t c")
+        return stft_repr, stft_window
 
-        stft_repr = unpack_one(stft_repr, batch_audio_channel_packed_shape, "* f t c")
-        stft_repr = rearrange(stft_repr, "b s f t c -> b (f s) t c")  # merge stereo / mono into the frequency, with frequency leading dimension, for band splitting
-
-        # transformer body + masking (ONNX-export cut point)
-
-        stft_repr = self.forward_spec(stft_repr)
-
-        # istft
-
-        stft_repr = rearrange(stft_repr, "b n (f s) t -> (b n s) f t", s=self.audio_channels)
-
-        recon_audio = torch.istft(stft_repr, **self.stft_kwargs, window=stft_window, return_complex=False)
-
-        recon_audio = rearrange(recon_audio, "(b n s) t -> b n s t", s=self.audio_channels, n=self.num_stems)
-
+    def _istft_post(self, masked, stft_window):
+        """complex masked spectrogram (b n (f s) t) -> recon audio (b n s t)."""
+        masked = rearrange(masked, "b n (f s) t -> (b n s) f t", s=self.audio_channels)
+        recon = torch.istft(masked, **self.stft_kwargs, window=stft_window, return_complex=False)
+        recon = rearrange(recon, "(b n s) t -> b n s t", s=self.audio_channels, n=self.num_stems)
         if self.num_stems == 1:
-            recon_audio = rearrange(recon_audio, "b 1 s t -> b s t")
+            recon = rearrange(recon, "b 1 s t -> b s t")
+        return recon
 
-        return recon_audio
+    def forward(self, raw_audio):
+        """raw audio -> separated stems (b n s t). einops dims: b batch, f freq,
+        t time, s audio channel, n stems, c complex(2), d feature."""
+        stft_repr, stft_window = self._stft_prep(raw_audio)
+        masked = self.forward_spec(stft_repr)
+        return self._istft_post(masked, stft_window)
+
+    def forward_onnx(self, raw_audio, session):
+        """ONNX-backed forward: STFT prep (torch) -> mask (onnxruntime, the
+        forward_mask body) -> complex mask multiply + iSTFT (torch). `session`
+        wraps `forward_mask` (see separation.export)."""
+        stft_repr, stft_window = self._stft_prep(raw_audio)
+        name = session.get_inputs()[0].name
+        mask = session.run(None, {name: stft_repr.detach().cpu().numpy()})[0]
+        masked = self._apply_mask(stft_repr, torch.from_numpy(mask).to(stft_repr.device))
+        return self._istft_post(masked, stft_window)
