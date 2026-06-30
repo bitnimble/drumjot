@@ -5,7 +5,7 @@ file. Pure Python, no bun, no TypeScript. See
 [architecture.md](architecture.md) for why.
 
 Audio → MIDI flow: BS-Roformer SW separation → MDX23C DrumSep →
-madmom beat tracking → ADTOF Frame_RNN per-stem onset detection →
+Beat This! beat tracking → ADTOF Frame_RNN per-stem onset detection →
 Claude filter LLM (rejects artifact onsets per instrument) → kept onsets
 render straight to MIDI with original un-quantized times.
 `src/midi/from_midi.ts` on the frontend converts that MIDI to a Jot.
@@ -16,7 +16,7 @@ render straight to MIDI with original un-quantized times.
 transcriber/
 ├── README.md                   Service-level docs (formats, API, perf).
 ├── pyproject.toml              fastapi, audio-separator[gpu], adtof_pytorch,
-│                               madmom (git), mir_eval, anthropic.
+│                               beat-this, mir_eval, anthropic.
 ├── .env.example                ANTHROPIC_API_KEY, LLM_MODEL,
 │                               INSTRUMENT_CONCURRENCY, DEBUG_DIR.
 ├── docs/ai-midi-to-jot-notes.md   Captured techniques from the deleted DSL
@@ -36,8 +36,8 @@ transcriber/
         ├── resume.py           hydrate_context_from_resume(folder, start_stage).
         ├── separate.py         Two-stage separator (run_stems_all / run_stems_per).
         │                       BS-Roformer SW + Jarredou MDX23C 5-stem DrumSep.
-        ├── beats.py            madmom RNN+DBN downbeat tracker (default) OR Beat
-        │                       Transformer activations into the shared DBN.
+        ├── beats.py            Beat This! beat/downbeat tracker (DBN-free,
+        │                       meter-agnostic) + per-bar tempo/feel analysis.
         ├── adtof_onsets.py     ADTOF Frame_RNN per-stem onsets; hi-hat lane
         │                       adds audio-domain supplement + energy floor.
         ├── cymbal_split.py     Splits merged cymbals -> ride (d) / crash (c).
@@ -47,7 +47,7 @@ transcriber/
         ├── filter_llm.py       Per-instrument Claude artifact-rejection filter.
         ├── onsets_midi.py      Render kept onsets to prediction.mid.
         ├── note_provenance.py  Per-note debug sidecar (kept + rejected onsets).
-        ├── quantise.py / lyrics_align.py / beat_transformer.py / provision.py
+        ├── quantise.py / lyrics_align.py / provision.py
         └── llm_util.py         Refusal/content-filter retry + code-fence strip.
 ```
 
@@ -264,13 +264,12 @@ curl http://localhost:8001/health        # 200 only after eager-load completes
 ```
 
 Dev box has a local uv-managed venv at `transcriber/.venv` (torch cu128,
-madmom, audio-separator[gpu], adtof_pytorch), this is the **primary dev
+beat-this, audio-separator[gpu], adtof_pytorch), this is the **primary dev
 loop**; Docker is only for clean/reproducible builds. `scripts/check-py`
 activates it. Invoke Python as `python3` on the bare system (plain
 `python` only inside an activated venv). **Do NOT install/upgrade deps
-unprompted**, the install graph is ordering-sensitive (numpy/cython
-before madmom; torch from cu128 index first); flag dep changes and let
-the user run `uv pip install`.
+unprompted**, the install graph is ordering-sensitive (torch from the
+cu128 index first); flag dep changes and let the user run `uv pip install`.
 
 ## Accuracy: the two paths
 
@@ -317,7 +316,7 @@ F1 eval harness early and run ADTOF locally as a proxy baseline.
 - 2509.21739, N2N paper (Path B target).
 - ADTOF: github.com/MZehren/ADTOF, runnable proxy baseline.
 - E-GMD: magenta.tensorflow.org/datasets/e-gmd.
-- madmom: github.com/CPJKU/madmom, beat/downbeat tracking.
+- Beat This!: github.com/CPJKU/beat_this, beat/downbeat tracking (ISMIR 2024).
 - audio-separator: pypi.org/project/audio-separator/.
 - Jarredou MDX23C DrumSep: github.com/jarredou/models/releases.
 - Drumgizmo + free kits: drumgizmo.org/wiki (Path B rendering).

@@ -6,7 +6,7 @@
 # ruff config below. The [project] dependencies exist for the standalone
 # **Docker image** (training/Dockerfile), which installs this package on
 # its own, a LEAN subset of the transcriber stack (no audio-separator /
-# madmom / adtof / ctc-forced-aligner / anthropic): the trainer only needs
+# beat-this / adtof / ctc-forced-aligner / anthropic): the trainer only needs
 # a frozen MERT encoder + a small torch head.
 
 [build-system]

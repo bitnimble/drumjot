@@ -80,12 +80,10 @@ project, not history.
 
 ## Transcriber
 
-- **madmom installs from a git main branch**, not PyPI (last PyPI release
-  predates modern Python). The Dockerfile pins it. On ImportError,
-  `beats.py` falls back to librosa beat tracking (no downbeat detection),
-  degrading per-bar feel to default `straight16`. Second backend, Beat
-  Transformer, is available via `settings.beat_tracker =
-  "beat_transformer"` (feeds the same DBN).
+- **Beat tracking is Beat This!** (`beat-this` from PyPI; DBN-free,
+  meter-agnostic; weights auto-download to the torch hub cache). On
+  import/inference failure, `beats.py` falls back to librosa beat tracking
+  (no downbeat detection), degrading per-bar feel to default `straight16`.
 
 - **Per-instrument stems are the input to onset detection, not the full
   drum mix.** Detector windows are tuned tight on this assumption, see
@@ -135,9 +133,8 @@ project, not history.
   `bun run typecheck` gives the full list.
 - A `src/parser/__tests__/` test fails → the parser is the most
   load-bearing TS piece; revert the last parser change and re-run.
-- Transcriber Docker build fails on madmom → `beats.py` falls back to
-  librosa automatically on ImportError; madmom can be removed from
-  `pyproject.toml` temporarily.
+- Transcriber beat tracking unavailable (Beat This! import/download
+  fails) → `beats.py` falls back to librosa automatically, no downbeats.
 - `bun test` shows 0 tests → check the `test` script and `*.test.ts` glob.
 - Frontend can't reach the transcriber → confirm `docker compose up`
   finished startup and `curl http://localhost:8001/health` returns 200.

@@ -291,7 +291,7 @@ def _beat_this_beats(audio_path: Path) -> BeatStructure:
     `beat_input=full_mix` default). The downstream grid (alignment,
     tempo finalisation, padding) is unchanged: we convert the native
     (beats, downbeats) into the same Nx2 `(time, beat_pos_in_bar)` shape
-    the old DBN emitted and reuse `_from_madmom_raw`.
+    the old DBN emitted and reuse `_raw_to_structure`.
     """
     log.info("Beat This!: tracking beats/downbeats in %s", audio_path.name)
     beats, downbeats = _beat_this_model()(str(audio_path))
@@ -299,14 +299,14 @@ def _beat_this_beats(audio_path: Path) -> BeatStructure:
     if raw.size == 0:
         log.warning("Beat This! returned no beats for %s", audio_path.name)
         return BeatStructure()
-    return _from_madmom_raw(raw)
+    return _raw_to_structure(raw)
 
 
 def _beats_downbeats_to_raw(beats, downbeats, tol: float = 0.05) -> np.ndarray:
     """(beat times, downbeat times) -> Nx2 `(time, beat_pos_in_bar)`.
 
     `beat_pos_in_bar` is 1 at each downbeat and increments for the beats
-    in between, matching the convention `_from_madmom_raw` expects.
+    in between, matching the convention `_raw_to_structure` expects.
     Downbeats are a subset of the beat times, matched within `tol`.
     """
     beats = np.asarray(sorted(float(b) for b in beats), dtype=np.float64)
@@ -329,8 +329,8 @@ def _beats_downbeats_to_raw(beats, downbeats, tol: float = 0.05) -> np.ndarray:
     return rows
 
 
-def _from_madmom_raw(raw: np.ndarray) -> BeatStructure:
-    """Convert madmom's Nx2 output into our typed BeatStructure."""
+def _raw_to_structure(raw: np.ndarray) -> BeatStructure:
+    """Convert an Nx2 `(time, beat_pos_in_bar)` array into a BeatStructure."""
     beats: list[BeatTick] = []
     bars: list[BarInfo] = []
     current_bar_beats: list[BeatTick] = []
@@ -398,7 +398,7 @@ def _finalize_bar(index: int, beats: list[BeatTick]) -> BarInfo:
 def _choose_time_signature(count: int, tempo_bpm: float) -> tuple[int, int]:
     """Pick a `(numerator, denominator)` for a bar with `count` beats.
 
-    Madmom only reports a count of beats per bar; it doesn't tell us
+    The tracker only reports a count of beats per bar; it doesn't tell us
     whether they're quarter notes (simple meter) or dotted quarters
     (compound meter). For 4-, 5- and 7-beat bars 'quarter notes' is
     nearly always right in popular music. For 6 beats it's genuinely
@@ -426,7 +426,7 @@ def _summarize(beats: list[BeatTick], bars: list[BarInfo]) -> BeatStructure:
     global summary fields (initial tempo, change flags).
 
     Bar 0 is excluded from the global summary when ≥2 bars are present:
-    madmom often starts counting partway through the first bar (anacrusis
+    the tracker often starts counting partway through the first bar (anacrusis
     / pickup), producing a leading bar with fewer beats than the rest.
     Reading `initial_time_signature` off such a bar mislabels the whole
     song (e.g. 3/4 for a 4/4 song with a 3-beat pickup) AND falsely flips
@@ -854,7 +854,7 @@ def _enforce_monotonic_times(beats: list[BeatTick]) -> None:
 def _pad_trailing_bars(structure: BeatStructure, duration_seconds: float) -> None:
     """Extend the bar timeline forward to cover `duration_seconds`.
 
-    Madmom's downbeat tracker tends to cut off well before the audio's
+    The beat tracker tends to cut off well before the audio's
     actual end (it stops emitting confident beats in silence / fadeouts).
     Without padding, onsets after the last detected beat get attributed
     to the last real bar with arbitrarily large `beat_in_bar` values
@@ -1054,7 +1054,7 @@ def align_beats_to_onsets(
 ) -> None:
     """Shift the whole beat grid by the tracker's *systematic* lag.
 
-    Neural beat trackers (Beat Transformer especially) report each beat
+    Neural beat trackers report each beat
     ~30-50 ms after the transient, because the activation peak lags the
     strike. We still want to correct that.
 

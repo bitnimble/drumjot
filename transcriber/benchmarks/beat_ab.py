@@ -101,9 +101,9 @@ def _read_rows(root: Path, split: str) -> list[dict]:
             f"training/data_paths.toml, or pass --root."
         )
     # E-GMD's `test` split is 100% 4/4; non-4/4 meters live only in
-    # train/validation. madmom + Beat Transformer are pretrained (never
-    # trained on E-GMD), so there's no leakage in sampling across splits,
-    # and `all` is the default so the non-4/4 quota can be filled.
+    # train/validation. Beat This! is pretrained (never trained on E-GMD),
+    # so there's no leakage in sampling across splits, and `all` is the
+    # default so the non-4/4 quota can be filled.
     with csv_path.open(newline="") as fh:
         rows = list(csv.DictReader(fh))
     if split != "all":
@@ -394,7 +394,7 @@ def _write_summary(out_dir: Path, mode: str, rows: list[dict]) -> None:
 # ---------- cli ----------
 
 def main(argv: list[str] | None = None) -> None:
-    p = argparse.ArgumentParser(description="madmom vs Beat Transformer vs Beat This! beat-tracker A/B")
+    p = argparse.ArgumentParser(description="Beat-stage eval on E-GMD (production tracker: Beat This!)")
     p.add_argument("--onsets", choices=["synthetic", "gt", "adtof"], default="synthetic",
                    help="align-onset source (synthetic & gt are CPU-only; adtof needs the GPU)")
     p.add_argument("--root", type=Path, default=None,
@@ -411,17 +411,11 @@ def main(argv: list[str] | None = None) -> None:
     args = p.parse_args(argv)
 
     if args.onsets != "adtof":
-        # GPU is reserved for training; force BT inference onto CPU and pin
+        # GPU is reserved for training; force inference onto CPU and pin
         # threads (local box is a 12-thread 7800X3D). Must precede any torch
         # import, which analyze_beats does lazily.
         os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
         os.environ.setdefault("OMP_NUM_THREADS", "8")
-    # BT's default checkpoint path is the docker `/app/checkpoints`; point it
-    # at the writable in-tree dir so the local run can download/load there.
-    os.environ.setdefault(
-        "BEAT_TRANSFORMER_CHECKPOINT",
-        str(Path(__file__).resolve().parents[1] / "checkpoints" / "beat_transformer.pt"),
-    )
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     _seed_determinism()

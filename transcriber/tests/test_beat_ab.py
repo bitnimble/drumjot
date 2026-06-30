@@ -1,6 +1,6 @@
 """Deterministic-logic tests for the beat-tracker A/B harness.
 
-Covers the pure pieces that don't need E-GMD data, madmom, or torch:
+Covers the pure pieces that don't need E-GMD data, Beat This!, or torch:
 clip selection (stratified + deterministic), synthetic onset degradation
 (ratios, determinism, stem bleed), and MIDI-derived ground truth.
 """

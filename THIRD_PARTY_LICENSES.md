@@ -17,10 +17,10 @@ How each component reaches the user:
 
 ## Permissive (redistributable, incl. commercially)
 
-### Beat-Transformer, beat/downbeat model (bundled code + downloaded checkpoint)
-- License: **MIT**. Copyright (c) 2022 Zhao Jingwei.
-- Source: https://github.com/zhaojw1998/Beat-Transformer
-- The `DilatedTransformer` model code is vendored under `transcriber/app/vendor/beat_transformer/`; the `fold_N` checkpoint is fetched at runtime.
+### Beat This!, beat/downbeat model (pip dependency + downloaded weights)
+- License: **MIT**. Copyright (c) 2024 Francesco Foscarin, Jan Schlüter, et al.
+- Source: https://github.com/CPJKU/beat_this
+- Installed from PyPI (`beat-this`); the `final0` checkpoint auto-downloads to the torch hub cache at runtime.
 
 ### signalsmith-stretch, time-stretch (bundled, frontend WASM/worklet)
 - License: **MIT**. Copyright (c) 2022 Geraint Luff / Signalsmith Audio Ltd.
@@ -29,16 +29,6 @@ How each component reaches the user:
 ### uv, Python package manager (bundled binary)
 - License: **MIT OR Apache-2.0** (at your option). Copyright (c) Astral Software Inc.
 - Source: https://github.com/astral-sh/uv
-
-### madmom, audio signal processing (vendored wheel)
-- **Code**: BSD 2-Clause. Copyright (c) Institute of Computational Perception,
-  Johannes Kepler University Linz.
-- madmom's pretrained model files (`madmom/models/*.pkl`) are CC-BY-NC-SA 4.0
-  (non-commercial). Drumjot tracks beats with Beat-Transformer and never loads
-  them, so the build **strips them from the vendored wheel**
-  (scripts/strip-madmom-models.py), they are NOT redistributed. Only madmom's
-  BSD code (the DBN post-processor + DSP utils) ships.
-- Source: https://github.com/CPJKU/madmom
 
 ### ctc-forced-aligner, lyric forced alignment (vendored wheel)
 - **Code**: BSD. Source: https://github.com/MahmoudAshraf97/ctc-forced-aligner
@@ -105,7 +95,7 @@ restriction above applies to the specific *model weights*, not these libraries.
 ## License texts
 
 ### MIT License
-(applies to: Beat-Transformer, signalsmith-stretch, uv [MIT option], and the
+(applies to: Beat This!, signalsmith-stretch, uv [MIT option], and the
 permissive frontend dependencies)
 
 ```
@@ -129,7 +119,7 @@ SOFTWARE.
 ```
 
 ### BSD 2-Clause License
-(applies to: madmom [code], ctc-forced-aligner [code])
+(applies to: ctc-forced-aligner [code])
 
 ```
 Redistribution and use in source and binary forms, with or without

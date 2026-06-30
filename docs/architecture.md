@@ -134,7 +134,7 @@ drift-guard fixture test, rather than resurrecting the bridge. `gm.ts` /
 ### Beat-relative coordinates, not fixed grids
 
 The transcriber operates in `(bar, beat_in_bar)` space throughout
-(backed by madmom). Chosen over a 1/16 grid because triplets become a
+(backed by Beat This!). Chosen over a 1/16 grid because triplets become a
 property of intra-beat fractions (0.000 / 0.333 / 0.667), tempo changes
 work naturally (each beat has its own absolute time anchor), time-sig
 changes are detected from downbeat gaps, and tolerances stay musically

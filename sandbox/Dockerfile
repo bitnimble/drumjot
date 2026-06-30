@@ -10,7 +10,7 @@
 # transcriber writes debug artifacts, separated stems, benchmark
 # results, etc.) read-only or read-write, inspect the output of previous
 # transcribe runs, and prototype new pipeline code against the same
-# torch / audio-separator / librosa / madmom stack the real service uses
+# torch / audio-separator / librosa / beat-this stack the real service uses
 # - without rebuilding or touching the production image.
 #
 # Deps are managed with uv (the transcriber's dev loop uses uv, not
@@ -69,8 +69,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1
 
 # System dependencies, same set as the transcriber image: libsndfile +
-# ffmpeg for librosa/soundfile; build-essential for madmom's C
-# extensions; curl/ca-certificates for the in-image downloads below.
+# ffmpeg for librosa/soundfile; build-essential for any source-built
+# deps; curl/ca-certificates for the in-image downloads below.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         software-properties-common \
         build-essential \
@@ -124,9 +124,8 @@ RUN groupadd -g ${APP_GID} app \
 # Python deps in three independently-cacheable layers, mirroring
 # docker/Dockerfile so the heavy torch fetch stays cached across edits.
 
-# Layer 1: numpy/cython bedrock. madmom's Cython extensions want these
-# present at build time; isolating the layer also seeds the dep cache.
-RUN uv pip install 'numpy>=1.26' cython
+# Layer 1: numpy bedrock. Isolating the layer seeds the dep cache.
+RUN uv pip install 'numpy>=1.26'
 
 # Layer 2: torch + torchaudio from the cu128 wheel index (CUDA 12.8 =
 # highest most consumer drivers handle). Pinned to the same range as
@@ -138,7 +137,7 @@ RUN uv pip install --index-url https://download.pytorch.org/whl/cu128 \
 # docker/Dockerfile: drop in ONLY pyproject.toml and `uv pip install -e .`
 # with no package source present - setuptools finds nothing to build but
 # uv still resolves and installs every declared dependency
-# (audio-separator, madmom, adtof_pytorch, ctc-forced-aligner, librosa,
+# (audio-separator, beat-this, adtof_pytorch, ctc-forced-aligner, librosa,
 # anthropic, ...), keeping the sandbox's deps in lockstep with the real
 # service. Installed into /opt/deps so the editable .pth points there and
 # /sandbox stays pristine. --extra-index-url keeps any transitive torch

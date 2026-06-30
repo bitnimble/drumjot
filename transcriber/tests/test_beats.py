@@ -1,6 +1,6 @@
 """Tests for the time-signature heuristic and trailing-bar padding in beats.py.
 
-These exercise pure-Python branches that don't require madmom or audio
+These exercise pure-Python branches that don't require Beat This! or audio
 I/O - we construct a BeatStructure by hand or call the small helpers
 directly.
 """
