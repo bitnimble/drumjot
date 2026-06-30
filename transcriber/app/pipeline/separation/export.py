@@ -84,5 +84,8 @@ def export_body(loaded: LoadedModel, out_path: str | Path, *, opset: int = 17) -
                 dynamo=False,
             )
     finally:
-        model.to(orig_device)
+        # Restore device AND eval: torch.onnx.export can leave the module in
+        # train mode, which would re-enable BS-Roformer's attn/ff dropout on any
+        # later torch forward (the separators are always eval / inference).
+        model.to(orig_device).eval()
     return out_path
