@@ -167,16 +167,25 @@ is preserved so re-resuming is idempotent.
 `tracker → align_beats_to_onsets → _finalize_bar_tempos → _pad_trailing_bars`.
 
 - **`_smooth_downbeats`** (inside `_beats_downbeats_to_raw`, before bars are
-  built) repairs downbeat mis-detections that would fake a time-signature
-  change. Beat This! is DBN-free (no fixed-meter prior), so one stray downbeat
-  surfaces as a one-off odd bar. Against the prevailing meter P (majority bar
-  length) it (1) splits a bar of length k·P back into k bars (no 4/4→8/4, no
-  3/4→6/4 from a *missed* downbeat) and (2) merges a run of sub-P bars summing
-  to exactly one P bar (2+2 / 1+3 → 4, an *extra* downbeat). It only acts when
-  one meter holds a clear majority, and a **sustained** odd meter (≥2 bars not
-  summing to one P bar, e.g. a real 3/4 or 6/8 section) is left untouched, so
-  genuine mid-song changes survive. A truly dropped/added *beat* (not downbeat)
-  still yields a lone odd bar, can't be fixed without inventing beats.
+  built) repairs beat/downbeat mis-detections that would fake a meter change.
+  Beat This! is DBN-free (no fixed-meter prior), so a stray downbeat or a local
+  tempo flip surfaces as a one-off odd bar. Against the prevailing meter P
+  (majority bar length) AND its typical duration D, a bar with anomalous count
+  `c` is repaired by its **duration**, that's what tells the failure modes
+  apart:
+  - `c == k·P`, duration ≈ **k·D** → *k merged bars* (missed downbeat): **split**
+    into k bars of P (no 4/4→8/4, no 3/4→6/4).
+  - `c == k·P`, duration ≈ **D** → *one bar read at k× tempo* (e.g. a busy 3/4
+    bar tracked as 6 fast beats → "6/8"): **decimate** to P beats at the bar's
+    true tempo, stays one P bar, NOT split.
+  - a run of sub-P bars summing to exactly one P bar → *extra downbeat*: **merge**
+    (2+2 / 1+3 → 4).
+
+  Only acts when one meter holds a clear majority; a **sustained** odd meter
+  (≥2 bars that are neither a P-multiple nor sum to one P bar, e.g. a real 3/4
+  or 6/8 section) is left untouched so genuine mid-song changes survive. A lone
+  truly dropped/added *beat* matching none of these is preserved (can't fix
+  without inventing beats).
 
 - **`align_beats_to_onsets`** shifts the **whole grid** by one median
   offset (not per-beat snap). Neural trackers report each beat at its

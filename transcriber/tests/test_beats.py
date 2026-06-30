@@ -856,3 +856,47 @@ def test_smooth_noop_without_majority_meter():
     # No meter holds a majority -> leave the grid exactly as detected.
     s = _structure_from_bars([4, 3, 5, 4, 3])
     assert _sigs(s) == [(4, 4), (3, 4), (5, 4), (4, 4), (3, 4)]
+
+
+def _structure_from_bars_dur(bars: list[tuple[int, float]]) -> BeatStructure:
+    """Like _structure_from_bars but each bar is (n_beats, duration_seconds),
+    so a bar can be densely subdivided (local tempo flip) without changing its
+    span. Beats are evenly spaced within each bar."""
+    beats: list[float] = []
+    downbeats: list[float] = []
+    t = 0.0
+    for n, dur in bars:
+        downbeats.append(round(t, 4))
+        step = dur / n
+        for _ in range(n):
+            beats.append(round(t, 4))
+            t += step
+    return _raw_to_structure(_beats_downbeats_to_raw(beats, downbeats))
+
+
+def test_smooth_decimates_doubled_tempo_bar_to_three():
+    # 3/4 song; one busy bar tracked at 2x tempo (6 beats in the SAME 1.5 s
+    # span) -> must become a single 3/4 bar (decimate), NOT split, NOT 6/8.
+    s = _structure_from_bars_dur(
+        [(3, 1.5), (3, 1.5), (6, 1.5), (3, 1.5), (3, 1.5)]
+    )
+    assert _sigs(s) == [(3, 4)] * 5     # 5 bars, not 6 -> not split
+    assert s.has_time_sig_changes is False
+
+
+def test_smooth_splits_merged_bar_when_duration_is_doubled():
+    # Same beat count (6) but TWICE the span -> genuinely two merged bars,
+    # so split into 3+3 (six bars), the opposite of the decimate case.
+    s = _structure_from_bars_dur(
+        [(3, 1.5), (3, 1.5), (6, 3.0), (3, 1.5), (3, 1.5)]
+    )
+    assert _sigs(s) == [(3, 4)] * 6     # 6 bars -> split
+    assert s.has_time_sig_changes is False
+
+
+def test_smooth_decimates_doubled_tempo_bar_in_four_four():
+    s = _structure_from_bars_dur(
+        [(4, 2.0), (4, 2.0), (8, 2.0), (4, 2.0), (4, 2.0)]
+    )
+    assert _sigs(s) == [(4, 4)] * 5
+    assert s.has_time_sig_changes is False

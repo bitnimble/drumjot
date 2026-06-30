@@ -322,7 +322,7 @@ def _beats_downbeats_to_raw(beats, downbeats, tol: float = 0.05) -> np.ndarray:
         if nearest is not None and abs(beats[nearest] - d) <= tol:
             is_downbeat[nearest] = True
 
-    is_downbeat = _smooth_downbeats(is_downbeat)
+    beats, is_downbeat = _smooth_downbeats(beats, is_downbeat)
 
     rows = np.empty((beats.size, 2), dtype=np.float64)
     pos = 0
@@ -332,64 +332,94 @@ def _beats_downbeats_to_raw(beats, downbeats, tol: float = 0.05) -> np.ndarray:
     return rows
 
 
-def _smooth_downbeats(is_downbeat: np.ndarray) -> np.ndarray:
-    """Repair downbeat mis-detections that would fake a time-signature change.
+def _smooth_downbeats(
+    beats: np.ndarray, is_downbeat: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Repair beat/downbeat mis-detections that would fake a meter change.
 
-    Beat This! is DBN-free (no fixed-meter prior), so a single mis-placed
-    downbeat shows up as a one-off odd bar. Against the *prevailing* meter P
-    (the majority bar length) two corrections are applied, both purely by
-    inserting/removing downbeats (never inventing or dropping beats):
+    Beat This! is DBN-free (no fixed-meter prior), so a stray downbeat or a
+    local tempo flip shows up as a one-off odd bar. Against the *prevailing*
+    meter P (majority interior bar length) and its typical duration D, a bar
+    with an anomalous beat count `c` is repaired using its **duration** to
+    tell the two failure modes apart:
 
-    1. **No multiples** (missed downbeat merged two bars): a bar whose length
-       is an exact multiple ``k·P`` (k≥2) is split back into k bars of P, so
-       4/4 never reads as 8/4 and 3/4 never as 6/4.
-    2. **2-bar persistence** (extra downbeat fragmented one bar): a run of
-       consecutive sub-P bars whose lengths sum to exactly one P bar is merged
-       back into a single bar (e.g. 2+2 or 1+3 → 4). A *sustained* odd meter
-       (≥2 bars that don't sum to one P bar, e.g. a real 3/4 or 6/8 section) is
-       left untouched, so genuine mid-song changes survive.
+    1. **Merged bars** (missed downbeat): `c == k·P` AND duration ≈ k·D, i.e.
+       k real bars ran together. Split back into k bars of P (no 4/4→8/4, no
+       3/4→6/4). Keeps every beat.
+    2. **Local tempo/subdivision multiply** (a busy bar read at k× tempo, e.g.
+       a 3/4 bar tracked as 6 fast beats → "6/8"): `c == k·P` AND duration ≈ D
+       (same span as its neighbours). The bar boundary is correct, only the
+       beat density is wrong, so **decimate** to P beats (keep every k-th) at
+       the bar's true tempo, it stays one P bar, not split.
+    3. **Fragmented bar** (extra downbeat): a run of consecutive sub-P bars
+       whose lengths sum to exactly one P bar is merged (2+2 / 1+3 → 4).
 
-    No-ops unless one meter holds a clear majority of the interior bars (so a
-    genuinely meter-varied song isn't forced onto a single grid). A truly
-    dropped/added *beat* (not downbeat) still yields a lone odd bar; we can't
-    fix that without inventing beats, so it's preserved.
+    A *sustained* odd meter (≥2 bars that aren't a P-multiple and don't sum to
+    one P bar, a real 3/4 or 6/8 section) is left untouched, so genuine
+    mid-song changes survive. No-ops unless one meter holds a clear majority of
+    the interior bars. A truly dropped/added *beat* in a lone bar that matches
+    none of the above is preserved (can't fix without inventing beats).
     """
+    n = int(beats.shape[0])
     db = [int(i) for i in np.flatnonzero(is_downbeat)]
     if len(db) < 3:
-        return is_downbeat
+        return beats, is_downbeat
     counts = [db[k + 1] - db[k] for k in range(len(db) - 1)]  # interior bar lengths
     p, freq = Counter(counts).most_common(1)[0]
     if p < 2 or freq * 2 <= len(counts):  # no clear majority meter -> don't touch
-        return is_downbeat
+        return beats, is_downbeat
+    p_durs = [float(beats[db[k + 1]] - beats[db[k]])
+              for k in range(len(db) - 1) if counts[k] == p]
+    bar_dur = float(np.median(p_durs)) if p_durs else 0.0
 
-    # 1. split exact multiples of P
-    split: list[int] = [db[0]]
+    out_t: list[float] = list(beats[:db[0]])          # leading anacrusis beats
+    out_db: list[bool] = [False] * db[0]
+
+    def emit(idxs: list[int], downbeat_every: int) -> None:
+        for off, bi in enumerate(idxs):
+            out_t.append(float(beats[bi]))
+            out_db.append(off % downbeat_every == 0)
+
     for k in range(len(db) - 1):
-        c = db[k + 1] - db[k]
-        if c >= 2 * p and c % p == 0:
-            split.extend(db[k] + m * p for m in range(1, c // p))
-        split.append(db[k + 1])
-    split = sorted(set(split))
+        s, e = db[k], db[k + 1]
+        c = e - s
+        idxs = list(range(s, e))
+        nbars = max(1, round((beats[e] - beats[s]) / bar_dur)) if bar_dur > 0 else 1
+        if c >= 2 * p and c % p == 0 and c // p == nbars and nbars >= 2:
+            emit(idxs, p)                              # merged k bars -> split
+        elif c >= 2 * p and c % p == 0 and nbars == 1:
+            emit(idxs[:: c // p][:p], p)               # tempo x k in one bar -> decimate
+        else:
+            emit(idxs, c if c > 0 else 1)              # keep as-is (one bar)
+    out_t.extend(float(x) for x in beats[db[-1]:])     # trailing beats
+    out_db.append(True)
+    out_db.extend([False] * (n - db[-1] - 1))
 
-    # 2. merge runs of consecutive sub-P bars that sum to exactly one P bar
-    kept = [split[0]]
+    out_db = _merge_fragment_bars(out_db, p)
+    return np.asarray(out_t, dtype=np.float64), np.asarray(out_db, dtype=bool)
+
+
+def _merge_fragment_bars(db_flags: list[bool], p: int) -> list[bool]:
+    """Drop interior downbeats of any run of consecutive sub-P bars whose
+    lengths sum to exactly one P bar (an extra downbeat that fragmented a
+    single bar, e.g. 2+2 or 1+3 -> 4). Flag-only; beats are untouched."""
+    db = [i for i, f in enumerate(db_flags) if f]
+    remove: set[int] = set()
     k = 0
-    while k < len(split) - 1:
-        if split[k + 1] - split[k] < p:
+    while k < len(db) - 1:
+        if db[k + 1] - db[k] < p:
             run_sum, j = 0, k
-            while j < len(split) - 1 and (split[j + 1] - split[j]) < p and run_sum < p:
-                run_sum += split[j + 1] - split[j]
+            while j < len(db) - 1 and (db[j + 1] - db[j]) < p and run_sum < p:
+                run_sum += db[j + 1] - db[j]
                 j += 1
-            if run_sum == p and j - k >= 2:  # fragments of one bar -> collapse
-                kept.append(split[j])
+            if run_sum == p and j - k >= 2:
+                remove.update(db[k + 1:j])
                 k = j
                 continue
-        kept.append(split[k + 1])
         k += 1
-
-    out = np.zeros(is_downbeat.shape[0], dtype=bool)
-    out[kept] = True
-    return out
+    if not remove:
+        return db_flags
+    return [f and i not in remove for i, f in enumerate(db_flags)]
 
 
 def _raw_to_structure(raw: np.ndarray) -> BeatStructure:
