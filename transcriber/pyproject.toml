@@ -126,6 +126,9 @@ extend-exclude = [
     "build",
     "debug",
     "models",
+    # Vendored BS-Roformer / MDX23C model classes (copied near-verbatim from
+    # audio-separator so they stay diffable against upstream); not our style.
+    "app/pipeline/separation/architectures",
 ]
 
 [tool.ruff.lint]

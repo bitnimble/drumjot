@@ -103,13 +103,16 @@ _MODELS: list[_CustomModel] = [
         friendly_name="Roformer Model: BS-Roformer SW (jarredou BS-ROFO-SW-Fixed)",
         ckpt_local="model_bs_roformer_sw.ckpt",
         yaml_local="config_bs_roformer_sw.yaml",
+        # Vendored to our own HF account: jarredou's GitHub was deleted and
+        # the upstream HF repo can't be relied on. These are byte copies of
+        # the original ckpt/yaml (renamed to our local filenames).
         ckpt_url=(
-            "https://huggingface.co/jarredou/BS-ROFO-SW-Fixed/"
-            "resolve/main/BS-Rofo-SW-Fixed.ckpt"
+            "https://huggingface.co/bitnimble/stem_separation/"
+            "resolve/main/model_bs_roformer_sw.ckpt"
         ),
         yaml_url=(
-            "https://huggingface.co/jarredou/BS-ROFO-SW-Fixed/"
-            "resolve/main/BS-Rofo-SW-Fixed.yaml"
+            "https://huggingface.co/bitnimble/stem_separation/"
+            "resolve/main/config_bs_roformer_sw.yaml"
         ),
     ),
     _CustomModel(
@@ -118,15 +121,28 @@ _MODELS: list[_CustomModel] = [
         ckpt_local="drumsep_5stems_mdx23c_jarredou.ckpt",
         yaml_local="config_drumsep_5stems_mdx23c.yaml",
         ckpt_url=(
-            "https://github.com/jarredou/models/releases/download/"
-            "DrumSep/drumsep_5stems_mdx23c_jarredou.ckpt"
+            "https://huggingface.co/bitnimble/stem_separation/"
+            "resolve/main/drumsep_5stems_mdx23c_jarredou.ckpt"
         ),
         yaml_url=(
-            "https://github.com/jarredou/models/releases/download/"
-            "DrumSep/config_mdx23c.yaml"
+            "https://huggingface.co/bitnimble/stem_separation/"
+            "resolve/main/config_drumsep_5stems_mdx23c.yaml"
         ),
     ),
 ]
+
+
+def yaml_for_ckpt(ckpt_filename: str) -> str:
+    """Local yaml filename paired with a custom model's ckpt filename.
+
+    The two filenames are independent (a bare state_dict can't be loaded
+    without its architecture yaml), so the pairing lives here, next to the
+    download definitions. Used by `separate.py` to build the (ckpt, yaml)
+    pair the vendored loader needs."""
+    for m in _MODELS:
+        if m.ckpt_local == ckpt_filename:
+            return m.yaml_local
+    raise KeyError(f"no custom-model yaml registered for ckpt {ckpt_filename!r}")
 
 
 def _download(url: str, dest: Path) -> None:

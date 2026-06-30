@@ -10,10 +10,13 @@ what Stage 2 then has to split. Stage `stems_per` uses the **jarredou
 kick / snare / toms / hi-hat / cymbals. Note: this 5-stem model merges
 ride + crash into a single `cymbals` stem (see `STEM_NAME_TO_PITCH`).
 
-Both stages run via the `audio-separator` library, which dispatches
-inference onto CUDA (or CPU if no GPU is available). Neither model ships
-in audio-separator's registry; `pipeline/provision.py` injects them and
-fetches their weights on startup (see that module for the mechanism).
+Both stages run through a vendored, torch-only separation wrapper
+(`pipeline/separation/`), reimplemented from `audio-separator`'s chunked
+overlap-add (validated bit-exact against it) so we can drop the dependency,
+surface per-chunk progress, keep stems in memory, and (next) export the model
+bodies to ONNX for cross-platform GPU backends. `pipeline/provision.py`
+fetches the weights on startup. The /lyrics vocals separator still uses
+`audio-separator` for now (a different MDX-ONNX model).
 
 Failure modes intentionally surface up to the caller - if the drum-piece
 separator can't find a kick, we just won't emit candidates for the kick lane
@@ -34,7 +37,9 @@ import soundfile as sf
 
 from app.config import settings
 from app.debug import current_debug_sink
-from app.pipeline.provision import provision_custom_models
+from app.pipeline.provision import provision_custom_models, yaml_for_ckpt
+from app.pipeline.separation.loader import load_model
+from app.pipeline.separation.runner import SAMPLE_RATE, ProgressCallback, SeparationRunner
 
 log = logging.getLogger(__name__)
 
@@ -81,8 +86,8 @@ def _enable_bf16_separation() -> None:
         return
     import torch
 
-    # --- MDX23C ---
-    from audio_separator.separator.uvr_lib_v5 import tfc_tdf_v3 as _mdx
+    # --- MDX23C (vendored model classes) ---
+    from app.pipeline.separation.architectures import tfc_tdf as _mdx
 
     _call, _inv, _fwd = _mdx.STFT.__call__, _mdx.STFT.inverse, _mdx.TFC_TDF_net.forward
 
@@ -192,6 +197,14 @@ STEM_NAME_TO_PITCH: dict[str, str] = {
 }
 
 
+# Our vendored runner returns BARE instrument names ("kick", "hh", ...), not the
+# parenthesised filename tokens audio-separator emitted. Derive the bare-name ->
+# pitch map from STEM_NAME_TO_PITCH so the two stay in sync.
+_INSTRUMENT_TO_PITCH: dict[str, str] = {
+    token.strip("()"): pitch for token, pitch in STEM_NAME_TO_PITCH.items()
+}
+
+
 class Separator:
     """Two-stage drum separator. Models are loaded eagerly by `load()` at
     application startup so the first `/transcribe` call doesn't pay
@@ -235,66 +248,53 @@ class Separator:
 
         # Local import: pulls in heavy ML deps; only needed in worker processes.
         import torch
-        from audio_separator.separator import Separator as AS
 
-        # cuDNN benchmark: every chunk in a separation pass is windowed to
-        # exactly chunk_size (see mdxc_separator.py: the tail chunk is
-        # re-anchored to `mix[:; -chunk_size:]`); so input shape is fixed
-        # across the hot loop — autotune is a free win and has nothing to
-        # re-benchmark mid-pass.
+        # cuDNN benchmark: every chunk in a separation pass is windowed to a
+        # fixed chunk_size, so input shape is fixed across the hot loop.
+        # Autotune is a free win with nothing to re-benchmark mid-pass.
         torch.backends.cudnn.benchmark = True
 
         # TF32: lets fp32 matmuls use the Ampere+ tensor-core path (≈2× on the
         # 3080) WITHOUT changing any tensor dtype, so the models' complex STFT
         # (view_as_complex) stays fp32 and there's no range/NaN risk. A harmless
-        # no-op on Turing (1660) / older cards, which simply don't have TF32.
-        # NB autocast is a dead end for these separators: fp16 overflowed and the
-        # drum stem NaN'd out / never landed on disk, and bf16 fails outright
-        # ("view_as_complex is only supported for half, float and double"). TF32
-        # is the only tensor-core path compatible with the complex-STFT models.
+        # no-op on Turing (1660) / older cards. NB autocast is a dead end for
+        # these separators: fp16 overflowed and the drum stem NaN'd out, and bf16
+        # fails outright ("view_as_complex is only supported for half, float and
+        # double"). TF32 is the only tensor-core path compatible with them.
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
-        common = dict(
-            output_dir=None,  # set per-call
-            model_file_dir=str(settings.models_dir),
-            use_autocast=False,  # fp16 autocast off, see the TF32 note above
-            # audio-separator is very chatty at INFO (per-stem "Saving …", pydub,
-            # bit-depth, per-call "Processing/Separation duration" lines). Default
-            # INFO for the transcriber; batch jobs set DRUMJOT_SEP_LOG_LEVEL=WARNING
-            # (+ TQDM_DISABLE=1 for the chunk bars) to get quiet, summarisable runs.
-            log_level=getattr(
-                logging, os.environ.get("DRUMJOT_SEP_LOG_LEVEL", "INFO").upper(), logging.INFO
-            ),
-        )
+        models_dir = Path(settings.models_dir)
+        device = _resolve_device()
 
         t0 = time.perf_counter()
         if need_all:
             log.info("Loading stems_all separator (%s) ...", settings.demucs_model)
-            self._stems_all = AS(**common)
-            self._stems_all.load_model(model_filename=settings.demucs_model)
-            _maybe_compile_model(self._stems_all)
+            self._stems_all = self._load_runner(settings.demucs_model, models_dir, device)
             log.info(
-                "stems_all ready in %.2fs (%s)",
-                time.perf_counter() - t0,
-                settings.demucs_model,
+                "stems_all ready in %.2fs (%s)", time.perf_counter() - t0, settings.demucs_model
             )
 
         t1 = time.perf_counter()
         if need_per:
             log.info("Loading stems_per separator (%s) ...", settings.drum_pieces_model)
-            self._stems_per = AS(**common)
-            self._stems_per.load_model(model_filename=settings.drum_pieces_model)
-            _maybe_compile_model(self._stems_per)
+            self._stems_per = self._load_runner(settings.drum_pieces_model, models_dir, device)
             log.info(
                 "stems_per ready in %.2fs (%s)",
                 time.perf_counter() - t1,
                 settings.drum_pieces_model,
             )
-        log.info(
-            "Separator ready (total %.2fs).",
-            time.perf_counter() - t0,
-        )
+        log.info("Separator ready (total %.2fs).", time.perf_counter() - t0)
+
+    def _load_runner(self, ckpt_filename: str, models_dir: Path, device: str) -> SeparationRunner:
+        """Build a `SeparationRunner` for one custom model from its on-disk
+        (ckpt, yaml) pair. `yaml_for_ckpt` resolves the paired config (the
+        bare state_dict can't be instantiated without it)."""
+        ckpt = models_dir / ckpt_filename
+        yaml = models_dir / yaml_for_ckpt(ckpt_filename)
+        loaded = load_model(ckpt, yaml, device=device)
+        _maybe_compile_model(loaded)
+        return SeparationRunner(loaded, device=device)
 
     @staticmethod
     def _point_at(separator: object, out_dir: Path) -> None:
@@ -352,34 +352,29 @@ class Separator:
 
         out_dir = work_dir / "stems_all"
         out_dir.mkdir(parents=True, exist_ok=True)
-        self._point_at(self._stems_all, out_dir)
 
         log.info("stems_all: extracting drum stem from %s", audio_path.name)
-        raw = self._stems_all.separate(str(audio_path))
-        stems_paths = _resolve_outputs(raw, out_dir)
-        drum_candidates = [p for p in stems_paths if "drum" in p.stem.lower()]
-        if not drum_candidates:
-            raise RuntimeError(
-                f"stems_all produced no drum stem. Got: {[p.name for p in stems_paths]}"
-            )
-        drum_stem = drum_candidates[0]
-        if not drum_stem.exists():
-            raise RuntimeError(
-                f"stems_all: separator reported drum stem {drum_stem} but "
-                f"it is not on disk (separate() returned {list(raw)!r}). "
-                "audio-separator wrote elsewhere or the write failed."
-            )
-        non_drum_stems = [p for p in stems_paths if p != drum_stem]
+        sources = self._stems_all.separate(
+            str(audio_path), progress_callback=_log_progress("stems_all")
+        )
+        if "drums" not in sources:
+            raise RuntimeError(f"stems_all produced no drum stem. Got: {sorted(sources)}")
 
-        # Sum bass + other + vocals into a single drumless mix so the
-        # consumer (and the operator listening through /debug) gets a
-        # ready-to-play "music minus drums" track without having to mix
-        # the three Demucs sub-stems themselves.
+        drum_stem = out_dir / "drums.wav"
+        _write_stem(drum_stem, sources["drums"])
+
+        non_drum = {name: wave for name, wave in sources.items() if name != "drums"}
+
+        # Sum the non-drum stems (bass / other / vocals / guitar / piano) into a
+        # single drumless mix so the consumer (and the operator listening through
+        # /debug) gets a ready-to-play "music minus drums" track. Summed in
+        # memory, the individual non-drum stems only hit disk when a debug sink
+        # is active (no consumer needs them otherwise).
         no_drums_path: Path | None = None
-        if build_no_drums and non_drum_stems:
-            no_drums_path = out_dir / f"no_drums{drum_stem.suffix}"
+        if build_no_drums and non_drum:
+            no_drums_path = out_dir / "no_drums.wav"
             try:
-                _sum_audio(non_drum_stems, no_drums_path)
+                _write_stem(no_drums_path, _sum_stems(list(non_drum.values())))
             except Exception as exc:
                 log.warning("Failed to build drumless mix (%s); skipping.", exc)
                 no_drums_path = None
@@ -389,11 +384,12 @@ class Separator:
             sink.copy_audio("stems_all/drum_stem", drum_stem)
             if no_drums_path is not None:
                 sink.copy_audio("stems_all/no_drums", no_drums_path)
-            for path in non_drum_stems:
-                # bass / other / vocals (htdemucs_ft outputs four stems).
-                # Kept individually too so the operator can audit which
-                # sub-stem contains any drum bleed.
-                sink.copy_audio(f"stems_all/{path.stem}", path)
+            for name, wave in non_drum.items():
+                # Kept individually so the operator can audit which sub-stem
+                # contains any drum bleed.
+                path = out_dir / f"{name}.wav"
+                _write_stem(path, wave)
+                sink.copy_audio(f"stems_all/{name}", path)
         return StemsAllResult(drum_stem=drum_stem, no_drums=no_drums_path)
 
     def run_stems_per(
@@ -420,21 +416,23 @@ class Separator:
 
         out_dir = work_dir / "stems_per"
         out_dir.mkdir(parents=True, exist_ok=True)
-        self._point_at(self._stems_per, out_dir)
 
         log.info("stems_per: splitting drum stem into pieces")
-        raw = self._stems_per.separate(str(drum_stem))
-        piece_paths = _resolve_outputs(raw, out_dir)
+        sources = self._stems_per.separate(
+            str(drum_stem), progress_callback=_log_progress("stems_per")
+        )
 
         per_instrument: dict[str, Path] = {}
-        for path in piece_paths:
-            pitch = _pitch_for_stem_name(path.stem)
+        for name, wave in sources.items():
+            pitch = _INSTRUMENT_TO_PITCH.get(name.lower())
             if pitch is None:
-                log.info("Skipping unrecognised stem %s", path.name)
+                log.info("Skipping unrecognised stem %s", name)
                 continue
-            # First-seen wins so we deterministically pick e.g. crash over
-            # china if both are present (rare with the default model).
-            per_instrument.setdefault(pitch, path)
+            if pitch in per_instrument:
+                continue  # first-seen wins, for deterministic pitch routing
+            path = out_dir / f"{name}.wav"
+            _write_stem(path, wave)
+            per_instrument[pitch] = path
 
         log.info("Recovered %d pitches: %s", len(per_instrument), sorted(per_instrument))
 
@@ -479,6 +477,9 @@ class Separator:
 
     @staticmethod
     def _inner_module(separator: object) -> object | None:
+        if isinstance(separator, SeparationRunner):
+            return separator.model  # vendored nn.Module (the two drum stages)
+        # audio-separator wrapper (still used by the vocals / lyrics path).
         model_instance = getattr(separator, "model_instance", None)
         if model_instance is None:
             return None
@@ -632,32 +633,69 @@ class Separator:
         return vocals_stem
 
 
-def _maybe_compile_model(separator: object) -> None:
-    """Wrap the inner inference module in `torch.compile` when on CUDA.
+def _resolve_device() -> str:
+    """`settings.device` ("auto" by default) resolved to a concrete device."""
+    import torch
 
-    Both stages call `model_instance.model_run(part)` in a tight loop with
-    a fixed input shape — exactly the pattern Inductor optimises best.
-    Guarded on CUDA because compile cost on CPU often outweighs the win,
-    and skipped silently on any compile failure so a torch/version mismatch
-    can't break the pipeline.
+    if settings.device and settings.device != "auto":
+        return settings.device
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def _log_progress(stage: str) -> ProgressCallback:
+    """Per-chunk progress hook for a separation pass. Currently logs at DEBUG;
+    the callback is the seam a future progress-bar / ETA UI plugs into."""
+
+    def _cb(done: int, total: int) -> None:
+        log.debug("%s: chunk %d/%d", stage, done, total)
+
+    return _cb
+
+
+def _write_stem(path: Path, wave: np.ndarray) -> None:
+    """Write an in-memory stem (channels, samples) to `path` as 16-bit WAV.
+
+    The runner returns (channels, samples) (audio-separator's pre-write shape);
+    soundfile wants (samples, channels). PCM_16 matches the prior on-disk
+    fidelity (these are FLAC-re-encoded downstream)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(str(path), np.ascontiguousarray(wave.T), SAMPLE_RATE, subtype="PCM_16")
+
+
+def _sum_stems(stems: list[np.ndarray]) -> np.ndarray:
+    """Sample-wise sum of equal-rate (channels, samples) stems, clipped to
+    [-1, 1]. In memory, so the non-drum stems never need to hit disk."""
+    min_len = min(s.shape[1] for s in stems)
+    summed = np.zeros((stems[0].shape[0], min_len), dtype=np.float32)
+    for s in stems:
+        summed += s[:, :min_len]
+    np.clip(summed, -1.0, 1.0, out=summed)
+    return summed
+
+
+def _maybe_compile_model(loaded: object) -> None:
+    """Wrap the model's inner module in `torch.compile` when on CUDA.
+
+    The separation loop calls the model in a tight, fixed-input-shape loop,
+    exactly the pattern Inductor optimises best. Guarded on CUDA because
+    compile cost on CPU often outweighs the win, and skipped silently on any
+    compile failure so a torch/version mismatch can't break the pipeline.
+    Mutates `loaded.model` in place, before the runner reads it.
     """
     import torch
 
-    model_instance = getattr(separator, "model_instance", None)
-    if model_instance is None:
-        return
-    inner = getattr(model_instance, "model_run", None)
-    if inner is None:
+    model = getattr(loaded, "model", None)
+    if model is None:
         return
     try:
-        device = next(inner.parameters()).device
+        device = next(model.parameters()).device
     except StopIteration:
         return
     if device.type != "cuda":
         return
-    log.info("Compiling %s.model_run with torch.compile", type(model_instance).__name__)
+    log.info("Compiling %s with torch.compile", type(model).__name__)
     try:
-        model_instance.model_run = torch.compile(inner, dynamic=False)
+        loaded.model = torch.compile(model, dynamic=False)
     except Exception as exc:
         log.warning("torch.compile failed (%s); continuing in eager mode.", exc)
 
@@ -676,14 +714,6 @@ def _resolve_outputs(raw_paths: list[str], out_dir: Path) -> list[Path]:
         p = Path(raw)
         resolved.append(p if p.is_absolute() else out_dir / p.name)
     return resolved
-
-
-def _pitch_for_stem_name(stem_name: str) -> str | None:
-    name = stem_name.lower()
-    for needle, pitch in STEM_NAME_TO_PITCH.items():
-        if needle in name:
-            return pitch
-    return None
 
 
 def _residual_audio(
@@ -723,31 +753,3 @@ def _residual_audio(
     np.clip(residual, -1.0, 1.0, out=residual)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(str(out_path), residual, sr, subtype=subtype_ref)
-
-
-def _sum_audio(inputs: list[Path], out_path: Path) -> None:
-    """Sample-wise sum of equal-rate wavs into `out_path`.
-
-    Demucs's four stems sum back to (approximately) the original mix, so
-    bass + other + vocals is a usable "music minus drums" track without
-    additional gain staging. Subtype is preserved from the first input to
-    keep file size in line with the per-stem outputs.
-    """
-    summed: np.ndarray | None = None
-    sr_ref: int | None = None
-    subtype_ref: str | None = None
-    for p in inputs:
-        data, sr = sf.read(str(p), always_2d=True, dtype="float32")
-        if summed is None:
-            summed = data.copy()
-            sr_ref = sr
-            subtype_ref = sf.info(str(p)).subtype
-            continue
-        if sr != sr_ref:
-            raise RuntimeError(f"sample-rate mismatch summing stems: {p} ({sr}) vs {sr_ref}")
-        n = min(summed.shape[0], data.shape[0])
-        summed = summed[:n] + data[:n]
-    assert summed is not None and sr_ref is not None
-    np.clip(summed, -1.0, 1.0, out=summed)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(str(out_path), summed, sr_ref, subtype=subtype_ref)
