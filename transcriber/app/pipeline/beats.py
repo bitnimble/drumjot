@@ -263,11 +263,13 @@ def _beat_onnx_enabled() -> bool:
 
 def _onnx_providers():
     """onnxruntime providers from settings.device (no torch import): CPU-pinned
-    when CPU/MPS is forced, else the available set (+ CPU fallback in the loader)."""
+    only when CPU is forced, else the available set (+ CPU fallback in the loader)
+    -- which is CUDA on Linux/Windows and CoreML on macOS. `mps`/`coreml` are NOT
+    CPU-pinned: ORT's Apple EP is CoreML, so they take the available set too."""
     from app.config import settings
 
     dev = (settings.device or "auto").lower()
-    return ["CPUExecutionProvider"] if dev in ("cpu", "mps") else None
+    return ["CPUExecutionProvider"] if dev == "cpu" else None
 
 
 def _beat_this_model():

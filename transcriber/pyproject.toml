@@ -43,11 +43,13 @@ ml = [
 # stacks.
 separation = [
     { include-group = "ml" },
-    # Cross-platform ONNX inference path (DRUMJOT_SEP_ONNX). Pin onnxruntime-gpu
-    # to its CUDA-12 line: 1.26 moved to a CUDA-13 build (libcudart.so.13); the
-    # image is CUDA 12 + torch cu128, so the CUDA-12 build (<=1.25.x) matches.
-    # Bump only alongside a CUDA-13 base.
-    "onnxruntime-gpu>=1.19,<1.26",
+    # Cross-platform ONNX inference path (DRUMJOT_SEP_ONNX). `onnxruntime-gpu`
+    # (CUDA / DirectML) ships Linux + Windows wheels only; on macOS the standard
+    # `onnxruntime` arm64 wheel carries the CoreML EP (Apple GPU/ANE). Pin the
+    # CUDA-12 line: 1.26 moved to a CUDA-13 build (libcudart.so.13); the image is
+    # CUDA 12 + torch cu128, so <=1.25.x matches. Bump only alongside a CUDA-13 base.
+    "onnxruntime-gpu>=1.19,<1.26; sys_platform != 'darwin'",
+    "onnxruntime>=1.19,<1.26; sys_platform == 'darwin'",
     # `onnx` (distinct from onnxruntime) is used by the ONNX export path
     # (onnx_fp16.to_fp16 -> onnx.load/save + convert_float_to_float16): the
     # build script and the dev-fallback local export. onnxruntime doesn't pull it.
@@ -114,10 +116,12 @@ name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
+# cu128 torch is Linux/Windows only; on macOS torch resolves from PyPI (the arm64
+# MPS build) by having no source point at the cu128 index there.
 [tool.uv.sources]
-torch = { index = "pytorch-cu128" }
-torchaudio = { index = "pytorch-cu128" }
-torchvision = { index = "pytorch-cu128" }
+torch = [{ index = "pytorch-cu128", marker = "sys_platform != 'darwin'" }]
+torchaudio = [{ index = "pytorch-cu128", marker = "sys_platform != 'darwin'" }]
+torchvision = [{ index = "pytorch-cu128", marker = "sys_platform != 'darwin'" }]
 drumjot-dsp = { path = "../dsp", editable = true }
 
 [tool.setuptools.packages.find]
