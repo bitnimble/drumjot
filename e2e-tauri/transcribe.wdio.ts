@@ -9,8 +9,8 @@
  * -- then asserts the frontend rendered a transcription that matches the input:
  * the beat tracker's tempo AND actual drum notes across multiple lanes (the
  * fixture is a rock beat: kick 4-on-the-floor, snare backbeat, hi-hat 8ths).
- * Exercises every ONNX model (separation, onsets, beats) end-to-end, not just
- * beat_this.
+ * Exercises every ONNX model (separation, onsets, beats) end-to-end via the real
+ * WebKitGTK webview (@wdio/tauri-service), not just beat_this.
  *
  * Hermetic: `filter:false` + `quantise:false` skip both LLM stages (the pipeline
  * still runs every ONNX model), so no ANTHROPIC_API_KEY is needed.
@@ -21,7 +21,6 @@
  *   DRUMJOT_E2E_TRANSCRIBE=1 MODELS_DIR=/dir/with/models \
  *   DRUMJOT_SIDECAR_PYTHON="$PWD/transcriber/.venv/bin/python3" \
  *     xvfb-run -a bun run e2e:tauri
- * The capability gate is seeded in wdio.conf's beforeSession (same env guard).
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync } from 'node:fs'
@@ -29,10 +28,11 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const repoRoot = fileURLToPath(new URL('../../', import.meta.url))
+const repoRoot = fileURLToPath(new URL('../', import.meta.url))
 const venvPython = join(repoRoot, 'transcriber/.venv/bin/python3')
 const makeDrums = join(repoRoot, 'e2e-tauri/fixtures/make_drums.py')
 const modelsDir = process.env.MODELS_DIR ?? '/models'
+const enabled = process.env.DRUMJOT_E2E_TRANSCRIBE != null
 const BPM = 120
 const BARS = 8
 
@@ -50,11 +50,27 @@ const REQUIRED = [
   'beat_this.fp16.onnx',
 ]
 
+// Mark the transcription capability installed over real IPC (persists to the
+// data dir's capabilities.json). desktopTranscribe's point-of-use gate reads
+// this at boot; the real sidecar still runs on DRUMJOT_SIDECAR_PYTHON, so no
+// actual install happens -- this only flips the UI gate.
+function setTranscriptionInstalled(installed: boolean): Promise<unknown> {
+  return browser.execute(
+    (v: boolean) =>
+      (
+        window as unknown as {
+          __TAURI__: { core: { invoke: (c: string, a: unknown) => Promise<unknown> } }
+        }
+      ).__TAURI__.core.invoke('set_capability_installed', { id: 'transcription', installed: v }),
+    installed,
+  )
+}
+
 let audioPath: string
 
 describe('End-to-end transcription through the app (full ONNX pipeline)', function () {
-  before(function () {
-    if (process.env.DRUMJOT_E2E_TRANSCRIBE == null) {
+  before(async function () {
+    if (!enabled) {
       this.skip() // opt-in: heavy, needs a GPU + the full model set
     }
     const missing = REQUIRED.filter((f) => !existsSync(resolve(modelsDir, f)))
@@ -71,6 +87,20 @@ describe('End-to-end transcription through the app (full ONNX pipeline)', functi
     if (gen.status !== 0) {
       throw new Error(`drum-loop fixture generation failed: ${gen.stderr || gen.error}`)
     }
+
+    // Install the capability, then reload so the boot capability-refresh reads it
+    // as ready and desktopTranscribe's gate passes with no install prompt.
+    await setTranscriptionInstalled(true)
+    await browser.refresh()
+    await browser.waitUntil(
+      () => browser.execute(() => typeof (window as { drumjot?: unknown }).drumjot !== 'undefined'),
+      { timeout: 30_000, timeoutMsg: 'app did not re-boot after reload' },
+    )
+  })
+
+  after(async () => {
+    // Reset the flag we flipped so the data dir isn't left dirty for later runs.
+    if (enabled) await setTranscriptionInstalled(false).catch(() => {})
   })
 
   it('transcribes a drum loop into the correct notes + tempo', async () => {

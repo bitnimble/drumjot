@@ -1,20 +1,21 @@
 /**
  * True end-to-end test that ONNX is loaded + executed *through the desktop app*.
  *
- * Drives the real app window (WebDriver via tauri-driver) to invoke the `beats`
- * sidecar op on a small click track, exercising the full stack:
+ * Drives the real WebKitGTK webview (via @wdio/tauri-service) to invoke the
+ * `beats` sidecar op on a small click track, exercising the full stack:
  *   webview `invoke('run_job')` -> Rust broker -> Python sidecar -> ONNX Beat
  *   This! model -> beats streamed back over the Tauri Channel.
  * It asserts the result reports `engine === 'onnx'` (the ONNX model actually
  * ran, not a torch/librosa fallback) and a sane 120 BPM grid.
  *
- * Requires the app to be launched with the model + sidecar env set (the Rust
- * broker + Python read these from the process env it inherits):
+ * The app must be launched with the model + sidecar env set (the Rust broker +
+ * Python read these from the process env the wdio service passes through):
  *   MODELS_DIR             dir containing beat_this.fp16.onnx
  *   DRUMJOT_SIDECAR_PYTHON abs path to transcriber/.venv/bin/python3
  *   DRUMJOT_BEAT_ONNX=1    (default) run Beat This! on onnxruntime
  * Skipped (whole suite) when MODELS_DIR/beat_this.fp16.onnx is absent, mirroring
- * transcriber/tests/test_onnx_model_e2e.py.
+ * transcriber/tests/test_onnx_model_e2e.py. Globals (`browser`, `expect`) come
+ * from @wdio/globals; `window.__TAURI__` from the wdio build's withGlobalTauri.
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync } from 'node:fs'
@@ -22,7 +23,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const repoRoot = fileURLToPath(new URL('../../', import.meta.url))
+const repoRoot = fileURLToPath(new URL('../', import.meta.url))
 const venvPython = join(repoRoot, 'transcriber/.venv/bin/python3')
 const makeClick = join(repoRoot, 'e2e-tauri/fixtures/make_click.py')
 const modelFile = resolve(process.env.MODELS_DIR ?? '/models', 'beat_this.fp16.onnx')

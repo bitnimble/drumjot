@@ -10,7 +10,6 @@
     "beforeBuildCommand": "bun run build && bun run desktop:resources"
   },
   "app": {
-    "withGlobalTauri": true,
     "windows": [
       {
         "title": "Drumjot",
