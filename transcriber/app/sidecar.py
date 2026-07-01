@@ -15,6 +15,7 @@ from pathlib import Path
 
 from app.comms.runners import build_registry
 from app.comms.stdio_adapter import StdioAdapter
+from app.pipeline.onnx_cuda import preload_cuda_libs
 
 # Age past which an orphaned runner scratch dir is safe to reap. Far longer than
 # any real job, so an in-flight concurrent sidecar's dir (mtime ~now) is never
@@ -42,6 +43,10 @@ def _sweep_stale_scratch() -> None:
 
 def main() -> None:
     logging.basicConfig(stream=sys.stderr, level=logging.INFO)
+    # The broker spawns us without LD_LIBRARY_PATH, so onnxruntime-gpu can't find
+    # the CUDA libs on its own; preload them so GPU inference works (no-op on a
+    # CPU-only box). Must run before any ORT session is created.
+    preload_cuda_libs()
     _sweep_stale_scratch()
     # The control protocol owns the real stdout. Hand the adapter that stream,
     # then repoint sys.stdout at stderr so a stray print() in any dependency
