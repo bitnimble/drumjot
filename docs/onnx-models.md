@@ -135,18 +135,43 @@ reference":
   for the shape of a proper A/B (per-lane F1 at tuned thresholds, cross-checked on
   a second corpus so you don't overfit a tiny eval set).
 
+## Platforms & execution providers
+
+The onnx bodies are portable; the EP + how the CUDA/GPU libs are found is
+per-platform. The loaders default to `get_available_providers()` (CUDA→CPU on
+Linux/Windows, CoreML→CPU on macOS); `settings.device` only pins CPU when it's
+literally `cpu`.
+
+| Platform | onnxruntime pkg | EP | CUDA libs found via |
+|---|---|---|---|
+| Linux (NVIDIA) | `onnxruntime-gpu` | CUDA | `preload_cuda_libs` RTLD_GLOBAL `nvidia/*/lib` |
+| Windows (NVIDIA) | `onnxruntime-gpu` | CUDA / DirectML | `preload_cuda_libs` `add_dll_directory` `torch/lib` |
+| macOS (Apple Silicon) | `onnxruntime` | CoreML | n/a (no CUDA) |
+| Android / iOS |, (no sidecar) |, | ML runs on the remote HTTP backend |
+
+- The onnxruntime package is **platform-conditional in `pyproject.toml`**
+  (`onnxruntime-gpu` off darwin, `onnxruntime` on darwin) and torch resolves from
+  the cu128 index only off darwin (macOS gets the PyPI MPS build). `uv lock` is
+  universal, it resolves all of these; re-lock after touching those.
+- **macOS is not yet validated.** Open risk: CoreML may not cover the fp16 **GRU**
+  ops (onset heads / ADTOF) and fall back to CPU, which segfaults on fp16, if a
+  Mac build crashes at onsets, that lane needs an fp32 export or the
+  `DRUMJOT_ONSET_ONNX=0` torch-MPS fallback. Separation / beats / CTC
+  (transformer/CNN) are the likelier-to-just-work models on CoreML.
+- **Android has no on-device ML** (no sidecar); it transcribes over the HTTP
+  backend, so none of the sidecar/CUDA/models-dir concerns apply.
+
 ## Gotchas / invariants
 
 - **fp16 is GPU-only** (CPU EP segfaults on fp16 GRU). If a model has GRUs/LSTMs
   and must run on CPU somewhere, it needs an fp32 variant.
 - **CUDA-lib preload is load-bearing.** The torch-free runtime never loads torch's
-  CUDA libs, so onnxruntime-gpu can't `dlopen` its CUDA provider
+  CUDA libs, so onnxruntime-gpu can't load its CUDA provider
   (`libcublasLt.so.12 not found`) and SILENTLY falls back to CPU → the fp16 GRU
   segfault. `onnx_cuda.preload_cuda_libs()` (called at `app/sidecar.py::main`)
-  RTLD_GLOBAL-preloads the venv's `nvidia/*/lib` so the provider resolves, no
-  `LD_LIBRARY_PATH` needed. This is Linux-only today; **Windows + NVIDIA has the
-  same bug uncovered** (needs `os.add_dll_directory` over `nvidia/*/bin`), macOS
-  uses CoreML/MPS (no CUDA), Android has no sidecar (HTTP backend).
+  makes them findable with no `LD_LIBRARY_PATH`: Linux RTLD_GLOBAL-preloads
+  `nvidia/*/lib/*.so`, Windows adds `torch/lib` + `nvidia/*/bin` via
+  `os.add_dll_directory`. Don't remove it.
 - **Ship the sidecar files.** A separation onnx without its yaml, or onset heads
   without `onset_meta.json`, loads but can't run / mislabels lanes.
 - **The numpy frontend is the contract**, not the onnx. Bit-compatibility with
