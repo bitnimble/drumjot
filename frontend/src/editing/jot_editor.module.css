@@ -247,12 +247,13 @@
        native-overflow model). JotEditor's ResizeObserver feeds it to
        `store.setContentSize` for scroll clamping. */
     width: max-content;
-    /* Mirror the original `.jotContainer` vertical padding so the score
-       has the same top inset on initial paint. No horizontal padding;
-       the per-block inset (`padding: 0 24px` on title/subtitle/legend)
-       keeps the text content indented while leaving gutters flush with
-       the viewport's left edge, matching the previous layout. */
-    padding: 32px 0;
+    /* Top inset matches the header row's 8px bottom margin so the song
+       info header sits evenly spaced; the 32px bottom keeps breathing
+       room past the last row. No horizontal padding; the per-block inset
+       (`padding: 0 24px` on title/subtitle/legend) keeps the text content
+       indented while leaving gutters flush with the viewport's left edge,
+       matching the previous layout. */
+    padding: 8px 0 32px 0;
     box-sizing: border-box;
     transform: translate3d(calc(var(--scroll-x, 0) * -1px), calc(var(--scroll-y, 0) * -1px), 0);
     will-change: transform;
