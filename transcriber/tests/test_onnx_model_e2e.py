@@ -64,3 +64,40 @@ def test_shipped_beat_onnx_tracks_a_click_track(tmp_path):
     ibi = float(np.median(np.diff(np.asarray(beats, dtype=float))))
     assert 0.4 < ibi < 0.6, f"median inter-beat interval {ibi:.3f}s not ~0.5s (120 BPM)"
     assert len(downbeats) >= 1, "no downbeats detected"
+
+
+def test_shipped_beat_onnx_via_sidecar_beats_op(tmp_path):
+    """Drive the `beats` op through the real sidecar registry + StdioAdapter --
+    the exact path the desktop app's Rust broker feeds over stdio -- and confirm
+    it ran the ONNX model (engine == 'onnx') and returned a sane 120 BPM grid.
+    This is the headless twin of the desktop WebDriver e2e (which drives the same
+    op through the actual app window)."""
+    import asyncio
+    import io
+    import json
+
+    from app.comms.protocol import RequestMessage
+    from app.comms.runners import build_registry
+    from app.comms.stdio_adapter import StdioAdapter
+
+    clip = tmp_path / "click.wav"
+    _click_track(clip)
+
+    request = RequestMessage(
+        type="request",
+        id="b1",
+        op="beats",
+        args={"audio": {"kind": "path", "path": str(clip)}, "params": {}},
+    ).model_dump_json()
+    stdout = io.StringIO()
+    asyncio.run(StdioAdapter(build_registry(), stdin=io.StringIO(request + "\n"), stdout=stdout).run())
+    frames = [json.loads(line) for line in stdout.getvalue().splitlines() if line.strip()]
+
+    result = frames[-1]
+    assert result["type"] == "result", frames
+    data = result["data"]
+    assert data["engine"] == "onnx", f"beat detection did not run on ONNX: {data['engine']}"
+    assert data["count"] > 10, f"expected a beat grid, got {data['count']} beats"
+    ibi = float(np.median(np.diff(np.asarray(data["beats"], dtype=float))))
+    assert 0.4 < ibi < 0.6, f"median inter-beat interval {ibi:.3f}s not ~0.5s (120 BPM)"
+    assert len(data["downbeats"]) >= 1, "no downbeats detected"

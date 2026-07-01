@@ -317,6 +317,15 @@ def unpark_model() -> None:
     """No-op: `_beat_this_model` reloads lazily on next use."""
 
 
+def beat_engine_name() -> str:
+    """Which Beat This! backend is currently loaded: 'onnx' | 'torch' | 'none'.
+    'none' before the first detection (or after `park_model`). Lets a caller
+    (e.g. the desktop e2e) assert ONNX inference actually ran."""
+    if _BEAT_THIS_MODEL is None:
+        return "none"
+    return "onnx" if type(_BEAT_THIS_MODEL).__name__ == "OnnxBeatThis" else "torch"
+
+
 def _beat_this_beats(audio_path: Path) -> BeatStructure:
     """Beat This! beats + downbeats -> typed BeatStructure.
 

@@ -48,7 +48,7 @@ export const ArtifactSchema = z.object({
 });
 
 /** Backend operations a `request` can invoke. */
-export const OpSchema = z.enum(['transcribe', 'separate', 'alignLyrics']);
+export const OpSchema = z.enum(['transcribe', 'separate', 'alignLyrics', 'beats']);
 
 const base = { v: z.literal(PROTOCOL_VERSION), id: z.string() };
 

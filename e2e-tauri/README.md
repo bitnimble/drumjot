@@ -6,10 +6,18 @@ in-browser Playwright suite (`src/**/test/*.e2e.ts`, run with `bun run e2e`),
 which exercises the frontend in a plain headless Chromium and never boots the
 Tauri shell / Rust broker / Python sidecar.
 
-Scope today: an app-launch smoke test (`specs/app_launch.e2e.ts`), the window
-opens, the frontend renders into `#app`, and the Tauri IPC bridge is present.
-The ONNX inference path is validated headlessly and doesn't need the GUI, see
-`transcriber/tests/test_onnx_model_e2e.py`.
+Specs:
+
+- `specs/app_launch.e2e.ts`, smoke: the window opens, the frontend renders into
+  `#app`, and the Tauri IPC bridge is present. No models / env needed.
+- `specs/beat_detection.e2e.ts`, **true ML e2e**: invokes the `beats` sidecar op
+  through the app on a generated click track and asserts the ONNX Beat This! model
+  ran (`engine === 'onnx'`) and returned a 120 BPM grid. Exercises webview
+  `invoke('run_job')` → Rust broker → Python sidecar → ONNX. Needs the env below;
+  self-skips if `MODELS_DIR/beat_this.fp16.onnx` is absent.
+
+(A headless twin of the beat e2e, same op through the real `StdioAdapter`
+registry, no GUI, lives at `transcriber/tests/test_onnx_model_e2e.py`.)
 
 ## Tooling
 
@@ -55,3 +63,27 @@ bun run e2e:tauri            # headless box: xvfb-run -a bun run e2e:tauri
 
 `e2e:tauri` runs `wdio run e2e-tauri/wdio.conf.ts`, which spawns/kills
 `tauri-driver` around the session and points it at the release binary.
+
+### Env for the beat-detection e2e
+
+The app inherits these from the process env; the Rust broker + Python sidecar
+read them at runtime:
+
+```sh
+MODELS_DIR=/dir/with/beat_this.fp16.onnx \
+DRUMJOT_SIDECAR_PYTHON="$PWD/transcriber/.venv/bin/python3" \
+DRUMJOT_BEAT_ONNX=1 \
+  xvfb-run -a bun run e2e:tauri
+```
+
+- `MODELS_DIR`, where the sidecar finds `beat_this.fp16.onnx` (provision it, or
+  point at a dir that already has it). Absent → the beat spec self-skips.
+- `DRUMJOT_SIDECAR_PYTHON`, abs path to the interpreter the broker spawns
+  (`resolve_python` prefers this; the dev fallback is a CWD-relative path that
+  won't resolve when tauri-driver launches the binary).
+- `DRUMJOT_BEAT_ONNX=1`, default; runs Beat This! on onnxruntime.
+
+Rebuild the app (`bun run tauri build`) after changing `withGlobalTauri` or any
+frontend/Rust source, the config + frontend bundle are baked into the binary.
+`withGlobalTauri: true` (tauri.conf.json) is what exposes `window.__TAURI__` so
+the spec can `invoke('run_job', …)` from the webview.

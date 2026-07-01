@@ -1,14 +1,15 @@
 """Runner registry.
 
 `transcribe` -> {@link TranscribeRunner}, `separate` -> {@link SeparateRunner},
-`alignLyrics` -> {@link AlignLyricsRunner}. `EchoRunner` remains as a plumbing
-stub for tests.
+`alignLyrics` -> {@link AlignLyricsRunner}, `beats` -> {@link BeatsRunner}.
+`EchoRunner` remains as a plumbing stub for tests.
 """
 from __future__ import annotations
 
 import asyncio
 
 from .align_lyrics_runner import AlignLyricsRunner
+from .beats_runner import BeatsRunner
 from .core import CancelToken, EmitProgress, Registry
 from .protocol import Artifact, PathRef, RequestMessage
 from .separate_runner import SeparateRunner
@@ -41,4 +42,5 @@ def build_registry() -> Registry:
         "transcribe": TranscribeRunner(),
         "separate": SeparateRunner(),
         "alignLyrics": AlignLyricsRunner(),
+        "beats": BeatsRunner(),
     }
