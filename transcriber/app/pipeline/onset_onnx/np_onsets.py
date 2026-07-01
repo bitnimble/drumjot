@@ -83,7 +83,16 @@ def _session(onnx_path, providers):
         providers = ort.get_available_providers()
     try:
         return ort.InferenceSession(str(onnx_path), providers=providers)
-    except Exception:
+    except Exception as e:
+        # A shipped fp16 graph has no working CPU-EP GRU kernel (segfault), so a
+        # silent CPU fallback crashes late + opaquely -- fail loud instead. fp32
+        # graphs run fine on CPU, so keep that fallback.
+        if ".fp16." in Path(onnx_path).name:
+            raise RuntimeError(
+                f"ONNX session create failed for fp16 model {Path(onnx_path).name} on {providers}; "
+                "refusing to fall back to the CPU EP (no fp16 GRU kernel). Use a GPU EP "
+                "or the DRUMJOT_*_ONNX=0 torch path."
+            ) from e
         return ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
 
 

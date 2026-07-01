@@ -124,7 +124,15 @@ def _ort_session(onnx_path, providers):
         providers = ort.get_available_providers()
     try:
         return ort.InferenceSession(str(onnx_path), providers=providers)
-    except Exception:
+    except Exception as e:
+        # fp16 separation graphs weren't validated on the CPU EP; a silent fallback
+        # would run unvalidated numerics (or crash), so fail loud. fp32 runs on CPU.
+        if ".fp16." in str(onnx_path):
+            raise RuntimeError(
+                f"ONNX session create failed for fp16 model {onnx_path} on {providers}; "
+                "refusing a silent CPU-EP fallback (unvalidated fp16 numerics). Use a GPU EP "
+                "or the DRUMJOT_SEP_ONNX=0 torch path."
+            ) from e
         return ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
 
 
