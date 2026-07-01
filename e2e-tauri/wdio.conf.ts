@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 // The raw release binary tauri-driver launches. The crate name is `app`
@@ -43,6 +44,22 @@ export const config: WebdriverIO.Config = {
   },
 
   beforeSession: () => {
+    // The full-transcribe e2e (opt-in) drives desktopTranscribe, which gates on
+    // the 'transcription' capability being installed -- otherwise it shows an
+    // install prompt that would hang the run. Seed the app's capability-state
+    // file as installed BEFORE the window boots so the boot refresh reads it as
+    // ready and the gate passes with no prompt. The real sidecar interpreter is
+    // still DRUMJOT_SIDECAR_PYTHON (the dev venv), not an app-managed venv; this
+    // only flips the UI gate. Scoped to the opt-in run so other specs are
+    // untouched. Path = Tauri's Linux app_local_data_dir for the identifier.
+    if (process.env.DRUMJOT_E2E_TRANSCRIBE != null) {
+      const dataRoot = join(homedir(), '.local/share/dev.drumjot.studio')
+      mkdirSync(dataRoot, { recursive: true })
+      writeFileSync(
+        join(dataRoot, 'capabilities.json'),
+        JSON.stringify({ separation: { installed: true }, transcription: { installed: true } }, null, 2),
+      )
+    }
     tauriDriver = spawn('tauri-driver', [], {
       stdio: [null, process.stdout, process.stderr],
     })

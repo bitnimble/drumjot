@@ -15,6 +15,15 @@ Specs:
   ran (`engine === 'onnx'`) and returned a 120 BPM grid. Exercises webview
   `invoke('run_job')` → Rust broker → Python sidecar → ONNX. Needs the env below;
   self-skips if `MODELS_DIR/beat_this.fp16.onnx` is absent.
+- `specs/transcribe.e2e.ts`, **full black-box ML e2e**: loads an audio fixture and
+  triggers a full transcribe via the real frontend client
+  (`window.drumjot.desktopTranscribe(path, {filter:false, quantise:false})` →
+  `backendClient()` → sidecar → the whole ONNX pipeline: separation → onsets →
+  beats → MIDI → loaded into the editor), then asserts the frontend rendered a
+  bar/beat structure (`jotEditorStore.structural`). Exercises every ONNX model
+  end-to-end. Hermetic (no LLM, no API key). **Opt-in + heavy**: needs a GPU (fp16
+  models are GPU-only) + the full model set; gated on `DRUMJOT_E2E_TRANSCRIBE` so
+  normal runs skip it (see the env block below).
 
 (A headless twin of the beat e2e, same op through the real `StdioAdapter`
 registry, no GUI, lives at `transcriber/tests/test_onnx_model_e2e.py`.)
@@ -104,6 +113,24 @@ DRUMJOT_BEAT_ONNX=1 \
   (`resolve_python` prefers this; the dev fallback is a CWD-relative path that
   won't resolve when tauri-driver launches the binary).
 - `DRUMJOT_BEAT_ONNX=1`, default; runs Beat This! on onnxruntime.
+
+### Env for the full-transcribe e2e
+
+Everything above, PLUS `DRUMJOT_E2E_TRANSCRIBE=1` to opt in (it's off by default
+because the run is heavy and needs a GPU). `MODELS_DIR` must hold the full set
+(`python -m app.pipeline.provision transcription`), not just `beat_this`:
+
+```sh
+DRUMJOT_E2E_TRANSCRIBE=1 \
+MODELS_DIR=/dir/with/full/model/set \
+DRUMJOT_SIDECAR_PYTHON="$PWD/transcriber/.venv/bin/python3" \
+  xvfb-run -a bun run e2e:tauri
+```
+
+The `transcription` capability gate is auto-seeded (wdio.conf `beforeSession`,
+same env guard) so `desktopTranscribe` doesn't show an install prompt. The fp16
+models are GPU-only, so this needs a working CUDA/accelerator; on CPU the fp16
+GRU onset model can't run.
 
 Rebuild the app (`bun run tauri build`) after changing `withGlobalTauri` or any
 frontend/Rust source, the config + frontend bundle are baked into the binary.
