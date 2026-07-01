@@ -1625,8 +1625,14 @@ def _trial_perstem_specs(args) -> tuple[list, list, Path]:
 
     root = Path(os.environ["DRUMJOT_TRIAL"])
     per = trial_perstem.perstem_index(root)
-    tr = trial_perstem.perstem_for_split(per, "train")
-    va = trial_perstem.perstem_for_split(per, "validation")
+    # DRUMJOT_TRIAL_CAP / _VAL_CAP cap train/val to ~N windows (0 = all): the full
+    # 300-clip set is ~12k train windows (paradb full-song windowing), too slow for
+    # a 6-run A/B. The cap is deterministic (fixed clip order) + applied identically
+    # to both arms, so it doesn't bias the comparison.
+    tr = _cap_by_windows(trial_perstem.perstem_for_split(per, "train"),
+                         int(os.environ.get("DRUMJOT_TRIAL_CAP", "0")))
+    va = _cap_by_windows(trial_perstem.perstem_for_split(per, "validation"),
+                         int(os.environ.get("DRUMJOT_TRIAL_VAL_CAP", "0")))
     spec = lambda c: (  # noqa: E731
         c.audio_path,
         trial_perstem.restricted_onsets(c.onsets_path, c.lanes),
