@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def export_adtof(out_path: str | Path, *, opset: int = 17) -> Path:
+def export_adtof(out_path: str | Path, *, opset: int = 17, fp16: bool = False) -> Path:
     """Export the pretrained Frame_RNN to `out_path`. Returns the path."""
     import torch
     from adtof_pytorch import (
@@ -36,6 +36,10 @@ def export_adtof(out_path: str | Path, *, opset: int = 17) -> Path:
             dynamic_axes={"features": {1: "frames"}, "activations": {1: "frames"}},
             opset_version=opset, do_constant_folding=True, dynamo=False,
         )
+    if fp16:
+        from app.pipeline.onnx_fp16 import to_fp16
+
+        to_fp16(out_path)
     return out_path
 
 

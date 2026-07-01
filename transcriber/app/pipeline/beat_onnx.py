@@ -23,7 +23,8 @@ CHUNK, BORDER = 1500, 6
 _STFT_NORM = 1.0 / np.sqrt(N_FFT)
 
 
-def export_beatthis(out_path: str | Path, *, checkpoint: str = "final0", opset: int = 17) -> Path:
+def export_beatthis(out_path: str | Path, *, checkpoint: str = "final0", opset: int = 17,
+                    fp16: bool = False) -> Path:
     """Export the BeatThis transformer (spectrogram -> beat/downbeat logits)."""
     import torch
     from beat_this.inference import load_model
@@ -50,6 +51,10 @@ def export_beatthis(out_path: str | Path, *, checkpoint: str = "final0", opset: 
             dynamic_axes={"spect": {1: "frames"}, "beat": {1: "frames"}, "downbeat": {1: "frames"}},
             opset_version=opset, do_constant_folding=True, dynamo=False,
         )
+    if fp16:
+        from app.pipeline.onnx_fp16 import to_fp16
+
+        to_fp16(out_path)
     return out_path
 
 

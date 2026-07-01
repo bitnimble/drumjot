@@ -147,7 +147,8 @@ def _forced_align(log_probs: np.ndarray, targets: np.ndarray, blank: int = 0):
     return _ctc_torch_free()[2](log_probs, targets, blank)
 
 
-def export_ctc_model(model_path: str, out_path: str | Path, *, opset: int = 17) -> Path:
+def export_ctc_model(model_path: str, out_path: str | Path, *, opset: int = 17,
+                     fp16: bool = False) -> Path:
     """Export a HF `AutoModelForCTC` (waveform -> logits). Returns the path."""
     import torch
     from transformers import AutoModelForCTC
@@ -173,6 +174,10 @@ def export_ctc_model(model_path: str, out_path: str | Path, *, opset: int = 17) 
                           "logits": {0: "batch", 1: "frames"}},
             opset_version=opset, do_constant_folding=True, dynamo=False,
         )
+    if fp16:
+        from app.pipeline.onnx_fp16 import to_fp16
+
+        to_fp16(out_path)
     return out_path
 
 

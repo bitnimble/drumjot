@@ -24,7 +24,7 @@ from pathlib import Path
 
 
 def export_mert(out_path: str | Path, layer: int, *, name: str = "m-a-p/MERT-v1-330M",
-                opset: int = 17) -> Path:
+                opset: int = 17, fp16: bool = False) -> Path:
     """Export the truncated MERT encoder to `out_path`. Returns the path."""
     import torch
     from drumjot_training import embeddings
@@ -58,10 +58,15 @@ def export_mert(out_path: str | Path, layer: int, *, name: str = "m-a-p/MERT-v1-
             dynamic_axes={"input_values": {1: "samples"}, "features": {1: "frames"}},
             opset_version=opset, do_constant_folding=True, dynamo=False,
         )
+    if fp16:
+        from app.pipeline.onnx_fp16 import to_fp16
+
+        to_fp16(out_path)
     return out_path
 
 
-def export_heads(checkpoint_dir: str | Path, out_path: str | Path, *, opset: int = 17):
+def export_heads(checkpoint_dir: str | Path, out_path: str | Path, *, opset: int = 17,
+                 fp16: bool = False):
     """Export the `MultiLaneHeads` to `out_path`. Returns `(path, meta)`."""
     import torch
     from drumjot_training import inference
@@ -88,4 +93,8 @@ def export_heads(checkpoint_dir: str | Path, out_path: str | Path, *, opset: int
             dynamic_axes={"features": {1: "frames"}, "logits": {2: "frames"}},
             opset_version=opset, do_constant_folding=True, dynamo=False,
         )
+    if fp16:
+        from app.pipeline.onnx_fp16 import to_fp16
+
+        to_fp16(out_path)
     return out_path, meta

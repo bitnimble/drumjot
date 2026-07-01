@@ -58,15 +58,11 @@ def _bs_example(loaded: LoadedModel) -> torch.Tensor:
 
 
 def _to_fp16(out_path: Path) -> None:
-    """Convert an fp32 ONNX graph in place to fp16, keeping the graph inputs and
-    outputs fp32 (Cast nodes at the boundary) so the numpy inference path feeds
-    fp32 and reads fp32 unchanged. Halves the file and unlocks the GPU tensor /
-    NPU fp16 path; the STFT/iSTFT stay fp32 in numpy outside this graph."""
-    import onnx
-    from onnxruntime.transformers.float16 import convert_float_to_float16
+    """Convert the fp32 ONNX body to fp16 in place (shared onnx_fp16.to_fp16);
+    the STFT/iSTFT stay fp32 in numpy outside this graph."""
+    from app.pipeline.onnx_fp16 import to_fp16
 
-    model = onnx.load(str(out_path))
-    onnx.save(convert_float_to_float16(model, keep_io_types=True), str(out_path))
+    to_fp16(out_path)
 
 
 def export_body(
