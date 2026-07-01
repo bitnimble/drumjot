@@ -15,15 +15,18 @@ Specs:
   ran (`engine === 'onnx'`) and returned a 120 BPM grid. Exercises webview
   `invoke('run_job')` → Rust broker → Python sidecar → ONNX. Needs the env below;
   self-skips if `MODELS_DIR/beat_this.fp16.onnx` is absent.
-- `specs/transcribe.e2e.ts`, **full black-box ML e2e**: loads an audio fixture and
-  triggers a full transcribe via the real frontend client
+- `specs/transcribe.e2e.ts`, **end-to-end transcription e2e**: generates a known
+  drum-loop fixture (kick 4-on-the-floor + snare backbeat + hi-hat 8ths) and runs
+  a full transcribe via the real frontend client
   (`window.drumjot.desktopTranscribe(path, {filter:false, quantise:false})` →
   `backendClient()` → sidecar → the whole ONNX pipeline: separation → onsets →
-  beats → MIDI → loaded into the editor), then asserts the frontend rendered a
-  bar/beat structure (`jotEditorStore.structural`). Exercises every ONNX model
-  end-to-end. Hermetic (no LLM, no API key). **Opt-in + heavy**: needs a GPU (fp16
-  models are GPU-only) + the full model set; gated on `DRUMJOT_E2E_TRANSCRIBE` so
-  normal runs skip it (see the env block below).
+  beats → MIDI → loaded into the editor), then verifies the transcription matches
+  the input: the recovered tempo (~120 BPM) AND actual drum notes across multiple
+  lanes (`jotEditorStore.structural` per-lane note counts). Exercises every ONNX
+  model end-to-end. Hermetic (no LLM, no API key). **Opt-in + heavy**: needs a GPU
+  (fp16 models are GPU-only) + the full model set; gated on
+  `DRUMJOT_E2E_TRANSCRIBE` so normal runs skip it (see the env block below). The
+  note-count thresholds are lenient pending a first GPU run (see the spec's NOTE).
 
 (A headless twin of the beat e2e, same op through the real `StdioAdapter`
 registry, no GUI, lives at `transcriber/tests/test_onnx_model_e2e.py`.)

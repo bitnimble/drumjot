@@ -1,13 +1,16 @@
 /**
- * True black-box e2e: a FULL transcribe through the desktop app.
+ * End-to-end TRANSCRIPTION e2e: a full transcribe through the desktop app,
+ * verifying the transcribed *notes* (not just the beat grid).
  *
- * Loads an audio fixture and triggers a full transcribe via the real frontend
- * client -- `window.drumjot.desktopTranscribe(path, params)` -> `backendClient()`
- * -> Rust broker -> Python sidecar -> the whole ONNX pipeline (separation ->
- * onsets -> beats -> MIDI) -> `fromMidi` -> loaded into the editor -- then
- * asserts the frontend updated with beat information (the loaded jot's bar/beat
- * structure on `jotEditorStore.structural`). This exercises every ONNX model
- * (separation, onsets, beats) end-to-end through the app, not just beat_this.
+ * Loads a known drum-loop fixture and triggers a full transcribe via the real
+ * frontend client -- `window.drumjot.desktopTranscribe(path, params)` ->
+ * `backendClient()` -> Rust broker -> Python sidecar -> the whole ONNX pipeline
+ * (separation -> onsets -> beats -> MIDI) -> `fromMidi` -> loaded into the editor
+ * -- then asserts the frontend rendered a transcription that matches the input:
+ * the beat tracker's tempo AND actual drum notes across multiple lanes (the
+ * fixture is a rock beat: kick 4-on-the-floor, snare backbeat, hi-hat 8ths).
+ * Exercises every ONNX model (separation, onsets, beats) end-to-end, not just
+ * beat_this.
  *
  * Hermetic: `filter:false` + `quantise:false` skip both LLM stages (the pipeline
  * still runs every ONNX model), so no ANTHROPIC_API_KEY is needed.
@@ -28,8 +31,10 @@ import { fileURLToPath } from 'node:url'
 
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url))
 const venvPython = join(repoRoot, 'transcriber/.venv/bin/python3')
-const makeClick = join(repoRoot, 'e2e-tauri/fixtures/make_click.py')
+const makeDrums = join(repoRoot, 'e2e-tauri/fixtures/make_drums.py')
 const modelsDir = process.env.MODELS_DIR ?? '/models'
+const BPM = 120
+const BARS = 8
 
 // Everything the full pipeline loads: both separation bodies + their yamls, the
 // learned-onset MERT + heads (+ meta), and beat_this. Absent -> hard fail (the
@@ -47,7 +52,7 @@ const REQUIRED = [
 
 let audioPath: string
 
-describe('Full transcribe through the app (ONNX pipeline)', function () {
+describe('End-to-end transcription through the app (full ONNX pipeline)', function () {
   before(function () {
     if (process.env.DRUMJOT_E2E_TRANSCRIBE == null) {
       this.skip() // opt-in: heavy, needs a GPU + the full model set
@@ -59,14 +64,16 @@ describe('Full transcribe through the app (ONNX pipeline)', function () {
           'Run `python -m app.pipeline.provision transcription` first.',
       )
     }
-    audioPath = join(mkdtempSync(join(tmpdir(), 'drumjot-tx-')), 'click.wav')
-    const gen = spawnSync(venvPython, [makeClick, audioPath, '120', '12'], { encoding: 'utf8' })
+    audioPath = join(mkdtempSync(join(tmpdir(), 'drumjot-tx-')), 'drums.wav')
+    const gen = spawnSync(venvPython, [makeDrums, audioPath, String(BPM), String(BARS)], {
+      encoding: 'utf8',
+    })
     if (gen.status !== 0) {
-      throw new Error(`click-track fixture generation failed: ${gen.stderr || gen.error}`)
+      throw new Error(`drum-loop fixture generation failed: ${gen.stderr || gen.error}`)
     }
   })
 
-  it('transcribes an audio fixture and renders beat structure in the editor', async () => {
+  it('transcribes a drum loop into the correct notes + tempo', async () => {
     // Separation + onset + beat inference on the GPU; the first run pays cold
     // model loads, so give it a wide budget.
     await browser.setTimeout({ script: 300_000 })
@@ -78,7 +85,9 @@ describe('Full transcribe through the app (ONNX pipeline)', function () {
           jotEditorStore: {
             jot?: unknown
             tempo?: { dominantBpmAndTime: { dominantBpm?: number } }
-            structural?: { layers: Array<{ bars: Array<{ beats: number }> }> }
+            structural?: {
+              layers: Array<{ bars: Array<{ tracks: Record<string, { notes: unknown[] }> }> }>
+            }
           }
         }
       }).drumjot
@@ -91,26 +100,49 @@ describe('Full transcribe through the app (ONNX pipeline)', function () {
         return { error: String(err) }
       }
 
-      const layers = dj.jotEditorStore.structural?.layers ?? []
+      // Aggregate the transcribed notes per drum lane across every layer/bar.
+      const notesByLane: Record<string, number> = {}
+      let totalNotes = 0
+      for (const layer of dj.jotEditorStore.structural?.layers ?? []) {
+        for (const bar of layer.bars) {
+          for (const [pitch, track] of Object.entries(bar.tracks ?? {})) {
+            const count = track.notes?.length ?? 0
+            notesByLane[pitch] = (notesByLane[pitch] ?? 0) + count
+            totalNotes += count
+          }
+        }
+      }
       return {
         loaded: dj.jotEditorStore.jot != null,
-        // Beat tracker's tempo, carried through MIDI -> jot; the primary
-        // beat-information signal (present even if the click track yields no
-        // drum notes, so it doesn't depend on onsets/bars).
         dominantBpm: dj.jotEditorStore.tempo?.dominantBpmAndTime?.dominantBpm ?? null,
-        layerCount: layers.length,
-        barCount: layers[0]?.bars?.length ?? 0,
+        notesByLane,
+        totalNotes,
+        laneCount: Object.values(notesByLane).filter((c) => c > 0).length,
       }
     }, audioPath)
 
     if ('error' in outcome) {
       throw new Error(`desktopTranscribe failed: ${outcome.error}`)
     }
-    // The full ONNX pipeline ran through the app and its result loaded into the
-    // editor, carrying the beat tracker's tempo (the fixture is a 120 BPM click
-    // track) -- proof the beats stage's ONNX output reached the frontend.
+    // Surface the transcription so the first GPU run's actual output is visible
+    // (the correctness thresholds below are intentionally lenient until then).
+    console.log('[transcribe e2e] result:', JSON.stringify(outcome))
+
+    // The full ONNX pipeline ran and its result loaded into the editor.
     expect(outcome.loaded).toBe(true)
+    // Beat correctness: the tracker recovered the fixture's tempo (120 BPM).
     expect(outcome.dominantBpm).toBeGreaterThan(100)
     expect(outcome.dominantBpm).toBeLessThan(140)
+    // Transcription correctness: real drum notes were produced (not an empty or
+    // beats-only result), spread across multiple lanes -- the fixture is a
+    // multi-instrument rock beat (kick 4-on-the-floor + snare backbeat + hats),
+    // so a faithful transcription lands notes in several lanes.
+    //
+    // NOTE: thresholds are provisional (separation + onset detection isn't exact
+    // and this hasn't been run on a GPU yet). On the first real run, tighten
+    // against the logged `notesByLane` -- e.g. assert kick 'k' ~= BARS*4 and
+    // snare 's' ~= BARS*2 within tolerance, and check per-beat positions.
+    expect(outcome.totalNotes).toBeGreaterThanOrEqual(BARS) // >= ~1 hit/bar minimum
+    expect(outcome.laneCount).toBeGreaterThanOrEqual(2)
   })
 })
