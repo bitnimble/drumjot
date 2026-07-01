@@ -250,6 +250,26 @@ def analyze_beats(
 _BEAT_THIS_MODEL = None
 
 
+def _beat_onnx_enabled() -> bool:
+    """Default ON: run Beat This! through onnxruntime (torch-free inference).
+    Opt out with DRUMJOT_BEAT_ONNX in {0,false,no,off,torch} for the torch path
+    (mirrors DRUMJOT_SEP_ONNX / DRUMJOT_ONSET_ONNX)."""
+    import os
+
+    return os.environ.get("DRUMJOT_BEAT_ONNX", "1").strip().lower() not in (
+        "0", "false", "no", "off", "torch",
+    )
+
+
+def _onnx_providers():
+    """onnxruntime providers from settings.device (no torch import): CPU-pinned
+    when CPU/MPS is forced, else the available set (+ CPU fallback in the loader)."""
+    from app.config import settings
+
+    dev = (settings.device or "auto").lower()
+    return ["CPUExecutionProvider"] if dev in ("cpu", "mps") else None
+
+
 def _beat_this_model():
     """Lazily build the cached Beat This! inference wrapper.
 
@@ -259,15 +279,27 @@ def _beat_this_model():
     (madmom RNN and Beat Transformer both fed it) collapsed. Weights
     auto-download to the torch hub cache on first use. Lazy so an import/
     download hiccup doesn't block service startup.
+
+    Default: the torch-free ONNX wrapper (`OnnxBeatThis`, the transformer on
+    onnxruntime + numpy frontend/chunking/postproc); opt out with
+    DRUMJOT_BEAT_ONNX=0 for the torch `File2Beats`. Both are callables
+    `audio_path -> (beats, downbeats)`.
     """
     global _BEAT_THIS_MODEL
     if _BEAT_THIS_MODEL is None:
-        import torch
-        from beat_this.inference import File2Beats
+        if _beat_onnx_enabled():
+            from app.config import settings
+            from app.pipeline.beat_onnx import load_beat_session
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        log.info("Loading Beat This! (final0) onto %s", device)
-        _BEAT_THIS_MODEL = File2Beats(device=device, dbn=False)
+            log.info("Loading Beat This! (ONNX, final0)")
+            _BEAT_THIS_MODEL = load_beat_session(settings.models_dir, providers=_onnx_providers())
+        else:
+            import torch
+            from beat_this.inference import File2Beats
+
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            log.info("Loading Beat This! (final0) onto %s", device)
+            _BEAT_THIS_MODEL = File2Beats(device=device, dbn=False)
     return _BEAT_THIS_MODEL
 
 
