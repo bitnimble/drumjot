@@ -31,6 +31,7 @@ from drumjot_training import (
     paths,
     runtime,
     star,
+    trial_perstem,
 )
 from drumjot_training.config import Config
 from drumjot_training.lanes import LANES, sibling_matrix
@@ -1599,6 +1600,30 @@ def _paradb_perstem_specs(args) -> tuple[list, list, Path]:
     return [spec(c) for c in tr], [spec(c) for c in va], root / "_cache_mert"
 
 
+def _trial_perstem_specs(args) -> tuple[list, list, Path]:
+    """(train, val, cache) for the 6-way-drumsep A/B trial. Reads the paradb-shaped
+    tree at ``DRUMJOT_TRIAL`` (perstem/<pitch>/<cid>.flac + onsets/<cid>.json);
+    the 5-way-vs-6-way layout is auto-detected (see `trial_perstem.lane_map`).
+
+    Onsets are baked into the json at staging time (identical across arms), so no
+    aligned-store lookup -- the arms differ ONLY in the cymbal/hat stem audio. The
+    cache is the SHARED MERT cache (env DRUMJOT_MERT_CACHE), so k/s/t stems that
+    symlink to the existing 5-way files resolve to cached features (no re-encode);
+    only the new 6-way hh/ride/crash stems are encoded."""
+    import os
+
+    root = Path(os.environ["DRUMJOT_TRIAL"])
+    per = trial_perstem.perstem_index(root)
+    tr = trial_perstem.perstem_for_split(per, "train")
+    va = trial_perstem.perstem_for_split(per, "validation")
+    spec = lambda c: (  # noqa: E731
+        c.audio_path,
+        trial_perstem.restricted_onsets(c.onsets_path, c.lanes),
+        trial_perstem.onsets_by_lane(c.onsets_path),
+    )
+    return [spec(c) for c in tr], [spec(c) for c in va], Path(embeddings.MERT_CACHE_DIR)
+
+
 def _fold_aligned_lanes(al: dict) -> dict[str, list[float]]:
     """Restrict one aligned-onset entry to the current `LANES`, folding the legacy
     `hp` (pedal hi-hat) lane into `hc`.
@@ -1873,7 +1898,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument(
         "--dataset",
         choices=("egmd", "egmd_perstem", "star", "star_perstem", "enst", "enst_perstem",
-                 "paradb_perstem", "pooled"),
+                 "paradb_perstem", "trial_perstem", "pooled"),
         default="egmd",
     )
     ap.add_argument("--pool-sources", default="star,enst,egmd",
@@ -2098,6 +2123,7 @@ def main(argv: list[str] | None = None) -> None:
             else _enst_specs(args) if args.dataset == "enst"
             else _egmd_perstem_specs(args) if args.dataset == "egmd_perstem"
             else _paradb_perstem_specs(args) if args.dataset == "paradb_perstem"
+            else _trial_perstem_specs(args) if args.dataset == "trial_perstem"
             else _pooled_specs(args) if args.dataset == "pooled"
             else _egmd_specs(args)
         )
