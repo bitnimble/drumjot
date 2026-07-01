@@ -79,14 +79,25 @@ pub async fn run_job<R: Runtime>(
 
     let mut line = serde_json::to_string(&request).map_err(|e| e.to_string())?;
     line.push('\n');
-    stdin
-        .write_all(line.as_bytes())
-        .await
-        .map_err(|e| format!("failed to write request: {e}"))?;
-    stdin.flush().await.map_err(|e| e.to_string())?;
 
+    // Register the cancel channel BEFORE writing the request. `cancel_job`
+    // removes-then-sends on this same map, so a cancel that races in during the
+    // awaited write below must find the entry, otherwise it is silently dropped
+    // and the job runs to completion. A cancel arriving now is buffered in the
+    // oneshot and honoured on the select loop's first poll.
     let (cancel_tx, mut cancel_rx) = oneshot::channel::<()>();
     state.jobs.lock().await.insert(id.clone(), cancel_tx);
+
+    // On a write failure the read loop never runs, so unregister here to avoid
+    // leaking a dead entry that a later cancel_job would match.
+    if let Err(e) = stdin.write_all(line.as_bytes()).await {
+        state.jobs.lock().await.remove(&id);
+        return Err(format!("failed to write request: {e}"));
+    }
+    if let Err(e) = stdin.flush().await {
+        state.jobs.lock().await.remove(&id);
+        return Err(e.to_string());
+    }
 
     // stderr is diagnostics only (the protocol owns stdout); drain it to the log.
     let stderr_task = tokio::spawn(async move {
@@ -256,8 +267,13 @@ printf '{"v":1,"type":"result","id":"job1","artifacts":[]}\n'
         let handle = app.handle().clone();
         let state = app.state::<SidecarState>();
         let (channel, frames) = recording_channel();
+        // A well-formed protocol frame (RequestArgs.audio is required): the fake
+        // sidecar ignores stdin, but keeping the fixture valid means the broker's
+        // request-forwarding path is exercised against a shape the real Python
+        // backend would actually accept.
         let request = serde_json::json!({
-            "v": 1, "type": "request", "id": "job1", "op": "transcribe", "args": {}
+            "v": 1, "type": "request", "id": "job1", "op": "transcribe",
+            "args": { "audio": { "kind": "path", "path": "/tmp/song.mp3" }, "params": {} }
         });
 
         let result = tauri::async_runtime::block_on(run_job(handle, state, request, channel));

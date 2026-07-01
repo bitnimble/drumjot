@@ -90,6 +90,34 @@ def test_malformed_line_is_skipped() -> None:
     assert out[-1]["type"] == "result"
 
 
+def test_invalid_request_with_id_gets_error_frame() -> None:
+    # A structurally-invalid frame that still carries an id must get a terminal
+    # error, not be silently dropped (which would hang the broker waiting for a
+    # result that never comes). Missing `args` fails RequestMessage validation.
+    bad = json.dumps({"v": 1, "type": "request", "id": "bad1", "op": "separate"})
+    out = _run_adapter(ECHO_REGISTRY, [bad])
+    assert len(out) == 1
+    assert out[0]["type"] == "error"
+    assert out[0]["id"] == "bad1"
+    assert out[0]["code"] == "bad_request"
+
+
+def test_nan_progress_frac_is_clamped_not_fatal() -> None:
+    # A runner reporting a NaN/out-of-range fraction must not turn the job into a
+    # spurious error (or, on the live path, silently drop the frame); the fraction
+    # is clamped and the job still completes.
+    class NanRunner:
+        async def run(self, request, emit, cancel):  # type: ignore[no-untyped-def]
+            await emit("working", float("nan"), None)
+            await emit("working", 5.0, None)
+            return []
+
+    out = _run_adapter({"separate": NanRunner()}, [_request("n1", "/z.wav")])
+    assert out[-1]["type"] == "result"
+    progress = [m for m in out if m["type"] == "progress"]
+    assert progress and all(0.0 <= m["frac"] <= 1.0 for m in progress)
+
+
 def test_cancel_token() -> None:
     tok = CancelToken()
     tok.check()  # no raise before cancel
