@@ -167,6 +167,32 @@ def _resolve_device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
+def _onnx_enabled() -> bool:
+    """Default ON: run the Frame_RNN through onnxruntime (torch-free inference).
+    Opt out with DRUMJOT_ONSET_ONNX in {0,false,no,off,torch} (shared with the
+    learned-onset backend, mirrors DRUMJOT_SEP_ONNX for separation)."""
+    import os
+
+    return os.environ.get("DRUMJOT_ONSET_ONNX", "1").strip().lower() not in (
+        "0", "false", "no", "off", "torch",
+    )
+
+
+def _onnx_providers():
+    """onnxruntime providers from settings.device (no torch import): CPU-pinned
+    when CPU/MPS is forced, else the available set (+ CPU fallback in the loader)."""
+    dev = (settings.device or "auto").lower()
+    return ["CPUExecutionProvider"] if dev in ("cpu", "mps") else None
+
+
+@lru_cache(maxsize=1)
+def _load_adtof_session():
+    """Cached ADTOF onnxruntime session; exports + caches the `.onnx` once."""
+    from app.pipeline.adtof_onnx import load_adtof_session
+
+    return load_adtof_session(settings.models_dir, providers=_onnx_providers())
+
+
 @lru_cache(maxsize=1)
 def _load_model():
     """Load the ADTOF model once per process and cache (lazy singleton).
@@ -352,26 +378,34 @@ def _median_scale_factor(audio: np.ndarray) -> float:
     return float(np.clip(target / median, 0.25, 25.0))
 
 
-def _adtof_activations(model, device: str, audio: np.ndarray) -> tuple[np.ndarray, float]:
-    """Return ADTOF dense per-frame activations for an in-memory audio
-    array (already mono, at the processor's sample rate).
-
-    Bypasses `load_audio_for_model` so we can feed a median-scaled array
-    without writing a temp wav. Returns `(acts, fps)` where `acts` is
-    shape `(frames, 5)`.
-    """
-    import torch
-
+def _features(audio: np.ndarray) -> np.ndarray:
+    """`[1, T, n_bins, 1]` log-filterbank features for an in-memory mono array (at
+    the processor's rate). Bypasses `load_audio_for_model` so a median-scaled
+    array feeds in without a temp wav. Torch-free (numpy STFT + filterbank)."""
     proc = _audio_processor()
     stft = proc.compute_stft(audio)
     filtered = proc.apply_filterbank(stft).T.astype(np.float32, copy=False)
-    # AudioProcessor.process_audio adds a trailing channel dim of size 1
-    # for the mono case; the model's conv layers expect [batch, time,
-    # freq, channels]. Replicate that shape here.
-    filtered = filtered[:, :, np.newaxis]
-    x = torch.from_numpy(filtered).unsqueeze(0).to(device)
-    with torch.no_grad():
-        pred = model(x).cpu().numpy()  # [1, frames, classes]
+    # AudioProcessor.process_audio adds a trailing channel dim of size 1 for the
+    # mono case; the model's conv layers expect [batch, time, freq, channels].
+    return filtered[np.newaxis, :, :, np.newaxis]
+
+
+def _adtof_activations(audio: np.ndarray) -> tuple[np.ndarray, float]:
+    """ADTOF dense per-frame activations `(frames, 5)` + fps for `audio`.
+
+    Runs the Frame_RNN through onnxruntime (default, torch-free) or torch
+    (DRUMJOT_ONSET_ONNX=0). The frontend is numpy either way.
+    """
+    x = _features(audio)
+    if _onnx_enabled():
+        sess = _load_adtof_session()
+        pred = sess.run(None, {sess.get_inputs()[0].name: x})[0]  # [1, frames, classes]
+    else:
+        import torch
+
+        model, device = _load_model()
+        with torch.no_grad():
+            pred = model(torch.from_numpy(x).to(device)).cpu().numpy()
     acts = np.asarray(pred, dtype=np.float64)
     if acts.ndim == 3 and acts.shape[0] == 1:
         acts = acts[0]
@@ -748,8 +782,7 @@ def detect_onsets_adtof(
         if scale != 1.0:
             audio = np.clip(audio * scale, -1.0, 1.0).astype(np.float32, copy=False)
 
-    model, device = _load_model()
-    acts, fps = _adtof_activations(model, device, audio)
+    acts, fps = _adtof_activations(audio)
     activation = acts[:, lane]
     if activation.size == 0:
         return []
@@ -1006,8 +1039,7 @@ def detect_all_lanes_adtof(drum_stem_path: Path) -> dict[str, list[float]]:
         if scale != 1.0:
             audio = np.clip(audio * scale, -1.0, 1.0).astype(np.float32, copy=False)
 
-    model, device = _load_model()
-    acts, fps = _adtof_activations(model, device, audio)
+    acts, fps = _adtof_activations(audio)
 
     frames_by_lane: dict[str, list[int]] = {}
     for lane_name, idx, pitch in _SCORING_LANES_FROM_ADTOF:

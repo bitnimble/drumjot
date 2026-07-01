@@ -28,8 +28,7 @@ def test_detect_all_lanes_adtof_maps_lanes_and_picks_peaks(monkeypatch) -> None:
     acts[50, 4] = 0.99  # cymbal lane 4 -> "cy" -> 0.50 s
 
     monkeypatch.setattr(ao, "_load_mono_audio", lambda p: np.ones(1000, dtype=np.float32))
-    monkeypatch.setattr(ao, "_load_model", lambda: (None, "cpu"))
-    monkeypatch.setattr(ao, "_adtof_activations", lambda m, d, a: (acts, 100.0))
+    monkeypatch.setattr(ao, "_adtof_activations", lambda a: (acts, 100.0))
     monkeypatch.setattr(
         ao, "_refine_peak_times_audio", lambda path, times, window_sec: list(times)
     )
