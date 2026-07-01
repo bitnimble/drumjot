@@ -8,10 +8,10 @@ one capability must never pull another capability's weights (the lyrics models
 alone are >1 GB). The capability -> asset map mirrors the pyproject
 dependency-groups, where `transcription` and `lyrics` both compose `separation`.
 
-Shipped runtime assets = the fp16 `.onnx` bodies (`settings.onnx_repo`) plus the
-small sidecars they need: the separation architecture yamls (STFT params the
-numpy path reads, `settings.separation_repo`) and the onset `meta.json` (lane
-vocab / thresholds / fps). The heavy torch `.ckpt`s are NOT fetched -- the
+Shipped runtime assets = the fp16 `.onnx` bodies plus the small sidecars they
+need: the separation architecture yamls (STFT params the numpy path reads) and
+the onset `meta.json` (lane vocab / thresholds / fps). All come from the one
+`settings.onnx_repo`. The heavy torch `.ckpt`s are NOT fetched -- the
 shipped runtime is torch-free and loads the onnx; a dev checkout exports locally
 from ckpts already in its `models_dir`.
 
@@ -64,8 +64,7 @@ def _separation_assets() -> list[_Asset]:
     shipped runtime uses the onnx). Names derive from `settings.*_model`."""
     out: list[_Asset] = []
     for ckpt in (settings.demucs_model, settings.drum_pieces_model):
-        yaml = yaml_for_ckpt(ckpt)
-        out.append(_Asset(yaml, f"{settings.separation_repo}/{yaml}"))
+        out.append(_onnx(yaml_for_ckpt(ckpt)))
         out.append(_onnx(f"{Path(ckpt).stem}.fp16.onnx"))
     return out
 

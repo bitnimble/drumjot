@@ -51,12 +51,11 @@ class Settings(BaseSettings):
     # Every model URL / HF id / repo that the packaged app has baked in lives
     # here so it can be repointed per build (fork, private mirror, staging)
     # without touching code. Defaults are the canonical Drumjot repos.
-    #   - `onnx_repo`: the shipped fp16 `.onnx` set (bitnimble/drumjot-onnx).
-    #   - `separation_repo`: the separation architecture yamls (+ dev ckpts).
+    #   - `onnx_repo`: all shipped runtime assets (the fp16 `.onnx` set + the
+    #     separation architecture yamls + the onset `meta.json`), bitnimble/drumjot-onnx.
     #   - `lyrics_align_model_*`: the /lyrics CTC aligner HF ids (also the
     #     tokenizer source and the shipped `.onnx` filename stem).
     onnx_repo: str = "https://huggingface.co/bitnimble/drumjot-onnx/resolve/main"
-    separation_repo: str = "https://huggingface.co/bitnimble/stem_separation/resolve/main"
     lyrics_align_model_english: str = "facebook/wav2vec2-large-robust-ft-libri-960h"
     lyrics_align_model_default: str = "MahmoudAshraf/mms-300m-1130-forced-aligner"
 
