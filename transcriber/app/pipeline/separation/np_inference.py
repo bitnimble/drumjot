@@ -167,6 +167,8 @@ class NumpySeparator:
         segment = cfg["inference"]["dim_t"]
         num_stems = len(self.instruments)
         window = np_stft.hann_window(n_fft)
+        _wl = cfg["audio"].get("win_length")  # np_stft assumes a full n_fft window; torch centre-pads a shorter one
+        assert _wl in (None, n_fft), f"win_length {_wl} != n_fft {n_fft}: np_stft would silently degrade this model"
 
         chunk_size = hop * (segment - 1)
         hop_size = chunk_size // MDXC_OVERLAP
@@ -201,6 +203,8 @@ class NumpySeparator:
         audio_channels = 2 if cfg["model"].get("stereo") else 1
         num_stems = 1 if self.target else len(self.instruments)
         window = np_stft.hann_window(n_fft)
+        _wl = cfg["model"].get("stft_win_length") or cfg["model"].get("win_length")
+        assert _wl in (None, n_fft), f"stft_win_length {_wl} != n_fft {n_fft}: np_stft would silently degrade this model"
 
         chunk_size = hop * (segment - 1)
         desired_step = int(MDXC_OVERLAP * cfg["audio"]["sample_rate"])
