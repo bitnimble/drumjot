@@ -6,9 +6,11 @@ drummer/session/id/style/bpm/.../midi_filename/audio_filename/duration/split.
 helpers carve out a split or a small duration-capped subset for the Phase-0
 smoke test (design spec §2).
 
-Known E-GMD caveats (data owner's experience): some mislabels, duplicates,
-and offset timing. Those are handled in the cleaning stage (spec §3 / the
-`dedup` module + the scoring quality pass), not here; this is pure indexing.
+Known E-GMD caveats (data owner's experience): some mislabels, duplicates, and
+offset timing. This is pure indexing. NOTE: near-duplicate dedup is NOT currently
+wired into the pipeline (the `dedup` module exists but is unused) -- only exact
+same-file leakage is prevented, by the CSV train/val/test split. Timing/mislabels
+are addressed downstream (aligned-onset snap + the scoring quality pass).
 """
 from __future__ import annotations
 

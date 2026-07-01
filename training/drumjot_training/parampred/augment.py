@@ -49,7 +49,11 @@ def apply_reverb(y: np.ndarray, sr: int, decay_s: float = 0.3, wet: float = 0.3)
     y = np.asarray(y, dtype=np.float32)
     n_ir = max(1, int(decay_s * sr))
     t = np.arange(n_ir) / sr
-    rng = np.random.default_rng(0)
+    # Per-clip IR texture: seed from the signal content so different clips get
+    # different rooms (the diversity this transform exists for) while staying
+    # reproducible for a given clip. (Was hardcoded 0 -> identical room every time.)
+    seed = int(np.abs(y[: min(y.size, 4096)]).sum() * 1e3) % (2**32)
+    rng = np.random.default_rng(seed)
     ir = (np.exp(-t / (decay_s / 4.0)) * rng.standard_normal(n_ir)).astype(np.float32)
     ir[0] = 1.0  # direct path at lag 0 -> onset position preserved
     wetsig = fftconvolve(y, ir)[: len(y)].astype(np.float32)
