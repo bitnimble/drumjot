@@ -54,21 +54,9 @@ FEAT_DIM = MERT_DIM + HB_BANDS  # model input width (1040) -- default (hb on)
 MERT_CACHE_DIR = os.environ.get("DRUMJOT_MERT_CACHE", "/codebox-workspace/mert_cache")
 
 
-def robust_peak_normalize(y: np.ndarray, pct: float = 99.5) -> np.ndarray:
-    """Per-clip robust peak norm: y / percentile(|y|, pct). Robust to a single
-    separation-artifact spike; makes every clip's loud transients land at a
-    consistent level for MERT (do_normalize=false) + the high-band block."""
-    if y.size == 0:
-        return y
-    scale = float(np.percentile(np.abs(y), pct))
-    return (y / scale).astype(y.dtype, copy=False) if scale > 1e-8 else y
-
-
-def feat_variant(high_band: bool = True, input_norm: bool = False) -> str:
-    """Cache-key token for a feature recipe: "hb16" (default) or "" (raw MERT),
-    with "_pn" appended when per-clip peak-normalisation is on (so normalised and
-    raw-level caches never collide; OFF is byte-identical to the pre-norm token)."""
-    return (FEAT_VARIANT if high_band else "") + ("_pn" if input_norm else "")
+def feat_variant(high_band: bool = True) -> str:
+    """Cache-key token for a feature recipe: "hb16" (default) or "" (raw MERT)."""
+    return FEAT_VARIANT if high_band else ""
 
 
 def feat_dim(high_band: bool = True) -> int:
@@ -149,7 +137,6 @@ def highband_from_wave(y44: np.ndarray, n_frames: int, fps: float = MERT_FPS) ->
 def highband_features(
     audio_path: str | Path, n_frames: int, max_seconds: float | None = None,
     start_seconds: float = 0.0, fps: float = MERT_FPS, y44_full: np.ndarray | None = None,
-    input_norm: bool = False,
 ) -> np.ndarray:
     """`highband_from_wave` for a file: loads at HB_SR (resampling if needed;
     sources at <=24 kHz simply yield near-zero bands, degrading gracefully).
@@ -159,32 +146,25 @@ def highband_features(
     `y44_full` is the optional WHOLE-clip mono waveform already loaded at HB_SR; when
     given, the per-call `librosa.load` is skipped (the batched encoder loads each
     clip once and slices all its windows, avoiding re-decoding the file per window
-    over NFS). Identical result either way (same slice -> same `highband_from_wave`).
-
-    `input_norm` peak-normalises the WHOLE clip before windowing (matching the
-    MERT waveform), so the high-band level is clip-consistent."""
+    over NFS). Identical result either way (same slice -> same `highband_from_wave`)."""
     if y44_full is None:
         import librosa
 
         y44, _ = librosa.load(str(audio_path), sr=HB_SR, mono=True)
-        if input_norm:
-            y44 = robust_peak_normalize(y44)
     else:
-        y44 = y44_full  # already normalised by the caller when input_norm is on
+        y44 = y44_full
     a = int(start_seconds * HB_SR)
     b = a + int(max_seconds * HB_SR) if max_seconds is not None else None
     y44 = y44[a:b]
     return highband_from_wave(y44, n_frames, fps)
 
 
-def load_audio(path: str | Path, sr: int = MERT_SR, input_norm: bool = False) -> np.ndarray:
-    """Mono float32 audio at `sr` (lazy librosa import). `input_norm` applies the
-    per-clip robust peak norm to the WHOLE clip (before any windowing)."""
+def load_audio(path: str | Path, sr: int = MERT_SR) -> np.ndarray:
+    """Mono float32 audio at `sr` (lazy librosa import)."""
     import librosa
 
     y, _ = librosa.load(str(path), sr=sr, mono=True)
-    y = y.astype(np.float32, copy=False)
-    return robust_peak_normalize(y) if input_norm else y
+    return y.astype(np.float32, copy=False)
 
 
 class MertEncoder:
@@ -298,7 +278,6 @@ def embed_clip(
     start_seconds: float = 0.0,
     y_full: np.ndarray | None = None,
     y44_full: np.ndarray | None = None,
-    input_norm: bool = False,
 ) -> np.ndarray:
     """Features for one clip, reading/writing `cache_dir` when given.
 
@@ -308,9 +287,6 @@ def embed_clip(
     slices all its windows, instead of re-decoding the whole file (twice, at both
     sample rates) for every window over NFS. The result is byte-identical (same
     slice, same encode, same block); these only change WHERE the bytes come from.
-    When `input_norm` is on, a preloaded `y_full`/`y44_full` MUST already be
-    peak-normalised by the caller (the whole-clip norm can't be reconstructed from a
-    single window slice), so it isn't re-normalised here.
 
     `max_seconds` caps the audio before encoding (bounds MERT's sequence
     length on long clips); it's part of the cache key so capped and full
@@ -329,7 +305,7 @@ def embed_clip(
     `feat_dim(high_band)` and the cache key carries `feat_variant(...)` so each
     recipe (raw / hb) lands in its own cache, never colliding.
     """
-    variant = feat_variant(high_band, input_norm)  # distinct cache per recipe
+    variant = feat_variant(high_band)  # distinct cache per recipe
     cache_file: Path | None = None
     if cache_dir is not None:
         cache_dir = Path(cache_dir)
@@ -339,7 +315,7 @@ def embed_clip(
         cache_file = cache_dir / f"{key}.npy"
         if cache_file.exists():
             return np.load(cache_file)
-    y = load_audio(audio_path, sr=encoder.sr, input_norm=input_norm) if y_full is None else y_full
+    y = load_audio(audio_path, sr=encoder.sr) if y_full is None else y_full
     a = int(start_seconds * encoder.sr)
     b = a + int(max_seconds * encoder.sr) if max_seconds is not None else None
     y = y[a:b]  # the [start, start+max] window (one MERT forward, always <= max)
@@ -349,7 +325,7 @@ def embed_clip(
     if high_band:
         # the 6-20 kHz sizzle MERT's 24 kHz input discards (cymbal vs non-cymbal)
         blocks.append(highband_features(
-            audio_path, feat.shape[0], max_seconds, start_seconds, fps, y44_full, input_norm))
+            audio_path, feat.shape[0], max_seconds, start_seconds, fps, y44_full))
     feat = np.concatenate(blocks, axis=1) if len(blocks) > 1 else feat
     feat = feat.astype(cache_dtype, copy=False)
     if cache_file is not None:
@@ -368,7 +344,6 @@ def encode_layers_to_cache(
     start_seconds: float = 0.0,
     y_full: np.ndarray | None = None,
     y44_full: np.ndarray | None = None,
-    input_norm: bool = False,
 ) -> int:
     """Encode SEVERAL hidden layers for one window in ONE MERT forward and write each
     layer's `[MERT_layer | high-band]` to `cache_dir` under the SAME key `embed_clip`
@@ -378,7 +353,7 @@ def encode_layers_to_cache(
     The per-lane-layer fast path: N distinct layers cost ONE forward instead of N.
     Already-cached layers in `layers` are skipped. Returns the encoder frame count.
     Mirrors perstem_layer_sweep's `_encode_all_layers` for the package side."""
-    variant = feat_variant(high_band, input_norm)
+    variant = feat_variant(high_band)
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -390,13 +365,13 @@ def encode_layers_to_cache(
     todo = [layer for layer in layers if not _file(layer).exists()]
     if not todo:  # all present -> just report the frame count (header read, no data)
         return int(np.load(_file(layers[0]), mmap_mode="r").shape[0])
-    y = load_audio(audio_path, sr=encoder.sr, input_norm=input_norm) if y_full is None else y_full
+    y = load_audio(audio_path, sr=encoder.sr) if y_full is None else y_full
     a = int(start_seconds * encoder.sr)
     b = a + int(max_seconds * encoder.sr) if max_seconds is not None else None
     feats = encoder.encode_layers(y[a:b], encoder.sr, todo)  # {layer: (T, MERT_DIM)} -- one forward
     nT = next(iter(feats.values())).shape[0]
     fps = getattr(encoder, "fps", MERT_FPS)
-    hb = (highband_features(audio_path, nT, max_seconds, start_seconds, fps, y44_full, input_norm)
+    hb = (highband_features(audio_path, nT, max_seconds, start_seconds, fps, y44_full)
           if high_band else None)
     for layer, mert in feats.items():
         feat = np.concatenate([mert, hb], axis=1) if hb is not None else mert
@@ -412,7 +387,6 @@ def clip_cached(
     cache_dtype: str = "float16",
     high_band: bool = True,
     start_seconds: float = 0.0,
-    input_norm: bool = False,
 ) -> bool:
     """True iff this clip's features are already in `cache_dir` (no MERT encode
     needed). Mirrors `embed_clip`'s cache key so the two can't drift -- lets the
@@ -420,7 +394,7 @@ def clip_cached(
     if cache_dir is None:
         return False
     key = cache_key(audio_path, encoder.name, encoder.layer, max_seconds,
-                    feat_variant(high_band, input_norm), start_seconds, cache_dtype)
+                    feat_variant(high_band), start_seconds, cache_dtype)
     return (Path(cache_dir) / f"{key}.npy").exists()
 
 
@@ -438,12 +412,11 @@ def windows_cached(
     from drumjot_training.train import plan_windows
 
     high_band = meta.get("high_band", int(meta.get("in_dim", MERT_DIM)) > MERT_DIM)
-    input_norm = meta.get("input_norm", False)
     wins = plan_windows(audio_path, window_seconds or 30.0, 3.0, 0)
     if max_seconds is not None:
         wins = [(s, min(length, max_seconds - s)) for s, length in wins if s < max_seconds]
     return all(
         clip_cached(audio_path, encoder, max_seconds=length, cache_dtype=cache_dtype,
-                    high_band=high_band, start_seconds=s, input_norm=input_norm)
+                    high_band=high_band, start_seconds=s)
         for s, length in wins
     )

@@ -39,7 +39,6 @@ def run_metadata(cfg: Config, thresholds: dict[str, float], in_dim: int = FEAT_D
         "head_layers": cfg.head_layers,
         "in_dim": in_dim,
         "high_band": cfg.high_band,  # whether the heads expect the high-band block
-        "input_norm": cfg.input_norm,  # per-clip peak-norm the waveform before features
         "aux_activity": True,  # heads carry the auxiliary ring-activity output
         "cymbal_softmax": cfg.cymbal_softmax,  # rd/cr decoded as a joint 3-way softmax
 
