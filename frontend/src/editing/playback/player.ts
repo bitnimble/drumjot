@@ -20,8 +20,8 @@
  *     traveling playhead without prop drilling.
  *
  * Live mute / solo: the caller (`JotEditorStore`) pushes a `Filter` via
- * `setFilter()` whenever the user toggles a row's M/S buttons. While
- * playback is in flight, `setFilter()` cancels every scheduled note and
+ * `applyLaneFilter()` whenever the user toggles a row's M/S buttons. While
+ * playback is in flight, `applyLaneFilter()` cancels every scheduled note and
  * re-schedules those whose audio time hasn't passed yet — so unmuting a
  * row brings it back in the same play, and muting silences it
  * immediately.
@@ -569,7 +569,7 @@ export class JotPlayer {
   private scheduledStops: StopFn[] = [];
   /**
    * The full event list for the currently-playing jot, retained so that
-   * `setFilter` can re-derive the scheduled subset on a mute/solo
+   * `applyLaneFilter` can re-derive the scheduled subset on a mute/solo
    * toggle without having to re-walk the layout. Public + observable so
    * a non-React renderer can read "all scheduled notes for this jot"
    * and combine with the observable {@link currentTime} to know which
@@ -1133,15 +1133,18 @@ export class JotPlayer {
    * error) changes mid-flight — the notes have moved, so the scheduled
    * hits must follow. No-op unless playing or paused.
    *
-   * Mirrors {@link setFilter}'s reschedule: the bar grid (and thus the
+   * Mirrors {@link applyLaneFilter}'s reschedule: the bar grid (and thus the
    * timeline) is unchanged, so only the drum schedule is rebuilt; audio
    * tracks and the playhead stay put. While paused the AudioContext clock
    * is frozen, so the rescheduled notes line up against it and come alive
    * on resume (which re-arms the tail timer from `tailAudioTime`).
    */
-  refreshDrumSchedule(jot: MutableJot): void {
+  refreshDrumSchedule(jot: MutableJot, precomputedEvents?: PlaybackEvent[]): void {
     if ((this.state !== 'playing' && this.state !== 'paused') || !this.ctx) return;
-    this.events = jotToEvents(jot);
+    // Reuse the event list the caller already derived: the live-edit reaction
+    // walks the whole jot to detect the change under structural equality, so
+    // re-walking here would double the per-edit cost. Fall back to deriving it.
+    this.events = precomputedEvents ?? jotToEvents(jot);
     const now = this.ctx.currentTime;
     const jotOffset = this.currentJotTime(now);
     this.cancelScheduledStops();
@@ -1417,6 +1420,11 @@ export class JotPlayer {
       this.endTimerId = undefined;
     }
     this.stopRaf();
+    // Tear down any output capture so its 10ms interval + the analyser wired
+    // into the master bus don't outlive playback. stopOutputCapture keeps the
+    // recorded series, so a pending reader still gets it; it's idempotent when
+    // no capture is active (the production default).
+    this.stopOutputCapture();
     this.cancelScheduledStops();
     this.drums?.stop();
     this.audioTrackController?.dispose();
@@ -1613,28 +1621,30 @@ export class JotPlayer {
         this.rafId = undefined;
         return;
       }
-      const now = this.ctx.currentTime;
-      const jotTime = this.currentJotTime(now);
       // Audio tracks now play through the Signalsmith Stretch worklet,
       // which consumes samples on the audio thread in lockstep with
       // the AudioContext clock the drum scheduler uses; no drift
       // subsystem needed at any speed.
-      runInAction(() => {
-        // Allow negative jot time during the lead-in so the playhead travels
-        // the reserved pre-roll space (timeToX maps it into the lead-in
-        // pixels). Clamp at the rendered left edge (`fullLeadIn` = the first
-        // bar's startSec, incl. the view's virtual lead-in) so it can't run
-        // off the left of the lead-in. The user's `audioLatencyMs` fine-tune
-        // and the auto-detected `internalLatencyMs` baseline are summed; both
-        // shift the visual ahead of the audio clock to compensate for
-        // perceived audio/visual sync drift.
-        const latencyShiftSec = (this.audioLatencyMs + this.internalLatencyMs) * 0.001;
-        const fullLeadIn = this.timeline.bars[0]?.startSec ?? this.songLeadInSec;
-        this.currentTime = Math.max(jotTime + latencyShiftSec, fullLeadIn);
-      });
+      this.advancePlayhead(this.currentJotTime(this.ctx.currentTime));
       this.rafId = window.requestAnimationFrame(tick);
     };
     this.rafId = window.requestAnimationFrame(tick);
+  }
+
+  /** Advance the visual playhead to `jotTime`. An @action (via makeAutoObservable)
+   *  so the 120fps RAF loop reuses one action wrapper instead of allocating a
+   *  fresh `runInAction` closure every frame. */
+  private advancePlayhead(jotTime: number): void {
+    // Allow negative jot time during the lead-in so the playhead travels the
+    // reserved pre-roll space (timeToX maps it into the lead-in pixels). Clamp
+    // at the rendered left edge (`fullLeadIn` = the first bar's startSec, incl.
+    // the view's virtual lead-in) so it can't run off the left of the lead-in.
+    // The user's `audioLatencyMs` fine-tune and the auto-detected
+    // `internalLatencyMs` baseline are summed; both shift the visual ahead of
+    // the audio clock to compensate for perceived audio/visual sync drift.
+    const latencyShiftSec = (this.audioLatencyMs + this.internalLatencyMs) * 0.001;
+    const fullLeadIn = this.timeline.bars[0]?.startSec ?? this.songLeadInSec;
+    this.currentTime = Math.max(jotTime + latencyShiftSec, fullLeadIn);
   }
 
   private stopRaf(): void {

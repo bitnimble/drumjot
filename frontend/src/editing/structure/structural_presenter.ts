@@ -375,33 +375,7 @@ export class StructuralPresenter implements LaidOutJot {
         tracks: b.tracks[lane] ? { [lane]: b.tracks[lane] } : {},
       }));
     }
-
-    let layerBeats = 0;
-    let leadInBarsBeats = 0;
-    let countedLeadIn = true;
-    const barBeatStart: number[] = new Array(bars.length);
-    let cursor = 0;
-    for (let i = 0; i < bars.length; i++) {
-      barBeatStart[i] = cursor;
-      const b = bars[i];
-      cursor += b.beats;
-      layerBeats += b.beats;
-      if (countedLeadIn) {
-        if (b.index < 0) leadInBarsBeats += b.beats;
-        else countedLeadIn = false;
-      }
-    }
-    const laneColor = this.paletteStore.colorForLane(lane);
-    const instrumentName = this.instrumentFor(lane).name;
-    return {
-      bars,
-      layerBeats,
-      leadInBarsBeats,
-      barBeatStart,
-      startBeats: barBeatStart,
-      laneColor,
-      instrumentName,
-    };
+    return this.finalizeLaneBars(bars, lane);
   });
 
   barsForLane = computedFn((lane: string): LaneBars => {
@@ -409,7 +383,15 @@ export class StructuralPresenter implements LaidOutJot {
       this.effectiveDrumOffsetBeats === 0
         ? this.viewGeometry.map((geo) => this.laneBarFor(geo.id, lane))
         : (this.layers[0]?.bars ?? []);
+    return this.finalizeLaneBars(bars, lane);
+  });
 
+  /** Accumulate the cursor-relative bar starts + lead-in beats for `bars`, and
+   *  attach the lane-wide colour + instrument name. Shared by {@link barsForTrack}
+   *  and {@link barsForLane}, which differ only in how they source `bars` (per-
+   *  layer vs merged); colour + instrument are jot-wide functions of the lane
+   *  (palette slot + instrument mapping), not per-track. */
+  private finalizeLaneBars(bars: readonly StructBar[], lane: string): LaneBars {
     let layerBeats = 0;
     let leadInBarsBeats = 0;
     let countedLeadIn = true;
@@ -425,20 +407,16 @@ export class StructuralPresenter implements LaidOutJot {
         else countedLeadIn = false;
       }
     }
-    // Colour + instrument are jot-wide functions of the lane (palette slot +
-    // the instrument mapping), no longer per-track.
-    const laneColor = this.paletteStore.colorForLane(lane);
-    const instrumentName = this.instrumentFor(lane).name;
     return {
       bars,
       layerBeats,
       leadInBarsBeats,
       barBeatStart,
       startBeats: barBeatStart,
-      laneColor,
-      instrumentName,
+      laneColor: this.paletteStore.colorForLane(lane),
+      instrumentName: this.instrumentFor(lane).name,
     };
-  });
+  }
 }
 
 // ---------- View-only virtual lead-in ----------
