@@ -38,6 +38,55 @@ def _c(time: float, strength: float = 5.0, bar: int = 0, beat: float = 1.0):
     )
 
 
+def _filter_ctx(onsets_by_pitch):
+    import threading
+
+    return SimpleNamespace(
+        structure=SimpleNamespace(),
+        onsets_by_pitch=onsets_by_pitch,
+        cancel_event=threading.Event(),
+    )
+
+
+def test_do_filter_skips_llm_verbatim_when_run_filter_false(monkeypatch) -> None:
+    """run_filter=False keeps every in-range onset verbatim and never calls the
+    LLM (the explicit, hermetic opt-out)."""
+    from app.pipeline import runner as R
+
+    monkeypatch.setattr(
+        R,
+        "filter_onsets_all_instruments",
+        lambda *a, **k: pytest.fail("filter LLM called with run_filter=False"),
+    )
+    ctx = _filter_ctx({"k": [_c(0.5, bar=0), _c(9.9, bar=-1)], "h": [_c(0.6, bar=0)]})
+    R._do_filter(ctx, R.PipelineOptions(run_filter=False, use_learned_onsets=True), None, None)
+
+    assert [c.time for c in ctx.kept_by_pitch["k"]] == [0.5]  # in-range kept, bar<0 dropped
+    assert [c.time for c in ctx.kept_by_pitch["h"]] == [0.6]
+    assert ctx.filter_reasons == {}
+
+
+def test_do_filter_runs_llm_for_learned_backend(monkeypatch) -> None:
+    """Regression: the learned onset backend goes through the filter LLM
+    identically to ADTOF (it used to skip the stage entirely). The onset
+    backend must not alter the filter pipelining."""
+    from app.pipeline import runner as R
+
+    seen = {}
+
+    def _fake(onsets_by_pitch, structure, *, on_complete, cancel_event, skip_pitches, llm_model):
+        seen["skip_pitches"] = skip_pitches
+        return {"k": [c for c in onsets_by_pitch.get("k", []) if c.bar >= 0]}, {}
+
+    monkeypatch.setattr(R, "filter_onsets_all_instruments", _fake)
+    ctx = _filter_ctx({"k": [_c(0.5, bar=0)], "h": [_c(0.6, bar=0)]})
+    R._do_filter(ctx, R.PipelineOptions(run_filter=True, use_learned_onsets=True), None, None)
+
+    assert seen["skip_pitches"] == {"h", "H", "c", "d"}  # pre-vetted lanes skip the LLM
+    assert [c.time for c in ctx.kept_by_pitch["k"]] == [0.5]  # k filtered through the LLM
+    assert [c.time for c in ctx.kept_by_pitch["h"]] == [0.6]  # h re-attached verbatim
+
+
 def test_onsets_midi_roundtrip_to_3class_events() -> None:
     onsets = {
         "k": [_c(0.000), _c(0.500)],

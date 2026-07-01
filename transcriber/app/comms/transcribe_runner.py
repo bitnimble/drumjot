@@ -249,6 +249,7 @@ def _run_live_pipeline(
             beat_input=beat_input,
             quantise=bool(params.get("quantise", True)),
             quantise_use_llm=bool(params.get("quantiseUseLlm", True)),
+            run_filter=bool(params.get("filter", True)),
             llm_model=str(params.get("llmModel") or settings.llm_model),
             use_learned_onsets=(str(backend).lower() == "learned")
             if backend is not None

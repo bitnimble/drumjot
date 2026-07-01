@@ -178,6 +178,12 @@ class PipelineOptions:
     # A/B'd (does the LLM still earn its slot?). No-op when `quantise` is
     # False.
     quantise_use_llm: bool = True
+    # Whether the `filter` stage runs its per-instrument LLM artifact rejection.
+    # Default True. Set False to keep every in-range onset verbatim (no LLM) --
+    # an EXPLICIT opt-in skip (logged), NOT the silent missing-key fallback the
+    # spec forbids. Backend-agnostic: the onset backend only swaps the model +
+    # its post-processing (the onsets stage), never the filter pipelining.
+    run_filter: bool = True
     # Anthropic model used by the three Opus-by-default classification
     # stages (`filter`; `hihat_split`; `cymbal_split`). Empty string
     # falls back to `settings.llm_model` inside each call site so callers
@@ -191,9 +197,11 @@ class PipelineOptions:
     # frozen-MERT model (training/, `learned_onsets.py`). It runs PER STEM over
     # the per-instrument stems (matching the per-stem deployment architecture
     # the model was tuned/evaluated on) and emits ALL trained classes as
-    # distinct pitches (no merge to 5), so the hihat/cymbal splitters and the
-    # filter LLM are skipped for it. `learned_onsets_checkpoint` is a run dir
-    # (model.pt + meta.json with tuned per-lane thresholds).
+    # distinct pitches (no merge to 5), so the hihat/cymbal splitters are
+    # skipped for it (its per-lane heads already classify those). Downstream
+    # stages -- filter included -- are identical to ADTOF; the backend only
+    # swaps the model + its post-processing. `learned_onsets_checkpoint` is a
+    # run dir (model.pt + meta.json with tuned per-lane thresholds).
     use_learned_onsets: bool = False
     learned_onsets_checkpoint: str = ""
 
@@ -677,10 +685,12 @@ def _do_filter(
     # the per-instrument filter LLM here would duplicate work and risk
     # double-rejecting soft real hits, so we skip those pitches in the
     # pool and re-attach the pre-vetted lanes verbatim afterwards.
-    if options.use_learned_onsets:
-        # The learned model is itself the per-class classifier (tuned per-lane
-        # thresholds), so skip the per-instrument filter LLM and keep its
-        # in-range onsets verbatim across every class.
+    if not options.run_filter:
+        # Explicit opt-in skip (run_filter=False): keep every in-range onset
+        # verbatim, no LLM call. This is a deliberate, logged configuration
+        # (used by hermetic tests / offline runs), NOT the silent "keep
+        # everything" fallback the spec forbids when a key is merely missing.
+        log.info("filter: run_filter=False; keeping all in-range onsets, no LLM")
         kept_by_pitch = {
             p: keep
             for p, cs in ctx.onsets_by_pitch.items()

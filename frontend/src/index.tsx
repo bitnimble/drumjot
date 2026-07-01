@@ -208,7 +208,10 @@ class Drumjot {
    *  (installing the transcription capability on demand) and load the result.
    *  Omit `audioPath` to pick a file via the native dialog. Exposed on
    *  `window.drumjot` for the desktop UI / scripting; throws in the web build. */
-  async desktopTranscribe(audioPath?: string): Promise<void> {
+  async desktopTranscribe(
+    audioPath?: string,
+    params: Record<string, unknown> = {},
+  ): Promise<void> {
     if (!isDesktopShell()) {
       throw new Error('desktopTranscribe is desktop-only (no Tauri runtime)');
     }
@@ -229,7 +232,7 @@ class Drumjot {
     if (caps != null && !(await caps.presenter.requestCapability('transcription'))) {
       return; // user dismissed the install prompt
     }
-    const result = await backendClient().run({ op: 'transcribe', params: {} }, { kind: 'path', path });
+    const result = await backendClient().run({ op: 'transcribe', params }, { kind: 'path', path });
     const midiRef = result.artifacts.find((a) => a.role === 'midi')?.ref;
     if (midiRef == null) throw new Error('transcribe produced no MIDI');
     this.load(fromMidi(await backendClient().resolveBytes(midiRef)));
