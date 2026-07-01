@@ -297,6 +297,17 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
       e.clientY - rect.top + viewport.scrollY
     );
   };
+  // End the marquee, committing the current box's hits, and drop the window
+  // release/blur guards. Idempotent (no-op once already ended), so the React
+  // onMouseUp and the window guards below can both call it harmlessly.
+  const finishMarquee = () => {
+    window.removeEventListener('mouseup', finishMarquee);
+    window.removeEventListener('blur', finishMarquee);
+    if (!marqueeOrigin) return;
+    marqueeOrigin = undefined;
+    const box = selection.marquee;
+    selectionPresenter.endMarquee(box ? marqueeHitTest(box) : []);
+  };
   const onMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     // A press during a paste placement is the commit click (handled on the
@@ -305,18 +316,18 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     e.preventDefault();
     marqueeOrigin = containerPoint(e);
     selectionPresenter.beginMarquee(marqueeOrigin);
+    // React's onMouseUp only fires for a release inside this subtree, so a
+    // release over the toolbar / outside the window (or a focus loss) would
+    // otherwise strand the rubber-band. Guarantee it ends via window guards.
+    window.addEventListener('mouseup', finishMarquee);
+    window.addEventListener('blur', finishMarquee);
   };
   const onMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!marqueeOrigin) return;
     const p = containerPoint(e);
     selectionPresenter.updateMarquee(marqueeOrigin, p, marqueeHitTest(Box.create(marqueeOrigin, p)));
   };
-  const onMouseUp = () => {
-    if (!marqueeOrigin) return;
-    marqueeOrigin = undefined;
-    const box = selection.marquee;
-    selectionPresenter.endMarquee(box ? marqueeHitTest(box) : []);
-  };
+  const onMouseUp = () => finishMarquee();
 
   /**
    * Zoom-slider handler. Mirrors the cursor-anchored math the wheel

@@ -104,12 +104,15 @@ export class CapabilityPresenter {
         if (this.store.pendingGate === id) this.store.pendingGate = undefined;
       });
       resolve(true);
-    } else if (this.store.pendingGate === id) {
+    } else if (this.store.pendingGate === id && this.gateResolve == null) {
       // Install failed and nothing superseded us: re-arm so the prompt's Retry
       // resolves this same waiter.
       this.gateResolve = resolve;
     } else {
-      // Superseded during a failed install: abandon this waiter.
+      // Superseded, either by a different capability's prompt, or by a concurrent
+      // requestCapability for this same id that already installed its own resolver
+      // (which we must not overwrite, or that caller hangs forever): abandon this
+      // waiter.
       resolve(false);
     }
   }
@@ -124,19 +127,36 @@ export class CapabilityPresenter {
     resolve?.(false);
   }
 
-  /** Load detected accelerator + persisted install state into the store. */
+  /** Load detected accelerator + persisted install state into the store.
+   *  Merge, don't clobber: this fires once at boot and its `detectAccelerator`
+   *  probe can be slow, so an install may complete while it's still awaiting. A
+   *  blind write of the boot snapshot would revert that cap's `installing`/`ready`
+   *  to `not-installed` and re-prompt the user, so it upgrades to `ready` from
+   *  disk but never downgrades a cap the store already considers in-flight/done.
+   *  A transport failure is logged rather than left as an unhandled rejection
+   *  that would wedge the "Detecting hardware…" readout. */
   async refresh(): Promise<void> {
-    const [accelerator, states] = await Promise.all([
-      this.bridge.detectAccelerator(),
-      this.bridge.capabilityStates(),
-    ]);
-    runInAction(() => {
-      this.store.accelerator = accelerator;
-      for (const cap of CAPABILITIES) {
-        const installed = states[cap.id]?.installed ?? false;
-        this.store.statuses.set(cap.id, installed ? 'ready' : 'not-installed');
-      }
-    });
+    try {
+      const [accelerator, states] = await Promise.all([
+        this.bridge.detectAccelerator(),
+        this.bridge.capabilityStates(),
+      ]);
+      runInAction(() => {
+        this.store.accelerator = accelerator;
+        for (const cap of CAPABILITIES) {
+          const installed = states[cap.id]?.installed ?? false;
+          if (installed) {
+            this.store.statuses.set(cap.id, 'ready');
+          } else if (this.store.statusOf(cap.id) === 'not-installed') {
+            // Only (re)assert not-installed for a cap that isn't already mid-
+            // install, ready, or errored from an operation fresher than our snapshot.
+            this.store.statuses.set(cap.id, 'not-installed');
+          }
+        }
+      });
+    } catch (err) {
+      console.error('[capability] refresh failed', err);
+    }
   }
 
   /** Incremental download for installing `ids` (+ prereqs), deduping the shared
@@ -229,11 +249,16 @@ export class CapabilityPresenter {
       });
     } catch (err) {
       runInAction(() => {
-        const message = err instanceof Error ? err.message : String(err);
+        const base = err instanceof Error ? err.message : String(err);
         for (const dep of fresh) {
+          // The invoke rejection is the Rust side's generic "uv sync failed
+          // (status)"; the actionable detail (resolver conflict, no disk space,
+          // network) is the last uv line we streamed into installLog. Fold it
+          // into the surfaced error before clearing the log.
+          const tail = this.store.installLog.get(dep);
           this.store.statuses.set(dep, 'error');
           this.store.installLog.delete(dep);
-          this.store.errors.set(dep, message);
+          this.store.errors.set(dep, tail != null && tail !== '' ? `${base}\n${tail}` : base);
         }
       });
     }
