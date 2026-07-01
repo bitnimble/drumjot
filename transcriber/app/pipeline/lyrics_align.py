@@ -430,17 +430,6 @@ class LyricsAligner:
         if not input_lines:
             return []
 
-        # Lazy imports inside the lock so the per-process model singletons
-        # initialise once even under concurrent calls.
-        from ctc_forced_aligner import (  # type: ignore[import-not-found]
-            generate_emissions,
-            get_alignments,
-            get_spans,
-            load_audio,
-            postprocess_results,
-            preprocess_text,
-        )
-
         with self._lock:
             # Resolve language first so the CTC checkpoint can be picked
             # accordingly. Detection is text-only (`input_lines`); the
@@ -460,16 +449,37 @@ class LyricsAligner:
             # branch binds `alignments_fn(emissions, tokens, tokenizer)`; the
             # emissions call itself is inside the try (below) so a failure degrades
             # gracefully. get_spans / postprocess_results / _repair are shared.
+            # `preprocess_text` / `get_spans` / `postprocess_results` are pure
+            # numpy/python. On the ONNX path they come from `lyrics_onnx` (which
+            # loads the package's torch-free pieces WITHOUT its torch-importing
+            # __init__), keeping the whole path torch-free; the torch path imports
+            # them (and generate_emissions/get_alignments/load_audio) from the
+            # package as before.
             use_onnx = _lyrics_onnx_enabled()
             aligner = model = None
             if use_onnx:
-                from app.pipeline.lyrics_onnx import get_alignments_np, load_audio_np
+                from app.pipeline.lyrics_onnx import (
+                    get_alignments_np,
+                    get_spans,
+                    load_audio_np,
+                    postprocess_results,
+                    preprocess_text,
+                )
 
                 aligner = self._load_ctc_onnx(model_path)
                 tokenizer = aligner.tokenizer
                 audio_waveform = load_audio_np(str(audio_path))
                 alignments_fn = get_alignments_np
             else:
+                from ctc_forced_aligner import (  # type: ignore[import-not-found]
+                    generate_emissions,
+                    get_alignments,
+                    get_spans,
+                    load_audio,
+                    postprocess_results,
+                    preprocess_text,
+                )
+
                 model, tokenizer = self._load_ctc_aligner(model_path)
                 # load_audio materialises the waveform on the same device +
                 # dtype as the model so generate_emissions can run without
