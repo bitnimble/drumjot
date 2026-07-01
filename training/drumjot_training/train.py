@@ -809,6 +809,7 @@ def materialize(
     new_frames: dict = {}
     n_enc = 0
     n_dropped = 0
+    n_err = 0
     ok: list[tuple] = []
     for i, spec in enumerate(specs):
         # spec: (audio, onsets_rel, weight_onsets_or_None, start, length) -- one
@@ -865,6 +866,7 @@ def materialize(
             rings = _rings_for_clip(audio, onsets, cfg, cache_dir, length, start)
             ok.append((audio, onsets, weight_onsets, rings, frames, start, length))
         except Exception as e:  # noqa: BLE001
+            n_err += 1
             log(f"  skip {Path(audio).name}@{start:.0f}s: {e!r}")
         if (i + 1) % 500 == 0:
             log(f"  {tag}: {i + 1}/{len(specs)} windows ({n_enc} encoded)")
@@ -873,6 +875,15 @@ def materialize(
         _save_feature_index(cache_dir, new_frames)
     drop_note = f", {n_dropped} dropped (label support < {cfg.label_min_support})" if n_dropped else ""
     log(f"{tag}: {len(ok)} windows ({n_enc} newly encoded, {len(ok) - n_enc} from cache){drop_note}")
+    # Silent-decimation guard: an encode/load ERROR (bad .npy, decode failure, NFS
+    # outage, wrong --pool-cache path) must not quietly shrink the train set -- a
+    # systematic failure would train on a fraction of the data with only log noise.
+    # (n_dropped is the INTENTIONAL label-support gate, not counted here.)
+    if specs and (not ok or n_err > 0.05 * len(specs)):
+        raise RuntimeError(
+            f"{tag}: {n_err}/{len(specs)} windows failed to encode/load ({len(ok)} usable) -- "
+            "aborting rather than train on a silently decimated set "
+            "(check the MERT cache / NFS mount / --pool-cache path)")
     return CachedClips(ok, cfg, cache_dir, max_seconds)
 
 
@@ -955,6 +966,7 @@ def train_loop(
     grad_clip: float | None = None,
     resume_path: str | None = None,
     train_sampler=None,
+    seed: int = 0,
     log: Callable[[str], None] = print,
 ) -> dict:
     """Train `model` on `clips` in padded mini-batches of `batch_size` (clips
@@ -1044,7 +1056,7 @@ def train_loop(
     best_lane_epoch = {ln: -1 for ln in cfg.lanes}
     best_lane_state: dict = {}
 
-    gen = torch.Generator().manual_seed(0)  # reproducible per-epoch shuffle
+    gen = torch.Generator().manual_seed(seed)  # per-epoch shuffle; per-seed order so multi-seed runs are independent
     # `train_sampler` (PerSourceResampler) and `shuffle` are mutually exclusive:
     # the sampler does its own per-epoch resample + shuffle, so drop `shuffle`.
     loader = DataLoader(
@@ -1764,11 +1776,22 @@ def _per_source_specs(
         full = _full(ann_of(c), reader)  # all output lanes + the `x` negative lane
         keep = set(p2l.get(c.pitch, ()))
         al = aligned.get(str(c.audio_path))
-        if al is not None:  # snapped targets (this stem's own lanes), default when present
-            restricted = _fold_aligned_lanes(al)  # folds legacy hp -> hc (see helper)
+        if al is not None:  # snapped targets, default when present
+            folded = _fold_aligned_lanes(al)  # folds legacy hp -> hc (see helper)
+            # Restrict to THIS stem's lanes even on the aligned path: the store is
+            # per-stem today (so folded already holds only these), but a future
+            # full-kit-per-path store would otherwise label e.g. the kick stem with
+            # snare/hat onsets -- the inverse of the bleed-suppression objective.
+            restricted = {ln: (folded[ln] if ln in keep else []) for ln in LANES}
+            # Sibling-weight source aligned with the (snapped) targets: use the
+            # snapped self-lane onsets, and raw onsets for the cross-instrument
+            # lanes the snap-only store doesn't carry for this stem path. Keeps the
+            # regional weight from drifting ~9 frames off the snapped target.
+            weight = {ln: (restricted[ln] if ln in keep else full[ln]) for ln in LANES}
         else:
             restricted = {ln: (full[ln] if ln in keep else []) for ln in LANES}
-        return (c.audio_path, restricted, full)
+            weight = full
+        return (c.audio_path, restricted, weight)
 
     per_train: dict[str, list] = {}
     per_val: dict[str, list] = {}
@@ -2194,6 +2217,7 @@ def main(argv: list[str] | None = None) -> None:
         early_stop=args.early_stop, es_window=args.es_window, es_slope=args.es_slope,
         es_jitter=args.es_jitter, es_min_epochs=args.es_min_epochs,
         train_sampler=sampler,
+        seed=args.seed,
         log=lambda s: print(s, flush=True),
     )
     thresholds = tune_thresholds(model, val_clips, cfg)
