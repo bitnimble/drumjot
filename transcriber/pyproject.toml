@@ -48,6 +48,10 @@ separation = [
     # image is CUDA 12 + torch cu128, so the CUDA-12 build (<=1.25.x) matches.
     # Bump only alongside a CUDA-13 base.
     "onnxruntime-gpu>=1.19,<1.26",
+    # `onnx` (distinct from onnxruntime) is used by the ONNX export path
+    # (onnx_fp16.to_fp16 -> onnx.load/save + convert_float_to_float16): the
+    # build script and the dev-fallback local export. onnxruntime doesn't pull it.
+    "onnx>=1.16",
     # Runtime deps of the vendored BS-Roformer / MDX23C model classes (formerly
     # pulled in transitively via audio-separator, which we've now dropped).
     "einops>=0.8",

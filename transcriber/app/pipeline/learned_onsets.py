@@ -115,7 +115,12 @@ def detect_all_pitches_learned(
     from drumjot_training import embeddings, enst, inference, metrics
 
     dev = device or _resolve_device()
-    meta = json.loads((Path(checkpoint_dir) / "meta.json").read_text())
+    # meta.json: the provisioned sidecar (shipped app has no checkpoint dir on
+    # disk), else the checkpoint dir (dev). Mirrors np_onsets.load_onnx_onset.
+    from app.pipeline.provision import provisioned_file
+
+    meta_path = provisioned_file("onset_meta.json") or (Path(checkpoint_dir) / "meta.json")
+    meta = json.loads(meta_path.read_text())
     # Default: the torch-free ONNX path (MERT + heads on onnxruntime); opt out
     # with DRUMJOT_ONSET_ONNX=0 for the torch path. Both expose `stitched(audio)
     # -> (probs, fps)`; everything downstream (per-lane picking, tom split) is

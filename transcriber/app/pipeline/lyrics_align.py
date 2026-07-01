@@ -164,11 +164,10 @@ _SIMPLIFIED_CHINESE_MARKERS = frozenset(
 )
 
 # The CTC aligner HF ids are build settings (config.py "Model asset sources"),
-# so a build can repoint them. English (Apache-2.0 wav2vec2-large-robust) handles
+# read at call time (`settings.lyrics_align_model_english` / `..._default`) so a
+# build/env override applies. English (Apache-2.0 wav2vec2-large-robust) handles
 # any request detected as English; every other language uses the multilingual MMS
 # aligner (adapters pre-merged, romanized).
-_ALIGN_MODEL_ENGLISH = settings.lyrics_align_model_english
-_ALIGN_MODEL_DEFAULT = settings.lyrics_align_model_default
 
 
 def _lyrics_onnx_enabled() -> bool:
@@ -268,7 +267,7 @@ class LyricsAligner:
         HuggingFace model id passed straight through to
         `load_alignment_model`; the package accepts any wav2vec2-family
         CTC checkpoint there. Used today by `_pick_alignment_model` to
-        route English requests to `_ALIGN_MODEL_ENGLISH`
+        route English requests to `settings.lyrics_align_model_english`
         (wav2vec2-large-robust-ft-libri-960h, Apache 2.0, ~317M).
 
         Caching: per-model-path; each unique path loads once and stays
@@ -310,7 +309,7 @@ class LyricsAligner:
         device = self._resolve_device()
         # fp16 only for the stable English head on CUDA; MMS-300m (and CPU)
         # must stay fp32 or fp16 NaN-poisons its emissions (see docstring).
-        use_fp16 = device == "cuda" and model_path == _ALIGN_MODEL_ENGLISH
+        use_fp16 = device == "cuda" and model_path == settings.lyrics_align_model_english
         dtype = torch.float16 if use_fp16 else torch.float32
         log.info(
             "lyrics: loading CTC aligner (model=%s, device=%s, dtype=%s)",
@@ -333,7 +332,7 @@ class LyricsAligner:
             return cached
         from app.pipeline.lyrics_onnx import load_onnx_aligner
 
-        resolved = model_path or _ALIGN_MODEL_DEFAULT
+        resolved = model_path or settings.lyrics_align_model_default
         log.info("lyrics: loading CTC aligner (ONNX, model=%s)", resolved)
         aligner = load_onnx_aligner(resolved, settings.models_dir, providers=_onnx_providers())
         self._onnx_aligners[model_path] = aligner
@@ -357,7 +356,7 @@ class LyricsAligner:
         upstream model card, and the dominant case for mis-detection
         is "mostly English with some non-English" anyway."""
         if language_code == "en":
-            return _ALIGN_MODEL_ENGLISH
+            return settings.lyrics_align_model_english
         return None
 
     def park(self) -> None:

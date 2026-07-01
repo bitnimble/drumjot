@@ -21,7 +21,44 @@ import numpy as np
 
 
 def _sigmoid(x: np.ndarray) -> np.ndarray:
-    return 1.0 / (1.0 + np.exp(-x, dtype=np.float64)).astype(np.float32)
+    return (1.0 / (1.0 + np.exp(-x.astype(np.float64)))).astype(np.float32)
+
+
+# `drumjot_training.train` pulls in torch (via model.py) at import, which would
+# break the torch-free ONNX runtime, so plan_windows is copied here (torch-free:
+# soundfile + librosa + numpy). MUST stay in sync with train.plan_windows.
+_MIN_WINDOW = 5.0  # a sub-5s tail can't feed MERT's conv stack (kernel > frames)
+
+
+def _plan_windows(audio_path, window: float, search: float, max_windows: int):
+    """Split a clip into ~`window`-second pieces `[(start, length), ...]`, each
+    interior cut nudged to the lowest-RMS point within ±`search` s so an edge
+    never bisects a hit. A sub-`_MIN_WINDOW` tail is folded into the prior window."""
+    import soundfile as sf
+    from drumjot_training import embeddings
+
+    dur = float(sf.info(str(audio_path)).duration)
+    if dur <= window:
+        return [(0.0, window)]
+    import librosa
+
+    full_n = int(np.ceil(dur / window))
+    y, sr = librosa.load(str(audio_path), sr=embeddings.MERT_SR, mono=True)
+    hop = 512
+    rms = librosa.feature.rms(y=y, hop_length=hop)[0]
+    t = librosa.times_like(rms, sr=sr, hop_length=hop)
+    cuts = [0.0]
+    for k in range(1, full_n):
+        b = k * window
+        sel = np.where((t >= b - search) & (t <= b + search))[0]
+        cuts.append(float(t[sel[np.argmin(rms[sel])]]) if sel.size else b)
+    cuts.append(dur)
+    wins = [(cuts[i], cuts[i + 1] - cuts[i]) for i in range(full_n)]
+    if len(wins) >= 2 and wins[-1][1] < _MIN_WINDOW:
+        s0, _ = wins[-2]
+        wins[-2] = (s0, dur - s0)
+        wins.pop()
+    return wins[:max_windows] if max_windows else wins
 
 
 def activate(logits: np.ndarray, lane_names, cymbal_softmax: bool) -> np.ndarray:
@@ -61,7 +98,6 @@ class OnnxOnsetModel:
 
     def stitched_probs(self, audio_path):
         from drumjot_training import embeddings
-        from drumjot_training.train import plan_windows
 
         meta = self.meta
         sr = embeddings.MERT_SR
@@ -77,7 +113,7 @@ class OnnxOnsetModel:
 
             y44, _ = librosa.load(str(audio_path), sr=embeddings.HB_SR, mono=True)
 
-        wins = plan_windows(audio_path, 30.0, 3.0, 0)
+        wins = _plan_windows(audio_path, 30.0, 3.0, 0)
         total = int(np.ceil(len(y) / sr * fps)) + 2
         out = np.zeros((len(lanes), total), dtype=np.float32)
         written = 0
