@@ -31,6 +31,11 @@ class Config:
     # default; --no-high-band trains on raw MERT only, for the high-band ablation.
     # Part of the feature-cache key (variant), so on/off caches don't collide.
     high_band: bool = True
+    # Per-clip robust peak-normalise the WAVEFORM (embeddings.robust_peak_normalize)
+    # before feature extraction, so MERT (do_normalize=false) + the high-band block
+    # see a level-consistent input across songs. Off by default; --input-norm enables
+    # it. Part of the feature-cache key (variant "_pn"), so on/off caches don't collide.
+    input_norm: bool = False
 
     # Targets (Gaussian onset bumps).
     lanes: tuple[str, ...] = LANES

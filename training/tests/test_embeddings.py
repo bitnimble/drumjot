@@ -43,13 +43,15 @@ def _stub_hb(monkeypatch):
     # the high-band block loads real 44.1k audio; stub it for fake-path tests
     monkeypatch.setattr(
         embeddings, "highband_features",
-        lambda p, n, max_seconds=None, start_seconds=0.0, fps=embeddings.MERT_FPS, y44_full=None:
+        lambda p, n, max_seconds=None, start_seconds=0.0, fps=embeddings.MERT_FPS,
+        y44_full=None, input_norm=False:
             np.zeros((n, embeddings.HB_BANDS), dtype=np.float32),
     )
 
 
 def test_embed_clip_caches_fp16_by_default(tmp_path, monkeypatch):
-    monkeypatch.setattr(embeddings, "load_audio", lambda p, sr=None: np.zeros(100, dtype=np.float32))
+    monkeypatch.setattr(embeddings, "load_audio",
+                        lambda p, sr=None, input_norm=False: np.zeros(100, dtype=np.float32))
     _stub_hb(monkeypatch)
     feat = embeddings.embed_clip("/x/a.flac", _StubEncoder(), cache_dir=tmp_path)
     assert feat.dtype == np.float16  # returned features are the cached precision
@@ -59,7 +61,8 @@ def test_embed_clip_caches_fp16_by_default(tmp_path, monkeypatch):
 
 
 def test_embed_clip_cache_dtype_override_to_fp32(tmp_path, monkeypatch):
-    monkeypatch.setattr(embeddings, "load_audio", lambda p, sr=None: np.zeros(100, dtype=np.float32))
+    monkeypatch.setattr(embeddings, "load_audio",
+                        lambda p, sr=None, input_norm=False: np.zeros(100, dtype=np.float32))
     _stub_hb(monkeypatch)
     feat = embeddings.embed_clip("/x/b.flac", _StubEncoder(), cache_dir=tmp_path, cache_dtype="float32")
     assert feat.dtype == np.float32
@@ -67,14 +70,16 @@ def test_embed_clip_cache_dtype_override_to_fp32(tmp_path, monkeypatch):
 
 
 def test_embed_clip_no_high_band_is_raw_mert(tmp_path, monkeypatch):
-    monkeypatch.setattr(embeddings, "load_audio", lambda p, sr=None: np.zeros(100, dtype=np.float32))
+    monkeypatch.setattr(embeddings, "load_audio",
+                        lambda p, sr=None, input_norm=False: np.zeros(100, dtype=np.float32))
     _stub_hb(monkeypatch)  # would add HB_BANDS cols if (wrongly) called
     feat = embeddings.embed_clip("/x/c.flac", _StubEncoder(), cache_dir=tmp_path, high_band=False)
     assert feat.shape[1] == 4  # encoder dims only, no high-band block appended
 
 
 def test_embed_clip_high_band_on_off_caches_dont_collide(tmp_path, monkeypatch):
-    monkeypatch.setattr(embeddings, "load_audio", lambda p, sr=None: np.zeros(100, dtype=np.float32))
+    monkeypatch.setattr(embeddings, "load_audio",
+                        lambda p, sr=None, input_norm=False: np.zeros(100, dtype=np.float32))
     _stub_hb(monkeypatch)
     on = embeddings.embed_clip("/x/d.flac", _StubEncoder(), cache_dir=tmp_path, high_band=True)
     off = embeddings.embed_clip("/x/d.flac", _StubEncoder(), cache_dir=tmp_path, high_band=False)
@@ -97,7 +102,8 @@ def test_feat_variant_and_dim_compose():
 
 
 def test_embed_clip_widths_and_distinct_caches(tmp_path, monkeypatch):
-    monkeypatch.setattr(embeddings, "load_audio", lambda p, sr=None: np.zeros(100, dtype=np.float32))
+    monkeypatch.setattr(embeddings, "load_audio",
+                        lambda p, sr=None, input_norm=False: np.zeros(100, dtype=np.float32))
     _stub_hb(monkeypatch)
     widths = {}
     for hb in (True, False):

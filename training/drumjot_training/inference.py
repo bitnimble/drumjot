@@ -58,7 +58,7 @@ def load_model(checkpoint_dir, device: str = "cpu"):
 
 
 def _embed_layers(audio_path, enc, layers, *, max_seconds, start_seconds, high_band,
-                  cache_dtype, y_full, y44_full):
+                  cache_dtype, y_full, y44_full, input_norm=False):
     """{layer: features} for one window, one `embed_clip` per distinct MERT layer (a
     cache hit if that layer was encoded in training). Transiently sets `enc.layer`
     (the cache key + which hidden state to read); restored before returning. Used by
@@ -72,7 +72,8 @@ def _embed_layers(audio_path, enc, layers, *, max_seconds, start_seconds, high_b
             enc.layer = layer
             out[layer] = embeddings.embed_clip(
                 audio_path, enc, max_seconds=max_seconds, start_seconds=start_seconds,
-                high_band=high_band, cache_dtype=cache_dtype, y_full=y_full, y44_full=y44_full)
+                high_band=high_band, cache_dtype=cache_dtype, y_full=y_full, y44_full=y44_full,
+                input_norm=input_norm)
     finally:
         enc.layer = orig
     return out
@@ -91,14 +92,15 @@ def lane_probs(audio_path, model, meta: dict, encoder=None, max_seconds: float |
 
     runtime.configure_backends()
     enc = encoder or embeddings.MertEncoder(name=meta["encoder"], layer=meta["encoder_layer"])
-    y = embeddings.load_audio(audio_path, sr=enc.sr)
     use_hb = meta.get("high_band", int(meta.get("in_dim", embeddings.MERT_DIM)) > embeddings.MERT_DIM)
+    input_norm = meta.get("input_norm", False)
+    y = embeddings.load_audio(audio_path, sr=enc.sr, input_norm=input_norm)
     device = next(model.parameters()).device
     lane_layers = meta.get("lane_layers")
     if lane_layers:  # per-lane-layer: one encode per distinct layer -> {layer: (1,T,dim)}
         feats = _embed_layers(audio_path, enc, sorted(set(lane_layers.values())),
                               max_seconds=max_seconds, start_seconds=0.0, high_band=use_hb,
-                              cache_dtype="float32", y_full=y, y44_full=None)
+                              cache_dtype="float32", y_full=y, y44_full=None, input_norm=input_norm)
         x = {L: torch.as_tensor(f, dtype=torch.float32, device=device).unsqueeze(0)
              for L, f in feats.items()}
     else:
@@ -106,7 +108,7 @@ def lane_probs(audio_path, model, meta: dict, encoder=None, max_seconds: float |
         # embed_clip applies max_seconds itself, so pass the full y (no manual truncation).
         feat = embeddings.embed_clip(
             audio_path, enc, max_seconds=max_seconds, high_band=use_hb,
-            cache_dtype="float32", y_full=y)
+            cache_dtype="float32", y_full=y, input_norm=input_norm)
         x = torch.as_tensor(feat, dtype=torch.float32, device=device).unsqueeze(0)
     with torch.no_grad(), runtime.autocast():
         from drumjot_training.model import activate_onsets
@@ -123,7 +125,7 @@ WINDOW_BATCH = 16
 
 
 def _stitched_probs_multilayer(audio_path, model, meta, enc, layers, *, y, y44, use_hb,
-                               fps, max_seconds, window_seconds):
+                               fps, max_seconds, window_seconds, input_norm=False):
     """`stitched_probs` for a PER-LANE-LAYER checkpoint: the same default (non-
     overlapping `plan_windows`) tiling + padded/packed batched heads as the single-
     layer path, but every window is encoded at each distinct MERT `layer` and the
@@ -144,7 +146,8 @@ def _stitched_probs_multilayer(audio_path, model, meta, enc, layers, *, y, y44, 
     written = 0
     per_win = [
         _embed_layers(audio_path, enc, layers, max_seconds=length, start_seconds=start,
-                      high_band=use_hb, cache_dtype="float16", y_full=y, y44_full=y44)
+                      high_band=use_hb, cache_dtype="float16", y_full=y, y44_full=y44,
+                      input_norm=input_norm)
         for start, length in wins
     ]
     for b0 in range(0, len(per_win), WINDOW_BATCH):
@@ -198,16 +201,19 @@ def stitched_probs(
     runtime.configure_backends()
     enc = encoder or embeddings.MertEncoder(name=meta["encoder"], layer=meta["encoder_layer"])
     device = next(model.parameters()).device
-    y = embeddings.load_audio(audio_path, sr=enc.sr)
+    use_hb = meta.get("high_band", int(meta.get("in_dim", embeddings.MERT_DIM)) > embeddings.MERT_DIM)
+    input_norm = meta.get("input_norm", False)
+    y = embeddings.load_audio(audio_path, sr=enc.sr, input_norm=input_norm)
     if max_seconds is not None:
         y = y[: int(max_seconds * enc.sr)]
     fps = meta["encoder_fps"]
-    use_hb = meta.get("high_band", int(meta.get("in_dim", embeddings.MERT_DIM)) > embeddings.MERT_DIM)
     y44 = None
     if use_hb:
         import librosa
 
         y44, _ = librosa.load(str(audio_path), sr=embeddings.HB_SR, mono=True)
+        if input_norm:  # whole-clip norm BEFORE the max_seconds crop (matches y)
+            y44 = embeddings.robust_peak_normalize(y44)
         if max_seconds is not None:
             y44 = y44[: int(max_seconds * embeddings.HB_SR)]
 
@@ -224,7 +230,7 @@ def stitched_probs(
         return _stitched_probs_multilayer(
             audio_path, model, meta, enc, sorted(set(lane_layers.values())),
             y=y, y44=y44, use_hb=use_hb, fps=fps,
-            max_seconds=max_seconds, window_seconds=window_seconds)
+            max_seconds=max_seconds, window_seconds=window_seconds, input_norm=input_norm)
 
     if not legacy_overlap:
         from drumjot_training.train import plan_windows
@@ -242,7 +248,8 @@ def stitched_probs(
         feats = [
             embeddings.embed_clip(
                 audio_path, enc, max_seconds=length, start_seconds=start,
-                high_band=use_hb, cache_dtype="float16", y_full=y, y44_full=y44)
+                high_band=use_hb, cache_dtype="float16", y_full=y, y44_full=y44,
+                input_norm=input_norm)
             for start, length in wins
         ]
         for b0 in range(0, len(feats), WINDOW_BATCH):
@@ -285,7 +292,7 @@ def stitched_probs(
         # the step, so the [start, start+len] slice == the old y[s:s+chunk].
         feat = embeddings.embed_clip(
             audio_path, enc, max_seconds=len(seg) / enc.sr, start_seconds=s / enc.sr,
-            high_band=use_hb, cache_dtype="float32", y_full=y, y44_full=y44)
+            high_band=use_hb, cache_dtype="float32", y_full=y, y44_full=y44, input_norm=input_norm)
         x = torch.as_tensor(feat, dtype=torch.float32, device=device).unsqueeze(0)
         with torch.no_grad(), runtime.autocast():
             probs = activate_onsets(model(x), meta["lanes"], meta.get("cymbal_softmax", False))[0].float().cpu().numpy()  # (L, Tc)

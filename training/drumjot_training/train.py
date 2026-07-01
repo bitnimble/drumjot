@@ -97,7 +97,7 @@ def _build_clip(
     """
     feat = embeddings.embed_clip(
         audio_path, encoder, cache_dir=cache_dir, max_seconds=max_seconds,
-        cache_dtype=cfg.cache_dtype, high_band=cfg.high_band,
+        cache_dtype=cfg.cache_dtype, high_band=cfg.high_band, input_norm=cfg.input_norm,
     )
     if max_seconds is not None:
         onsets = {ln: [t for t in ts if t < max_seconds] for ln, ts in onsets.items()}
@@ -470,7 +470,7 @@ class CachedClips:
         self._max_seconds = max_seconds
 
     def _path(self, audio_path, start: float, length: float | None, layer: int | None = None) -> Path:
-        variant = embeddings.feat_variant(self._cfg.high_band)
+        variant = embeddings.feat_variant(self._cfg.high_band, self._cfg.input_norm)
         layer = self._cfg.encoder_layer if layer is None else layer
         key = embeddings.cache_key(
             audio_path, self._cfg.encoder, layer, length, variant, start
@@ -804,7 +804,7 @@ def materialize(
     can exceed available memory."""
     cache_dir = Path(cache_dir)
     index = _load_feature_index(cache_dir)
-    variant = embeddings.feat_variant(cfg.high_band)
+    variant = embeddings.feat_variant(cfg.high_band, cfg.input_norm)
     new_frames: dict = {}
     n_enc = 0
     n_dropped = 0
@@ -832,7 +832,8 @@ def materialize(
                 if missing:
                     embeddings.encode_layers_to_cache(
                         audio, encoder, missing, cache_dir, max_seconds=length,
-                        cache_dtype=cfg.cache_dtype, high_band=cfg.high_band, start_seconds=start)
+                        cache_dtype=cfg.cache_dtype, high_band=cfg.high_band, start_seconds=start,
+                        input_norm=cfg.input_norm)
                     n_enc += 1  # one forward encoded every missing layer
                 frames = None
                 for L in layers:
@@ -854,7 +855,7 @@ def materialize(
                         feat = embeddings.embed_clip(
                             audio, encoder, cache_dir=cache_dir, max_seconds=length,
                             cache_dtype=cfg.cache_dtype, high_band=cfg.high_band,
-                            start_seconds=start,
+                            start_seconds=start, input_norm=cfg.input_norm,
                         )
                         frames = int(feat.shape[0])
                         n_enc += 1
@@ -1956,6 +1957,11 @@ def main(argv: list[str] | None = None) -> None:
         help="append the 6-20 kHz high-band block to MERT features (default on); "
         "--no-high-band trains on raw MERT only (high-band ablation). Separate cache key.",
     )
+    ap.add_argument(
+        "--input-norm", default=False, action=argparse.BooleanOptionalAction,
+        help="per-clip robust peak-normalise the waveform before feature extraction "
+        "(level-consistent input for MERT + high-band; default off). Separate cache key.",
+    )
     # Windowing is unconditional: every clip (train AND val) is sliced into as many
     # ~max-seconds windows as fit, recovering ALL the separated audio instead of just
     # the first window. (Was a `--max-windows` flag defaulting to first-window-only;
@@ -2027,7 +2033,7 @@ def main(argv: list[str] | None = None) -> None:
     cfg = Config(
         encoder=embeddings.MERT_NAME, encoder_fps=embeddings.MERT_FPS,
         encoder_layer=args.layer, cache_dtype=args.cache_dtype,
-        high_band=args.high_band,
+        high_band=args.high_band, input_norm=args.input_norm,
         lr=args.lr, weight_decay=args.weight_decay,
         sib_neg_weight=args.sib_neg_weight, sib_pos_weight=args.sib_pos_weight,
         label_min_support=args.label_min_support, label_support_window_s=args.label_support_window,
