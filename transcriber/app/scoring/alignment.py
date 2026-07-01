@@ -161,9 +161,10 @@ def score(
 ) -> ScoreResult:
     """Score every lane and roll up. A lane empty on both sides is skipped
     (absent from `per_lane` and from both roll-ups). `f1_macro` is the mean
-    of scored lanes' F1; `f1_weighted` weights each lane by its audio-onset
-    count (busy lanes count more), falling back to 0 when no scored lane has
-    audio onsets."""
+    of scored lanes' F1; `f1_weighted` weights each lane by `max(n_chart,
+    n_audio)` (busy lanes count more), so a lane the chart over-notates but the
+    reference has 0 onsets in still carries weight (its low precision drags the
+    headline); falls back to 0 when every scored lane is empty on both sides."""
     per_lane: dict[str, LaneScore] = {}
     for lane in lanes:
         chart = chart_by_lane.get(lane, ())
@@ -176,10 +177,10 @@ def score(
         return ScoreResult(f1_macro=0.0, f1_weighted=0.0, per_lane={})
 
     f1_macro = sum(ls.soft_f1 for ls in per_lane.values()) / len(per_lane)
-    total_audio = sum(ls.n_audio for ls in per_lane.values())
+    total_w = sum(max(ls.n_chart, ls.n_audio) for ls in per_lane.values())
     f1_weighted = (
-        sum(ls.soft_f1 * ls.n_audio for ls in per_lane.values()) / total_audio
-        if total_audio
+        sum(ls.soft_f1 * max(ls.n_chart, ls.n_audio) for ls in per_lane.values()) / total_w
+        if total_w
         else 0.0
     )
     return ScoreResult(f1_macro=f1_macro, f1_weighted=f1_weighted, per_lane=per_lane)

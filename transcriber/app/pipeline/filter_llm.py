@@ -188,6 +188,7 @@ def filter_onsets_for_instrument(
         {
             "model": model,
             "max_tokens": settings.llm_max_tokens,
+            "temperature": 0,  # deterministic filter (A/B + debug-bundle replay reproducibility)
             "messages": [{"role": "user", "content": prompt}],
             "tools": [_FILTER_TOOL],
             "tool_choice": {"type": "tool", "name": _FILTER_TOOL["name"]},

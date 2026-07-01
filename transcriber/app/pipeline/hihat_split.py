@@ -957,6 +957,7 @@ def _classify_llm(
             {
                 "model": model,
                 "max_tokens": settings.llm_max_tokens,
+                "temperature": 0,  # deterministic open/closed split (A/B + debug-bundle replay reproducibility)
                 "messages": [{"role": "user", "content": prompt}],
                 "tools": [_SPLIT_TOOL],
                 "tool_choice": {"type": "tool", "name": _SPLIT_TOOL["name"]},
