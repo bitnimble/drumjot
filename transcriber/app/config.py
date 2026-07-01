@@ -47,6 +47,19 @@ class Settings(BaseSettings):
     demucs_model: str = "model_bs_roformer_sw.ckpt"
     drum_pieces_model: str = "drumsep_5stems_mdx23c_jarredou.ckpt"
 
+    # --- Model asset sources (build/packaging) ---
+    # Every model URL / HF id / repo that the packaged app has baked in lives
+    # here so it can be repointed per build (fork, private mirror, staging)
+    # without touching code. Defaults are the canonical Drumjot repos.
+    #   - `onnx_repo`: the shipped fp16 `.onnx` set (bitnimble/drumjot-onnx).
+    #   - `separation_repo`: the separation architecture yamls (+ dev ckpts).
+    #   - `lyrics_align_model_*`: the /lyrics CTC aligner HF ids (also the
+    #     tokenizer source and the shipped `.onnx` filename stem).
+    onnx_repo: str = "https://huggingface.co/bitnimble/drumjot-onnx/resolve/main"
+    separation_repo: str = "https://huggingface.co/bitnimble/stem_separation/resolve/main"
+    lyrics_align_model_english: str = "facebook/wav2vec2-large-robust-ft-libri-960h"
+    lyrics_align_model_default: str = "MahmoudAshraf/mms-300m-1130-forced-aligner"
+
     # --- Onset backend ---
     # The trained frozen-MERT + per-lane-heads model (training/, run PER STEM via
     # pipeline/learned_onsets.py) is the DEFAULT onset detector. A request can fall

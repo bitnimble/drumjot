@@ -163,20 +163,12 @@ _SIMPLIFIED_CHINESE_MARKERS = frozenset(
     "爱们这时长个听见说话让给风马鸟鱼谁谢发实还对么"
 )
 
-# English-specialized CTC checkpoint. Apache 2.0, ~317M params,
-# wav2vec2-large pretrained on Libri-Light + CommonVoice + Switchboard
-# + Fisher and fine-tuned on LibriSpeech 960h. Used for any request
-# detected as English; everything else falls back to the package's
-# default MMS-300m head (the `model_path=None` branch of
-# `_load_ctc_aligner`). Kept as a module constant rather than a
-# `settings.*` field so a swap stays a one-line code change for now;
-# promote to settings when the non-English replacement (likely
-# OWSM-CTC v4 1B) lands and we need per-language config knobs.
-_ALIGN_MODEL_ENGLISH = "facebook/wav2vec2-large-robust-ft-libri-960h"
-
-# The package's default multilingual CTC aligner (adapters pre-merged, romanized).
-# `_pick_alignment_model` returns None for it; the ONNX path needs the explicit id.
-_ALIGN_MODEL_DEFAULT = "MahmoudAshraf/mms-300m-1130-forced-aligner"
+# The CTC aligner HF ids are build settings (config.py "Model asset sources"),
+# so a build can repoint them. English (Apache-2.0 wav2vec2-large-robust) handles
+# any request detected as English; every other language uses the multilingual MMS
+# aligner (adapters pre-merged, romanized).
+_ALIGN_MODEL_ENGLISH = settings.lyrics_align_model_english
+_ALIGN_MODEL_DEFAULT = settings.lyrics_align_model_default
 
 
 def _lyrics_onnx_enabled() -> bool:

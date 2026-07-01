@@ -131,6 +131,18 @@ and gitignored. See the spec's "Android" section.
   entry that used the old default with its explicit value, so historical
   numbers stay interpretable. See the `persist-gpu-results-in-results-md`
   memory.
+- **Model inference is ONNX; downloads are CAPABILITY-SCOPED.** Every ML model
+  in the transcriber runtime runs torch-free on onnxruntime (separation, onsets,
+  beats, lyrics); torch is only for the one-time `.onnx` export + the
+  `DRUMJOT_*_ONNX=0` opt-outs. The shipped fp16 set lives on HF
+  `bitnimble/drumjot-onnx`; loaders prefer the provisioned `{name}.fp16.onnx`
+  (`provision.shipped_onnx`). **Provisioning MUST be capability-scoped**
+  (`provision.provision(*capabilities)` + `_capability_assets`): a
+  separation-only install must NEVER pull the lyrics/onset weights (the whole
+  point of the dep-group split, the lyrics models alone are >1 GB). Add a new
+  model under the one capability that uses it, never a global "fetch all" list.
+  All model URLs / HF ids are `settings.*` build fields (config.py "Model asset
+  sources"), not hardcoded. fp16 is GPU-only (ORT's CPU EP can't run fp16 GRU).
 - **Bash tool/search specifics.** `cat` / `sed` / `awk` / `find` stay
   redirected to `Read` / `Edit` / `Find`; their command-executing flags
   (`rg --pre` / `--pre-glob` / `--hostname-bin`, `git grep -O` /
