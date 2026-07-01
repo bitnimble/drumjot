@@ -81,3 +81,25 @@ files are safe to inspect mid-run.
 Cost note: each track is one /transcribe call. The pipeline makes one
 filter LLM call per drum pitch (parallel), so cost scales with how many
 instruments are present rather than with knobs at the CLI.
+
+## Meter backtest (`meter_backtest.py`)
+
+A **separate, standalone** harness (no transcriber service, no Docker) that
+checks *beats-per-bar* accuracy rather than onset F1. It runs Beat This!
+directly on E-GMD audio and compares the modal detected bar length to E-GMD's
+ground-truth `time_signature`, with the meter-recovery pass
+(`beats._recover_bar_length_if_incoherent`) OFF vs ON. It's the regression
+guard for that pass, it must not regress the common meters (4/4, 3/4) while it
+rescues the odd meters (5/4, 7/4, 7/8) Beat This!'s DBN-free downbeat head can't
+group.
+
+```bash
+# Points at the raw E-GMD dataset root (holds e-gmd-v1.0.0.csv + drummerN/),
+# NOT the paste-in datasets/e-gmd/ fixture folder above.
+PYTHONPATH=transcriber transcriber/.venv/bin/python3 -m benchmarks.meter_backtest \
+    --root /codebox-workspace/datasets/e-gmd-v1.0.0 --workers 4
+```
+
+Prints per-meter OLD vs NEW accuracy and the detected-bar-length distributions.
+Beat This! runs once per song (CPU is fine, ~3-5 s/clip); OLD/NEW diverge only
+at the downbeat-grouping stage. `--root` defaults to `$DRUMJOT_EGMD_RAW`.

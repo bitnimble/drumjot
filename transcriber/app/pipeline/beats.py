@@ -296,11 +296,182 @@ def _beat_this_beats(audio_path: Path) -> BeatStructure:
     """
     log.info("Beat This!: tracking beats/downbeats in %s", audio_path.name)
     beats, downbeats = _beat_this_model()(str(audio_path))
+    downbeats = _recover_bar_length_if_incoherent(beats, downbeats, audio_path)
     raw = _beats_downbeats_to_raw(beats, downbeats)
     if raw.size == 0:
         log.warning("Beat This! returned no beats for %s", audio_path.name)
         return BeatStructure()
     return _raw_to_structure(raw)
+
+
+# ---- Meter recovery (odd-meter downbeat rescue) ----
+#
+# Beat This! is DBN-free, so its downbeat head carries no fixed-meter prior
+# and reliably fails on odd meters (5/4, 7/4, 7/8): it sprays downbeats at a
+# ~4-beat period instead of finding the true bar length, and no amount of
+# `_smooth_downbeats` repair can recover a grouping that was never emitted.
+# But the true bar length IS present in the audio, the onset-accent pattern
+# repeats once per bar, so when Beat This!'s own downbeats are incoherent we
+# re-derive the bar length from the autocorrelation of the beat-synchronous
+# onset strength (which cleanly picks 5/7/… where the downbeat head could not).
+# The beat *pulse* Beat This! tracks is left untouched; only the downbeat
+# grouping is replaced.
+
+# Fraction of Beat This! bars that must share the modal beat-count before its
+# downbeats are trusted as-is. Below it the downbeats are judged incoherent
+# (no dominant period) and the audio-autocorr bar length takes over. Confident
+# 4/4 / 3/4 / 6/8 sit at ~0.85-1.0; the odd-meter failures sit at ~0.3-0.4, so
+# a mid gate cleanly separates them without touching the common case.
+_METER_TRUST_DOM_FRAC = 0.6
+
+# Candidate bar lengths (in beats) the autocorr picker chooses among. Covers
+# 2..9 beats/bar; the true fundamental wins argmax on real songs (its multiples
+# 2B score lower), so no explicit octave/harmonic tie-break is needed.
+_METER_CANDIDATES = (2, 3, 4, 5, 6, 7, 8, 9)
+
+# Minimum beat-synchronous-accent autocorrelation the winning bar length must
+# reach; below it there's no clear per-bar accent pattern, so keep Beat This!.
+_METER_MIN_AUTOCORR = 0.12
+
+# A divisor (≥3) of the argmax bar length is preferred as the true fundamental
+# when its accent autocorr is at least this fraction of the argmax's (3/4 read
+# as 6 → 3). Kept high so only a near-equal sub-period folds back.
+_METER_FUNDAMENTAL_FRAC = 0.85
+
+# Require this many bars of support (beats >= factor * B) before a candidate B
+# is scorable, so a large B isn't chosen off a couple of noisy cycles.
+_METER_MIN_BARS = 4
+
+# Recovery only fires with at least this many beats of support. Autocorr meter
+# detection needs enough bars to be reliable; on a short clip it picks spurious
+# odd lengths (a compound 6/8 groove of ~35 beats reads as "5"), so below the
+# floor we defer to Beat This!. Real songs sit far above it (hundreds of beats);
+# only sub-30 s clips fall under.
+_METER_MIN_BEATS = 64
+
+
+def _recover_bar_length_if_incoherent(beats, downbeats, audio_path: Path):
+    """Replace Beat This!'s downbeats with an autocorr-derived grouping when
+    its own downbeats show no dominant per-bar period (the odd-meter failure).
+
+    Returns a downbeat-times array: the original when Beat This! is coherent
+    or nothing better can be found, else regular downbeats every `B` beats
+    (phase = strongest-accent beat). Beat times are never modified.
+    """
+    beats = np.asarray(sorted(float(b) for b in beats), dtype=np.float64)
+    downbeats = np.asarray(sorted(float(d) for d in downbeats), dtype=np.float64)
+    if beats.size < _METER_MIN_BEATS or downbeats.size < 3:
+        return downbeats
+
+    dom_frac = _dominant_gap_fraction(beats, downbeats)
+    if dom_frac >= _METER_TRUST_DOM_FRAC:
+        return downbeats
+
+    strength = _beat_sync_strength(beats, audio_path)
+    bar_len = _bar_length_from_autocorr(strength)
+    if bar_len is None:
+        log.info(
+            "meter recovery: downbeats incoherent (dom_frac %.2f) but no clear "
+            "bar-length autocorr; keeping Beat This! downbeats", dom_frac,
+        )
+        return downbeats
+
+    phase = _best_downbeat_phase(strength, bar_len)
+    idx = np.arange(beats.size)
+    new_downbeats = beats[idx[(idx % bar_len) == phase]]
+    log.info(
+        "meter recovery: Beat This! downbeats incoherent (dom_frac %.2f); "
+        "re-derived %d-beat bars (phase %d) from onset-accent autocorr",
+        dom_frac, bar_len, phase,
+    )
+    return new_downbeats
+
+
+def _dominant_gap_fraction(beats: np.ndarray, downbeats: np.ndarray) -> float:
+    """Fraction of inter-downbeat gaps (in beats) equal to the modal gap.
+
+    ~1.0 for a cleanly-metered track, low when Beat This! scatters downbeats
+    with no consistent bar length (the odd-meter failure signature).
+    """
+    db_idx = sorted({int(np.argmin(np.abs(beats - d))) for d in downbeats})
+    gaps = np.diff(db_idx)
+    if gaps.size == 0:
+        return 1.0
+    counts = Counter(int(g) for g in gaps)
+    return counts.most_common(1)[0][1] / gaps.size
+
+
+def _beat_sync_strength(beats: np.ndarray, audio_path: Path) -> np.ndarray:
+    """Per-beat onset-accent: the onset-strength envelope summed in a ±70 ms
+    window around each beat. One accent value per beat, so its autocorrelation
+    exposes the bar-length periodicity."""
+    import librosa
+
+    try:
+        y, sr = librosa.load(str(audio_path), sr=22050, mono=True)
+    except Exception as exc:
+        log.warning("meter recovery: could not load %s (%s)", audio_path, exc)
+        return np.zeros(beats.size, dtype=np.float64)
+    if y.size == 0:
+        return np.zeros(beats.size, dtype=np.float64)
+    env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=256)
+    frame_times = librosa.frames_to_time(np.arange(env.size), sr=sr, hop_length=256)
+    strength = np.empty(beats.size, dtype=np.float64)
+    for i, t in enumerate(beats):
+        lo = int(np.searchsorted(frame_times, t - 0.07))
+        hi = int(np.searchsorted(frame_times, t + 0.07))
+        strength[i] = float(env[lo:hi].sum()) if hi > lo else 0.0
+    return strength
+
+
+def _bar_length_from_autocorr(strength: np.ndarray) -> int | None:
+    """Bar length (beats/bar) maximising the beat-accent autocorrelation.
+
+    Returns the candidate `B` with the strongest lag-`B` autocorrelation of the
+    per-beat accent, or None when no candidate has enough support or clears
+    `_METER_MIN_AUTOCORR` (no coherent per-bar accent → don't override).
+
+    A bar length also correlates at its multiples (a 3/4 bar repeats every 6
+    beats too), so the raw argmax can land on a harmonic. We fold back to the
+    fundamental: the smallest divisor ≥3 of the argmax whose accent autocorr is
+    nearly as strong (a genuine 3/4 read as 6 collapses back to 3). Divisor 2 is
+    excluded on purpose, a 4/4 backbeat gives a strong period-2 sub-correlation
+    that would otherwise demote 4/4 to 2/4.
+    """
+    x = strength - strength.mean()
+    denom = float((x * x).sum())
+    if denom <= 0:
+        return None
+    scores: dict[int, float] = {}
+    for B in _METER_CANDIDATES:
+        if strength.size < _METER_MIN_BARS * B:
+            continue
+        scores[B] = float((x[:-B] * x[B:]).sum() / denom)
+    if not scores:
+        return None
+    best_B = max(scores, key=lambda b: scores[b])
+    if scores[best_B] < _METER_MIN_AUTOCORR:
+        return None
+    for d in _METER_CANDIDATES:
+        if d >= best_B:
+            break
+        if d < 3:
+            continue  # never demote to 2: that's the 4/4-backbeat harmonic
+        if best_B % d == 0 and scores.get(d, 0.0) >= _METER_FUNDAMENTAL_FRAC * scores[best_B]:
+            return d
+    return best_B
+
+
+def _best_downbeat_phase(strength: np.ndarray, bar_len: int) -> int:
+    """Beat offset (0..bar_len-1) whose beats carry the most accent, the
+    downbeat sits on the strongest recurring position (typically the kick)."""
+    idx = np.arange(strength.size)
+
+    def mean_accent(phase: int) -> float:
+        vals = strength[(idx % bar_len) == phase]
+        return float(vals.mean()) if vals.size else 0.0
+
+    return max(range(bar_len), key=mean_accent)
 
 
 def _beats_downbeats_to_raw(beats, downbeats, tol: float = 0.05) -> np.ndarray:

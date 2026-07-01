@@ -6,21 +6,29 @@ directly.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from app.pipeline.beats import (
     _DRIFT_DEADBAND_SEC,
+    _METER_MIN_BEATS,
+    _METER_TRUST_DOM_FRAC,
     BarInfo,
     BeatStructure,
     BeatTick,
+    _bar_length_from_autocorr,
     _beats_downbeats_to_raw,
+    _best_downbeat_phase,
     _choose_time_signature,
     _coarse_offset_from_envelope,
+    _dominant_gap_fraction,
     _finalize_bar,
     _finalize_bar_tempos,
     _pad_trailing_bars,
     _raw_to_structure,
+    _recover_bar_length_if_incoherent,
     _summarize,
     align_beats_to_onsets,
 )
@@ -954,3 +962,89 @@ def test_beats_downbeats_raw_drops_far_downbeat():
     downbeats = [0.0, 1.06]
     raw = _beats_downbeats_to_raw(beats, downbeats)
     assert [int(r[1]) for r in raw] == [1, 2, 3, 4]  # one bar; far downbeat dropped
+
+
+# ---------- Meter recovery (odd-meter downbeat rescue) ----------
+
+def _accent(n: int, period: int, phase: int = 0, strong: float = 1.0,
+            weak: float = 0.2) -> np.ndarray:
+    """Per-beat accent array: `strong` every `period` beats at `phase`, `weak`
+    elsewhere - a synthetic stand-in for the beat-synchronous onset strength."""
+    s = np.full(n, weak, dtype=np.float64)
+    s[np.arange(n) % period == phase] = strong
+    return s
+
+
+@pytest.mark.parametrize("bar_len", [3, 4, 5, 7])
+def test_bar_length_recovers_common_and_odd_meters(bar_len: int) -> None:
+    assert _bar_length_from_autocorr(_accent(300, bar_len)) == bar_len
+
+
+def test_bar_length_prefers_fundamental_over_harmonic() -> None:
+    # 3/4 with a hypermetric strong-vs-medium alternation repeats every 6, but
+    # the bar is 3 - the fundamental preference must fold 6 back to 3.
+    n = 300
+    s = np.full(n, 0.1)
+    s[np.arange(n) % 6 == 0] = 1.0
+    s[np.arange(n) % 6 == 3] = 0.95
+    assert _bar_length_from_autocorr(s) == 3
+
+
+def test_bar_length_never_demotes_four_four_to_two() -> None:
+    # 4/4 backbeat: strong downbeat + medium beat 3 gives a strong period-2
+    # sub-correlation, but the bar is 4, not 2 (divisor 2 is excluded).
+    n = 300
+    s = np.full(n, 0.15)
+    s[np.arange(n) % 4 == 0] = 1.0
+    s[np.arange(n) % 4 == 2] = 0.7
+    assert _bar_length_from_autocorr(s) == 4
+
+
+def test_bar_length_keeps_pure_six_without_three_accent() -> None:
+    # Accent only every 6 (nothing at the intervening 3s) stays 6, not folded.
+    assert _bar_length_from_autocorr(_accent(300, 6)) == 6
+
+
+def test_bar_length_none_on_flat_accent() -> None:
+    assert _bar_length_from_autocorr(np.full(200, 0.5)) is None
+
+
+def test_bar_length_needs_enough_bars_of_support() -> None:
+    # Only 15 beats: B=5 needs >= 4 bars (20 beats), so the true period is
+    # excluded and nothing else fits -> no confident bar length.
+    assert _bar_length_from_autocorr(_accent(15, 5)) is None
+
+
+def test_best_downbeat_phase_finds_accent_offset() -> None:
+    assert _best_downbeat_phase(_accent(300, 5, phase=2), 5) == 2
+
+
+def test_dominant_gap_fraction_high_when_coherent() -> None:
+    beats = np.arange(0, 40.0, 0.5)       # 80 beats
+    assert _dominant_gap_fraction(beats, beats[::4]) == 1.0
+
+
+def test_dominant_gap_fraction_low_when_scattered() -> None:
+    beats = np.arange(0, 40.0, 0.5)
+    downbeats = beats[[0, 3, 4, 8, 9, 10, 14, 20, 22, 27, 35]]
+    assert _dominant_gap_fraction(beats, downbeats) < 0.5
+
+
+def test_recovery_leaves_coherent_downbeats_untouched() -> None:
+    # dom_frac == 1.0 -> the coherence gate returns before _beat_sync_strength
+    # runs, so the bogus audio path is never touched and downbeats pass through.
+    beats = np.arange(0, 40.0, 0.5)
+    downbeats = beats[::4]
+    out = _recover_bar_length_if_incoherent(beats, downbeats, Path("/no/such/audio"))
+    assert np.array_equal(np.asarray(out), downbeats)
+
+
+def test_recovery_skips_when_too_few_beats() -> None:
+    # Genuinely incoherent (gaps 1,2,5 -> dom_frac 1/3 < gate) so the coherence
+    # gate can't be the reason; below the min-beats floor -> defer to Beat This!.
+    n = _METER_MIN_BEATS - 1
+    beats = np.arange(n) * 0.5
+    downbeats = beats[[0, 1, 3, 8]]
+    assert _dominant_gap_fraction(beats, downbeats) < _METER_TRUST_DOM_FRAC
+    out = _recover_bar_length_if_incoherent(beats, downbeats, Path("/no/such/audio"))
+    assert np.array_equal(np.asarray(out), downbeats)
