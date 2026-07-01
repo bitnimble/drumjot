@@ -8,25 +8,31 @@
  * It asserts the result reports `engine === 'onnx'` (the ONNX model actually
  * ran, not a torch/librosa fallback) and a sane 120 BPM grid.
  *
- * The app must be launched with the model + sidecar env set (the Rust broker +
- * Python read these from the process env the wdio service passes through):
- *   MODELS_DIR             dir containing beat_this.fp16.onnx
- *   DRUMJOT_SIDECAR_PYTHON abs path to transcriber/.venv/bin/python3
- *   DRUMJOT_BEAT_ONNX=1    (default) run Beat This! on onnxruntime
- * Skipped (whole suite) when MODELS_DIR/beat_this.fp16.onnx is absent, mirroring
- * transcriber/tests/test_onnx_model_e2e.py. Globals (`browser`, `expect`) come
- * from @wdio/globals; `window.__TAURI__` from the wdio build's withGlobalTauri.
+ * Needs `beat_this.fp16.onnx` provisioned into the app's data dir (the sidecar
+ * reads models from `<app-local-data>/models`; a MODELS_DIR env is ignored by the
+ * app). Skipped (whole suite) when it's absent, mirroring
+ * transcriber/tests/test_onnx_model_e2e.py. Beat This! runs on onnxruntime by
+ * default (DRUMJOT_BEAT_ONNX). Globals (`browser`, `expect`) come from
+ * @wdio/globals; `window.__TAURI__` from the wdio build's withGlobalTauri.
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const repoRoot = fileURLToPath(new URL('../', import.meta.url))
 const venvPython = join(repoRoot, 'transcriber/.venv/bin/python3')
 const makeClick = join(repoRoot, 'e2e-tauri/fixtures/make_click.py')
-const modelFile = resolve(process.env.MODELS_DIR ?? '/models', 'beat_this.fp16.onnx')
+// The app reads models from its own data dir (paths::redirect_env forces
+// settings.models_dir = <app-local-data>/models), NOT a MODELS_DIR env. Provision
+// there: `MODELS_DIR=<this> python -m app.pipeline.provision transcription`.
+const appDataModels = join(
+  process.env.XDG_DATA_HOME ?? join(homedir(), '.local/share'),
+  'dev.drumjot.studio',
+  'models',
+)
+const modelFile = resolve(appDataModels, 'beat_this.fp16.onnx')
 
 let audioPath: string
 
