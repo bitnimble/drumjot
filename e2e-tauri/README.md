@@ -37,15 +37,37 @@ sudo apt-get install -y webkit2gtk-driver xvfb
 macOS uses the built-in WebKit driver; Windows needs `msedgedriver`. See
 <https://v2.tauri.app/develop/tests/webdriver/>.
 
-### Dev-container provisioning
+### Dev-container provisioning (build + test)
 
-These host tools live outside the repo, so a container that wipes them on reboot
-must reinstall on boot. Drop into the provisioning script:
+Everything below lives outside the repo, so a container that wipes it on reboot
+must reinstall on boot. This is the full set to **build and WebDriver-test** the
+desktop app from clean, the Rust toolchain, Tauri's Linux system libs, and the
+cargo/apt test tooling. (The Rust *crate* deps in `src-tauri/Cargo.lock` are NOT
+listed: `cargo build` / `bun run tauri build` fetch them automatically into the
+cargo registry cache.)
 
 ```sh
-apt-get update && apt-get install -y webkit2gtk-driver xvfb
-cargo install tauri-driver --locked   # idempotent: no-op if already current
+# 1. Rust toolchain (rustup installs the stable cargo/rustc). Skip if ~/.cargo
+#    survives reboot; re-running is a no-op.
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+. "$HOME/.cargo/env"
+
+# 2. Tauri v2 Linux system libs + build tools + the WebDriver test tooling
+#    (webkit2gtk-driver + xvfb). One apt transaction.
+apt-get update && apt-get install -y \
+  build-essential curl wget file patchelf \
+  libssl-dev libxdo-dev librsvg2-dev \
+  libgtk-3-dev libsoup-3.0-dev \
+  libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev \
+  libayatana-appindicator3-dev \
+  webkit2gtk-driver xvfb
+
+# 3. cargo-installed binaries (the WebDriver proxy). Idempotent.
+cargo install tauri-driver --locked
 ```
+
+The wdio client deps (`@wdio/*`) come with `bun install` (they're in
+`package.json`), so no extra step for those.
 
 ## Run
 
