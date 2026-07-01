@@ -75,6 +75,9 @@ def main():
         gc.collect()
         path, _ = export_heads(ONSET_CKPT, out / f"onset_heads.{tag}.onnx", fp16=fp16)
         _report(path)
+        # The heads' lane vocab / thresholds / fps sidecar (ships with them).
+        (out / "onset_meta.json").write_text((ONSET_CKPT / "meta.json").read_text())
+        _report(out / "onset_meta.json")
         gc.collect()
 
     if want("adtof"):

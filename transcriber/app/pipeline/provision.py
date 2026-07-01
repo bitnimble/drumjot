@@ -137,6 +137,55 @@ def provision_custom_models() -> None:
     log.info("provision: separation models ready in %s", models_dir)
 
 
+# ---- shipped ONNX models (fp16) ------------------------------------------
+#
+# Every ML model the transcriber runs on onnxruntime is pre-exported to fp16 and
+# hosted at bitnimble/drumjot-onnx, so the packaged (torch-free) app downloads
+# ready `.onnx` instead of exporting at first run. Each loader prefers the
+# shipped file (`shipped_onnx`) and only falls back to a local torch export in a
+# dev checkout where the file isn't present. fp16 is GPU-only (validated on CUDA
+# at corr >= 0.99998 vs fp32); a CPU-EP deployment would need the fp32 set.
+_ONNX_BASE = "https://huggingface.co/bitnimble/drumjot-onnx/resolve/main"
+_ONNX_FILES: tuple[str, ...] = (
+    "model_bs_roformer_sw.fp16.onnx",
+    "drumsep_5stems_mdx23c_jarredou.fp16.onnx",
+    "mert_L10.fp16.onnx",
+    "onset_heads.fp16.onnx",
+    # The learned-onset heads are checkpoint-specific; meta.json carries their
+    # lane vocab, encoder/layer, fps, and tuned per-lane thresholds. Ships with
+    # the heads so the onset path needs no local training checkpoint.
+    "onset_meta.json",
+    "adtof_frame_rnn.fp16.onnx",
+    "beat_this.fp16.onnx",
+    "ctc_align__facebook__wav2vec2-large-robust-ft-libri-960h.fp16.onnx",
+    "ctc_align__MahmoudAshraf__mms-300m-1130-forced-aligner.fp16.onnx",
+)
+
+
+def provision_onnx_models() -> None:
+    """Download the shipped fp16 `.onnx` set into `settings.models_dir`.
+    Idempotent (skips present files); call at install time."""
+    models_dir = Path(settings.models_dir)
+    models_dir.mkdir(parents=True, exist_ok=True)
+    for fname in _ONNX_FILES:
+        _download(f"{_ONNX_BASE}/{fname}", models_dir / fname)
+    log.info("provision: onnx models ready in %s", models_dir)
+
+
+def provisioned_file(filename: str) -> Path | None:
+    """Path to a provisioned asset `filename` under `settings.models_dir` if
+    present + non-empty, else None."""
+    path = Path(settings.models_dir) / filename
+    return path if path.exists() and path.stat().st_size > 0 else None
+
+
+def shipped_onnx(name: str) -> Path | None:
+    """Path to the shipped fp16 onnx `{name}.fp16.onnx` if present, else None.
+    Loaders use this to prefer the downloaded weights and skip the local
+    (torch-dependent) export."""
+    return provisioned_file(f"{name}.fp16.onnx")
+
+
 def main(argv: list[str]) -> int:
     """`python -m app.pipeline.provision <uv-group>...` - pre-fetch the heavy model
     assets a freshly-installed capability needs (separation models + vocals, and
@@ -146,13 +195,11 @@ def main(argv: list[str]) -> int:
     logging.basicConfig(level=logging.INFO)
     groups = set(argv)
     if groups & {"separation", "transcription", "lyrics"}:
+        # Separation ckpt+yaml (the yaml carries the STFT params the numpy path
+        # reads; the ckpt is only needed for a dev/torch local export), plus the
+        # shipped fp16 .onnx set every model runs on.
         provision_custom_models()
-    if "transcription" in groups:
-        # Instantiate once to trigger the Beat This! weight download into the
-        # torch hub cache (no-op if already cached).
-        from app.pipeline.beats import _beat_this_model
-
-        _beat_this_model()
+        provision_onnx_models()
     return 0
 
 

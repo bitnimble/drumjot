@@ -628,24 +628,27 @@ def _load_numpy_separator(ckpt_path: Path, yaml_path: Path, models_dir: Path):
     First export is heavy (full-size graph, minutes); later loads reuse the
     cached `.onnx`. Shipping a pre-exported `.onnx` via provision would make even
     the first load torch-free."""
+    from app.pipeline.provision import shipped_onnx
     from app.pipeline.separation.np_inference import NumpySeparator
 
-    fp16 = _onnx_separation_fp16()
-    onnx_path = models_dir / (ckpt_path.stem + (".fp16.onnx" if fp16 else ".onnx"))
-    if not onnx_path.exists():
-        from app.pipeline.separation.export import export_body
+    onnx_path = shipped_onnx(ckpt_path.stem)  # provisioned fp16 body (torch-free)
+    if onnx_path is None:
+        # Dev fallback: export the body next to the ckpt (needs torch).
+        fp16 = _onnx_separation_fp16()
+        onnx_path = models_dir / (ckpt_path.stem + (".fp16.onnx" if fp16 else ".onnx"))
+        if not onnx_path.exists():
+            from app.pipeline.separation.export import export_body
 
-        log.info(
-            "Exporting %s body to ONNX%s (one-time, cached) ...",
-            ckpt_path.name,
-            " fp16" if fp16 else "",
-        )
-        export_body(load_model(ckpt_path, yaml_path, device="cpu"), onnx_path, fp16=fp16)
+            log.info(
+                "Exporting %s body to ONNX%s (one-time, cached) ...",
+                ckpt_path.name,
+                " fp16" if fp16 else "",
+            )
+            export_body(load_model(ckpt_path, yaml_path, device="cpu"), onnx_path, fp16=fp16)
     sep = NumpySeparator(onnx_path, yaml_path)
     log.info(
-        "ONNX separation ENABLED for %s (%s, providers=%s)",
+        "ONNX separation ENABLED for %s (providers=%s)",
         ckpt_path.name,
-        "fp16" if fp16 else "fp32",
         sep.session.get_providers(),
     )
     return sep

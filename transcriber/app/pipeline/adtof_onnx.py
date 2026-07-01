@@ -49,10 +49,14 @@ def load_adtof_session(models_dir: str | Path, *, providers=None):
     a CPU fallback."""
     import onnxruntime as ort
 
-    onnx_path = Path(models_dir) / "adtof_frame_rnn.onnx"
-    if not onnx_path.exists():
-        onnx_path.parent.mkdir(parents=True, exist_ok=True)
-        export_adtof(onnx_path)
+    from app.pipeline.provision import shipped_onnx
+
+    onnx_path = shipped_onnx("adtof_frame_rnn")  # provisioned fp16 (torch-free)
+    if onnx_path is None:
+        onnx_path = Path(models_dir) / "adtof_frame_rnn.onnx"
+        if not onnx_path.exists():
+            onnx_path.parent.mkdir(parents=True, exist_ok=True)
+            export_adtof(onnx_path)  # dev fallback (needs torch)
     if providers is None:
         providers = ort.get_available_providers()
     try:

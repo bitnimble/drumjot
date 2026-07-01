@@ -279,9 +279,13 @@ def load_onnx_aligner(model_path: str, models_dir, *, providers=None) -> OnnxCtc
     (cached in `models_dir`). The tokenizer loads via HF (torch-free)."""
     from transformers import AutoTokenizer
 
-    onnx_path = Path(models_dir) / f"ctc_align__{_sanitize(model_path)}.onnx"
-    if not onnx_path.exists():
-        onnx_path.parent.mkdir(parents=True, exist_ok=True)
-        export_ctc_model(model_path, onnx_path)
+    from app.pipeline.provision import shipped_onnx
+
+    onnx_path = shipped_onnx(f"ctc_align__{_sanitize(model_path)}")  # provisioned fp16
+    if onnx_path is None:
+        onnx_path = Path(models_dir) / f"ctc_align__{_sanitize(model_path)}.onnx"
+        if not onnx_path.exists():
+            onnx_path.parent.mkdir(parents=True, exist_ok=True)
+            export_ctc_model(model_path, onnx_path)  # dev fallback (needs torch)
     tokenizer = AutoTokenizer.from_pretrained(model_path, word_delimiter_token=None)
     return OnnxCtcAligner(onnx_path, tokenizer, providers=providers)

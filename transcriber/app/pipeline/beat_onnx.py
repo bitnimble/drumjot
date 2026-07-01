@@ -175,8 +175,12 @@ class OnnxBeatThis:
 
 def load_beat_session(models_dir, *, providers=None) -> OnnxBeatThis:
     """Build the torch-free Beat This!, exporting the `.onnx` once (cached)."""
-    onnx_path = Path(models_dir) / "beat_this.onnx"
-    if not onnx_path.exists():
-        onnx_path.parent.mkdir(parents=True, exist_ok=True)
-        export_beatthis(onnx_path)
+    from app.pipeline.provision import shipped_onnx
+
+    onnx_path = shipped_onnx("beat_this")  # provisioned fp16 (torch-free)
+    if onnx_path is None:
+        onnx_path = Path(models_dir) / "beat_this.onnx"
+        if not onnx_path.exists():
+            onnx_path.parent.mkdir(parents=True, exist_ok=True)
+            export_beatthis(onnx_path)  # dev fallback (needs torch)
     return OnnxBeatThis(onnx_path, providers=providers)

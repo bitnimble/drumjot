@@ -108,20 +108,30 @@ def load_onnx_onset(checkpoint_dir, *, providers=None):
     """Build the torch-free `OnnxOnsetModel` from a saved run dir, exporting the
     MERT + heads `.onnx` once (cached next to the checkpoint) if absent. Returns
     `(model, meta)`."""
+    from app.pipeline.provision import provisioned_file, shipped_onnx
+
     checkpoint_dir = Path(checkpoint_dir)
-    meta = json.loads((checkpoint_dir / "meta.json").read_text())
+    # meta.json: the provisioned sidecar (shipped app), else the checkpoint dir (dev).
+    meta_path = provisioned_file("onset_meta.json") or (checkpoint_dir / "meta.json")
+    meta = json.loads(meta_path.read_text())
     if meta.get("lane_layers"):
         # Per-lane-layer checkpoints route each head to its own MERT layer; this
         # path exports a single layer and would feed every head the wrong
         # features (silently wrong, not a crash). Callers route these to torch.
         raise NotImplementedError("ONNX onset path supports single-layer checkpoints only")
-    mert_onnx, heads_onnx = _onnx_paths(checkpoint_dir, meta)
-    if not mert_onnx.exists():
-        from app.pipeline.onset_onnx.export import export_mert
 
-        export_mert(mert_onnx, meta["encoder_layer"], name=meta["encoder"])
-    if not heads_onnx.exists():
-        from app.pipeline.onset_onnx.export import export_heads
+    layer = meta["encoder_layer"]
+    mert_onnx = shipped_onnx(f"mert_L{layer}")  # provisioned fp16 (shared encoder)
+    heads_onnx = shipped_onnx("onset_heads")  # provisioned fp16 (this checkpoint's heads)
+    if mert_onnx is None or heads_onnx is None:
+        # Dev fallback: export both next to the checkpoint (needs torch).
+        mert_onnx, heads_onnx = _onnx_paths(checkpoint_dir, meta)
+        if not mert_onnx.exists():
+            from app.pipeline.onset_onnx.export import export_mert
 
-        export_heads(checkpoint_dir, heads_onnx)
+            export_mert(mert_onnx, layer, name=meta["encoder"])
+        if not heads_onnx.exists():
+            from app.pipeline.onset_onnx.export import export_heads
+
+            export_heads(checkpoint_dir, heads_onnx)
     return OnnxOnsetModel(mert_onnx, heads_onnx, meta, providers=providers), meta
