@@ -174,6 +174,44 @@ _SIMPLIFIED_CHINESE_MARKERS = frozenset(
 # OWSM-CTC v4 1B) lands and we need per-language config knobs.
 _ALIGN_MODEL_ENGLISH = "facebook/wav2vec2-large-robust-ft-libri-960h"
 
+# The package's default multilingual CTC aligner (adapters pre-merged, romanized).
+# `_pick_alignment_model` returns None for it; the ONNX path needs the explicit id.
+_ALIGN_MODEL_DEFAULT = "MahmoudAshraf/mms-300m-1130-forced-aligner"
+
+
+def _lyrics_onnx_enabled() -> bool:
+    """Default ON: run the CTC acoustic model through onnxruntime (torch-free
+    inference). Opt out with DRUMJOT_LYRICS_ONNX in {0,false,no,off,torch}
+    (mirrors DRUMJOT_SEP_ONNX / DRUMJOT_ONSET_ONNX / DRUMJOT_BEAT_ONNX)."""
+    import os
+
+    return os.environ.get("DRUMJOT_LYRICS_ONNX", "1").strip().lower() not in (
+        "0", "false", "no", "off", "torch",
+    )
+
+
+def _onnx_providers():
+    """onnxruntime providers from settings.device (no torch import): CPU-pinned
+    when CPU/MPS is forced, else the available set (+ CPU fallback in the loader)."""
+    dev = (settings.device or "auto").lower()
+    return ["CPUExecutionProvider"] if dev in ("cpu", "mps") else None
+
+
+def _is_torch_tensor(x: Any) -> bool:
+    """True for a torch tensor, False for a numpy array (duck-typed, no import).
+    Used to skip the torch-only emission diagnostics on the numpy/ONNX path."""
+    return hasattr(x, "is_cpu")
+
+
+def _all_finite(emissions: Any) -> bool:
+    if _is_torch_tensor(emissions):
+        import torch
+
+        return bool(torch.isfinite(emissions).all())
+    import numpy as np
+
+    return bool(np.isfinite(emissions).all())
+
 
 class LyricsAligner:
     """Lazy-loaded forced-alignment wrapper.
@@ -200,6 +238,8 @@ class LyricsAligner:
         # can be resident simultaneously, ~1-1.2 GB each at fp16 / fp32
         # respectively, well within the alignment-stage VRAM budget.
         self._align_models: dict[str | None, tuple[Any, Any]] = {}
+        # Torch-free ONNX aligners (OnnxCtcAligner), keyed the same way.
+        self._onnx_aligners: dict[str | None, Any] = {}
         self._device: str | None = None
 
     def _resolve_device(self) -> str:
@@ -293,6 +333,20 @@ class LyricsAligner:
         self._align_models[model_path] = (model, tokenizer)
         return model, tokenizer
 
+    def _load_ctc_onnx(self, model_path: str | None):
+        """Torch-free `OnnxCtcAligner` for `model_path` (None -> the MMS default).
+        Exports the model's `.onnx` once (cached in settings.models_dir)."""
+        cached = self._onnx_aligners.get(model_path)
+        if cached is not None:
+            return cached
+        from app.pipeline.lyrics_onnx import load_onnx_aligner
+
+        resolved = model_path or _ALIGN_MODEL_DEFAULT
+        log.info("lyrics: loading CTC aligner (ONNX, model=%s)", resolved)
+        aligner = load_onnx_aligner(resolved, settings.models_dir, providers=_onnx_providers())
+        self._onnx_aligners[model_path] = aligner
+        return aligner
+
     def _pick_alignment_model(self, language_code: str) -> str | None:
         """Route a detected ISO-639-1 language code to a CTC checkpoint.
 
@@ -326,6 +380,9 @@ class LyricsAligner:
         for key, entry in list(self._align_models.items()):
             label = f"ctc_align[{key or 'mms-default'}]"
             park_module(entry[0], label)
+        # ONNX aligners hold their VRAM in the ORT session; drop them (they reload
+        # lazily from the cached .onnx) so the swap frees it.
+        self._onnx_aligners.clear()
 
     def unpark(self) -> None:
         """Move every loaded CTC aligner back to CUDA. Idempotent."""
@@ -398,11 +455,28 @@ class LyricsAligner:
             iso3 = _iso1_to_iso3(language_code)
 
             model_path = self._pick_alignment_model(language_code)
-            model, tokenizer = self._load_ctc_aligner(model_path)
-            # load_audio materialises the waveform on the same device +
-            # dtype as the model so generate_emissions can run without
-            # an extra copy / cast inside its inner loop.
-            audio_waveform = load_audio(str(audio_path), model.dtype, model.device)
+            # Default: torch-free ONNX (acoustic model on onnxruntime, the Viterbi
+            # + everything else numpy); opt out with DRUMJOT_LYRICS_ONNX=0. Each
+            # branch binds `alignments_fn(emissions, tokens, tokenizer)`; the
+            # emissions call itself is inside the try (below) so a failure degrades
+            # gracefully. get_spans / postprocess_results / _repair are shared.
+            use_onnx = _lyrics_onnx_enabled()
+            aligner = model = None
+            if use_onnx:
+                from app.pipeline.lyrics_onnx import get_alignments_np, load_audio_np
+
+                aligner = self._load_ctc_onnx(model_path)
+                tokenizer = aligner.tokenizer
+                audio_waveform = load_audio_np(str(audio_path))
+                alignments_fn = get_alignments_np
+            else:
+                model, tokenizer = self._load_ctc_aligner(model_path)
+                # load_audio materialises the waveform on the same device +
+                # dtype as the model so generate_emissions can run without
+                # an extra copy / cast inside its inner loop.
+                audio_waveform = load_audio(str(audio_path), model.dtype, model.device)
+                alignments_fn = get_alignments
+
             _log_audio_stats(audio_waveform, audio_path)
 
             # Decide Japanese-aware romanization. cutlet/fugashi reads
@@ -455,9 +529,14 @@ class LyricsAligner:
             _log_token_sequence(all_tokens, all_text)
 
             try:
-                emissions, stride = generate_emissions(
-                    model, audio_waveform, batch_size=_CTC_BATCH_SIZE,
-                )
+                if use_onnx:
+                    emissions, stride = aligner.generate_emissions(
+                        audio_waveform, batch_size=_CTC_BATCH_SIZE,
+                    )
+                else:
+                    emissions, stride = generate_emissions(
+                        model, audio_waveform, batch_size=_CTC_BATCH_SIZE,
+                    )
                 # `stride`'s unit is package-internal (seen as ms or samples
                 # per frame depending on version) so it's not safe to use
                 # for our diagnostic time axis. Derive sec/frame from the
@@ -478,20 +557,20 @@ class LyricsAligner:
                 # `get_spans` AssertionError far from the real cause. The
                 # `except Exception` below catches this and degrades to
                 # returning the caller's lines unchanged.
-                import torch  # type: ignore[import-not-found]
-
-                if not torch.isfinite(emissions).all():
-                    nan = int(torch.isnan(emissions).sum())
-                    inf = int(torch.isinf(emissions).sum())
+                # Fail fast on poisoned emissions: a non-finite tensor (fp16
+                # overflow on an unstable head, corrupt weights, broken audio)
+                # otherwise flows into Viterbi, which collapses to one all-blank
+                # segment and surfaces as a cryptic `get_spans` AssertionError far
+                # from the cause. The `except Exception` below then degrades to
+                # returning the caller's lines unchanged.
+                if not _all_finite(emissions):
                     raise ValueError(
-                        f"acoustic model emitted non-finite emissions "
-                        f"(nan={nan} inf={inf} of {emissions.numel()}); "
-                        f"model={model_path or 'MMS-300m'} "
-                        f"dtype={emissions.dtype} - likely fp16 numerical "
-                        f"instability, load this head in fp32"
+                        f"acoustic model emitted non-finite emissions; "
+                        f"model={model_path or 'MMS-300m'} - likely numerical "
+                        f"instability (load this head in fp32)"
                     )
                 _log_emissions_windowed(emissions, audio_seconds, tokenizer)
-                segments, scores, blank_token = get_alignments(
+                segments, scores, blank_token = alignments_fn(
                     emissions, all_tokens, tokenizer,
                 )
                 try:
@@ -515,7 +594,7 @@ class LyricsAligner:
                     all_text=all_text,
                     tokenizer=tokenizer,
                     stride=stride,
-                    get_alignments=get_alignments,
+                    get_alignments=alignments_fn,
                     get_spans=get_spans,
                     postprocess_results=postprocess_results,
                 )
@@ -752,6 +831,8 @@ def _log_audio_stats(audio_waveform: Any, audio_path: Path) -> None:
     NaN/Inf counts catch upstream numerical tainting; `near_silent`
     catches the case where the separator zeroed out quiet regions and
     the model is being asked to align text against a near-flat signal."""
+    if not _is_torch_tensor(audio_waveform):
+        return  # numpy/ONNX path: this torch-only diagnostic is skipped
     import torch  # type: ignore[import-not-found]
 
     numel = audio_waveform.numel()
@@ -843,7 +924,7 @@ def _repair_low_score_words(
         )
         return word_timestamps
 
-    em_dim = int(emissions.dim())
+    em_dim = int(emissions.ndim)  # .ndim works for both torch tensors and numpy
     total_frames = int(emissions.shape[1 if em_dim == 3 else 0])
     sec_per_frame = audio_seconds / max(total_frames, 1)
 
@@ -1025,6 +1106,8 @@ def _log_emissions_stats(emissions: Any, tokenizer: Any) -> None:
     `<star>` column appended by `generate_emissions` lives at index
     `vocab_size` and shows up as '<star-col>' since it isn't in the
     tokenizer's own vocab map."""
+    if not _is_torch_tensor(emissions):
+        return  # numpy/ONNX path: this torch-only diagnostic is skipped
     import torch  # type: ignore[import-not-found]
 
     nan = int(torch.isnan(emissions).sum())
@@ -1109,6 +1192,8 @@ def _log_emissions_windowed(
     requiring an exp() in your head. Top-3 argmax classes ride the same
     `<star-col>` label vocabulary as `_log_emissions_stats` for
     cross-line greppability."""
+    if not _is_torch_tensor(emissions):
+        return  # numpy/ONNX path: this torch-only diagnostic is skipped
     import torch  # type: ignore[import-not-found]
 
     em = emissions.float()
@@ -1235,6 +1320,8 @@ def _log_word_score_diagnostics(
     if not word_timestamps:
         log.info("lyrics: word_scores: no words (skipping)")
         return
+    if not _is_torch_tensor(emissions):
+        return  # numpy/ONNX path: this torch-only diagnostic is skipped
     em = emissions.float()
     if em.dim() == 3:
         em = em[0]
