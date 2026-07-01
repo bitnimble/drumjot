@@ -143,6 +143,10 @@ and gitignored. See the spec's "Android" section.
   model under the one capability that uses it, never a global "fetch all" list.
   All model URLs / HF ids are `settings.*` build fields (config.py "Model asset
   sources"), not hardcoded. fp16 is GPU-only (ORT's CPU EP can't run fp16 GRU).
+  **Adding / converting / A/B-testing a model: read
+  [docs/onnx-models.md](docs/onnx-models.md)** (the export→fp16→numpy-frontend
+  recipe, the `keep_io_types`/`dynamo=False` gotchas, the CUDA-lib preload, and
+  the add-a-model checklist).
 - **Bash tool/search specifics.** `cat` / `sed` / `awk` / `find` stay
   redirected to `Read` / `Edit` / `Find`; their command-executing flags
   (`rg --pre` / `--pre-glob` / `--hostname-bin`, `git grep -O` /
@@ -353,6 +357,10 @@ Playwright subprocess), so plain `bun run e2e` picks it up.
   Python audio→MIDI pipeline, named-stage runner, `/transcribe/resume`,
   beat-grid invariants, debug/outputs folder layouts, accuracy Path A/B,
   things to test, open questions.
+- [docs/onnx-models.md](docs/onnx-models.md), the ONNX model format
+  (fp16, GPU-only) + how to convert/export a model to it, ship it
+  (capability-scoped provision + HF), and A/B-test models. Read before
+  adding a new model or swapping one.
 - [docs/design-system.md](docs/design-system.md), design tokens,
   typography classes, shared UI primitives, the stylelint rules.
 - [docs/dsl-reference.md](docs/dsl-reference.md), DSL quick reference
