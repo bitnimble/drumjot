@@ -41,13 +41,23 @@ export class CapabilityPresenter {
   /** Point-of-use gate: resolves true if the capability is already installed,
    *  otherwise opens the install prompt (sets `store.pendingGate`) and resolves
    *  once the user confirms+install succeeds (true) or cancels (false). */
-  requestCapability(id: CapabilityId): Promise<boolean> {
+  async requestCapability(id: CapabilityId): Promise<boolean> {
     if (this.store.isReady(id)) {
-      return Promise.resolve(true);
+      return true;
     }
     if (capabilityById(id).kind !== 'deps') {
       // credentials/system capabilities aren't installed via uv; treat as ready.
-      return Promise.resolve(true);
+      return true;
+    }
+    // The in-memory status can be a stale `not-installed`: the boot `refresh()`
+    // may not have landed yet (it's async, and `detectAccelerator` can be slow),
+    // or the on-disk state changed since load. Confirm against the persisted
+    // source of truth before showing an install prompt for something the user
+    // already has -- otherwise a genuinely-installed capability spuriously
+    // prompts to reinstall if the gate is hit early enough.
+    await this.syncInstalledFromDisk();
+    if (this.store.isReady(id)) {
+      return true;
     }
     // A prompt is already open (concurrent gate): abandon the prior waiter so it
     // resolves false rather than hanging when this one supersedes it.
@@ -57,6 +67,21 @@ export class CapabilityPresenter {
       runInAction(() => {
         this.store.pendingGate = id;
       });
+    });
+  }
+
+  /** Read the persisted capability states and mark any that are installed as
+   *  ready. Upgrade-only: never downgrades, so it can't clobber an in-flight
+   *  `installing`; it only corrects a stale/not-yet-loaded `not-installed` for a
+   *  capability that's actually present on disk. */
+  private async syncInstalledFromDisk(): Promise<void> {
+    const states = await this.bridge.capabilityStates();
+    runInAction(() => {
+      for (const cap of CAPABILITIES) {
+        if (states[cap.id]?.installed && !this.store.isReady(cap.id)) {
+          this.store.statuses.set(cap.id, 'ready');
+        }
+      }
     });
   }
 

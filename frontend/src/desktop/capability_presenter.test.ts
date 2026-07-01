@@ -145,6 +145,9 @@ describe('CapabilityPresenter', () => {
   it('requestCapability opens the prompt for a not-installed capability', async () => {
     const { presenter, store } = make();
     const pending = presenter.requestCapability('transcription');
+    // requestCapability confirms against disk (async) before prompting, so the
+    // gate opens on a later microtask, not synchronously.
+    await new Promise((r) => setTimeout(r, 0));
     expect(store.pendingGate).toBe('transcription');
     // confirm → install → resolves true, prompt closes
     await presenter.confirmGate();
@@ -153,9 +156,22 @@ describe('CapabilityPresenter', () => {
     expect(store.pendingGate).toBeUndefined();
   });
 
+  it('requestCapability confirms against disk before prompting (boot-race guard)', async () => {
+    // The capability IS installed on disk, but the store hasn't loaded it yet
+    // (the async boot refresh hasn't landed). requestCapability must confirm
+    // against the persisted state and pass, NOT spuriously prompt to reinstall.
+    const { presenter, store, bridge } = make();
+    bridge.states = { transcription: { installed: true } };
+    // store.statuses is empty here (refresh() never ran).
+    await expect(presenter.requestCapability('transcription')).resolves.toBe(true);
+    expect(store.pendingGate).toBeUndefined();
+    expect(store.statusOf('transcription')).toBe('ready'); // corrected from disk
+  });
+
   it('cancelGate resolves the pending request as false and closes the prompt', async () => {
     const { presenter, store } = make();
     const pending = presenter.requestCapability('transcription');
+    await new Promise((r) => setTimeout(r, 0)); // let the disk-confirm settle
     expect(store.pendingGate).toBe('transcription');
     presenter.cancelGate();
     await expect(pending).resolves.toBe(false);
