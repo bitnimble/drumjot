@@ -11,24 +11,33 @@ opens, the frontend renders into `#app`, and the Tauri IPC bridge is present.
 The ONNX inference path is validated headlessly and doesn't need the GUI, see
 `transcriber/tests/test_onnx_model_e2e.py`.
 
-## One-time tooling (not installed by default)
+## Tooling
 
-WebDriver-driving a GUI app needs system + cargo tools the repo doesn't vendor:
+The wdio client deps (`@wdio/*`, `expect-webdriverio`) are in `package.json`
+devDependencies, so `bun install` provides them. WebDriver-driving a GUI app
+additionally needs two host tools the repo can't vendor, a cargo binary and an
+apt package, plus a virtual display on a headless box:
 
 ```sh
-# 1. tauri-driver (WebDriver <-> platform-driver proxy)
+# tauri-driver: the WebDriver <-> platform-driver proxy
 cargo install tauri-driver --locked
 
-# 2. Linux platform driver + a virtual display for headless boxes
-sudo apt install webkit2gtk-driver xvfb
-
-# 3. wdio client deps (adds to package.json devDependencies -- run once)
-bun add -d @wdio/cli @wdio/local-runner @wdio/mocha-framework \
-           @wdio/spec-reporter @wdio/globals expect-webdriverio
+# Linux platform driver (WebKitWebDriver) + a virtual display for headless
+sudo apt-get install -y webkit2gtk-driver xvfb
 ```
 
 macOS uses the built-in WebKit driver; Windows needs `msedgedriver`. See
 <https://v2.tauri.app/develop/tests/webdriver/>.
+
+### Dev-container provisioning
+
+These host tools live outside the repo, so a container that wipes them on reboot
+must reinstall on boot. Drop into the provisioning script:
+
+```sh
+apt-get update && apt-get install -y webkit2gtk-driver xvfb
+cargo install tauri-driver --locked   # idempotent: no-op if already current
+```
 
 ## Run
 

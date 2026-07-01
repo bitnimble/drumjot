@@ -1,11 +1,13 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 // The raw release binary tauri-driver launches. The crate name is `app`
 // (src-tauri/Cargo.toml); the "Drumjot" productName only renames the packaged
 // AppImage/deb/rpm, not the release executable.
-const APP_BINARY = resolve(__dirname, '../src-tauri/target/release/app')
+const here = fileURLToPath(new URL('.', import.meta.url))
+const APP_BINARY = resolve(here, '../src-tauri/target/release/app')
 
 // tauri-driver proxies WebDriver to the platform driver (WebKitWebDriver on
 // Linux). We spawn it per session and tear it down after.
