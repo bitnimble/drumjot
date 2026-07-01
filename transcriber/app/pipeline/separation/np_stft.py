@@ -46,16 +46,35 @@ def istft(
     """`(b, n_fft//2+1, frames)` complex -> `(b, samples)` real fp32. Matches
     torch.istft (weighted overlap-add / window-envelope normalization)."""
     n_frames = spec.shape[-1]
+    b = spec.shape[0]
     spec = np.transpose(spec, (0, 2, 1))
     frames = np.fft.irfft(spec, n=n_fft, axis=-1).astype(np.float32) * window[None, None, :]
     out_len = n_fft + hop * (n_frames - 1)
-    y = np.zeros((spec.shape[0], out_len), dtype=np.float32)
-    env = np.zeros(out_len, dtype=np.float32)
     w2 = (window**2).astype(np.float32)
-    for i in range(n_frames):
-        s = i * hop
-        y[:, s : s + n_fft] += frames[:, i, :]
-        env[s : s + n_fft] += w2
+    if n_fft % hop == 0:
+        # Vectorized overlap-add: split each n_fft frame into K = n_fft//hop
+        # hop-blocks; block j of frame i lands in output block i+j, so the whole
+        # add is a K-iteration column sweep instead of an n_frames Python loop
+        # (K is ~4-16; n_frames is 512-1101). Same values, only the add order
+        # differs (fp32-negligible; still bit-compatible with torch to rounding).
+        k = n_fft // hop
+        n_blocks = n_frames + k - 1  # == out_len // hop
+        fb = frames.reshape(b, n_frames, k, hop)
+        yb = np.zeros((b, n_blocks, hop), np.float32)
+        eb = np.zeros((n_blocks, hop), np.float32)
+        w2b = w2.reshape(k, hop)
+        for j in range(k):
+            yb[:, j : j + n_frames] += fb[:, :, j]
+            eb[j : j + n_frames] += w2b[j]
+        y = yb.reshape(b, out_len)
+        env = eb.reshape(out_len)
+    else:
+        y = np.zeros((b, out_len), dtype=np.float32)
+        env = np.zeros(out_len, dtype=np.float32)
+        for i in range(n_frames):
+            s = i * hop
+            y[:, s : s + n_fft] += frames[:, i, :]
+            env[s : s + n_fft] += w2
     env = np.where(env > 1e-11, env, 1.0)
     y = y / env[None, :]
     if center:
