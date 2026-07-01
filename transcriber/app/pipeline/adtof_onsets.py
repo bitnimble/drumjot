@@ -250,9 +250,12 @@ def _load_model():
 
 
 def park_model() -> None:
-    """Move the cached ADTOF Frame_RNN model to CPU. No-op when the
-    lru_cache hasn't been hit yet. Callers must hold the process-wide
-    GPU lock; see `app.pipeline.gpu_park`."""
+    """Free the ADTOF model's GPU memory for the /lyrics swap. Callers must hold
+    the process-wide GPU lock; see `app.pipeline.gpu_park`.
+
+    ONNX path: drop the onnxruntime session (its arena holds the VRAM); it
+    reloads lazily from the cached `.onnx`. Torch path: move the module to CPU."""
+    _load_adtof_session.cache_clear()  # ORT session VRAM; reloads from the cached .onnx
     if _load_model.cache_info().currsize == 0:
         return
     from app.pipeline.gpu_park import park_module
