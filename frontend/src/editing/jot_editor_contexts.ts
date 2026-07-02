@@ -5,6 +5,17 @@ import type { StructuralPresenter } from 'src/editing/structure/structural_prese
 import type { TempoPresenter } from 'src/editing/playback/tempo_presenter';
 import type { TempoEditPresenter } from 'src/editing/playback/tempo_edit_presenter';
 import type { PaletteStore } from 'src/editing/palette/palette_store';
+import type { JotEditorStore } from './jot_editor_store';
+import type { JotEditorPresenter } from './jot_editor_presenter';
+
+/**
+ * The editor's composition-root store + presenter (examples, load/save,
+ * new-jot), provided at the JotEditor level so the File dropdown drives them
+ * off context instead of the app shell threading every loader callback through
+ * the Toolbar. `null` outside the View; consumers no-op in that case.
+ */
+export const JotEditorStoreContext = React.createContext<JotEditorStore | null>(null);
+export const JotEditorPresenterContext = React.createContext<JotEditorPresenter | null>(null);
 
 /**
  * The loaded song's peer domains, provided once at the JotEditor level so deep

@@ -2,6 +2,7 @@ import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { jotPlayer } from 'src/editing/playback/player';
 import { SampleLoadProgress } from 'src/editing/playback/sample_storage';
+import { LyricsAlignStoreContext } from 'src/editing/lyrics/lyrics_contexts';
 import { TranscribeStage } from 'src/editing/transcribe/transcriber';
 import { TranscribeStoreContext } from 'src/editing/transcribe/transcribe_contexts';
 import { ProgressBar } from 'src/ui/progress_bar/progress_bar';
@@ -104,27 +105,25 @@ export const DrumLoadingIndicator = observer(() => {
  * with another job) and flips to "Aligning lyrics…" once the work
  * actually starts. Returns to nothing on completion; success is
  * signalled by the row's lines upgrading, failure by an error toast.
+ *
+ * Reads the phase off the {@link LyricsAlignStore} via context so the toolbar
+ * around it doesn't re-render as alignment state changes.
  */
-export const LyricsAlignBusyPill = observer(
-  ({ phase }: { phase: 'idle' | 'queued' | 'aligning' }) => {
-    if (phase === 'idle') return null;
-    const queued = phase === 'queued';
-    return (
-      <StatusPill
-        tone="busy"
-        title={
-          queued
-            ? 'Waiting for the GPU (another job is running)…'
-            : 'Extracting vocals + aligning lyrics…'
-        }
-        testId="lyrics-align-busy"
-      >
-        <Spinner size={10} tone="accent" className={styles.statusPillSpinner} />
-        {queued ? 'Queued…' : 'Aligning lyrics…'}
-      </StatusPill>
-    );
-  }
-);
+export const LyricsAlignBusyPill = observer(() => {
+  const phase = React.useContext(LyricsAlignStoreContext)?.lyricsAlignBusyPhase ?? 'idle';
+  if (phase === 'idle') return null;
+  const queued = phase === 'queued';
+  return (
+    <StatusPill
+      tone="busy"
+      title={queued ? 'Waiting for the GPU (another job is running)…' : 'Extracting vocals + aligning lyrics…'}
+      testId="lyrics-align-busy"
+    >
+      <Spinner size={10} tone="accent" className={styles.statusPillSpinner} />
+      {queued ? 'Queued…' : 'Aligning lyrics…'}
+    </StatusPill>
+  );
+});
 
 /**
  * Persistent top-right pill for any in-flight transcription, fed from the

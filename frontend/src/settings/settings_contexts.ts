@@ -1,5 +1,16 @@
 import React from 'react';
 import { GridLineSettings } from './settings_store';
+import type { SettingsStore } from './settings_store';
+import type { SettingsPresenter } from './settings_presenter';
+
+/**
+ * The display-settings store + its presenter, provided at the JotEditor level
+ * so the View dropdown reads/toggles them off context instead of the app shell
+ * threading a dozen `on*`/flag props through the Toolbar. `null` outside the
+ * View (e.g. a Toolbar-less render); consumers no-op in that case.
+ */
+export const SettingsStoreContext = React.createContext<SettingsStore | null>(null);
+export const SettingsPresenterContext = React.createContext<SettingsPresenter | null>(null);
 
 /**
  * Grid-line toggles surfaced through the View dropdown. Threaded as

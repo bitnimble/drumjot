@@ -1,7 +1,13 @@
 import { observer } from 'mobx-react-lite';
+import React from 'react';
 import { jotPlayer, PLAYBACK_SPEED_MAX, PLAYBACK_SPEED_MIN, PLAYBACK_SPEED_STEP } from 'src/editing/playback/player';
-import { SubmenuItem, ToggleMenuItem } from 'src/ui/dropdown/dropdown';
+import {
+  PlaybackStoreContext,
+  PlaybackPresenterContext,
+} from 'src/editing/playback/playback_contexts';
+import { DropdownButton, SubmenuItem, ToggleMenuItem } from 'src/ui/dropdown/dropdown';
 import { NumberStepper } from 'src/ui/number_stepper/number_stepper';
+import { ToolbarDropdownLabel } from './toolbar';
 import styles from './toolbar.module.css';
 
 /**
@@ -95,3 +101,37 @@ export const AudioLatencyItem = observer(() => (
     </span>
   </label>
 ));
+
+/**
+ * The "Playback" toolbar dropdown: drum kit, speed, audio-latency trim, and the
+ * auto-follow-on-play toggle. Self-contained `observer`; the kit/speed/latency
+ * rows read `jotPlayer` directly, the toggle reads the playback store/presenter
+ * off context (the Toolbar renders inside their providers).
+ */
+export const PlaybackMenu = observer(() => {
+  const playback = React.useContext(PlaybackStoreContext);
+  const playbackPresenter = React.useContext(PlaybackPresenterContext);
+  return (
+    <DropdownButton
+      label={<ToolbarDropdownLabel>Playback</ToolbarDropdownLabel>}
+      className={styles.playButton}
+      title="Drum kit (sample set) and playback speed."
+    >
+      {() => (
+        <>
+          <PlaybackKitSubmenu />
+          <PlaybackSpeedItem />
+          <AudioLatencyItem />
+          <ToggleMenuItem
+            label="Auto-enable follow on play"
+            active={playback?.autoFollowOnPlay ?? false}
+            onToggle={() =>
+              playbackPresenter?.setAutoFollowOnPlay(!(playback?.autoFollowOnPlay ?? false))
+            }
+            title="When on, pressing Play (or resuming) re-enables Auto-follow if it was disabled mid-playback (pan, minimap drag, follow-button toggle while playing). Turning Auto-follow off while paused or stopped is treated as deliberate and survives the next play. Off = current Auto-follow state is always preserved across plays."
+          />
+        </>
+      )}
+    </DropdownButton>
+  );
+});
