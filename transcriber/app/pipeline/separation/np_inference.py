@@ -17,7 +17,6 @@ The spectrogram packing mirrors the vendored model classes:
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 
 import librosa
@@ -26,22 +25,17 @@ import yaml
 from scipy import signal
 
 from . import np_stft
-
-NORMALIZATION_THRESHOLD = 0.9
-AMPLIFICATION_THRESHOLD = 0.0
-SAMPLE_RATE = 44100
-MDXC_OVERLAP = 8
-
-ProgressCallback = Callable[[int, int], None]
-
-
-def _normalize(wave: np.ndarray, max_peak: float = 1.0, min_peak: float | None = None) -> np.ndarray:
-    maxv = np.abs(wave).max()
-    if maxv > max_peak:
-        wave = wave * (max_peak / maxv)
-    elif min_peak is not None and min_peak > 0 and maxv < min_peak:
-        wave = wave * (min_peak / maxv)
-    return wave
+from ._chunking import (
+    AMPLIFICATION_THRESHOLD,
+    MDXC_OVERLAP,
+    NORMALIZATION_THRESHOLD,
+    SAMPLE_RATE,
+    ProgressCallback,
+    chunk_size_for,
+    mdx23c_schedule,
+    normalize,
+    roformer_step,
+)
 
 
 def _prepare_mix(audio: str | Path | np.ndarray) -> np.ndarray:
@@ -154,7 +148,7 @@ class NumpySeparator:
         return self.session.run(None, {self._in: x})[0]
 
     def separate(self, audio, *, progress_callback: ProgressCallback | None = None) -> dict[str, np.ndarray]:
-        mix = _normalize(
+        mix = normalize(
             _prepare_mix(audio), max_peak=NORMALIZATION_THRESHOLD, min_peak=AMPLIFICATION_THRESHOLD
         )
         sources = (
@@ -163,7 +157,7 @@ class NumpySeparator:
             else self._demix_mdx23c(mix, progress_callback)
         )
         return {
-            name: _normalize(w, max_peak=NORMALIZATION_THRESHOLD, min_peak=AMPLIFICATION_THRESHOLD)
+            name: normalize(w, max_peak=NORMALIZATION_THRESHOLD, min_peak=AMPLIFICATION_THRESHOLD)
             for name, w in sources.items()
         }
 
@@ -178,10 +172,8 @@ class NumpySeparator:
         _wl = cfg["audio"].get("win_length")  # np_stft assumes a full n_fft window; torch centre-pads a shorter one
         assert _wl in (None, n_fft), f"win_length {_wl} != n_fft {n_fft}: np_stft would silently degrade this model"
 
-        chunk_size = hop * (segment - 1)
-        hop_size = chunk_size // MDXC_OVERLAP
-        mix_shape = mix.shape[1]
-        pad_size = hop_size - (mix_shape - chunk_size) % hop_size
+        chunk_size = chunk_size_for(hop, segment)
+        hop_size, pad_size = mdx23c_schedule(chunk_size, mix.shape[1])
         mix_p = np.concatenate(
             [
                 np.zeros((2, chunk_size - hop_size), np.float32),
@@ -214,9 +206,8 @@ class NumpySeparator:
         _wl = cfg["model"].get("stft_win_length") or cfg["model"].get("win_length")
         assert _wl in (None, n_fft), f"stft_win_length {_wl} != n_fft {n_fft}: np_stft would silently degrade this model"
 
-        chunk_size = hop * (segment - 1)
-        desired_step = int(MDXC_OVERLAP * cfg["audio"]["sample_rate"])
-        step = chunk_size if desired_step <= 0 else min(desired_step, chunk_size)
+        chunk_size = chunk_size_for(hop, segment)
+        step = roformer_step(chunk_size, cfg["audio"]["sample_rate"])
         ham = signal.windows.hamming(chunk_size).astype(np.float32)
 
         orig_len = mix.shape[1]

@@ -26,7 +26,6 @@ mono->stereo broadcast).
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 
 import librosa
@@ -34,28 +33,21 @@ import numpy as np
 import torch
 from scipy import signal
 
+from ._chunking import (
+    AMPLIFICATION_THRESHOLD,
+    MDXC_OVERLAP,
+    NORMALIZATION_THRESHOLD,
+    SAMPLE_RATE,
+    ProgressCallback,
+    chunk_size_for,
+    mdx23c_schedule,
+    normalize,
+    roformer_step,
+)
 from .loader import LoadedModel
 
-# audio-separator Separator() defaults (separator.py:116-120).
-NORMALIZATION_THRESHOLD = 0.9
-AMPLIFICATION_THRESHOLD = 0.0
-SAMPLE_RATE = 44100
-
-# mdxc_params defaults (separator.py:128).
-MDXC_OVERLAP = 8
+# mdxc_params default (separator.py:128).
 MDXC_OVERRIDE_SEGMENT_SIZE = False
-
-ProgressCallback = Callable[[int, int], None]
-
-
-def _normalize(wave: np.ndarray, max_peak: float = 1.0, min_peak: float | None = None) -> np.ndarray:
-    """spec_utils.normalize (spec_utils.py:99-115), in place on a copy-safe array."""
-    maxv = np.abs(wave).max()
-    if maxv > max_peak:
-        wave = wave * (max_peak / maxv)
-    elif min_peak is not None and min_peak > 0 and maxv < min_peak:
-        wave = wave * (min_peak / maxv)
-    return wave
 
 
 def _prepare_mix(audio: str | Path | np.ndarray) -> np.ndarray:
@@ -89,7 +81,7 @@ class SeparationRunner:
         (channels, samples), matching what audio-separator returns pre-write
         (before its transpose for the soundfile write)."""
         mix = _prepare_mix(audio)
-        mix = _normalize(mix, max_peak=NORMALIZATION_THRESHOLD, min_peak=AMPLIFICATION_THRESHOLD)
+        mix = normalize(mix, max_peak=NORMALIZATION_THRESHOLD, min_peak=AMPLIFICATION_THRESHOLD)
 
         if self.loaded.kind == "bs_roformer":
             sources = self._demix_roformer(mix, progress_callback)
@@ -98,7 +90,7 @@ class SeparationRunner:
 
         out: dict[str, np.ndarray] = {}
         for name, wave in sources.items():
-            out[name] = _normalize(
+            out[name] = normalize(
                 wave, max_peak=NORMALIZATION_THRESHOLD, min_peak=AMPLIFICATION_THRESHOLD
             )
         return out
@@ -123,11 +115,9 @@ class SeparationRunner:
         stft_hop_len = getattr(cfg.model, "stft_hop_length", None)
         if stft_hop_len is None:
             stft_hop_len = cfg.audio.hop_length
-        chunk_size = int(stft_hop_len) * (int(mdx_segment_size) - 1)
+        chunk_size = chunk_size_for(int(stft_hop_len), int(mdx_segment_size))
 
-        # overlap is in seconds; clamp the resulting step to chunk_size.
-        desired_step = int(MDXC_OVERLAP * cfg.audio.sample_rate)
-        step = chunk_size if desired_step <= 0 else min(desired_step, chunk_size)
+        step = roformer_step(chunk_size, cfg.audio.sample_rate)
 
         window = torch.tensor(signal.windows.hamming(chunk_size), dtype=torch.float32)
 
@@ -202,11 +192,8 @@ class SeparationRunner:
         num_stems = self.model.num_target_instruments
 
         mdx_segment_size = cfg.inference.dim_t
-        chunk_size = cfg.audio.hop_length * (mdx_segment_size - 1)
-        hop_size = chunk_size // MDXC_OVERLAP
-
-        mix_shape = mix_t.shape[1]
-        pad_size = hop_size - (mix_shape - chunk_size) % hop_size
+        chunk_size = chunk_size_for(cfg.audio.hop_length, mdx_segment_size)
+        hop_size, pad_size = mdx23c_schedule(chunk_size, mix_t.shape[1])
 
         mix_t = torch.cat(
             [
