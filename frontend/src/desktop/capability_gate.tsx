@@ -1,5 +1,6 @@
 import { observer } from 'mobx-react-lite';
 import { Modal, ModalBody, ModalFooter, ModalHeader, modalStyles } from 'src/ui/modal/modal';
+import { Spinner } from 'src/ui/spinner/spinner';
 import { capabilityById, formatBytes } from './capability_manifest';
 import { desktopCapabilities } from './desktop_services';
 
@@ -31,7 +32,10 @@ export const CapabilityGate = observer(function CapabilityGate() {
       <ModalBody>
         <p>{cap.description}</p>
         {installing ? (
-          <p className={modalStyles.note}>Installing… {store.installLog.get(id) ?? ''}</p>
+          <p className={modalStyles.note} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Spinner size={14} label="Installing capability" />
+            <span>Installing… {store.installLog.get(id) ?? ''}</span>
+          </p>
         ) : error != null ? (
           <p className={modalStyles.note}>Install failed: {error}</p>
         ) : (

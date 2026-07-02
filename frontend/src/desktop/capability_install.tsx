@@ -8,6 +8,7 @@ import {
 } from './capability_manifest';
 import { type CapabilityStatus } from './capability_store';
 import { desktopCapabilities } from './desktop_services';
+import { Spinner } from 'src/ui/spinner/spinner';
 import styles from './capability_panel.module.css';
 
 /** Selection + install state for the capability picker, shared by the first-run
@@ -76,16 +77,15 @@ export const CapabilityTree = observer(function CapabilityTree({
     const cap = capabilityById(id);
     const status = controller.statusOf(id);
     const credentials = cap.kind === 'credentials';
+    // `installing` renders a spinner (below), not a text badge.
     const badge =
       status === 'ready'
         ? 'Installed'
-        : status === 'installing'
-          ? 'Installing…'
-          : credentials
-            ? 'Needs API key'
-            : status === 'error'
-              ? 'Failed'
-              : '';
+        : credentials
+          ? 'Needs API key'
+          : status === 'error'
+            ? 'Failed'
+            : '';
     return (
       <React.Fragment key={id}>
         <div className={styles.node} style={{ paddingInlineStart: depth * 22 }}>
@@ -108,7 +108,17 @@ export const CapabilityTree = observer(function CapabilityTree({
               </span>
             </label>
           )}
-          {badge !== '' && <span className={styles.nodeStatus}>{badge}</span>}
+          {status === 'installing' ? (
+            <span
+              className={styles.nodeStatus}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            >
+              <Spinner size={12} label="Installing" />
+              Installing…
+            </span>
+          ) : (
+            badge !== '' && <span className={styles.nodeStatus}>{badge}</span>
+          )}
         </div>
         {childrenOf(id).map((c) => renderNode(c, depth + 1))}
       </React.Fragment>
