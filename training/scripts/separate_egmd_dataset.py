@@ -63,7 +63,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_HERE, ".."))  # training/
 sys.path.insert(0, os.path.join(_HERE, "..", "..", "transcriber"))  # transcriber app
 
-from drumjot_training import egmd, midi_labels  # noqa: E402
+from drumjot_training import dedup, egmd, midi_labels  # noqa: E402
 from drumjot_training.lanes import LANES  # noqa: E402
 
 PITCHES = tuple(egmd.PERSTEM_TO_LANES)  # ("k", "s", "h", "c", "t")
@@ -83,12 +83,22 @@ def uid_for(audio_filename: str) -> str:
     return "__".join(Path(audio_filename).with_suffix("").parts)
 
 
-def greedy_select(counts: np.ndarray, durations: np.ndarray, max_seconds: float) -> list[int]:
+def greedy_select(
+    counts: np.ndarray, durations: np.ndarray, max_seconds: float,
+    sigs: list[str] | None = None, max_per_sig: int = 0,
+) -> list[int]:
     """Indices selected by greedy marginal rare-lane coverage, capped by total
     duration. `counts` is (n_clips, n_lanes); each step picks the clip with the
     highest `sum_lane count/(1+covered)` so under-covered (rare) lanes pull their
     clips in first. Deterministic (argmax ties -> lowest index), and
-    prefix-stable, so a larger cap just extends the same order."""
+    prefix-stable, so a larger cap just extends the same order.
+
+    `sigs` + `max_per_sig` (>0) cap how many clips sharing an onset-signature are
+    taken. In E-GMD one drum PERFORMANCE is re-rendered across many kits (identical
+    onsets -> same signature); without a cap the raw-count term lets a few
+    high-onset grooves stack ~25-40 kit-renders each, starving groove diversity. The
+    cap keeps a few kit-renders per performance (timbre variety) while the duration
+    budget spreads across many more distinct grooves."""
     n = counts.shape[0]
     if n == 0:
         return []
@@ -97,6 +107,11 @@ def greedy_select(counts: np.ndarray, durations: np.ndarray, max_seconds: float)
     avail = np.ones(n, dtype=bool)
     order: list[int] = []
     total = 0.0
+    sig_idx: dict[str, list[int]] = {}
+    per_sig: dict[str, int] = {}
+    if sigs is not None and max_per_sig > 0:
+        for j, s in enumerate(sigs):
+            sig_idx.setdefault(s, []).append(j)
     while total < max_seconds and avail.any():
         scores = (cf / (1.0 + covered)).sum(axis=1)
         scores[~avail] = -np.inf
@@ -105,6 +120,12 @@ def greedy_select(counts: np.ndarray, durations: np.ndarray, max_seconds: float)
         order.append(i)
         covered += cf[i]
         total += float(durations[i])
+        if sigs is not None and max_per_sig > 0:
+            s = sigs[i]
+            per_sig[s] = per_sig.get(s, 0) + 1
+            if per_sig[s] >= max_per_sig:  # cap hit -> drop this performance's remaining renders
+                for j in sig_idx.get(s, ()):
+                    avail[j] = False
     return order
 
 
@@ -149,16 +170,18 @@ def load_lane_counts(rows, root: Path, cache_path: Path, log) -> dict:
     scanned = 0
     for i, r in enumerate(rows):
         key = r["audio_filename"]
-        if key in cache:
+        if key in cache and "sig" in cache[key]:  # re-parse entries from a pre-sig cache
             out[key] = cache[key]
             continue
         try:
             onsets = midi_labels.onsets_from_path(root / r["midi_filename"])
             counts = {ln: len(onsets[ln]) for ln in LANES}
+            sig = dedup.onset_signature(onsets)  # performance identity (kit-renders share it)
         except Exception as e:  # noqa: BLE001
             log(f"  skip count {key}: {e!r}")
             counts = dict.fromkeys(LANES, 0)
-        out[key] = cache[key] = {"counts": counts, "dur": float(r["duration"])}
+            sig = ""
+        out[key] = cache[key] = {"counts": counts, "dur": float(r["duration"]), "sig": sig}
         scanned += 1
         if scanned % 2000 == 0:
             _atomic_bytes(json.dumps(cache).encode(), cache_path)  # atomic so an interrupted scan resumes
@@ -167,14 +190,16 @@ def load_lane_counts(rows, root: Path, cache_path: Path, log) -> dict:
     return out
 
 
-def select(rows, counts_by_key, max_seconds: float) -> list[dict]:
+def select(rows, counts_by_key, max_seconds: float, max_per_sig: int = 0) -> list[dict]:
     """Balanced, duration-capped selection of `rows` (CSV dicts), in priority
-    order."""
+    order. `max_per_sig` caps kit-renders per distinct performance (see
+    greedy_select)."""
     if not rows:
         return []
     counts = np.array([[counts_by_key[r["audio_filename"]]["counts"][ln] for ln in LANES] for r in rows])
     durs = np.array([counts_by_key[r["audio_filename"]]["dur"] for r in rows])
-    return [rows[i] for i in greedy_select(counts, durs, max_seconds)]
+    sigs = [counts_by_key[r["audio_filename"]].get("sig", "") for r in rows]
+    return [rows[i] for i in greedy_select(counts, durs, max_seconds, sigs, max_per_sig)]
 
 
 # --- output paths + completion ---------------------------------------------
@@ -350,6 +375,10 @@ def main():
     ap.add_argument("--val-min", type=float, default=30.0,
                     help="balanced val minutes from validation+test (0 = everything); kept modest by "
                     "default since eval rarely needs all ~10k held-out clips")
+    ap.add_argument("--max-renders-per-perf", type=int, default=4,
+                    help="cap kit-renders per distinct performance (onset-signature) in the balanced "
+                    "selection, so the budget spreads across grooves instead of stacking ~25-40 "
+                    "renders of a few high-onset grooves (see greedy_select). 0 = uncapped (old behaviour)")
     ap.add_argument("--buffer-sec", type=float, default=300.0, help="separation buffer length per batch")
     ap.add_argument("--gap-sec", type=float, default=2.0, help="silence gap between concatenated clips")
     ap.add_argument(
@@ -376,9 +405,10 @@ def main():
     val_rows = [r for r in rows if r["split"].strip() in ("validation", "test")]
     train_cap = float("inf") if args.train_min <= 0 else args.train_min * 60
     val_cap = float("inf") if args.val_min <= 0 else args.val_min * 60
-    train_sel = select(train_rows, counts_by_key, train_cap)
-    val_sel = select(val_rows, counts_by_key, val_cap)
-    log(f"selected (balanced): {len(train_sel)} train, {len(val_sel)} val clips")
+    train_sel = select(train_rows, counts_by_key, train_cap, args.max_renders_per_perf)
+    val_sel = select(val_rows, counts_by_key, val_cap, args.max_renders_per_perf)
+    log(f"selected (balanced): {len(train_sel)} train, {len(val_sel)} val clips "
+        f"(<={args.max_renders_per_perf or 'inf'} renders/perf)")
 
     # val FIRST so an early ctrl-C/resume always leaves a complete eval set, then
     # train grinds in balanced priority order (most valuable clips first). val is

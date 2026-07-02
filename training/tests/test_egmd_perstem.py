@@ -82,6 +82,24 @@ def test_greedy_select_is_balanced_and_deterministic():
     assert len(capped) == 2 and 2 in capped                       # rare clip beats redundant commons
 
 
+def test_greedy_select_caps_renders_per_performance():
+    sed = _load_sep()
+    # sig "A" = one high-onset groove with 4 kit-renders; B/C/D = distinct low-onset grooves.
+    counts = np.array([[100, 5], [100, 5], [100, 5], [100, 5], [10, 1], [10, 1], [10, 1]])
+    durs = np.ones(7)
+    sigs = ["A", "A", "A", "A", "B", "C", "D"]
+    # max_per_sig=0 is the old behaviour (identical to no sigs at all).
+    assert sed.greedy_select(counts, durs, 3.0, sigs, 0) == sed.greedy_select(counts, durs, 3.0)
+    # under a 3-clip budget, uncapped stacks the big groove's renders -> zero diversity.
+    unc = sed.greedy_select(counts, durs, 3.0, sigs, 0)
+    assert [sigs[i] for i in unc].count("A") == 3
+    # capped at 2/perf: only 2 renders of A, budget then spreads to a distinct groove.
+    cap = sed.greedy_select(counts, durs, 3.0, sigs, 2)
+    assert [sigs[i] for i in cap].count("A") == 2
+    assert len({sigs[i] for i in cap}) == 2                       # A + one other performance
+    assert cap == sed.greedy_select(counts, durs, 3.0, sigs, 2)   # deterministic
+
+
 def test_plan_batches_groups_by_buffer():
     sed = _load_sep()
     # gap 2s, buffer 25s: 10 + (2+10)=22 fit; +(2+10)=34 over -> new batch
