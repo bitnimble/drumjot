@@ -1,7 +1,8 @@
 import numpy as np
 import torch
 
-from drumjot_training.train import Clip, collate_clips, masked_bce
+from drumjot_training.losses import masked_bce
+from drumjot_training.train import Clip, collate_clips
 
 
 def _clip(t, dim=4, n_lanes=3, val=1.0):

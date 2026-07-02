@@ -94,7 +94,7 @@ def test_activate_onsets_cymbal_softmax_couples_ride_crash():
 def test_masked_cymbal_ce_lower_when_logits_match_target():
     import torch
 
-    from drumjot_training.train import masked_cymbal_ce
+    from drumjot_training.losses import masked_cymbal_ce
 
     b, t = 2, 60
     tgt = torch.zeros(b, 2, t)  # (ride, crash)

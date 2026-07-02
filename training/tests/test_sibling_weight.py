@@ -25,7 +25,7 @@ def test_sibling_matrix_shape_and_entries():
 def test_sibling_weight_torch_behaviour():
     import torch
 
-    from drumjot_training.train import masked_bce, sibling_weight
+    from drumjot_training.losses import masked_bce, sibling_weight
 
     # 2 lanes, 4 frames; lane0 has a positive at frame1; lane1 silent throughout
     Y = torch.tensor([[[0.0, 1.0, 0.0, 0.0]], [[0.0, 0.0, 0.0, 0.0]]]).transpose(0, 1)  # (1,2,4)
