@@ -77,6 +77,11 @@ type PasteCtx = {
 /** One bar's place in the absolute-beat coordinate (cumulative across bars). */
 type BarSlot = { id: string; start: number; beats: number };
 
+type Gesture =
+  | { kind: 'idle' }
+  | { kind: 'drag'; ctx: DragMoveCtx }
+  | { kind: 'paste'; ctx: PasteCtx };
+
 /** Identity lane map (no cross-lane move). */
 const SAME_LANE = (lane: string): string => lane;
 
@@ -93,10 +98,10 @@ const INSERTED_NOTE_DURATION = 0.25;
  * go straight through `jotEditorStore.jot` (the sanctioned document-write path).
  */
 export class EditingPresenter implements Resettable {
-  /** Live drag-move bookkeeping, or undefined when no drag is in flight. */
-  private dragCtx: DragMoveCtx | undefined = undefined;
-  /** Live paste-placement bookkeeping, or undefined when no paste is in flight. */
-  private pasteCtx: PasteCtx | undefined = undefined;
+  /** The in-flight gesture (drag / paste), or `idle`. Single source of truth;
+   *  {@link setGesture} keeps the observable `dragActive`/`pasteActive` flags in
+   *  lockstep. */
+  private gesture: Gesture = { kind: 'idle' };
 
   constructor(
     private readonly editingStore: EditingStore,
@@ -114,8 +119,7 @@ export class EditingPresenter implements Resettable {
       | 'selectionStore'
       | 'selectionPresenter'
       | 'layersPresenter'
-      | 'dragCtx'
-      | 'pasteCtx'
+      | 'gesture'
     >(this, {
       editingStore: false,
       jotEditorStore: false,
@@ -123,9 +127,20 @@ export class EditingPresenter implements Resettable {
       selectionStore: false,
       selectionPresenter: false,
       layersPresenter: false,
-      dragCtx: false,
-      pasteCtx: false,
+      gesture: false,
     });
+  }
+
+  /** The single writer of gesture state: keeps editingStore.dragActive /
+   *  pasteActive in lockstep with `gesture` (so at most one is ever true) and
+   *  clears the shared preview when idle or when a paste starts (a paste's
+   *  preview appears on the first cursor move; a drag's is recomputed by
+   *  applyPreview immediately after). */
+  private setGesture(next: Gesture): void {
+    this.gesture = next;
+    this.editingStore.dragActive = next.kind === 'drag';
+    this.editingStore.pasteActive = next.kind === 'paste';
+    if (next.kind !== 'drag') this.editingStore.dragPreview = [];
   }
 
   /** Run a compound gesture's mutations as ONE Loro commit (= one undo step).
@@ -454,7 +469,7 @@ export class EditingPresenter implements Resettable {
     }
     if (notes.length === 0) return;
 
-    this.dragCtx = {
+    const ctx: DragMoveCtx = {
       anchor,
       startClientX,
       startLane,
@@ -467,7 +482,7 @@ export class EditingPresenter implements Resettable {
       lastClientX: startClientX,
       lastTargetLane: anchor.lane,
     };
-    this.editingStore.dragActive = true;
+    this.setGesture({ kind: 'drag', ctx });
     this.applyPreview();
   }
 
@@ -478,8 +493,8 @@ export class EditingPresenter implements Resettable {
    * rendered lane order (mixer order) for the group's vertical shift.
    */
   updateDragMove(targetLane: string, clientX: number, laneOrder: readonly string[]): void {
-    const ctx = this.dragCtx;
-    if (!ctx) return;
+    if (this.gesture.kind !== 'drag') return;
+    const ctx = this.gesture.ctx;
     // A frame drag seeds `startLane` lazily from the first reported row, so the
     // cross-lane shift is measured from wherever inside the frame the user
     // grabbed (zero at the start) rather than the snap anchor's lane.
@@ -495,8 +510,8 @@ export class EditingPresenter implements Resettable {
    *  the snapped delta shifts every member off its rest position. Lane: the
    *  shared span rule (see {@link placementPreview}). */
   private applyPreview(): void {
-    const ctx = this.dragCtx;
-    if (!ctx) return;
+    if (this.gesture.kind !== 'drag') return;
+    const ctx = this.gesture.ctx;
     const px = this.jotEditorStore.layout?.pxPerBeat ?? 0;
     const rawDelta = px > 0 ? (ctx.lastClientX - ctx.startClientX) / px : 0;
     const shift = ctx.snap(rawDelta);
@@ -514,11 +529,10 @@ export class EditingPresenter implements Resettable {
    *  {@link moveSelection} (same snap + lane remap as the preview, so what you
    *  saw is what lands), then clears the preview. No-op if no drag is active. */
   commitDragMove(): void {
-    const ctx = this.dragCtx;
-    this.dragCtx = undefined;
-    this.editingStore.dragActive = false;
-    this.editingStore.dragPreview = [];
-    if (!ctx) return;
+    const g = this.gesture;
+    this.setGesture({ kind: 'idle' });
+    if (g.kind !== 'drag') return;
+    const ctx = g.ctx;
     const px = this.jotEditorStore.layout?.pxPerBeat ?? 0;
     const rawDelta = px > 0 ? (ctx.lastClientX - ctx.startClientX) / px : 0;
     // Span rule (mirrors `applyPreview`): a multi-lane group keeps every lane
@@ -533,9 +547,7 @@ export class EditingPresenter implements Resettable {
   /** Abandon an in-flight drag-move (pointercancel), leaving the document
    *  untouched and clearing the preview. */
   cancelDragMove(): void {
-    this.dragCtx = undefined;
-    this.editingStore.dragActive = false;
-    this.editingStore.dragPreview = [];
+    if (this.gesture.kind === 'drag') this.setGesture({ kind: 'idle' });
   }
 
   /**
@@ -643,7 +655,7 @@ export class EditingPresenter implements Resettable {
     if (layout.slots.length === 0) return;
     const lanes = new Set(payload.notes.map((n) => n.lane));
     const anchorLane = payload.notes[0].lane;
-    this.pasteCtx = {
+    const ctx: PasteCtx = {
       members: payload.notes.map((n, i) => ({
         id: `paste:${i}`,
         lane: n.lane,
@@ -659,9 +671,9 @@ export class EditingPresenter implements Resettable {
       lastTargetLane: anchorLane,
       hasCursor: false,
     };
-    this.editingStore.pasteActive = true;
-    // Preview appears on the first pointer move (which seeds the anchor).
-    this.editingStore.dragPreview = [];
+    // Preview appears on the first pointer move (which seeds the anchor);
+    // setGesture clears dragPreview.
+    this.setGesture({ kind: 'paste', ctx });
   }
 
   /**
@@ -671,8 +683,8 @@ export class EditingPresenter implements Resettable {
    * but the horizontal quantity is an absolute beat, not a delta.
    */
   updatePaste(anchorAbs: number, targetLane: string, laneOrder: readonly string[]): void {
-    const ctx = this.pasteCtx;
-    if (!ctx) return;
+    if (this.gesture.kind !== 'paste') return;
+    const ctx = this.gesture.ctx;
     ctx.lastAnchorAbs = anchorAbs;
     ctx.lastTargetLane = targetLane;
     ctx.laneOrder = laneOrder;
@@ -683,8 +695,8 @@ export class EditingPresenter implements Resettable {
   /** Recompute the paste preview from the current cursor anchor + target lane,
    *  through the same {@link placementPreview} span rule as a drag. */
   private applyPastePreview(): void {
-    const ctx = this.pasteCtx;
-    if (!ctx) return;
+    if (this.gesture.kind !== 'paste') return;
+    const ctx = this.gesture.ctx;
     const shift = ctx.snap(ctx.lastAnchorAbs);
     this.editingStore.dragPreview = placementPreview(
       ctx.members,
@@ -704,11 +716,10 @@ export class EditingPresenter implements Resettable {
    * before the first pointer move (no position chosen) or with no document.
    */
   commitPaste(): void {
-    const ctx = this.pasteCtx;
-    this.pasteCtx = undefined;
-    this.editingStore.pasteActive = false;
-    this.editingStore.dragPreview = [];
-    if (!ctx || !ctx.hasCursor) return;
+    const g = this.gesture;
+    this.setGesture({ kind: 'idle' });
+    if (g.kind !== 'paste' || !g.ctx.hasCursor) return;
+    const ctx = g.ctx;
     const jot = this.jotEditorStore.jot;
     const layers = this.jotEditorStore.jot?.musicalLayers;
     if (!jot || !layers) return;
@@ -765,10 +776,8 @@ export class EditingPresenter implements Resettable {
   /** Abandon an in-flight paste placement (Esc / a new load), writing nothing
    *  and clearing the preview. No-op when no paste is active. */
   cancelPaste(): void {
-    if (!this.pasteCtx && !this.editingStore.pasteActive) return;
-    this.pasteCtx = undefined;
-    this.editingStore.pasteActive = false;
-    this.editingStore.dragPreview = [];
+    if (this.gesture.kind !== 'paste') return;
+    this.setGesture({ kind: 'idle' });
   }
 }
 
