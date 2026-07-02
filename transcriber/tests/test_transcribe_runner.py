@@ -38,7 +38,7 @@ def test_replays_debug_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         op="transcribe",
         args=RequestArgs(audio=PathRef(kind="path", path=str(BUNDLE))),
     )
-    artifacts = asyncio.run(TranscribeRunner().run(req, emit, CancelToken()))
+    artifacts = asyncio.run(TranscribeRunner().run(req, emit, CancelToken())).artifacts
 
     roles = [a.role for a in artifacts]
     assert "midi" in roles
@@ -106,7 +106,7 @@ def test_live_transcribe_collects_outputs(
         op="transcribe",
         args=RequestArgs(audio=PathRef(kind="path", path=str(audio)), params={"quantise": False}),
     )
-    artifacts = asyncio.run(TranscribeRunner().run(req, emit, CancelToken()))
+    artifacts = asyncio.run(TranscribeRunner().run(req, emit, CancelToken())).artifacts
 
     roles = [a.role for a in artifacts]
     assert "midi" in roles and "stem" in roles

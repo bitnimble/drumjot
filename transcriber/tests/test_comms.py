@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from app.comms.core import Cancelled, CancelToken, Registry
+from app.comms.core import Cancelled, CancelToken, Registry, RunnerResult
 from app.comms.protocol import (
     CLIENT_MESSAGE_ADAPTER,
     PROTOCOL_VERSION,
@@ -66,7 +66,6 @@ def test_echo_runner_emits_progress_then_result() -> None:
 def test_runner_result_carries_data() -> None:
     """A runner returning RunnerResult surfaces its `data` on the result frame
     (the alignLyrics mechanism)."""
-    from app.comms.core import RunnerResult
 
     class DataRunner:
         async def run(self, request, emit, cancel) -> RunnerResult:  # type: ignore[no-untyped-def]
@@ -110,7 +109,7 @@ def test_nan_progress_frac_is_clamped_not_fatal() -> None:
         async def run(self, request, emit, cancel):  # type: ignore[no-untyped-def]
             await emit("working", float("nan"), None)
             await emit("working", 5.0, None)
-            return []
+            return RunnerResult()
 
     out = _run_adapter({"separate": NanRunner()}, [_request("n1", "/z.wav")])
     assert out[-1]["type"] == "result"

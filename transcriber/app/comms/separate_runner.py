@@ -14,7 +14,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from .core import CancelToken, EmitProgress
+from .core import CancelToken, EmitProgress, RunnerResult
 from .protocol import Artifact, PathRef, RequestMessage
 from .transcribe_runner import _input_id, _outputs_dir
 
@@ -29,7 +29,7 @@ class SeparateRunner:
         request: RequestMessage,
         emit: EmitProgress,
         cancel: CancelToken,
-    ) -> list[Artifact]:
+    ) -> RunnerResult:
         source = request.args.audio
         if not isinstance(source, PathRef):
             raise ValueError("separate needs a local file path (remote upload unsupported here)")
@@ -47,10 +47,12 @@ class SeparateRunner:
         named = await asyncio.to_thread(_run_separation, path, stage, out)
         cancel.check()
         await emit("done", 1.0, None)
-        return [
-            Artifact(role=role, name=name, ref=PathRef(kind="path", path=str(p)))
-            for (name, role, p) in named
-        ]
+        return RunnerResult(
+            artifacts=[
+                Artifact(role=role, name=name, ref=PathRef(kind="path", path=str(p)))
+                for (name, role, p) in named
+            ]
+        )
 
 
 def _run_separation(audio_path: Path, stage: str, out_dir: Path) -> list[tuple[str, str, Path]]:
