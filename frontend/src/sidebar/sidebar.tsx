@@ -159,7 +159,10 @@ function watchEmptyScorePress(
   const startY = downEvent.clientY;
   const inner = new AbortController();
   const stop = () => inner.abort();
-  outerSignal.addEventListener('abort', stop, { once: true });
+  // Tie the outer-abort listener to `inner` so stop() (release / drag / outer
+  // abort) removes it too; otherwise the common release path leaves it on the
+  // session-lived outerSignal and repeated empty-score presses pile up.
+  outerSignal.addEventListener('abort', stop, { signal: inner.signal });
   const onMove = (e: MouseEvent) => {
     if (Math.hypot(e.clientX - startX, e.clientY - startY) > MARQUEE_DRAG_PX) stop(); // marquee: keep open
   };

@@ -132,8 +132,9 @@ export class LayersStore {
   }
 
   /** Layer ids (top-to-bottom) that carry an instrument track on `lane`. The
-   *  merged view's row aggregates these (mute/solo/volume act on all). */
-  layerIdsForLane(lane: string): string[] {
+   *  merged view's row aggregates these (mute/solo/volume act on all). Reactive,
+   *  memoised per lane (it's called per-track during merge-view render). */
+  layerIdsForLane = computedFn((lane: string): string[] => {
     const out: string[] = [];
     for (const layer of this.layout) {
       if (layer.slots.some((s) => s.tracks.some((t) => t.kind === 'instrument' && t.lane === lane))) {
@@ -141,7 +142,7 @@ export class LayersStore {
       }
     }
     return out;
-  }
+  });
 
   /** Id of the layer holding `trackId` (reactive, memoised per id). */
   layerIdOfTrack = computedFn((trackId: string): string | undefined => {
