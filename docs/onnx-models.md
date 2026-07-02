@@ -70,6 +70,14 @@ Non-obvious bits:
   at the boundary), so the numpy frontend feeds/reads fp32 unchanged; only
   internal weights/compute go fp16. Don't drop it, otherwise every numpy caller
   has to fp16-cast at the seam.
+- **`op_block_list`** (`to_fp16(path, op_block_list=[...])`) keeps named op types
+  in fp32 on top of the converter defaults, for a model whose fp16 rounding would
+  move a decision boundary. Currently unused: the onset heads' per-clip
+  calibration `Exp` was the suspected case, but a probe (non-zero calibration,
+  random features) measured max |Δlogit| ≈ 0.0036 and **zero** peak-pick threshold
+  flips (0.1/0.3/0.5) with vs without `op_block_list=["Exp"]`, the tiny drift is
+  uniform GRU/proj rounding, not the exp, so fp16 needs no blocking here. Reach for
+  it only if a future model's per-lane F1 (not just corr) shows fp16 flips.
 - **`dynamo=False`**, see above; the legacy exporter is what our graphs + the
   fp16 converter expect.
 - **opset 17**, `do_constant_folding=True` across the board.

@@ -10,14 +10,23 @@ shipping format (GPU EPs only; ORT's CPU EP lacks fp16 GRU kernels).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 
-def to_fp16(onnx_path: str | Path) -> Path:
-    """Convert the fp32 ONNX graph at `onnx_path` to fp16 in place. Returns it."""
+def to_fp16(onnx_path: str | Path, op_block_list: Sequence[str] | None = None) -> Path:
+    """Convert the fp32 ONNX graph at `onnx_path` to fp16 in place. Returns it.
+
+    `op_block_list` keeps the named op types in fp32 (on top of the converter's
+    defaults) -- for graphs with a numerically sensitive op whose fp16 rounding
+    would move a decision boundary (e.g. the onset heads' per-clip calibration
+    `Exp`, which amplifies the logit before the peak-pick threshold)."""
     import onnx
     from onnxruntime.transformers.float16 import convert_float_to_float16
 
     onnx_path = Path(onnx_path)
-    onnx.save(convert_float_to_float16(onnx.load(str(onnx_path)), keep_io_types=True), str(onnx_path))
+    kwargs: dict[str, object] = {"keep_io_types": True}
+    if op_block_list is not None:
+        kwargs["op_block_list"] = list(op_block_list)
+    onnx.save(convert_float_to_float16(onnx.load(str(onnx_path)), **kwargs), str(onnx_path))
     return onnx_path
