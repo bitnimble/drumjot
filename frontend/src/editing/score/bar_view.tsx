@@ -642,7 +642,10 @@ const NoteView = observer(
   }
 );
 
-function FlamGrace({ color, config }: { color: string; config: ViewConfig }) {
+// memo'd: sizes derive only from the stable `config.noteDiameter` + `color`, so a
+// parent NoteView re-render (selection/hover) shouldn't re-run these or realloc
+// their inline styles.
+const FlamGrace = React.memo(function FlamGrace({ color, config }: { color: string; config: ViewConfig }) {
   const size = (config.noteDiameter as number) * 0.55;
   return (
     <span
@@ -659,9 +662,9 @@ function FlamGrace({ color, config }: { color: string; config: ViewConfig }) {
       }}
     />
   );
-}
+});
 
-function DragGrace({ color, config }: { color: string; config: ViewConfig }) {
+const DragGrace = React.memo(function DragGrace({ color, config }: { color: string; config: ViewConfig }) {
   const size = (config.noteDiameter as number) * 0.45;
   return (
     <>
@@ -683,7 +686,7 @@ function DragGrace({ color, config }: { color: string; config: ViewConfig }) {
       ))}
     </>
   );
-}
+});
 
 function pickBadge(note: StructNote): string | undefined {
   const m = note.modifiers;

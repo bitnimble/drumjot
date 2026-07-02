@@ -1,5 +1,6 @@
 import classNames from 'classnames';
 import React from 'react';
+import { useBufferedStepper } from './use_buffered_stepper';
 import styles from './stepper.module.css';
 
 type StepperProps = {
@@ -39,17 +40,18 @@ export const Stepper = ({
   disabled = false,
   testId,
 }: StepperProps) => {
-  // While editing, the raw keystroke buffer; `null` means "show `value`".
-  const [text, setText] = React.useState<string | null>(null);
-  const display = text !== null ? text : value === null ? '' : value.toFixed(precision);
-
-  const commit = () => {
-    if (text === null) return;
-    const trimmed = text.trim();
-    const n = Number(trimmed);
-    if (trimmed !== '' && Number.isFinite(n)) onSet?.(n);
-    setText(null);
-  };
+  const buffered = useBufferedStepper({
+    commit: (raw) => {
+      const trimmed = raw.trim();
+      const n = Number(trimmed);
+      if (trimmed !== '' && Number.isFinite(n)) onSet?.(n);
+    },
+    deriveDisplay: (text) =>
+      text !== null ? text : value === null ? '' : value.toFixed(precision),
+    step: onStep,
+    handleArrowKeys: true,
+    commitOnChange: false,
+  });
 
   return (
     <div className={styles.stepper} data-disabled={disabled || undefined} data-testid={testId}>
@@ -66,30 +68,16 @@ export const Stepper = ({
       </button>
       <input
         className={styles.input}
-        value={display}
+        value={buffered.display}
         placeholder={placeholder}
         inputMode="decimal"
         aria-label={ariaLabel}
         disabled={disabled}
         readOnly={!onSet}
-        onChange={(e) => onSet && setText(e.target.value)}
+        onChange={(e) => onSet && buffered.onChange(e.target.value)}
         onFocus={(e) => e.currentTarget.select()}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            commit();
-            e.currentTarget.blur();
-          } else if (e.key === 'Escape') {
-            setText(null);
-            e.currentTarget.blur();
-          } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            onStep(1);
-          } else if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            onStep(-1);
-          }
-        }}
+        onBlur={buffered.onBlur}
+        onKeyDown={buffered.onKeyDown}
         data-testid={testId ? `${testId}-input` : undefined}
       />
       <button

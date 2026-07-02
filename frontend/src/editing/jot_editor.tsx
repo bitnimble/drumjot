@@ -40,8 +40,14 @@ import {
   TempoContext,
   TempoEditContext,
   PaletteContext,
+  JotEditorStoreContext,
+  JotEditorPresenterContext,
 } from './jot_editor_contexts';
-import { GridLineSettingsContext } from '../settings/settings_contexts';
+import {
+  GridLineSettingsContext,
+  SettingsStoreContext,
+  SettingsPresenterContext,
+} from '../settings/settings_contexts';
 import {
   MergeLayersContext,
   MixerStoreContext,
@@ -297,6 +303,17 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
       e.clientY - rect.top + viewport.scrollY
     );
   };
+  // End the marquee, committing the current box's hits, and drop the window
+  // release/blur guards. Idempotent (no-op once already ended), so the React
+  // onMouseUp and the window guards below can both call it harmlessly.
+  const finishMarquee = () => {
+    window.removeEventListener('mouseup', finishMarquee);
+    window.removeEventListener('blur', finishMarquee);
+    if (!marqueeOrigin) return;
+    marqueeOrigin = undefined;
+    const box = selection.marquee;
+    selectionPresenter.endMarquee(box ? marqueeHitTest(box) : []);
+  };
   const onMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     // A press during a paste placement is the commit click (handled on the
@@ -305,18 +322,18 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     e.preventDefault();
     marqueeOrigin = containerPoint(e);
     selectionPresenter.beginMarquee(marqueeOrigin);
+    // React's onMouseUp only fires for a release inside this subtree, so a
+    // release over the toolbar / outside the window (or a focus loss) would
+    // otherwise strand the rubber-band. Guarantee it ends via window guards.
+    window.addEventListener('mouseup', finishMarquee);
+    window.addEventListener('blur', finishMarquee);
   };
   const onMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!marqueeOrigin) return;
     const p = containerPoint(e);
     selectionPresenter.updateMarquee(marqueeOrigin, p, marqueeHitTest(Box.create(marqueeOrigin, p)));
   };
-  const onMouseUp = () => {
-    if (!marqueeOrigin) return;
-    marqueeOrigin = undefined;
-    const box = selection.marquee;
-    selectionPresenter.endMarquee(box ? marqueeHitTest(box) : []);
-  };
+  const onMouseUp = () => finishMarquee();
 
   /**
    * Zoom-slider handler. Mirrors the cursor-anchored math the wheel
@@ -503,6 +520,10 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
     );
 
     return (
+        <JotEditorStoreContext.Provider value={jotEditorStore}>
+        <JotEditorPresenterContext.Provider value={jotEditorPresenter}>
+        <SettingsStoreContext.Provider value={settings}>
+        <SettingsPresenterContext.Provider value={settingsPresenter}>
         <TranscribeStoreContext.Provider value={transcribe}>
         <TranscribePresenterContext.Provider value={transcribePresenter}>
         <LayersStoreContext.Provider value={layers}>
@@ -538,40 +559,10 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
                   >
                     <div className={styles.mainColumn}>
                     <Toolbar
-                      examples={jotEditorStore.examples}
-                      currentId={jotEditorStore.currentExampleId}
-                      onSelect={(id) => jotEditorPresenter.loadExample(id)}
                       onNewJot={onNewJot}
-                      onSaveJot={() => jotEditorPresenter.saveMutableFile()}
-                      onLoadJot={(file) => jotEditorPresenter.loadJotFile(file)}
-                      onLoadMidi={(file) => jotEditorPresenter.loadMidiFile(file)}
-                      onLoadZip={(file) => fileDrop.openFiles([file])}
-                      onScoreParadb={(file) => jotEditorPresenter.scoreParadbMap(file)}
-                      onLoadAudioTrack={(file) => jotEditorPresenter.loadAudioTrack(file)}
-                      onLoadLyricsFile={(file) => jotEditorPresenter.loadLyricsFile(file)}
-                      onOpenLyricsTextLoad={() => lyricsPresenter.setLyricsTextOpen(true)}
-                      onOpenLyricsSearch={() => lyricsPresenter.setLyricsSearchOpen(true)}
                       onOpenSettings={() => setSettingsOpen(true)}
-                      lyricsAlignBusyPhase={lyricsAlign.lyricsAlignBusyPhase}
+                      onLoadZip={(file) => fileDrop.openFiles([file])}
                       onSetZoom={setZoomCentered}
-                      hasNoteProvenance={provenance.noteProvenance !== undefined}
-                      showFilteredOnsets={provenance.showFilteredOnsets}
-                      onSetShowFilteredOnsets={(v) => provenancePresenter.setShowFilteredOnsets(v)}
-                      gridLines={settings.gridLines}
-                      onToggleGridLine={(k) => settingsPresenter.toggleGridLine(k)}
-                      uniformWaveforms={settings.uniformWaveforms}
-                      onSetUniformWaveforms={(v) => settingsPresenter.setUniformWaveforms(v)}
-                      waveformGridLines={settings.waveformGridLines}
-                      onSetWaveformGridLines={(v) => settingsPresenter.setWaveformGridLines(v)}
-                      mergeLayers={settings.mergeLayers}
-                      onSetMergeLayers={(v) => settingsPresenter.setMergeLayers(v)}
-                      autoFollowOnPlay={playback.autoFollowOnPlay}
-                      onSetAutoFollowOnPlay={(v) => playbackPresenter.setAutoFollowOnPlay(v)}
-                      recentTranscriptions={transcribe.recentTranscriptions}
-                      recentTranscriptionsLoaded={transcribe.recentTranscriptionsLoaded}
-                      recentTranscriptionsLoading={transcribe.recentTranscriptionsLoading}
-                      onRefreshRecentTranscriptions={() => transcribePresenter.refreshRecentTranscriptions()}
-                      onOpenRecentTranscription={(folder) => transcribePresenter.openReplaceDialog(folder)}
                     />
                     {/* Score region: the score (or empty state) plus the
                         right-edge sidebar (rail + panel). The sidebar is a
@@ -698,6 +689,10 @@ export function createJotEditor(options: CreateJotEditorOptions = {}): CreateJot
         </LayersStoreContext.Provider>
         </TranscribePresenterContext.Provider>
         </TranscribeStoreContext.Provider>
+        </SettingsPresenterContext.Provider>
+        </SettingsStoreContext.Provider>
+        </JotEditorPresenterContext.Provider>
+        </JotEditorStoreContext.Provider>
     );
   });
 

@@ -3,6 +3,7 @@ import { Check, ChevronRight } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import React from 'react';
 import { createPortal } from 'react-dom';
+import { useMenuKeyboard } from 'src/ui/menu_keyboard';
 import styles from './dropdown.module.css';
 
 export { styles as dropdownStyles };
@@ -128,6 +129,8 @@ export const DropdownButton = observer(
     // panel. Stable across renders so children don't churn their effect
     // hooks; the registry's own state lives in its closure-bound Set.
     const submenuRegistry = React.useMemo(createSubmenuRegistry, []);
+    // Arrow/Home/End roving focus over the panel's menu rows.
+    const { onKeyDown: onPanelKeyDown } = useMenuKeyboard(panelRef);
 
     React.useEffect(() => {
       if (!open) return;
@@ -220,6 +223,7 @@ export const DropdownButton = observer(
                 className={classNames(styles.dropdownPanel, panelClassName)}
                 role="menu"
                 style={{ position: 'fixed', top: anchor.top, left: anchor.left }}
+                onKeyDown={onPanelKeyDown}
               >
                 {children(() => setOpen(false))}
               </div>
@@ -268,6 +272,11 @@ export const SubmenuItem = ({
   // descendants can be siblings-exclusive among themselves without
   // closing us.
   const childRegistry = React.useMemo(createSubmenuRegistry, []);
+  // The fly-out runs its own copy of the roving-focus behaviour: the parent
+  // panel's arrow-nav excludes descendant-submenu rows (see menu_keyboard.ts),
+  // so each submenu handles arrow/Home/End over its own rows.
+  const panelRef = React.useRef<HTMLDivElement>(null);
+  const { onKeyDown: onPanelKeyDown } = useMenuKeyboard(panelRef);
 
   // Hover-to-open. Mouse-enter on the trigger arms a short timer; if
   // the pointer leaves (or the panel opens some other way) before it
@@ -323,7 +332,7 @@ export const SubmenuItem = ({
       </button>
       {open && !disabled && (
         <SubmenuRegistryContext.Provider value={childRegistry}>
-          <div className={styles.submenuPanel} role="menu">
+          <div className={styles.submenuPanel} role="menu" ref={panelRef} onKeyDown={onPanelKeyDown}>
             {children(() => setOpen(false))}
           </div>
         </SubmenuRegistryContext.Provider>
@@ -411,6 +420,7 @@ export const ToggleMenuItem = ({
   title,
   disabled,
   testId,
+  role = 'menuitemcheckbox',
 }: {
   label: React.ReactNode;
   active: boolean;
@@ -418,11 +428,15 @@ export const ToggleMenuItem = ({
   title?: string;
   disabled?: boolean;
   testId?: string;
+  /** `menuitemradio` for a mutually-exclusive set (one tick at a time),
+   *  otherwise the default independent checkbox. `aria-checked` is
+   *  carried the same way for both. */
+  role?: 'menuitemcheckbox' | 'menuitemradio';
 }) => (
   <button
     type="button"
     className={classNames(styles.dropdownItem, styles.toggleMenuItem)}
-    role="menuitemcheckbox"
+    role={role}
     aria-checked={active}
     onClick={onToggle}
     disabled={disabled}

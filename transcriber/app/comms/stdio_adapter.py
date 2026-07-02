@@ -14,7 +14,7 @@ from typing import TextIO
 
 from pydantic import BaseModel, ValidationError
 
-from .core import Cancelled, CancelToken, Registry, RunnerResult
+from .core import Cancelled, CancelToken, Registry
 from .protocol import (
     CLIENT_MESSAGE_ADAPTER,
     CancelMessage,
@@ -41,14 +41,29 @@ class StdioAdapter:
 
     async def _send(self, msg: BaseModel) -> None:
         line = msg.model_dump_json(exclude_none=True)
+        loop = asyncio.get_running_loop()
         async with self._write_lock:
-            self._stdout.write(line + "\n")
-            self._stdout.flush()
+            # Off-thread write+flush: a blocking flush on the loop thread (when the
+            # broker back-pressures its stdout pipe) would stall the whole loop, so
+            # a `cancel` frame the broker just sent couldn't be read until the write
+            # unblocked. Keeping the write off the loop preserves cancel/EOF
+            # responsiveness under a slow consumer.
+            await loop.run_in_executor(None, self._write_line, line)
+
+    def _write_line(self, line: str) -> None:
+        self._stdout.write(line + "\n")
+        self._stdout.flush()
 
     async def _handle_request(self, req: RequestMessage, token: CancelToken) -> None:
         async def emit(stage: str, frac: float, message: str | None = None) -> None:
+            # Clamp defensively: a NaN or out-of-range fraction makes the
+            # ProgressMessage(ge=0, le=1) constructor raise, which on the live
+            # transcribe path is swallowed (progress silently lost) and on the
+            # direct-emit runners turns the whole job into a spurious `internal`
+            # error. Progress is advisory; never let it be fatal.
+            safe_frac = 0.0 if frac != frac else min(1.0, max(0.0, frac))
             await self._send(
-                ProgressMessage(id=req.id, stage=stage, frac=frac, message=message)
+                ProgressMessage(id=req.id, stage=stage, frac=safe_frac, message=message)
             )
 
         try:
@@ -64,12 +79,9 @@ class StdioAdapter:
                 )
                 return
             result = await runner.run(req, emit, token)
-            if isinstance(result, RunnerResult):
-                await self._send(
-                    ResultMessage(id=req.id, artifacts=list(result.artifacts), data=result.data)
-                )
-            else:
-                await self._send(ResultMessage(id=req.id, artifacts=list(result)))
+            await self._send(
+                ResultMessage(id=req.id, artifacts=list(result.artifacts), data=result.data)
+            )
         except Cancelled:
             await self._send(
                 ErrorMessage(id=req.id, code="cancelled", message="job cancelled", recoverable=True)
@@ -99,9 +111,27 @@ class StdioAdapter:
             if not line:
                 continue
             try:
-                msg = CLIENT_MESSAGE_ADAPTER.validate_python(json.loads(line))
-            except (json.JSONDecodeError, ValidationError):
-                continue  # tolerate a malformed client line rather than die
+                raw = json.loads(line)
+            except json.JSONDecodeError:
+                continue  # not JSON at all; nothing to correlate a reply to
+            try:
+                msg = CLIENT_MESSAGE_ADAPTER.validate_python(raw)
+            except ValidationError:
+                # A structurally-invalid frame (unknown fields, a future protocol
+                # version, a bad op shape). If it still carries a string id, send a
+                # terminal error so the broker/frontend promise resolves instead of
+                # hanging forever waiting for a result that will never arrive.
+                req_id = raw.get("id") if isinstance(raw, dict) else None
+                if isinstance(req_id, str):
+                    await self._send(
+                        ErrorMessage(
+                            id=req_id,
+                            code="bad_request",
+                            message="malformed or unsupported request frame",
+                            recoverable=False,
+                        )
+                    )
+                continue
             if isinstance(msg, RequestMessage):
                 # Register the cancel token synchronously, before scheduling the
                 # task, so a cancel frame read on the very next iteration can't

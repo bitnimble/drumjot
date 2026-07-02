@@ -115,19 +115,22 @@ def _download(url: str, dest: Path) -> None:
     try:
         with httpx.stream("GET", url, follow_redirects=True, timeout=_HTTP_TIMEOUT) as resp:
             resp.raise_for_status()
-            written = 0
             with open(tmp, "wb") as fh:
                 for chunk in resp.iter_bytes(chunk_size=1 << 20):
-                    written += fh.write(chunk)
-            # Only verifiable on an identity transfer: gzip/chunked decode the
-            # body, so the decoded byte count won't match Content-Length.
+                    fh.write(chunk)
+            # Catch a silently-truncated transfer (proxy/CDN cutting the stream at EOF
+            # without a protocol error). MUST use num_bytes_downloaded (raw/encoded)
+            # vs Content-Length, NOT a sum of the chunks: iter_bytes yields DECODED
+            # bytes, so a manual count false-positives on every gzip-encoded body.
+            # Skip when Content-Length is absent/non-integer (chunked responses).
             declared = resp.headers.get("content-length")
-            if declared is not None and "content-encoding" not in resp.headers:
+            if declared is not None and declared.isdigit():
                 expected = int(declared)
-                if written != expected:
-                    raise RuntimeError(
-                        f"provision: truncated download of {dest.name}: "
-                        f"got {written} bytes, expected {expected}"
+                got = resp.num_bytes_downloaded
+                if got != expected:
+                    raise OSError(
+                        f"truncated download of {dest.name}: got {got} bytes, "
+                        f"expected {expected}"
                     )
         tmp.replace(dest)
     except Exception:

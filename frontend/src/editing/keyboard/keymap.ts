@@ -109,6 +109,16 @@ export function isTextEntryTarget(target: EventTarget | null): boolean {
   return isTextInput || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable === true;
 }
 
+/** Controls that natively activate on Space: a real `<button>`, a `<summary>`,
+ *  or an ARIA `role="button"`. A Space keybinding must yield to a focused one so
+ *  the keystroke activates the control instead of ALSO toggling transport (and
+ *  preventDefault stealing the press from the control entirely). */
+function isActivatableControl(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (el == null) return false;
+  return el.tagName === 'BUTTON' || el.tagName === 'SUMMARY' || el.getAttribute?.('role') === 'button';
+}
+
 /**
  * Install the global keydown dispatcher for the editor. One listener resolves
  * each keystroke through the keymap to a command and runs it, skipping
@@ -121,7 +131,12 @@ export function useEditorKeymap(ctx: CommandContext, keymap: Keymap = DEFAULT_KE
   React.useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (isTextEntryTarget(e.target)) return;
-      const id = keymap[eventCombo(e)];
+      const combo = eventCombo(e);
+      // A focused button/summary natively activates on Space; let it, rather than
+      // also firing the Space transport toggle (whose preventDefault would then
+      // steal the press from the button entirely).
+      if (combo === 'Space' && isActivatableControl(e.target)) return;
+      const id = keymap[combo];
       if (!id) return;
       const command = COMMANDS_BY_ID.get(id);
       if (!command) return;

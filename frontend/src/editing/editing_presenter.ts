@@ -1,5 +1,6 @@
 import { makeAutoObservable } from 'mobx';
 import type { Element, MutableJot, NoteElement } from 'src/schema/schema';
+import { transact } from 'src/schema/reactive_doc';
 import { laneForNote, layerIdOfTrack } from 'src/schema/ordering';
 import { SettingsStore } from 'src/settings/settings_store';
 import type { StructLayer, StructNote } from 'src/editing/structure/structure_store';
@@ -76,6 +77,11 @@ type PasteCtx = {
 /** One bar's place in the absolute-beat coordinate (cumulative across bars). */
 type BarSlot = { id: string; start: number; beats: number };
 
+type Gesture =
+  | { kind: 'idle' }
+  | { kind: 'drag'; ctx: DragMoveCtx }
+  | { kind: 'paste'; ctx: PasteCtx };
+
 /** Identity lane map (no cross-lane move). */
 const SAME_LANE = (lane: string): string => lane;
 
@@ -92,10 +98,10 @@ const INSERTED_NOTE_DURATION = 0.25;
  * go straight through `jotEditorStore.jot` (the sanctioned document-write path).
  */
 export class EditingPresenter implements Resettable {
-  /** Live drag-move bookkeeping, or undefined when no drag is in flight. */
-  private dragCtx: DragMoveCtx | undefined = undefined;
-  /** Live paste-placement bookkeeping, or undefined when no paste is in flight. */
-  private pasteCtx: PasteCtx | undefined = undefined;
+  /** The in-flight gesture (drag / paste), or `idle`. Single source of truth;
+   *  {@link setGesture} keeps the observable `dragActive`/`pasteActive` flags in
+   *  lockstep. */
+  private gesture: Gesture = { kind: 'idle' };
 
   constructor(
     private readonly editingStore: EditingStore,
@@ -113,8 +119,7 @@ export class EditingPresenter implements Resettable {
       | 'selectionStore'
       | 'selectionPresenter'
       | 'layersPresenter'
-      | 'dragCtx'
-      | 'pasteCtx'
+      | 'gesture'
     >(this, {
       editingStore: false,
       jotEditorStore: false,
@@ -122,9 +127,35 @@ export class EditingPresenter implements Resettable {
       selectionStore: false,
       selectionPresenter: false,
       layersPresenter: false,
-      dragCtx: false,
-      pasteCtx: false,
+      gesture: false,
     });
+  }
+
+  /** The single writer of gesture state: keeps editingStore.dragActive /
+   *  pasteActive in lockstep with `gesture` (so at most one is ever true) and
+   *  clears the shared preview when idle or when a paste starts (a paste's
+   *  preview appears on the first cursor move; a drag's is recomputed by
+   *  applyPreview immediately after). */
+  private setGesture(next: Gesture): void {
+    this.gesture = next;
+    this.editingStore.dragActive = next.kind === 'drag';
+    this.editingStore.pasteActive = next.kind === 'paste';
+    if (next.kind !== 'drag') this.editingStore.dragPreview = [];
+  }
+
+  /** Run a compound gesture's mutations as ONE Loro commit (= one undo step).
+   *  Each facade write commits on its own, so a multi-write gesture (delete
+   *  then set; provision a track then write notes) would otherwise fragment
+   *  into several undo steps, and a single Ctrl+Z would leave the document
+   *  half-applied (notes gone but group not, or an orphan track). Falls back to
+   *  running `fn` directly when no doc is loaded. */
+  private transactDoc(fn: () => void): void {
+    const doc = this.jotEditorStore.loroDoc;
+    if (doc) {
+      transact(doc, fn);
+    } else {
+      fn();
+    }
   }
 
   /**
@@ -222,29 +253,31 @@ export class EditingPresenter implements Resettable {
       arr.push({ el, abs: slot.start + el.beat });
     }
 
-    for (const members of byLayer.values()) {
-      if (members.length < 2) continue;
-      const start = Math.min(...members.map((m) => m.abs));
-      const end = Math.max(...members.map((m) => m.abs + m.el.duration));
-      const anchor = homeBar(layout.slots, start);
-      const groupId = crypto.randomUUID();
-      const children: Record<string, NoteElement> = {};
-      for (const { el, abs } of members) {
-        // Rebase into the group's internal space; drop `barId` (children live in
-        // the group's coordinate space, not a bar's). Keep the id so selection /
-        // provenance survive the regroup.
-        children[el.id] = childNoteOf(el, abs - start);
+    this.transactDoc(() => {
+      for (const members of byLayer.values()) {
+        if (members.length < 2) continue;
+        const start = Math.min(...members.map((m) => m.abs));
+        const end = Math.max(...members.map((m) => m.abs + m.el.duration));
+        const anchor = homeBar(layout.slots, start);
+        const groupId = crypto.randomUUID();
+        const children: Record<string, NoteElement> = {};
+        for (const { el, abs } of members) {
+          // Rebase into the group's internal space; drop `barId` (children live in
+          // the group's coordinate space, not a bar's). Keep the id so selection /
+          // provenance survive the regroup.
+          children[el.id] = childNoteOf(el, abs - start);
+        }
+        jot.elements.delete(...members.map((m) => m.el.id));
+        jot.elements.set(groupId, {
+          kind: 'group',
+          id: groupId,
+          barId: anchor.id,
+          beat: start - anchor.start,
+          duration: end - start,
+          children,
+        } as unknown as Element);
       }
-      jot.elements.delete(...members.map((m) => m.el.id));
-      jot.elements.set(groupId, {
-        kind: 'group',
-        id: groupId,
-        barId: anchor.id,
-        beat: start - anchor.start,
-        duration: end - start,
-        children,
-      } as unknown as Element);
-    }
+    });
   }
 
   /**
@@ -277,29 +310,31 @@ export class EditingPresenter implements Resettable {
         }
       }
     }
-    for (const groupId of groupIds) {
-      const group = jot.elements.get(groupId) as Element | undefined;
-      if (!group || group.kind !== 'group' || group.barId === undefined) continue;
-      const groupSlot = layout.byId.get(group.barId);
-      if (!groupSlot) continue;
-      const groupStart = groupSlot.start + group.beat;
-      const children = [...group.children.values()] as Element[];
-      const internalLen = children.reduce((m, c) => Math.max(m, c.beat + c.duration), 0);
-      const scale = internalLen > 1e-9 ? group.duration / internalLen : 1;
-      const restored: [string, NoteElement][] = [];
-      for (const child of children) {
-        if (child.kind !== 'note') continue;
-        const abs = Math.min(Math.max(groupStart + child.beat * scale, 0), layout.total);
-        const dest = homeBar(layout.slots, abs);
-        // Fresh id: the child's original id was deleted from the top-level map
-        // when the group formed, and resurrecting a tombstoned Loro key yields
-        // an empty container, so mint a new one (matching `insertNote`).
-        const id = crypto.randomUUID();
-        restored.push([id, { ...childNoteOf(child, abs - dest.start), id, barId: dest.id }]);
+    this.transactDoc(() => {
+      for (const groupId of groupIds) {
+        const group = jot.elements.get(groupId) as Element | undefined;
+        if (!group || group.kind !== 'group' || group.barId === undefined) continue;
+        const groupSlot = layout.byId.get(group.barId);
+        if (!groupSlot) continue;
+        const groupStart = groupSlot.start + group.beat;
+        const children = [...group.children.values()] as Element[];
+        const internalLen = children.reduce((m, c) => Math.max(m, c.beat + c.duration), 0);
+        const scale = internalLen > 1e-9 ? group.duration / internalLen : 1;
+        const restored: [string, NoteElement][] = [];
+        for (const child of children) {
+          if (child.kind !== 'note') continue;
+          const abs = Math.min(Math.max(groupStart + child.beat * scale, 0), layout.total);
+          const dest = homeBar(layout.slots, abs);
+          // Fresh id: the child's original id was deleted from the top-level map
+          // when the group formed, and resurrecting a tombstoned Loro key yields
+          // an empty container, so mint a new one (matching `insertNote`).
+          const id = crypto.randomUUID();
+          restored.push([id, { ...childNoteOf(child, abs - dest.start), id, barId: dest.id }]);
+        }
+        jot.elements.delete(groupId);
+        if (restored.length > 0) jot.elements.setAll(restored);
       }
-      jot.elements.delete(groupId);
-      if (restored.length > 0) jot.elements.setAll(restored);
-    }
+    });
     // The restored notes carry fresh ids, so the selection (still holding the
     // pre-ungroup note objects) no longer matches any element, clear it rather
     // than leave a dangling selection that renders nothing.
@@ -342,41 +377,43 @@ export class EditingPresenter implements Resettable {
       snappedDelta = snapBeat(rawTarget, divisors, layout.total) - anchorAbs;
     }
 
-    const updates: [string, Record<string, unknown>][] = [];
-    for (const note of this.selectionStore.selectedNotes) {
-      const el = jot.elements.get(note.id) as Element | undefined;
-      if (!el || el.kind !== 'note' || el.barId === undefined) continue;
-      const cur = byId.get(el.barId);
-      if (!cur) continue;
-      const newAbs = Math.min(Math.max(cur.start + el.beat + snappedDelta, 0), layout.total);
-      const dest = homeBar(layout.slots, newAbs);
-      const curLane = laneForNote(jot, el);
-      const newLane = laneMap(curLane);
-      // A cross-lane move re-homes the note to the track for the destination
-      // lane: in the layer that owns that lane (the row clicked), else the
-      // note's own current layer. The note's layer is never stored, so only
-      // its `trackId` changes; a same-lane move leaves the track untouched.
-      let laneUpdate: Record<string, unknown> = {};
-      if (newLane !== curLane) {
-        const curLayer = el.trackId !== undefined ? layerIdOfTrack(jot, el.trackId) : undefined;
-        const targetLayer = jot.ownerLayerFor(newLane) ?? curLayer;
-        const newTrackId =
-          targetLayer !== undefined
-            ? this.layersPresenter.ensureInstrumentTrack(targetLayer, newLane)
-            : undefined;
-        laneUpdate = { lane: newLane, ...(newTrackId !== undefined ? { trackId: newTrackId } : {}) };
+    this.transactDoc(() => {
+      const updates: [string, Record<string, unknown>][] = [];
+      for (const note of this.selectionStore.selectedNotes) {
+        const el = jot.elements.get(note.id) as Element | undefined;
+        if (!el || el.kind !== 'note' || el.barId === undefined) continue;
+        const cur = byId.get(el.barId);
+        if (!cur) continue;
+        const newAbs = Math.min(Math.max(cur.start + el.beat + snappedDelta, 0), layout.total);
+        const dest = homeBar(layout.slots, newAbs);
+        const curLane = laneForNote(jot, el);
+        const newLane = laneMap(curLane);
+        // A cross-lane move re-homes the note to the track for the destination
+        // lane: in the layer that owns that lane (the row clicked), else the
+        // note's own current layer. The note's layer is never stored, so only
+        // its `trackId` changes; a same-lane move leaves the track untouched.
+        let laneUpdate: Record<string, unknown> = {};
+        if (newLane !== curLane) {
+          const curLayer = el.trackId !== undefined ? layerIdOfTrack(jot, el.trackId) : undefined;
+          const targetLayer = jot.ownerLayerFor(newLane) ?? curLayer;
+          const newTrackId =
+            targetLayer !== undefined
+              ? this.layersPresenter.ensureInstrumentTrack(targetLayer, newLane)
+              : undefined;
+          laneUpdate = { lane: newLane, ...(newTrackId !== undefined ? { trackId: newTrackId } : {}) };
+        }
+        updates.push([
+          note.id,
+          {
+            ...el,
+            barId: dest.id,
+            beat: newAbs - dest.start,
+            ...laneUpdate,
+          },
+        ]);
       }
-      updates.push([
-        note.id,
-        {
-          ...el,
-          barId: dest.id,
-          beat: newAbs - dest.start,
-          ...laneUpdate,
-        },
-      ]);
-    }
-    if (updates.length > 0) jot.elements.setAll(updates);
+      if (updates.length > 0) jot.elements.setAll(updates);
+    });
   }
 
   /**
@@ -432,7 +469,7 @@ export class EditingPresenter implements Resettable {
     }
     if (notes.length === 0) return;
 
-    this.dragCtx = {
+    const ctx: DragMoveCtx = {
       anchor,
       startClientX,
       startLane,
@@ -445,7 +482,7 @@ export class EditingPresenter implements Resettable {
       lastClientX: startClientX,
       lastTargetLane: anchor.lane,
     };
-    this.editingStore.dragActive = true;
+    this.setGesture({ kind: 'drag', ctx });
     this.applyPreview();
   }
 
@@ -456,8 +493,8 @@ export class EditingPresenter implements Resettable {
    * rendered lane order (mixer order) for the group's vertical shift.
    */
   updateDragMove(targetLane: string, clientX: number, laneOrder: readonly string[]): void {
-    const ctx = this.dragCtx;
-    if (!ctx) return;
+    if (this.gesture.kind !== 'drag') return;
+    const ctx = this.gesture.ctx;
     // A frame drag seeds `startLane` lazily from the first reported row, so the
     // cross-lane shift is measured from wherever inside the frame the user
     // grabbed (zero at the start) rather than the snap anchor's lane.
@@ -473,8 +510,8 @@ export class EditingPresenter implements Resettable {
    *  the snapped delta shifts every member off its rest position. Lane: the
    *  shared span rule (see {@link placementPreview}). */
   private applyPreview(): void {
-    const ctx = this.dragCtx;
-    if (!ctx) return;
+    if (this.gesture.kind !== 'drag') return;
+    const ctx = this.gesture.ctx;
     const px = this.jotEditorStore.layout?.pxPerBeat ?? 0;
     const rawDelta = px > 0 ? (ctx.lastClientX - ctx.startClientX) / px : 0;
     const shift = ctx.snap(rawDelta);
@@ -492,11 +529,10 @@ export class EditingPresenter implements Resettable {
    *  {@link moveSelection} (same snap + lane remap as the preview, so what you
    *  saw is what lands), then clears the preview. No-op if no drag is active. */
   commitDragMove(): void {
-    const ctx = this.dragCtx;
-    this.dragCtx = undefined;
-    this.editingStore.dragActive = false;
-    this.editingStore.dragPreview = [];
-    if (!ctx) return;
+    const g = this.gesture;
+    this.setGesture({ kind: 'idle' });
+    if (g.kind !== 'drag') return;
+    const ctx = g.ctx;
     const px = this.jotEditorStore.layout?.pxPerBeat ?? 0;
     const rawDelta = px > 0 ? (ctx.lastClientX - ctx.startClientX) / px : 0;
     // Span rule (mirrors `applyPreview`): a multi-lane group keeps every lane
@@ -511,9 +547,7 @@ export class EditingPresenter implements Resettable {
   /** Abandon an in-flight drag-move (pointercancel), leaving the document
    *  untouched and clearing the preview. */
   cancelDragMove(): void {
-    this.dragCtx = undefined;
-    this.editingStore.dragActive = false;
-    this.editingStore.dragPreview = [];
+    if (this.gesture.kind === 'drag') this.setGesture({ kind: 'idle' });
   }
 
   /**
@@ -537,21 +571,23 @@ export class EditingPresenter implements Resettable {
       placeholder.layerId ??
       this.jotEditorStore.jot?.ownerLayerFor(placeholder.lane) ??
       primaryLayerId(jot);
-    const trackId =
-      layerId !== undefined
-        ? this.layersPresenter.ensureInstrumentTrack(layerId, placeholder.lane)
-        : undefined;
-    const note: NoteElement = {
-      id,
-      barId: placeholder.barId,
-      beat: placeholder.beat,
-      duration: INSERTED_NOTE_DURATION,
-      kind: 'note',
-      lane: placeholder.lane,
-      modifiers: [],
-      ...(trackId !== undefined ? { trackId } : {}),
-    };
-    jot.elements.set(id, note);
+    this.transactDoc(() => {
+      const trackId =
+        layerId !== undefined
+          ? this.layersPresenter.ensureInstrumentTrack(layerId, placeholder.lane)
+          : undefined;
+      const note: NoteElement = {
+        id,
+        barId: placeholder.barId,
+        beat: placeholder.beat,
+        duration: INSERTED_NOTE_DURATION,
+        kind: 'note',
+        lane: placeholder.lane,
+        modifiers: [],
+        ...(trackId !== undefined ? { trackId } : {}),
+      };
+      jot.elements.set(id, note);
+    });
   }
 
   // ---------- Clipboard: copy + paste placement ----------
@@ -619,7 +655,7 @@ export class EditingPresenter implements Resettable {
     if (layout.slots.length === 0) return;
     const lanes = new Set(payload.notes.map((n) => n.lane));
     const anchorLane = payload.notes[0].lane;
-    this.pasteCtx = {
+    const ctx: PasteCtx = {
       members: payload.notes.map((n, i) => ({
         id: `paste:${i}`,
         lane: n.lane,
@@ -635,9 +671,9 @@ export class EditingPresenter implements Resettable {
       lastTargetLane: anchorLane,
       hasCursor: false,
     };
-    this.editingStore.pasteActive = true;
-    // Preview appears on the first pointer move (which seeds the anchor).
-    this.editingStore.dragPreview = [];
+    // Preview appears on the first pointer move (which seeds the anchor);
+    // setGesture clears dragPreview.
+    this.setGesture({ kind: 'paste', ctx });
   }
 
   /**
@@ -647,8 +683,8 @@ export class EditingPresenter implements Resettable {
    * but the horizontal quantity is an absolute beat, not a delta.
    */
   updatePaste(anchorAbs: number, targetLane: string, laneOrder: readonly string[]): void {
-    const ctx = this.pasteCtx;
-    if (!ctx) return;
+    if (this.gesture.kind !== 'paste') return;
+    const ctx = this.gesture.ctx;
     ctx.lastAnchorAbs = anchorAbs;
     ctx.lastTargetLane = targetLane;
     ctx.laneOrder = laneOrder;
@@ -659,8 +695,8 @@ export class EditingPresenter implements Resettable {
   /** Recompute the paste preview from the current cursor anchor + target lane,
    *  through the same {@link placementPreview} span rule as a drag. */
   private applyPastePreview(): void {
-    const ctx = this.pasteCtx;
-    if (!ctx) return;
+    if (this.gesture.kind !== 'paste') return;
+    const ctx = this.gesture.ctx;
     const shift = ctx.snap(ctx.lastAnchorAbs);
     this.editingStore.dragPreview = placementPreview(
       ctx.members,
@@ -680,11 +716,10 @@ export class EditingPresenter implements Resettable {
    * before the first pointer move (no position chosen) or with no document.
    */
   commitPaste(): void {
-    const ctx = this.pasteCtx;
-    this.pasteCtx = undefined;
-    this.editingStore.pasteActive = false;
-    this.editingStore.dragPreview = [];
-    if (!ctx || !ctx.hasCursor) return;
+    const g = this.gesture;
+    this.setGesture({ kind: 'idle' });
+    if (g.kind !== 'paste' || !g.ctx.hasCursor) return;
+    const ctx = g.ctx;
     const jot = this.jotEditorStore.jot;
     const layers = this.jotEditorStore.jot?.musicalLayers;
     if (!jot || !layers) return;
@@ -692,40 +727,42 @@ export class EditingPresenter implements Resettable {
     if (layout.slots.length === 0) return;
     const shift = ctx.snap(ctx.lastAnchorAbs);
     const newIds: string[] = [];
-    const entries: [string, Record<string, unknown>][] = [];
-    for (const m of ctx.members) {
-      const lane = ctx.spansMultipleLanes ? m.lane : ctx.lastTargetLane;
-      const abs = Math.min(Math.max(m.baseAbs + shift, 0), layout.total);
-      const dest = homeBar(layout.slots, abs);
-      // Resolve the note's home like insertNote: the firstmost layer owning the
-      // lane, else the primary layer; mint its instrument track if needed.
-      const layerId = jot.ownerLayerFor(lane) ?? primaryLayerId(jot);
-      const trackId =
-        layerId !== undefined ? this.layersPresenter.ensureInstrumentTrack(layerId, lane) : undefined;
-      const id = crypto.randomUUID();
-      newIds.push(id);
-      const n = m.note;
-      entries.push([
-        id,
-        {
+    this.transactDoc(() => {
+      const entries: [string, Record<string, unknown>][] = [];
+      for (const m of ctx.members) {
+        const lane = ctx.spansMultipleLanes ? m.lane : ctx.lastTargetLane;
+        const abs = Math.min(Math.max(m.baseAbs + shift, 0), layout.total);
+        const dest = homeBar(layout.slots, abs);
+        // Resolve the note's home like insertNote: the firstmost layer owning the
+        // lane, else the primary layer; mint its instrument track if needed.
+        const layerId = jot.ownerLayerFor(lane) ?? primaryLayerId(jot);
+        const trackId =
+          layerId !== undefined ? this.layersPresenter.ensureInstrumentTrack(layerId, lane) : undefined;
+        const id = crypto.randomUUID();
+        newIds.push(id);
+        const n = m.note;
+        entries.push([
           id,
-          barId: dest.id,
-          beat: abs - dest.start,
-          duration: n.duration,
-          kind: 'note',
-          lane,
-          modifiers: [...n.modifiers],
-          ...(n.sticking !== undefined ? { sticking: n.sticking } : {}),
-          ...(n.roll !== undefined ? { roll: n.roll } : {}),
-          ...(n.offsetMs !== undefined ? { offsetMs: n.offsetMs } : {}),
-          ...(n.velocity !== undefined ? { velocity: n.velocity } : {}),
-          ...(n.midiNote !== undefined ? { midiNote: n.midiNote } : {}),
-          ...(trackId !== undefined ? { trackId } : {}),
-        },
-      ]);
-    }
-    if (entries.length === 0) return;
-    jot.elements.setAll(entries);
+          {
+            id,
+            barId: dest.id,
+            beat: abs - dest.start,
+            duration: n.duration,
+            kind: 'note',
+            lane,
+            modifiers: [...n.modifiers],
+            ...(n.sticking !== undefined ? { sticking: n.sticking } : {}),
+            ...(n.roll !== undefined ? { roll: n.roll } : {}),
+            ...(n.offsetMs !== undefined ? { offsetMs: n.offsetMs } : {}),
+            ...(n.velocity !== undefined ? { velocity: n.velocity } : {}),
+            ...(n.midiNote !== undefined ? { midiNote: n.midiNote } : {}),
+            ...(trackId !== undefined ? { trackId } : {}),
+          },
+        ]);
+      }
+      if (entries.length > 0) jot.elements.setAll(entries);
+    });
+    if (newIds.length === 0) return;
     // Select the freshly-pasted notes (resolved from the recomputed structure).
     const byId = notesById(this.jotEditorStore.jot?.musicalLayers ?? []);
     const pasted: StructNote[] = [];
@@ -739,10 +776,8 @@ export class EditingPresenter implements Resettable {
   /** Abandon an in-flight paste placement (Esc / a new load), writing nothing
    *  and clearing the preview. No-op when no paste is active. */
   cancelPaste(): void {
-    if (!this.pasteCtx && !this.editingStore.pasteActive) return;
-    this.pasteCtx = undefined;
-    this.editingStore.pasteActive = false;
-    this.editingStore.dragPreview = [];
+    if (this.gesture.kind !== 'paste') return;
+    this.setGesture({ kind: 'idle' });
   }
 }
 

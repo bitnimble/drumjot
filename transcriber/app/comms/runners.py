@@ -10,7 +10,7 @@ import asyncio
 
 from .align_lyrics_runner import AlignLyricsRunner
 from .beats_runner import BeatsRunner
-from .core import CancelToken, EmitProgress, Registry
+from .core import CancelToken, EmitProgress, Registry, RunnerResult
 from .protocol import Artifact, PathRef, RequestMessage
 from .separate_runner import SeparateRunner
 from .transcribe_runner import TranscribeRunner
@@ -26,7 +26,7 @@ class EchoRunner:
         request: RequestMessage,
         emit: EmitProgress,
         cancel: CancelToken,
-    ) -> list[Artifact]:
+    ) -> RunnerResult:
         stages = ("received", "processing", "finishing")
         for i, stage in enumerate(stages):
             cancel.check()
@@ -34,7 +34,7 @@ class EchoRunner:
             await asyncio.sleep(0)
         source = request.args.audio
         path = source.path if isinstance(source, PathRef) else "<remote-upload>"
-        return [Artifact(role="midi", ref=PathRef(kind="path", path=path))]
+        return RunnerResult(artifacts=[Artifact(role="midi", ref=PathRef(kind="path", path=path))])
 
 
 def build_registry() -> Registry:

@@ -263,19 +263,23 @@ const WaveformGridOverlay = observer(
   ({ structural, testId }: { structural: StructuralPresenter | null; testId?: string }) => {
     const show = React.useContext(WaveformGridLinesContext);
     const viewport = React.useContext(ViewportStoreContext);
-    const layer = structural?.layers[0];
-    // Cumulative beat position per bar, recomputed only when the bar
-    // structure changes (zoom-invariant, so scroll re-renders reuse it).
+    // Read the canonical geometry spine (the same computed.struct the score
+    // renders against), NOT `layers[0]` (a plain computed that churns a new
+    // reference on every note edit and would re-run this memo each time). Bar
+    // geometry is layer-independent, so the grid is identical either way.
+    const geometry = structural?.viewGeometry;
+    // Cumulative beat position per bar, recomputed only when the bar structure
+    // actually changes (zoom-invariant, so scroll re-renders reuse it).
     const bars = React.useMemo(() => {
-      if (!layer) return [];
+      if (!geometry) return [];
       const out: { index: number; startBeat: number; beats: number }[] = [];
       let cursor = 0;
-      for (const b of layer.bars) {
+      for (const b of geometry) {
         out.push({ index: b.index, startBeat: cursor, beats: b.beats });
         cursor += b.beats;
       }
       return out;
-    }, [layer]);
+    }, [geometry]);
     if (!show || bars.length === 0) return null;
     const range = viewport?.visibleBeatRange ?? null;
     return (

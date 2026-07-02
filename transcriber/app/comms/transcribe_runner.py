@@ -25,7 +25,7 @@ from pathlib import Path
 
 from app.pipeline.stages import STAGE_ORDER
 
-from .core import Cancelled, CancelToken, EmitProgress
+from .core import Cancelled, CancelToken, EmitProgress, RunnerResult
 from .protocol import Artifact, PathRef, RequestMessage
 
 MANIFEST_NAME = "debug.json"
@@ -63,14 +63,16 @@ class TranscribeRunner:
         request: RequestMessage,
         emit: EmitProgress,
         cancel: CancelToken,
-    ) -> list[Artifact]:
+    ) -> RunnerResult:
         source = request.args.audio
         if not isinstance(source, PathRef):
             raise ValueError("transcribe needs a local file path (remote upload unsupported here)")
         path = Path(source.path)
         if path.suffix == ".zip" and _is_debug_bundle(path):
-            return await self._replay_bundle(path, emit, cancel)
-        return await self._transcribe_live(path, request.args.params, emit, cancel)
+            return RunnerResult(artifacts=await self._replay_bundle(path, emit, cancel))
+        return RunnerResult(
+            artifacts=await self._transcribe_live(path, request.args.params, emit, cancel)
+        )
 
     async def _replay_bundle(
         self,

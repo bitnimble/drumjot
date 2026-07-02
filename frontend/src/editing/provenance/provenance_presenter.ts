@@ -41,6 +41,9 @@ export class ProvenancePresenter implements Resettable {
     this.provenance.lastDebugBundle = manifest;
     this.provenance.noteProvenance = noteProvenance;
     this.provenance.showFilteredOnsets = false;
+    // Drop the prior bundle's pin: its `lane:time` key would otherwise survive
+    // and phantom-match (or mismatch) an onset in the newly loaded provenance.
+    this.provenance.pinnedFilteredOnsetKey = undefined;
   }
 
   /** Drop the debug bundle's per-note provenance + reset the visibility
@@ -50,6 +53,7 @@ export class ProvenancePresenter implements Resettable {
   clearNoteProvenance() {
     this.provenance.noteProvenance = undefined;
     this.provenance.showFilteredOnsets = false;
+    this.provenance.pinnedFilteredOnsetKey = undefined;
   }
 
   /**

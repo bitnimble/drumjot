@@ -21,6 +21,9 @@ tauri-build = { version = "2.6.3", features = [] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
+# Cross-platform free-disk-space query for the pre-install space check (std has
+# no portable API; the alternative is fragile df/wmic shell-outs).
+fs2 = "0.4"
 tauri = { version = "2.11.3", features = ["protocol-asset"] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"

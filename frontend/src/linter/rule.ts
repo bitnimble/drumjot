@@ -173,11 +173,16 @@ export function buildLintContext(jot: Jot, source: string): LintContext {
   });
 
   if (jot.patterns) {
-    for (const [name, pat] of Object.entries(jot.patterns)) {
-      // Synthetic layer/bar indices for pattern notes so they don't collide
-      // with real-layer indices in downstream grouping. The negative
-      // ranges are enough for rules that key off layer/bar identity.
-      const layerIndex = -1 - name.length;
+    // Synthetic layer indices for pattern notes so they don't collide with
+    // real-layer indices (>= 0) in downstream grouping. A monotonic per-pattern
+    // ordinal keeps DISTINCT patterns in distinct synthetic layers; the old
+    // `-1 - name.length` scheme collided any two same-length pattern names into
+    // one synthetic layer, pooling their hand notes and skewing the sticking
+    // inference (same_hand_conflict groups notes by layerIndex).
+    let patternOrdinal = 0;
+    for (const pat of Object.values(jot.patterns)) {
+      const layerIndex = -1 - patternOrdinal;
+      patternOrdinal++;
       for (const el of pat.elements) visit(el, layerIndex, -1, null);
     }
   }

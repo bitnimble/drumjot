@@ -84,9 +84,11 @@ export class PlaybackPresenter implements Resettable {
         const { jot } = this.jotEditorStore;
         return jot ? jotToEvents(jot) : null;
       },
-      () => {
+      (events) => {
         const { jot } = this.jotEditorStore;
-        if (jot) jotPlayer.refreshDrumSchedule(jot);
+        // Pass the events the tracker just walked so the player doesn't re-derive
+        // them (the reschedule cost, cancel + reschedule, still runs).
+        if (jot && events) jotPlayer.refreshDrumSchedule(jot, events);
       },
       { equals: comparer.structural }
     );

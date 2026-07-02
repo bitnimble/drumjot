@@ -7,13 +7,31 @@ import styles from './modal.module.css';
 
 export { styles as modalStyles };
 
+const FOCUSABLE_SELECTOR = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',');
+
+function focusablesIn(panel: HTMLElement): HTMLElement[] {
+  return Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+    (el) => el.offsetParent != null || el === document.activeElement
+  );
+}
+
 /**
  * Low-level modal shell: a portaled backdrop + centred panel that owns the
  * cross-cutting behaviour every modal needs and no call site should
  * re-implement, top-of-stack portal (so it escapes the score's clipping /
  * z-index contexts), `role="dialog"` + `aria-modal`, backdrop-click and
  * Escape to close (Escape via the {@link ModalProvider} stack, so only the
- * topmost modal closes), and a stable size.
+ * topmost modal closes), a stable size, and focus management: on open, focus
+ * moves into the panel (respecting an `autoFocus`ed control, else the first
+ * focusable, else the panel itself); Tab/Shift+Tab are trapped to wrap within
+ * the panel; and focus is restored to the previously-focused element on close.
  *
  * Content is composed from {@link ModalHeader}, {@link ModalBody}, and
  * {@link ModalFooter} (or anything else); the common confirm/cancel shape
@@ -44,6 +62,7 @@ export const Modal: React.FC<{
   children,
 }) => {
   const manager = useModalManager();
+  const panelRef = React.useRef<HTMLDivElement>(null);
 
   // Register with the manager while open so Escape / closeActive can reach
   // this modal as the top of the stack. Keep the latest onClose in a ref so
@@ -55,7 +74,46 @@ export const Modal: React.FC<{
     return manager.register(() => onCloseRef.current());
   }, [open, manager]);
 
+  // Focus management: on open, pull focus into the panel and remember what
+  // had it; on close (cleanup), hand focus back. An `autoFocus`ed control
+  // (ConfirmModal's Cancel/confirm) has already grabbed focus by the time this
+  // runs, so only reach for the first focusable when focus isn't in the panel.
+  React.useEffect(() => {
+    if (!open) return;
+    const panel = panelRef.current;
+    if (!panel) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    if (!panel.contains(document.activeElement)) {
+      (focusablesIn(panel)[0] ?? panel).focus();
+    }
+    return () => previouslyFocused?.focus?.();
+  }, [open]);
+
   if (!open) return null;
+
+  const onPanelKeyDown = (e: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (e.key !== 'Tab') return;
+    const panel = panelRef.current;
+    if (!panel) return;
+    const focusables = focusablesIn(panel);
+    if (focusables.length === 0) {
+      // Nothing tabbable: keep focus pinned on the panel rather than letting
+      // Tab escape to the page behind the modal.
+      e.preventDefault();
+      panel.focus();
+      return;
+    }
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey && (active === first || active === panel)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
 
   const panelStyle: React.CSSProperties = {};
   if (width !== undefined) {
@@ -77,7 +135,13 @@ export const Modal: React.FC<{
       }}
       data-testid={testId}
     >
-      <div className={classNames(styles.panel, panelClassName)} style={panelStyle}>
+      <div
+        ref={panelRef}
+        className={classNames(styles.panel, panelClassName)}
+        style={panelStyle}
+        tabIndex={-1}
+        onKeyDown={onPanelKeyDown}
+      >
         {children}
       </div>
     </div>,

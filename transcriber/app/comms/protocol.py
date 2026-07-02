@@ -89,14 +89,6 @@ class ProgressMessage(BaseModel):
     message: str | None = None
 
 
-class LogMessage(BaseModel):
-    v: Literal[1] = PROTOCOL_VERSION
-    type: Literal["log"] = "log"
-    id: str | None = None
-    level: Literal["debug", "info", "warn", "error"]
-    message: str
-
-
 class ResultMessage(BaseModel):
     v: Literal[1] = PROTOCOL_VERSION
     type: Literal["result"] = "result"
@@ -117,7 +109,7 @@ class ErrorMessage(BaseModel):
 
 
 ServerMessage = Annotated[
-    ProgressMessage | LogMessage | ResultMessage | ErrorMessage,
+    ProgressMessage | ResultMessage | ErrorMessage,
     Field(discriminator="type"),
 ]
 SERVER_MESSAGE_ADAPTER: TypeAdapter[ServerMessage] = TypeAdapter(ServerMessage)

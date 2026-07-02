@@ -90,13 +90,16 @@ const PopoverPortalShown = observer(function PopoverPortalShown({
   void viewport?.zoom;
 
   const labelRef = React.useRef<HTMLDivElement | null>(null);
+  // Anchor rect from the render body below, reused by the layout effect
+  // so it doesn't re-measure: the anchor can't move between a render and
+  // its immediately-following layout effect.
+  const anchorRectRef = React.useRef<DOMRect | null>(null);
   const [flip, setFlip] = React.useState(false);
 
   React.useLayoutEffect(() => {
-    const anchor = anchorRef.current;
+    const aRect = anchorRectRef.current;
     const label = labelRef.current;
-    if (!anchor || !label) return;
-    const aRect = anchor.getBoundingClientRect();
+    if (!aRect || !label) return;
     const lRect = label.getBoundingClientRect();
     const SAFE = 8;
     const GAP = 16;
@@ -111,6 +114,7 @@ const PopoverPortalShown = observer(function PopoverPortalShown({
   const anchor = anchorRef.current;
   if (!anchor) return null;
   const aRect = anchor.getBoundingClientRect();
+  anchorRectRef.current = aRect;
   const GAP = 16;
   const top = flip ? aRect.top - GAP : aRect.bottom + GAP;
   const left = aRect.left + aRect.width / 2;

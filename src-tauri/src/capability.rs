@@ -134,6 +134,26 @@ pub async fn set_capability_installed<R: Runtime>(
     tokio::fs::rename(&tmp, &path).await.map_err(|e| e.to_string())
 }
 
+/// Free bytes available to a non-privileged user on the volume holding the
+/// writable data root, so the frontend can warn before a multi-GB install that
+/// wouldn't fit. Walks up to the nearest existing ancestor (the data root may
+/// not exist yet on a first run) so the query lands on the right volume.
+#[tauri::command]
+pub async fn available_disk_space<R: Runtime>(app: AppHandle<R>) -> Result<u64, String> {
+    let probe = existing_ancestor(crate::paths::data_root(&app)?);
+    fs2::available_space(&probe).map_err(|e| e.to_string())
+}
+
+fn existing_ancestor(mut path: PathBuf) -> PathBuf {
+    while !path.exists() {
+        match path.parent() {
+            Some(parent) => path = parent.to_path_buf(),
+            None => break,
+        }
+    }
+    path
+}
+
 /// Path to the python interpreter inside a venv (platform-specific layout).
 pub fn venv_python(venv: &Path) -> PathBuf {
     if cfg!(windows) {
@@ -252,10 +272,14 @@ pub async fn install_capability(
 
     if status.success() {
         // Pre-fetch the capability's model assets (separation models, Beat
-        // Transformer) now, so they're ready offline rather than downloading on
-        // first use. Best-effort: a failure here defers to the pipeline's lazy
-        // fallbacks, so the install still completes.
-        provision_models(&venv, &dir, &groups, &on_event).await;
+        // Transformer) now, so it runs offline afterwards. Surfaced, NOT
+        // best-effort: a provisioning failure fails the install, so a capability
+        // is never recorded installed while its weights are missing (which would
+        // break the offline promise). The gate shows the error + offers Retry.
+        if let Err(message) = provision_models(&venv, &dir, &groups, &on_event).await {
+            let _ = on_event.send(InstallEvent::Error { message: message.clone() });
+            return Err(message);
+        }
         let _ = on_event.send(InstallEvent::Done);
         Ok(())
     } else {
@@ -266,32 +290,32 @@ pub async fn install_capability(
 }
 
 /// Run `python -m app.pipeline.provision <groups>` in the freshly-synced venv to
-/// download the capability's models, streaming progress to the webview.
-/// Best-effort: any spawn/exit failure is swallowed (the pipeline lazily fetches
-/// anything still missing on first use).
-async fn provision_models(venv: &Path, dir: &Path, groups: &[String], on_event: &Channel<InstallEvent>) {
+/// download the capability's models, streaming progress to the webview. Returns
+/// an error if the download can't be started or exits non-zero, so
+/// `install_capability` surfaces it rather than reporting a capability installed
+/// without its weights.
+async fn provision_models(
+    venv: &Path,
+    dir: &Path,
+    groups: &[String],
+    on_event: &Channel<InstallEvent>,
+) -> Result<(), String> {
     let python = venv_python(venv);
     if !python.exists() {
-        return;
+        return Err("model download skipped: venv python missing after sync".to_string());
     }
     let mut cmd = Command::new(&python);
     cmd.arg("-m").arg("app.pipeline.provision");
     for group in groups {
         cmd.arg(group);
     }
-    let mut child = match cmd
+    let mut child = cmd
         .current_dir(dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-    {
-        Ok(child) => child,
-        Err(e) => {
-            log::warn!("[provision] spawn failed: {e}");
-            return;
-        }
-    };
+        .map_err(|e| format!("failed to start model download: {e}"))?;
     let _ = on_event.send(InstallEvent::Line { line: "Downloading models…".to_string() });
     let out = child.stdout.take();
     let err = child.stderr.take();
@@ -313,9 +337,14 @@ async fn provision_models(venv: &Path, dir: &Path, groups: &[String], on_event: 
             }
         }
     });
-    let _ = child.wait().await;
+    let status = child.wait().await.map_err(|e| e.to_string())?;
     let _ = out_task.await;
     let _ = err_task.await;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("model download failed ({status})"))
+    }
 }
 
 #[cfg(test)]

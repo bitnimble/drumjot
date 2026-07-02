@@ -16,6 +16,9 @@ export type CapabilityStatus =
  */
 export class CapabilityStore {
   accelerator: AcceleratorInfo | undefined = undefined;
+  /** Free bytes on the data-root volume, for the pre-install space check;
+   *  undefined until first queried (then the UI doesn't block on it). */
+  availableBytes: number | undefined = undefined;
   statuses: Map<CapabilityId, CapabilityStatus> = new Map();
   /** Capability awaiting the user's point-of-use install decision (drives the
    *  install prompt modal); undefined when no prompt is open. */

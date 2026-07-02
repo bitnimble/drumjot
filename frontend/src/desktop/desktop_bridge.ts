@@ -41,6 +41,9 @@ export interface DesktopBridge {
   ): Promise<void>;
   runJob(request: ClientMessage, onEvent: (msg: ServerMessage) => void): Promise<void>;
   cancelJob(id: string): Promise<void>;
+  /** Free bytes on the volume holding the writable data root, for the
+   *  pre-install space check. */
+  availableDiskSpace(): Promise<number>;
 }
 
 /** Real bridge backed by Tauri `invoke` + `Channel`. Construct only when
@@ -90,5 +93,9 @@ export class TauriBridge implements DesktopBridge {
 
   async cancelJob(id: string): Promise<void> {
     await invoke('cancel_job', { id });
+  }
+
+  availableDiskSpace(): Promise<number> {
+    return invoke<number>('available_disk_space');
   }
 }

@@ -150,8 +150,12 @@ export class TranscribePresenter {
     const options = this.transcribe.transcribeOptions;
     try {
       // Transport (HTTP vs local sidecar) is the adapter's concern; the desktop
-      // capability gate already ran at openAppendDialog.
-      const result = await backendClient().run(
+      // capability gate already ran at openAppendDialog. Resolve the client ONCE
+      // so the run and the artifact read below use the same transport even if the
+      // user toggles Local/Hosted mid-job (a sidecar path ref can't be read over
+      // HTTP, and vice-versa).
+      const backend = backendClient();
+      const result = await backend.run(
         {
           op: 'transcribe',
           params: {
@@ -171,7 +175,7 @@ export class TranscribePresenter {
         toastStore.showError('Transcriber returned no predicted MIDI.');
         return;
       }
-      const bytes = await backendClient().resolveBytes(midiRef);
+      const bytes = await backend.resolveBytes(midiRef);
       // The job can complete in the window where a cancel is racing the result
       // frame (cancelJob may not reach the sidecar in time); don't merge a
       // transcription the user aborted.
@@ -180,8 +184,15 @@ export class TranscribePresenter {
     } catch (err) {
       this.handleTranscribeError(err, controller, 'Transcribe');
     } finally {
-      if (this.trackControllers.get(id) === controller) this.trackControllers.delete(id);
-      runInAction(() => this.transcribe.trackStatuses.delete(id));
+      // Only tear down this track's controller + status if a newer transcribe
+      // for the SAME track hasn't already superseded us (which installs its own
+      // controller + status synchronously). An unconditional status delete here
+      // would wipe the in-flight job's progress entry, so its spinner/stage pill
+      // vanishes for the rest of the (still-running) job.
+      if (this.trackControllers.get(id) === controller) {
+        this.trackControllers.delete(id);
+        runInAction(() => this.transcribe.trackStatuses.delete(id));
+      }
       void this.refreshRecentTranscriptions();
     }
   }

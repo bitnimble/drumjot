@@ -55,7 +55,3 @@ export function lint(
   });
   return { source, diagnostics };
 }
-
-// Re-export the rule registry so callers can introspect / build CLI flags.
-export { ALL_RULES };
-export type { Rule };

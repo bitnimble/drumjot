@@ -9,6 +9,7 @@ inference runs off the event loop on a worker thread.
 from __future__ import annotations
 
 import asyncio
+import math
 from pathlib import Path
 
 from .core import Cancelled, CancelToken, EmitProgress, RunnerResult
@@ -42,11 +43,12 @@ def _detect_beats(path: Path) -> dict:
     structure = analyze_beats(path)
     beats = [round(b.time, 6) for b in structure.beats]
     downbeats = [round(b.time, 6) for b in structure.beats if b.beat_in_bar == 1]
+    tempo = structure.initial_tempo
     return {
         "beats": beats,
         "downbeats": downbeats,
         "count": len(beats),
-        "initialTempo": round(structure.initial_tempo, 3),
+        "initialTempo": round(tempo, 3) if math.isfinite(tempo) else 0.0,
         # 'onnx' proves the Beat This! ONNX model ran (vs the torch/librosa paths).
         "engine": beat_engine_name(),
     }

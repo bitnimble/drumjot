@@ -20,8 +20,7 @@ EmitProgress = Callable[[str, float, "str | None"], Awaitable[None]]
 @dataclass
 class RunnerResult:
     """A runner's output when it carries a structured payload alongside (or
-    instead of) file artifacts, e.g. alignLyrics -> data={"lines": [...]}.
-    Runners that only emit files may return a bare `list[Artifact]` instead."""
+    instead of) file artifacts, e.g. alignLyrics -> data={"lines": [...]}."""
 
     artifacts: list[Artifact] = field(default_factory=list)
     data: object | None = None
@@ -56,7 +55,7 @@ class Runner(Protocol):
         request: RequestMessage,
         emit: EmitProgress,
         cancel: CancelToken,
-    ) -> list[Artifact] | RunnerResult: ...
+    ) -> RunnerResult: ...
 
 
 # op name -> the runner that handles it
