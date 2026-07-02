@@ -41,6 +41,49 @@ pub fn resolve_python<R: Runtime>(app: &AppHandle<R>) -> String {
     "../transcriber/.venv/bin/python".to_string()
 }
 
+/// Largest single protocol frame the broker will buffer. Real frames are small
+/// (large artifacts pass by reference), so this only bounds a misbehaving
+/// sidecar that writes an unbounded run with no newline, which a plain `lines()`
+/// would otherwise buffer forever.
+const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
+
+/// Read one newline-terminated line, capped at `MAX_FRAME_BYTES`: like
+/// `AsyncBufReadExt::next_line` but errors instead of buffering an unbounded
+/// no-newline stream. Strips the trailing `\r\n` / `\n`; `Ok(None)` at EOF.
+async fn read_capped_line<R>(reader: &mut R) -> std::io::Result<Option<String>>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        let chunk = reader.fill_buf().await?;
+        if chunk.is_empty() {
+            return Ok(if buf.is_empty() { None } else { Some(finish_line(buf)) });
+        }
+        if let Some(pos) = chunk.iter().position(|&b| b == b'\n') {
+            buf.extend_from_slice(&chunk[..pos]);
+            reader.consume(pos + 1);
+            return Ok(Some(finish_line(buf)));
+        }
+        let n = chunk.len();
+        buf.extend_from_slice(chunk);
+        reader.consume(n);
+        if buf.len() > MAX_FRAME_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "sidecar frame exceeds the size cap",
+            ));
+        }
+    }
+}
+
+fn finish_line(mut buf: Vec<u8>) -> String {
+    if buf.last() == Some(&b'\r') {
+        buf.pop();
+    }
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
 /// Run one backend job. `request` is a validated client control-protocol frame
 /// (the frontend builds it via `encodeClientMessage`); each backend frame is
 /// forwarded verbatim through `on_event`. Resolves when the sidecar emits a
@@ -101,16 +144,16 @@ pub async fn run_job<R: Runtime>(
 
     // stderr is diagnostics only (the protocol owns stdout); drain it to the log.
     let stderr_task = tokio::spawn(async move {
-        let mut lines = BufReader::new(stderr).lines();
-        while let Ok(Some(l)) = lines.next_line().await {
+        let mut reader = BufReader::new(stderr);
+        while let Ok(Some(l)) = read_capped_line(&mut reader).await {
             log::info!("[sidecar] {l}");
         }
     });
 
-    let mut reader = BufReader::new(stdout).lines();
+    let mut reader = BufReader::new(stdout);
     let outcome = loop {
         tokio::select! {
-            next = reader.next_line() => match next {
+            next = read_capped_line(&mut reader) => match next {
                 Ok(Some(raw)) => {
                     let raw = raw.trim();
                     if raw.is_empty() {
@@ -118,10 +161,14 @@ pub async fn run_job<R: Runtime>(
                     }
                     match serde_json::from_str::<Value>(raw) {
                         Ok(frame) => {
+                            // Terminal only for a `result`/`error` carrying THIS
+                            // request's id (the broker is one-shot today, but
+                            // keying on id keeps a future multiplexed sidecar from
+                            // being torn down by another job's terminal frame).
                             let terminal = matches!(
                                 frame.get("type").and_then(|t| t.as_str()),
                                 Some("result") | Some("error")
-                            );
+                            ) && frame.get("id").and_then(|v| v.as_str()) == Some(id.as_str());
                             // Break (don't `?`-return) on a send failure so the
                             // jobs-map removal + child reap below still run.
                             if let Err(e) = on_event.send(frame) {
@@ -238,6 +285,28 @@ mod tests {
         let state = app.state::<SidecarState>();
         let r = tauri::async_runtime::block_on(cancel_job(state, "no-such-job".into()));
         assert!(r.is_ok());
+    }
+
+    #[test]
+    fn read_capped_line_splits_lines_and_strips_terminators() {
+        tauri::async_runtime::block_on(async {
+            let mut r = BufReader::new(&b"one\r\ntwo\nthree"[..]);
+            assert_eq!(read_capped_line(&mut r).await.unwrap(), Some("one".to_string()));
+            assert_eq!(read_capped_line(&mut r).await.unwrap(), Some("two".to_string()));
+            // A final line with no trailing newline still returns before EOF.
+            assert_eq!(read_capped_line(&mut r).await.unwrap(), Some("three".to_string()));
+            assert_eq!(read_capped_line(&mut r).await.unwrap(), None);
+        });
+    }
+
+    #[test]
+    fn read_capped_line_errors_past_the_cap() {
+        tauri::async_runtime::block_on(async {
+            // A no-newline run past the cap errors instead of buffering forever.
+            let big = vec![b'x'; MAX_FRAME_BYTES + 10];
+            let mut r = BufReader::new(&big[..]);
+            assert!(read_capped_line(&mut r).await.is_err());
+        });
     }
 
     // Drives the broker against a fake sidecar that speaks the control protocol:
