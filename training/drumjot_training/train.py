@@ -1074,19 +1074,23 @@ def train_loop(
     # schedule's total_steps + the progress count must track the actual length.
     n_per_epoch = len(train_sampler) if train_sampler is not None else len(clips)
     expected_batches = (n_per_epoch + batch_size - 1) // batch_size
-    # warmup -> cosine LR schedule (stepped per optimizer step). Cosine decays to
-    # ~0 over the run so the final (saved + threshold-tuned) epoch settles at the
-    # LR minimum; warmup_steps>0 ramps in, which matters for large-batch/high-LR
-    # runs. lr_schedule="none" keeps a constant LR (legacy behaviour).
+    # warmup -> cosine LR schedule (stepped per optimizer step). Cosine decays from
+    # the base LR toward a small floor (LR_MIN_MULT) over the run; warmup_steps>0
+    # ramps in, which matters for large-batch/high-LR runs. The floor means the tail
+    # never hits ~0 (which would freeze learning), and it gives the schedule a
+    # well-defined minimum even though non-finite-grad step skips + --early-stop mean
+    # prog rarely reaches 1.0. lr_schedule="none" keeps a constant LR (legacy).
     sched = None
     if lr_schedule == "cosine":
         total_steps = max(1, epochs * expected_batches)
+        LR_MIN_MULT = 0.05  # cosine floor as a fraction of base LR
 
         def _lr_mult(step: int) -> float:
             if warmup_steps > 0 and step < warmup_steps:
                 return (step + 1) / warmup_steps
             prog = (step - warmup_steps) / max(1, total_steps - warmup_steps)
-            return 0.5 * (1.0 + math.cos(math.pi * min(1.0, max(0.0, prog))))
+            cos = 0.5 * (1.0 + math.cos(math.pi * min(1.0, max(0.0, prog))))
+            return LR_MIN_MULT + (1.0 - LR_MIN_MULT) * cos
 
         sched = torch.optim.lr_scheduler.LambdaLR(opt, _lr_mult)
 
@@ -1129,29 +1133,37 @@ def train_loop(
                 fw = sibling_weight(Y, sib_act, cfg.sib_pos_weight, cfg.sib_neg_weight)
             opt.zero_grad()
             with runtime.autocast():  # bf16 fwd on Ampere+; FP32 no-op elsewhere
-                # mask bounds each head's per-clip calibration pool to real frames
-                logits, act_logits = model.forward_all(X, mask)
-                # per-lane loss: BCE on bce_idx lanes + focal on focal_idx lanes.
-                # Independent heads -> summing the two (separately normalised) terms
-                # is correct; each head only sees its own lane's loss gradient.
-                terms = []
-                if bce_idx:
-                    fwb = fw[:, bce_idx] if fw is not None else None
-                    terms.append(masked_bce(logits[:, bce_idx], Y[:, bce_idx], mask, pw[bce_idx], frame_weight=fwb))
-                if focal_idx:
-                    fwf = fw[:, focal_idx] if fw is not None else None
-                    terms.append(masked_focal(logits[:, focal_idx], Y[:, focal_idx], mask, frame_weight=fwf))
-                if cym_idx:  # joint 3-way ride/crash CE (replaces rd/cr BCE)
-                    terms.append(cfg.cymbal_ce_weight * masked_cymbal_ce(
-                        logits[:, cym_idx], Y[:, cym_idx], mask, pos_weight=pw[cym_idx].max()))
-                loss = sum(terms)
-                if cfg.aux_act_weight > 0.0:
-                    # auxiliary ring-activity BCE, sustained lanes only (the
-                    # open-hat/cymbal tail that defines those classes)
-                    A = A.to(device, non_blocking=True)
-                    loss = loss + cfg.aux_act_weight * masked_bce(
-                        act_logits[:, sus_idx], A[:, sus_idx], mask, one_pw
-                    )
+                # mask bounds each head's per-clip calibration pool to real frames;
+                # pack=True runs each head's GRU at true length so a padded training
+                # batch matches the packed inference path (no backward-GRU pad
+                # contamination of the real tail frames).
+                logits, act_logits = model.forward_all(X, mask, pack=True)
+            # Loss in explicit fp32, OUTSIDE autocast. BCE/focal/CE sit on autocast's
+            # fp32 allowlist today, but upcasting the logits and computing the loss
+            # outside keeps it fp32 regardless of a future non-allowlisted op.
+            logits = logits.float()
+            act_logits = act_logits.float()
+            # per-lane loss: BCE on bce_idx lanes + focal on focal_idx lanes.
+            # Independent heads -> summing the two (separately normalised) terms
+            # is correct; each head only sees its own lane's loss gradient.
+            terms = []
+            if bce_idx:
+                fwb = fw[:, bce_idx] if fw is not None else None
+                terms.append(masked_bce(logits[:, bce_idx], Y[:, bce_idx], mask, pw[bce_idx], frame_weight=fwb))
+            if focal_idx:
+                fwf = fw[:, focal_idx] if fw is not None else None
+                terms.append(masked_focal(logits[:, focal_idx], Y[:, focal_idx], mask, frame_weight=fwf))
+            if cym_idx:  # joint 3-way ride/crash CE (replaces rd/cr BCE)
+                terms.append(cfg.cymbal_ce_weight * masked_cymbal_ce(
+                    logits[:, cym_idx], Y[:, cym_idx], mask, pos_weight=pw[cym_idx].max()))
+            loss = sum(terms)
+            if cfg.aux_act_weight > 0.0:
+                # auxiliary ring-activity BCE, sustained lanes only (the
+                # open-hat/cymbal tail that defines those classes)
+                A = A.to(device, non_blocking=True)
+                loss = loss + cfg.aux_act_weight * masked_bce(
+                    act_logits[:, sus_idx], A[:, sus_idx], mask, one_pw
+                )
             loss.backward()  # bf16 keeps FP32 range, so no GradScaler needed
             # clip_grad_norm_ returns the PRE-clip total grad norm. If it's
             # non-finite (a bad batch / bf16 forward blow-up -- clipping can't
@@ -1333,6 +1345,38 @@ def synthetic_smoke(epochs: int = 80, loss_fn: str = "bce", log: Callable[[str],
 
 
 # --- real-data entry point ----------------------------------------------
+
+
+def _cross_val_report(model, val_clips: Sequence[Clip], cfg: Config,
+                      folds: int = 2, log: Callable[[str], None] = print) -> None:
+    """Honest generalization estimate: k-fold cross-tuned val F1. Per fold, tune
+    thresholds on the OTHER folds and score the held-out fold, so the reported
+    number isn't in-sample-optimistic like `_report` (which tunes AND scores on the
+    same clips). This is only a reporting metric -- the SAVED deploy thresholds still
+    use all of val (best data for the shipped operating point). Skipped when there
+    are too few val clips to split."""
+    if len(val_clips) < 2 * folds:
+        return
+    probs = _clip_probs_batched(model, val_clips, cymbal_softmax=cfg.cymbal_softmax)
+    fold_of = [i % folds for i in range(len(val_clips))]  # deterministic, no RNG
+    lane_scores: dict[str, list[float]] = {ln: [] for ln in cfg.lanes}
+    for f in range(folds):
+        tune = [i for i in range(len(val_clips)) if fold_of[i] != f]
+        test = [i for i in range(len(val_clips)) if fold_of[i] == f]
+        thr = _tune_thresholds_from_probs(
+            [(probs[i], val_clips[i].onsets_by_lane) for i in tune], cfg)
+        for i in test:
+            pl = _f1_from_probs(probs[i], val_clips[i], cfg, thr)
+            for ln in cfg.lanes:
+                if val_clips[i].onsets_by_lane.get(ln):
+                    lane_scores[ln].append(pl[ln])
+    lane_f1 = {ln: sum(v) / len(v) for ln, v in lane_scores.items() if v}
+    if not lane_f1:
+        return
+    macro = sum(lane_f1.values()) / len(lane_f1)
+    log(f"\ncross-val ({folds}-fold, held-out thresholds) macro {macro:.3f}  ["
+        + " ".join(f"{ln} {lane_f1[ln]:.2f}" for ln in cfg.lanes if ln in lane_f1)
+        + "]  (unbiased; saved thresholds still use all val)")
 
 
 def _report(model, val_clips: Sequence[Clip], cfg: Config, thresholds: dict[str, float]) -> None:
@@ -2190,6 +2234,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     thresholds = tune_thresholds(model, val_clips, cfg)
     _report(model, val_clips, cfg, thresholds)
+    _cross_val_report(model, val_clips, cfg)  # unbiased headline (held-out thresholds)
     if not args.no_filter_report:
         _report_compare(model, val_clips, cfg, thresholds)
 

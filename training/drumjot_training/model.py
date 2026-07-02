@@ -90,13 +90,16 @@ class OnsetHead(nn.Module):
         h = self._run_gru(x, mask, pack)
         return self._calibrate(self.proj(h).squeeze(-1), h, mask)
 
-    def forward_all(self, x: torch.Tensor, mask: torch.Tensor | None = None
-                    ) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward_all(self, x: torch.Tensor, mask: torch.Tensor | None = None,
+                    pack: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
         """One GRU pass -> (calibrated onset logits (B, T), activity logits (B, T)).
 
         `mask` (B, T; True = real frame) bounds the calibration pool to non-pad
-        frames; None pools over all frames (single clip / no-pad batch)."""
-        h, _ = self.gru(x)
+        frames; None pools over all frames (single clip / no-pad batch). `pack`
+        runs each sequence at its true length (like `forward`), so training on a
+        padded batch matches the packed inference path (no train/serve skew from
+        the backward GRU reading trailing pad)."""
+        h = self._run_gru(x, mask, pack)
         onset = self._calibrate(self.proj(h).squeeze(-1), h, mask)
         return onset, self.act(h).squeeze(-1)
 
@@ -142,12 +145,13 @@ class MultiLaneHeads(nn.Module):
         outs = [self.heads[lane](self._x_for(x, lane), mask, pack) for lane in self.lane_names]
         return torch.stack(outs, dim=1)
 
-    def forward_all(self, x, mask: torch.Tensor | None = None
-                    ) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward_all(self, x, mask: torch.Tensor | None = None,
+                    pack: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
         """(onset logits (B, n_lanes, T), activity logits (B, n_lanes, T)). `mask`
-        (B, T; True = real frame) bounds each head's per-clip calibration pool.
+        (B, T; True = real frame) bounds each head's per-clip calibration pool and,
+        with `pack`, runs each head's GRU at true length (matches inference).
         `x` is a single tensor (single-layer) or a {layer: tensor} dict (per-lane)."""
-        pairs = [self.heads[lane].forward_all(self._x_for(x, lane), mask) for lane in self.lane_names]
+        pairs = [self.heads[lane].forward_all(self._x_for(x, lane), mask, pack) for lane in self.lane_names]
         return torch.stack([p[0] for p in pairs], dim=1), torch.stack([p[1] for p in pairs], dim=1)
 
 

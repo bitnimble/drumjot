@@ -33,6 +33,38 @@ def test_multilane_heads_are_separate_modules_per_lane():
     assert set(m.heads) == set(lanes.LANES)
 
 
+def test_forward_all_pack_matches_per_clip_unpadded():
+    """Packed forward_all over a padded batch equals per-clip forwards on the real
+    frames -- the train/serve anti-skew guarantee (training now packs like the
+    inference path). Without packing the backward GRU reads trailing pad and the
+    shorter clip's tail frames drift; with pack=True they don't."""
+    import torch
+
+    torch.manual_seed(0)
+    m = model.MultiLaneHeads(in_dim=12, hidden=8, num_layers=2)
+    m.eval()
+    lens = [17, 25]
+    t_max = max(lens)
+    xb = torch.zeros(2, t_max, 12)
+    mask = torch.zeros(2, t_max)
+    seqs = [torch.randn(L, 12) for L in lens]
+    for i, (L, s) in enumerate(zip(lens, seqs, strict=True)):
+        xb[i, :L] = s
+        mask[i, :L] = 1.0
+
+    with torch.no_grad():
+        onset_p, act_p = m.forward_all(xb, mask, pack=True)
+        onset_u, _ = m.forward_all(xb, mask)  # unpacked (old training path)
+        drift = 0.0
+        for i, L in enumerate(lens):
+            onset_s, act_s = m.forward_all(seqs[i].unsqueeze(0))  # single, unpadded
+            assert torch.allclose(onset_p[i, :, :L], onset_s[0], atol=1e-4)
+            assert torch.allclose(act_p[i, :, :L], act_s[0], atol=1e-4)
+            drift = max(drift, (onset_u[i, :, :L] - onset_s[0]).abs().max().item())
+    # sanity: the unpacked path genuinely differs (the skew this fix removes)
+    assert drift > 1e-3
+
+
 def test_activate_onsets_sigmoid_by_default():
     import torch
 
