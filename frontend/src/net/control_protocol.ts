@@ -47,8 +47,9 @@ export const ArtifactSchema = z.object({
   name: z.string().optional(),
 });
 
-/** Backend operations a `request` can invoke. */
-export const OpSchema = z.enum(['transcribe', 'separate', 'alignLyrics', 'beats']);
+/** Backend operations a `request` can invoke. (Beat tracking runs as an internal
+ *  transcribe stage, not a client-driven op.) */
+export const OpSchema = z.enum(['transcribe', 'separate', 'alignLyrics']);
 
 const base = { v: z.literal(PROTOCOL_VERSION), id: z.string() };
 
@@ -87,15 +88,6 @@ export const ProgressMessageSchema = z.object({
   message: z.string().optional(),
 });
 
-export const LogMessageSchema = z.object({
-  v: z.literal(PROTOCOL_VERSION),
-  type: z.literal('log'),
-  // Not tied to a request: process-level logs carry no `id`.
-  id: z.string().optional(),
-  level: z.enum(['debug', 'info', 'warn', 'error']),
-  message: z.string(),
-});
-
 export const ResultMessageSchema = z.object({
   ...base,
   type: z.literal('result'),
@@ -115,7 +107,6 @@ export const ErrorMessageSchema = z.object({
 
 export const ServerMessageSchema = z.discriminatedUnion('type', [
   ProgressMessageSchema,
-  LogMessageSchema,
   ResultMessageSchema,
   ErrorMessageSchema,
 ]);
@@ -128,7 +119,6 @@ export type RequestMessage = z.infer<typeof RequestMessageSchema>;
 export type CancelMessage = z.infer<typeof CancelMessageSchema>;
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
 export type ProgressMessage = z.infer<typeof ProgressMessageSchema>;
-export type LogMessage = z.infer<typeof LogMessageSchema>;
 export type ResultMessage = z.infer<typeof ResultMessageSchema>;
 export type ErrorMessage = z.infer<typeof ErrorMessageSchema>;
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;
