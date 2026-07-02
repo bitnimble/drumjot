@@ -93,16 +93,23 @@ pytestmark = [
 
 
 def _stereo_noise(seconds: float = 3.5, sr: int = 44100, seed: int = 0) -> np.ndarray:
-    """A short seeded stereo waveform, shape (samples, channels) -- the shape
-    both `separate()` entry points expect for a 2D ndarray (they transpose to
-    channels-first internally). Lightly band-limited + decorrelated L/R so both
-    the roformer and MDX23C paths see a non-trivial signal across the spectrum."""
+    """A short seeded stereo waveform, shape (samples, channels) -- the shape both
+    `separate()` entry points expect for a 2D ndarray (they transpose to channels-
+    first internally). Tones + noise + a broadband click train: the transients give
+    the percussion separators (MDX23C kick/snare/toms) real energy to route, so the
+    correlation check covers more than one stem, not just whichever stem the steady
+    tones land in. Decorrelated L/R so the stereo path is non-trivial."""
     rng = np.random.default_rng(seed)
     n = int(sr * seconds)
     t = np.arange(n) / sr
     tone = 0.15 * np.sin(2 * np.pi * 220.0 * t) + 0.1 * np.sin(2 * np.pi * 1760.0 * t)
-    left = tone + 0.2 * rng.standard_normal(n)
-    right = tone + 0.2 * rng.standard_normal(n)
+    clicks = np.zeros(n, dtype=np.float64)
+    for k in range(int(seconds * 4)):  # 4 clicks/sec -> broadband transients
+        i = int(k * sr / 4)
+        if i < n:
+            clicks[i:i + 64] = np.hanning(128)[:64] * rng.choice([-1.0, 1.0])
+    left = tone + 0.5 * clicks + 0.15 * rng.standard_normal(n)
+    right = tone + 0.5 * clicks + 0.15 * rng.standard_normal(n)
     mix = np.stack([left, right], axis=1).astype(np.float32)  # (samples, channels)
     return (mix / np.abs(mix).max() * 0.7).astype(np.float32)
 
@@ -143,11 +150,26 @@ def test_onnx_separation_matches_torch(ckpt_filename, expected_kind):
 
     assert set(torch_stems) == set(onnx_stems), (sorted(torch_stems), sorted(onnx_stems))
 
+    # All stems are fractions of the same mix; the loudest one sets the reference
+    # scale for the (magnitude) error bound. RMS gates the correlation check: a stem
+    # that's near-silent on this synthetic input (e.g. guitar/cymbals -- there's no
+    # real such content in tones+noise) has an ill-conditioned corr (residual-vs-
+    # residual noise), so its corr is uninformative; the tiny abs-error bound still
+    # guards it against corruption. Real energy-carrying stems (drums, bass) get the
+    # tight corr guard that would catch a shifted/re-exported/onnxruntime-drifted model.
+    def _rms(a: np.ndarray) -> float:
+        return float(np.sqrt((a.astype(np.float64) ** 2).mean()))
+
+    peak_all = max(float(np.abs(s).max()) for s in torch_stems.values()) or 1.0
+    rms_all = max(_rms(s) for s in torch_stems.values()) or 1.0
     for name in sorted(torch_stems):
         ta, oa = torch_stems[name], onnx_stems[name]
         assert ta.shape == oa.shape, f"{name}: {ta.shape} vs {oa.shape}"
         corr = _correlation(ta, oa)
         max_abs = float(np.abs(ta.astype(np.float64) - oa.astype(np.float64)).max())
-        print(f"{ckpt_filename} :: {name}: corr={corr:.6f} max_abs_diff={max_abs:.4e}")
-        assert corr >= 0.9998, f"{ckpt_filename} stem {name}: corr {corr:.6f} < 0.9998"
-        assert max_abs < 5e-2, f"{ckpt_filename} stem {name}: max_abs_diff {max_abs:.4e} too large"
+        rms_frac = _rms(ta) / rms_all
+        print(f"{ckpt_filename} :: {name}: corr={corr:.6f} max_abs_diff={max_abs:.4e} rms_frac={rms_frac:.3f}")
+        assert max_abs < 1e-2 * peak_all, (
+            f"{ckpt_filename} stem {name}: max_abs_diff {max_abs:.4e} > 1% of peak {peak_all:.4e}")
+        if rms_frac >= 0.05:  # only assert corr on stems with real energy
+            assert corr >= 0.9998, f"{ckpt_filename} stem {name}: corr {corr:.6f} < 0.9998"
