@@ -9,8 +9,9 @@ import styles from './color_pot.module.css';
  * that popover's palette grid, and any future swatch-style affordance.
  *
  * `selected` paints the accent-coloured ring so the popover can flag
- * the current colour against its palette row. `aria-pressed` reflects
- * it so screen readers see the same state.
+ * the current colour against its palette row. Screen readers see the
+ * same state via `aria-selected` when it's an `option` (inside the
+ * picker listbox) or `aria-pressed` otherwise (a plain toggle button).
  */
 export const ColorPot = React.forwardRef<
   HTMLButtonElement,
@@ -26,18 +27,22 @@ export const ColorPot = React.forwardRef<
      *  `listbox`). Defaults to a plain button. */
     role?: string;
   }
->(({ color, selected, onClick, title, ariaLabel, ariaHasPopup, ariaExpanded, role }, ref) => (
-  <button
-    ref={ref}
-    type="button"
-    role={role}
-    className={classNames(styles.pot, selected && styles.selected)}
-    style={{ background: color }}
-    title={title}
-    aria-label={ariaLabel}
-    aria-pressed={selected}
-    aria-haspopup={ariaHasPopup}
-    aria-expanded={ariaExpanded}
-    onClick={onClick}
-  />
-));
+>(({ color, selected, onClick, title, ariaLabel, ariaHasPopup, ariaExpanded, role }, ref) => {
+  const isOption = role === 'option';
+  return (
+    <button
+      ref={ref}
+      type="button"
+      role={role}
+      className={classNames(styles.pot, selected && styles.selected)}
+      style={{ background: color }}
+      title={title}
+      aria-label={ariaLabel}
+      aria-selected={isOption ? selected : undefined}
+      aria-pressed={isOption ? undefined : selected}
+      aria-haspopup={ariaHasPopup}
+      aria-expanded={ariaExpanded}
+      onClick={onClick}
+    />
+  );
+});

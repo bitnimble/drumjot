@@ -420,6 +420,7 @@ export const ToggleMenuItem = ({
   title,
   disabled,
   testId,
+  role = 'menuitemcheckbox',
 }: {
   label: React.ReactNode;
   active: boolean;
@@ -427,11 +428,15 @@ export const ToggleMenuItem = ({
   title?: string;
   disabled?: boolean;
   testId?: string;
+  /** `menuitemradio` for a mutually-exclusive set (one tick at a time),
+   *  otherwise the default independent checkbox. `aria-checked` is
+   *  carried the same way for both. */
+  role?: 'menuitemcheckbox' | 'menuitemradio';
 }) => (
   <button
     type="button"
     className={classNames(styles.dropdownItem, styles.toggleMenuItem)}
-    role="menuitemcheckbox"
+    role={role}
     aria-checked={active}
     onClick={onToggle}
     disabled={disabled}

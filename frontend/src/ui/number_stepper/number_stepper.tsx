@@ -1,5 +1,6 @@
 import classNames from 'classnames';
 import React from 'react';
+import { useBufferedStepper } from 'src/ui/stepper/use_buffered_stepper';
 import styles from './number_stepper.module.css';
 
 /**
@@ -12,10 +13,10 @@ import styles from './number_stepper.module.css';
  *
  * State semantics mirror the original buffered inputs in
  * `playback.tsx::OffsetControl` and `lyrics_track_view.tsx::OffsetInput`: a
- * local text buffer lets the user clear the field or type a leading
- * `-` without the parent's value clamp snapping mid-keystroke, and the
- * buffer re-syncs from `value` whenever the input isn't focused (so a
- * fresh jot resetting the offset reflects immediately).
+ * local text buffer (in {@link useBufferedStepper}) lets the user clear the
+ * field or type a leading `-` without the parent's value clamp snapping
+ * mid-keystroke, and the buffer reflects `value` whenever the input isn't
+ * being edited (so a fresh jot resetting the offset shows immediately).
  *
  * Stepping (+/− buttons, keyboard up/down) operates on the current
  * committed `value`, not the text buffer, so the button always moves
@@ -52,13 +53,9 @@ export const NumberStepper = ({
   testId?: string;
   className?: string;
 }) => {
-  const [text, setText] = React.useState(() => value.toFixed(precision));
   const [editing, setEditing] = React.useState(false);
   const inputRef = React.useRef<HTMLInputElement>(null);
   const wrapperRef = React.useRef<HTMLDivElement>(null);
-  React.useEffect(() => {
-    if (!editing) setText(value.toFixed(precision));
-  }, [value, editing, precision]);
 
   // Defocus on mousedown outside the stepper. Native focus shift would
   // normally do this for free, but several parent containers
@@ -87,18 +84,25 @@ export const NumberStepper = ({
     return out;
   };
 
-  const commit = (raw: string) => {
-    const n = parseFloat(raw);
-    if (!Number.isFinite(n)) return;
-    onChange(clamp(n));
-  };
-
   const stepBy = (sign: 1 | -1) => {
     if (disabled) return;
     const next = clamp(value + sign * step);
     if (next === value) return;
     onChange(next);
   };
+
+  const buffered = useBufferedStepper({
+    commit: (raw) => {
+      const n = parseFloat(raw);
+      if (!Number.isFinite(n)) return;
+      onChange(clamp(n));
+    },
+    deriveDisplay: (text) => (text !== null ? text : value.toFixed(precision)),
+    step: stepBy,
+    // The native `<input type="number">` handles arrow keys itself.
+    handleArrowKeys: false,
+    commitOnChange: true,
+  });
 
   const atMin = typeof min === 'number' && value <= min;
   const atMax = typeof max === 'number' && value >= max;
@@ -134,30 +138,15 @@ export const NumberStepper = ({
         min={min}
         max={max}
         step={step}
-        value={text}
+        value={buffered.display}
         disabled={disabled}
         onFocus={() => setEditing(true)}
         onBlur={(e) => {
           setEditing(false);
-          commit(e.target.value);
+          buffered.onBlur(e);
         }}
-        onChange={(e) => {
-          setText(e.target.value);
-          commit(e.target.value);
-        }}
-        onKeyDown={(e) => {
-          // Enter commits and defocuses; Escape reverts to the committed
-          // value and defocuses. Both rely on onBlur to clear `editing`
-          // and run the final commit, so the buffer/value stay in sync.
-          if (e.key === 'Enter') {
-            e.preventDefault();
-            e.currentTarget.blur();
-          } else if (e.key === 'Escape') {
-            e.preventDefault();
-            setText(value.toFixed(precision));
-            e.currentTarget.blur();
-          }
-        }}
+        onChange={(e) => buffered.onChange(e.target.value)}
+        onKeyDown={buffered.onKeyDown}
         aria-label={ariaLabel}
         data-testid={testId}
       />

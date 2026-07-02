@@ -68,6 +68,7 @@ export const ThemeSection = observer(() => {
         <ToggleMenuItem
           key={m}
           label={THEME_MODE_LABELS[m]}
+          role="menuitemradio"
           active={mode === m}
           onToggle={() => themeStore.setMode(m)}
           title={
