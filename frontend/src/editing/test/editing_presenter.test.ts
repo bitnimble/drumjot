@@ -252,7 +252,7 @@ function setupMulti() {
     selectionPresenter,
     layersPresenter
   );
-  return { store, presenter, selection, selectionPresenter };
+  return { store, editingStore, presenter, selection, selectionPresenter };
 }
 
 describe('EditingPresenter, multi-layer (hands/feet split)', () => {
@@ -366,5 +366,158 @@ describe('EditingPresenter, multi-layer (hands/feet split)', () => {
       store.structural!.ownerLayerFor('k'),
       store.structural!.ownerLayerFor('k'),
     ]);
+  });
+});
+
+// Locks the observable behaviour of the drag + paste gesture lifecycle so the
+// state-machine refactor of these methods is provably behaviour-preserving.
+describe('EditingPresenter drag/paste gesture lifecycle (parity contract)', () => {
+  const laneNotes = (store: JotEditorStore, lane: string) =>
+    (store.structural?.barsForLane(lane).bars ?? []).flatMap((b) => b.tracks[lane]?.notes ?? []);
+  const totalNotes = (store: JotEditorStore) =>
+    [...(store.jot?.elements.values() ?? [])].filter((e) => (e as { kind: string }).kind === 'note')
+      .length;
+  const firstKick = (store: JotEditorStore) =>
+    store.structural!.musicalLayers[0].bars[0].tracks['k'].notes[0];
+  const firstHat = (store: JotEditorStore) =>
+    store.structural!.barsForLane('h').bars.find((b) => b.tracks['h']?.notes.length)!.tracks['h']
+      .notes[0];
+
+  it('beginDragMove activates the drag, previews the selection, and selects the anchor', () => {
+    const { store, editingStore, selection, presenter } = setup();
+    presenter.beginDragMove(firstKick(store), 0);
+    expect(editingStore.dragActive).toBe(true);
+    expect(editingStore.pasteActive).toBe(false);
+    expect(editingStore.dragPreview.length).toBe(1);
+    expect(selection.selectedNotes.size).toBe(1);
+  });
+
+  it('updateDragMove keeps the drag active and refreshes the preview', () => {
+    const { store, editingStore, presenter } = setup();
+    presenter.beginDragMove(firstKick(store), 0, 'k');
+    presenter.updateDragMove('k', 10, ['k']);
+    expect(editingStore.dragActive).toBe(true);
+    expect(editingStore.dragPreview.length).toBe(1);
+  });
+
+  it('updateDragMove and commitDragMove are no-ops with no active drag', () => {
+    const { store, editingStore, presenter } = setup();
+    const before = totalNotes(store);
+    presenter.updateDragMove('k', 10, ['k']);
+    presenter.commitDragMove();
+    expect(editingStore.dragActive).toBe(false);
+    expect(totalNotes(store)).toBe(before);
+  });
+
+  it('commitDragMove applies the move (cross-lane) and clears drag state', () => {
+    const { store, editingStore, selectionPresenter, presenter } = setupMulti();
+    const h0 = firstHat(store);
+    selectionPresenter.replace(h0);
+    presenter.beginDragMove(h0, 0, 'h');
+    presenter.updateDragMove('k', 0, store.jot!.lanes);
+    presenter.commitDragMove();
+    expect(editingStore.dragActive).toBe(false);
+    expect(editingStore.dragPreview.length).toBe(0);
+    // The hi-hat re-homed onto the kick lane (matches moveSelection(h0, 0, () => 'k')).
+    expect(laneNotes(store, 'h').length).toBe(0);
+    expect(laneNotes(store, 'k').length).toBe(2);
+  });
+
+  it('cancelDragMove clears state and leaves the document unchanged', () => {
+    const { store, editingStore, selectionPresenter, presenter } = setupMulti();
+    const h0 = firstHat(store);
+    selectionPresenter.replace(h0);
+    presenter.beginDragMove(h0, 0, 'h');
+    presenter.updateDragMove('k', 0, store.jot!.lanes);
+    presenter.cancelDragMove();
+    expect(editingStore.dragActive).toBe(false);
+    expect(editingStore.dragPreview.length).toBe(0);
+    expect(laneNotes(store, 'h').length).toBe(1); // still on the hi-hat lane
+  });
+
+  it('beginPaste activates paste with an empty preview until the first move', () => {
+    const { store, editingStore, selectionPresenter, presenter } = setup();
+    selectionPresenter.replace(firstKick(store));
+    presenter.beginPaste(presenter.copySelectionPayload()!);
+    expect(editingStore.pasteActive).toBe(true);
+    expect(editingStore.dragActive).toBe(false);
+    expect(editingStore.dragPreview.length).toBe(0);
+  });
+
+  it('updatePaste produces a preview', () => {
+    const { store, editingStore, selectionPresenter, presenter } = setup();
+    selectionPresenter.replace(firstKick(store));
+    presenter.beginPaste(presenter.copySelectionPayload()!);
+    presenter.updatePaste(2, 'k', store.jot!.lanes);
+    expect(editingStore.dragPreview.length).toBe(1);
+  });
+
+  it('commitPaste after a cursor move inserts the pasted notes and clears state', () => {
+    const { store, editingStore, selectionPresenter, presenter } = setup();
+    presenter.setSnapping(false);
+    selectionPresenter.replace(firstKick(store));
+    presenter.beginPaste(presenter.copySelectionPayload()!);
+    presenter.updatePaste(2, 'k', store.jot!.lanes); // drop at bar 0 beat 2
+    const before = totalNotes(store);
+    presenter.commitPaste();
+    expect(editingStore.pasteActive).toBe(false);
+    expect(editingStore.dragPreview.length).toBe(0);
+    expect(totalNotes(store)).toBe(before + 1);
+  });
+
+  it('commitPaste with no cursor move is a no-op', () => {
+    const { store, editingStore, selectionPresenter, presenter } = setup();
+    selectionPresenter.replace(firstKick(store));
+    presenter.beginPaste(presenter.copySelectionPayload()!);
+    const before = totalNotes(store);
+    presenter.commitPaste();
+    expect(editingStore.pasteActive).toBe(false);
+    expect(totalNotes(store)).toBe(before);
+  });
+
+  it('cancelPaste clears state without inserting', () => {
+    const { store, editingStore, selectionPresenter, presenter } = setup();
+    selectionPresenter.replace(firstKick(store));
+    presenter.beginPaste(presenter.copySelectionPayload()!);
+    presenter.updatePaste(2, 'k', store.jot!.lanes);
+    const before = totalNotes(store);
+    presenter.cancelPaste();
+    expect(editingStore.pasteActive).toBe(false);
+    expect(editingStore.dragPreview.length).toBe(0);
+    expect(totalNotes(store)).toBe(before);
+  });
+
+  it('beginPaste supersedes an in-flight drag (exactly one gesture active)', () => {
+    const { store, editingStore, selectionPresenter, presenter } = setup();
+    selectionPresenter.replace(firstKick(store));
+    presenter.beginDragMove(firstKick(store), 0);
+    presenter.beginPaste(presenter.copySelectionPayload()!);
+    expect(editingStore.dragActive).toBe(false);
+    expect(editingStore.pasteActive).toBe(true);
+  });
+
+  it('beginDragMove supersedes an in-flight paste (exactly one gesture active)', () => {
+    const { store, editingStore, selectionPresenter, presenter } = setup();
+    selectionPresenter.replace(firstKick(store));
+    presenter.beginPaste(presenter.copySelectionPayload()!);
+    presenter.beginDragMove(firstKick(store), 0);
+    expect(editingStore.pasteActive).toBe(false);
+    expect(editingStore.dragActive).toBe(true);
+  });
+
+  it('reset cancels an in-flight drag', () => {
+    const { store, editingStore, selectionPresenter, presenter } = setup();
+    selectionPresenter.replace(firstKick(store));
+    presenter.beginDragMove(firstKick(store), 0);
+    presenter.reset();
+    expect(editingStore.dragActive).toBe(false);
+  });
+
+  it('reset cancels an in-flight paste', () => {
+    const { store, editingStore, selectionPresenter, presenter } = setup();
+    selectionPresenter.replace(firstKick(store));
+    presenter.beginPaste(presenter.copySelectionPayload()!);
+    presenter.reset();
+    expect(editingStore.pasteActive).toBe(false);
   });
 });
