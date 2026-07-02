@@ -1,9 +1,9 @@
 """Unit + drift-guard tests for `app.scoring.lanes`.
 
 The lane fold and the two pitch tables are Python ports of TypeScript
-sources (`src/midi/gm.ts`, `src/rlrr/drums.ts`). The `drift-guard` tests
-parse those `.ts` files and assert the Python ports still match them, so a
-future TS change that isn't mirrored here fails CI loudly.
+sources (`frontend/src/midi/gm.ts`, `frontend/src/schema/rlrr/drums.ts`). The
+`drift-guard` tests parse those `.ts` files and assert the Python ports still
+match them, so a future TS change that isn't mirrored here fails CI loudly.
 """
 from __future__ import annotations
 
@@ -80,16 +80,16 @@ def test_class_from_instance_name() -> None:
 
 
 def _parse_gm_ts() -> dict[int, str]:
-    """Pull `<note>: { pitch: '<x>'` rows out of gm.ts's GM_PERCUSSION."""
-    text = (_REPO / "src" / "midi" / "gm.ts").read_text(encoding="utf-8")
-    pairs = re.findall(r"^\s*(\d+):\s*\{\s*pitch:\s*'([a-z])'", text, re.MULTILINE)
+    """Pull `<note>: { lane: '<x>'` rows out of gm.ts's GM_PERCUSSION."""
+    text = (_REPO / "frontend" / "src" / "midi" / "gm.ts").read_text(encoding="utf-8")
+    pairs = re.findall(r"^\s*(\d+):\s*\{\s*lane:\s*'([a-z])'", text, re.MULTILINE)
     return {int(note): pitch for note, pitch in pairs}
 
 
 def _parse_drums_ts() -> dict[str, str]:
-    """Pull `<class>: { pitch: '<x>'` rows out of drums.ts's CLASS_TO_DRUM."""
-    text = (_REPO / "src" / "rlrr" / "drums.ts").read_text(encoding="utf-8")
-    pairs = re.findall(r"^\s*(BP_\w+):\s*\{\s*pitch:\s*'([a-z])'", text, re.MULTILINE)
+    """Pull `<class>: { lane: '<x>'` rows out of drums.ts's CLASS_TO_DRUM."""
+    text = (_REPO / "frontend" / "src" / "schema" / "rlrr" / "drums.ts").read_text(encoding="utf-8")
+    pairs = re.findall(r"^\s*(BP_\w+):\s*\{\s*lane:\s*'([a-z])'", text, re.MULTILINE)
     return {cls: pitch for cls, pitch in pairs}
 
 
