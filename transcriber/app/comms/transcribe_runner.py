@@ -23,6 +23,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.pipeline.stages import STAGE_ORDER
+
 from .core import Cancelled, CancelToken, EmitProgress
 from .protocol import Artifact, PathRef, RequestMessage
 
@@ -30,9 +32,9 @@ MANIFEST_NAME = "debug.json"
 MIDI_NAME = "prediction.mid"
 # Mapping key for the drumless backing track (mirrors debug_bundle.NO_DRUMS_KEY).
 NO_DRUMS_KEY = "no_drums"
-# Pipeline stage order (mirrors app.pipeline.runner.STAGE_ORDER); kept here so
-# progress fractions don't require importing the torch-heavy pipeline.
-LIVE_STAGES = ["stems_all", "stems_per", "beats", "onsets", "filter", "quantise", "transcribe"]
+# Progress-fraction stage order, derived from the canonical Stage enum (torch-free
+# app.pipeline.stages) so it can't drift from the runner's STAGE_ORDER.
+LIVE_STAGES = [s.value for s in STAGE_ORDER]
 
 
 def _outputs_dir() -> Path:

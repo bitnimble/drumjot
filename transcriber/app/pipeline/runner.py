@@ -49,7 +49,6 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
@@ -73,37 +72,11 @@ from app.pipeline.note_provenance import build_note_provenance
 from app.pipeline.onsets_midi import onsets_to_midi_bytes
 from app.pipeline.quantise import quantise_kept_onsets
 from app.pipeline.separate import PITCH_DISPLAY_NAMES, Separator
+from app.pipeline.stages import STAGE_ORDER, Stage, stage_index
 from app.pipeline.transcription import build_transcription
 from app.run_log import current_run_log
 
 log = logging.getLogger(__name__)
-
-
-class Stage(StrEnum):
-    """Named pipeline stages, ordered by data dependency."""
-
-    STEMS_ALL = "stems_all"
-    STEMS_PER = "stems_per"
-    BEATS = "beats"
-    ONSETS = "onsets"
-    FILTER = "filter"
-    QUANTISE = "quantise"
-    TRANSCRIBE = "transcribe"
-
-
-STAGE_ORDER: list[Stage] = [
-    Stage.STEMS_ALL,
-    Stage.STEMS_PER,
-    Stage.BEATS,
-    Stage.ONSETS,
-    Stage.FILTER,
-    Stage.QUANTISE,
-    Stage.TRANSCRIBE,
-]
-
-
-def stage_index(s: Stage) -> int:
-    return STAGE_ORDER.index(s)
 
 
 class StageError(Exception):

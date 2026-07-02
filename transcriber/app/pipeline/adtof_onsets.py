@@ -55,6 +55,7 @@ Design notes / deliberate constraints:
 from __future__ import annotations
 
 import logging
+from collections import deque
 from functools import lru_cache
 from pathlib import Path
 
@@ -699,6 +700,15 @@ def _crash_shadow_filter(
     rms_t = librosa.times_like(rms, sr=sample_rate, hop_length=_SHADOW_RMS_HOP)
     kept: list[OnsetCandidate] = []
     dropped = 0
+    # O(n) sliding-window replacement for the per-candidate `candidates[:i]`
+    # rescan. Candidates are time-ordered (docstring contract), so the earlier
+    # candidates eligible to shadow `c` are those with
+    # `c.time - window_s <= p.time < c.time`; both bounds move forward
+    # monotonically with `c.time`. A max-amplitude monotonic deque holds those
+    # in-window predecessors (amplitude-bearing only), so the shadow test is
+    # `deque_max >= louder_mult * c.amplitude` (== `any(p.amplitude >= ...)`).
+    window: deque[tuple[float, float]] = deque()  # (time, amplitude), amp non-increasing
+    add_idx = 0  # next predecessor not yet folded into `window`
     for i, c in enumerate(candidates):
         if c.amplitude is None:
             kept.append(c)
@@ -706,12 +716,20 @@ def _crash_shadow_filter(
         if _energy_injection(rms, rms_t, float(c.time)) >= inject_max:
             kept.append(c)
             continue
-        in_shadow = any(
-            0.0 < c.time - p.time <= window_s
-            and p.amplitude is not None
-            and p.amplitude >= louder_mult * c.amplitude
-            for p in candidates[:i]
-        )
+        # Fold in predecessors with strictly-earlier time (ties in time are
+        # excluded by the original `0.0 < c.time - p.time`).
+        while add_idx < i and candidates[add_idx].time < c.time:
+            p = candidates[add_idx]
+            add_idx += 1
+            if p.amplitude is None:
+                continue
+            while window and window[-1][1] <= p.amplitude:
+                window.pop()
+            window.append((p.time, p.amplitude))
+        # Evict predecessors that fell out of the look-back window.
+        while window and c.time - window[0][0] > window_s:
+            window.popleft()
+        in_shadow = bool(window) and window[0][1] >= louder_mult * c.amplitude
         if in_shadow:
             dropped += 1
         else:

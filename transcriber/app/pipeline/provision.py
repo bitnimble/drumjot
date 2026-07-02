@@ -21,6 +21,7 @@ so a build can repoint them without code changes.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -108,14 +109,26 @@ def _download(url: str, dest: Path) -> None:
         log.info("provision: %s already present, skipping download", dest.name)
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_name(dest.name + ".part")
+    # pid-unique .part so concurrent provisioners don't clobber one temp file.
+    tmp = dest.with_name(f"{dest.name}.{os.getpid()}.part")
     log.info("provision: downloading %s -> %s", url, dest.name)
     try:
         with httpx.stream("GET", url, follow_redirects=True, timeout=_HTTP_TIMEOUT) as resp:
             resp.raise_for_status()
+            written = 0
             with open(tmp, "wb") as fh:
                 for chunk in resp.iter_bytes(chunk_size=1 << 20):
-                    fh.write(chunk)
+                    written += fh.write(chunk)
+            # Only verifiable on an identity transfer: gzip/chunked decode the
+            # body, so the decoded byte count won't match Content-Length.
+            declared = resp.headers.get("content-length")
+            if declared is not None and "content-encoding" not in resp.headers:
+                expected = int(declared)
+                if written != expected:
+                    raise RuntimeError(
+                        f"provision: truncated download of {dest.name}: "
+                        f"got {written} bytes, expected {expected}"
+                    )
         tmp.replace(dest)
     except Exception:
         tmp.unlink(missing_ok=True)
