@@ -382,14 +382,12 @@ async def transcribe(
         sink.copy_audio("input", in_path)
 
     ctx = PipelineContext(audio_path=in_path, work_dir=work_dir)
-    options = PipelineOptions(
+    options = _pipeline_options_from_params(
         beat_input=beat_input,
         quantise=quantise,
         quantise_use_llm=quantise_use_llm,
-        llm_model=llm_model or settings.llm_model,
-        use_learned_onsets=(onset_backend.strip().lower() == "learned")
-        if onset_backend else settings.use_learned_onsets,
-        learned_onsets_checkpoint=str(settings.learned_onsets_checkpoint),
+        llm_model=llm_model,
+        onset_backend=onset_backend,
     )
     separator: Separator = request.app.state.separator
 
@@ -534,14 +532,12 @@ async def transcribe_resume(
     audio_path = find_input_audio(resume_dir) or (resume_dir / "input")
     sink = DebugSink(resume_dir)
     output_sink = make_output_sink(resume_dir.name, settings.outputs_dir)
-    options = PipelineOptions(
+    options = _pipeline_options_from_params(
         beat_input=beat_input,
         quantise=quantise,
         quantise_use_llm=quantise_use_llm,
-        llm_model=resolved_model,
-        use_learned_onsets=(onset_backend.strip().lower() == "learned")
-        if onset_backend else settings.use_learned_onsets,
-        learned_onsets_checkpoint=str(settings.learned_onsets_checkpoint),
+        llm_model=llm_model,
+        onset_backend=onset_backend,
     )
     separator: Separator = request.app.state.separator
     run_log = RunLog()
@@ -938,41 +934,13 @@ async def _stream_lyrics_align(
             log.exception("lyrics_align failed")
             yield {"type": "error", "status_code": 500, "message": str(exc)}
 
-    pending: asyncio.Task[dict[str, Any]] | None = None
+    envelopes = _serialized_gpu_stream(_gpu_lock, job).__aiter__()
     try:
-        # Drive the envelope stream by hand (rather than `async for`) so we
-        # can race each `__anext__()` against a heartbeat timeout: the
-        # separator/aligner stages can be silent for tens of seconds, and a
-        # proxy with an idle timeout would otherwise drop the connection.
-        # `wait_for` cancels its inner await on timeout, so we hold the
-        # awaitable (a shielded Task) across iterations to avoid dropping an
-        # envelope. A heartbeat is never emitted once the stream ends:
-        # StopAsyncIteration breaks the loop before any further wait.
-        envelopes = _serialized_gpu_stream(_gpu_lock, job).__aiter__()
-        while True:
-            if pending is None:
-                pending = asyncio.ensure_future(envelopes.__anext__())
-            try:
-                envelope = await asyncio.wait_for(
-                    asyncio.shield(pending),
-                    timeout=HEARTBEAT_INTERVAL_SECONDS,
-                )
-            except TimeoutError:
-                # No envelope yet, keep the connection warm and keep
-                # waiting on `pending` (shield kept it alive through the
-                # wait_for cancellation).
-                yield (json.dumps({"type": "heartbeat"}) + "\n").encode("utf-8")
-                continue
-            except StopAsyncIteration:
-                break
-            pending = None
-            yield (json.dumps(envelope) + "\n").encode("utf-8")
+        async for chunk in _pump_with_heartbeat(envelopes.__anext__, _encode_envelope):
+            yield chunk
     finally:
-        # If we're unwound mid-wait (client disconnect), cancel the
-        # in-flight pull so it doesn't leak; the job's own `finally`
-        # releases the GPU lock.
-        if pending is not None and not pending.done():
-            pending.cancel()
+        # The job's own `finally` releases the GPU lock; here we only own
+        # the temp dir.
         shutil.rmtree(cleanup_dir, ignore_errors=True)
 
 
@@ -1090,27 +1058,36 @@ async def _stream_score(
             log.exception("score failed")
             yield {"type": "error", "status_code": 500, "message": str(exc)}
 
-    pending: asyncio.Task[dict[str, Any]] | None = None
+    envelopes = _serialized_gpu_stream(_gpu_lock, job).__aiter__()
     try:
-        envelopes = _serialized_gpu_stream(_gpu_lock, job).__aiter__()
-        while True:
-            if pending is None:
-                pending = asyncio.ensure_future(envelopes.__anext__())
-            try:
-                envelope = await asyncio.wait_for(
-                    asyncio.shield(pending), timeout=HEARTBEAT_INTERVAL_SECONDS
-                )
-            except TimeoutError:
-                yield (json.dumps({"type": "heartbeat"}) + "\n").encode("utf-8")
-                continue
-            except StopAsyncIteration:
-                break
-            pending = None
-            yield (json.dumps(envelope) + "\n").encode("utf-8")
+        async for chunk in _pump_with_heartbeat(envelopes.__anext__, _encode_envelope):
+            yield chunk
     finally:
-        if pending is not None and not pending.done():
-            pending.cancel()
         shutil.rmtree(cleanup_dir, ignore_errors=True)
+
+
+def _pipeline_options_from_params(
+    *,
+    beat_input: BeatInput,
+    quantise: bool,
+    quantise_use_llm: bool,
+    llm_model: str,
+    onset_backend: str,
+) -> PipelineOptions:
+    """Build `PipelineOptions` from the shared /transcribe(/resume) form
+    params, resolving the two fields the HTTP layer owns: an empty
+    `llm_model` falls back to `settings.llm_model`, and `onset_backend`
+    ('learned' vs anything else) overrides `settings.use_learned_onsets`
+    only when supplied (empty string keeps the configured default)."""
+    return PipelineOptions(
+        beat_input=beat_input,
+        quantise=quantise,
+        quantise_use_llm=quantise_use_llm,
+        llm_model=llm_model or settings.llm_model,
+        use_learned_onsets=(onset_backend.strip().lower() == "learned")
+        if onset_backend else settings.use_learned_onsets,
+        learned_onsets_checkpoint=str(settings.learned_onsets_checkpoint),
+    )
 
 
 def _parse_lyrics_input(raw: str) -> list[InputLine]:
@@ -1314,6 +1291,55 @@ def _encode_vocals_to_opus(src: Path, dest: Path) -> None:
     subprocess.run(cmd, check=True)
 
 
+async def _pump_with_heartbeat(
+    next_item: Callable[[], Any],
+    encode: Callable[[Any], bytes | None],
+) -> AsyncIterator[bytes]:
+    """Drive `next_item()` to exhaustion, interleaving `{"type":
+    "heartbeat"}` NDJSON lines during silent gaps so an idle-timeout proxy
+    between us and the client doesn't drop the connection.
+
+    `next_item()` returns a *fresh* awaitable each call yielding the next
+    upstream value; the stream ends when that awaitable raises
+    `StopAsyncIteration`. `encode(value)` maps a value to the NDJSON bytes
+    to emit, or `None` to consume it silently (internal sentinels).
+
+    Each `next_item()` awaitable is raced against a
+    HEARTBEAT_INTERVAL_SECONDS timeout. `wait_for` cancels its inner await
+    on timeout, so the awaitable is held (shielded) across iterations to
+    avoid dropping a value; on timeout we emit a heartbeat and keep waiting
+    on the same pending. A heartbeat is never emitted once the stream ends:
+    `StopAsyncIteration` breaks the loop before any further wait. On unwind
+    (client disconnect) the in-flight pending is cancelled so it doesn't
+    leak; the caller's own `finally` owns lock release / temp cleanup.
+    """
+    pending: asyncio.Task[Any] | None = None
+    try:
+        while True:
+            if pending is None:
+                pending = asyncio.ensure_future(next_item())
+            try:
+                value = await asyncio.wait_for(
+                    asyncio.shield(pending), timeout=HEARTBEAT_INTERVAL_SECONDS
+                )
+            except TimeoutError:
+                yield (json.dumps({"type": "heartbeat"}) + "\n").encode("utf-8")
+                continue
+            except StopAsyncIteration:
+                break
+            pending = None
+            chunk = encode(value)
+            if chunk is not None:
+                yield chunk
+    finally:
+        if pending is not None and not pending.done():
+            pending.cancel()
+
+
+def _encode_envelope(envelope: dict[str, Any]) -> bytes:
+    return (json.dumps(envelope) + "\n").encode("utf-8")
+
+
 async def _serialized_gpu_stream(
     lock: asyncio.Lock,
     job: Callable[[], AsyncIterator[dict[str, Any]]],
@@ -1514,41 +1540,38 @@ async def _stream_pipeline(
         task = asyncio.create_task(run_in_thread())
         pipeline_ok = False
         cancelled = False
+
+        async def next_envelope() -> dict[str, Any]:
+            # The `None` sentinel enqueued in the worker-thread `finally`
+            # ends the stream; translate it to StopAsyncIteration so the
+            # heartbeat pump breaks its loop. A heartbeat can never fire
+            # after the terminal event: the terminal `result`/`error` and
+            # the `None` sentinel are enqueued in the same worker-thread
+            # `finally`, so once queued `queue.get()` returns them
+            # immediately rather than timing out.
+            envelope = await queue.get()
+            if envelope is None:
+                raise StopAsyncIteration
+            return envelope
+
+        def encode_pipeline(envelope: dict[str, Any]) -> bytes | None:
+            nonlocal pipeline_ok, cancelled
+            env_type = envelope.get("type")
+            if env_type == "_done":
+                pipeline_ok = True
+                return None
+            if env_type == "_cancelled":
+                cancelled = True
+                log.info(
+                    "%s cancelled (next_stage=%s); skipping result emit",
+                    verb, envelope.get("next_stage"),
+                )
+                return None
+            return _encode_envelope(envelope)
+
         try:
-            while True:
-                try:
-                    envelope = await asyncio.wait_for(
-                        queue.get(), timeout=HEARTBEAT_INTERVAL_SECONDS
-                    )
-                except TimeoutError:
-                    # No real progress event for HEARTBEAT_INTERVAL_SECONDS
-                    # (a long silent stage is in flight). Emit a keepalive
-                    # without consuming a real event, then keep draining.
-                    # This can never fire after the terminal event: the
-                    # terminal `result`/`error` line is yielded after this
-                    # loop, and the `None` sentinel that ends the loop is
-                    # enqueued in the same worker-thread `finally` as every
-                    # terminal envelope, so once they're queued
-                    # `queue.get()` returns them immediately rather than
-                    # timing out.
-                    yield (
-                        json.dumps({"type": "heartbeat"}) + "\n"
-                    ).encode("utf-8")
-                    continue
-                if envelope is None:
-                    break
-                env_type = envelope.get("type")
-                if env_type == "_done":
-                    pipeline_ok = True
-                    continue
-                if env_type == "_cancelled":
-                    cancelled = True
-                    log.info(
-                        "%s cancelled (next_stage=%s); skipping result emit",
-                        verb, envelope.get("next_stage"),
-                    )
-                    continue
-                yield (json.dumps(envelope) + "\n").encode("utf-8")
+            async for chunk in _pump_with_heartbeat(next_envelope, encode_pipeline):
+                yield chunk
             await task  # propagate any unexpected internal failure
         except asyncio.CancelledError:
             # Starlette's disconnect listener cancelled the response.
