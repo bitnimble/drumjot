@@ -16,6 +16,137 @@ Scoring is `mir_eval` onset-F1 at ±50 ms (`metrics.onset_f1`).
 
 ---
 
+## 2026-07-02 · A/B: 6-way vs 5-way MDX23C drumsep (isolated ride/crash + 6-way hat), 3 seeds; 6-way is a DECISIVE REGRESSION
+
+Paired 3-seed A/B on the exact question "does a 6-way drumsep that splits ride/crash into
+their own stems (and gives hi-hat a dedicated stem) recover cymbal onsets better than the
+current 5-way (which merges all cymbals into one `c` stem)?" **base** = 5-way
+(`drumsep_5stems_mdx23c_jarredou.ckpt`), **treat** = 6-way
+(`MDX23C-DrumSep-aufr33-jarredou.ckpt`, instruments kick/snare/toms/hh/ride/crash). Single
+source (`--dataset trial_perstem`), 300 baked clips split 266 train / 34 val, **identical
+onsets/clips/recipe/seed per pair, only the cymbal+hat stem audio differs.** k/s/t reuse the
+5-way MERT cache in both arms (path-resolved symlinks), so only treat's new hh/rd/cr stems were
+separated + encoded. Metric is the in-domain per-lane VAL F1 at tuned thresholds (same
+ground-truth onsets both arms, so the val IS the apples-to-apples separator comparison).
+
+### Command (local RTX 3080, sandbox container; train.py @ `3e7f30b`, launcher `tmp/run_6way_ab.sh`; treat_s2 re-run `tmp/run_treat_s2.sh`)
+Both arms, only `DRUMJOT_TRIAL` (trial5 vs trial6) + `--seed` differ:
+```
+MODELS_DIR=/codebox-workspace/drumjot/models-cache \
+DRUMJOT_MERT_CACHE=/codebox-workspace/mert_cache \
+DRUMJOT_TRIAL=/codebox-workspace/datasets/trial6way/{trial5|trial6} \
+DRUMJOT_TRIAL_CAP=3200 DRUMJOT_TRIAL_VAL_CAP=800 \
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True OMP_NUM_THREADS=8 PYTHONPATH=training:dsp \
+python3 -m drumjot_training.train --dataset trial_perstem \
+  --head-hidden 256 --lanes k,s,t,hc,ho,rd,cr --batch-size 16 --epochs 15 --warmup-steps 1000 \
+  --lr 5e-4 --num-workers 4 --grad-clip 1.0 --no-filter-report --label-min-support 0 \
+  --seed {0,1,2} --out /codebox-workspace/datasets/t6_{base|treat}_s{0,1,2}
+```
+`DRUMJOT_TRIAL_CAP=3200` caps train windows (full trial set ~12k → too slow for 6 runs);
+`_VAL_CAP=800`. Defaults not on the CLI (config.py @ `3e7f30b`): encoder MERT-v1-330M, layer 10
+(single-layer, lane_layers=None), fps 75, high-band ON (feat_dim 1040; **input-norm code now
+deleted**, the 2026-07-01 A/B found it a wash), cache float16, head-layers 2, loss bce,
+lr-schedule cosine, weight-decay 0.01, pos-weight-cap 50, sib_neg 8.0 / sib_pos 3.0,
+aux_act_weight 0.5, aux_lanes (ho,rd,cr), cymbal_softmax OFF, auto_calibrate ON, sigma_frames
+1.5, peak_threshold 0.5, peak_min_distance_s 0.03, onset_tol ±50 ms, rare_lane_min_onsets 50 /
+rare_thr_floor 0.3, keep-best ON, early-stop ON (15 < 20 es-min-epochs, did not fire). bf16 +
+TF32. ~360–490 s/ep. Compare via `tmp/val_compare_6way.py` (best-macro epoch per seed/arm).
+(base_s2's log froze mid-run at epoch 7 on a broken stdout pipe, but had plateaued 0.669 → **0.686**
+→ 0.684, so its truncation can't rescue the 6-way; treat_s2 saved best @ epoch 9.)
+
+### Results, in-domain val macro-F1 (best epoch, tuned thr; mean ± sd over 3 seeds)
+- **base (5-way): 0.695 ± 0.006**  (seeds 0.700 / 0.698 / 0.686)
+- **treat (6-way): 0.630 ± 0.004**  → **−0.065, far outside seed spread**
+
+| lane | base mean ± sd | treat mean ± sd | Δ (treat−base) |
+|---|---|---|---|
+| k  | 0.933 ± 0.005 | 0.937 ± 0.005 | +0.003 |
+| s  | 0.900 ± 0.014 | 0.893 ± 0.012 | −0.007 |
+| t  | 0.573 ± 0.012 | 0.613 ± 0.019 | **+0.040** |
+| hc | 0.537 ± 0.005 | 0.487 ± 0.012 | **−0.050** |
+| ho | 0.690 ± 0.037 | 0.670 ± 0.037 | −0.020 |
+| rd | 0.263 ± 0.021 | 0.230 ± 0.028 | **−0.033** |
+| cr | 0.520 ± 0.057 | 0.513 ± 0.024 | −0.007 |
+
+### Verdict, REJECT the 6-way separator, it hurts the exact lanes it was meant to help
+The whole premise was "a dedicated ride and a dedicated crash stem should beat merging cymbals."
+It doesn't: **ride −0.033, crash flat (−0.007), closed-hat −0.050** under the 6-way split. The
+6-way ride stem in particular yields weak onsets (`rd` sat 0.12–0.25 every epoch, both arms, the
+extra split doesn't disambiguate ride from the rest, it just adds artifacts). Only toms gain
+(+0.040), which wasn't the goal and doesn't offset a −0.065 macro loss. Consistent with the
+standing "extra MDX23C splits add artifacts that hurt clean lanes" finding. **Keep the 5-way
+separator.** No real-domain (ParaDB-102/MDB) eval run: an in-domain −0.065 on the target lanes is
+already decisive, and real-domain rarely flips a negative of that size to a win. Cymbal precision
+must come from elsewhere (encoder / loss / per-lane modelling), not a finer separator.
+
+---
+
+## 2026-07-01 · A/B: full input-normalization (per-clip robust-peak, incl. HB block), SUBSET, mixed
+
+Paired A/B on a FIXED 1200/source subset, 18 epochs, same seed, only `--input-norm` differs.
+`input_norm` = per-clip robust-peak waveform normalization (`y ÷ 99.5th-pct|y|`) before BOTH the MERT
+encode and the high-band block; forces a full MERT re-encode (`do_normalize=false` → MERT is
+level-dependent), so it's a distinct cache variant (`_pn`). Hypothesis: level-invariance helps
+threshold-transfer (deployed vs oracle gap), which the per-stem val can't show; so the metric is the
+DEPLOYED real eval (ParaDB-102 F_pick + MDB fixed-thr), not val_macro.
+
+### Command (local RTX 3080, sandbox container; train.py @ `52a0493`, launcher `tmp/run_inputnorm_ab.sh`)
+Both arms, `treat` adds `--input-norm`:
+```
+MODELS_DIR=/codebox-workspace/drumjot/models-cache \
+DRUMJOT_MERT_CACHE=/codebox-workspace/datasets/mert_cache \
+DRUMJOT_STAR=/codebox-workspace/datasets/star_balanced_sep \
+DRUMJOT_ENST=/codebox-workspace/datasets/enst-sep DRUMJOT_EGMD=/codebox-workspace/datasets/egmd_sep \
+DRUMJOT_PARADB=/codebox-workspace/datasets/paradb-sep-train \
+DRUMJOT_ALIGNED_ONSETS=/codebox-workspace/datasets/_onsets_aligned_snaponly.json \
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True OMP_NUM_THREADS=8 PYTHONPATH=training:dsp \
+python3 -m drumjot_training.train --dataset pooled --pool-sources star,enst,egmd,paradb \
+  --pool-cap 1200 --pool-val-cap 200 --pool-cache /codebox-workspace/datasets/mert_cache \
+  --head-hidden 256 --lanes k,s,t,hc,ho,rd,cr --batch-size 16 --epochs 18 --warmup-steps 1000 \
+  --lr 5e-4 --num-workers 4 --grad-clip 1.0 --no-filter-report --seed 0 --label-min-support 0 \
+  --out /codebox-workspace/datasets/inab_{control,treat}   [treat: + --input-norm]
+```
+NO `--pool-resample` (single-int `--pool-cap` = fixed subset; resample would re-encode the whole pool
+under the treatment variant). Deployed eval: `eval_paradb_parallel.sh 6` (ParaDB-102) + `eval_mdb.py
+--lanes hc,ho,rd,cr` per arm. Defaults not on the CLI (config.py @ `52a0493`): encoder MERT-v1-330M,
+layer 10 (single-layer, lane_layers=None), fps 75, high-band ON (feat_dim 1040→**input_norm OFF for
+control / ON for treat**), cache float16, head-layers 2, loss bce, lr-schedule cosine, weight-decay
+0.01, pos-weight-cap 50, sib_neg 8.0 / sib_pos 3.0, aux_act_weight 0.5, aux_lanes (ho,rd,cr),
+cymbal_softmax OFF, auto_calibrate ON, sigma_frames 1.5, peak_threshold 0.5, onset_tol ±50 ms,
+rare_lane_min_onsets 50 / rare_thr_floor 0.3, keep-best ON, early-stop ON (did not fire, 18<20
+es-min-epochs). bf16. ~400–490 s/ep; control fully cached at eval, treat re-encoded all 102+23 songs
+serially (single encoder worker, input-norm cache-miss).
+
+### Results, STAR-pool val (final epoch, tuned thr)
+- control **0.716** `[k .96 s .87 t .77 hc .51 ho .47 rd .52 cr .42]`
+- treat   **0.722** `[k .96 s .85 t .77 hc .51 ho .54 rd .53 cr .44]`  (+0.006; val gains on ho/rd/cr)
+
+### Results, DEPLOYED real eval (control → treat, Δ)
+| lane | ParaDB F_pick | MDB fixed |
+|---|---|---|
+| k  | .944 → .928  (−0.016) |, |
+| s  | .950 → .907  (−0.043) |, |
+| t  | .594 → .562  (−0.032) |, |
+| **h** (folded) | **.463 → .561  (+0.098)** |, |
+| hc | .217 → .272  (+0.055) | .726 → .785  (+0.059) |
+| ho | .141 → .074  (−0.067) | .467 → .388  (−0.079) |
+| cym| .581 → .517  (−0.064) |, |
+| rd | .342 → .316  (−0.026) | .595 → .661  (+0.066) |
+| cr | .462 → .399  (−0.063) | .537 → .525  (−0.012) |
+
+### Verdict, mixed; only closed-hat clears the noise floor
+The one delta that reproduces on **both** eval sets is **closed hi-hat** (ParaDB folded-`h` +0.098 @ n=87,
+MDB `hc` +0.059). Everything else is within single-seed / small-eval noise and mixed in sign: cymbals
+straddle zero (cr −0.063 ParaDB / −0.012 MDB, rd −0.026 / +0.066, noise-dominated per the cr-lever
+finding, ±0.13 MDB-cr + ±0.11 seed); open-hat regressed on both (−0.067 / −0.079, but ho n=15 ParaDB);
+k/s/t each dipped slightly on ParaDB (−0.016…−0.043), small but consistently negative, plausibly
+input-norm shaving level cues kick/snare used. val_macro ~flat, so input-norm **redistributes** toward
+closed-hat rather than lifting. Also note the val ho/rd/cr gains did NOT transfer to the deployed eval
+(synth→real gap). **Not shippable on one 18ep seed**; would need multi-seed at the full recipe to
+confirm the hat gain holds and the k/s/t dip isn't real.
+
+---
+
 ## 2026-07-01 · Best-model 7-lane run: first STABLE full-kit model (hp→hc fold + grad-clip + workers)
 
 The full-kit best-model run. THREE fixes (all committed) were needed to train it at all + correctly:
