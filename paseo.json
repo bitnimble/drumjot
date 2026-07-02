@@ -1,5 +1,13 @@
 {
   "worktree": {
     "setup": "bun install\ncp $PASEO_SOURCE_CHECKOUT_PATH/.env $PASEO_WORKTREE_PATH/.env"
+  },
+  "metadataGeneration": {
+    "branchName": {
+      "instructions": "Prefix with semantic prefix, e.g. feat/new-feature or fix/broken-feature"
+    },
+    "commitMessage": {
+      "instructions": "Use conventional commits with scope, e.g. \"feat(mixer): implement volume sliders\" or \"fix(schema): bad type representation of optional args\""
+    }
   }
 }
