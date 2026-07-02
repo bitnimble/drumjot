@@ -62,6 +62,16 @@ SEP_SR = paradb.SEP_SR  # separate at full band so cymbal/hi-hat content survive
 # the cull + training via the paradb module so the three can't drift.
 STEM_TO_LANES = paradb.PERSTEM_TO_LANES
 
+# 6-way drumsep (aufr33-jarredou v0.1) eval: the merged `c` cymbal stem is
+# replaced by isolated `rd` (ride) + `cr` (crash) stems, and hi-hat comes from the
+# 6-way `hh` stem. Selected by --six-way so a model trained on 6-way stems is
+# scored in its matching separation domain (needs a 6-way stems-cache; see
+# tmp/presep_eval_6way.py). k/s/t are the reused 5-way stems, as in training.
+STEM_TO_LANES_6WAY: dict[str, tuple[str, ...]] = {
+    "k": ("k",), "s": ("s", "ss"), "h": ("hc", "ho"),
+    "rd": ("rd",), "cr": ("cr",), "t": ("t",),
+}
+
 # Mix reconstruction + chart offset live in `drumjot_training.paradb` (shared with
 # the corpus-cull gate and the separation step). Thin aliases keep the call sites
 # below unchanged.
@@ -134,7 +144,7 @@ def print_reports(agg, leak, gap_records, flagged, *, oracle_report, predictor):
 
     print("\n==== cross-instrument leakage (onsets fired in the WRONG lane, discarded) ====", flush=True)
     print("  stem  matched  leaked  leak%   top wrong lanes", flush=True)
-    for pitch in ("k", "s", "h", "c", "t"):
+    for pitch in STEM_TO_LANES:  # 5-way k/s/h/c/t or 6-way k/s/h/rd/cr/t
         d = leak[pitch]
         tot = d["matched"] + d["leaked"]
         if not tot:
@@ -210,7 +220,13 @@ def main():
                     help="skip (don't score) any song whose MERT features aren't fully cached, "
                     "so this worker never loads the encoder -- for the cache-only workers in a "
                     "parallel run (the single encoder worker omits this and does the uncached).")
+    ap.add_argument("--six-way", action="store_true",
+                    help="score a 6-way-drumsep-trained model: route ride/crash from isolated "
+                    "rd/cr stems + hi-hat from the 6-way hh stem (needs a 6-way --stems-cache).")
     args = ap.parse_args()
+
+    if args.six_way:  # module global read by the piece cache + scoring loop + _accumulate_gap
+        globals()["STEM_TO_LANES"] = STEM_TO_LANES_6WAY
 
     import gc
 
