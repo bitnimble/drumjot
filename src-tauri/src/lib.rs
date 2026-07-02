@@ -81,6 +81,7 @@ pub fn run() {
             capability::capability_states,
             capability::set_capability_installed,
             capability::install_capability,
+            capability::available_disk_space,
         ]);
 
     builder

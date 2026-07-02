@@ -20,6 +20,8 @@ export const CapabilityGate = observer(function CapabilityGate() {
   const installing = store.statusOf(id) === 'installing';
   const error = store.errors.get(id);
   const size = formatBytes(presenter.incrementalBytes([id]));
+  // undefined = free space not yet known (don't block); false = won't fit.
+  const insufficient = presenter.hasEnoughSpaceFor([id]) === false;
   // Don't let Escape / backdrop dismiss the prompt mid-install (the buttons are
   // already disabled then); the install would keep running with no UI.
   const close = (): void => {
@@ -38,6 +40,11 @@ export const CapabilityGate = observer(function CapabilityGate() {
           </p>
         ) : error != null ? (
           <p className={modalStyles.note}>Install failed: {error}</p>
+        ) : insufficient ? (
+          <p className={modalStyles.note}>
+            Not enough disk space: needs about {size}, but only{' '}
+            {formatBytes(store.availableBytes ?? 0)} is free. Free up space, then retry.
+          </p>
         ) : (
           <p className={modalStyles.note}>Downloads about {size} once, then runs offline.</p>
         )}
@@ -54,7 +61,7 @@ export const CapabilityGate = observer(function CapabilityGate() {
         <button
           type="button"
           className={modalStyles.primaryButton}
-          disabled={installing}
+          disabled={installing || insufficient}
           onClick={() => void presenter.confirmGate()}
         >
           {error != null ? 'Retry' : `Download · ${size}`}

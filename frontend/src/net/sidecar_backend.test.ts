@@ -23,6 +23,9 @@ class MockBridge implements DesktopBridge {
   }
   async setCapabilityInstalled() {}
   async installCapability() {}
+  async availableDiskSpace() {
+    return 1e12;
+  }
   async cancelJob(id: string) {
     this.cancelledId = id;
   }

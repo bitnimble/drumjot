@@ -8,6 +8,10 @@ import {
 import { type CapabilityStore } from './capability_store';
 import { type DesktopBridge } from './desktop_bridge';
 
+/** Peak install footprint over the raw download size: the venv unpacks wheels
+ *  and models decompress, so require this much headroom before warning. */
+const DISK_INSTALL_SAFETY_FACTOR = 1.5;
+
 export type CapabilityPresenterDeps = {
   store: CapabilityStore;
   bridge: DesktopBridge;
@@ -59,6 +63,9 @@ export class CapabilityPresenter {
     if (this.store.isReady(id)) {
       return true;
     }
+    // About to prompt: refresh free disk space so the gate can warn up front if
+    // the download wouldn't fit.
+    await this.refreshDiskSpace();
     // A prompt is already open (concurrent gate): abandon the prior waiter so it
     // resolves false rather than hanging when this one supersedes it.
     this.gateResolve?.(false);
@@ -136,6 +143,7 @@ export class CapabilityPresenter {
    *  A transport failure is logged rather than left as an unhandled rejection
    *  that would wedge the "Detecting hardware…" readout. */
   async refresh(): Promise<void> {
+    void this.refreshDiskSpace();
     try {
       const [accelerator, states] = await Promise.all([
         this.bridge.detectAccelerator(),
@@ -157,6 +165,29 @@ export class CapabilityPresenter {
     } catch (err) {
       console.error('[capability] refresh failed', err);
     }
+  }
+
+  /** Query + cache free disk space for the pre-install space check. Best-effort:
+   *  a failure leaves `availableBytes` unchanged, so the UI won't block on an
+   *  unknown value. */
+  async refreshDiskSpace(): Promise<void> {
+    try {
+      const bytes = await this.bridge.availableDiskSpace();
+      runInAction(() => {
+        this.store.availableBytes = bytes;
+      });
+    } catch (err) {
+      console.error('[capability] disk-space query failed', err);
+    }
+  }
+
+  /** Whether the data-root volume has room to install `ids` (the incremental
+   *  download times {@link DISK_INSTALL_SAFETY_FACTOR}). `undefined` when free
+   *  space isn't known yet, callers must NOT block on an unknown. */
+  hasEnoughSpaceFor(ids: CapabilityId[]): boolean | undefined {
+    const free = this.store.availableBytes;
+    if (free == null) return undefined;
+    return free >= this.incrementalBytes(ids) * DISK_INSTALL_SAFETY_FACTOR;
   }
 
   /** Incremental download for installing `ids` (+ prereqs), deduping the shared

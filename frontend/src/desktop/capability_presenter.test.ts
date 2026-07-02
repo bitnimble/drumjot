@@ -17,6 +17,9 @@ class MockBridge implements DesktopBridge {
   installCalls: string[] = [];
   /** Group sets passed to each installCapability (uv sync) call. */
   groupCalls: string[][] = [];
+  /** Free bytes for availableDiskSpace; huge by default so tests don't trip the
+   *  pre-install space warning unless they set it. */
+  freeBytes = 1e12;
 
   async detectAccelerator(): Promise<AcceleratorInfo> {
     return this.accelerator;
@@ -38,6 +41,9 @@ class MockBridge implements DesktopBridge {
   }
   async runJob(): Promise<void> {}
   async cancelJob(): Promise<void> {}
+  async availableDiskSpace(): Promise<number> {
+    return this.freeBytes;
+  }
 }
 
 function make(): { presenter: CapabilityPresenter; store: CapabilityStore; bridge: MockBridge } {

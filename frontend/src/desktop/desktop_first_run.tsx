@@ -54,7 +54,11 @@ export const DesktopFirstRun = observer(function DesktopFirstRun() {
       </ModalBody>
       <ModalFooter>
         <span className={styles.total}>
-          {install.totalBytes > 0 ? `Total: ${formatBytes(install.totalBytes)}` : 'Nothing selected'}
+          {install.enoughSpace === false
+            ? 'Not enough disk space for this selection'
+            : install.totalBytes > 0
+              ? `Total: ${formatBytes(install.totalBytes)}`
+              : 'Nothing selected'}
         </span>
         <button type="button" className={modalStyles.secondaryButton} onClick={dismiss}>
           Skip for now
@@ -62,7 +66,7 @@ export const DesktopFirstRun = observer(function DesktopFirstRun() {
         <button
           type="button"
           className={modalStyles.primaryButton}
-          disabled={install.totalBytes === 0 || install.installing}
+          disabled={install.totalBytes === 0 || install.installing || install.enoughSpace === false}
           onClick={install.install}
         >
           {install.installing ? 'Installing…' : 'Install'}

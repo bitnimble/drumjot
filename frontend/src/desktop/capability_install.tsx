@@ -23,6 +23,9 @@ export type CapabilityInstallController = {
   /** Cumulative incremental download for the whole selection (deduped). */
   totalBytes: number;
   installing: boolean;
+  /** undefined = free space unknown (don't block); false = the selection won't
+   *  fit on the data-root volume. */
+  enoughSpace: boolean | undefined;
   install: () => void;
 };
 
@@ -52,8 +55,11 @@ export function useCapabilityInstall(): CapabilityInstallController {
       }),
     totalBytes: presenter != null ? presenter.incrementalBytes([...selected]) : 0,
     installing: [...selectedClosure].some((id) => store?.statusOf(id) === 'installing'),
+    enoughSpace: presenter != null ? presenter.hasEnoughSpaceFor([...selected]) : undefined,
     install: () => {
-      if (presenter != null) void presenter.installAll([...selected]);
+      if (presenter != null && presenter.hasEnoughSpaceFor([...selected]) !== false) {
+        void presenter.installAll([...selected]);
+      }
     },
   };
 }

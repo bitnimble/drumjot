@@ -134,6 +134,26 @@ pub async fn set_capability_installed<R: Runtime>(
     tokio::fs::rename(&tmp, &path).await.map_err(|e| e.to_string())
 }
 
+/// Free bytes available to a non-privileged user on the volume holding the
+/// writable data root, so the frontend can warn before a multi-GB install that
+/// wouldn't fit. Walks up to the nearest existing ancestor (the data root may
+/// not exist yet on a first run) so the query lands on the right volume.
+#[tauri::command]
+pub async fn available_disk_space<R: Runtime>(app: AppHandle<R>) -> Result<u64, String> {
+    let probe = existing_ancestor(crate::paths::data_root(&app)?);
+    fs2::available_space(&probe).map_err(|e| e.to_string())
+}
+
+fn existing_ancestor(mut path: PathBuf) -> PathBuf {
+    while !path.exists() {
+        match path.parent() {
+            Some(parent) => path = parent.to_path_buf(),
+            None => break,
+        }
+    }
+    path
+}
+
 /// Path to the python interpreter inside a venv (platform-specific layout).
 pub fn venv_python(venv: &Path) -> PathBuf {
     if cfg!(windows) {

@@ -190,14 +190,16 @@ export const SettingsDialog = observer(function SettingsDialog({
       {tab === 'capabilities' && (
         <ModalFooter>
           <span className={panelStyles.total}>
-            {install.totalBytes > 0
-              ? `Total: ${formatBytes(install.totalBytes)}`
-              : 'Nothing selected'}
+            {install.enoughSpace === false
+              ? 'Not enough disk space for this selection'
+              : install.totalBytes > 0
+                ? `Total: ${formatBytes(install.totalBytes)}`
+                : 'Nothing selected'}
           </span>
           <button
             type="button"
             className={modalStyles.primaryButton}
-            disabled={install.totalBytes === 0 || install.installing}
+            disabled={install.totalBytes === 0 || install.installing || install.enoughSpace === false}
             onClick={install.install}
           >
             {install.installing ? 'Installing…' : 'Install'}
