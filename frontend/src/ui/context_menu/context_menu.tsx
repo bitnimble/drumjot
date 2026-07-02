@@ -1,6 +1,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { dropdownStyles } from 'src/ui/dropdown/dropdown';
+import { useMenuKeyboard } from 'src/ui/menu_keyboard';
 
 /**
  * A right-click context menu: the SAME floating panel + menu-item components as
@@ -26,6 +27,8 @@ export function ContextMenu({
 }) {
   const panelRef = React.useRef<HTMLDivElement>(null);
   const [pos, setPos] = React.useState<{ top: number; left: number }>({ top: y, left: x });
+  // Arrow/Home/End roving focus over the menu rows.
+  const { onKeyDown: onPanelKeyDown } = useMenuKeyboard(panelRef);
 
   React.useEffect(() => {
     const onPointerDown = (e: MouseEvent) => {
@@ -65,6 +68,7 @@ export function ContextMenu({
       role="menu"
       style={{ position: 'fixed', top: pos.top, left: pos.left }}
       onContextMenu={(e) => e.preventDefault()}
+      onKeyDown={onPanelKeyDown}
     >
       {children}
     </div>,
